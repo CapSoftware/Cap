@@ -2,14 +2,13 @@ use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
     ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, OverlayTrackKind, ProjectConfiguration, RecordingMeta, SceneMode,
-    StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
+    FrameStyle, OverlayTrackKind, ProjectConfiguration, ProjectStyleCache, RecordingMeta,
+    SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
 use cursor_interpolation::{
-    CursorEventOrder, InterpolatedCursorPosition, interpolate_cursor,
-    interpolate_cursor_with_click_spring,
+    InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
@@ -20,9 +19,8 @@ use frame_pipeline::{
 };
 use futures::future::OptionFuture;
 use layers::{
-    Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
-    ClickRippleLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer,
-    NotchLayer, NotchUniforms,
+    BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer, ClickRippleLayer,
+    ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer, NotchLayer, NotchUniforms,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -58,10 +56,13 @@ mod readiness;
 mod recorded_cursor_assets;
 mod scene;
 mod segment_timing;
+mod shape;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
 mod transition;
+#[cfg(test)]
+mod transition_render_tests;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -76,7 +77,10 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
+pub use layers::{
+    BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
+    new_font_system,
+};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
@@ -85,6 +89,9 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use transition::{
+    TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
+};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -94,6 +101,92 @@ use transition::{TransitionCompositor, TransitionParameters};
 /// font database cheaply.
 pub fn prewarm_fonts() {
     drop(layers::new_font_system());
+}
+
+/// Renders one small RGBA frame and one NV12 frame through the full frame
+/// pipeline with `layers`, then discards them. A fresh process waits on the
+/// driver finishing each pipeline the first time it draws (the first preview
+/// of the first editor took ~50 ms longer than any later one); building
+/// `layers` and drawing once off the hot path moves both costs there.
+pub async fn prewarm_first_frame(
+    shared: SharedWgpuDevice,
+    layers: &mut RendererLayers,
+) -> Result<(), RenderingError> {
+    const SIZE: u32 = 64;
+    let studio_meta = StudioRecordingMeta::SingleSegment {
+        segment: cap_project::SingleSegment {
+            display: cap_project::VideoMeta {
+                path: "prewarm.png".into(),
+                fps: 30,
+                start_time: Some(0.0),
+                device_id: None,
+            },
+            camera: None,
+            audio: None,
+            cursor: None,
+        },
+    };
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: std::env::temp_dir(),
+        pretty_name: "Prewarm".to_string(),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+        upload: None,
+    };
+    let constants = RenderVideoConstants::from_shared_device(
+        shared,
+        RenderOptions {
+            screen_size: XY::new(SIZE, SIZE),
+            camera_size: None,
+            preserve_screen_alpha: true,
+        },
+        studio_meta,
+        recording_meta,
+        Arc::new(BackgroundTextureCache::default()),
+    );
+    let config = Arc::new(ProjectConfiguration::default());
+    let cursor_events = CursorEvents::default();
+    let mut zoom_timeline = ZoomTransformTimeline::new(
+        &[],
+        None,
+        &cursor_events,
+        config.screen_movement_spring,
+        0.0,
+        None,
+    );
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
+    let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, &config);
+    let mut frame_renderer = FrameRenderer::new(&constants);
+    let pixels = (SIZE * SIZE) as usize;
+    for screen_frame in [
+        DecodedFrame::new(vec![255; pixels * 4], SIZE, SIZE),
+        DecodedFrame::new_nv12(vec![128; pixels * 3 / 2], SIZE, SIZE, SIZE, SIZE),
+    ] {
+        let segment_frames = DecodedSegmentFrames {
+            screen_size: XY::new(SIZE, SIZE),
+            screen_frame: Some(screen_frame),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let uniforms = ProjectUniforms::new(
+            &constants,
+            &config,
+            0,
+            30,
+            XY::new(base_w, base_h),
+            &cursor_events,
+            &segment_frames,
+            0.0,
+            &zoom_timeline,
+        );
+        frame_renderer
+            .render_immediate(segment_frames, uniforms, &cursor_events, true, layers)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Unique installed font family names, sorted, for the editor's font picker.
@@ -129,9 +222,11 @@ mod font_family_tests {
 }
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
-pub use cursor_interpolation::PrecomputedCursorTimeline;
+pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
 use mask::interpolate_masks;
 use scene::*;
+pub use shape::PreparedShape;
+use shape::prepare_shapes;
 use takeover::InterpolatedTakeover;
 pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
@@ -223,18 +318,109 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
     #[cfg(target_os = "windows")]
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = match DX12_SHADER_COMPILER.get() {
+        Some((compiler, _)) => dx12_instance(compiler.clone()),
+        None => {
+            let bundled = bundled_dxc_compiler();
+            let uses_dxc = !matches!(bundled, wgpu::Dx12Compiler::Fxc);
+            let (instance, compiler) = dx12_instance_with_fxc_fallback(bundled);
+            let fxc_fallback = uses_dxc && matches!(compiler, wgpu::Dx12Compiler::Fxc);
+            let _ = DX12_SHADER_COMPILER.set((compiler, fxc_fallback));
+            instance
+        }
+    };
+
+    instance
+}
+
+/// The compiler the first instance ended up on, so later instances skip a
+/// DXC that already failed to load, and whether that is the FXC fallback.
+#[cfg(target_os = "windows")]
+static DX12_SHADER_COMPILER: std::sync::OnceLock<(wgpu::Dx12Compiler, bool)> =
+    std::sync::OnceLock::new();
+
+/// WARP crashes on the first frame rendered with FXC-compiled shaders, so the
+/// FXC fallback only renders on hardware adapters.
+#[cfg(not(target_arch = "wasm32"))]
+fn software_adapters_unusable() -> bool {
+    #[cfg(target_os = "windows")]
+    let unusable = DX12_SHADER_COMPILER
+        .get()
+        .is_some_and(|(_, fxc_fallback)| *fxc_fallback);
+    #[cfg(not(target_os = "windows"))]
+    let unusable = false;
+
+    unusable
+}
+
+#[cfg(target_os = "windows")]
+fn dx12_instance_descriptor(shader_compiler: wgpu::Dx12Compiler) -> wgpu::InstanceDescriptor {
+    wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
         backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: bundled_dxc_compiler(),
-            },
+            dx12: wgpu::Dx12BackendOptions { shader_compiler },
             ..Default::default()
         },
         ..Default::default()
-    });
+    }
+}
 
-    instance
+#[cfg(target_os = "windows")]
+fn dx12_instance(shader_compiler: wgpu::Dx12Compiler) -> wgpu::Instance {
+    wgpu::Instance::new(&dx12_instance_descriptor(shader_compiler))
+}
+
+/// wgpu drops a backend that fails to initialise and only logs it at debug
+/// level, so a DXC that will not load leaves an instance with no DX12 adapters
+/// at all, not even WARP. FXC ships with Windows, so rebuild on it instead.
+#[cfg(target_os = "windows")]
+fn dx12_instance_with_fxc_fallback(
+    compiler: wgpu::Dx12Compiler,
+) -> (wgpu::Instance, wgpu::Dx12Compiler) {
+    let instance = dx12_instance(compiler.clone());
+    // SAFETY: the raw instance is only checked for presence, never used.
+    let has_dx12 = unsafe { instance.as_hal::<wgpu_hal::api::Dx12>() }.is_some();
+    if has_dx12 || matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+        return (instance, compiler);
+    }
+
+    tracing::warn!(
+        error = dx12_init_error(compiler),
+        "DX12 with bundled DXC failed to initialise; retrying with FXC"
+    );
+    (
+        dx12_instance(wgpu::Dx12Compiler::Fxc),
+        wgpu::Dx12Compiler::Fxc,
+    )
+}
+
+/// wgpu does not surface why a backend failed, so initialise the DX12 backend
+/// directly once more to get the error for the log.
+#[cfg(target_os = "windows")]
+fn dx12_init_error(compiler: wgpu::Dx12Compiler) -> String {
+    use wgpu_hal::Instance as _;
+
+    let desc = dx12_instance_descriptor(compiler);
+    let hal_desc = wgpu_hal::InstanceDescriptor {
+        name: "wgpu",
+        flags: desc.flags,
+        backend_options: desc.backend_options,
+    };
+    // SAFETY: the same call wgpu-core makes in `Instance::new`; the instance,
+    // if any, is dropped straight away.
+    match unsafe { wgpu_hal::dx12::Instance::init(&hal_desc) } {
+        Ok(_) => "unknown".to_string(),
+        Err(error) => {
+            let mut message = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                message.push_str(": ");
+                message.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            message
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -729,6 +915,10 @@ pub enum RenderingError {
     BufferMapWaitingFailed,
     #[error(transparent)]
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
+    #[error(
+        "Not enough memory to read back frame {frame_number}. Close other apps or lower the export resolution and try again."
+    )]
+    ReadbackAllocationFailed { frame_number: u32 },
     #[error("Sending frame to channel failed")]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Sending NV12 frame to channel failed")]
@@ -818,10 +1008,12 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
+    owned_frames: bool,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
     validate_timeline(project, render_segments.len())?;
 
+    let project = &Arc::new(project.clone());
     let start_time = Instant::now();
 
     let duration = get_duration(recordings, recording_meta, meta, project);
@@ -890,6 +1082,9 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
     frame_renderer.use_export_deadlines();
+    if owned_frames {
+        frame_renderer.deliver_owned_frames();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -1157,6 +1352,7 @@ pub async fn render_video_to_channel(
                     }
                 }
                 Ok(None) => in_flight.rendered(current_frame_number, None)?,
+                Err(e @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(e),
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -1385,6 +1581,7 @@ pub async fn render_video_to_channel_nv12(
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
 ) -> Result<(), RenderingError> {
+    let project = &Arc::new(project.clone());
     let ffmpeg_init_start = Instant::now();
     ffmpeg::init().unwrap();
     let ffmpeg_init_ms = ffmpeg_init_start.elapsed().as_millis() as u64;
@@ -1901,6 +2098,7 @@ pub async fn render_video_to_channel_nv12(
                     }
                 }
                 Ok(None) => in_flight.rendered(current_frame_number, None)?,
+                Err(e @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(e),
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -2100,6 +2298,7 @@ impl InFlightFrame {
         let expected = self.0.take();
         let frame = match flushed.transpose() {
             Ok(frame) => frame,
+            Err(error @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(error),
             Err(error) => {
                 if let Some(frame_number) = expected {
                     tracing::error!(frame_number, %error, "In-flight export frame readback failed");
@@ -2131,7 +2330,7 @@ impl InFlightFrame {
 
 struct TransitionExportContext<'a> {
     constants: &'a RenderVideoConstants,
-    project: &'a ProjectConfiguration,
+    project: &'a Arc<ProjectConfiguration>,
     render_segments: &'a [RenderSegment],
     outgoing_zoom_timelines: &'a mut [ZoomTransformTimeline],
     precomputed_cursor_timelines: &'a [Arc<PrecomputedCursorTimeline>],
@@ -2477,6 +2676,7 @@ pub struct RenderVideoConstants {
     pub is_software_adapter: bool,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
+    project_styles: ProjectStyleCache,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -2492,9 +2692,12 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     if force_software_adapter {
         tracing::warn!("Forcing software WGPU adapter");
     }
+    let usable = |adapter: &wgpu::Adapter| {
+        !software_adapters_unusable() || !is_software_wgpu_adapter(&adapter.get_info())
+    };
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
-    let hardware_adapter = if force_software_adapter {
+    let preferred = if force_software_adapter {
         None
     } else {
         instance
@@ -2506,55 +2709,122 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
             .await
             .ok()
     };
-
-    let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-        let adapter_info = adapter.get_info();
-        let is_software = is_software_wgpu_adapter(&adapter_info);
-
-        if is_software {
-            tracing::warn!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Hardware adapter behaves like a software renderer"
-            );
-        } else {
-            tracing::info!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Using hardware GPU adapter"
-            );
-        }
-
-        (adapter, is_software)
+    adapter_phase.finish(if preferred.is_some() {
+        "preferred"
     } else {
-        tracing::warn!("No hardware GPU adapter found, attempting software fallback");
-        let software_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: true,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|_| RenderingError::NoAdapter)?;
+        "none"
+    });
 
-        let adapter_info = software_adapter.get_info();
-        tracing::info!(
+    let device_phase = readiness::Phase::start("wgpu.device");
+    let mut last_error = None;
+    let mut created = None;
+    if let Some(adapter) = preferred.filter(usable) {
+        match try_rendering_device(adapter).await {
+            Ok(found) => created = Some(found),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    // A driver can list an adapter it cannot make a device on (a GL context
+    // without compute shaders, a broken install). Only then are the others
+    // enumerated, hardware first, then the fallback adapter.
+    if created.is_none() {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter)
+            .await
+            .into_iter()
+            .filter(usable)
+        {
+            match try_rendering_device(adapter).await {
+                Ok(found) => {
+                    created = Some(found);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+    }
+    let Some((adapter, device, queue)) = created else {
+        device_phase.finish("failed");
+        return Err(last_error.map_or(RenderingError::NoAdapter, Into::into));
+    };
+    device_phase.finish("returned");
+
+    let adapter_info = adapter.get_info();
+    let is_software_adapter = is_software_wgpu_adapter(&adapter_info);
+    if is_software_adapter {
+        tracing::warn!(
             adapter_name = adapter_info.name,
             adapter_backend = ?adapter_info.backend,
             adapter_device_type = ?adapter_info.device_type,
             "Using software adapter (CPU rendering - performance may be reduced)"
         );
-        (software_adapter, true)
-    };
-
-    adapter_phase.finish(if is_software_adapter {
-        "software"
     } else {
-        "hardware"
-    });
+        tracing::info!(
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
+            "Using hardware GPU adapter"
+        );
+    }
+    log_uncaptured_errors(&device, "cap-rendering-device");
+    Ok(SharedWgpuDevice {
+        instance,
+        adapter,
+        device,
+        queue,
+        is_software_adapter,
+    })
+}
 
+// Identical cards report identical `AdapterInfo` (wgpu 25 has no bus id), so
+// the preferred adapter is not filtered out: one more failed attempt on it is
+// cheaper than skipping a working twin.
+#[cfg(not(target_arch = "wasm32"))]
+async fn other_wgpu_adapters(
+    instance: &wgpu::Instance,
+    force_software_adapter: bool,
+) -> Vec<wgpu::Adapter> {
+    let mut adapters = if force_software_adapter {
+        Vec::new()
+    } else {
+        instance.enumerate_adapters(wgpu::Backends::all())
+    };
+    adapters.sort_by_key(|adapter| is_software_wgpu_adapter(&adapter.get_info()));
+    if let Ok(fallback) = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: true,
+            compatible_surface: None,
+        })
+        .await
+    {
+        adapters.push(fallback);
+    }
+    adapters
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn try_rendering_device(
+    adapter: wgpu::Adapter,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    let info = adapter.get_info();
+    match request_rendering_device(&adapter).await {
+        Ok((device, queue)) => Ok((adapter, device, queue)),
+        Err(error) => {
+            tracing::warn!(
+                adapter_name = info.name,
+                adapter_backend = ?info.backend,
+                %error,
+                "Could not create a rendering device; trying the next adapter"
+            );
+            Err(error)
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn request_rendering_device(
+    adapter: &wgpu::Adapter,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     let mut required_features = wgpu::Features::empty();
     if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
         required_features |= wgpu::Features::PIPELINE_CACHE;
@@ -2565,23 +2835,40 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     {
         required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
     }
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features,
+            ..Default::default()
+        })
+        .await
+}
 
-    let device_descriptor = wgpu::DeviceDescriptor {
-        label: Some("cap-rendering-device"),
-        required_features,
-        ..Default::default()
+/// wgpu panics on an error nothing captured. After a device is lost (a driver
+/// reset, sleep, a GPU switch) every call on it fails validation, so that
+/// default ended the app at the next frame or export. Log those errors
+/// instead, at most a few per second; the operation that hit them fails on
+/// its own (a readback that cannot map, a frame that never presents) and the
+/// next device request gets a new device.
+pub fn log_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
     };
-
-    let device_phase = readiness::Phase::start("wgpu.device");
-    let (device, queue) = adapter.request_device(&device_descriptor).await?;
-    device_phase.finish("returned");
-    Ok(SharedWgpuDevice {
-        instance,
-        adapter,
-        device,
-        queue,
-        is_software_adapter,
-    })
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let last = Mutex::new(None::<std::time::Instant>);
+    let suppressed = AtomicU64::new(0);
+    device.on_uncaptured_error(Box::new(move |error| {
+        let now = std::time::Instant::now();
+        let mut last = last.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|last| now.duration_since(last) < MIN_INTERVAL) {
+            suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        *last = Some(now);
+        let suppressed = suppressed.swap(0, Ordering::Relaxed);
+        tracing::error!(device = label, suppressed, %error, "uncaptured wgpu error");
+    }));
 }
 
 #[derive(Clone, Debug)]
@@ -2640,6 +2927,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2670,6 +2958,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2731,6 +3020,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -2939,7 +3229,7 @@ pub struct ProjectUniforms {
     pub cursor_clip_visibility: f32,
     pub click_ripples: Vec<ClickRipple>,
     cursor_event_order: CursorEventOrder,
-    pub project: ProjectConfiguration,
+    pub project: Arc<ProjectConfiguration>,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
     pub split: Option<SplitLayoutComputed>,
@@ -2952,6 +3242,9 @@ pub struct ProjectUniforms {
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
+    /// Shape-track marks for this frame, drawn in output-frame space like
+    /// text: zoom, crop, scenes and the 3D camera never move them.
+    pub shapes: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).
     pub camera3d: Option<Camera3DFrame>,
@@ -3470,6 +3763,9 @@ pub struct FrameLayout {
     pub display: [f32; 4],
     pub camera: Option<[f32; 4]>,
     pub output_size: [u32; 2],
+    /// Only the caption layer measures its box, so this is filled in after
+    /// the frame renders and stays `None` from [`ProjectUniforms::frame_layout`].
+    pub caption: Option<CaptionFrameBox>,
 }
 
 /// Unzoomed placement of the display card in output-frame pixels. Without a
@@ -3499,6 +3795,7 @@ impl ProjectUniforms {
             display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
+            caption: None,
         }
     }
 
@@ -3612,7 +3909,10 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        Coord::new(Self::display_layout(options, project, resolution_base).content_offset)
+        Coord::new(
+            Self::display_layout(options, project, resolution_base, options.screen_size)
+                .content_offset,
+        )
     }
 
     /// Placement of the display card in output-frame pixels.
@@ -3628,10 +3928,23 @@ impl ProjectUniforms {
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
+        source_size: XY<u32>,
     ) -> DisplayLayout {
-        let base = Self::display_base_offset(options, project, resolution_base).coord;
+        let aspect = Self::display_source_aspect(options, project, source_size);
+        let base = Self::display_base_offset(options, project, resolution_base, aspect).coord;
         let output_size = Self::get_output_size(options, project, resolution_base);
-        Self::display_layout_in_box(options, project, output_size, base)
+        Self::display_layout_in_box(project, output_size, base, aspect)
+    }
+
+    fn display_source_aspect(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        source_size: XY<u32>,
+    ) -> f64 {
+        let crop_size = Self::get_crop(options, project).size.map(f64::from);
+        let source_scale = source_size.map(f64::from) / options.screen_size.map(f64::from);
+        let crop_size = crop_size * source_scale;
+        (crop_size.x / crop_size.y.max(f64::EPSILON)).max(f64::EPSILON)
     }
 
     fn styled_display_layout(
@@ -3639,22 +3952,25 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         output_size: (u32, u32),
         resolution_base: XY<u32>,
+        source_size: XY<u32>,
     ) -> DisplayLayout {
         let canvas = XY::new(output_size.0 as f64, output_size.1 as f64);
         let styled_output = Self::get_output_size(options, project, resolution_base);
         let styled_canvas = XY::new(styled_output.0 as f64, styled_output.1 as f64);
-        let styled_offset = Self::display_base_offset(options, project, resolution_base).coord;
+        let aspect = Self::display_source_aspect(options, project, source_size);
+        let styled_offset =
+            Self::display_base_offset(options, project, resolution_base, aspect).coord;
         let content = (styled_canvas - styled_offset) - styled_offset;
         let scale = (canvas.x / styled_canvas.x).min(canvas.y / styled_canvas.y);
         let base = (canvas - content * scale) / 2.0;
-        Self::display_layout_in_box(options, project, output_size, base)
+        Self::display_layout_in_box(project, output_size, base, aspect)
     }
 
     fn display_layout_in_box(
-        options: &RenderOptions,
         project: &ProjectConfiguration,
         output_size: (u32, u32),
         base: XY<f64>,
+        aspect: f64,
     ) -> DisplayLayout {
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
         // Same op order as the legacy display_size (end - offset - offset) so
@@ -3667,8 +3983,6 @@ impl ProjectUniforms {
             (base, box_size, base, box_size)
         } else {
             let insets = frame_chrome::chrome_insets(style);
-            let crop = Self::get_crop(options, project);
-            let aspect = (crop.size.x as f64 / f64::from(crop.size.y.max(1))).max(f64::EPSILON);
             // Insets are fractions of the content height; solve for the
             // largest content that keeps the outer card inside the box.
             let outer_w_per_h = aspect + insets.left + insets.right;
@@ -3710,6 +4024,7 @@ impl ProjectUniforms {
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
+        cropped_aspect: f64,
     ) -> Coord<FrameSpace> {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -3739,8 +4054,6 @@ impl ProjectUniforms {
         ));
 
         let cropped_size = crop_end.coord - crop_start.coord;
-
-        let cropped_aspect = cropped_size.x / cropped_size.y;
 
         let padding = {
             let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
@@ -3786,7 +4099,10 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        Coord::new(Self::display_layout(options, project, resolution_base).content_size)
+        Coord::new(
+            Self::display_layout(options, project, resolution_base, options.screen_size)
+                .content_size,
+        )
     }
 
     fn display_bounds(
@@ -3982,7 +4298,7 @@ impl ProjectUniforms {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -3990,6 +4306,33 @@ impl ProjectUniforms {
         segment_frames: &DecodedSegmentFrames,
         total_duration: f64,
         zoom_timeline: &ZoomTransformTimeline,
+    ) -> Self {
+        Self::new_with_cursor_event_order(
+            constants,
+            project,
+            frame_number,
+            fps,
+            resolution_base,
+            cursor_events,
+            segment_frames,
+            total_duration,
+            zoom_timeline,
+            CursorEventOrder::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_cursor_event_order(
+        constants: &RenderVideoConstants,
+        project: &Arc<ProjectConfiguration>,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+        zoom_timeline: &ZoomTransformTimeline,
+        cursor_event_order: CursorEventOrder,
     ) -> Self {
         let cursor = project.cursor_at(f64::from(frame_number) / f64::from(fps.max(1)));
         let cursor_smoothing = (!cursor.raw).then_some(SpringMassDamperSimulationConfig {
@@ -4007,7 +4350,7 @@ impl ProjectUniforms {
                     Some(cfg),
                     Some(click_spring_cfg),
                 ),
-                None => interpolate_cursor(cursor_events, time, None),
+                None => cursor_event_order.interpolate_raw(cursor_events, time),
             }
         };
 
@@ -4022,14 +4365,14 @@ impl ProjectUniforms {
             total_duration,
             zoom_timeline,
             &cursor_interp_fn,
-            CursorEventOrder::default(),
+            cursor_event_order,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_precomputed_cursor(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -4093,7 +4436,7 @@ impl ProjectUniforms {
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        shared_project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -4104,8 +4447,21 @@ impl ProjectUniforms {
         cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
         cursor_event_order: CursorEventOrder,
     ) -> Self {
+        let project = shared_project.as_ref();
         let options = &constants.options;
+        let camera_size = options.camera_size.map(|size| {
+            segment_frames
+                .camera_frame
+                .as_ref()
+                .map_or(size, |frame| XY::new(frame.width(), frame.height()))
+        });
         let output_size = Self::get_output_size(options, project, resolution_base);
+        let source_size = segment_frames
+            .screen_frame
+            .as_ref()
+            .map_or(segment_frames.screen_size, |frame| {
+                XY::new(frame.width(), frame.height())
+            });
         let fps_f32 = fps.max(1) as f32;
         let timeline_time = f64::from(frame_number) / f64::from(fps.max(1));
         let frame_time = timeline_time as f32;
@@ -4113,15 +4469,17 @@ impl ProjectUniforms {
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
         let base_crop = Self::get_crop(options, project);
         let base_padding = project.background.padding;
-        let styled_project = project.style_at(timeline_time);
+        let styled_project = constants
+            .project_styles
+            .resolve(shared_project, timeline_time);
         let project = styled_project.as_ref();
         let styled_crop = Self::get_crop(options, project);
         let has_layout_override =
             base_crop.size != styled_crop.size || base_padding != project.background.padding;
         let display_layout = if has_layout_override {
-            Self::styled_display_layout(options, project, output_size, resolution_base)
+            Self::styled_display_layout(options, project, output_size, resolution_base, source_size)
         } else {
-            Self::display_layout(options, project, resolution_base)
+            Self::display_layout(options, project, resolution_base, source_size)
         };
         let prev_frame_time = if frame_number == 0 {
             0.0
@@ -4246,8 +4604,7 @@ impl ProjectUniforms {
         // camera and cursor layers. Only engages when a camera actually exists;
         // otherwise the layers render normally (graceful full-screen fallback).
         let split_layout: Option<SplitLayoutComputed> = if scene.is_split() {
-            options
-                .camera_size
+            camera_size
                 .filter(|_| !project.camera.hide)
                 .map(|camera_size| {
                     let out_w = output_size.0 as f32;
@@ -4782,12 +5139,6 @@ impl ProjectUniforms {
             )
         };
 
-        let source_size = segment_frames
-            .screen_frame
-            .as_ref()
-            .map_or(segment_frames.screen_size, |frame| {
-                XY::new(frame.width(), frame.height())
-            });
         let display = display.for_source_frame(source_size);
         let display_outer_bounds = if frame_chrome.is_none() {
             display.target_bounds
@@ -4795,8 +5146,7 @@ impl ProjectUniforms {
             display_outer_bounds
         };
 
-        let camera = options
-            .camera_size
+        let camera = camera_size
             .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -5005,8 +5355,7 @@ impl ProjectUniforms {
                 }
             });
 
-        let camera_only = options
-            .camera_size
+        let camera_only = camera_size
             .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -5168,6 +5517,18 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let shapes = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_shapes(
+                    XY::new(output_size.0, output_size.1),
+                    timeline_time,
+                    &timeline.shape_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -5179,7 +5540,7 @@ impl ProjectUniforms {
             frame_chrome,
             notch,
             display_outer_bounds,
-            project: styled_project.into_owned(),
+            project: styled_project,
             zoom,
             scene,
             split: split_layout,
@@ -5196,6 +5557,7 @@ impl ProjectUniforms {
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
+            shapes,
             camera3d,
             camera3d_zoom,
             screen_color_grade,
@@ -5206,6 +5568,33 @@ impl ProjectUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_components_parse_rgb_hex_with_either_case_and_optional_hash() {
+        for hex in ["#4785FF", "4785ff", "#4785ff"] {
+            assert_eq!(parse_color_component(hex, 0), 71.0 / 255.0);
+            assert_eq!(parse_color_component(hex, 1), 133.0 / 255.0);
+            assert_eq!(parse_color_component(hex, 2), 1.0);
+        }
+    }
+
+    #[test]
+    fn color_components_fall_back_for_unsupported_hex_formats() {
+        for hex in ["", "#abc", "#abcd", "#12345678", " #123456 ", "#GGHHII"] {
+            for index in 0..3 {
+                assert_eq!(parse_color_component(hex, index), 1.0, "{hex:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn color_components_fall_back_for_six_byte_unicode_colors() {
+        for hex in ["#白色", "白色", "#a白bc", "#ab白c", "#abc白", "#💙ab"] {
+            for index in 0..3 {
+                assert_eq!(parse_color_component(hex, index), 1.0, "{hex:?}");
+            }
+        }
+    }
 
     #[test]
     fn camera_blur_output_rejects_missing_pending_and_failed_masks() {
@@ -5560,9 +5949,19 @@ mod tests {
             };
             project.background.padding = 25.0;
             let output = ProjectUniforms::get_output_size(&options, &project, resolution);
-            let base = ProjectUniforms::display_layout(&options, &project, resolution);
-            let copied =
-                ProjectUniforms::styled_display_layout(&options, &project, output, resolution);
+            let base = ProjectUniforms::display_layout(
+                &options,
+                &project,
+                resolution,
+                options.screen_size,
+            );
+            let copied = ProjectUniforms::styled_display_layout(
+                &options,
+                &project,
+                output,
+                resolution,
+                options.screen_size,
+            );
             for (before, after) in [
                 (base.content_size.x, copied.content_size.x),
                 (base.content_size.y, copied.content_size.y),
@@ -5574,8 +5973,13 @@ mod tests {
                 );
             }
             project.background.padding += 0.01;
-            let resized =
-                ProjectUniforms::styled_display_layout(&options, &project, output, resolution);
+            let resized = ProjectUniforms::styled_display_layout(
+                &options,
+                &project,
+                output,
+                resolution,
+                options.screen_size,
+            );
             assert!((copied.content_size.x - resized.content_size.x).abs() < 4.0);
             assert!((copied.content_size.y - resized.content_size.y).abs() < 4.0);
         }
@@ -5643,7 +6047,12 @@ mod tests {
         let mut project = ProjectConfiguration::default();
         project.background.padding = 25.0;
 
-        let layout = ProjectUniforms::display_layout(&options, &project, XY::new(2688, 1512));
+        let layout = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            XY::new(2688, 1512),
+            options.screen_size,
+        );
 
         assert_eq!(layout.outer_offset, layout.content_offset);
         assert_eq!(layout.outer_size, layout.content_size);
@@ -5661,7 +6070,12 @@ mod tests {
 
         let resolution_base = XY::new(2112, 1188);
         let (out_w, out_h) = ProjectUniforms::get_output_size(&options, &project, resolution_base);
-        let layout = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let layout = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
         let insets = frame_chrome::chrome_insets(FrameStyle::Browser);
 
         // The video keeps the recording's aspect ratio.
@@ -5700,9 +6114,19 @@ mod tests {
         });
 
         let resolution_base = XY::new(2304, 1296);
-        let centered = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let centered = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
         project.background.display_position = Some(XY::new(0.25, 0.75));
-        let moved = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let moved = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
 
         let outer_delta = moved.outer_offset - centered.outer_offset;
         let content_delta = moved.content_offset - centered.content_offset;
@@ -6070,7 +6494,15 @@ mod style_image_tests {
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 6.0, size);
         let at = |project: &ProjectConfiguration, frame| {
             ProjectUniforms::new(
-                &constants, project, frame, 60, size, &cursor, &frames, 6.0, &zoom,
+                &constants,
+                &Arc::new(project.clone()),
+                frame,
+                60,
+                size,
+                &cursor,
+                &frames,
+                6.0,
+                &zoom,
             )
         };
         let uniforms = at(&project, 180);
@@ -6228,6 +6660,7 @@ mod style_image_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -6293,10 +6726,12 @@ mod style_image_tests {
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 3.0, XY::new(160, 90));
         let mut layers = RendererLayers::new(&constants.device, &constants.queue);
         let mut renderer = FrameRenderer::new(&constants);
+        let shared_project = Arc::new(project.clone());
+        let mut previous_styled = None;
         for frame_number in [41, 42, 60, 83, 84] {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &shared_project,
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6308,6 +6743,10 @@ mod style_image_tests {
             assert_eq!(uniforms.output_size, (160, 90));
             let active = (42..84).contains(&frame_number);
             if active {
+                if let Some(previous) = &previous_styled {
+                    assert!(Arc::ptr_eq(previous, &uniforms.project));
+                }
+                previous_styled = Some(Arc::clone(&uniforms.project));
                 assert!(uniforms.display.target_size[0] < uniforms.display.target_size[1]);
                 let camera = uniforms.camera_only.expect("camera-only layout");
                 assert_eq!(camera.target_bounds, [9.0, 9.0, 151.0, 81.0]);
@@ -6369,7 +6808,7 @@ mod style_image_tests {
         );
         let uniforms = ProjectUniforms::new(
             &constants,
-            &project,
+            &Arc::new(project.clone()),
             60,
             60,
             XY::new(160, 90),
@@ -6396,7 +6835,7 @@ mod style_image_tests {
         let visibility_at = |frame_number: u32| {
             ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6477,6 +6916,7 @@ mod export_order_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -6510,6 +6950,7 @@ mod export_order_tests {
     async fn export(
         constants: &RenderVideoConstants,
         screen: AsyncVideoDecoderHandle,
+        rgba: bool,
     ) -> (Result<(), RenderingError>, Vec<u32>) {
         let project = ProjectConfiguration {
             timeline: Some(
@@ -6541,6 +6982,30 @@ mod export_order_tests {
             render_display: true,
         }];
         let recordings = ProjectRecordingsMeta { segments: vec![] };
+        if rgba {
+            let (sender, mut receiver) = mpsc::channel(8);
+            let render = render_video_to_channel(
+                constants,
+                &project,
+                sender,
+                &constants.recording_meta,
+                &constants.meta,
+                segments,
+                FPS,
+                XY::new(SIZE, SIZE),
+                &recordings,
+                None,
+                false,
+            );
+            let collect = async {
+                let mut order = Vec::new();
+                while let Some((frame, _)) = receiver.recv().await {
+                    order.push(frame.frame_number);
+                }
+                order
+            };
+            return tokio::join!(render, collect);
+        }
         let (sender, mut receiver) = mpsc::channel(8);
         let render = render_video_to_channel_nv12(
             constants,
@@ -6574,6 +7039,16 @@ mod export_order_tests {
         slow_decode: Option<(u32, Duration)>,
         slow_readback: Option<(u32, Duration)>,
     ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
+        run_export_with_allocation_failure(software_path, slow_decode, slow_readback, None, false)
+    }
+
+    fn run_export_with_allocation_failure(
+        software_path: bool,
+        slow_decode: Option<(u32, Duration)>,
+        slow_readback: Option<(u32, Duration)>,
+        allocation_failure: Option<u32>,
+        rgba: bool,
+    ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
         let _one_export_at_a_time = EXPORTS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -6586,14 +7061,18 @@ mod export_order_tests {
                     .build()
                     .expect("runtime")
                     .block_on(async move {
-                        let Some(constants) = constants(software_path).await else {
+                        let Some(mut constants) = constants(software_path).await else {
                             eprintln!("No graphics adapter available for export order test");
                             return None;
                         };
                         if let Some((frame_number, delay)) = slow_readback {
                             frame_pipeline::readback_delay::inject(frame_number, delay);
                         }
-                        Some(export(&constants, scripted_decoder(slow_decode)).await)
+                        if let Some(frame_number) = allocation_failure {
+                            constants.is_software_adapter = true;
+                            frame_pipeline::readback_allocation_failure::inject(frame_number);
+                        }
+                        Some(export(&constants, scripted_decoder(slow_decode), rgba).await)
                     })
             })
             .expect("export thread")
@@ -6604,6 +7083,32 @@ mod export_order_tests {
             started.elapsed()
         );
         result
+    }
+
+    #[test]
+    fn readback_allocation_failure_stops_export_without_retry_or_substitution() {
+        for rgba in [true, false] {
+            for failed_frame in [0, 5, FRAMES - 1] {
+                let Some((result, order)) =
+                    run_export_with_allocation_failure(false, None, None, Some(failed_frame), rgba)
+                else {
+                    return;
+                };
+                assert!(
+                    matches!(
+                        result,
+                        Err(RenderingError::ReadbackAllocationFailed { frame_number })
+                            if frame_number == failed_frame
+                    ),
+                    "rgba={rgba}, failed_frame={failed_frame}: {result:?}"
+                );
+                assert_eq!(
+                    order,
+                    (0..failed_frame).collect::<Vec<_>>(),
+                    "rgba={rgba}, failed_frame={failed_frame}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -6679,6 +7184,18 @@ mod export_order_tests {
     }
 
     #[test]
+    fn in_flight_frame_preserves_readback_allocation_failure() {
+        let mut in_flight = InFlightFrame::default();
+        in_flight.rendered(5, None).unwrap();
+        assert!(matches!(
+            in_flight.drain::<RenderedFrame>(Some(Err(RenderingError::ReadbackAllocationFailed {
+                frame_number: 5,
+            }))),
+            Err(RenderingError::ReadbackAllocationFailed { frame_number: 5 })
+        ));
+    }
+
+    #[test]
     fn in_flight_frame_must_come_out_next() {
         let mut in_flight = InFlightFrame::default();
         in_flight.rendered(0, None).unwrap();
@@ -6736,6 +7253,7 @@ mod nv12_flush_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -6769,7 +7287,7 @@ mod nv12_flush_tests {
         for frame_number in 0..5u32 {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(4, 4),
@@ -6886,7 +7404,7 @@ mod nv12_flush_tests {
             let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 7,
                 60,
                 XY::new(4, 4),
@@ -6961,6 +7479,7 @@ pub struct FrameRenderer<'a> {
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
+    owned_frames: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -6979,6 +7498,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
+            owned_frames: false,
         }
     }
 
@@ -6987,6 +7507,13 @@ impl<'a> FrameRenderer<'a> {
     /// failed readback costs the export a frame.
     pub(crate) fn use_export_deadlines(&mut self) {
         self.export_deadlines = true;
+    }
+
+    /// Frames are delivered with no other owner: the readback does not keep
+    /// a clone for recycling, so the consumer can take the buffer by value
+    /// instead of copying it out of a shared `Arc`.
+    pub(crate) fn deliver_owned_frames(&mut self) {
+        self.owned_frames = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -7037,6 +7564,7 @@ impl<'a> FrameRenderer<'a> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(&self.constants.device, width, height)
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
         });
         session.update_texture_size(&self.constants.device, width, height);
     }
@@ -7085,6 +7613,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7163,6 +7692,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7335,6 +7865,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7473,6 +8004,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7559,6 +8091,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7653,56 +8186,17 @@ impl<'a> FrameRenderer<'a> {
         let nv12_size = (width as usize) * (height as usize) * 3 / 2;
         let mut nv12_buf = self.nv12_buffer_pool.acquire(nv12_size);
 
-        let y_stride = width as usize;
-        let uv_stride = width as usize;
-        let y_plane_size = y_stride * height as usize;
-        let uv_plane_size = uv_stride * (height as usize / 2);
+        let y_plane_size = width as usize * height as usize;
+        let uv_plane_size = width as usize * (height as usize / 2);
         nv12_buf.resize(y_plane_size + uv_plane_size, 0);
 
-        let src_data = &rgba_frame.data;
-        let src_stride = padded_bytes_per_row as usize;
-
-        for row in 0..height as usize {
-            let src_row = &src_data[row * src_stride..row * src_stride + width as usize * 4];
-            let y_row = &mut nv12_buf[row * y_stride..(row + 1) * y_stride];
-            for col in 0..width as usize {
-                let r = src_row[col * 4] as i32;
-                let g = src_row[col * 4 + 1] as i32;
-                let b = src_row[col * 4 + 2] as i32;
-                y_row[col] = cpu_yuv::bt709_luma(r, g, b);
-            }
-        }
-
-        let uv_offset = y_plane_size;
-        for row in 0..(height as usize / 2) {
-            let src_row0 =
-                &src_data[row * 2 * src_stride..row * 2 * src_stride + width as usize * 4];
-            let src_row1 = &src_data
-                [(row * 2 + 1) * src_stride..(row * 2 + 1) * src_stride + width as usize * 4];
-            let uv_row =
-                &mut nv12_buf[uv_offset + row * uv_stride..uv_offset + (row + 1) * uv_stride];
-            for col in 0..(width as usize / 2) {
-                let r = (src_row0[col * 8] as i32
-                    + src_row0[col * 8 + 4] as i32
-                    + src_row1[col * 8] as i32
-                    + src_row1[col * 8 + 4] as i32
-                    + 2)
-                    / 4;
-                let g = (src_row0[col * 8 + 1] as i32
-                    + src_row0[col * 8 + 5] as i32
-                    + src_row1[col * 8 + 1] as i32
-                    + src_row1[col * 8 + 5] as i32
-                    + 2)
-                    / 4;
-                let b = (src_row0[col * 8 + 2] as i32
-                    + src_row0[col * 8 + 6] as i32
-                    + src_row1[col * 8 + 2] as i32
-                    + src_row1[col * 8 + 6] as i32
-                    + 2)
-                    / 4;
-                [uv_row[col * 2], uv_row[col * 2 + 1]] = cpu_yuv::bt709_chroma(r, g, b);
-            }
-        }
+        cpu_yuv::rgba_to_nv12(
+            &rgba_frame.data,
+            padded_bytes_per_row as usize,
+            width as usize,
+            height as usize,
+            &mut nv12_buf,
+        );
 
         frame_pipeline::Nv12RenderedFrame {
             data: self.nv12_buffer_pool.wrap(nv12_buf),
@@ -7752,6 +8246,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7850,7 +8345,11 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    fn reset_frame_state(&mut self) {
+    pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
+        self.overlays.as_ref()?.captions.frame_box()
+    }
+
+    pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();
@@ -8156,15 +8655,12 @@ impl RendererLayers {
     ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
         self.camera_blur_unavailable = false;
+        let background = self.background.background_for(
+            &uniforms.project.background.source,
+            constants.options.preserve_screen_alpha,
+        );
         self.background
-            .prepare(
-                constants,
-                uniforms,
-                Background::from_source(
-                    uniforms.project.background.source.clone(),
-                    constants.options.preserve_screen_alpha,
-                ),
-            )
+            .prepare(constants, uniforms, background)
             .await?;
 
         self.background_blur.prepare(&constants.queue, uniforms);
@@ -8237,8 +8733,14 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8308,15 +8810,12 @@ impl RendererLayers {
         let mut timings = FrameRenderStageTimings::default();
 
         let start = Instant::now();
+        let background = self.background.background_for(
+            &uniforms.project.background.source,
+            constants.options.preserve_screen_alpha,
+        );
         self.background
-            .prepare(
-                constants,
-                uniforms,
-                Background::from_source(
-                    uniforms.project.background.source.clone(),
-                    constants.options.preserve_screen_alpha,
-                ),
-            )
+            .prepare(constants, uniforms, background)
             .await?;
         timings.background_prepare_duration = start.elapsed();
 
@@ -8414,8 +8913,14 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8466,14 +8971,98 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.render_parts(
+            device,
+            queue,
+            encoder,
+            session,
+            uniforms,
+            render_display,
+            LayerParts::ALL,
+        )
+    }
+
+    /// What one side of a layered transition draws: its own content on a
+    /// transparent frame, with its masks, so a blurred region moves with the
+    /// footage it hides. Masks and a focus blur read and cover the
+    /// background too (a pixelated cell at a clip's edge samples it), so a
+    /// side with either keeps its background to stay identical to its plain
+    /// frames. When a mask is ordered above a text or
+    /// image overlay it has to cover that overlay as well, which only a whole
+    /// frame can show correctly, so the overlays travel with the clips then.
+    fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
+        let background = self.camera3d.blur_kind().is_some() || !uniforms.masks.is_empty();
+        LayerParts {
+            background,
+            content: true,
+            masks: true,
+            overlays: self.masks_cover_overlays(uniforms),
+        }
+    }
+
+    fn masks_cover_overlays(&self, uniforms: &ProjectUniforms) -> bool {
+        let Some(overlays) = &self.overlays else {
+            return false;
+        };
+        if uniforms.masks.is_empty() || !uniforms.project.has_overlay_order() {
+            return false;
+        }
+        let mut overlay_below = false;
+        for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+            match overlay.kind {
+                OverlayTrackKind::Image => {
+                    overlay_below |= overlays.images.has_track(overlay.track)
+                }
+                OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Shape => {
+                    overlay_below |= overlays.shapes.has_track(overlay.track)
+                }
+                OverlayTrackKind::Mask => {
+                    if overlay_below
+                        && uniforms
+                            .masks
+                            .iter()
+                            .any(|mask| mask.track == overlay.track)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_parts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
 
-        if render_display {
-            self.display.copy_to_texture(encoder);
+        let session_views = [session.current_texture_view(), session.other_texture_view()];
+        self.background_blur.retain_views(session_views);
+        self.background_color_grade.retain_views(session_views);
+        self.camera3d.retain_views(session_views);
+        if parts.masks {
+            self.mask.begin_frame(session_views);
         }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
-        self.background.render_surface(encoder);
+
+        if parts.content {
+            if render_display {
+                self.display.copy_to_texture(encoder);
+            }
+            self.camera.copy_to_texture(encoder);
+            self.camera_only.copy_to_texture(encoder);
+        }
+        if parts.background {
+            self.background.render_surface(encoder);
+        }
 
         let mut passes = LayerPasses {
             encoder,
@@ -8481,6 +9070,38 @@ impl RendererLayers {
             #[cfg(test)]
             split: self.split_layer_passes,
         };
+        if parts.background {
+            self.render_background(device, &mut passes, session, uniforms);
+        } else if parts.content {
+            passes.pass(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+        }
+        if parts.content {
+            self.render_content(device, &mut passes, session, uniforms, render_display);
+        }
+        if parts.masks || parts.overlays {
+            self.render_overlays(
+                device,
+                queue,
+                &mut passes,
+                session,
+                uniforms,
+                render_display,
+                parts,
+            );
+        }
+        Ok(())
+    }
+
+    fn render_background(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+    ) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
@@ -8547,6 +9168,18 @@ impl RendererLayers {
 
             session.swap_textures();
         }
+    }
+
+    fn render_content(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
@@ -8644,19 +9277,39 @@ impl RendererLayers {
             }
             None => {}
         }
+    }
 
-        if uniforms.project.overlay_order.is_empty() {
-            if !uniforms.masks.is_empty() {
+    #[allow(clippy::too_many_arguments)]
+    fn render_overlays(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) {
+        let load = wgpu::LoadOp::Load;
+
+        if !uniforms.project.has_overlay_order() {
+            if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
                         .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
-            if let Some(overlays) = &self.overlays {
+            if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
+                        .render(passes.pass(session.current_texture_view(), load));
+                }
+
+                if overlays.shapes.has_content() {
+                    overlays
+                        .shapes
                         .render(passes.pass(session.current_texture_view(), load));
                 }
 
@@ -8669,7 +9322,7 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask => {
+                    OverlayTrackKind::Mask if parts.masks => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -8680,25 +9333,40 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
+                        if parts.overlays
+                            && render_display
+                            && overlays.images.has_track(overlay.track) =>
                     {
                         overlays.images.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text
+                        if parts.overlays && overlays.text.has_track(overlay.track) =>
+                    {
                         overlays.text.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Shape
+                        if parts.overlays && overlays.shapes.has_track(overlay.track) =>
+                    {
+                        overlays.shapes.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
+                    }
+                    OverlayTrackKind::Mask
+                    | OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Shape => {}
                 }
             }
         }
 
-        if let Some(overlays) = &self.overlays {
+        if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
             if overlays.keyboard.has_content() {
                 overlays
                     .keyboard
@@ -8711,8 +9379,37 @@ impl RendererLayers {
                     .render(passes.pass(session.current_texture_view(), load));
             }
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayerParts {
+    background: bool,
+    content: bool,
+    masks: bool,
+    /// Every overlay but masks: images, text, keyboard and captions.
+    overlays: bool,
+}
+
+impl LayerParts {
+    const ALL: Self = Self {
+        background: true,
+        content: true,
+        masks: true,
+        overlays: true,
+    };
+    const BACKGROUND: Self = Self {
+        background: true,
+        content: false,
+        masks: false,
+        overlays: false,
+    };
+    const OVERLAYS: Self = Self {
+        background: false,
+        content: false,
+        masks: false,
+        overlays: true,
+    };
 }
 
 /// Lets consecutive layer draws into the same texture share one render pass.
@@ -8849,6 +9546,13 @@ async fn produce_transition_texture(
     session: &mut RenderSession,
     compositor: &TransitionCompositor,
 ) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let parameters = TransitionParameters {
+        kind: transition.0,
+        progress: transition.1,
+        opaque: outgoing.render_display || incoming.render_display,
+    };
+    let layered = parameters.composite().is_layered();
+
     let mut outgoing_encoder =
         constants
             .device
@@ -8865,13 +9569,19 @@ async fn produce_transition_texture(
             outgoing.render_display,
         )
         .await?;
-    layers.render(
+    let outgoing_parts = if layered {
+        layers.transition_side_parts(&outgoing.uniforms)
+    } else {
+        LayerParts::ALL
+    };
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut outgoing_encoder,
         session,
         &outgoing.uniforms,
         outgoing.render_display,
+        outgoing_parts,
     )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
@@ -8897,25 +9607,69 @@ async fn produce_transition_texture(
         .await;
     layers.camera_blur_unavailable |= outgoing_camera_blur_unavailable;
     incoming_prepare?;
-    layers.render(
+
+    if !layered {
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+        )?;
+        compositor.capture_incoming_and_render(
+            &constants.queue,
+            &mut incoming_encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+            parameters,
+        );
+        return Ok(incoming_encoder);
+    }
+
+    // Both sides take the outgoing side's parts: masks, 3D blur and overlay
+    // order are timeline state shared by the two, and a background drawn
+    // into the sides must not be drawn again underneath them.
+    let incoming_parts = outgoing_parts;
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut incoming_encoder,
         session,
         &incoming.uniforms,
         incoming.render_display,
+        incoming_parts,
     )?;
-    compositor.capture_incoming_and_render(
+    compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
+    if !incoming_parts.background {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::BACKGROUND,
+        )?;
+    }
+    compositor.render_layers(
         &constants.queue,
         &mut incoming_encoder,
-        session.current_texture(),
         session.current_texture_view(),
-        TransitionParameters {
-            kind: transition.0,
-            progress: transition.1,
-            opaque: outgoing.render_display || incoming.render_display,
-        },
+        parameters,
+        incoming_parts.background,
     );
+    if !incoming_parts.overlays {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::OVERLAYS,
+        )?;
+    }
 
     Ok(incoming_encoder)
 }
@@ -8974,7 +9728,7 @@ fn blur_mode_from_config(
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
     let color = hex_color.trim_start_matches('#');
 
-    if color.len() == 6 {
+    if color.len() == 6 && color.is_ascii() {
         let start = index * 2;
         if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
             return value as f32 / 255.0;
@@ -9073,7 +9827,7 @@ mod notch_bounds_tests {
             NOTCH,
             &options(),
             project,
-            ProjectUniforms::display_layout(&options(), project, SCREEN),
+            ProjectUniforms::display_layout(&options(), project, SCREEN, SCREEN),
             zoom,
         )
     }
@@ -9322,6 +10076,7 @@ mod project_uniforms_tests {
                 Some(project.cursor.click_spring_config()),
             );
             let zoom = ZoomTransformTimeline::from_project(&project, &events, 2.0, size);
+            let project = Arc::new(project);
             let mut legacy_renderer = FrameRenderer::new(&constants);
             let mut indexed_renderer = FrameRenderer::new(&constants);
             let mut hidden_renderer = FrameRenderer::new(&constants);
@@ -9385,7 +10140,7 @@ mod project_uniforms_tests {
                         2.0,
                         &zoom,
                     );
-                    hidden.project.cursor.hide = true;
+                    Arc::make_mut(&mut hidden.project).cursor.hide = true;
                     let hidden = hidden_renderer
                         .render_immediate(frames, hidden, &events, true, &mut hidden_layers)
                         .await
@@ -9478,6 +10233,308 @@ mod project_uniforms_tests {
     }
 
     #[tokio::test]
+    async fn raw_cursor_event_order_preserves_preview_uniforms_and_pixels() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let click = |time_ms: f64, down: bool| cap_project::CursorClickEvent {
+            active_modifiers: Vec::new(),
+            cursor_num: 0,
+            cursor_id: "primary".to_string(),
+            time_ms,
+            down,
+        };
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut random_time = 0.0;
+        let random_moves = (0..400)
+            .map(|index| {
+                if next() % 4 != 0 {
+                    random_time += f64::from(next() % 40);
+                }
+                let mut event = cursor_move(
+                    random_time,
+                    f64::from(next() % 1000) / 1000.0,
+                    f64::from(next() % 1000) / 1000.0,
+                );
+                event.cursor_id = (index / 37 % 3).to_string();
+                event
+            })
+            .collect::<Vec<_>>();
+        let mut click_time = 0.0;
+        let random_clicks = (0..40)
+            .map(|index| {
+                click_time += f64::from(next() % 400);
+                click(click_time, index % 2 == 0)
+            })
+            .collect::<Vec<_>>();
+        let mut unordered_moves = random_moves.clone();
+        unordered_moves.swap(120, 121);
+        unordered_moves.swap(10, 300);
+        let mut unordered_clicks = random_clicks.clone();
+        unordered_clicks.swap(3, 30);
+        let cases = [
+            CursorEvents {
+                moves: random_moves.clone(),
+                clicks: random_clicks.clone(),
+            },
+            CursorEvents {
+                moves: unordered_moves,
+                clicks: unordered_clicks,
+            },
+            CursorEvents {
+                moves: vec![
+                    cursor_move(0.0, 0.1, 0.5),
+                    cursor_move(0.0, 0.2, 0.5),
+                    cursor_move(250.0, 0.3, 0.4),
+                    cursor_move(250.0, 0.35, 0.45),
+                    cursor_move(800.0, 0.8, 0.6),
+                ],
+                clicks: vec![click(250.0, true), click(250.0, false), click(260.0, true)],
+            },
+            CursorEvents {
+                moves: Vec::new(),
+                clicks: random_clicks,
+            },
+        ];
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.motion_blur = 0.6;
+        project.cursor.rotation_amount = 1.0;
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.cursor.stop_movement_in_last_seconds = Some(0.5);
+        project.cursor.ripple.enabled = true;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let project = Arc::new(project);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut linear_renderer = FrameRenderer::new(&constants);
+        let mut ordered_renderer = FrameRenderer::new(&constants);
+        let mut linear_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut ordered_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut ordered_cases = 0;
+        for events in &cases {
+            let order = CursorEventOrder::new(events);
+            if order != CursorEventOrder::default() {
+                ordered_cases += 1;
+            }
+            let zoom = ZoomTransformTimeline::from_project(&project, events, 10.0, size);
+            let event_frames = events
+                .moves
+                .iter()
+                .map(|event| event.time_ms)
+                .chain(events.clicks.iter().map(|click| click.time_ms))
+                .step_by(7)
+                .map(|time_ms| (time_ms * 60.0 / 1000.0) as u32);
+            for frame_number in [0, 1, 15, 16, 48, 120, 300, 599]
+                .into_iter()
+                .chain(event_frames)
+            {
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let linear = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    events,
+                    &frames,
+                    10.0,
+                    &zoom,
+                );
+                let ordered = ProjectUniforms::new_with_cursor_event_order(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    events,
+                    &frames,
+                    10.0,
+                    &zoom,
+                    order,
+                );
+                assert_eq!(ordered.cursor_event_order, order);
+                let mut neutral = ordered.clone();
+                neutral.cursor_event_order = CursorEventOrder::default();
+                assert_eq!(
+                    format!("{linear:?}"),
+                    format!("{neutral:?}"),
+                    "frame={frame_number}: uniforms changed"
+                );
+                let linear = linear_renderer
+                    .render_immediate(frames.clone(), linear, events, true, &mut linear_layers)
+                    .await
+                    .unwrap();
+                let ordered = ordered_renderer
+                    .render_immediate(frames, ordered, events, true, &mut ordered_layers)
+                    .await
+                    .unwrap();
+                assert!(
+                    linear.data == ordered.data,
+                    "frame={frame_number}: rendered cursor pixels changed"
+                );
+            }
+        }
+        assert_eq!(ordered_cases, 3);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_raw_cursor_preview_uniforms() {
+        use std::hint::black_box;
+
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for duration_secs in [60, 600, 3600] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = true;
+            project.cursor.ripple.enabled = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": duration_secs, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            let project = Arc::new(project);
+            let events = CursorEvents {
+                moves: (0..=duration_secs * 60)
+                    .map(|index| {
+                        cursor_move(
+                            index as f64 * 1000.0 / 60.0,
+                            (index % 479) as f64 / 479.0,
+                            (index % 283) as f64 / 283.0,
+                        )
+                    })
+                    .collect(),
+                clicks: (0..duration_secs * 2)
+                    .map(|index| cap_project::CursorClickEvent {
+                        active_modifiers: Vec::new(),
+                        cursor_num: 0,
+                        cursor_id: "primary".to_string(),
+                        time_ms: index as f64 * 500.0,
+                        down: index % 2 == 0,
+                    })
+                    .collect(),
+            };
+            let started = Instant::now();
+            let order = CursorEventOrder::new(black_box(&events));
+            let order_us = started.elapsed().as_secs_f64() * 1e6;
+            assert_eq!(
+                order,
+                CursorEventOrder {
+                    moves: true,
+                    clicks: true
+                }
+            );
+            let zoom =
+                ZoomTransformTimeline::from_project(&project, &events, duration_secs as f64, size);
+            for workload in ["middle", "end"] {
+                let mut baseline = Vec::new();
+                let mut optimized = Vec::new();
+                for index in 0..544u32 {
+                    let frame_number = match workload {
+                        "middle" => duration_secs * 30,
+                        _ => (duration_secs - 3) * 60,
+                    } + index % 120;
+                    let time = frame_number as f32 / 60.0;
+                    let frames = DecodedSegmentFrames {
+                        screen_size: size,
+                        screen_frame: Some(source.clone()),
+                        camera_frame: None,
+                        segment_time: time,
+                        recording_time: time,
+                        segment_has_camera: false,
+                    };
+                    let old = || {
+                        ProjectUniforms::new(
+                            black_box(&constants),
+                            black_box(&project),
+                            black_box(frame_number),
+                            60,
+                            size,
+                            black_box(&events),
+                            black_box(&frames),
+                            duration_secs as f64,
+                            black_box(&zoom),
+                        )
+                    };
+                    let new = || {
+                        ProjectUniforms::new_with_cursor_event_order(
+                            black_box(&constants),
+                            black_box(&project),
+                            black_box(frame_number),
+                            60,
+                            size,
+                            black_box(&events),
+                            black_box(&frames),
+                            duration_secs as f64,
+                            black_box(&zoom),
+                            black_box(order),
+                        )
+                    };
+                    let measure = |build: &dyn Fn() -> ProjectUniforms| {
+                        let started = Instant::now();
+                        let uniforms = build();
+                        (started.elapsed().as_secs_f64() * 1e6, uniforms)
+                    };
+                    let ((old_us, old_uniforms), (new_us, new_uniforms)) = if index % 2 == 0 {
+                        (measure(&old), measure(&new))
+                    } else {
+                        let new = measure(&new);
+                        (measure(&old), new)
+                    };
+                    let mut neutral = new_uniforms;
+                    neutral.cursor_event_order = CursorEventOrder::default();
+                    assert!(old_uniforms.interpolated_cursor.is_some());
+                    assert_eq!(format!("{old_uniforms:?}"), format!("{neutral:?}"));
+                    if index >= 32 {
+                        baseline.push(old_us);
+                        optimized.push(new_us);
+                    }
+                }
+                baseline.sort_by(f64::total_cmp);
+                optimized.sort_by(f64::total_cmp);
+                let p50 = baseline.len() / 2;
+                let p95 = baseline.len() * 95 / 100;
+                println!(
+                    "raw_preview_uniforms duration_secs={duration_secs} workload={workload} moves={} clicks={} frames={} order_setup_us={order_us:.3} baseline_p50_us={:.3} baseline_p95_us={:.3} optimized_p50_us={:.3} optimized_p95_us={:.3}",
+                    events.moves.len(),
+                    events.clicks.len(),
+                    baseline.len(),
+                    baseline[p50],
+                    baseline[p95],
+                    optimized[p50],
+                    optimized[p95],
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn ordered_cursor_event_lookups_preserve_rendered_pixels() {
         let mut constants = cursor_test_constants().await;
         let size = XY::new(320, 180);
@@ -9533,6 +10590,7 @@ mod project_uniforms_tests {
             }
         );
         let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let project = Arc::new(project);
         let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
         let mut ordered_renderer = FrameRenderer::new(&constants);
         let mut linear_renderer = FrameRenderer::new(&constants);
@@ -9586,6 +10644,98 @@ mod project_uniforms_tests {
             distinct_frames.insert(ordered.data);
         }
         assert!(distinct_frames.len() > 8);
+    }
+
+    #[tokio::test]
+    async fn idle_hidden_cursor_never_flashes_while_resuming() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: [0.0, 3000.0, 3050.0]
+                .into_iter()
+                .map(|time| cursor_move(time, 0.5, 0.5))
+                .collect(),
+            clicks: Vec::new(),
+        };
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let cursor = PrecomputedCursorTimeline::new(&events, None, None);
+        let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let mut hidden_project = project.clone();
+        hidden_project.cursor.hide = true;
+        let project = Arc::new(project);
+        let hidden_project = Arc::new(hidden_project);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut render = async |project: &Arc<ProjectConfiguration>, frame_number: u32| {
+            let time = frame_number as f32 / 60.0;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: Some(source.clone()),
+                camera_frame: None,
+                segment_time: time,
+                recording_time: time,
+                segment_has_camera: false,
+            };
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                &constants,
+                project,
+                frame_number,
+                60,
+                size,
+                &events,
+                &frames,
+                4.0,
+                &zoom,
+                &cursor,
+            );
+            renderer
+                .render_immediate(frames, uniforms, &events, true, &mut layers)
+                .await
+                .unwrap()
+                .data
+        };
+        let background = render(&hidden_project, 180).await;
+        let mut coverage = Vec::new();
+        for frame_number in 160..=212 {
+            let frame = render(&project, frame_number).await;
+            let drawn: u64 = frame
+                .iter()
+                .zip(background.iter())
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            coverage.push((frame_number, drawn));
+        }
+        assert_eq!(coverage[0].1, 0, "the cursor must start idle-hidden");
+        let full = coverage.last().unwrap().1;
+        assert!(full > 0, "the fixture must draw a cursor");
+        for pair in coverage.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "cursor coverage fell from {} at frame {} to {} at frame {}",
+                pair[0].1,
+                pair[0].0,
+                pair[1].1,
+                pair[1].0,
+            );
+        }
+        let at_resume = coverage.iter().find(|(frame, _)| *frame == 180).unwrap().1;
+        assert_eq!(
+            at_resume, full,
+            "the cursor must be fully visible when it moves"
+        );
     }
 
     #[tokio::test]
@@ -9651,6 +10801,7 @@ mod project_uniforms_tests {
                 f64::from(duration_secs),
                 size,
             );
+            let project = Arc::new(project);
             let mut renderer = FrameRenderer::new(&constants);
             let mut layers = RendererLayers::new(&constants.device, &constants.queue);
             let mut random = 0x9e37_79b9_u32;
@@ -9754,7 +10905,7 @@ mod project_uniforms_tests {
                 }
                 let uniforms = ProjectUniforms::new(
                     &constants,
-                    &project,
+                    &Arc::new(project.clone()),
                     0,
                     30,
                     screen_size,
@@ -10061,7 +11212,7 @@ mod project_uniforms_tests {
             );
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(800, 450),
@@ -10090,7 +11241,7 @@ mod project_uniforms_tests {
                 assert!((opacity - expected).abs() < 0.001);
             }
             let mut display_uniforms = uniforms.clone();
-            display_uniforms.project.cursor.hide = true;
+            Arc::make_mut(&mut display_uniforms.project).cursor.hide = true;
             let display = renderer
                 .render_immediate(frames.clone(), display_uniforms, &events, true, &mut layers)
                 .await
@@ -10102,7 +11253,7 @@ mod project_uniforms_tests {
             for ripple_only in [false, true] {
                 let mut overlay_uniforms = uniforms.clone();
                 if ripple_only {
-                    overlay_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut overlay_uniforms.project).cursor.hide = true;
                     overlay_uniforms.click_ripples = vec![ClickRipple {
                         position: Coord::new(position),
                         progress: 0.35,
@@ -10126,7 +11277,7 @@ mod project_uniforms_tests {
                 cursor_only_frames.camera_frame = None;
                 let mut cursor_only_uniforms = ProjectUniforms::new(
                     &constants,
-                    &project,
+                    &Arc::new(project.clone()),
                     frame_number,
                     60,
                     XY::new(800, 450),
@@ -10135,12 +11286,14 @@ mod project_uniforms_tests {
                     4.0,
                     &zoom_timeline,
                 );
-                cursor_only_uniforms.project.background.source = BackgroundSource::Color {
+                Arc::make_mut(&mut cursor_only_uniforms.project)
+                    .background
+                    .source = BackgroundSource::Color {
                     value: [0, 0, 0],
                     alpha: 0,
                 };
                 if ripple_only {
-                    cursor_only_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut cursor_only_uniforms.project).cursor.hide = true;
                     cursor_only_uniforms.click_ripples = vec![ClickRipple {
                         position: Coord::new(position),
                         progress: 0.35,
@@ -10183,7 +11336,7 @@ mod project_uniforms_tests {
                     );
                     report_pixel_changes("overlay vs original", &overlay, &display, marker_center);
                     let mut hidden_uniforms = uniforms.clone();
-                    hidden_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut hidden_uniforms.project).cursor.hide = true;
                     let hidden_repeat = renderer
                         .render_immediate(
                             frames.clone(),
@@ -10313,6 +11466,163 @@ mod project_uniforms_tests {
         assert!(delta < 0.2, "focus moved too far ahead: {delta}");
         assert!(delta > -0.25, "focus lagged too far behind: {delta}");
     }
+
+    fn uniforms_at(
+        constants: &RenderVideoConstants,
+        project: &Arc<ProjectConfiguration>,
+        frame_number: u32,
+    ) -> ProjectUniforms {
+        let screen_size = constants.options.screen_size;
+        let events = CursorEvents::default();
+        let mut zoom_timeline =
+            ZoomTransformTimeline::from_project(project, &events, 60.0, screen_size);
+        zoom_timeline.ensure_precomputed_until(60.0);
+        let frames = DecodedSegmentFrames {
+            screen_size,
+            screen_frame: Some(DecodedFrame::new(Vec::new(), screen_size.x, screen_size.y)),
+            camera_frame: None,
+            segment_time: frame_number as f32 / 30.0,
+            recording_time: frame_number as f32 / 30.0,
+            segment_has_camera: false,
+        };
+        ProjectUniforms::new(
+            constants,
+            project,
+            frame_number,
+            30,
+            screen_size,
+            &events,
+            &frames,
+            60.0,
+            &zoom_timeline,
+        )
+    }
+
+    fn captioned_project(segments: u32) -> ProjectConfiguration {
+        let captions: Vec<_> = (0..segments)
+            .map(|i| {
+                let start = f64::from(i) * 3.0;
+                serde_json::json!({
+                    "id": format!("caption-{i}"),
+                    "start": start,
+                    "end": start + 2.5,
+                    "text": "the quick brown fox jumps over the lazy dog",
+                    "words": (0..8).map(|w| serde_json::json!({
+                        "text": format!("word{w}"),
+                        "start": start + f64::from(w) * 0.3,
+                        "end": start + f64::from(w) * 0.3 + 0.25,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{"recordingClip": 0, "start": 0.0, "end": f64::from(segments) * 3.0, "timescale": 1.0}],
+                "zoomSegments": [],
+                "captionSegments": captions,
+            },
+            "captions": {"segments": captions, "settings": {}},
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn uniforms_share_base_and_styled_project_snapshots() {
+        let constants = cursor_test_constants().await;
+        let mut project = captioned_project(10);
+        project.timeline.as_mut().unwrap().style_segments = serde_json::from_value(
+            serde_json::json!([{"start": 1.0, "end": 2.0, "overrides": {"background": {"padding": 30.0}}}]),
+        )
+        .unwrap();
+        let mut project = Arc::new(project);
+
+        let before = uniforms_at(&constants, &project, 15);
+        let styled = uniforms_at(&constants, &project, 45);
+        let next_styled = uniforms_at(&constants, &project, 46);
+        let after = uniforms_at(&constants, &project, 75);
+
+        assert!(Arc::ptr_eq(&before.project, &project));
+        assert!(Arc::ptr_eq(&after.project, &project));
+        assert!(!Arc::ptr_eq(&styled.project, &project));
+        assert!(Arc::ptr_eq(&styled.project, &next_styled.project));
+        assert_eq!(styled.project.background.padding, 30.0);
+        assert_eq!(
+            styled.project.captions.as_ref().unwrap().segments.len(),
+            project.captions.as_ref().unwrap().segments.len()
+        );
+        Arc::make_mut(&mut project)
+            .timeline
+            .as_mut()
+            .unwrap()
+            .style_segments[0]
+            .overrides
+            .background
+            .as_mut()
+            .unwrap()
+            .padding = 15.0;
+        let edited = uniforms_at(&constants, &project, 45);
+        assert_eq!(edited.project.background.padding, 15.0);
+        assert_eq!(styled.project.background.padding, 30.0);
+        assert!(!Arc::ptr_eq(&edited.project, &styled.project));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_project_uniforms() {
+        use std::hint::black_box;
+
+        let constants = cursor_test_constants().await;
+        let screen_size = constants.options.screen_size;
+        let events = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size,
+            screen_frame: Some(DecodedFrame::new(Vec::new(), screen_size.x, screen_size.y)),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        for (transcript, segments) in [
+            ("none", 0),
+            ("10 min", 200),
+            ("30 min", 600),
+            ("60 min", 1200),
+        ] {
+            let project = Arc::new(captioned_project(segments));
+            let mut zoom_timeline =
+                ZoomTransformTimeline::from_project(&project, &events, 60.0, screen_size);
+            zoom_timeline.ensure_precomputed_until(60.0);
+            let mut runs: Vec<f64> = (0..400)
+                .map(|frame| {
+                    let start = Instant::now();
+                    let uniforms = ProjectUniforms::new(
+                        &constants,
+                        &project,
+                        frame % 1800,
+                        30,
+                        screen_size,
+                        &events,
+                        &frames,
+                        60.0,
+                        &zoom_timeline,
+                    );
+                    let elapsed = start.elapsed().as_secs_f64() * 1_000_000.0;
+                    black_box(uniforms);
+                    elapsed
+                })
+                .collect();
+            runs.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "transcript": transcript,
+                    "caption_segments": segments,
+                    "median_us": runs[runs.len() / 2],
+                    "p95_us": runs[runs.len() * 95 / 100],
+                })
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -10336,5 +11646,208 @@ mod initial_decode_recovery_tests {
 
         assert!(times.iter().all(|time| *time >= 0.0));
         assert!(times.last().copied().unwrap_or_default() >= 0.0);
+    }
+}
+
+#[cfg(test)]
+mod per_frame_cache_tests {
+    use super::*;
+    use cap_project::{BackgroundSource, CursorMoveEvent, CursorType};
+
+    #[tokio::test]
+    async fn steady_frames_reuse_bind_groups_and_the_resolved_wallpaper() {
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "per-frame-caches",
+            "display": { "path": "display.mp4", "fps": 30 },
+            "camera": null, "audio": null, "cursor": null
+        }))
+        .expect("metadata");
+        let meta = recording_meta.studio_meta().expect("studio").clone();
+        let size = XY::new(160, 90);
+        let constants = RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .expect("graphics device");
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let wallpaper = directory.path().join("wallpaper.png");
+        image::RgbaImage::from_pixel(64, 48, image::Rgba([40, 90, 160, 255]))
+            .save(&wallpaper)
+            .expect("wallpaper");
+
+        let mut project = ProjectConfiguration::default();
+        project.background.source = BackgroundSource::Wallpaper {
+            path: Some(wallpaper.to_string_lossy().into_owned()),
+        };
+        project.background.padding = 10.0;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.color_correction.screen.exposure = 0.4;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [], "zoomSegments": [],
+                "maskSegments": [
+                    {
+                        "start": 0.0, "end": 10.0, "maskType": "sensitive",
+                        "center": { "x": 0.3, "y": 0.4 }, "size": { "x": 0.3, "y": 0.3 },
+                        "pixelation": 1024.0
+                    },
+                    {
+                        "start": 0.0, "end": 10.0, "maskType": "sensitive",
+                        "center": { "x": 0.6, "y": 0.5 }, "size": { "x": 0.2, "y": 0.2 },
+                        "pixelation": 18.0
+                    }
+                ]
+            }))
+            .expect("timeline"),
+        );
+        let project = Arc::new(project);
+
+        let frame_count = 10;
+        let cursor = CursorEvents {
+            clicks: vec![],
+            moves: (0..frame_count)
+                .map(|frame| CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: "0".to_string(),
+                    time_ms: frame as f64 * 1000.0 / 30.0,
+                    x: 0.2 + frame as f64 * 0.05,
+                    y: 0.5,
+                })
+                .collect(),
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, size);
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut layers = RendererLayers::new_for_preparing_preview(
+            &constants.device,
+            &constants.queue,
+            constants.is_software_adapter,
+            &project,
+        )
+        .expect("layers");
+
+        let mut first_cursor_bind_group = None;
+        let mut first_background_generation = None;
+        for frame_number in 0..frame_count {
+            let time = frame_number as f32 / 30.0;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: Some(DecodedFrame::new(
+                    [200, 120, 60, 255].repeat(160 * 90),
+                    160,
+                    90,
+                )),
+                camera_frame: None,
+                segment_time: time,
+                recording_time: time,
+                segment_has_camera: false,
+            };
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                30,
+                size,
+                &cursor,
+                &frames,
+                1.0,
+                &zoom,
+            );
+            assert_eq!(uniforms.masks.len(), 2);
+            renderer
+                .render_immediate(frames, uniforms, &cursor, true, &mut layers)
+                .await
+                .expect("frame");
+
+            let bind_group = layers.cursor.bind_group().cloned().expect("cursor drawn");
+            let generation = layers.background.static_generation();
+            if frame_number == 0 {
+                first_cursor_bind_group = Some(bind_group);
+                first_background_generation = generation;
+                std::fs::remove_file(&wallpaper).expect("remove wallpaper");
+            } else {
+                assert_eq!(Some(bind_group), first_cursor_bind_group);
+                assert_eq!(generation, first_background_generation);
+            }
+        }
+
+        assert_eq!(layers.mask.uniform_buffer_count(), 3);
+        assert!(layers.mask.bind_groups_created() <= 6);
+        assert!(layers.background_color_grade.bind_groups_created() <= 2);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod dx12_compiler_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn unloadable_dxc_falls_back_to_fxc() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dxc_path = dir.path().join("dxcompiler.dll");
+        let dxil_path = dir.path().join("dxil.dll");
+        std::fs::write(&dxc_path, b"").expect("write dxcompiler.dll");
+        std::fs::write(&dxil_path, b"").expect("write dxil.dll");
+        let broken = wgpu::Dx12Compiler::DynamicDxc {
+            dxc_path: dxc_path.to_string_lossy().into_owned(),
+            dxil_path: dxil_path.to_string_lossy().into_owned(),
+            max_shader_model: wgpu::DxcShaderModel::V6_7,
+        };
+
+        assert!(
+            dx12_instance(broken.clone())
+                .enumerate_adapters(wgpu::Backends::all())
+                .is_empty(),
+            "a DXC that fails to load should drop the DX12 backend"
+        );
+        println!("dx12 init error: {}", dx12_init_error(broken.clone()));
+
+        let (instance, compiler) = dx12_instance_with_fxc_fallback(broken);
+        assert!(matches!(compiler, wgpu::Dx12Compiler::Fxc));
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("FXC instance has a DX12 adapter");
+        let (device, queue) =
+            pollster::block_on(request_rendering_device(&adapter)).expect("device on FXC");
+
+        // FXC compiles at pipeline creation, so build every production
+        // rendering pipeline on the fallback device.
+        device.push_error_scope(wgpu::ErrorFilter::Internal);
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let started = Instant::now();
+        let _layers = RendererLayers::new(&device, &queue);
+        let _transitions = TransitionCompositor::new(&device);
+        let compile_time = started.elapsed();
+        let validation = pollster::block_on(device.pop_error_scope());
+        let internal = pollster::block_on(device.pop_error_scope());
+        assert!(
+            validation.is_none() && internal.is_none(),
+            "pipeline on FXC failed: {validation:?} {internal:?}"
+        );
+
+        let info = adapter.get_info();
+        println!(
+            "device created on FXC: adapter={} backend={:?} type={:?} pipelines={compile_time:?}",
+            info.name, info.backend, info.device_type
+        );
+    }
+
+    #[test]
+    fn loadable_bundled_dxc_is_kept() {
+        let compiler = bundled_dxc_compiler();
+        if matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+            println!("no bundled DXC next to the test binary; nothing to check");
+            return;
+        }
+
+        let (instance, kept) = dx12_instance_with_fxc_fallback(compiler);
+        assert!(matches!(kept, wgpu::Dx12Compiler::DynamicDxc { .. }));
+        assert!(!instance.enumerate_adapters(wgpu::Backends::DX12).is_empty());
     }
 }

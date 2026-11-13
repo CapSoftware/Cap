@@ -3,11 +3,13 @@ use crate::{
     output_pipeline::{
         HealthSender, PipelineHealthEvent, emit_health,
         frame_pacing::{FramePacer, Paced},
+        mjpeg::MjpegDecoder,
     },
     screen_capture,
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::aac::AACEncoder;
+use cap_enc_ffmpeg::hardware_crash::{HardwareEncoderSession, hardware_encoder_disabled};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use futures::channel::oneshot;
@@ -23,6 +25,10 @@ use std::{
 use tracing::*;
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+
+/// The direct Media Foundation encoder loads the same vendor transforms as
+/// FFmpeg's `h264_mf`, so it shares that name for crash recovery.
+const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -245,6 +251,13 @@ impl Muxer for WindowsMuxer {
                         return fallback(None);
                     }
 
+                    if hardware_encoder_disabled(MEDIA_FOUNDATION_ENCODER) {
+                        return fallback(Some(
+                            "Media Foundation H264 disabled after it crashed Cap".to_string(),
+                        ));
+                    }
+
+                    let session = HardwareEncoderSession::begin(MEDIA_FOUNDATION_ENCODER);
                     match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                         &config.d3d_device,
                         config.pixel_format,
@@ -304,7 +317,7 @@ impl Muxer for WindowsMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -337,8 +350,12 @@ impl Muxer for WindowsMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
@@ -789,6 +806,13 @@ impl Muxer for WindowsCameraMuxer {
                         return fallback(None);
                     }
 
+                    if hardware_encoder_disabled(MEDIA_FOUNDATION_ENCODER) {
+                        return fallback(Some(
+                            "Media Foundation H264 disabled after it crashed Cap".to_string(),
+                        ));
+                    }
+
+                    let session = HardwareEncoderSession::begin(MEDIA_FOUNDATION_ENCODER);
                     match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                         &d3d_device,
                         input_format,
@@ -828,7 +852,7 @@ impl Muxer for WindowsCameraMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -861,8 +885,12 @@ impl Muxer for WindowsCameraMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         info!(
                             "Windows camera encoder started (hardware) with frame pacing: {:?} {}x{} -> NV12 {}x{} @ {}fps",
                             input_format,
@@ -960,6 +988,7 @@ impl Muxer for WindowsCameraMuxer {
                         let mut last_frame: Option<NativeCameraFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
+                        let mut mjpeg_decoder = MjpegDecoder::default();
 
                         loop {
                             let ts = match pacer.next(&video_rx, &pause_flag) {
@@ -976,7 +1005,7 @@ impl Muxer for WindowsCameraMuxer {
 
                             let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
 
-                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame) {
+                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame, &mut mjpeg_decoder) {
                                 Ok(f) => f,
                                 Err(e) => {
                                     error!("Failed to convert camera frame: {e}");
@@ -1345,11 +1374,14 @@ fn convert_uyvy_to_yuyv(
     dst
 }
 
-pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+pub(crate) fn camera_frame_to_ffmpeg(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
-        return decode_mjpeg_frame(frame);
+        return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
     let ffmpeg_format = match frame.pixel_format {
@@ -1625,7 +1657,10 @@ fn copy_plane(
     }
 }
 
-fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+fn decode_mjpeg_frame(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     let buffer_guard = frame
@@ -1637,26 +1672,7 @@ fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
 
-    let codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::MJPEG)
-        .ok_or_else(|| anyhow!("MJPEG codec not found"))?;
-
-    let decoder_context = ffmpeg::codec::context::Context::new_with_codec(codec);
-    let mut decoder = decoder_context
-        .decoder()
-        .video()
-        .map_err(|e| anyhow!("Failed to create MJPEG decoder: {e}"))?;
-
-    let packet = ffmpeg::Packet::copy(data);
-    decoder
-        .send_packet(&packet)
-        .map_err(|e| anyhow!("Failed to send MJPEG packet: {e}"))?;
-
-    let mut decoded_frame = ffmpeg::frame::Video::empty();
-    decoder
-        .receive_frame(&mut decoded_frame)
-        .map_err(|e| anyhow!("Failed to decode MJPEG frame: {e}"))?;
-
-    Ok(decoded_frame)
+    mjpeg_decoder.decode(data)
 }
 
 fn flip_buffer_size(

@@ -9,8 +9,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@cap/ui";
-import { faBell } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBell } from "@fortawesome/free-solid-svg-icons/faBell";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -33,8 +32,9 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { resetUser } from "@/app/utils/analytics";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { LazyUpgradeModal } from "@/components/LazyUpgradeModal";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
@@ -68,6 +68,8 @@ const Top = () => {
 		"/dashboard/settings/organization/content": "Organization Settings",
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
+		"/dashboard/settings/organization/integrations": "Organization Settings",
+		"/dashboard/settings/organization/security": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/settings/notifications": "Notification Settings",
 		"/dashboard/spaces": "Spaces",
@@ -75,10 +77,6 @@ const Top = () => {
 		"/dashboard/analytics": "Analytics",
 		[`/dashboard/folder/${params.id}`]: "Caps",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
-		"/dashboard/developers": "Developers",
-		"/dashboard/developers/apps": "Developer Apps",
-		"/dashboard/developers/usage": "Developer Usage",
-		"/dashboard/developers/credits": "Developer Credits",
 	};
 
 	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
@@ -108,6 +106,7 @@ const Top = () => {
 			className={clsx(
 				"flex fixed z-40 justify-between items-center py-3 pr-2 pl-5 w-full md:relative mt-[60px] lg:mt-0 lg:py-[19px] lg:pl-0 lg:pr-5",
 				"top-0 bg-gray-1",
+				toggleNotifications && "lg:z-[60]",
 			)}
 		>
 			<div className="flex flex-col gap-0.5 min-w-0 shrink">
@@ -269,7 +268,7 @@ const User = () => {
 
 	return (
 		<>
-			<UpgradeModal
+			<LazyUpgradeModal
 				open={upgradeModalOpen}
 				onOpenChange={setUpgradeModalOpen}
 			/>

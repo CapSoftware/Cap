@@ -66,15 +66,16 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight, GlobalElementId, Hsla,
-    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font, FontWeight, GlobalElementId,
+    Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, RenderOnce, SharedString, Size,
     Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window,
     WrappedLine, actions, div, fill, point, prelude::*, px, relative, size, svg,
 };
 use smallvec::SmallVec;
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::GraphemeCursor;
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 // -- Actions and key bindings -------------------------------------------------
@@ -139,8 +140,12 @@ pub const KEY_CONTEXT: &str = "TextInput";
 /// matched *before* the IME composes the character, so binding `a` would mean
 /// the letter `a` could never be typed.
 pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys(bindings());
+}
+
+pub(crate) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some(KEY_CONTEXT);
-    cx.bind_keys([
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, ctx),
         KeyBinding::new("delete", DeleteForward, ctx),
         KeyBinding::new("alt-backspace", DeleteWordLeft, ctx),
@@ -181,7 +186,36 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Confirm, ctx),
         KeyBinding::new("escape", Cancel, ctx),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, ctx),
-    ]);
+    ];
+    if cfg!(not(target_os = "macos")) {
+        bindings.extend(ctrl_bindings(ctx));
+    }
+    bindings
+}
+
+/// The fork parses `cmd` as the Windows/Super key off macOS, so the `cmd-*`
+/// chords above never fire there. These are the Windows and Linux spellings of
+/// the same commands.
+fn ctrl_bindings(ctx: Option<&str>) -> [KeyBinding; 17] {
+    [
+        KeyBinding::new("ctrl-a", SelectAll, ctx),
+        KeyBinding::new("ctrl-c", Copy, ctx),
+        KeyBinding::new("ctrl-x", Cut, ctx),
+        KeyBinding::new("ctrl-v", Paste, ctx),
+        KeyBinding::new("ctrl-z", Undo, ctx),
+        KeyBinding::new("ctrl-shift-z", Redo, ctx),
+        KeyBinding::new("ctrl-y", Redo, ctx),
+        KeyBinding::new("ctrl-left", MoveWordLeft, ctx),
+        KeyBinding::new("ctrl-right", MoveWordRight, ctx),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, ctx),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, ctx),
+        KeyBinding::new("ctrl-backspace", DeleteWordLeft, ctx),
+        KeyBinding::new("ctrl-delete", DeleteWordRight, ctx),
+        KeyBinding::new("ctrl-home", MoveToStart, ctx),
+        KeyBinding::new("ctrl-end", MoveToEnd, ctx),
+        KeyBinding::new("ctrl-shift-home", SelectToStart, ctx),
+        KeyBinding::new("ctrl-shift-end", SelectToEnd, ctx),
+    ]
 }
 
 // -- The focus gate for bare printable keys -----------------------------------
@@ -210,6 +244,21 @@ pub fn text_input_has_focus(window: &Window, cx: &App) -> bool {
     inputs.iter().any(|weak| {
         weak.upgrade()
             .is_some_and(|entity| entity.read(cx).focus.is_focused(window))
+    })
+}
+
+/// Is a focused field in this window composing IME text? Tab belongs to the
+/// input method then.
+pub fn text_input_is_composing(window: &Window, cx: &App) -> bool {
+    let Some(live) = cx.try_global::<LiveInputs>() else {
+        return false;
+    };
+    let inputs = live.0.borrow();
+    inputs.iter().any(|weak| {
+        weak.upgrade().is_some_and(|entity| {
+            let input = entity.read(cx);
+            input.marked_range.is_some() && input.focus.is_focused(window)
+        })
     })
 }
 
@@ -261,11 +310,16 @@ struct Row {
 /// The shaped picture of the content, rebuilt only when its key changes.
 struct InputLayout {
     lines: SmallVec<[WrappedLine; 1]>,
+    max_glyph_height: Pixels,
     /// Byte offset of each paragraph's first character in the whole content.
     paragraph_starts: Vec<usize>,
     /// Index of each paragraph's first visual row.
     paragraph_rows: Vec<usize>,
     rows: Vec<Row>,
+    wrap_width: Option<Pixels>,
+    size: Size<Pixels>,
+    intrinsic_size: Size<Pixels>,
+    measurements: SmallVec<[(Pixels, Size<Pixels>); 4]>,
     key: LayoutKey,
 }
 
@@ -273,10 +327,10 @@ struct InputLayout {
 #[derive(Debug, Clone, PartialEq)]
 struct LayoutKey {
     text: SharedString,
-    wrap_width: Option<Pixels>,
     font_size: Pixels,
     line_height: Pixels,
-    weight: FontWeight,
+    font: Font,
+    color: Hsla,
     marked: Option<Range<usize>>,
 }
 
@@ -547,6 +601,11 @@ impl TextInputState {
 
     pub fn focus_handle(&self) -> FocusHandle {
         self.focus.clone()
+    }
+
+    /// `focus_handle().is_focused(window)` without cloning the handle.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus.is_focused(window)
     }
 
     fn invalidate_layout(&self) {
@@ -1405,15 +1464,19 @@ impl EntityInputHandler for TextInputState {
 // -- Pure text helpers, unit-tested -------------------------------------------
 
 fn previous_grapheme(text: &str, offset: usize) -> usize {
-    text.grapheme_indices(true)
-        .rev()
-        .find_map(|(index, _)| (index < offset).then_some(index))
+    // Rounding up keeps the containing grapheme eligible for interior byte offsets.
+    let offset = text.ceil_char_boundary(offset);
+    GraphemeCursor::new(offset, text.len(), true)
+        .prev_boundary(text, 0)
+        .expect("the complete string supplies all grapheme context")
         .unwrap_or(0)
 }
 
 fn next_grapheme(text: &str, offset: usize) -> usize {
-    text.grapheme_indices(true)
-        .find_map(|(index, _)| (index > offset).then_some(index))
+    let offset = text.floor_char_boundary(offset);
+    GraphemeCursor::new(offset, text.len(), true)
+        .next_boundary(text, 0)
+        .expect("the complete string supplies all grapheme context")
         .unwrap_or(text.len())
 }
 
@@ -1828,7 +1891,11 @@ impl RenderOnce for TextInput {
         let state = self.state.clone();
         let (focus, multi_line, disabled) = {
             let read = state.read(cx);
-            (read.focus.clone(), read.multi_line, read.disabled)
+            (
+                read.focus.clone().tab_stop(!read.disabled),
+                read.multi_line,
+                read.disabled,
+            )
         };
         let focused = focus.is_focused(window);
         // `leading-normal` on a `text-xs` input is 1.35 in this font stack;
@@ -1863,6 +1930,7 @@ impl RenderOnce for TextInput {
             .id(self.id.clone())
             .key_context(KEY_CONTEXT)
             .track_focus(&focus)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .relative()
             .flex()
             .flex_row()
@@ -1974,48 +2042,36 @@ impl IntoElement for TextBody {
 }
 
 impl TextBody {
-    /// Shape the content if the cached layout is stale, and hand back the size
-    /// it occupies. The only place `shape_text` is called.
-    fn ensure_layout(
-        &self,
-        wrap_width: Option<Pixels>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Size<Pixels> {
+    fn layout_key(&self, window: &Window, cx: &App) -> LayoutKey {
         let mut font = window.text_style().font();
         font.weight = self.weight;
-
-        let (text, marked) = {
-            let read = self.state.read(cx);
-            (read.content.clone(), read.marked_range.clone())
-        };
-        let key = LayoutKey {
-            text: text.clone(),
-            wrap_width,
+        let state = self.state.read(cx);
+        LayoutKey {
+            text: state.content.clone(),
             font_size: self.text_size,
             line_height: self.line_height,
-            weight: self.weight,
-            marked: marked.clone(),
-        };
-
-        if let Some(layout) = self.layout.borrow().as_ref()
-            && layout.key == key
-        {
-            return layout_size(layout, self.line_height);
-        }
-
-        // The composing run is underlined, which is the whole visual contract
-        // of marked text.
-        let base = TextRun {
-            len: text.len(),
-            font: font.clone(),
+            font,
             color: self.color,
+            marked: state.marked_range.clone(),
+        }
+    }
+
+    fn shape_lines(
+        &self,
+        key: &LayoutKey,
+        wrap_width: Option<Pixels>,
+        window: &mut Window,
+    ) -> SmallVec<[WrappedLine; 1]> {
+        let base = TextRun {
+            len: key.text.len(),
+            font: key.font.clone(),
+            color: key.color,
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        let runs: Vec<TextRun> = match marked.as_ref() {
-            Some(marked) if marked.end <= text.len() && marked.start <= marked.end => vec![
+        let runs: Vec<TextRun> = match key.marked.as_ref() {
+            Some(marked) if marked.end <= key.text.len() && marked.start <= marked.end => vec![
                 TextRun {
                     len: marked.start,
                     ..base.clone()
@@ -2023,14 +2079,14 @@ impl TextBody {
                 TextRun {
                     len: marked.end - marked.start,
                     underline: Some(UnderlineStyle {
-                        color: Some(self.color),
+                        color: Some(key.color),
                         thickness: px(1.),
                         wavy: false,
                     }),
                     ..base.clone()
                 },
                 TextRun {
-                    len: text.len() - marked.end,
+                    len: key.text.len() - marked.end,
                     ..base
                 },
             ]
@@ -2039,11 +2095,88 @@ impl TextBody {
             .collect(),
             _ => vec![base],
         };
-
-        let lines = window
+        window
             .text_system()
-            .shape_text(text, self.text_size, &runs, wrap_width, None)
-            .unwrap_or_default();
+            .shape_text(key.text.clone(), key.font_size, &runs, wrap_width, None)
+            .unwrap_or_default()
+    }
+
+    fn measure(
+        &self,
+        key: &LayoutKey,
+        wrap_width: Option<Pixels>,
+        window: &mut Window,
+    ) -> Size<Pixels> {
+        if let Some(layout) = self.layout.borrow().as_ref()
+            && layout.key == *key
+        {
+            match wrap_width {
+                None => return layout.intrinsic_size,
+                Some(width) if layout.wrap_width == wrap_width => {
+                    return size(width, layout.size.height);
+                }
+                Some(width) => {
+                    if let Some((_, size)) = layout
+                        .measurements
+                        .iter()
+                        .find(|(cached_width, _)| *cached_width == width)
+                    {
+                        return *size;
+                    }
+                }
+            }
+        }
+
+        // Flex measurement probes several widths; only prepaint needs the interaction rows.
+        let lines = self.shape_lines(key, wrap_width, window);
+        let measured = match wrap_width {
+            Some(width) => {
+                let rows = lines
+                    .iter()
+                    .map(|line| line.wrap_boundaries().len() + 1)
+                    .sum::<usize>()
+                    .max(1);
+                size(width, self.line_height * rows as f32)
+            }
+            None => intrinsic_text_size(&lines, self.line_height),
+        };
+        if let Some(width) = wrap_width
+            && let Some(layout) = self.layout.borrow_mut().as_mut()
+            && layout.key == *key
+        {
+            if layout.measurements.len() == 4 {
+                layout.measurements.remove(0);
+            }
+            layout.measurements.push((width, measured));
+        }
+        measured
+    }
+
+    fn ensure_layout(
+        &self,
+        key: LayoutKey,
+        wrap_width: Option<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Size<Pixels> {
+        if let Some(layout) = self.layout.borrow().as_ref()
+            && layout.key == key
+            && layout.wrap_width == wrap_width
+        {
+            return layout.size;
+        }
+
+        let lines = self.shape_lines(&key, wrap_width, window);
+        let max_glyph_height = lines.iter().fold(px(0.), |height, line| {
+            line.runs().iter().fold(height, |height, run| {
+                height.max(
+                    cx.text_system()
+                        .bounding_box(run.font_id, line.font_size())
+                        .size
+                        .height,
+                )
+            })
+        });
 
         let mut paragraph_starts = Vec::with_capacity(lines.len());
         let mut paragraph_rows = Vec::with_capacity(lines.len());
@@ -2067,15 +2200,24 @@ impl TextBody {
             });
         }
 
-        let layout = InputLayout {
+        let width = rows
+            .iter()
+            .map(|row| row.width)
+            .fold(px(0.), |a, b| if b > a { b } else { a });
+        let size = size(width, self.line_height * rows.len() as f32);
+        let intrinsic_size = intrinsic_text_size(&lines, self.line_height);
+        *self.layout.borrow_mut() = Some(InputLayout {
             lines,
+            max_glyph_height,
             paragraph_starts,
             paragraph_rows,
             rows,
+            wrap_width,
+            size,
+            intrinsic_size,
+            measurements: SmallVec::new(),
             key,
-        };
-        let size = layout_size(&layout, self.line_height);
-        *self.layout.borrow_mut() = Some(layout);
+        });
         self.state.update(cx, |state, _| {
             state.line_height = self.line_height;
             state.align = self.align;
@@ -2084,13 +2226,41 @@ impl TextBody {
     }
 }
 
-fn layout_size(layout: &InputLayout, line_height: Pixels) -> Size<Pixels> {
-    let width = layout
-        .rows
+fn intrinsic_text_size(lines: &[WrappedLine], line_height: Pixels) -> Size<Pixels> {
+    let width = lines
         .iter()
-        .map(|row| row.width)
-        .fold(px(0.), |a: Pixels, b| if b > a { b } else { a });
-    size(width, line_height * layout.rows.len() as f32)
+        .map(|line| {
+            let layout = &line.unwrapped_layout;
+            layout.width - layout.x_for_index(0)
+        })
+        .fold(px(0.), |a, b| if b > a { b } else { a });
+    size(width, line_height * lines.len().max(1) as f32)
+}
+
+fn paragraph_is_visible(
+    line: &WrappedLine,
+    origin_y: Pixels,
+    line_height: Pixels,
+    max_glyph_height: Pixels,
+    clip: Bounds<Pixels>,
+) -> bool {
+    if line_height <= px(0.) {
+        return true;
+    }
+    if origin_y > clip.bottom() {
+        return false;
+    }
+    if origin_y + line.size(line_height).height + max_glyph_height < clip.top() {
+        // GPUI advances wrapped rows with repeated f32 addition, which can exceed n * height.
+        let last_row_y = line
+            .wrap_boundaries()
+            .iter()
+            .fold(origin_y, |y, _| y + line_height);
+        if last_row_y + max_glyph_height < clip.top() {
+            return false;
+        }
+    }
+    true
 }
 
 impl Element for TextBody {
@@ -2131,13 +2301,14 @@ impl Element for TextBody {
             style.size.width = relative(1.).into();
         }
         let body = self.clone();
+        let key = self.layout_key(window, cx);
         let fit_content = self.fit_content;
         let line_height = self.line_height;
         let layout_id = window.request_measured_layout(
             style,
             move |known_dimensions, available_space, window, cx| {
                 if fit_content {
-                    let size = body.ensure_layout(None, window, cx);
+                    let size = body.ensure_layout(key.clone(), None, window, cx);
                     // One pixel of slack so the caret at the very end is inside
                     // the element rather than on its edge.
                     return gpui::size(size.width + px(1.), line_height);
@@ -2146,8 +2317,7 @@ impl Element for TextBody {
                     gpui::AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
-                let size = body.ensure_layout(wrap_width, window, cx);
-                gpui::size(wrap_width.unwrap_or(size.width), size.height)
+                body.measure(&key, wrap_width, window)
             },
         );
         (layout_id, ())
@@ -2163,7 +2333,7 @@ impl Element for TextBody {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let wrap_width = (self.multi_line && !self.fit_content).then_some(bounds.size.width);
-        self.ensure_layout(wrap_width, window, cx);
+        self.ensure_layout(self.layout_key(window, cx), wrap_width, window, cx);
 
         let placeholder = {
             let read = self.state.read(cx);
@@ -2332,17 +2502,28 @@ impl Element for TextBody {
             // and not inside the entity.
             let layout = self.layout.borrow();
             if let Some(layout) = layout.as_ref() {
+                let clip = window.content_mask().bounds;
                 for line in layout.lines.iter() {
                     let height = line.size(self.line_height).height;
-                    line.paint(
-                        origin,
-                        self.line_height,
-                        self.align,
-                        Some(bounds),
-                        window,
-                        cx,
-                    )
-                    .ok();
+                    if layout.key.marked.is_some()
+                        || paragraph_is_visible(
+                            line,
+                            origin.y,
+                            self.line_height,
+                            layout.max_glyph_height,
+                            clip,
+                        )
+                    {
+                        line.paint(
+                            origin,
+                            self.line_height,
+                            self.align,
+                            Some(bounds),
+                            window,
+                            cx,
+                        )
+                        .ok();
+                    }
                     origin.y += height;
                 }
             }
@@ -2379,6 +2560,217 @@ impl Element for TextBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
+
+    // -- Key bindings ---------------------------------------------------------
+
+    fn single_keystroke(binding: &KeyBinding) -> &gpui::Keystroke {
+        assert_eq!(binding.keystrokes().len(), 1, "{binding:?}");
+        binding.keystrokes()[0].inner()
+    }
+
+    fn bound<'a>(bindings: &'a [KeyBinding], source: &str) -> Vec<&'a KeyBinding> {
+        let keystroke = gpui::Keystroke::parse(source).unwrap();
+        bindings
+            .iter()
+            .filter(|binding| single_keystroke(binding) == &keystroke)
+            .collect()
+    }
+
+    fn assert_bound(bindings: &[KeyBinding], source: &str, action: &dyn gpui::Action) {
+        let matches = bound(bindings, source);
+        assert_eq!(matches.len(), 1, "{source} should be bound exactly once");
+        assert!(
+            matches[0].action().partial_eq(action),
+            "{source} is bound to {}, expected {}",
+            matches[0].action().name(),
+            action.name()
+        );
+    }
+
+    const MAC_CHORDS: usize = 40;
+
+    #[test]
+    fn every_binding_is_a_single_keystroke_in_the_text_input_context() {
+        for binding in bindings() {
+            single_keystroke(&binding);
+            assert_eq!(
+                binding.predicate().map(|predicate| predicate.to_string()),
+                Some(KEY_CONTEXT.to_string()),
+                "{binding:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_keystroke_is_bound_twice() {
+        let bindings = bindings();
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            assert!(
+                seen.insert(single_keystroke(binding).unparse()),
+                "{binding:?} is bound twice"
+            );
+        }
+    }
+
+    #[test]
+    fn no_bare_printable_key_is_bound() {
+        for binding in bindings() {
+            let keystroke = single_keystroke(&binding);
+            let modified = keystroke.modifiers.control
+                || keystroke.modifiers.alt
+                || keystroke.modifiers.platform
+                || keystroke.modifiers.function;
+            assert!(
+                modified || keystroke.key.chars().count() > 1,
+                "{binding:?} would swallow a typed character"
+            );
+        }
+    }
+
+    #[test]
+    fn mac_chords_are_unchanged() {
+        let golden: &[(&str, &dyn gpui::Action)] = &[
+            ("backspace", &Backspace),
+            ("delete", &DeleteForward),
+            ("alt-backspace", &DeleteWordLeft),
+            ("alt-delete", &DeleteWordRight),
+            ("cmd-backspace", &DeleteToLineStart),
+            ("cmd-delete", &DeleteToLineEnd),
+            ("left", &MoveLeft),
+            ("right", &MoveRight),
+            ("up", &MoveUp),
+            ("down", &MoveDown),
+            ("alt-left", &MoveWordLeft),
+            ("alt-right", &MoveWordRight),
+            ("cmd-left", &MoveToLineStart),
+            ("cmd-right", &MoveToLineEnd),
+            ("home", &MoveToLineStart),
+            ("end", &MoveToLineEnd),
+            ("cmd-up", &MoveToStart),
+            ("cmd-down", &MoveToEnd),
+            ("shift-left", &SelectLeft),
+            ("shift-right", &SelectRight),
+            ("shift-up", &SelectUp),
+            ("shift-down", &SelectDown),
+            ("alt-shift-left", &SelectWordLeft),
+            ("alt-shift-right", &SelectWordRight),
+            ("cmd-shift-left", &SelectToLineStart),
+            ("cmd-shift-right", &SelectToLineEnd),
+            ("shift-home", &SelectToLineStart),
+            ("shift-end", &SelectToLineEnd),
+            ("cmd-shift-up", &SelectToStart),
+            ("cmd-shift-down", &SelectToEnd),
+            ("cmd-a", &SelectAll),
+            ("cmd-c", &Copy),
+            ("cmd-x", &Cut),
+            ("cmd-v", &Paste),
+            ("cmd-z", &Undo),
+            ("cmd-shift-z", &Redo),
+            ("cmd-y", &Redo),
+            ("enter", &Confirm),
+            ("escape", &Cancel),
+            ("ctrl-cmd-space", &ShowCharacterPalette),
+        ];
+        assert_eq!(golden.len(), MAC_CHORDS);
+        let bindings = bindings();
+        for (source, action) in golden {
+            assert_bound(&bindings, source, *action);
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(bindings.len(), MAC_CHORDS);
+        }
+    }
+
+    #[test]
+    fn ctrl_chords_edit_text_only_off_macos() {
+        let chords: &[(&str, &dyn gpui::Action)] = &[
+            ("ctrl-a", &SelectAll),
+            ("ctrl-c", &Copy),
+            ("ctrl-x", &Cut),
+            ("ctrl-v", &Paste),
+            ("ctrl-z", &Undo),
+            ("ctrl-shift-z", &Redo),
+            ("ctrl-y", &Redo),
+            ("ctrl-left", &MoveWordLeft),
+            ("ctrl-right", &MoveWordRight),
+            ("ctrl-shift-left", &SelectWordLeft),
+            ("ctrl-shift-right", &SelectWordRight),
+            ("ctrl-backspace", &DeleteWordLeft),
+            ("ctrl-delete", &DeleteWordRight),
+            ("ctrl-home", &MoveToStart),
+            ("ctrl-end", &MoveToEnd),
+            ("ctrl-shift-home", &SelectToStart),
+            ("ctrl-shift-end", &SelectToEnd),
+        ];
+        let bindings = bindings();
+        for (source, action) in chords {
+            if cfg!(target_os = "macos") {
+                assert!(
+                    bound(&bindings, source).is_empty(),
+                    "{source} is bound on macOS"
+                );
+            } else {
+                assert_bound(&bindings, source, *action);
+            }
+        }
+        if !cfg!(target_os = "macos") {
+            assert_eq!(bindings.len(), MAC_CHORDS + chords.len());
+        }
+    }
+
+    struct PasteProbe {
+        state: Entity<TextInputState>,
+    }
+
+    impl Render for PasteProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(TextInput::settings(
+                &Theme::light(),
+                "paste-probe",
+                &self.state,
+            ))
+        }
+    }
+
+    /// A 0.6.1 report from Linux: pasting into Cap's text fields did nothing.
+    /// The fields bound only `cmd-v`, which the fork reads as Super off macOS.
+    /// This presses the platform's paste chord through the real key dispatch,
+    /// and copies back out with the copy chord.
+    #[gpui::test]
+    fn the_platform_paste_and_copy_chords_reach_a_focused_field(cx: &mut gpui::TestAppContext) {
+        cx.update(bind_keys);
+        let (probe, cx) = cx.add_window_view(|window, cx| PasteProbe {
+            state: cx.new(|cx| TextInputState::single_line(window, cx)),
+        });
+        let state = probe.read_with(cx, |probe, _| probe.state.clone());
+        cx.update(|window, cx| {
+            let focus = state.read(cx).focus_handle();
+            window.focus(&focus, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                "pasted from the clipboard".into(),
+            ));
+        });
+        cx.run_until_parked();
+        let (paste, select_all, copy) = if cfg!(target_os = "macos") {
+            ("cmd-v", "cmd-a", "cmd-c")
+        } else {
+            ("ctrl-v", "ctrl-a", "ctrl-c")
+        };
+        cx.simulate_keystrokes(paste);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.text().to_string()),
+            "pasted from the clipboard"
+        );
+
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
+        cx.simulate_keystrokes(&format!("{select_all} {copy}"));
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some("pasted from the clipboard".to_string())
+        );
+    }
 
     // -- Word navigation ------------------------------------------------------
 
@@ -2508,6 +2900,50 @@ mod tests {
         assert_eq!(previous_grapheme(text, text.len()), 0);
     }
 
+    #[test]
+    fn grapheme_navigation_matches_boundaries_at_every_byte_offset() {
+        let texts = [
+            "",
+            "a",
+            "plain text\r\nnext line",
+            "é中😀",
+            "e\u{301}\u{308}x",
+            "\u{301}\u{308}a",
+            "a🇬🇧🇯🇵🇨b",
+            "a👩🏽‍💻👨‍👩‍👧‍👦b",
+            "aक्ष\u{200d}कb",
+            "a\u{600}\u{600}بb",
+            "a\u{1100}\u{1161}\u{11a8}b",
+            "a\u{915}\u{93e}b",
+            "a\u{200d}b\u{200c}c",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain([
+            format!("a{}b", "🇬".repeat(65)),
+            format!("a{}b", "\u{301}".repeat(64)),
+            format!("a{}b", "\u{600}".repeat(64)),
+            format!("a{}👩b", "👩\u{200d}".repeat(32)),
+        ]);
+        for text in texts {
+            let boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
+            for offset in (0..=text.len() + 3).chain([usize::MAX]) {
+                let before = boundaries.partition_point(|&i| i < offset);
+                let after = boundaries.partition_point(|&i| i <= offset);
+                assert_eq!(
+                    previous_grapheme(&text, offset),
+                    before.checked_sub(1).map_or(0, |i| boundaries[i]),
+                    "previous at {offset} in {text:?}"
+                );
+                assert_eq!(
+                    next_grapheme(&text, offset),
+                    boundaries.get(after).copied().unwrap_or(text.len()),
+                    "next at {offset} in {text:?}"
+                );
+            }
+        }
+    }
+
     // -- utf-16, the input protocol's unit ------------------------------------
 
     #[test]
@@ -2606,9 +3042,250 @@ mod tests {
         assert_eq!(starts, vec![0]);
     }
 
+    #[gpui::test]
+    fn paragraph_culling_keeps_fractional_wrapped_rows(cx: &mut gpui::TestAppContext) {
+        cx.add_empty_window().update(|window, cx| {
+            let body = measurement_body(&"a".repeat(15_000), window, cx);
+            body.ensure_layout(body.layout_key(window, cx), Some(px(1.)), window, cx);
+            let layout = body.layout.borrow();
+            let layout = layout.as_ref().unwrap();
+            let line = &layout.lines[0];
+            assert_eq!(line.wrap_boundaries().len(), 14_999);
+            let height = px(26.4);
+            let glyph_height = layout.max_glyph_height;
+            let origin = -line.size(height).height - glyph_height - px(1.);
+            let clip = Bounds::new(point(px(0.), px(0.)), size(px(240.), px(240.)));
+            // Multiplication says this is clipped; GPUI's repeated row additions leave visible glyphs.
+            assert!(origin + line.size(height).height + glyph_height < clip.top());
+            assert!(paragraph_is_visible(
+                line,
+                origin,
+                height,
+                glyph_height,
+                clip
+            ));
+            assert!(!paragraph_is_visible(
+                line,
+                clip.bottom() + px(1.),
+                height,
+                glyph_height,
+                clip
+            ));
+            assert!(!paragraph_is_visible(
+                line,
+                origin - px(10_000.),
+                height,
+                glyph_height,
+                clip
+            ));
+            for height in [px(0.), px(-1.)] {
+                assert!(paragraph_is_visible(
+                    line,
+                    clip.bottom() + px(1.),
+                    height,
+                    glyph_height,
+                    clip
+                ));
+            }
+        });
+    }
+
+    fn measurement_body(text: &str, window: &mut Window, cx: &mut App) -> TextBody {
+        let state = cx.new(|cx| TextInputState::multi_line(window, cx));
+        state.update(cx, |state, cx| state.set_text(text.to_owned(), cx));
+        TextBody {
+            layout: state.read(cx).shared_layout(),
+            state,
+            fit_content: false,
+            text_size: px(30.),
+            line_height: px(45.),
+            weight: FontWeight::MEDIUM,
+            align: TextAlign::Left,
+            color: gpui::black(),
+            placeholder_color: gpui::black(),
+            caret_color: gpui::black(),
+            selection_color: gpui::black(),
+            multi_line: true,
+            focused: false,
+        }
+    }
+
+    fn fresh_measurement(
+        body: &TextBody,
+        wrap_width: Option<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Size<Pixels> {
+        let mut fresh = body.clone();
+        fresh.layout = Rc::new(RefCell::new(None));
+        let measured = fresh.ensure_layout(fresh.layout_key(window, cx), wrap_width, window, cx);
+        size(wrap_width.unwrap_or(measured.width), measured.height)
+    }
+
+    fn check_measurement(
+        body: &TextBody,
+        width: Option<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let expected = fresh_measurement(body, width, window, cx);
+        for _ in 0..2 {
+            assert_eq!(
+                body.measure(&body.layout_key(window, cx), width, window),
+                expected
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn measurement_preserves_rows_across_width_probes(cx: &mut gpui::TestAppContext) {
+        cx.add_empty_window().update(|window, cx| {
+            for text in [
+                "",
+                "\n\n",
+                "A paragraph with wrapping.\nSecond.\n",
+                "مرحبا café e\u{301} हिन्दी 👩🏽‍💻 🇬🇧\n中文。",
+            ] {
+                let mut body = measurement_body(text, window, cx);
+                for height in [16.25, 45.] {
+                    body.line_height = px(height);
+                    for width in [None, Some(px(0.)), Some(px(1.)), Some(px(70.5))] {
+                        check_measurement(&body, width, window, cx);
+                        assert!(body.layout.borrow().is_none());
+                    }
+                }
+                body.ensure_layout(body.layout_key(window, cx), Some(px(496.)), window, cx);
+                body.layout.borrow_mut().as_mut().unwrap().max_glyph_height = px(-123.);
+                for width in [None, Some(px(1368.)), Some(px(496.))]
+                    .into_iter()
+                    .chain((1..=20).map(|i| Some(px(i as f32 * 40.))))
+                    .chain([Some(px(40.))])
+                {
+                    check_measurement(&body, width, window, cx);
+                    body.ensure_layout(body.layout_key(window, cx), Some(px(496.)), window, cx);
+                    let cache = body.layout.borrow();
+                    let cache = cache.as_ref().unwrap();
+                    assert_eq!(cache.wrap_width, Some(px(496.)));
+                    assert_eq!(cache.max_glyph_height, px(-123.));
+                    if let Some(width) = width.filter(|w| *w != px(496.)) {
+                        assert!(cache.measurements.iter().any(|(w, _)| *w == width));
+                        assert!(cache.measurements.len() <= 4);
+                    }
+                }
+            }
+        });
+    }
+
+    fn check_invalidated(body: &TextBody, window: &mut Window, cx: &mut App) {
+        body.layout.borrow_mut().as_mut().unwrap().max_glyph_height = px(-123.);
+        check_measurement(body, Some(px(1368.)), window, cx);
+        let key = body.layout_key(window, cx);
+        body.ensure_layout(key.clone(), Some(px(250.)), window, cx);
+        let cache = body.layout.borrow();
+        let cache = cache.as_ref().unwrap();
+        assert_eq!(cache.key, key);
+        assert_eq!(cache.wrap_width, Some(px(250.)));
+        assert_ne!(cache.max_glyph_height, px(-123.));
+        assert!(cache.measurements.is_empty());
+    }
+
+    #[gpui::test]
+    fn measurement_invalidates_on_resize_text_and_style(cx: &mut gpui::TestAppContext) {
+        cx.add_empty_window().draw(
+            point(px(0.), px(0.)),
+            size(px(800.), px(600.)),
+            |window, cx| {
+                let mut body = measurement_body("A paragraph with wrapping.", window, cx);
+                body.ensure_layout(body.layout_key(window, cx), Some(px(496.)), window, cx);
+                check_invalidated(&body, window, cx);
+                body.state
+                    .update(cx, |s, _| s.content = "Changed text.\nNext.".into());
+                check_invalidated(&body, window, cx);
+                body.text_size = px(24.);
+                check_invalidated(&body, window, cx);
+                body.line_height = px(36.5);
+                check_invalidated(&body, window, cx);
+                body.weight = FontWeight::BOLD;
+                check_invalidated(&body, window, cx);
+                body.color = gpui::white();
+                check_invalidated(&body, window, cx);
+                body.state.update(cx, |s, _| s.marked_range = Some(0..7));
+                check_invalidated(&body, window, cx);
+                body.state.update(cx, |s, _| s.marked_range = None);
+                check_invalidated(&body, window, cx);
+                for style in [
+                    gpui::TextStyleRefinement {
+                        font_family: Some("test-font".into()),
+                        ..Default::default()
+                    },
+                    gpui::TextStyleRefinement {
+                        font_style: Some(gpui::FontStyle::Italic),
+                        ..Default::default()
+                    },
+                ] {
+                    window.with_text_style(Some(style), |window| {
+                        check_invalidated(&body, window, cx)
+                    });
+                }
+                div()
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn deferred_measurement_retains_the_inherited_font(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        for fit_content in [false, true] {
+            let text = "A paragraph with several words to wrap. ".repeat(8);
+            let mut body = cx.update(|window, cx| measurement_body(&text, window, cx));
+            body.fit_content = fit_content;
+            let draw = |cx: &mut gpui::VisualTestContext| {
+                cx.draw(
+                    point(px(0.), px(0.)),
+                    size(
+                        gpui::AvailableSpace::Definite(px(496.)),
+                        gpui::AvailableSpace::MaxContent,
+                    ),
+                    |_, _| {
+                        div()
+                            .w(px(496.))
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .font_family("measurement-parent-font")
+                            .child(body.clone())
+                    },
+                );
+            };
+            draw(cx);
+            {
+                let mut cached = body.layout.borrow_mut();
+                let cached = cached.as_mut().unwrap();
+                assert_eq!(cached.key.font.family.as_ref(), "measurement-parent-font");
+                assert_eq!(cached.wrap_width, (!fit_content).then_some(px(496.)));
+                cached.max_glyph_height = px(-123.);
+                if !fit_content {
+                    cached.size.height = px(123.);
+                }
+            }
+            draw(cx);
+            assert_eq!(
+                body.layout.borrow().as_ref().unwrap().max_glyph_height,
+                px(-123.)
+            );
+            if !fit_content {
+                assert_eq!(
+                    cx.update(|_, cx| body.state.read(cx).text_bounds.unwrap().size.height),
+                    px(123.),
+                );
+            }
+        }
+    }
+
     fn layout_of(rows: &[Range<usize>], widths: &[f32]) -> InputLayout {
         InputLayout {
             lines: SmallVec::new(),
+            max_glyph_height: px(0.),
             paragraph_starts: vec![0],
             paragraph_rows: vec![0],
             rows: rows
@@ -2621,12 +3298,19 @@ mod tests {
                     width: px(widths[index]),
                 })
                 .collect(),
+            wrap_width: None,
+            size: size(
+                widths.iter().copied().map(px).fold(px(0.), Pixels::max),
+                px(20.) * rows.len() as f32,
+            ),
+            intrinsic_size: size(px(0.), px(20.)),
+            measurements: SmallVec::new(),
             key: LayoutKey {
                 text: SharedString::default(),
-                wrap_width: None,
                 font_size: px(12.),
                 line_height: px(20.),
-                weight: FontWeight::NORMAL,
+                font: Font::default(),
+                color: gpui::black(),
                 marked: None,
             },
         }

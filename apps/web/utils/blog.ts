@@ -11,6 +11,7 @@ export type PostMetadata = {
 	description: string;
 	tags?: string;
 	image?: string;
+	video?: string;
 };
 
 export type DocMetadata = {

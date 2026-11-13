@@ -1,23 +1,27 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RenderedFrame,
-    RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
+    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders,
+    RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ZoomTransformTimeline,
 };
 use image::{
-    Rgba,
+    ImageFormat, Rgba, RgbaImage,
     codecs::jpeg::JpegEncoder,
     flat::{FlatSamples, SampleLayout},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ExportError, ExporterBase, ExporterBuilder, make_cursor_only_project,
-    synthesize_default_timeline,
+    ExportError, ExporterBase, ExporterBuilder,
+    gif::{DEFAULT_GIF_QUALITY, GifQuality},
+    make_cursor_only_project, synthesize_default_timeline,
 };
+
+const GIF_PREVIEW_JPEG_QUALITY: u8 = 95;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ExportPreviewSettings {
@@ -26,6 +30,10 @@ pub struct ExportPreviewSettings {
     pub compression_bpp: f32,
     #[serde(default)]
     pub cursor_only: bool,
+    /// Set for a GIF export: the preview shows the frame reduced to a GIF
+    /// palette at this quality instead of the MP4 compression estimate.
+    #[serde(default)]
+    pub gif_quality: Option<GifQuality>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,7 +63,7 @@ pub async fn render_preview(
     }
 
     let exporter_base = exporter_builder
-        .build()
+        .build_video_only()
         .await
         .map_err(|e| ExportError::Other(format!("Exporter build error: {e}")))?;
 
@@ -87,7 +95,7 @@ pub async fn render_preview_with_config(
 ) -> Result<ExportPreviewResult, ExportError> {
     let exporter_base =
         preview_builder_with_config(project_path, project_config, settings, force_ffmpeg_decoder)
-            .build()
+            .build_video_only()
             .await
             .map_err(|error| ExportError::Other(format!("Exporter build error: {error}")))?;
     render_preview_with_base(exporter_base, frame_time, settings).await
@@ -100,6 +108,7 @@ struct PreviewSource<'a> {
     render_constants: &'a RenderVideoConstants,
     segments: Vec<PreviewSegment<'a>>,
     total_duration: f64,
+    layers_cache: Option<&'a std::sync::Mutex<Option<RendererLayers>>>,
 }
 
 struct PreviewSegment<'a> {
@@ -130,6 +139,7 @@ async fn render_preview_with_base(
             })
             .collect(),
         total_duration,
+        layers_cache: None,
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -138,7 +148,7 @@ async fn render_preview_with_base(
 /// instead of building a fresh exporter (a new wgpu device, every shader, and
 /// a cold decoder per recording segment) for each frame. This is what makes the
 /// export page's preview respond in one frame's worth of work rather than
-/// seconds, and it is the same path the Tauri editor's fast preview takes.
+/// seconds.
 pub async fn render_preview_with_editor(
     editor: &EditorInstance,
     project_config: ProjectConfiguration,
@@ -184,6 +194,7 @@ pub async fn render_preview_with_editor(
             })
             .collect(),
         total_duration,
+        layers_cache: Some(&editor.preview_layers),
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -219,7 +230,9 @@ async fn render_preview_frame(
         render_constants,
         segments,
         total_duration,
+        layers_cache,
     } = source;
+    let project_config = &Arc::new(project_config.clone());
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -272,7 +285,9 @@ async fn render_preview_frame(
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
-    let uniforms = ProjectUniforms::new(
+    let cursor_timeline =
+        PrecomputedCursorTimeline::from_project(segment_media.cursor, project_config);
+    let uniforms = ProjectUniforms::new_with_precomputed_cursor(
         render_constants,
         project_config,
         frame_number,
@@ -282,14 +297,26 @@ async fn render_preview_frame(
         &segment_frames,
         total_duration,
         &zoom_timeline,
+        &cursor_timeline,
     );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
-    let mut layers = RendererLayers::new_with_options(
-        &render_constants.device,
-        &render_constants.queue,
-        render_constants.is_software_adapter,
-    );
+    let mut layers = layers_cache
+        .and_then(|cache| {
+            let mut guard = cache.lock().ok()?;
+            guard.take()
+        })
+        .map(|mut cached| {
+            cached.reset_frame_state();
+            cached
+        })
+        .unwrap_or_else(|| {
+            RendererLayers::new_with_options(
+                &render_constants.device,
+                &render_constants.queue,
+                render_constants.is_software_adapter,
+            )
+        });
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
         let outgoing_media = segments
@@ -325,7 +352,16 @@ async fn render_preview_frame(
             outgoing.segment.recording_clip,
         );
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
-        let outgoing_uniforms = ProjectUniforms::new(
+        let outgoing_cursor_timeline = if outgoing.segment.recording_clip == segment.recording_clip
+        {
+            None
+        } else {
+            Some(PrecomputedCursorTimeline::from_project(
+                outgoing_media.cursor,
+                project_config,
+            ))
+        };
+        let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
             render_constants,
             project_config,
             frame_number,
@@ -335,6 +371,9 @@ async fn render_preview_frame(
             &outgoing_frames,
             total_duration,
             &outgoing_zoom,
+            outgoing_cursor_timeline
+                .as_ref()
+                .unwrap_or(&cursor_timeline),
         );
 
         frame_renderer
@@ -372,7 +411,16 @@ async fn render_preview_frame(
     let width = frame.width;
     let height = frame.height;
 
-    let jpeg_buffer = encode_preview_jpeg(&frame, bpp_to_jpeg_quality(settings.compression_bpp))?;
+    let jpeg_buffer = match settings.gif_quality.filter(|_| !settings.cursor_only) {
+        Some(quality) => match encode_gif_preview_jpeg(&frame, quality) {
+            Ok(jpeg) => jpeg,
+            Err(error) => {
+                tracing::warn!(%error, "GIF preview fell back to the unquantized frame");
+                encode_preview_jpeg(&frame, GIF_PREVIEW_JPEG_QUALITY)?
+            }
+        },
+        None => encode_preview_jpeg(&frame, bpp_to_jpeg_quality(settings.compression_bpp))?,
+    };
     drop(frame);
 
     let duration_seconds = total_duration;
@@ -391,6 +439,12 @@ async fn render_preview_frame(
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
 
+    if let Some(cache) = layers_cache
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some(layers);
+    }
+
     Ok(ExportPreviewResult {
         jpeg_base64: STANDARD.encode(&jpeg_buffer),
         estimated_size_mb,
@@ -408,6 +462,75 @@ fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
     ((bpp - 0.04) / (0.3 - 0.04) * (95.0 - 40.0) + 40.0).clamp(40.0, 95.0) as u8
+}
+
+fn encode_gif_preview_jpeg(
+    frame: &RenderedFrame,
+    quality: GifQuality,
+) -> Result<Vec<u8>, ExportError> {
+    let image = gif_quantized_frame(frame, quality)?;
+    let mut jpeg_buffer = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg_buffer, GIF_PREVIEW_JPEG_QUALITY)
+        .encode_image(&image)
+        .map_err(|e| ExportError::Other(format!("Failed to encode JPEG: {e}")))?;
+    Ok(jpeg_buffer)
+}
+
+fn gif_quantized_frame(
+    frame: &RenderedFrame,
+    quality: GifQuality,
+) -> Result<RgbaImage, ExportError> {
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let stride = frame.padded_bytes_per_row as usize;
+    let row_bytes = width.saturating_mul(4);
+    let required_len = stride
+        .checked_mul(height.saturating_sub(1))
+        .and_then(|offset| offset.checked_add(row_bytes));
+    if width == 0
+        || height == 0
+        || stride < row_bytes
+        || required_len.is_none_or(|required| frame.data.len() < required)
+    {
+        return Err(ExportError::Other(
+            "Preview frame buffer does not match its layout".to_string(),
+        ));
+    }
+
+    let mut pixels = Vec::with_capacity(width * height);
+    for row in frame.data.chunks(stride).take(height) {
+        pixels.extend(
+            row[..row_bytes]
+                .chunks_exact(4)
+                .map(|pixel| rgb::RGBA8::new(pixel[0], pixel[1], pixel[2], pixel[3])),
+        );
+    }
+
+    let (collector, writer) = gifski::new(gifski::Settings {
+        width: Some(frame.width),
+        height: Some(frame.height),
+        quality: quality.quality.unwrap_or(DEFAULT_GIF_QUALITY),
+        fast: quality.fast.unwrap_or(false),
+        repeat: gifski::Repeat::Infinite,
+    })
+    .map_err(|e| ExportError::Other(format!("Failed to create GIF preview encoder: {e}")))?;
+
+    let mut gif = Vec::new();
+    std::thread::scope(|scope| {
+        let written = scope.spawn(|| writer.write(&mut gif, &mut gifski::progress::NoProgress {}));
+        let added = collector.add_frame_rgba(0, imgref::Img::new(pixels, width, height), 0.0);
+        drop(collector);
+        let written = written
+            .join()
+            .map_err(|_| ExportError::Other("GIF preview encoder panicked".to_string()))?;
+        added
+            .and(written)
+            .map_err(|e| ExportError::Other(format!("Failed to encode GIF preview: {e}")))
+    })?;
+
+    image::load_from_memory_with_format(&gif, ImageFormat::Gif)
+        .map(|image| image.into_rgba8())
+        .map_err(|e| ExportError::Other(format!("Failed to decode GIF preview: {e}")))
 }
 
 fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, ExportError> {
@@ -465,8 +588,6 @@ fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, Ex
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     fn frame(width: u32, height: u32, stride: usize, mut state: u64) -> RenderedFrame {
@@ -543,6 +664,52 @@ mod tests {
     }
 
     #[test]
+    fn gif_preview_keeps_the_frame_size_and_uses_a_gif_palette() {
+        for (width, height, stride) in [(48, 32, 48 * 4), (33, 17, 256)] {
+            let frame = frame(width, height, stride, 7);
+            for quality in [None, Some(70), Some(50)] {
+                let image = gif_quantized_frame(
+                    &frame,
+                    GifQuality {
+                        quality,
+                        fast: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!((image.width(), image.height()), (width, height));
+                let colors: std::collections::HashSet<[u8; 4]> =
+                    image.pixels().map(|pixel| pixel.0).collect();
+                assert!(colors.len() <= 256, "{} colors", colors.len());
+                assert!(
+                    !encode_gif_preview_jpeg(
+                        &frame,
+                        GifQuality {
+                            quality,
+                            fast: None
+                        }
+                    )
+                    .unwrap()
+                    .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gif_preview_rejects_a_frame_that_does_not_match_its_layout() {
+        let mut short = frame(8, 8, 32, 3);
+        short.data = Arc::new(vec![0; 16]);
+        let quality = GifQuality {
+            quality: None,
+            fast: None,
+        };
+        assert!(gif_quantized_frame(&short, quality).is_err());
+        let mut overlapping = frame(8, 8, 32, 3);
+        overlapping.padded_bytes_per_row = 16;
+        assert!(gif_quantized_frame(&overlapping, quality).is_err());
+    }
+
+    #[test]
     fn rejects_overlapping_rows_and_short_buffers() {
         let mut overlapping = frame(13, 9, 64, 1);
         overlapping.padded_bytes_per_row = 51;
@@ -598,6 +765,7 @@ mod subtitle_preview_tests {
                     resolution_base: XY::new(1280, 720),
                     compression_bpp: 0.15,
                     cursor_only: false,
+                    gif_quality: None,
                 },
                 true,
             );
@@ -634,9 +802,183 @@ mod subtitle_preview_tests {
                 resolution_base: XY::new(1280, 720),
                 compression_bpp: 0.15,
                 cursor_only: true,
+                gif_quality: None,
             },
             false,
         );
         assert!(builder.load_project_config().unwrap().captions.is_none());
+    }
+}
+
+#[cfg(test)]
+mod video_only_preview_tests {
+    use super::*;
+
+    fn studio_project() -> tempfile::TempDir {
+        let project = tempfile::tempdir().unwrap();
+        let generated = std::process::Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x64:rate=15:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-map",
+                "0:v",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-threads",
+                "1",
+            ])
+            .arg(project.path().join("display.mp4"))
+            .args(["-map", "1:a", "-c:a", "aac", "-ac", "2"])
+            .arg(project.path().join("mic.m4a"))
+            .output()
+            .unwrap();
+        assert!(generated.status.success(), "{generated:?}");
+        std::fs::write(
+            project.path().join("recording-meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Video-only preview test",
+                "segments": [{
+                    "display": {"path": "display.mp4", "fps": 15},
+                    "mic": {"path": "mic.m4a"}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        ProjectConfiguration::default()
+            .write(project.path())
+            .unwrap();
+        project
+    }
+
+    fn settings(cursor_only: bool) -> ExportPreviewSettings {
+        ExportPreviewSettings {
+            fps: 15,
+            resolution_base: XY::new(64, 64),
+            compression_bpp: 0.2,
+            cursor_only,
+            gif_quality: None,
+        }
+    }
+
+    fn assert_same_preview(actual: ExportPreviewResult, expected: &ExportPreviewResult) {
+        assert_eq!(actual.jpeg_base64, expected.jpeg_base64);
+        assert_eq!(actual.actual_width, expected.actual_width);
+        assert_eq!(actual.actual_height, expected.actual_height);
+        assert_eq!(actual.total_frames, expected.total_frames);
+        assert_eq!(
+            actual.estimated_size_mb.to_bits(),
+            expected.estimated_size_mb.to_bits()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg and a wgpu adapter"]
+    async fn video_only_previews_match_eager_jpeg_and_metadata() {
+        let project = studio_project();
+        for cursor_only in [false, true] {
+            let config = ProjectConfiguration::load(project.path()).unwrap();
+            let base = preview_builder_with_config(
+                project.path().to_path_buf(),
+                config.clone(),
+                settings(cursor_only),
+                true,
+            )
+            .build()
+            .await
+            .unwrap();
+            let expected = render_preview_with_base(base, 0.5, settings(cursor_only))
+                .await
+                .unwrap();
+            let actual = render_preview(
+                project.path().to_path_buf(),
+                0.5,
+                settings(cursor_only),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_same_preview(actual, &expected);
+            let actual = render_preview_with_config(
+                project.path().to_path_buf(),
+                config,
+                0.5,
+                settings(cursor_only),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_same_preview(actual, &expected);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg, ffprobe and a wgpu adapter"]
+    async fn preview_does_not_decode_unused_corrupt_audio() {
+        let project = studio_project();
+        let audio = project.path().join("mic.m4a");
+        let expected = render_preview(project.path().to_path_buf(), 0.5, settings(false), true)
+            .await
+            .unwrap();
+        let packets = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_packets",
+                "-show_entries",
+                "packet=pts_time,pos,size",
+                "-of",
+                "json",
+            ])
+            .arg(&audio)
+            .output()
+            .unwrap();
+        assert!(packets.status.success());
+        let packets: serde_json::Value = serde_json::from_slice(&packets.stdout).unwrap();
+        let packet = packets["packets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|packet| packet["pts_time"].as_str().unwrap().parse::<f64>().unwrap() > 1.5)
+            .unwrap();
+        let position: usize = packet["pos"].as_str().unwrap().parse().unwrap();
+        let size: usize = packet["size"].as_str().unwrap().parse().unwrap();
+        let mut bytes = std::fs::read(&audio).unwrap();
+        bytes[position..position + size].fill(0xff);
+        std::fs::write(audio, bytes).unwrap();
+        let eager = ExporterBase::builder(project.path().to_path_buf())
+            .with_force_ffmpeg_decoder(true)
+            .build()
+            .await;
+        assert!(matches!(
+            eager,
+            Err(crate::ExporterBuildError::MediaLoad(_))
+        ));
+        let actual = render_preview(project.path().to_path_buf(), 0.5, settings(false), true)
+            .await
+            .unwrap();
+        assert_same_preview(actual, &expected);
+        let config = ProjectConfiguration::load(project.path()).unwrap();
+        let actual = render_preview_with_config(
+            project.path().to_path_buf(),
+            config,
+            0.5,
+            settings(false),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_same_preview(actual, &expected);
     }
 }

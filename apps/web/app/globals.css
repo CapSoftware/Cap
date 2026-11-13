@@ -9,6 +9,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The one rule of Font Awesome's runtime stylesheet that applies to an icon,
+   for components/FontAwesomeIcon.tsx. That stylesheet is injected first in
+   the document, so its class rule beat element resets and lost to every other
+   class. Three element selectors keep the same place without depending on
+   stylesheet order. */
+html body svg:where(.svg-inline--fa) {
+	box-sizing: content-box;
+	display: var(--fa-display, inline-block);
+	height: 1em;
+	overflow: visible;
+	vertical-align: -0.125em;
+	width: var(--fa-width, 1.25em);
+}
+
 :root {
 	--primary: #005cb1;
 	--primary-2: #004c93;
@@ -834,6 +848,29 @@ footer a {
 	color: inherit;
 	font-size: inherit;
 	line-height: inherit;
+}
+
+/* Links inside a post's charts take the size of the text around them. */
+.prose .chart-figure a {
+	font-size: inherit !important;
+	line-height: inherit !important;
+	font-weight: inherit !important;
+}
+
+/* react-tweet embeds in a post: put back X's own sizes over the forced prose ones. */
+.prose .x-embed p {
+	font-size: var(--tweet-body-font-size) !important;
+	font-weight: var(--tweet-body-font-weight) !important;
+	line-height: var(--tweet-body-line-height) !important;
+	letter-spacing: normal !important;
+	color: inherit !important;
+}
+
+.prose .x-embed a {
+	font-size: inherit !important;
+	font-weight: inherit !important;
+	line-height: inherit !important;
+	letter-spacing: normal !important;
 }
 
 .new-card-style {

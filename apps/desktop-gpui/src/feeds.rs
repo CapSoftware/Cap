@@ -311,15 +311,9 @@ impl CameraProcessingFactory {
 
 #[cfg(target_os = "linux")]
 impl RecordingCameraWorker {
-    fn publish(
-        &self,
-        image: &gpui::RenderImage,
-        dims: (usize, usize),
-        timestamp: cap_timestamp::Timestamp,
-        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
-    ) {
+    fn accept(&self, timestamp: cap_timestamp::Timestamp) -> bool {
         if self.publisher.is_cancelled() {
-            return;
+            return false;
         }
         match validate_recording_camera_frame(
             timestamp,
@@ -327,21 +321,42 @@ impl RecordingCameraWorker {
             self.epoch,
             self.current_epoch.load(Ordering::Acquire),
         ) {
-            Ok(true) => {}
-            Ok(false) => return,
+            Ok(true) => true,
+            Ok(false) => false,
             Err(error) => {
                 self.publisher.fail(error);
-                return;
+                false
             }
         }
-        let Some(bytes) = image.as_bytes(0) else {
+    }
+
+    fn publish_sample(&self, frame: cap_recording::instant_recording::LinuxProcessedCameraFrame) {
+        if self.accept(frame.timestamp) {
+            self.publisher.publish(frame);
+        }
+    }
+
+    fn publish(
+        &self,
+        image: &Arc<gpui::RenderImage>,
+        dims: (usize, usize),
+        timestamp: cap_timestamp::Timestamp,
+        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
+    ) {
+        if !self.accept(timestamp) {
+            return;
+        }
+        if image.as_bytes(0).is_none() {
             self.publisher
                 .fail("Processed camera pixels unavailable".to_string());
             return;
-        };
+        }
         self.publisher.publish(
             cap_recording::instant_recording::LinuxProcessedCameraFrame {
-                bgra: Arc::from(bytes),
+                pixels: cap_recording::instant_recording::LinuxCameraPixels::new(
+                    RenderImagePixels(image.clone()),
+                ),
+                format: cap_recording::instant_recording::LinuxCameraSampleFormat::Bgra,
                 dimensions: (dims.0 as u32, dims.1 as u32),
                 stride: dims.0 * 4,
                 timestamp,
@@ -350,6 +365,34 @@ impl RecordingCameraWorker {
                 mask,
             },
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn yuyv_overlay_frame(
+    frame: &cap_recording::FFmpegVideoFrame,
+    blur: u8,
+    generation: u64,
+    processing: cap_recording::instant_recording::LinuxCameraProcessing,
+) -> Option<cap_recording::instant_recording::LinuxProcessedCameraFrame> {
+    if blur != 0 {
+        return None;
+    }
+    cap_recording::instant_recording::LinuxProcessedCameraFrame::from_yuyv422(
+        &frame.inner,
+        frame.timestamp,
+        generation,
+        processing,
+    )
+}
+
+#[cfg(target_os = "linux")]
+struct RenderImagePixels(Arc<gpui::RenderImage>);
+
+#[cfg(target_os = "linux")]
+impl AsRef<[u8]> for RenderImagePixels {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes(0).unwrap_or_default()
     }
 }
 
@@ -550,12 +593,29 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 .publisher
                 .fail("Requested camera blur is unavailable".to_string());
         }
+        #[cfg(target_os = "linux")]
+        let published_yuyv = recording.as_ref().is_some_and(|recording| {
+            let Some(sample) = yuyv_overlay_frame(
+                &frame,
+                requested_blur,
+                recording.generation,
+                recording.processing,
+            ) else {
+                return false;
+            };
+            recording.publish_sample(sample);
+            true
+        });
+        #[cfg(target_os = "linux")]
+        if published_yuyv && !active.load(Ordering::Acquire) {
+            continue;
+        }
         let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
         let Some((mut image, dims)) =
             camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
         else {
             #[cfg(target_os = "linux")]
-            if let Some(recording) = &recording {
+            if !published_yuyv && let Some(recording) = &recording {
                 recording
                     .publisher
                     .fail("Camera frame conversion failed".to_string());
@@ -645,7 +705,10 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             }
         }
         #[cfg(target_os = "linux")]
-        if effects_ready && let Some(recording) = &recording {
+        if !published_yuyv
+            && effects_ready
+            && let Some(recording) = &recording
+        {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
@@ -688,8 +751,7 @@ pub struct Feeds {
     pub camera: Option<SelectedCamera>,
     /// Selected microphone name.
     pub microphone: Option<String>,
-    /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
-    pub mic_level_db: f64,
+    mic_level: Entity<MicLevel>,
     mic_level_shown: Arc<std::sync::atomic::AtomicU64>,
     pub camera_error: Option<String>,
     camera_preview_parked: bool,
@@ -729,12 +791,34 @@ pub struct SelectedCamera {
 struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
+/// The live mic level: rolling 200ms max in dB FS, `-96` when absent. Kept
+/// out of `Feeds` because windows read device state from `Feeds` in render,
+/// so each of its notifies redraws them, and the level changes up to 20
+/// times a second.
+pub struct MicLevel {
+    db: f64,
+}
+
+impl MicLevel {
+    pub fn db(&self) -> f64 {
+        self.db
+    }
+
+    fn set(&mut self, db: f64, cx: &mut Context<Self>) {
+        if self.db != db {
+            self.db = db;
+            cx.notify();
+        }
+    }
+}
+
 impl Feeds {
     pub fn camera_input_pending(&self) -> bool {
         self.camera_input_pending
     }
 
     pub fn init(cx: &mut App) -> Entity<Self> {
+        let mic_level = cx.new(|_| MicLevel { db: -96.0 });
         let feeds = cx.new(|_| Self {
             camera_actor: None,
             camera_preview_sender: None,
@@ -754,7 +838,7 @@ impl Feeds {
             microphone_ready: None,
             camera: None,
             microphone: None,
-            mic_level_db: -96.0,
+            mic_level,
             mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
             camera_error: None,
             camera_preview_parked: false,
@@ -1126,7 +1210,7 @@ impl Feeds {
         self.microphone_error = None;
         self.mic_input_pending = label.is_some();
         self.mic_input_released = false;
-        self.set_mic_level(-96.0);
+        self.set_mic_level(-96.0, cx);
         let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
         let gate = self.mic_input_gate.clone();
@@ -1239,13 +1323,17 @@ impl Feeds {
             })
             .detach();
         }
-        self.set_mic_level(-96.0);
+        self.set_mic_level(-96.0, cx);
         cx.notify();
     }
 
-    fn set_mic_level(&mut self, db: f64) {
-        self.mic_level_db = db;
+    pub fn mic_level(&self) -> &Entity<MicLevel> {
+        &self.mic_level
+    }
+
+    fn set_mic_level(&mut self, db: f64, cx: &mut Context<Self>) {
         self.mic_level_shown.store(db.to_bits(), Ordering::Release);
+        self.mic_level.update(cx, |level, cx| level.set(db, cx));
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
@@ -1370,20 +1458,11 @@ impl Feeds {
             let _meter = meter;
             while wakes.recv_async().await.is_ok() {
                 let level = f64::from_bits(latest.load(Ordering::Acquire));
-                let changed = this.update(cx, |this: &mut Feeds, cx| {
-                    if this.mic_level_db == level {
-                        return false;
-                    }
-                    this.set_mic_level(level);
-                    cx.notify();
-                    true
-                });
-                match changed {
-                    Err(_) => return,
-                    Ok(true) => {
-                        cx.update(app_windows::refresh_controls_window);
-                    }
-                    Ok(false) => {}
+                if this
+                    .update(cx, |this: &mut Feeds, cx| this.set_mic_level(level, cx))
+                    .is_err()
+                {
+                    return;
                 }
             }
         });
@@ -1458,6 +1537,10 @@ pub(crate) fn camera_preview_image(
     Some((image, (width, height)))
 }
 
+/// The quietest level any meter draws: `bar_level` bottoms out at -60 dB and
+/// `picker_level` at -40 dB, so anything below looks identical everywhere.
+const METER_FLOOR_DB: f64 = -60.0;
+
 /// A 200ms max-hold window, coalesced to ~20 updates/s and quantized to
 /// 0.5dB (under a pixel on both level mappings).
 #[derive(Default)]
@@ -1501,6 +1584,7 @@ impl MeterSender {
         let Some(level) = self.window.push(now, db) else {
             return;
         };
+        let level = level.max(METER_FLOOR_DB);
         self.latest.store(level.to_bits(), Ordering::Release);
         if level.to_bits() != self.shown.load(Ordering::Acquire) {
             let _ = self.wake.try_send(());
@@ -1698,6 +1782,44 @@ mod tests {
             sender.push(at(callback), -30.0);
         }
         assert!(wakes.try_recv().is_err());
+    }
+
+    #[test]
+    fn input_below_every_meter_floor_never_wakes_the_ui() {
+        use std::sync::atomic::AtomicU64;
+
+        let shown = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let latest = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let (wake, wakes) = flume::bounded(1);
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let start = Instant::now();
+        let at = |callback: u64| start + Duration::from_micros(callback * 10_667);
+
+        sender.push(at(0), -72.0);
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert_eq!(
+            f64::from_bits(latest.load(Ordering::Acquire)),
+            METER_FLOOR_DB
+        );
+
+        shown.store(METER_FLOOR_DB.to_bits(), Ordering::Release);
+        for callback in 1..400 {
+            let db = -96.0 + (callback % 7) as f64 * 5.0;
+            sender.push(at(callback), db);
+        }
+        assert!(wakes.try_recv().is_err());
+
+        sender.push(at(400), -42.0);
+        sender.push(at(410), -42.0);
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert_eq!(f64::from_bits(latest.load(Ordering::Acquire)), -42.0);
+        assert_eq!(picker_level(METER_FLOOR_DB), picker_level(-96.0));
+        assert_eq!(bar_level(METER_FLOOR_DB), bar_level(-96.0));
     }
 
     #[test]
@@ -2133,6 +2255,78 @@ mod tests {
             &[30, 20, 10, 255, 60, 50, 40, 128]
         );
         assert!(scaler.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn blur_off_yuyv_recording_keeps_the_packed_plane() {
+        use cap_recording::instant_recording::{
+            LinuxCameraBlur, LinuxCameraProcessing, LinuxCameraSampleFormat,
+        };
+        use cap_timestamp::Timestamp;
+
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        let stride = frame.stride(0);
+        let row = 8;
+        frame.data_mut(0).fill(0xAB);
+        for y in 0..2 {
+            frame.data_mut(0)[y * stride..y * stride + row]
+                .copy_from_slice(&[10, 20, 30, 40, 50, 60, 70, 80]);
+        }
+        let timestamp = Timestamp::Instant(std::time::Instant::now());
+        let processing = LinuxCameraProcessing {
+            mirrored: true,
+            blur: LinuxCameraBlur::Off,
+        };
+        let packed = cap_recording::FFmpegVideoFrame {
+            inner: frame,
+            timestamp,
+        };
+        let sample = yuyv_overlay_frame(&packed, 0, 4, processing).expect("yuyv sample");
+        assert_eq!(sample.format, LinuxCameraSampleFormat::Yuyv422);
+        assert_eq!(sample.dimensions, (4, 2));
+        assert_eq!(sample.stride, row);
+        assert_eq!(sample.generation, 4);
+        assert_eq!(sample.processing, processing);
+        assert!(sample.mask.is_none());
+        assert_eq!(
+            &*sample.pixels,
+            &[
+                10, 20, 30, 40, 50, 60, 70, 80, 10, 20, 30, 40, 50, 60, 70, 80
+            ]
+        );
+
+        let mut blurred = packed;
+        assert!(yuyv_overlay_frame(&blurred, 1, 4, processing).is_none());
+        blurred.inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 4, 2);
+        assert!(yuyv_overlay_frame(&blurred, 0, 4, processing).is_none());
+        let heavy = LinuxCameraProcessing {
+            blur: LinuxCameraBlur::Heavy,
+            ..processing
+        };
+        let mut yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        yuyv.data_mut(0).fill(1);
+        let source = cap_recording::FFmpegVideoFrame {
+            inner: yuyv,
+            timestamp,
+        };
+        assert!(yuyv_overlay_frame(&source, 0, 4, heavy).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_camera_pixels_share_the_preview_image() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 2, 1);
+        frame.data_mut(0)[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let (image, dims) = camera_preview_image(&frame, &mut None, false, None).unwrap();
+
+        let shared = RenderImagePixels(image.clone());
+        let pixels = cap_recording::instant_recording::LinuxCameraPixels::new(shared);
+
+        let preview = image.as_bytes(0).unwrap();
+        assert_eq!(pixels.as_ptr(), preview.as_ptr());
+        assert_eq!(&*pixels, preview);
+        assert_eq!(pixels.len(), dims.0 * dims.1 * 4);
     }
 
     #[test]

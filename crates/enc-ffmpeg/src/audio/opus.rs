@@ -106,6 +106,19 @@ impl OpusEncoder {
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.flush(output)
     }
+
+    pub fn queue_frame_to(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+        sink: &mut impl crate::PacketSink,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.send_frame(frame, timestamp, sink)
+    }
+
+    pub fn flush_to(&mut self, sink: &mut impl crate::PacketSink) -> Result<(), ffmpeg::Error> {
+        self.base.flush(sink)
+    }
 }
 
 fn select_output_rate(input_rate: i32, supported_rates: &[i32]) -> Option<i32> {

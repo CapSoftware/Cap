@@ -1,7 +1,9 @@
 use crate::{EditorInstance, editor::RendererTransitionInput};
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{ProjectUniforms, RenderedFrame, ZoomTransformTimeline};
-use std::{io::Write, path::Path};
+use cap_rendering::{
+    PrecomputedCursorTimeline, ProjectUniforms, RenderedFrame, ZoomTransformTimeline,
+};
+use std::{io::Write, path::Path, sync::Arc};
 
 const THUMBNAIL_SIZE: XY<u32> = XY { x: 640, y: 640 };
 const THUMBNAIL_FPS: u32 = 30;
@@ -34,8 +36,8 @@ impl EditorInstance {
     async fn render_pending_thumbnail(&self) -> Result<Option<(Vec<u8>, RenderedFrame)>, String> {
         let project_path = self.project_path.clone();
         let pending = tokio::task::spawn_blocking(move || {
-            let project = ProjectConfiguration::load(&project_path)?;
-            let signature = serde_json::to_vec(&project)?;
+            let mut project = ProjectConfiguration::load(&project_path)?;
+            let signature = thumbnail_signature(&mut project)?;
             let screenshots = project_path.join("screenshots");
             if screenshots.join("preview.jpg").is_file()
                 && std::fs::read(screenshots.join("preview-config.json"))
@@ -53,6 +55,7 @@ impl EditorInstance {
         let Some((project, signature)) = pending else {
             return Ok(None);
         };
+        let project = Arc::new(project);
         let (source_time, segment) = project
             .get_segment_time(0.0)
             .ok_or("No first frame in the edited timeline")?;
@@ -84,7 +87,8 @@ impl EditorInstance {
             segment.recording_clip,
         );
         zoom.ensure_precomputed_until(1.0 / THUMBNAIL_FPS as f32);
-        let uniforms = ProjectUniforms::new(
+        let cursor_timeline = PrecomputedCursorTimeline::from_project(&media.cursor, &project);
+        let uniforms = ProjectUniforms::new_with_precomputed_cursor(
             &self.render_constants,
             &project,
             0,
@@ -94,6 +98,7 @@ impl EditorInstance {
             &frames,
             duration,
             &zoom,
+            &cursor_timeline,
         );
         let frame = self
             .renderer
@@ -107,13 +112,24 @@ impl EditorInstance {
     }
 }
 
+/// The project as the thumbnail sees it. Markers never change a frame, so
+/// they are left out and editing them keeps the saved thumbnail. A project
+/// without markers serializes exactly as it did before markers existed, so
+/// saved signatures stay valid.
+fn thumbnail_signature(project: &mut ProjectConfiguration) -> serde_json::Result<Vec<u8>> {
+    let markers = std::mem::take(&mut project.markers);
+    let signature = serde_json::to_vec(project);
+    project.markers = markers;
+    signature
+}
+
 fn save_thumbnail(
     project_path: &Path,
     signature: &[u8],
     frame: &RenderedFrame,
 ) -> Result<bool, String> {
-    let current = ProjectConfiguration::load(project_path).map_err(|e| e.to_string())?;
-    if serde_json::to_vec(&current).map_err(|e| e.to_string())? != signature {
+    let mut current = ProjectConfiguration::load(project_path).map_err(|e| e.to_string())?;
+    if thumbnail_signature(&mut current).map_err(|e| e.to_string())? != signature {
         return Ok(false);
     }
     let width = frame.width as usize;
@@ -149,8 +165,8 @@ fn save_thumbnail(
         .map_err(|e| e.to_string())?;
     let mut config = tempfile::NamedTempFile::new_in(&screenshots).map_err(|e| e.to_string())?;
     config.write_all(signature).map_err(|e| e.to_string())?;
-    let current = ProjectConfiguration::load(project_path).map_err(|e| e.to_string())?;
-    if serde_json::to_vec(&current).map_err(|e| e.to_string())? != signature {
+    let mut current = ProjectConfiguration::load(project_path).map_err(|e| e.to_string())?;
+    if thumbnail_signature(&mut current).map_err(|e| e.to_string())? != signature {
         return Ok(false);
     }
     image
@@ -165,7 +181,6 @@ fn save_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn project() -> (tempfile::TempDir, Vec<u8>) {
         let root = tempfile::tempdir().unwrap();
@@ -233,6 +248,30 @@ mod tests {
         invalid.data = Arc::new(vec![0; 4]);
         assert!(save_thumbnail(root.path(), &signature, &invalid).is_err());
         assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn markers_neither_block_nor_invalidate_a_thumbnail() {
+        let root = tempfile::tempdir().unwrap();
+        let mut project = ProjectConfiguration {
+            markers: vec![cap_project::TimelineMarker::new(0, 1.5)],
+            ..ProjectConfiguration::default()
+        };
+        project.write(root.path()).unwrap();
+        let mut loaded = ProjectConfiguration::load(root.path()).unwrap();
+        let signature = thumbnail_signature(&mut loaded).unwrap();
+        assert_eq!(loaded.markers.len(), 1);
+        assert!(save_thumbnail(root.path(), &signature, &frame()).unwrap());
+
+        project
+            .markers
+            .push(cap_project::TimelineMarker::new(0, 3.0));
+        project.write(root.path()).unwrap();
+        assert!(save_thumbnail(root.path(), &signature, &frame()).unwrap());
+
+        project.markers.clear();
+        let unmarked = serde_json::to_vec(&project).unwrap();
+        assert_eq!(thumbnail_signature(&mut project).unwrap(), unmarked);
     }
 
     #[test]

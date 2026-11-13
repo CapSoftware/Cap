@@ -23,6 +23,7 @@ use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
+    PreviewSpeed, PreviewSpeedHandle,
     audio_output::{AudioOutput, PlaySpec},
     editor,
     editor_instance::{SegmentMedia, cursor_timeline_settings},
@@ -64,6 +65,7 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            segment.active_voice_eq(),
             offsets.mic,
             offsets.system_audio,
         )
@@ -104,6 +106,70 @@ impl Drop for WindowsTimerResolution {
     }
 }
 
+/// Above normal, so a wake preempts decode and render threads instead of
+/// queueing behind them: at normal priority on a loaded machine the wake
+/// landed up to 10 ms late, with or without the spin.
+#[cfg(target_os = "windows")]
+fn raise_playback_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsWaitableTimer(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl WindowsWaitableTimer {
+    /// How long before the deadline the timer wait ends and spinning starts.
+    /// The timer fires up to about 0.5 ms late.
+    const SPIN: Duration = Duration::from_micros(500);
+
+    /// `None` before Windows 10 1803, which rejects the high-resolution flag.
+    fn high_resolution() -> Option<Self> {
+        use windows::Win32::System::Threading::{
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_ALL_ACCESS,
+        };
+        unsafe {
+            CreateWaitableTimerExW(
+                None,
+                windows::core::PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok()
+        .map(Self)
+    }
+
+    fn sleep(&self, duration: Duration) -> bool {
+        use windows::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{INFINITE, SetWaitableTimer, WaitForSingleObject},
+        };
+        // Negative: relative, in 100 ns intervals.
+        let due = -i64::try_from(duration.as_nanos() / 100)
+            .unwrap_or(i64::MAX)
+            .max(1);
+        unsafe {
+            SetWaitableTimer(self.0, &due, 0, None, None, false).is_ok()
+                && WaitForSingleObject(self.0, INFINITE) == WAIT_OBJECT_0
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsWaitableTimer {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 fn precision_sleep_sync(deadline: Instant) {
     let now = Instant::now();
     if now >= deadline {
@@ -114,9 +180,25 @@ fn precision_sleep_sync(deadline: Instant) {
 
     #[cfg(target_os = "windows")]
     {
-        let spin_threshold = Duration::from_millis(2);
-        if remaining > spin_threshold {
-            std::thread::sleep(remaining.saturating_sub(spin_threshold));
+        thread_local! {
+            static WAITABLE_TIMER: Option<WindowsWaitableTimer> =
+                WindowsWaitableTimer::high_resolution();
+        }
+        // A high-resolution timer wakes within a fraction of a millisecond,
+        // so only the last 500 us are spun. Without one, `thread::sleep` can
+        // wake a full 1 ms timer period late and the last 2 ms are spun.
+        let timed = WAITABLE_TIMER.with(|timer| {
+            timer.as_ref().is_some_and(|timer| {
+                remaining <= WindowsWaitableTimer::SPIN
+                    || timer.sleep(remaining.saturating_sub(WindowsWaitableTimer::SPIN))
+            })
+        });
+        if !timed {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let spin_threshold = Duration::from_millis(2);
+            if remaining > spin_threshold {
+                std::thread::sleep(remaining.saturating_sub(spin_threshold));
+            }
         }
         while Instant::now() < deadline {
             std::hint::spin_loop();
@@ -156,6 +238,7 @@ pub struct Playback {
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
     pub telemetry: Option<PlaybackTelemetry>,
+    pub preview_speed: PreviewSpeedHandle,
 }
 
 #[derive(Clone, Copy)]
@@ -670,6 +753,10 @@ impl Playback {
 
         let mut prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
+        let prefetch_speed = self.preview_speed.clone();
+        let preparing_owns_clock = Arc::new(AtomicBool::new(adopted.is_some()));
+        let prefetch_preparing_owns_clock = Arc::clone(&preparing_owns_clock);
+        let mut prefetch_previous_speed = PreviewSpeed::NORMAL;
         let prefetch_segment_medias = self.segment_medias.clone();
         let (prefetch_duration, has_timeline) = self
             .project
@@ -774,11 +861,23 @@ impl Playback {
                 }
 
                 let current_playback_frame = *playback_position_rx.borrow_and_update();
+                let speed = if prefetch_preparing_owns_clock.load(Ordering::Acquire) {
+                    PreviewSpeed::NORMAL
+                } else {
+                    prefetch_speed.get()
+                };
+                if speed != prefetch_previous_speed {
+                    if speed < prefetch_previous_speed {
+                        next_prefetch_frame = next_prefetch_frame.min(current_playback_frame);
+                    }
+                    prefetch_previous_speed = speed;
+                }
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
                     as u32;
-                let max_prefetch_frame = current_playback_frame + max_prefetch_ahead;
+                let max_prefetch_frame = current_playback_frame
+                    + (f64::from(max_prefetch_ahead) * speed.as_f64().max(1.0)).ceil() as u32;
 
                 let initial_parallel_decode_tasks = INITIAL_PARALLEL_DECODE_TASKS;
                 let parallel_decode_tasks = PARALLEL_DECODE_TASKS;
@@ -808,7 +907,7 @@ impl Playback {
                         .map(|guard| guard.contains(&frame_num))
                         .unwrap_or(false);
                     if already_in_flight {
-                        next_prefetch_frame += 1;
+                        next_prefetch_frame = speed.next_frame(next_prefetch_frame);
                         continue;
                     }
 
@@ -851,7 +950,7 @@ impl Playback {
                         })));
                     }
 
-                    next_prefetch_frame += 1;
+                    next_prefetch_frame = speed.next_frame(next_prefetch_frame);
                 }
 
                 tokio::select! {
@@ -1090,7 +1189,12 @@ impl Playback {
                 .sort_by_key(|p| p.frame_number);
 
             let playback_start_frame = frame_number;
-            let mut cached_project = self.project.borrow().clone();
+            let mut cached_project = Arc::new(self.project.borrow().clone());
+            let mut speed = if adopted.is_some() {
+                PreviewSpeed::NORMAL
+            } else {
+                self.preview_speed.get()
+            };
 
             let build_cursor_timelines =
                 |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
@@ -1272,7 +1376,7 @@ impl Playback {
 
                         total_frames_rendered += 1;
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-                        frame_number = frame_number.saturating_add(1);
+                        frame_number = speed.next_frame(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                     }
                 }
@@ -1309,6 +1413,8 @@ impl Playback {
 
             #[cfg(target_os = "windows")]
             let _timer_guard = WindowsTimerResolution::set_high_precision();
+            #[cfg(target_os = "windows")]
+            raise_playback_thread_priority();
 
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
@@ -1333,6 +1439,7 @@ impl Playback {
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx.clone(),
+                    preview_speed: self.preview_speed.clone(),
                 })
             };
             let mut has_audio = audio_generation.is_some();
@@ -1385,9 +1492,10 @@ impl Playback {
                         break;
                     }
                     drop(adopted.take());
+                    preparing_owns_clock.store(false, Ordering::Release);
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
-                    cached_project.audio = project.audio.clone();
+                    Arc::make_mut(&mut cached_project).audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
@@ -1395,6 +1503,7 @@ impl Playback {
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
                         playhead_rx: audio_playhead_rx.clone(),
+                        preview_speed: self.preview_speed.clone(),
                     });
                     let started = runtime.block_on(async {
                         tokio::select! {
@@ -1465,7 +1574,7 @@ impl Playback {
                         &next_project,
                         self.render_constants.options.screen_size,
                     );
-                    cached_project = next_project;
+                    cached_project = Arc::new(next_project);
                     if adopted.is_none()
                         && audio_changed
                         && let Some(generation) = audio_generation
@@ -1474,10 +1583,11 @@ impl Playback {
                             PlaySpec {
                                 segments: audio_segments.clone(),
                                 music: self.music.clone(),
-                                project: cached_project.clone(),
+                                project: (*cached_project).clone(),
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
+                                preview_speed: self.preview_speed.clone(),
                             },
                             generation,
                         );
@@ -1491,8 +1601,27 @@ impl Playback {
                     }
                 }
 
+                let requested_speed = if adopted.is_some() {
+                    PreviewSpeed::NORMAL
+                } else {
+                    self.preview_speed.get()
+                };
+                if requested_speed != speed {
+                    start += speed.wall_time(
+                        frame_duration,
+                        frame_number.saturating_sub(clock_anchor_frame),
+                    );
+                    clock_anchor_frame = frame_number;
+                    speed = requested_speed;
+                    tracing::debug!(
+                        speed = speed.as_f64(),
+                        frame_number,
+                        "preview speed changed"
+                    );
+                }
+
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
-                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+                let next_deadline = start + frame_duration.mul_f64(frame_offset / speed.as_f64());
 
                 if adopted.is_none() {
                     precision_sleep_sync(next_deadline);
@@ -1508,7 +1637,8 @@ impl Playback {
                     Instant::now().saturating_duration_since(next_deadline)
                 };
                 if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
-                    let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
+                    let frames_behind =
+                        (overshoot.as_secs_f64() * fps_f64 * speed.as_f64()).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
                     frame_number += skip;
@@ -1669,7 +1799,7 @@ impl Playback {
                                 } else {
                                     prefetch_buffer.push_back(prefetched);
                                     let skipped_from = frame_number;
-                                    frame_number = frame_number.saturating_add(1);
+                                    frame_number = speed.next_frame(frame_number);
                                     total_frames_skipped += 1;
                                     starvation_skips += 1;
                                     boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1686,7 +1816,7 @@ impl Playback {
                             }
                             None => {
                                 let skipped_from = frame_number;
-                                frame_number = frame_number.saturating_add(1);
+                                frame_number = speed.next_frame(frame_number);
                                 total_frames_skipped += 1;
                                 starvation_skips += 1;
                                 boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1791,7 +1921,7 @@ impl Playback {
                                 continue;
                             }
                             let skipped_from = frame_number;
-                            frame_number = frame_number.saturating_add(1);
+                            frame_number = speed.next_frame(frame_number);
                             total_frames_skipped += 1;
                             starvation_skips += 1;
                             boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1823,7 +1953,7 @@ impl Playback {
                         if adopted.is_some() {
                             break;
                         }
-                        frame_number = frame_number.saturating_add(1);
+                        frame_number = speed.next_frame(frame_number);
                         continue;
                     };
 
@@ -1973,7 +2103,7 @@ impl Playback {
                     continue;
                 }
 
-                frame_number = frame_number.saturating_add(1);
+                frame_number = speed.next_frame(frame_number);
                 let _ = playback_position_tx.send(frame_number);
                 if has_audio
                     && audio_playhead_tx
@@ -1983,13 +2113,13 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame =
-                    clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame = clock_anchor_frame
+                    + speed.frames_elapsed(start.elapsed(), fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
 
-                    if frames_behind <= 2 {
+                    if f64::from(frames_behind) <= 2.0 * speed.as_f64().max(1.0) {
                         continue;
                     }
 
@@ -2094,6 +2224,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn precision_sleep_returns_at_its_deadline() {
+        for micros in [0, 50, 250, 900, 2_100, 16_667, 33_333] {
+            let deadline = Instant::now() + Duration::from_micros(micros);
+            precision_sleep_sync(deadline);
+            let late = Instant::now()
+                .checked_duration_since(deadline)
+                .unwrap_or_else(|| panic!("{micros} us sleep returned early"));
+            assert!(
+                late < Duration::from_secs(1),
+                "{micros} us sleep returned {late:?} late"
+            );
+        }
+        let start = Instant::now();
+        precision_sleep_sync(start);
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
+
+    // Every supported runner is Windows 10 1803 or later; the spin fallback
+    // is for older builds.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_has_a_high_resolution_waitable_timer() {
+        let timer = WindowsWaitableTimer::high_resolution().expect("high-resolution timer");
+        let start = Instant::now();
+        assert!(timer.sleep(Duration::from_millis(5)));
+        assert!(start.elapsed() >= Duration::from_millis(4));
+    }
+
+    /// Pacing cost and accuracy of the playback sleep at 30 and 60 fps:
+    /// `cargo test -p cap-editor --lib playback::tests::precision_sleep_pacing -- --ignored --nocapture`
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore]
+    fn precision_sleep_pacing() {
+        fn thread_cpu() -> Duration {
+            use windows::Win32::{
+                Foundation::FILETIME,
+                System::Threading::{GetCurrentThread, GetThreadTimes},
+            };
+            let [mut creation, mut exit, mut kernel, mut user] = [FILETIME::default(); 4];
+            unsafe {
+                GetThreadTimes(
+                    GetCurrentThread(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+                .unwrap();
+            }
+            let ticks =
+                |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+        }
+
+        let _timer_guard = WindowsTimerResolution::set_high_precision();
+        raise_playback_thread_priority();
+        for fps in [30u32, 60] {
+            let frame = Duration::from_secs(1) / fps;
+            let frames = fps * 10;
+            let cpu_start = thread_cpu();
+            let start = Instant::now();
+            let mut late_us = Vec::with_capacity(frames as usize);
+            for n in 1..=frames {
+                let deadline = start + frame * n;
+                precision_sleep_sync(deadline);
+                late_us.push(Instant::now().duration_since(deadline).as_secs_f64() * 1e6);
+            }
+            let cpu = thread_cpu().saturating_sub(cpu_start).as_secs_f64()
+                / start.elapsed().as_secs_f64();
+            late_us.sort_by(f64::total_cmp);
+            let at = |q: f64| late_us[((late_us.len() - 1) as f64 * q).round() as usize];
+            println!(
+                "pacing fps={fps} cpu={:.1}% late_us p50={:.0} p95={:.0} p99={:.0} max={:.0}",
+                cpu * 100.0,
+                at(0.5),
+                at(0.95),
+                at(0.99),
+                at(1.0)
+            );
+        }
+    }
+
+    #[test]
     fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {
         let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
             "clips": [{ "index": 1 }, { "index": 0 }],
@@ -2162,6 +2376,19 @@ mod tests {
         next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
         next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
         assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(cap_project::VoiceEq {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        let mut voice_eq = cap_project::VoiceEq::default();
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&project, &next));
+        let equalized = next.clone();
+        voice_eq.high_mid.gain_db += 1.0;
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&equalized, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = None;
         next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
         assert!(clip_audio_changed(&project, &next));
         next.timeline.as_mut().unwrap().segments[0].volume = None;

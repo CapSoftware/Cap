@@ -124,10 +124,18 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 	invalidateGoogleDriveStorageQuotaCache: vi.fn(),
 }));
 
+vi.mock("@/lib/server-analytics", () => ({
+	trackServerEvent: vi.fn(),
+}));
+
 // The live-transcription stack drags in the whole workflow graph
 // (server-only modules included); these tests only care that create works.
 vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
+}));
+
+vi.mock("@/lib/desktop-share-url", () => ({
+	getDesktopShareUrl: vi.fn(async () => undefined),
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -142,6 +150,9 @@ const { Storage } = await import("@cap/web-backend");
 const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
+const { maybeStartLiveTranscription } = await import("@/lib/live-transcribe");
+const { trackServerEvent } = await import("@/lib/server-analytics");
+const { getDesktopShareUrl } = await import("@/lib/desktop-share-url");
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -172,6 +183,50 @@ function insertedValues(table: unknown) {
 	return mockDb.values.mock.calls[index]?.[0] as
 		| Record<string, unknown>
 		| undefined;
+}
+
+function recordingTransactionFixture(rejectUpload: boolean) {
+	type Row = Record<string, unknown>;
+	type Rows = { videos: Map<string, Row>; uploads: Map<string, Row> };
+	const committed: Rows = { videos: new Map(), uploads: new Map() };
+	const transactionInserts: unknown[] = [];
+	const directInserts: unknown[] = [];
+	const insertInto = (rows: Rows, inserts: unknown[]) => (table: unknown) => {
+		inserts.push(table);
+		return {
+			values: async (value: Row) => {
+				if (table === schema.videoUploads && rejectUpload)
+					throw new Error("Injected upload insert failure");
+				const target =
+					table === schema.videos
+						? rows.videos
+						: table === schema.videoUploads
+							? rows.uploads
+							: null;
+				if (!target) throw new Error("Unexpected insert table");
+				const id = String(table === schema.videos ? value.id : value.videoId);
+				target.set(id, { ...value });
+			},
+		};
+	};
+	mockDb.insert.mockImplementation(insertInto(committed, directInserts));
+	mockDb.transaction.mockImplementation(
+		async (
+			run: (tx: { insert: ReturnType<typeof insertInto> }) => Promise<unknown>,
+		) => {
+			const candidate: Rows = {
+				videos: new Map(committed.videos),
+				uploads: new Map(committed.uploads),
+			};
+			const result = await run({
+				insert: insertInto(candidate, transactionInserts),
+			});
+			committed.videos = candidate.videos;
+			committed.uploads = candidate.uploads;
+			return result;
+		},
+	);
+	return { committed, transactionInserts, directInserts };
 }
 
 function stubStorage() {
@@ -395,6 +450,74 @@ describe("DELETE /delete", () => {
 		expect(deletion.deleteVideo).not.toHaveBeenCalled();
 		expect(mockDb.delete).not.toHaveBeenCalled();
 	});
+
+	it("reports why the desktop app cleaned up an Instant start after deleting it", async () => {
+		mockDb.where.mockResolvedValue([
+			{ video: { ...ownedVideo, source: { type: "desktopSegments" } } },
+		]);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed&cause=microphone",
+			{
+				method: "DELETE",
+				headers: { "X-Cap-Desktop-Features": "googleDriveUpload,gpui" },
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toBe(true);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{
+				reason: "start-failed",
+				cause: "microphone",
+				app: "gpui",
+				sourceType: "desktopSegments",
+			},
+		);
+	});
+
+	it.each([
+		"https://cap.test/delete?videoId=video-1",
+		"https://cap.test/delete?videoId=video-1&reason=unknown&cause=microphone",
+	])(
+		"deletes without reporting when no known reason is sent: %s",
+		async (url) => {
+			const response = await app.request(url, { method: "DELETE" });
+			expect(response.status).toBe(200);
+			expect(await response.json()).toBe(true);
+			expect(deletion.deleteVideo).toHaveBeenCalledExactlyOnceWith("video-1");
+			expect(trackServerEvent).not.toHaveBeenCalled();
+		},
+	);
+
+	it("drops an unknown cause and labels other desktop apps", async () => {
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=interrupted&cause=../../etc",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(200);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{ reason: "interrupted", cause: null, app: "desktop", sourceType: null },
+		);
+	});
+
+	it("reports nothing when the deletion itself fails", async () => {
+		deletion.deleteVideo.mockReturnValue(
+			Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error("Provider deletion failed"),
+				}),
+			),
+		);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(500);
+		expect(trackServerEvent).not.toHaveBeenCalled();
+	});
 });
 
 describe("GET /create", () => {
@@ -425,7 +548,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string; ownerId: string; name: string }
@@ -474,7 +597,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
@@ -524,7 +647,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string }
@@ -554,7 +677,7 @@ describe("GET /create", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string }
@@ -588,7 +711,7 @@ describe("GET /create", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
@@ -615,12 +738,74 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create?orgId=org-2");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-2",
 			ownerId: "user-1",
 		});
+	});
+
+	it("returns the share link for the new video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([
+				{ id: "org-2", name: "Team", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/new-video",
+		);
+
+		const response = await app.request("https://cap.test/create?orgId=org-2");
+
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-2", body.id);
+		expect(body).toMatchObject({
+			share_url: "https://videos.team.test/s/new-video",
+		});
+	});
+
+	it("returns the share link for an existing video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where.mockResolvedValueOnce([
+			{
+				id: "0123456789abcde",
+				ownerId: "user-1",
+				orgId: "org-3",
+				isScreenshot: false,
+				source: { type: "desktopMP4" },
+			},
+		]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/0123456789abcde",
+		);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&orgId=org-1",
+		);
+
+		expect(response.status).toBe(200);
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-3", "0123456789abcde");
+		expect(await response.json()).toMatchObject({
+			id: "0123456789abcde",
+			share_url: "https://videos.team.test/s/0123456789abcde",
+		});
+		expect(mockDb.transaction).not.toHaveBeenCalled();
 	});
 
 	it("creates a missing video with an explicitly reserved ID", async () => {
@@ -648,6 +833,84 @@ describe("GET /create", () => {
 			ownerId: "user-1",
 		});
 		expect(await response.json()).toMatchObject({ id: "0123456789abcde" });
+	});
+
+	it("commits a progress-capable recording and its upload row in one transaction", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "fixture-user",
+			email: "fixture@example.com",
+			defaultOrgId: "fixture-org",
+			activeOrganizationId: "fixture-org",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					id: "fixture-org",
+					name: "Fixture organization",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+				},
+			])
+			.mockResolvedValueOnce([]);
+		const fixture = recordingTransactionFixture(false);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopMP4",
+			{ headers: { "X-Cap-Desktop-Version": "0.3.68" } },
+		);
+
+		expect(response.status).toBe(200);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(fixture.transactionInserts).toEqual([
+			schema.videos,
+			schema.videoUploads,
+		]);
+		expect(fixture.directInserts).toEqual([]);
+		const body = await response.json();
+		expect(fixture.committed.videos.get(body.id)).toMatchObject({
+			id: body.id,
+			ownerId: "fixture-user",
+			orgId: "fixture-org",
+		});
+		expect(fixture.committed.uploads.get(body.id)).toMatchObject({
+			videoId: body.id,
+			mode: "singlepart",
+		});
+	});
+
+	it("rolls back a recording and skips transcription when its upload insert fails", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "fixture-user",
+			email: "fixture@example.com",
+			defaultOrgId: "fixture-org",
+			activeOrganizationId: "fixture-org",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					id: "fixture-org",
+					name: "Fixture organization",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+				},
+			])
+			.mockResolvedValueOnce([]);
+		const fixture = recordingTransactionFixture(true);
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopSegments",
+			{ headers: { "X-Cap-Desktop-Version": "0.3.68" } },
+		);
+
+		expect(response.status).toBe(500);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(fixture.transactionInserts).toEqual([
+			schema.videos,
+			schema.videoUploads,
+		]);
+		expect(fixture.directInserts).toEqual([]);
+		expect(fixture.committed.videos.size).toBe(0);
+		expect(fixture.committed.uploads.size).toBe(0);
+		expect(maybeStartLiveTranscription).not.toHaveBeenCalled();
 	});
 
 	it("rejects an invalid client-selected video ID", async () => {

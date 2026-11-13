@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { file, type Subprocess, spawn } from "bun";
+import { file, type Subprocess } from "bun";
+import { spawn } from "./media-spawn";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const DEFAULT_CRF = 23;

@@ -63,8 +63,8 @@ impl MicrophoneOption {
         let sample_rate = self.sample_rate?;
         let khz = sample_rate as f32 / 1000.;
         let layout = match self.channels {
-            Some(1) => "Mono".to_string(),
-            Some(2) => "Stereo".to_string(),
+            Some(1) => crate::i18n::tr::main::device::format::mono().to_string(),
+            Some(2) => crate::i18n::tr::main::device::format::stereo().to_string(),
             Some(n) => format!("{n}ch"),
             None => return Some(format!("{khz}kHz")),
         };
@@ -124,6 +124,24 @@ impl WindowOption {
             (None, None) => None,
         }
     }
+
+    /// Whether two entries draw the same card. `position` only feeds the
+    /// thumbnail signature, so a window that moved still draws the same card.
+    pub fn same_card(&self, other: &Self) -> bool {
+        let Self {
+            id,
+            label,
+            app,
+            size,
+            position: _,
+            refresh_rate,
+        } = self;
+        *id == other.id
+            && *label == other.label
+            && *app == other.app
+            && *size == other.size
+            && *refresh_rate == other.refresh_rate
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -135,6 +153,28 @@ pub struct DeviceSnapshot {
 }
 
 impl DeviceSnapshot {
+    /// Store a fresh display list. Returns whether any card changed.
+    pub fn install_displays(&mut self, displays: Vec<DisplayOption>) -> bool {
+        if self.displays == displays {
+            return false;
+        }
+        self.displays = displays;
+        true
+    }
+
+    /// Store a fresh window list. Returns whether any card changed. The list is
+    /// stored either way so the thumbnail signature sees moved windows.
+    pub fn install_windows(&mut self, windows: Vec<WindowOption>) -> bool {
+        let changed = self.windows.len() != windows.len()
+            || self
+                .windows
+                .iter()
+                .zip(&windows)
+                .any(|(current, next)| !current.same_card(next));
+        self.windows = windows;
+        changed
+    }
+
     pub fn update_camera_formats(
         &mut self,
         queried: &CameraOption,
@@ -228,6 +268,122 @@ impl InputSnapshot {
             _ => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod target_list_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn window(id: &str, label: &str) -> WindowOption {
+        WindowOption {
+            id: WindowId::from_str(id).unwrap(),
+            label: label.into(),
+            app: "Cap".into(),
+            size: Some((1920, 1080)),
+            position: Some((0., 0.)),
+            refresh_rate: Some(60.),
+        }
+    }
+
+    fn display(id: &str, label: &str) -> DisplayOption {
+        DisplayOption {
+            id: DisplayId::from_str(id).unwrap(),
+            label: label.into(),
+            refresh_rate: 60.,
+        }
+    }
+
+    #[test]
+    fn unchanged_display_list_does_not_repaint() {
+        let list = vec![display("1", "Built-in"), display("2", "Studio Display")];
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(snapshot.install_displays(list.clone()));
+        assert!(!snapshot.install_displays(list.clone()));
+        assert_eq!(snapshot.displays, list);
+    }
+
+    #[test]
+    fn display_changes_repaint() {
+        let list = vec![display("1", "Built-in"), display("2", "Studio Display")];
+        let mut renamed = list.clone();
+        renamed[1].label = "Sidecar".into();
+        let mut slower = list.clone();
+        slower[0].refresh_rate = 30.;
+        let reordered = vec![list[1].clone(), list[0].clone()];
+        for next in [
+            renamed,
+            slower,
+            reordered,
+            vec![list[0].clone()],
+            Vec::new(),
+        ] {
+            let mut snapshot = DeviceSnapshot {
+                displays: list.clone(),
+                ..Default::default()
+            };
+            assert!(snapshot.install_displays(next.clone()));
+            assert_eq!(snapshot.displays, next);
+        }
+    }
+
+    #[test]
+    fn unchanged_window_list_does_not_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(snapshot.install_windows(list.clone()));
+        assert!(!snapshot.install_windows(list.clone()));
+        assert_eq!(snapshot.windows, list);
+    }
+
+    #[test]
+    fn moved_window_is_stored_without_a_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut moved = list.clone();
+        moved[1].position = Some((240., 96.));
+        let mut snapshot = DeviceSnapshot {
+            windows: list,
+            ..Default::default()
+        };
+        assert!(!snapshot.install_windows(moved.clone()));
+        assert_eq!(snapshot.windows, moved);
+    }
+
+    #[test]
+    fn window_card_changes_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut renamed = list.clone();
+        renamed[0].label = "Untitled".into();
+        let mut other_app = list.clone();
+        other_app[1].app = "Finder".into();
+        let mut resized = list.clone();
+        resized[0].size = Some((1280, 720));
+        let mut sizeless = list.clone();
+        sizeless[0].size = None;
+        let mut slower = list.clone();
+        slower[1].refresh_rate = Some(30.);
+        let reordered = vec![list[1].clone(), list[0].clone()];
+        let mut opened = list.clone();
+        opened.push(window("3", "Settings"));
+        for next in [
+            renamed,
+            other_app,
+            resized,
+            sizeless,
+            slower,
+            reordered,
+            opened,
+            vec![list[0].clone()],
+            Vec::new(),
+        ] {
+            let mut snapshot = DeviceSnapshot {
+                windows: list.clone(),
+                ..Default::default()
+            };
+            assert!(snapshot.install_windows(next.clone()));
+            assert_eq!(snapshot.windows, next);
+        }
     }
 }
 
@@ -676,7 +832,15 @@ pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     candidates.into_iter().next().map(|(window, _)| window)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
+    match scap_targets::WindowImpl::topmost_x11_snapshot_at_cursor() {
+        Some(found) => found.map(|snapshot| snapshot.window),
+        None => Window::get_topmost_at_cursor(),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     Window::get_topmost_at_cursor()
 }
@@ -712,16 +876,6 @@ pub fn list_display_targets() -> Vec<(DisplayOption, Display)> {
         .collect()
 }
 
-/// Mirrors the picker path of `cap_recording::sources::screen_capture::list_windows`
-/// (i.e. `include_accessory_panels: false`), which collapses to: a non-empty
-/// title, not owned by the Window Server, and at window level 0.
-///
-/// The level check is what actually matters. A raw `Window::list()` on macOS is
-/// dominated by menu-bar extras and status items — Control Centre alone
-/// contributes a dozen `Item-0` windows at level 25 — so without it the picker
-/// is unusable. This is deliberately duplicated rather than imported:
-/// `cap-recording` drags in ffmpeg and the whole encode stack, which this app
-/// has no other reason to build.
 pub fn list_windows() -> Vec<WindowOption> {
     list_window_targets()
         .into_iter()
@@ -734,15 +888,37 @@ pub fn list_windows() -> Vec<WindowOption> {
 /// `collect_windows_with_thumbnails` (`thumbnails/mod.rs:107-137`), which needs
 /// the handle for both the ScreenCaptureKit filter and `Window::app_icon()`.
 pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
-    Window::list()
+    list_window_targets_inner(
+        #[cfg(target_os = "windows")]
+        &mut scap_targets::platform::WindowListCache::default(),
+    )
+}
+
+pub(crate) fn list_window_targets_inner(
+    #[cfg(target_os = "windows")] cache: &mut scap_targets::platform::WindowListCache,
+) -> Vec<(WindowOption, Window)> {
+    #[cfg(target_os = "linux")]
+    if let Some(targets) = linux_window_targets_from_snapshot() {
+        return targets;
+    }
+
+    #[cfg(target_os = "windows")]
+    let windows = cache.list();
+    #[cfg(not(target_os = "windows"))]
+    let windows = Window::list();
+
+    windows
         .into_iter()
         .filter_map(|window| {
             #[cfg(target_os = "windows")]
-            if !window.raw_handle().is_valid() || !window.raw_handle().is_on_screen() {
+            if !cache.is_valid(&window) || !cache.is_on_screen(&window) {
                 return None;
             }
 
             let label = window.name().filter(|name| !name.trim().is_empty())?;
+            #[cfg(target_os = "windows")]
+            let app = cache.owner_name(&window)?;
+            #[cfg(not(target_os = "windows"))]
             let app = window.owner_name()?;
 
             if app == "Window Server" {
@@ -754,17 +930,27 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             // (`app_windows::begin_recording`), so offering one as a target
             // records a hole. Matched by owner pid rather than title or
             // bundle id -- the dev binary is unbundled, and most of our
-            // windows carry no CG title at all. (The shared
-            // `screen_capture::list_windows` has no such filter; the Tauri
-            // main window only escapes it by being a level>0 panel.)
+            // windows carry no CG title at all.
             #[cfg(target_os = "macos")]
             if window.raw_handle().owner_pid() == Some(std::process::id() as i32) {
                 return None;
             }
 
             #[cfg(target_os = "macos")]
-            if window.raw_handle().level() != Some(0) {
-                return None;
+            {
+                let level = window.raw_handle().level();
+                let bundle_identifier = window.raw_handle().bundle_identifier();
+                let is_accessory_application = matches!(level, Some(level) if level > 0)
+                    && window.raw_handle().is_accessory_application();
+                if !cap_recording::sources::screen_capture::is_listable_macos_window(
+                    level,
+                    &app,
+                    bundle_identifier.as_deref(),
+                    false,
+                    is_accessory_application,
+                ) {
+                    return None;
+                }
             }
 
             Some((
@@ -784,6 +970,45 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             ))
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_targets_from_snapshot() -> Option<Vec<(WindowOption, Window)>> {
+    let snapshots = scap_targets::WindowImpl::list_x11_snapshots()?;
+    Some(
+        snapshots
+            .into_iter()
+            .filter_map(|snapshot| {
+                let size = snapshot.logical_size();
+                let position = snapshot.display_relative_origin();
+                let refresh_rate = snapshot.refresh_rate();
+                let id = snapshot.window.id();
+                if snapshot.name.trim().is_empty() {
+                    return None;
+                }
+                let app = snapshot.owner_name?;
+                if app == "Window Server" {
+                    return None;
+                }
+                // As on macOS: recording one of our own windows records a
+                // window the recording hides.
+                if snapshot.owner_pid == Some(std::process::id()) {
+                    return None;
+                }
+                Some((
+                    WindowOption {
+                        id,
+                        label: snapshot.name,
+                        app,
+                        size: Some((size.width() as u32, size.height() as u32)),
+                        position,
+                        refresh_rate: Some(refresh_rate),
+                    },
+                    snapshot.window,
+                ))
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

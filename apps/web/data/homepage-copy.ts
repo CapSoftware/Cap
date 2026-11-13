@@ -73,6 +73,12 @@ export interface PricingCopy {
 	title: string;
 	subtitle: string;
 	lovedBy: string;
+	free: {
+		title: string;
+		description: string;
+		features: string[];
+		cta: string;
+	};
 	commercial: {
 		title: string;
 		description: string;
@@ -271,7 +277,7 @@ export const homepageCopy: HomePageCopy = {
 				key: "native",
 				title: "Native, Not An Electron Tab",
 				description:
-					"Built on Tauri and Rust for genuinely native performance on macOS and Windows. No bloated browser, no battery hit — just a fast, lightweight recorder.",
+					"Built in Rust with a native interface for genuinely native performance on macOS, Windows, and Linux. No bloated browser, no battery hit — just a fast, lightweight recorder.",
 			},
 			{
 				key: "oss",
@@ -301,7 +307,19 @@ export const homepageCopy: HomePageCopy = {
 		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 50,000+ users",
+		lovedBy: "Trusted by 80,000+ users",
+		free: {
+			title: "Free",
+			description:
+				"The full recorder and editor for personal use, with shareable links included.",
+			features: [
+				"Studio Mode with the full editor",
+				"4K export at 60fps",
+				"25 shareable links a month, up to 5 minutes each",
+				"Apps for Mac, Windows and Linux",
+			],
+			cta: "Download free",
+		},
 		commercial: {
 			title: "Desktop License",
 			description:
@@ -310,7 +328,7 @@ export const homepageCopy: HomePageCopy = {
 				"Commercial usage rights",
 				"Unlimited local recordings & editing",
 				"Studio Mode with full editor",
-				"20 cloud shareable links / month (up to 5 min each)",
+				"25 cloud shareable links / month (up to 5 min each)",
 				"Export to any format",
 				"Community support",
 			],

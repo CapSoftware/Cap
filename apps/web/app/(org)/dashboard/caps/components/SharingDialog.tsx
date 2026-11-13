@@ -10,8 +10,8 @@ import {
 } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import { type ImageUpload, Space, type Video } from "@cap/web-domain";
-import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faShareNodes } from "@fortawesome/free-solid-svg-icons/faShareNodes";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Globe2, Lock, Search } from "lucide-react";
@@ -32,9 +32,11 @@ import {
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { buildEmbedCode } from "@/lib/embed-code";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 
 interface SharingDialogProps {
@@ -56,10 +58,13 @@ interface SharingDialogProps {
 	spacesData?: Spaces[] | null;
 	hasPassword?: boolean;
 	allowedEmailDomain?: string | null;
+	allowLinkOverride?: boolean;
+	linkOpenToAnyone?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
 	onUpgradeRequest?: (open: boolean) => void;
+	shareUrl?: string;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -73,16 +78,20 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	spacesData: propSpacesData = null,
 	hasPassword = false,
 	allowedEmailDomain: propAllowedEmailDomain,
+	allowLinkOverride: propAllowLinkOverride,
+	linkOpenToAnyone = false,
 	inheritedPasswordSources = [],
 	onPasswordUpdated,
 	user: propUser,
 	onUpgradeRequest: propOnUpgradeRequest,
+	shareUrl: propShareUrl,
 }) => {
 	const {
 		spacesData: contextSpacesData,
 		user: contextUser,
 		setUpgradeModalOpen,
 		activeOrganization,
+		organizationSettings,
 	} = useDashboardContext() ?? {};
 	const spacesData = propSpacesData || contextSpacesData;
 	const user = propUser ?? contextUser;
@@ -90,6 +99,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const allowedEmailDomain =
 		propAllowedEmailDomain ??
 		activeOrganization?.organization.allowedEmailDomain;
+	const canOverrideLink =
+		Boolean(allowedEmailDomain?.trim()) &&
+		(propAllowLinkOverride ??
+			organizationSettings?.allowPublicLinkOverride === true);
 	const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
 	const [searchTerm, setSearchTerm] = useState("");
 	const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
@@ -97,6 +110,11 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	>(new Set());
 	const [publicToggle, setPublicToggle] = useState(isPublic);
 	const [initialPublicState, setInitialPublicState] = useState(isPublic);
+	const [linkAnyone, setLinkAnyone] = useState(linkOpenToAnyone);
+	const linkAccessChanged =
+		publicToggle && canOverrideLink && linkAnyone !== linkOpenToAnyone;
+	const linkRestricted =
+		Boolean(allowedEmailDomain?.trim()) && !(canOverrideLink && linkAnyone);
 	const [passwordEnabled, setPasswordEnabled] = useState(hasPassword);
 	const [passwordValue, setPasswordValue] = useState("");
 	const [initialPasswordEnabled, setInitialPasswordEnabled] =
@@ -106,7 +124,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const [viewerEmail, setViewerEmail] = useState("");
 	const router = useRouter();
 	const { webUrl } = usePublicEnv();
-	const shareUrl = `${webUrl}/s/${capId}`;
+	const shareUrl =
+		propShareUrl ??
+		videoShareUrl(webUrl, capId, activeOrganization?.organization);
 	const viewerGrants = useQuery({
 		queryKey: ["video-viewer-grants", capId],
 		queryFn: () => getVideoViewerGrants(capId),
@@ -166,7 +186,14 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			spaceIds: Space.SpaceIdOrOrganisationId[];
 			public: boolean;
 		}) => {
-			const result = await shareCap({ capId, spaceIds, public: isPublic });
+			const result = await shareCap({
+				capId,
+				spaceIds,
+				public: isPublic,
+				...(linkAccessChanged
+					? { linkAccess: linkAnyone ? "anyone" : "restricted" }
+					: {}),
+			});
 
 			if (!result.success) {
 				throw new Error(result.error || "Failed to update sharing settings");
@@ -195,7 +222,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				(id) => !newSelectedSpaces.includes(id),
 			);
 
-			const publicChanged = publicToggle !== initialPublicState;
+			const visibilityChanged = publicToggle !== initialPublicState;
+			const publicChanged = visibilityChanged || linkAccessChanged;
 			const passwordChanged =
 				passwordEnabled !== initialPasswordEnabled ||
 				(passwordEnabled && passwordValue.trim().length > 0);
@@ -211,7 +239,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				!passwordChanged
 			) {
 				toast.success(
-					publicToggle ? "Video is now public" : "Video is now private",
+					visibilityChanged
+						? publicToggle
+							? "Video is now public"
+							: "Video is now private"
+						: linkAnyone
+							? "Anyone with the link can now view"
+							: "Link limited to matching emails",
 				);
 			} else if (
 				passwordChanged &&
@@ -297,6 +331,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setInitialSelectedSpaces(spaceIds);
 			setPublicToggle(isPublic);
 			setInitialPublicState(isPublic);
+			setLinkAnyone(linkOpenToAnyone);
 			setPasswordEnabled(hasPassword);
 			setPasswordValue("");
 			setInitialPasswordEnabled(hasPassword);
@@ -304,7 +339,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setViewerEmail("");
 			setActiveTab(tabs[0]);
 		}
-	}, [isOpen, sharedSpaces, isPublic, hasPassword, tabs[0]]);
+	}, [isOpen, sharedSpaces, isPublic, linkOpenToAnyone, hasPassword, tabs[0]]);
 
 	const isSpaceSharedViaOrganization = useCallback(
 		(spaceId: string) => {
@@ -424,32 +459,57 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 					{activeTab === "Share" ? (
 						<>
 							{/* Public sharing toggle */}
-							<div className="flex justify-between items-center p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
-								<div className="flex gap-3 items-center">
-									<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
-										<Globe2 className="w-4 h-4 text-gray-11" />
+							<div className="mb-4 rounded-lg border bg-gray-1 border-gray-4">
+								<div className="flex justify-between items-center p-3">
+									<div className="flex gap-3 items-center">
+										<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
+											<Globe2 className="w-4 h-4 text-gray-11" />
+										</div>
+										<div>
+											<p className="text-sm font-medium text-gray-12">
+												{!publicToggle
+													? "Private"
+													: linkRestricted
+														? "Restricted link access"
+														: "Anyone with the link"}
+											</p>
+											<p className="text-xs text-gray-10">
+												{!publicToggle
+													? "Only people with access can view"
+													: linkRestricted
+														? `Only users with matching ${allowedEmailDomain?.trim().includes(",") ? "emails" : "email"} can view`
+														: "Anyone on the internet with the link can view"}
+											</p>
+										</div>
 									</div>
-									<div>
-										<p className="text-sm font-medium text-gray-12">
-											{!publicToggle
-												? "Private"
-												: allowedEmailDomain?.trim()
-													? "Restricted link access"
-													: "Anyone with the link"}
-										</p>
-										<p className="text-xs text-gray-10">
-											{!publicToggle
-												? "Only people with access can view"
-												: allowedEmailDomain?.trim()
-													? `Only users with matching ${allowedEmailDomain.trim().includes(",") ? "emails" : "email"} can view`
-													: "Anyone on the internet with the link can view"}
-										</p>
-									</div>
+									<Switch
+										checked={publicToggle}
+										onCheckedChange={setPublicToggle}
+									/>
 								</div>
-								<Switch
-									checked={publicToggle}
-									onCheckedChange={setPublicToggle}
-								/>
+								{publicToggle && canOverrideLink && (
+									<div className="grid grid-cols-2 gap-1 p-1 mx-3 mb-3 rounded-lg bg-gray-3">
+										{[
+											{ anyone: false, label: "Matching emails only" },
+											{ anyone: true, label: "Anyone with the link" },
+										].map((option) => (
+											<button
+												type="button"
+												aria-pressed={linkAnyone === option.anyone}
+												key={option.label}
+												onClick={() => setLinkAnyone(option.anyone)}
+												className={clsx(
+													"px-2 py-1.5 text-xs font-medium rounded-md transition-colors",
+													linkAnyone === option.anyone
+														? "bg-gray-1 text-gray-12 shadow-sm"
+														: "text-gray-10 hover:text-gray-12",
+												)}
+											>
+												{option.label}
+											</button>
+										))}
+									</div>
+								)}
 							</div>
 
 							<div className="p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">

@@ -1,5 +1,8 @@
+use std::borrow::Cow;
+use std::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
-use cap_project::{CaptionWord, XY};
+use cap_project::{CaptionWord, XY, caption_words::caption_display_segment};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -98,13 +101,107 @@ pub struct CaptionOverlayLayout {
     pub position: CaptionPosition,
 }
 
+/// The caption box on the latest frame at rest, before the bounce and pop
+/// animations move it, in output-frame pixels (`[x0, y0, x1, y1]`). The
+/// editor hit-tests and drags this box when the caption is placed manually.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptionFrameBox {
+    pub bounds: [f32; 4],
+    position: CaptionPosition,
+}
+
+impl CaptionFrameBox {
+    pub fn new(bounds: [f32; 4], position: &str) -> Self {
+        Self {
+            bounds,
+            position: CaptionPosition::from_str(position),
+        }
+    }
+
+    /// Whether this caption sits at the Manual position, through the
+    /// settings or its segment's own override.
+    pub fn is_manual(&self) -> bool {
+        self.position == CaptionPosition::Manual
+    }
+
+    pub fn is_at(&self, position: &str) -> bool {
+        self.position == CaptionPosition::from_str(position)
+    }
+}
+
+/// Top-left corner of a caption box of `box_size` at rest in a frame of
+/// `frame` pixels. Manual placement centres the box on `manual`, a fraction
+/// of the frame, and keeps the whole box inside the frame.
+pub(crate) fn caption_box_origin(
+    position: CaptionPosition,
+    manual: Option<XY<f32>>,
+    box_size: (f32, f32),
+    frame: (f32, f32),
+) -> (f32, f32) {
+    let (box_width, box_height) = box_size;
+    let (width, height) = frame;
+    let margin = width * 0.05;
+    let max_left = (width - box_width).max(0.0);
+    let max_top = (height - box_height).max(0.0);
+    let manual = manual.filter(|_| position == CaptionPosition::Manual);
+    let left = match (position, manual) {
+        (_, Some(manual)) => {
+            (manual.x.clamp(0.0, 1.0) * width - box_width / 2.0).clamp(0.0, max_left)
+        }
+        (CaptionPosition::TopLeft | CaptionPosition::BottomLeft, _) => margin,
+        (CaptionPosition::TopRight | CaptionPosition::BottomRight, _) => {
+            (width - margin - box_width).max(0.0)
+        }
+        _ => ((width - box_width) / 2.0).max(0.0),
+    };
+    let center_y = match manual {
+        Some(manual) => manual.y.clamp(0.0, 1.0) * height,
+        None => height * position.y_factor(),
+    };
+    (left, (center_y - box_height / 2.0).clamp(0.0, max_top))
+}
+
+/// The centre of the caption box last drawn, as fractions of the frame, with
+/// the position setting it was drawn for. Left and right presets align the
+/// box's edge to the margin, so where its centre lands depends on the box
+/// width, which only this layer measures. The editor starts Manual placement
+/// here so switching to it leaves the captions where they were.
+static LAST_CAPTION_CENTER: std::sync::Mutex<Option<(CaptionPosition, [f32; 2])>> =
+    std::sync::Mutex::new(None);
+
+/// [`LAST_CAPTION_CENTER`] when the last caption was drawn at `position`.
+pub fn last_caption_center(position: &str) -> Option<(f32, f32)> {
+    let wanted = CaptionPosition::from_str(position);
+    let last = *LAST_CAPTION_CENTER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    last.and_then(|(drawn, [x, y])| (drawn == wanted).then_some((x, y)))
+}
+
+fn caption_center(rect: [f32; 4], frame: (u32, u32)) -> Option<[f32; 2]> {
+    (frame.0 > 0 && frame.1 > 0).then(|| {
+        [
+            ((rect[0] + rect[2] / 2.0) / frame.0 as f32).clamp(0.0, 1.0),
+            ((rect[1] + rect[3] / 2.0) / frame.1 as f32).clamp(0.0, 1.0),
+        ]
+    })
+}
+
+fn record_caption_center(position: CaptionPosition, rect: [f32; 4], frame: (u32, u32)) {
+    if let Some(center) = caption_center(rect, frame) {
+        *LAST_CAPTION_CENTER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((position, center));
+    }
+}
+
 const BASE_TEXT_OPACITY: f32 = 0.8;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
-// stays on screen for the whole inflated duration. Kept in sync with
-// MAX_CAPTION_WORD_DURATION in the desktop transcription/projection layers.
-const MAX_CAPTION_WORD_DURATION: f64 = 2.5;
+// stays on screen for the whole inflated duration. Value comes from the shared
+// caption word utilities so it stays in sync with the transcription layers.
+const MAX_CAPTION_WORD_DURATION: f64 = cap_project::caption_words::MAX_CAPTION_WORD_DURATION as f64;
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -261,6 +358,83 @@ fn calculate_word_highlight(
     0.0
 }
 
+fn caption_rgba(rgb: [f32; 3], alpha: f32) -> Color {
+    Color::rgba(
+        (rgb[0] * 255.0) as u8,
+        (rgb[1] * 255.0) as u8,
+        (rgb[2] * 255.0) as u8,
+        (alpha * 255.0) as u8,
+    )
+}
+
+struct WordHighlight {
+    base_rgb: [f32; 3],
+    highlight_rgb: [f32; 3],
+    base_alpha: f32,
+    highlight_alpha: f32,
+    transition_duration: f32,
+}
+
+fn word_highlight_spans(
+    text: &str,
+    words: &[CaptionWord],
+    uppercase: bool,
+    current_time: f32,
+    highlight: &WordHighlight,
+) -> Vec<(Range<usize>, Color)> {
+    let base = caption_rgba(highlight.base_rgb, highlight.base_alpha);
+    let mut spans = Vec::with_capacity(words.len() * 2 + 1);
+    let mut last_end = 0usize;
+
+    for (idx, word) in words.iter().enumerate() {
+        let needle = if uppercase {
+            Cow::Owned(word.text.to_uppercase())
+        } else {
+            Cow::Borrowed(word.text.as_str())
+        };
+        let Some(start_pos) = text.get(last_end..).and_then(|s| s.find(needle.as_ref())) else {
+            continue;
+        };
+        let abs_start = last_end + start_pos;
+        if abs_start > last_end {
+            spans.push((last_end..abs_start, base));
+        }
+
+        let word_highlight = calculate_word_highlight(
+            current_time,
+            word,
+            idx,
+            words,
+            highlight.transition_duration,
+        );
+        let blended_rgb: [f32; 3] = std::array::from_fn(|channel| {
+            highlight.base_rgb[channel]
+                + (highlight.highlight_rgb[channel] - highlight.base_rgb[channel]) * word_highlight
+        });
+        let blended_alpha = highlight.base_alpha
+            + (highlight.highlight_alpha - highlight.base_alpha) * word_highlight;
+
+        let word_end = abs_start + needle.len();
+        spans.push((
+            abs_start..word_end,
+            caption_rgba(blended_rgb, blended_alpha),
+        ));
+        last_end = word_end;
+    }
+
+    if last_end < text.len() {
+        spans.push((last_end..text.len(), base));
+    }
+
+    spans
+}
+
+#[derive(PartialEq)]
+enum CaptionTextColors {
+    Uniform(Color),
+    Spans(Vec<(Range<usize>, Color)>),
+}
+
 #[derive(PartialEq)]
 struct ShapedCaptionText {
     text: String,
@@ -268,7 +442,74 @@ struct ShapedCaptionText {
     wrap_width: u32,
     family: Family<'static>,
     weight: Weight,
-    color: Color,
+    colors: CaptionTextColors,
+}
+
+fn caption_text_left(buffer: &Buffer, content_left: f32, render_scale: f32) -> f32 {
+    let min_x = LayoutRunIter::new(buffer)
+        .flat_map(|run| run.glyphs)
+        .map(|glyph| glyph.x)
+        .reduce(f32::min)
+        .unwrap_or(0.0);
+    content_left - min_x * render_scale
+}
+
+/// The caption size in output pixels, or `None` when it rounds to nothing.
+/// A size of 0 (from a hand-edited or tool-written config; the editor's
+/// slider stops at 12) would give cosmic-text a zero line height, which it
+/// asserts against.
+pub(crate) fn scaled_font_size(size: u32, output_height: u32) -> Option<f32> {
+    let font_size = size as f32 * (output_height as f32 / 1080.0);
+    (font_size > 0.0).then_some(font_size)
+}
+
+fn shape_caption_text(font_system: &mut FontSystem, shaped: &ShapedCaptionText) -> Buffer {
+    let font_size = f32::from_bits(shaped.font_size);
+    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
+    buffer.set_size(font_system, Some(f32::from_bits(shaped.wrap_width)), None);
+    buffer.set_wrap(font_system, glyphon::Wrap::None);
+    let attrs = Attrs::new().family(shaped.family).weight(shaped.weight);
+    match &shaped.colors {
+        CaptionTextColors::Uniform(color) => buffer.set_text(
+            font_system,
+            &shaped.text,
+            &attrs.color(*color),
+            Shaping::Advanced,
+        ),
+        CaptionTextColors::Spans(spans) => buffer.set_rich_text(
+            font_system,
+            spans
+                .iter()
+                .map(|(range, color)| (&shaped.text[range.clone()], attrs.clone().color(*color))),
+            &attrs,
+            Shaping::Advanced,
+            None,
+        ),
+    }
+    buffer
+}
+
+struct CaptionText {
+    buffer: Buffer,
+    shaped: Option<ShapedCaptionText>,
+}
+
+impl CaptionText {
+    fn new() -> Self {
+        Self {
+            buffer: Buffer::new_empty(Metrics::new(24.0, 24.0 * 1.2)),
+            shaped: None,
+        }
+    }
+
+    fn update(&mut self, font_system: &mut FontSystem, shaped: ShapedCaptionText) -> bool {
+        if self.shaped.as_ref() == Some(&shaped) {
+            return false;
+        }
+        self.buffer = shape_caption_text(font_system, &shaped);
+        self.shaped = Some(shaped);
+        true
+    }
 }
 
 pub struct CaptionsLayer {
@@ -277,8 +518,7 @@ pub struct CaptionsLayer {
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
-    text_buffer: Buffer,
-    shaped: Option<ShapedCaptionText>,
+    text: CaptionText,
     current_text: Option<String>,
     current_segment_start: f32,
     current_segment_end: f32,
@@ -294,6 +534,7 @@ pub struct CaptionsLayer {
     output_size: (u32, u32),
     has_caption: bool,
     active_layout: Option<CaptionOverlayLayout>,
+    frame_box: Option<CaptionFrameBox>,
 }
 
 impl CaptionsLayer {
@@ -318,9 +559,6 @@ impl CaptionsLayer {
             None,
         );
         glyph_phase.finish("returned");
-
-        let metrics = Metrics::new(24.0, 24.0 * 1.2);
-        let text_buffer = Buffer::new_empty(metrics);
 
         let background_uniforms = CaptionBackgroundUniforms {
             rect: [0.0; 4],
@@ -422,8 +660,7 @@ impl CaptionsLayer {
             swash_cache,
             text_atlas,
             text_renderer,
-            text_buffer,
-            shaped: None,
+            text: CaptionText::new(),
             current_text: None,
             current_segment_start: 0.0,
             current_segment_end: 0.0,
@@ -439,6 +676,7 @@ impl CaptionsLayer {
             output_size: (0, 0),
             has_caption: false,
             active_layout: None,
+            frame_box: None,
         }
     }
 
@@ -462,6 +700,7 @@ impl CaptionsLayer {
     ) {
         self.has_caption = false;
         self.active_layout = None;
+        self.frame_box = None;
         self.background_scissor = None;
         self.highlight_scissor = None;
         self.has_highlight = false;
@@ -494,9 +733,12 @@ impl CaptionsLayer {
         let default_fade = caption_data.settings.fade_duration;
         let word_transition_duration = caption_data.settings.word_transition_duration;
 
-        let Some(active) =
-            find_active_caption_segment(current_time, &timeline.caption_segments, default_fade)
-        else {
+        let Some(active) = find_active_caption_segment(
+            current_time,
+            &timeline.caption_segments,
+            default_fade,
+            caption_data.settings.hides_fillers(),
+        ) else {
             self.current_text = None;
             return;
         };
@@ -506,7 +748,7 @@ impl CaptionsLayer {
             .fade_duration_override
             .unwrap_or(default_fade) as f64;
 
-        let effective_end = caption_segment_effective_end(active.segment);
+        let effective_end = caption_segment_effective_end(&active.segment);
 
         self.update_caption(
             Some(active.segment.text.clone()),
@@ -616,15 +858,10 @@ impl CaptionsLayer {
             * fade_opacity)
             .clamp(0.0, 1.0);
 
-        let font_size = caption_data.settings.size as f32 * (height as f32 / 1080.0);
-        let wrap_width = (width as f32 - margin * 2.0).max(font_size);
-        let new_buffer = |font_system: &mut FontSystem| {
-            let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
-            buffer.set_size(font_system, Some(wrap_width), None);
-            buffer.set_wrap(font_system, glyphon::Wrap::None);
-            buffer
+        let Some(font_size) = scaled_font_size(caption_data.settings.size, height) else {
+            return;
         };
-
+        let wrap_width = (width as f32 - margin * 2.0).max(font_size);
         let font_family = match caption_data.settings.font.as_str() {
             "System Serif" => Family::Serif,
             "System Monospace" => Family::Monospace,
@@ -642,127 +879,39 @@ impl CaptionsLayer {
         let base_alpha = (fade_opacity * BASE_TEXT_OPACITY).clamp(0.0, 1.0);
         let highlight_alpha = fade_opacity.clamp(0.0, 1.0);
 
-        if use_color_highlight {
-            let mut rich_text: Vec<(&str, Attrs)> = Vec::new();
-            let full_text = caption_text.as_str();
-            let mut last_end = 0usize;
-
-            for (idx, word) in caption_words.iter().enumerate() {
-                let needle = if uppercase {
-                    word.text.to_uppercase()
-                } else {
-                    word.text.clone()
-                };
-                if let Some(start_pos) = full_text.get(last_end..).and_then(|s| s.find(&needle)) {
-                    let abs_start = last_end + start_pos;
-
-                    if abs_start > last_end {
-                        let space = &full_text[last_end..abs_start];
-                        rich_text.push((
-                            space,
-                            Attrs::new()
-                                .family(font_family)
-                                .weight(weight)
-                                .color(Color::rgba(
-                                    (base_color[0] * 255.0) as u8,
-                                    (base_color[1] * 255.0) as u8,
-                                    (base_color[2] * 255.0) as u8,
-                                    (base_alpha * 255.0) as u8,
-                                )),
-                        ));
-                    }
-
-                    let word_highlight = calculate_word_highlight(
-                        current_time as f32,
-                        word,
-                        idx,
-                        caption_words,
-                        word_transition_duration,
-                    );
-
-                    let blended_color = [
-                        base_color[0] + (highlight_color_rgb[0] - base_color[0]) * word_highlight,
-                        base_color[1] + (highlight_color_rgb[1] - base_color[1]) * word_highlight,
-                        base_color[2] + (highlight_color_rgb[2] - base_color[2]) * word_highlight,
-                    ];
-
-                    let blended_alpha =
-                        base_alpha + (highlight_alpha - base_alpha) * word_highlight;
-
-                    let word_end = abs_start + needle.len();
-                    rich_text.push((
-                        &full_text[abs_start..word_end],
-                        Attrs::new()
-                            .family(font_family)
-                            .weight(weight)
-                            .color(Color::rgba(
-                                (blended_color[0] * 255.0) as u8,
-                                (blended_color[1] * 255.0) as u8,
-                                (blended_color[2] * 255.0) as u8,
-                                (blended_alpha * 255.0) as u8,
-                            )),
-                    ));
-                    last_end = word_end;
-                }
-            }
-
-            if last_end < full_text.len() {
-                rich_text.push((
-                    &full_text[last_end..],
-                    Attrs::new()
-                        .family(font_family)
-                        .weight(weight)
-                        .color(Color::rgba(
-                            (base_color[0] * 255.0) as u8,
-                            (base_color[1] * 255.0) as u8,
-                            (base_color[2] * 255.0) as u8,
-                            (base_alpha * 255.0) as u8,
-                        )),
-                ));
-            }
-
-            let mut buffer = new_buffer(&mut self.font_system);
-            buffer.set_rich_text(
-                &mut self.font_system,
-                rich_text,
-                &Attrs::new().family(font_family).weight(weight),
-                Shaping::Advanced,
-                None,
-            );
-            self.text_buffer = buffer;
-            self.shaped = None;
+        let colors = if use_color_highlight {
+            CaptionTextColors::Spans(word_highlight_spans(
+                &caption_text,
+                caption_words,
+                uppercase,
+                current_time as f32,
+                &WordHighlight {
+                    base_rgb: base_color,
+                    highlight_rgb: highlight_color_rgb,
+                    base_alpha,
+                    highlight_alpha,
+                    transition_duration: word_transition_duration,
+                },
+            ))
         } else {
-            let color = Color::rgba(
-                (base_color[0] * 255.0) as u8,
-                (base_color[1] * 255.0) as u8,
-                (base_color[2] * 255.0) as u8,
-                (highlight_alpha * 255.0) as u8,
-            );
-            let shaped = ShapedCaptionText {
+            CaptionTextColors::Uniform(caption_rgba(base_color, highlight_alpha))
+        };
+        self.text.update(
+            &mut self.font_system,
+            ShapedCaptionText {
                 text: caption_text,
                 font_size: font_size.to_bits(),
                 wrap_width: wrap_width.to_bits(),
                 family: font_family,
                 weight,
-                color,
-            };
-            if self.shaped.as_ref() != Some(&shaped) {
-                let mut buffer = new_buffer(&mut self.font_system);
-                buffer.set_text(
-                    &mut self.font_system,
-                    &shaped.text,
-                    &Attrs::new().family(font_family).weight(weight).color(color),
-                    Shaping::Advanced,
-                );
-                self.text_buffer = buffer;
-                self.shaped = Some(shaped);
-            }
-        }
+                colors,
+            },
+        );
 
         let mut layout_width: f32 = 0.0;
         let mut layout_height: f32 = 0.0;
         let mut highlight_extent: Option<(f32, f32, f32, f32)> = None;
-        for run in LayoutRunIter::new(&self.text_buffer) {
+        for run in LayoutRunIter::new(&self.text.buffer) {
             layout_width = layout_width.max(run.line_w);
             layout_height = layout_height.max(run.line_top + run.line_height);
 
@@ -815,39 +964,12 @@ impl CaptionsLayer {
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
         let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
 
-        let background_left = if position == CaptionPosition::Manual {
-            caption_data
-                .settings
-                .manual_position
-                .map(|manual_position| {
-                    (manual_position.x.clamp(0.0, 1.0) * width as f32 - box_width / 2.0)
-                        .clamp(0.0, (width as f32 - box_width).max(0.0))
-                })
-                .unwrap_or_else(|| ((width as f32 - box_width) / 2.0).max(0.0))
-        } else {
-            match position {
-                CaptionPosition::TopLeft | CaptionPosition::BottomLeft => margin,
-                CaptionPosition::TopRight | CaptionPosition::BottomRight => {
-                    (width as f32 - margin - box_width).max(0.0)
-                }
-                CaptionPosition::TopCenter | CaptionPosition::BottomCenter => {
-                    ((width as f32 - box_width) / 2.0).max(0.0)
-                }
-                CaptionPosition::Manual => ((width as f32 - box_width) / 2.0).max(0.0),
-            }
-        };
-
-        let center_y = if position == CaptionPosition::Manual {
-            caption_data
-                .settings
-                .manual_position
-                .map(|manual_position| manual_position.y.clamp(0.0, 1.0) * height as f32)
-                .unwrap_or_else(|| height as f32 * CaptionPosition::BottomCenter.y_factor())
-        } else {
-            height as f32 * position.y_factor()
-        };
-        let base_background_top =
-            (center_y - box_height / 2.0).clamp(0.0, (height as f32 - box_height).max(0.0));
+        let (background_left, base_background_top) = caption_box_origin(
+            position,
+            caption_data.settings.manual_position,
+            (box_width, box_height),
+            (width as f32, height as f32),
+        );
         let background_top = (base_background_top + bounce_offset as f32)
             .clamp(0.0, (height as f32 - box_height).max(0.0));
 
@@ -862,13 +984,14 @@ impl CaptionsLayer {
         let draw_text_width = text_width * anim_scale;
         let draw_text_height = text_height * anim_scale;
 
-        let text_left = draw_box_left + padding * anim_scale;
+        let content_left = draw_box_left + padding * anim_scale;
+        let text_left = caption_text_left(&self.text.buffer, content_left, render_scale);
         let text_top = draw_box_top + padding * anim_scale;
 
         let bounds = TextBounds {
-            left: (text_left - 2.0).floor() as i32,
+            left: (content_left - 2.0).floor() as i32,
             top: (text_top - 2.0).floor() as i32,
-            right: (text_left + draw_text_width + 2.0).ceil() as i32,
+            right: (content_left + draw_text_width + 2.0).ceil() as i32,
             bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
         };
 
@@ -902,7 +1025,7 @@ impl CaptionsLayer {
 
             for (offset_x, offset_y) in outline_offsets.iter() {
                 text_areas.push(TextArea {
-                    buffer: &self.text_buffer,
+                    buffer: &self.text.buffer,
                     left: text_left + offset_x,
                     top: text_top + offset_y,
                     scale: render_scale,
@@ -921,7 +1044,7 @@ impl CaptionsLayer {
         );
 
         text_areas.push(TextArea {
-            buffer: &self.text_buffer,
+            buffer: &self.text.buffer,
             left: text_left,
             top: text_top,
             scale: render_scale,
@@ -950,7 +1073,18 @@ impl CaptionsLayer {
             draw_box_height,
         ];
 
+        let resting = [background_left, base_background_top, box_width, box_height];
         self.active_layout = Some(CaptionOverlayLayout { rect, position });
+        self.frame_box = Some(CaptionFrameBox {
+            bounds: [
+                resting[0],
+                resting[1],
+                resting[0] + resting[2],
+                resting[1] + resting[3],
+            ],
+            position,
+        });
+        record_caption_center(position, resting, (width, height));
 
         let background_uniforms = CaptionBackgroundUniforms {
             rect,
@@ -1073,6 +1207,10 @@ impl CaptionsLayer {
         self.active_layout
     }
 
+    pub fn frame_box(&self) -> Option<CaptionFrameBox> {
+        self.frame_box
+    }
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_caption {
             return;
@@ -1110,7 +1248,7 @@ impl CaptionsLayer {
 }
 
 struct ActiveCaptionSegment<'a> {
-    segment: &'a cap_project::CaptionTrackSegment,
+    segment: Cow<'a, cap_project::CaptionTrackSegment>,
 }
 
 fn caption_segment_effective_end(segment: &cap_project::CaptionTrackSegment) -> f64 {
@@ -1126,20 +1264,33 @@ fn find_active_caption_segment<'a>(
     time: f64,
     segments: &'a [cap_project::CaptionTrackSegment],
     default_fade_duration: f32,
+    hide_fillers: bool,
 ) -> Option<ActiveCaptionSegment<'a>> {
     for segment in segments {
-        if time >= segment.start && time < caption_segment_effective_end(segment) {
-            return Some(ActiveCaptionSegment { segment });
+        if time < segment.start || time >= caption_segment_effective_end(segment) {
+            continue;
+        }
+        if let Some(display) = caption_display_segment(segment, hide_fillers)
+            && time >= display.start
+            && time < caption_segment_effective_end(&display)
+        {
+            return Some(ActiveCaptionSegment { segment: display });
         }
     }
 
     for segment in segments {
-        let effective_end = caption_segment_effective_end(segment);
         let fade = segment
             .fade_duration_override
             .unwrap_or(default_fade_duration) as f64;
-        if time >= effective_end && time < effective_end + fade {
-            return Some(ActiveCaptionSegment { segment });
+        let raw_end = caption_segment_effective_end(segment);
+        if time < segment.start.min(raw_end) || time >= raw_end + fade {
+            continue;
+        }
+        if let Some(display) = caption_display_segment(segment, hide_fillers) {
+            let effective_end = caption_segment_effective_end(&display);
+            if time >= effective_end && time < effective_end + fade {
+                return Some(ActiveCaptionSegment { segment: display });
+            }
         }
     }
 
@@ -1194,10 +1345,83 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 #[cfg(test)]
 mod tests {
     use super::{
+        CaptionFrameBox, CaptionPosition, caption_box_origin, caption_center,
         caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
         word_byte_range,
     };
-    use cap_project::{CaptionTrackSegment, CaptionWord};
+    use cap_project::{CaptionTrackSegment, CaptionWord, XY};
+
+    #[test]
+    fn a_zero_text_size_has_no_font_size() {
+        use super::scaled_font_size;
+        assert_eq!(scaled_font_size(0, 1080), None);
+        assert_eq!(scaled_font_size(48, 0), None);
+        for height in [90, 288, 720, 1080, 2160] {
+            for size in [1, 12, 48, 100, 300] {
+                assert_eq!(
+                    scaled_font_size(size, height).map(f32::to_bits),
+                    Some((size as f32 * (height as f32 / 1080.0)).to_bits()),
+                    "{size} at {height}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caption_glyphs_fit_the_content_box_in_both_directions() {
+        use super::{CaptionTextColors, ShapedCaptionText, caption_text_left, shape_caption_text};
+        use glyphon::{Color, Family, Weight};
+
+        let mut fonts = super::super::new_font_system();
+        for text in [
+            "سلام دنیا این یک متن آزمایشی است",
+            "مرحبا بالعالم",
+            "سلام Cap 123 دنیا",
+            "Hello world",
+        ] {
+            for wrap_width in [80.0_f32, 1800.0] {
+                for colors in [
+                    CaptionTextColors::Uniform(Color::rgb(255, 255, 255)),
+                    CaptionTextColors::Spans(vec![(0..text.len(), Color::rgb(255, 200, 0))]),
+                ] {
+                    let buffer = shape_caption_text(
+                        &mut fonts,
+                        &ShapedCaptionText {
+                            text: text.to_string(),
+                            font_size: 48.0_f32.to_bits(),
+                            wrap_width: wrap_width.to_bits(),
+                            family: Family::SansSerif,
+                            weight: Weight::BOLD,
+                            colors,
+                        },
+                    );
+                    let runs = buffer.layout_runs().collect::<Vec<_>>();
+                    assert_eq!(runs.len(), 1);
+                    assert!(!runs[0].glyphs.is_empty());
+                    assert!(runs[0].glyphs.iter().all(|glyph| glyph.glyph_id != 0));
+                    let width = runs[0].line_w;
+                    for scale in [0.35, 0.72, 1.0, 1.08] {
+                        let content_left = 200.0;
+                        let left = caption_text_left(&buffer, content_left, scale);
+                        if text == "Hello world" {
+                            assert_eq!(left, content_left);
+                        }
+                        let mut min_x = f32::INFINITY;
+                        for glyph in runs[0].glyphs {
+                            let x = left + glyph.x * scale;
+                            min_x = min_x.min(x);
+                            assert!(x >= content_left - 0.001, "{text}: {x}");
+                            assert!(
+                                x + glyph.w * scale <= content_left + width * scale + 0.001,
+                                "{text}: {x}"
+                            );
+                        }
+                        assert!((min_x - content_left).abs() < 0.001, "{text}: {min_x}");
+                    }
+                }
+            }
+        }
+    }
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
         CaptionTrackSegment {
@@ -1223,6 +1447,137 @@ mod tests {
         }
     }
 
+    /// The caption box for a 24 px caption at 1080p is about this size; the
+    /// renderer scales the font with the frame height.
+    fn box_at(frame: (f32, f32)) -> (f32, f32) {
+        let scale = frame.1 / 1080.0;
+        (520.0 * scale, 60.0 * scale)
+    }
+
+    fn normalised_center(
+        position: CaptionPosition,
+        manual: Option<XY<f32>>,
+        frame: (f32, f32),
+    ) -> (f32, f32) {
+        let size = box_at(frame);
+        let (left, top) = caption_box_origin(position, manual, size, frame);
+        (
+            (left + size.0 / 2.0) / frame.0,
+            (top + size.1 / 2.0) / frame.1,
+        )
+    }
+
+    /// A stored manual centre is a fraction of the output frame, so the same
+    /// project places its captions at the same spot at every export size.
+    #[test]
+    fn a_manual_caption_lands_on_the_same_fraction_at_every_resolution() {
+        let spots = [XY::new(0.5, 0.5), XY::new(0.3, 0.2), XY::new(0.62, 0.9)];
+        for aspect in [
+            [(1280.0, 720.0), (1920.0, 1080.0), (3840.0, 2160.0)],
+            [(720.0, 1280.0), (1080.0, 1920.0), (2160.0, 3840.0)],
+            [(720.0, 720.0), (1080.0, 1080.0), (2160.0, 2160.0)],
+        ] {
+            for spot in spots {
+                let centers = aspect
+                    .map(|frame| normalised_center(CaptionPosition::Manual, Some(spot), frame));
+                for center in centers {
+                    assert!(
+                        (center.0 - centers[0].0).abs() < 1e-5,
+                        "{aspect:?} {spot:?}"
+                    );
+                    assert!(
+                        (center.1 - centers[0].1).abs() < 1e-5,
+                        "{aspect:?} {spot:?}"
+                    );
+                }
+            }
+        }
+        let center = normalised_center(
+            CaptionPosition::Manual,
+            Some(XY::new(0.3, 0.2)),
+            (1920.0, 1080.0),
+        );
+        assert!((center.0 - 0.3).abs() < 1e-6);
+        assert!((center.1 - 0.2).abs() < 1e-6);
+    }
+
+    /// A centre near an edge keeps the whole box in the frame, in every
+    /// aspect, rather than cutting the caption off.
+    #[test]
+    fn a_manual_caption_near_an_edge_stays_inside_the_frame() {
+        for frame in [(1920.0, 1080.0), (1080.0, 1920.0), (1440.0, 1080.0)] {
+            let size = box_at(frame);
+            for spot in [
+                XY::new(0.0, 0.0),
+                XY::new(1.0, 1.0),
+                XY::new(0.0, 1.0),
+                XY::new(-3.0, 7.0),
+            ] {
+                let (left, top) =
+                    caption_box_origin(CaptionPosition::Manual, Some(spot), size, frame);
+                assert!(
+                    left >= 0.0 && left + size.0 <= frame.0 + 1e-3,
+                    "{frame:?} {spot:?}"
+                );
+                assert!(
+                    top >= 0.0 && top + size.1 <= frame.1 + 1e-3,
+                    "{frame:?} {spot:?}"
+                );
+            }
+        }
+    }
+
+    /// The presets are unchanged by manual placement: a stored manual centre
+    /// does nothing until the position is Manual, and Manual without one is
+    /// the bottom-centre spot.
+    #[test]
+    fn presets_ignore_the_manual_centre() {
+        let frame = (1920.0, 1080.0);
+        let size = (400.0, 80.0);
+        let manual = Some(XY::new(0.1, 0.1));
+        let expected = [
+            (CaptionPosition::TopLeft, (96.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::TopCenter, (760.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::TopRight, (1424.0, 1080.0 * 0.08 - 40.0)),
+            (CaptionPosition::BottomLeft, (96.0, 1080.0 * 0.85 - 40.0)),
+            (CaptionPosition::BottomCenter, (760.0, 1080.0 * 0.85 - 40.0)),
+            (CaptionPosition::BottomRight, (1424.0, 1080.0 * 0.85 - 40.0)),
+        ];
+        for (position, origin) in expected {
+            assert_eq!(caption_box_origin(position, manual, size, frame), origin);
+            assert_eq!(caption_box_origin(position, None, size, frame), origin);
+        }
+        assert_eq!(
+            caption_box_origin(CaptionPosition::Manual, None, size, frame),
+            caption_box_origin(CaptionPosition::BottomCenter, None, size, frame)
+        );
+    }
+
+    #[test]
+    fn the_frame_box_knows_its_placement() {
+        let manual = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "manual");
+        assert!(manual.is_manual());
+        assert!(manual.is_at("manual"));
+        let preset = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "top");
+        assert!(!preset.is_manual());
+        assert!(preset.is_at("top-center"));
+        assert!(!preset.is_at("bottom-center"));
+    }
+
+    /// A 400 px box against the 96 px left margin of a 1920 px frame is
+    /// centred at 296 px, not at the 5% the preset table names.
+    #[test]
+    fn the_drawn_caption_centre_is_a_fraction_of_the_frame() {
+        let center = caption_center([96.0, 900.0, 400.0, 80.0], (1920, 1080)).unwrap();
+        assert!((center[0] - 296.0 / 1920.0).abs() < 1e-6);
+        assert!((center[1] - 940.0 / 1080.0).abs() < 1e-6);
+        assert!(caption_center([0.0, 0.0, 10.0, 10.0], (0, 1080)).is_none());
+        assert_eq!(
+            caption_center([1900.0, 0.0, 400.0, 10.0], (1920, 1080)).map(|c| c[0]),
+            Some(1.0)
+        );
+    }
+
     #[test]
     fn effective_end_clamps_inflated_trailing_word() {
         let seg = segment(36.1, 42.31, vec![word(36.1, 42.31)]);
@@ -1239,12 +1594,44 @@ mod tests {
     }
 
     #[test]
+    fn hidden_fillers_do_not_show_or_hold_a_caption() {
+        let mut seg = segment(
+            1.0,
+            3.2,
+            vec![
+                word(1.0, 1.4),
+                word(1.6, 1.9),
+                word(1.9, 2.4),
+                word(2.8, 3.2),
+            ],
+        );
+        for (word, text) in seg.words.iter_mut().zip(["Um,", "we", "ship", "uh."]) {
+            word.text = text.to_string();
+        }
+        seg.text = "Um, we ship uh.".to_string();
+        let segments = vec![seg];
+
+        assert!(find_active_caption_segment(1.2, &segments, 0.0, true).is_none());
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, true).is_none());
+        let active = find_active_caption_segment(1.7, &segments, 0.0, true).unwrap();
+        assert_eq!(active.segment.text, "we ship");
+        assert_eq!(active.segment.words.len(), 2);
+        assert!((caption_segment_effective_end(&active.segment) - 2.4).abs() < 1e-6);
+        let lingering = find_active_caption_segment(2.5, &segments, 0.2, true).unwrap();
+        assert_eq!(lingering.segment.text, "we ship");
+
+        let verbatim = find_active_caption_segment(1.2, &segments, 0.0, false).unwrap();
+        assert_eq!(verbatim.segment.text, "Um, we ship uh.");
+        assert!(find_active_caption_segment(3.0, &segments, 0.0, false).is_some());
+    }
+
+    #[test]
     fn inflated_caption_does_not_stay_active_after_clamp() {
         let segments = vec![segment(36.1, 42.31, vec![word(36.1, 42.31)])];
         // Well within the original (bloated) end, but past the clamped end.
-        assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
+        assert!(find_active_caption_segment(41.0, &segments, 0.2, true).is_none());
         // Still active while the (capped) word is on screen.
-        assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+        assert!(find_active_caption_segment(37.0, &segments, 0.2, true).is_some());
     }
 
     #[test]
@@ -1285,6 +1672,379 @@ mod tests {
         }
         assert_eq!(word_byte_range(text, &words, 3, false), None);
         assert_eq!(word_byte_range("missing", &words, 0, false), None);
+    }
+}
+
+#[cfg(test)]
+mod shaping_tests {
+    use cap_project::CaptionWord;
+    use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Weight};
+
+    use super::{
+        BASE_TEXT_OPACITY, CaptionText, CaptionTextColors, ShapedCaptionText, WordHighlight,
+        calculate_caption_fade, calculate_word_highlight, caption_rgba, word_highlight_spans,
+    };
+
+    const FPS: f32 = 60.0;
+    const FADE: f64 = 0.15;
+
+    fn spoken_words(sentence: &str, start: f32) -> Vec<CaptionWord> {
+        sentence
+            .split_whitespace()
+            .enumerate()
+            .map(|(index, text)| CaptionWord {
+                text: text.to_string(),
+                start: start + index as f32 * 0.3,
+                end: start + index as f32 * 0.3 + 0.25,
+            })
+            .collect()
+    }
+
+    struct Frame<'a> {
+        text: String,
+        words: &'a [CaptionWord],
+        uppercase: bool,
+        current_time: f32,
+        highlight: WordHighlight,
+        font_size: f32,
+        wrap_width: f32,
+        family: Family<'static>,
+        weight: Weight,
+    }
+
+    impl Frame<'_> {
+        fn key(&self) -> ShapedCaptionText {
+            ShapedCaptionText {
+                text: self.text.clone(),
+                font_size: self.font_size.to_bits(),
+                wrap_width: self.wrap_width.to_bits(),
+                family: self.family,
+                weight: self.weight,
+                colors: CaptionTextColors::Spans(word_highlight_spans(
+                    &self.text,
+                    self.words,
+                    self.uppercase,
+                    self.current_time,
+                    &self.highlight,
+                )),
+            }
+        }
+
+        fn uncached_buffer(&self, font_system: &mut FontSystem) -> Buffer {
+            let WordHighlight {
+                base_rgb: base_color,
+                highlight_rgb: highlight_color_rgb,
+                base_alpha,
+                highlight_alpha,
+                transition_duration: word_transition_duration,
+            } = self.highlight;
+            let (font_family, weight, font_size) = (self.family, self.weight, self.font_size);
+            let mut rich_text: Vec<(&str, Attrs)> = Vec::new();
+            let full_text = self.text.as_str();
+            let mut last_end = 0usize;
+
+            for (idx, word) in self.words.iter().enumerate() {
+                let needle = if self.uppercase {
+                    word.text.to_uppercase()
+                } else {
+                    word.text.clone()
+                };
+                if let Some(start_pos) = full_text.get(last_end..).and_then(|s| s.find(&needle)) {
+                    let abs_start = last_end + start_pos;
+
+                    if abs_start > last_end {
+                        let space = &full_text[last_end..abs_start];
+                        rich_text.push((
+                            space,
+                            Attrs::new()
+                                .family(font_family)
+                                .weight(weight)
+                                .color(Color::rgba(
+                                    (base_color[0] * 255.0) as u8,
+                                    (base_color[1] * 255.0) as u8,
+                                    (base_color[2] * 255.0) as u8,
+                                    (base_alpha * 255.0) as u8,
+                                )),
+                        ));
+                    }
+
+                    let word_highlight = calculate_word_highlight(
+                        self.current_time,
+                        word,
+                        idx,
+                        self.words,
+                        word_transition_duration,
+                    );
+
+                    let blended_color = [
+                        base_color[0] + (highlight_color_rgb[0] - base_color[0]) * word_highlight,
+                        base_color[1] + (highlight_color_rgb[1] - base_color[1]) * word_highlight,
+                        base_color[2] + (highlight_color_rgb[2] - base_color[2]) * word_highlight,
+                    ];
+
+                    let blended_alpha =
+                        base_alpha + (highlight_alpha - base_alpha) * word_highlight;
+
+                    let word_end = abs_start + needle.len();
+                    rich_text.push((
+                        &full_text[abs_start..word_end],
+                        Attrs::new()
+                            .family(font_family)
+                            .weight(weight)
+                            .color(Color::rgba(
+                                (blended_color[0] * 255.0) as u8,
+                                (blended_color[1] * 255.0) as u8,
+                                (blended_color[2] * 255.0) as u8,
+                                (blended_alpha * 255.0) as u8,
+                            )),
+                    ));
+                    last_end = word_end;
+                }
+            }
+
+            if last_end < full_text.len() {
+                rich_text.push((
+                    &full_text[last_end..],
+                    Attrs::new()
+                        .family(font_family)
+                        .weight(weight)
+                        .color(Color::rgba(
+                            (base_color[0] * 255.0) as u8,
+                            (base_color[1] * 255.0) as u8,
+                            (base_color[2] * 255.0) as u8,
+                            (base_alpha * 255.0) as u8,
+                        )),
+                ));
+            }
+
+            let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
+            buffer.set_size(font_system, Some(self.wrap_width), None);
+            buffer.set_wrap(font_system, glyphon::Wrap::None);
+            buffer.set_rich_text(
+                font_system,
+                rich_text,
+                &Attrs::new().family(font_family).weight(weight),
+                Shaping::Advanced,
+                None,
+            );
+            buffer
+        }
+    }
+
+    fn glyphs(buffer: &Buffer) -> Vec<String> {
+        buffer
+            .layout_runs()
+            .flat_map(|run| {
+                std::iter::once(format!(
+                    "line {} y {} top {} height {} width {}",
+                    run.line_i, run.line_y, run.line_top, run.line_height, run.line_w
+                ))
+                .chain(run.glyphs.iter().map(|glyph| format!("{glyph:?}")))
+            })
+            .collect()
+    }
+
+    fn highlight(
+        highlight_rgb: [f32; 3],
+        transition_duration: f32,
+        fade_opacity: f32,
+    ) -> WordHighlight {
+        WordHighlight {
+            base_rgb: [1.0, 1.0, 1.0],
+            highlight_rgb,
+            base_alpha: (fade_opacity * BASE_TEXT_OPACITY).clamp(0.0, 1.0),
+            highlight_alpha: fade_opacity.clamp(0.0, 1.0),
+            transition_duration,
+        }
+    }
+
+    #[test]
+    fn cached_word_highlight_layout_matches_an_uncached_shape_every_frame() {
+        let mut cached_fonts = super::super::new_font_system();
+        let mut uncached_fonts = super::super::new_font_system();
+        let sentence = "Ship it today, then share the link with Straße ŉ everyone";
+        let words = spoken_words(sentence, 0.3);
+        let start = f64::from(words[0].start);
+        let end = f64::from(words.last().unwrap().end);
+        let variants = [
+            (false, [1.0, 1.0, 1.0], 0.25),
+            (true, [1.0, 0.843, 0.0], 0.1),
+            (false, [0.2, 0.6, 1.0], 0.0),
+        ];
+
+        for (uppercase, highlight_rgb, transition_duration) in variants {
+            let text = if uppercase {
+                sentence.to_uppercase()
+            } else {
+                sentence.to_string()
+            };
+            let mut cache = CaptionText::new();
+            let (mut reshapes, mut visible_frames) = (0, 0);
+            let mut distinct_layouts = Vec::new();
+            for frame in 0..((end + FADE + 0.2) * f64::from(FPS)) as u32 {
+                let current_time = f64::from(frame) / f64::from(FPS);
+                let fade_opacity = calculate_caption_fade(current_time, start, end, FADE);
+                if fade_opacity <= 0.0 {
+                    continue;
+                }
+                visible_frames += 1;
+                let width = [1920.0, 1280.0, 640.0][(frame / 45) as usize % 3];
+                let font_size = 48.0;
+                let inputs = Frame {
+                    text: text.clone(),
+                    words: &words,
+                    uppercase,
+                    current_time: current_time as f32,
+                    highlight: highlight(highlight_rgb, transition_duration, fade_opacity),
+                    font_size,
+                    wrap_width: (width - width * 0.1_f32).max(font_size),
+                    family: Family::SansSerif,
+                    weight: Weight::BOLD,
+                };
+
+                reshapes += usize::from(cache.update(&mut cached_fonts, inputs.key()));
+                let expected = glyphs(&inputs.uncached_buffer(&mut uncached_fonts));
+                assert_eq!(
+                    glyphs(&cache.buffer),
+                    expected,
+                    "uppercase {uppercase}, transition {transition_duration}, time {current_time}"
+                );
+                if !distinct_layouts.contains(&expected) {
+                    distinct_layouts.push(expected);
+                }
+            }
+
+            assert!(distinct_layouts.len() > 2);
+            assert!(reshapes >= distinct_layouts.len());
+            assert!(
+                reshapes < visible_frames,
+                "{reshapes} reshapes for {visible_frames} frames"
+            );
+        }
+    }
+
+    #[test]
+    fn word_highlight_cache_reshapes_when_any_layout_input_changes() {
+        let mut cached_fonts = super::super::new_font_system();
+        let mut uncached_fonts = super::super::new_font_system();
+        let sentence = "Ship it today then share the link";
+        let words = spoken_words(sentence, 0.0);
+        let other_words = spoken_words("Ship it now then share the link", 0.0);
+        let base = || Frame {
+            text: sentence.to_string(),
+            words: &words,
+            uppercase: false,
+            current_time: 0.35,
+            highlight: highlight([1.0, 0.843, 0.0], 0.25, 1.0),
+            font_size: 48.0,
+            wrap_width: 1728.0,
+            family: Family::SansSerif,
+            weight: Weight::BOLD,
+        };
+        let mutations = [
+            (
+                "text",
+                Frame {
+                    text: "Ship it now then share the link".to_string(),
+                    words: &other_words,
+                    ..base()
+                },
+            ),
+            (
+                "uppercase",
+                Frame {
+                    text: sentence.to_uppercase(),
+                    uppercase: true,
+                    ..base()
+                },
+            ),
+            (
+                "font size",
+                Frame {
+                    font_size: 60.0,
+                    ..base()
+                },
+            ),
+            (
+                "wrap width",
+                Frame {
+                    wrap_width: 1152.0,
+                    ..base()
+                },
+            ),
+            (
+                "font family",
+                Frame {
+                    family: Family::Monospace,
+                    ..base()
+                },
+            ),
+            (
+                "font weight",
+                Frame {
+                    weight: Weight::NORMAL,
+                    ..base()
+                },
+            ),
+            (
+                "highlight color",
+                Frame {
+                    highlight: highlight([0.0, 1.0, 0.0], 0.25, 1.0),
+                    ..base()
+                },
+            ),
+            (
+                "transition duration",
+                Frame {
+                    highlight: highlight([1.0, 0.843, 0.0], 0.5, 1.0),
+                    ..base()
+                },
+            ),
+            (
+                "active word",
+                Frame {
+                    current_time: 0.65,
+                    ..base()
+                },
+            ),
+            (
+                "caption fade",
+                Frame {
+                    highlight: highlight([1.0, 0.843, 0.0], 0.25, 0.5),
+                    ..base()
+                },
+            ),
+        ];
+
+        for (name, changed) in mutations {
+            let mut cache = CaptionText::new();
+            assert!(cache.update(&mut cached_fonts, base().key()));
+            assert!(
+                !cache.update(&mut cached_fonts, base().key()),
+                "{name}: identical inputs reshaped"
+            );
+            assert!(
+                cache.update(&mut cached_fonts, changed.key()),
+                "{name}: the cached layout was reused"
+            );
+            assert_eq!(
+                glyphs(&cache.buffer),
+                glyphs(&changed.uncached_buffer(&mut uncached_fonts)),
+                "{name}"
+            );
+        }
+
+        let mut cache = CaptionText::new();
+        let plain = |color: Color| ShapedCaptionText {
+            colors: CaptionTextColors::Uniform(color),
+            ..base().key()
+        };
+        let white = caption_rgba([1.0, 1.0, 1.0], 1.0);
+        assert!(cache.update(&mut cached_fonts, plain(white)));
+        assert!(!cache.update(&mut cached_fonts, plain(white)));
+        assert!(cache.update(&mut cached_fonts, base().key()));
+        assert!(cache.update(&mut cached_fonts, plain(white)));
+        assert!(cache.update(&mut cached_fonts, plain(caption_rgba([1.0, 1.0, 1.0], 0.5))));
     }
 }
 
@@ -1387,15 +2147,23 @@ mod gpu_tests {
         let mut zoom = ZoomTransformTimeline::from_project(&project, &cursor, 60.0, size);
         zoom.ensure_precomputed_until(60.0);
         let mut uniforms = ProjectUniforms::new(
-            constants, &project, 0, FPS, size, &cursor, &frames, 60.0, &zoom,
+            constants,
+            &std::sync::Arc::new(project),
+            0,
+            FPS,
+            size,
+            &cursor,
+            &frames,
+            60.0,
+            &zoom,
         );
         uniforms.output_size = (size.x, size.y);
-        uniforms.project.captions = Some(CaptionsData {
+        std::sync::Arc::make_mut(&mut uniforms.project).captions = Some(CaptionsData {
             segments: vec![],
             settings,
             source_timed: false,
         });
-        uniforms.project.timeline = Some(TimelineConfiguration {
+        std::sync::Arc::make_mut(&mut uniforms.project).timeline = Some(TimelineConfiguration {
             segments: vec![],
             transitions: vec![],
             zoom_segments: vec![],
@@ -1407,6 +2175,7 @@ mod gpu_tests {
             audio_segments: vec![],
             style_segments: vec![],
             image_segments: vec![],
+            shape_segments: Vec::new(),
             camera3d_segments: vec![],
         });
         uniforms
@@ -1486,6 +2255,70 @@ mod gpu_tests {
         pixels
     }
 
+    /// A caption size of 0 draws nothing; cosmic-text asserts on the zero
+    /// line height it would give.
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn a_zero_size_caption_draws_nothing() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let decoded = frames(size);
+        let segments = spoken_segments(&["hello world"]);
+        for (caption_size, drawn) in [(60, true), (0, false)] {
+            let settings = CaptionSettings {
+                enabled: true,
+                size: caption_size,
+                ..Default::default()
+            };
+            let mut uniforms = uniforms(&constants, settings, &segments, size);
+            uniforms.frame_number = 30;
+            let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+            layer.prepare(&uniforms, &decoded, size, &constants);
+            assert_eq!(layer.has_caption, drawn, "size {caption_size}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn rtl_caption_ink_stays_inside_its_background() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let decoded = frames(size);
+        for sentence in ["سلام دنیا", "مرحبا بالعالم"] {
+            let segments = spoken_segments(&[sentence]);
+            for highlight_style in ["none", "pill", "color"] {
+                let settings = CaptionSettings {
+                    enabled: true,
+                    size: 60,
+                    active_word_highlight: highlight_style != "none",
+                    highlight_style: highlight_style.to_string(),
+                    background_opacity: 100,
+                    ..Default::default()
+                };
+                let mut uniforms = uniforms(&constants, settings, &segments, size);
+                uniforms.frame_number = 30;
+                let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+                layer.prepare(&uniforms, &decoded, size, &constants);
+                assert!(layer.has_caption);
+                let [left, top, right, bottom] = layer.frame_box.unwrap().bounds;
+                let pixels = render_pixels(&constants, &layer, size);
+                let mut ink = 0;
+                for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+                    if pixel[0] > 100 && pixel[1] > 100 && pixel[2] > 100 {
+                        ink += 1;
+                        let x = (index % size.x as usize) as f32;
+                        let y = (index / size.x as usize) as f32;
+                        assert!(x >= left && x < right && y >= top && y < bottom);
+                    }
+                }
+                assert!(
+                    ink > 20,
+                    "{sentence} ({highlight_style}) has no visible glyphs"
+                );
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires a working wgpu adapter"]
     fn every_caption_frame_renders_like_a_fresh_layer() {
@@ -1513,6 +2346,21 @@ mod gpu_tests {
             },
             CaptionSettings {
                 active_word_highlight: true,
+                ..enabled.clone()
+            },
+            CaptionSettings {
+                active_word_highlight: true,
+                highlight_color: "#FFD700".to_string(),
+                outline: true,
+                uppercase: true,
+                animation: "pop".to_string(),
+                ..enabled.clone()
+            },
+            CaptionSettings {
+                active_word_highlight: true,
+                highlight_color: "#3399FF".to_string(),
+                word_transition_duration: 0.0,
+                fade_duration: 0.4,
                 ..enabled
             },
         ];
@@ -1624,6 +2472,81 @@ mod gpu_tests {
                 plain.clone(),
                 base_size,
             ),
+            (
+                "highlighted font size",
+                color_highlight.clone(),
+                CaptionSettings {
+                    size: 80,
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "highlighted font family",
+                color_highlight.clone(),
+                CaptionSettings {
+                    font: "System Monospace".to_string(),
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "highlighted font weight",
+                color_highlight.clone(),
+                CaptionSettings {
+                    font_weight: 400,
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "highlighted uppercase",
+                color_highlight.clone(),
+                CaptionSettings {
+                    uppercase: true,
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "highlight color",
+                color_highlight.clone(),
+                CaptionSettings {
+                    highlight_color: "#00FF00".to_string(),
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "base color under highlight",
+                color_highlight.clone(),
+                CaptionSettings {
+                    color: "#00FFFF".to_string(),
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "word transition",
+                color_highlight.clone(),
+                CaptionSettings {
+                    word_transition_duration: 0.0,
+                    ..color_highlight.clone()
+                },
+                base_size,
+            ),
+            (
+                "highlighted output height",
+                color_highlight.clone(),
+                color_highlight.clone(),
+                XY::new(512, 216),
+            ),
+            (
+                "highlighted output width",
+                color_highlight.clone(),
+                color_highlight.clone(),
+                XY::new(384, 288),
+            ),
         ];
 
         for (name, before, after, size) in cases {
@@ -1659,6 +2582,42 @@ mod gpu_tests {
             render(&mut reused, &plain, base_size) == expected,
             "returning to plain text reused the highlighted layout"
         );
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn highlighted_frames_follow_output_size_changes_like_a_fresh_layer() {
+        let sizes = [XY::new(512, 288), XY::new(384, 288), XY::new(512, 216)];
+        let constants = constants(sizes[0]);
+        let segments = spoken_segments(&["Hello there", "Ship it today"]);
+        let settings = CaptionSettings {
+            enabled: true,
+            size: 60,
+            active_word_highlight: true,
+            highlight_color: "#FFD700".to_string(),
+            ..Default::default()
+        };
+        let last_frame = ((segments.last().unwrap().end + 0.3) * f64::from(FPS)) as u32;
+        let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+        let mut drawn_frames = 0;
+        for frame in 0..last_frame {
+            let size = sizes[(frame / 7) as usize % sizes.len()];
+            let decoded = frames(size);
+            let mut uniforms = uniforms(&constants, settings.clone(), &segments, size);
+            uniforms.frame_number = frame;
+            reused.prepare(&uniforms, &decoded, size, &constants);
+            let mut fresh = CaptionsLayer::new(&constants.device, &constants.queue);
+            fresh.prepare(&uniforms, &decoded, size, &constants);
+            assert_eq!(reused.has_caption, fresh.has_caption, "frame {frame}");
+            let pixels = render_pixels(&constants, &reused, size);
+            assert_eq!(
+                pixels,
+                render_pixels(&constants, &fresh, size),
+                "frame {frame}"
+            );
+            drawn_frames += usize::from(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        }
+        assert!(drawn_frames > 60);
     }
 
     #[test]
@@ -1726,6 +2685,107 @@ mod gpu_tests {
                 samples[samples.len() / 2],
                 samples[samples.len() * 95 / 100],
                 samples.iter().sum::<f64>() / samples.len() as f64,
+            );
+        }
+    }
+
+    fn pixel_digest(digest: u64, pixels: &[u8]) -> u64 {
+        pixels.chunks_exact(8).fold(digest, |hash, chunk| {
+            (hash ^ u64::from_le_bytes(chunk.try_into().unwrap())).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn benchmark_word_highlight_prepare() {
+        const FRAMES: u32 = 600;
+        const PASSES: usize = 5;
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        let spaced = spoken_segments(&[
+            "Today I want to walk you through the new export flow",
+            "First pick a preset and the resolution you need",
+            "Then trim the start and end so the video gets to the point",
+            "When you are happy with it press export and share the link",
+        ]);
+        let mut back_to_back = spaced.clone();
+        for segment in &mut back_to_back {
+            let next_starts = segment
+                .words
+                .iter()
+                .skip(1)
+                .map(|word| word.start)
+                .collect::<Vec<_>>();
+            for (word, next_start) in segment.words.iter_mut().zip(next_starts) {
+                word.end = next_start;
+            }
+        }
+        let base = CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let highlight = CaptionSettings {
+            active_word_highlight: true,
+            ..base.clone()
+        };
+        let cases = [
+            ("plain", base, &spaced),
+            ("color highlight", highlight.clone(), &spaced),
+            (
+                "color highlight gold outline",
+                CaptionSettings {
+                    highlight_color: "#FFD700".to_string(),
+                    outline: true,
+                    ..highlight.clone()
+                },
+                &spaced,
+            ),
+            (
+                "color highlight back-to-back words",
+                highlight,
+                &back_to_back,
+            ),
+        ];
+        for (name, settings, segments) in cases {
+            let mut uniforms = uniforms(&constants, settings, segments, size);
+            let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut samples = Vec::new();
+            let mut pass_totals = Vec::new();
+            for pass in 0..PASSES {
+                let mut pass_total = 0.0;
+                for frame in 0..FRAMES {
+                    uniforms.frame_number = frame;
+                    let started = std::time::Instant::now();
+                    layer.prepare(&uniforms, &frames, size, &constants);
+                    let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                    pass_total += elapsed;
+                    if pass > 0 && layer.has_caption {
+                        samples.push(elapsed);
+                    }
+                }
+                if pass > 0 {
+                    pass_totals.push(pass_total / 1e3);
+                }
+                constants.device.poll(wgpu::PollType::Wait).unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            pass_totals.sort_by(f64::total_cmp);
+
+            let mut checked = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut digest = 0xcbf2_9ce4_8422_2325;
+            for frame in 0..FRAMES {
+                uniforms.frame_number = frame;
+                checked.prepare(&uniforms, &frames, size, &constants);
+                digest = pixel_digest(digest, &render_pixels(&constants, &checked, size));
+            }
+
+            println!(
+                "word highlight prepare [{name}] ({FRAMES} frames, {} visible samples): p50 {:.1} us, p95 {:.1} us, {FRAMES}-frame total p50 {:.2} ms, pixels {digest:016x}",
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                pass_totals[pass_totals.len() / 2],
             );
         }
     }

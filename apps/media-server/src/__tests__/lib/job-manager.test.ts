@@ -6,12 +6,16 @@ import {
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
+	extendJobLifetime,
 	getJob,
+	getJobTotals,
 	type JobProgress,
+	MAX_RETAINED_TERMINAL_JOBS,
 	type RecordingWorkerAcknowledgement,
 	sendWebhook,
 	touchJob,
 	updateJob,
+	type VideoMetadata,
 } from "../../lib/job-manager";
 
 const createdJobs: string[] = [];
@@ -423,6 +427,31 @@ describe("job cleanup", () => {
 		}
 	});
 
+	test("keeps at most a fixed number of finished jobs, dropping the oldest first", () => {
+		const active = createTrackedJob("job-cap-active");
+		active.phase = "processing";
+		const finished = Array.from(
+			{ length: MAX_RETAINED_TERMINAL_JOBS },
+			(_, index) => {
+				const job = createTrackedJob(`job-cap-${index}`);
+				job.phase = "complete";
+				job.webhookUrl = "https://webhook.example.test/progress";
+				return job.jobId;
+			},
+		);
+		expect(getJob(finished[0] as string)).toBeDefined();
+
+		const overflow = createTrackedJob("job-cap-overflow");
+		overflow.phase = "error";
+		expect(getJob(finished[0] as string)).toBeDefined();
+
+		createTrackedJob("job-cap-next");
+		expect(getJob(finished[0] as string)).toBeUndefined();
+		expect(getJob(finished[1] as string)).toBeDefined();
+		expect(getJob(active.jobId)).toBe(active);
+		expect(getJob(overflow.jobId)).toBe(overflow);
+	});
+
 	test("bounds unacknowledged terminal retention and retains expired active jobs for delivery", () => {
 		const terminal = createTrackedJob("job-terminal-expired");
 		terminal.phase = "complete";
@@ -520,5 +549,129 @@ describe("job cleanup", () => {
 		expect(cleaned).toBe(1);
 		expect(currentJob?.phase).toBe("error");
 		expect(currentJob?.error).toContain("maximum lifetime of 60 minutes");
+	});
+});
+
+describe("job lifetime", () => {
+	test("extends the lifetime cap for long work without shortening it", () => {
+		const job = createTrackedJob("job-extended-lifetime");
+		const now = Date.now();
+		job.phase = "processing";
+		job.createdAt = now - 10 * 60 * 1000;
+
+		expect(extendJobLifetime(job.jobId, 60_000)).toBe(
+			job.createdAt + 60 * 60 * 1000,
+		);
+		const deadline = extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000);
+		expect(deadline).toBeGreaterThanOrEqual(now + 2 * 60 * 60 * 1000);
+		expect(extendJobLifetime(job.jobId, 60_000)).toBe(deadline);
+
+		job.createdAt = now - 90 * 60 * 1000;
+		job.updatedAt = Date.now();
+		expect(cleanupExpiredJobs()).toBe(0);
+		expect(getJob(job.jobId)?.phase).toBe("processing");
+	});
+
+	test("keeps a hard upper bound on extended lifetimes", () => {
+		const job = createTrackedJob("job-capped-lifetime");
+		job.phase = "uploading";
+		job.createdAt = Date.now() - 10 * 60 * 1000;
+
+		expect(extendJobLifetime(job.jobId, 24 * 60 * 60 * 1000)).toBe(
+			job.createdAt + 4 * 60 * 60 * 1000,
+		);
+		expect(extendJobLifetime(job.jobId, Number.NaN)).toBeUndefined();
+		expect(extendJobLifetime(job.jobId, -1)).toBeUndefined();
+	});
+
+	test("expires a job past its extended deadline", () => {
+		const job = createTrackedJob("job-past-extended-lifetime");
+		const abortController = new AbortController();
+		updateJob(job.jobId, { phase: "processing", abortController });
+		job.createdAt = Date.now() - 10 * 60 * 1000;
+		extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000);
+		job.createdAt -= 3 * 60 * 60 * 1000;
+		job.lifetimeDeadlineAt = Date.now() - 1;
+		job.updatedAt = Date.now();
+
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(job.phase).toBe("error");
+		expect(job.error).toContain("maximum lifetime");
+		expect(abortController.signal.aborted).toBe(true);
+	});
+
+	test("does not extend terminal jobs", () => {
+		const job = createTrackedJob("job-terminal-lifetime");
+		updateJob(job.jobId, { phase: "complete" });
+		expect(extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000)).toBeUndefined();
+		expect(job.lifetimeDeadlineAt).toBeUndefined();
+	});
+});
+
+describe("job totals", () => {
+	test("counts created, terminal, and expired jobs", () => {
+		const before = getJobTotals();
+		const completed = createTrackedJob("job-total-complete");
+		const errored = createTrackedJob("job-total-error");
+		const cancelled = createTrackedJob("job-total-cancelled");
+		const stale = createTrackedJob("job-total-stale");
+		updateJob(completed.jobId, { phase: "complete" });
+		updateJob(completed.jobId, { phase: "error" });
+		updateJob(errored.jobId, { phase: "error" });
+		updateJob(cancelled.jobId, { phase: "cancelled" });
+		updateJob(stale.jobId, { phase: "processing" });
+		stale.updatedAt = Date.now() - 16 * 60 * 1000;
+		cleanupExpiredJobs();
+
+		const after = getJobTotals();
+		expect(after.created - before.created).toBe(4);
+		expect(after.completed - before.completed).toBe(1);
+		expect(after.errored - before.errored).toBe(2);
+		expect(after.cancelled - before.cancelled).toBe(1);
+		expect(after.expired - before.expired).toBe(1);
+	});
+});
+
+describe("webhook delivery", () => {
+	test("settles with no acknowledgement when a delivery cannot be built and delivers the next update", async () => {
+		const job = createTrackedJob("job-webhook-unserializable");
+		job.webhookUrl = "https://webhook.example.test/progress";
+		const metadata: VideoMetadata = {
+			duration: 1,
+			width: 1,
+			height: 1,
+			fps: 30,
+			videoCodec: "h264",
+			audioCodec: null,
+			audioChannels: null,
+			sampleRate: null,
+			bitrate: 1,
+			fileSize: 1,
+		};
+		updateJob(job.jobId, {
+			phase: "processing",
+			metadata: { ...metadata, fileSize: BigInt(1) as unknown as number },
+		});
+		const payloads: Record<string, unknown>[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			payloads.push(JSON.parse(String(init?.body)));
+			return new Response(null, { status: 200 });
+		}) as typeof fetch;
+		const errors = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(await sendWebhook(job)).toBeUndefined();
+			expect(errors).toHaveBeenCalled();
+			expect(job.webhookInFlight).toBe(false);
+			expect(job.webhookPromise).toBeUndefined();
+			expect(payloads).toHaveLength(0);
+
+			updateJob(job.jobId, { phase: "complete", progress: 100, metadata });
+			await sendWebhook(job);
+			expect(payloads).toHaveLength(1);
+			expect(payloads[0]).toMatchObject({ phase: "complete", progress: 100 });
+			expect(job.terminalWebhookAcknowledgedAt).toBeNumber();
+		} finally {
+			errors.mockRestore();
+		}
 	});
 });

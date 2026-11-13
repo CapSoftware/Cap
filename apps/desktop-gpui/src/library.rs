@@ -28,7 +28,9 @@ use cap_project::{
     StudioRecordingStatus,
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
-use gpui::RenderImage;
+use gpui::{App, RenderImage};
+
+use crate::i18n::tr;
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -72,9 +74,11 @@ pub struct RecentItem {
 /// `media_sort_time_millis` (`lib.rs:3966-3972`): the filesystem `created()`
 /// time of the path, falling back to `modified()`, then to the epoch.
 fn media_sort_time_millis(path: &Path) -> f64 {
-    let Ok(metadata) = path.metadata() else {
-        return 0.0;
-    };
+    path.metadata()
+        .map_or(0.0, |metadata| metadata_sort_time_millis(&metadata))
+}
+
+fn metadata_sort_time_millis(metadata: &std::fs::Metadata) -> f64 {
     metadata
         .created()
         .or_else(|_| metadata.modified())
@@ -271,26 +275,26 @@ impl RecordingItem {
                 .is_some_and(crate::upload::queue::UploadState::is_pending)
     }
 
-    /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
-    pub fn opens_editor(&self) -> bool {
-        self.mode == RecordingMode::Studio && self.status.is_complete()
+    /// Complete studio rows open the editor, and so do interrupted ones (a
+    /// failed or unfinished recording): the editor recovers them first. Only
+    /// the recording being captured right now stays inert.
+    pub fn opens_editor(&self, active_recording: Option<&Path>) -> bool {
+        self.mode == RecordingMode::Studio
+            && !(self.status.is_in_progress() && active_recording == Some(self.path.as_path()))
     }
 }
 
-/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`).
-fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
-    let mode = match &meta.inner {
+/// `RecordingMetaWithMetadata::new`'s mode (`lib.rs:3888-3925`).
+fn recording_mode(meta: &RecordingMeta) -> RecordingMode {
+    match &meta.inner {
         RecordingMetaInner::Studio(_) => RecordingMode::Studio,
         RecordingMetaInner::Instant(_) => RecordingMode::Instant,
-    };
-    let clip_count = match &meta.inner {
-        RecordingMetaInner::Studio(studio) => match &**studio {
-            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
-            StudioRecordingMeta::SingleSegment { .. } => 1,
-        },
-        RecordingMetaInner::Instant(_) => 1,
-    };
-    let status = match &meta.inner {
+    }
+}
+
+/// `RecordingMetaWithMetadata::new`'s status (`lib.rs:3888-3925`).
+fn recording_status(meta: &RecordingMeta) -> RecordingStatus {
+    match &meta.inner {
         RecordingMetaInner::Studio(studio) => match &**studio {
             // A `MultipleSegments` meta with no `status` key at all is
             // Complete -- `.unwrap_or(StudioRecordingStatus::Complete)`.
@@ -318,7 +322,31 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
             RecordingStatus::Complete
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Full [`RecordingItem`]s built on this test thread. Recovery must stay on
+    /// [`ScannedRecording`], so its tests can pin that this does not move.
+    static RECORDING_ITEM_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`), plus the filesystem
+/// lookups a card needs.
+fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
+    let mode = recording_mode(&meta);
+    let clip_count = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => match &**studio {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+        },
+        RecordingMetaInner::Instant(_) => 1,
     };
+    let status = recording_status(&meta);
+
+    #[cfg(test)]
+    RECORDING_ITEM_BUILDS.with(|builds| builds.set(builds.get() + 1));
 
     let preview = path.join("screenshots/preview.jpg");
     let thumbnail = if preview.is_file() {
@@ -358,6 +386,37 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
 }
 
 fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+    scanned_recordings_in(dirs).map(ScannedRecording::into_item)
+}
+
+/// A recording directory after its metadata has been parsed, before the
+/// filesystem work a card needs (upload state, thumbnails, preview mtimes).
+///
+/// Both the library listing and the recovery scan walk every bundle, but
+/// recovery drops complete recordings before it needs any of those fields.
+/// Keeping this intermediate means the scan parses each `recording-meta.json`
+/// once and recovery only pays for recordings it can actually return.
+///
+/// Skipping the fields is state-neutral: `upload::queue::status` only reads the
+/// saved upload state (and settings for legacy records), and the thumbnail
+/// checks are `stat`s.
+struct ScannedRecording {
+    path: PathBuf,
+    meta: RecordingMeta,
+    sort_time_millis: f64,
+}
+
+impl ScannedRecording {
+    fn status(&self) -> RecordingStatus {
+        recording_status(&self.meta)
+    }
+
+    fn into_item(self) -> RecordingItem {
+        recording_item(self.path, self.meta, self.sort_time_millis)
+    }
+}
+
+fn scanned_recordings_in(dirs: &[PathBuf]) -> impl Iterator<Item = ScannedRecording> {
     let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -375,7 +434,11 @@ fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
     paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
     paths.into_iter().filter_map(|(path, sort_time_millis)| {
         let meta = RecordingMeta::load_for_project(&path).ok()?;
-        Some(recording_item(path, meta, sort_time_millis))
+        Some(ScannedRecording {
+            path,
+            meta,
+            sort_time_millis,
+        })
     })
 }
 
@@ -394,18 +457,24 @@ pub fn find_incomplete_recordings_in(
     dirs: &[PathBuf],
     active_recording: Option<&Path>,
 ) -> Vec<IncompleteRecordingItem> {
-    list_recordings_in(dirs)
-        .into_iter()
-        .filter(|item| {
-            matches!(
-                item.status,
+    scanned_recordings_in(dirs)
+        .filter(|recording| {
+            let status = recording.status();
+            (matches!(
+                status,
                 RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-            ) && active_recording != Some(item.path.as_path())
-                && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            ) || (matches!(status, RecordingStatus::Failed { .. })
+                && recording_mode(&recording.meta) == RecordingMode::Studio))
+                && active_recording != Some(recording.path.as_path())
+                && is_recording_after_recovery_cutoff(
+                    &recording.meta.pretty_name,
+                    recording.sort_time_millis,
+                )
         })
-        .filter_map(|item| {
-            if item.mode == RecordingMode::Instant {
-                let display = item.path.join("content/display");
+        .filter_map(|recording| {
+            let ScannedRecording { path, meta, .. } = recording;
+            if recording_mode(&meta) == RecordingMode::Instant {
+                let display = path.join("content/display");
                 if !display.join("init.mp4").is_file() {
                     return None;
                 }
@@ -415,16 +484,16 @@ pub fn find_incomplete_recordings_in(
                     .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
                     .count();
                 return (segment_count > 0).then_some(IncompleteRecordingItem {
-                    project_path: item.path,
-                    pretty_name: item.pretty_name,
+                    project_path: path,
+                    pretty_name: meta.pretty_name,
                     segment_count,
                     estimated_duration_secs: 0.0,
                 });
             }
-            let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+            let incomplete = RecoveryManager::inspect_recording(&path)?;
             (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
-                project_path: item.path,
-                pretty_name: item.pretty_name,
+                project_path: path,
+                pretty_name: meta.pretty_name,
                 segment_count: incomplete.recoverable_segments.len(),
                 estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
             })
@@ -490,19 +559,19 @@ fn recover_incomplete_recording_in(
     let Some(studio) = meta.studio_meta() else {
         return Err("Only incomplete studio recordings can be recovered".to_string());
     };
-    if !matches!(
-        studio.status(),
-        StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux
-    ) {
-        return Err("Recording is not waiting for recovery".to_string());
+    if matches!(studio.status(), StudioRecordingStatus::Complete) {
+        return Ok(canonical_path);
     }
 
-    let incomplete = RecoveryManager::inspect_recording(&canonical_path)
-        .ok_or_else(|| "No recoverable segments found".to_string())?;
-    crate::recording::ensure_finalization_storage(&canonical_path)
-        .map_err(|error| format!("{error:#}"))?;
-    let recovered = RecoveryManager::recover(&incomplete)
-        .map_err(|error| format!("Failed to recover recording: {error}"))?;
+    let incomplete = RecoveryManager::inspect_recording(&canonical_path).ok_or_else(|| {
+        tr::main::recovery::error::nothing_saved(canonical_path.display()).to_string()
+    })?;
+    crate::recording::ensure_finalization_storage(&canonical_path).map_err(|error| {
+        tr::main::recovery::error::storage(format!("{error:#}"), canonical_path.display())
+            .to_string()
+    })?;
+    let recovered = RecoveryManager::salvage(&incomplete)
+        .map_err(|error| recovery_failure_message(&error, &canonical_path))?;
     let display = match &recovered.meta {
         StudioRecordingMeta::SingleSegment { segment } => {
             segment.display.path.to_path(&recovered.project_path)
@@ -524,6 +593,266 @@ fn recover_incomplete_recording_in(
     Ok(recovered.project_path)
 }
 
+fn recovery_failure_message(
+    error: &cap_recording::recovery::RecoveryError,
+    project_path: &Path,
+) -> String {
+    use cap_recording::recovery::RecoveryError;
+    let path = project_path.display();
+    match error {
+        RecoveryError::NoRecoverableSegments => {
+            tr::main::recovery::error::nothing_saved(path).to_string()
+        }
+        error if is_storage_full(error) => {
+            tr::main::recovery::error::storage(error.to_string(), path).to_string()
+        }
+        error => tr::main::recovery::error::rebuild_failed(error.to_string(), path).to_string(),
+    }
+}
+
+/// A full disk can surface as the recovery's own IO error or inside the FFmpeg
+/// remux that rebuilds a track, so the remux error's chain is checked too.
+fn is_storage_full(error: &cap_recording::recovery::RecoveryError) -> bool {
+    use cap_recording::recovery::RecoveryError;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(match error {
+        RecoveryError::VideoConcat(remux)
+        | RecoveryError::AudioConcat(remux)
+        | RecoveryError::MediaMerge(remux) => remux,
+        error => error,
+    });
+    while let Some(error) = current {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+            || error.to_string().contains("No space left on device")
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Recovers a studio recording that a crash, a force quit or a failed stop left
+/// unfinished, so the editor can open it. Returns whether it recovered
+/// anything. Complete recordings, the recording being captured right now and
+/// bundles outside the library are left alone.
+pub fn recover_interrupted_for_editing(
+    project_path: &Path,
+    active_recording: Option<&Path>,
+) -> Result<bool, String> {
+    recover_interrupted_for_editing_in(&known_recordings_dirs(), project_path, active_recording)
+}
+
+fn recover_interrupted_for_editing_in(
+    dirs: &[PathBuf],
+    project_path: &Path,
+    active_recording: Option<&Path>,
+) -> Result<bool, String> {
+    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
+        return Ok(false);
+    };
+    let Some(studio) = meta.studio_meta() else {
+        return Ok(false);
+    };
+    let interrupted = match studio.status() {
+        StudioRecordingStatus::Complete => false,
+        StudioRecordingStatus::NeedsRemux | StudioRecordingStatus::Failed { .. } => true,
+        StudioRecordingStatus::InProgress => !active_recording.is_some_and(|active| {
+            active == project_path || active.canonicalize().ok() == project_path.canonicalize().ok()
+        }),
+    };
+    let library_path = project_path.canonicalize().ok().and_then(|canonical| {
+        dirs.iter().find_map(|dir| {
+            let relative = canonical.strip_prefix(dir.canonicalize().ok()?).ok()?;
+            Some(dir.join(relative))
+        })
+    });
+    let Some(library_path) = library_path.filter(|_| interrupted) else {
+        return Ok(false);
+    };
+    let project_path = library_path.as_path();
+    if RecoveryManager::inspect_recording(project_path).is_none() {
+        let has_segments = match studio {
+            StudioRecordingMeta::MultipleSegments { inner } => !inner.segments.is_empty(),
+            StudioRecordingMeta::SingleSegment { .. } => true,
+        };
+        return match studio.status() {
+            StudioRecordingStatus::Failed { .. } if has_segments => Ok(false),
+            _ => Err(tr::main::recovery::error::nothing_saved(project_path.display()).to_string()),
+        };
+    }
+    tracing::info!(path = %project_path.display(), "recovering an interrupted recording before editing");
+    recover_incomplete_recording_in(dirs, project_path).map(|_| true)
+}
+
+struct HeldProject {
+    id: u64,
+    path: PathBuf,
+    resolved: Option<PathBuf>,
+}
+
+/// A project folder's real location: its parent resolved through symlinks,
+/// plus its own name. A recording registers its folder before creating it, so
+/// this cannot canonicalize the folder itself.
+fn resolved_project_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?.canonicalize().ok()?;
+    Some(parent.join(path.file_name()?))
+}
+
+/// Project folders that something in the app owns for a while.
+struct HeldProjects(std::sync::Mutex<Vec<HeldProject>>);
+
+impl HeldProjects {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(Vec::new()))
+    }
+
+    fn projects(&self) -> std::sync::MutexGuard<'_, Vec<HeldProject>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn hold(&self, project_dir: &Path) -> u64 {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let resolved = resolved_project_path(project_dir);
+        self.projects().push(HeldProject {
+            id,
+            path: project_dir.to_path_buf(),
+            resolved,
+        });
+        id
+    }
+
+    fn release(&self, id: u64) {
+        self.projects().retain(|project| project.id != id);
+    }
+
+    /// Compares `path` with the spelling the folder was held under and with
+    /// its resolved location, without touching the filesystem.
+    fn holds(&self, path: &Path) -> bool {
+        self.projects()
+            .iter()
+            .any(|project| project.path == path || project.resolved.as_deref() == Some(path))
+    }
+
+    /// Whether the folder is held under any path that leads to it.
+    fn holds_resolved(&self, path: &Path) -> bool {
+        self.holds(path)
+            || [path.canonicalize().ok(), resolved_project_path(path)]
+                .iter()
+                .flatten()
+                .any(|resolved| self.holds(resolved))
+    }
+}
+
+static IN_PROGRESS_PROJECTS: HeldProjects = HeldProjects::new();
+static EDITOR_PROJECTS: HeldProjects = HeldProjects::new();
+static DELETING_PROJECTS: HeldProjects = HeldProjects::new();
+
+/// Held while an editor or a delete looks for the other and registers itself,
+/// so one of the two always sees the other.
+static EDITOR_OR_DELETE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn editor_or_delete() -> std::sync::MutexGuard<'static, ()> {
+    EDITOR_OR_DELETE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Marks a project folder as owned by a live recording until dropped. The
+/// recording holds it from start until its stop, including Studio
+/// finalization, has finished, so the library cannot delete the folder out
+/// from under the capture or the finalizer.
+pub struct RecordingInProgress(u64);
+
+impl RecordingInProgress {
+    pub fn begin(project_dir: &Path) -> Self {
+        Self(IN_PROGRESS_PROJECTS.hold(project_dir))
+    }
+}
+
+impl Drop for RecordingInProgress {
+    fn drop(&mut self) {
+        IN_PROGRESS_PROJECTS.release(self.0);
+    }
+}
+
+/// Whether a live recording (or its stop) still owns `path`. Compares `path`
+/// with the spelling the recording started under and with its resolved
+/// location, without touching the filesystem, so it is cheap enough for a
+/// render. [`ensure_not_recording_in_progress`] resolves `path` as well.
+pub fn is_recording_in_progress(path: &Path) -> bool {
+    IN_PROGRESS_PROJECTS.holds(path)
+}
+
+/// Refuses a project folder a live recording still owns, under any path that
+/// leads to it.
+pub fn ensure_not_recording_in_progress(path: &Path) -> Result<(), String> {
+    if IN_PROGRESS_PROJECTS.holds_resolved(path) {
+        return Err(tr::dialog::delete_recording::recording_active().to_string());
+    }
+    Ok(())
+}
+
+/// Marks a project folder as open in an editor window until dropped. The
+/// editor keeps the project's media open and writes its edits back into the
+/// folder, so the library refuses to delete it from under the window. The
+/// editor's own Delete and a delete from the Settings recordings row or a
+/// library card close the window, which lets go, before they delete.
+pub struct ProjectOpenInEditor(u64);
+
+impl ProjectOpenInEditor {
+    /// `None` while the library is deleting the folder: the editor must not
+    /// open on a project that is on its way out.
+    pub fn begin(project_dir: &Path) -> Option<Self> {
+        let _claim = editor_or_delete();
+        (!DELETING_PROJECTS.holds_resolved(project_dir))
+            .then(|| Self(EDITOR_PROJECTS.hold(project_dir)))
+    }
+}
+
+impl Drop for ProjectOpenInEditor {
+    fn drop(&mut self) {
+        EDITOR_PROJECTS.release(self.0);
+    }
+}
+
+/// Refuses a project folder an editor window has open, under any path that
+/// leads to it.
+pub fn ensure_not_open_in_editor(path: &Path) -> Result<(), String> {
+    if EDITOR_PROJECTS.holds_resolved(path) {
+        return Err(tr::dialog::delete_recording::open_in_editor().to_string());
+    }
+    Ok(())
+}
+
+/// Reserves a project folder for a delete until dropped. It is refused while
+/// an editor window has the folder open, and no editor can open the folder
+/// while it is held, so a delete that waits (on an upload to cancel, on a
+/// thumbnail still being written) cannot pull the folder from under an editor
+/// that opened in the meantime.
+pub struct ProjectBeingDeleted(u64);
+
+impl ProjectBeingDeleted {
+    pub fn begin(path: &Path) -> Result<Self, String> {
+        let _claim = editor_or_delete();
+        ensure_not_open_in_editor(path)?;
+        let resolved = path.canonicalize();
+        Ok(Self(
+            DELETING_PROJECTS.hold(resolved.as_deref().unwrap_or(path)),
+        ))
+    }
+}
+
+impl Drop for ProjectBeingDeleted {
+    fn drop(&mut self) {
+        DELETING_PROJECTS.release(self.0);
+    }
+}
+
 /// Existing targets and roots are canonicalized before containment is checked.
 /// This keeps symlink escapes outside the allow-list while accepting Windows
 /// editor paths whose canonical form has a `\\?\` prefix. A missing strict child
@@ -535,6 +864,8 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     {
         return Err("Invalid path".to_string());
     }
+    ensure_not_recording_in_progress(path)?;
+    let _deleting = ProjectBeingDeleted::begin(path)?;
 
     let canonical_dirs: Vec<_> = dirs
         .iter()
@@ -570,11 +901,207 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     };
 
     if let Some(canonical_path) = canonical_path {
-        std::fs::remove_dir_all(canonical_path)
+        let _thumbnails = crate::recording::hold_studio_thumbnail_writes().ok_or_else(|| {
+            "Timed out waiting for the recording's thumbnail to finish writing".to_string()
+        })?;
+        remove_recording_directory(&canonical_path)
             .map_err(|error| format!("Failed to delete recording: {error}"))?;
     }
 
     Ok(())
+}
+
+const DELETING_DIR: &str = ".cap-deleting";
+
+/// Removes a recording folder as a unit: it is first moved into a holding
+/// folder beside it, which either moves every file or none, and only then
+/// removed. Removing it in place stops at the first file something still has
+/// open, which on Windows left a recording with half its files (the cursor
+/// data gone, the video and metadata still there).
+fn remove_recording_directory(path: &Path) -> std::io::Result<()> {
+    match move_recording_aside(path) {
+        Ok(aside) => {
+            discard_moved_recording(&aside);
+            Ok(())
+        }
+        Err(error) => remove_unmoved_recording(path, error),
+    }
+}
+
+fn move_recording_aside(path: &Path) -> std::io::Result<PathBuf> {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let holding = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("Recording has no parent directory"))?
+        .join(DELETING_DIR);
+    if let Err(error) = std::fs::create_dir(&holding)
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(error);
+    }
+    if !std::fs::symlink_metadata(&holding)?.file_type().is_dir() {
+        return Err(std::io::Error::other(
+            "The recordings directory's deleting folder is not a directory",
+        ));
+    }
+    let aside = holding.join(format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos()),
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    debug_assert!(aside.file_name().is_some_and(is_staged_recording));
+    match std::fs::rename(path, &aside) {
+        Ok(()) => Ok(aside),
+        Err(error) => {
+            let _ = std::fs::remove_dir(&holding);
+            Err(error)
+        }
+    }
+}
+
+/// Whether a holding folder entry has the name [`move_recording_aside`] gives
+/// (`<process id>-<nanoseconds>-<counter>`). Nothing else in a holding folder
+/// is this code's to remove.
+fn is_staged_recording(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        let parts: Vec<&str> = name.split('-').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
+/// The recording has left the library by now, so files that cannot be removed
+/// are reported in the log instead of failing this delete. A later delete
+/// removes what an earlier one staged and left, and the holding folder goes
+/// once it is empty.
+fn discard_moved_recording(aside: &Path) {
+    if let Err(error) = retry_while_in_use(|| std::fs::remove_dir_all(aside)) {
+        tracing::warn!(path = %aside.display(), %error, "a deleted recording's files could not all be removed");
+    }
+    let Some(holding) = aside.parent() else {
+        return;
+    };
+    if let Ok(entries) = std::fs::read_dir(holding) {
+        for entry in entries.flatten() {
+            if is_staged_recording(&entry.file_name())
+                && entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(holding);
+}
+
+#[cfg(windows)]
+fn is_in_use(error: &std::io::Error) -> bool {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+    )
+}
+
+/// Shorter under test: a delete holds the thumbnail lock while it waits, the
+/// tests share that lock, and its other waiters give up after ten seconds.
+#[cfg(windows)]
+const IN_USE_RETRY: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 2 } else { 5 });
+
+/// Antivirus or the search indexer can briefly open a file, so on Windows an
+/// in-use error is retried for a few seconds before it is reported.
+fn retry_while_in_use<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    #[cfg(windows)]
+    {
+        let deadline = std::time::Instant::now() + IN_USE_RETRY;
+        loop {
+            match attempt() {
+                Err(error) if is_in_use(&error) && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                result => return result,
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    attempt()
+}
+
+/// Windows refuses to move a folder while any handle inside it is open, even
+/// one that allows deletion. Those were deletable in place before, so the
+/// folder is still removed in place, but only once every file and folder in
+/// it is known to be deletable. One that is not (a decoder closes its file a
+/// moment after its last handle is dropped) is waited on for a few seconds,
+/// and if it stays open nothing has been removed.
+#[cfg(windows)]
+fn remove_unmoved_recording(path: &Path, mut error: std::io::Error) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + IN_USE_RETRY;
+    loop {
+        if !is_in_use(&error) {
+            return Err(error);
+        }
+        match ensure_deletable(path) {
+            Ok(()) => return retry_while_in_use(|| std::fs::remove_dir_all(path)),
+            Err(busy) if !is_in_use(&busy) || std::time::Instant::now() >= deadline => {
+                return Err(busy);
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+        match move_recording_aside(path) {
+            Ok(aside) => {
+                discard_moved_recording(&aside);
+                return Ok(());
+            }
+            Err(next) => error = next,
+        }
+    }
+}
+
+/// Opens the folder at `path` and everything in it for deletion, which
+/// Windows refuses for a file or folder another handle holds without sharing
+/// deletion (a decoder's file, a terminal's current directory).
+#[cfg(windows)]
+fn ensure_deletable(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x7;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let open_for_delete = |path: &Path| {
+        std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    };
+    open_for_delete(path)?;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            ensure_deletable(&entry.path())?;
+        } else if file_type.is_file() {
+            open_for_delete(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// A folder cannot be moved off a mount point of its own. Open files do not
+/// block removal here, so it is removed in place as before.
+#[cfg(not(windows))]
+fn remove_unmoved_recording(path: &Path, error: std::io::Error) -> std::io::Result<()> {
+    if error.kind() == std::io::ErrorKind::CrossesDevices {
+        std::fs::remove_dir_all(path)
+    } else {
+        Err(error)
+    }
 }
 
 /// `delete_recording_directory` against the real library.
@@ -582,6 +1109,7 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
 /// The Tauri command also emits `RecordingDeleted`, which the page listens for
 /// to refetch; here the caller refreshes its own list instead.
 pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     delete_recording_directory_in(&known_recordings_dirs(), path)
 }
 
@@ -590,61 +1118,23 @@ pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
 /// An instant recording opens its `content` directory --
 /// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
 /// bundle with no `content` directory, is revealed in the file manager.
-pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
+pub fn open_recording_folder(path: &Path, mode: RecordingMode, cx: &App) {
     let content = path.join("content");
     if mode == RecordingMode::Instant && content.is_dir() {
-        open_path(&content);
+        open_with_system(&content, cx);
     } else {
-        reveal_in_folder(path);
+        reveal_path(path, cx);
     }
 }
 
-pub fn open_path(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(path).spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path.to_string_lossy()])
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            std::process::Command::new("xdg-open").arg(path).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "opening a path failed: {error}");
-    }
+// `std::fs::canonicalize` yields `\\?\` verbatim paths on Windows, which the
+// shell APIs behind GPUI's reveal and open reject with E_INVALIDARG.
+pub fn reveal_path(path: &Path, cx: &App) {
+    cx.reveal_path(dunce::simplified(path));
 }
 
-pub fn reveal_in_folder(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(path)
-                .spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path.display()))
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            let parent = path.parent().unwrap_or(path);
-            std::process::Command::new("xdg-open").arg(parent).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "revealing a path failed: {error}");
-    }
+pub fn open_with_system(path: &Path, cx: &App) {
+    cx.open_with_system(dunce::simplified(path));
 }
 
 pub fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
@@ -667,47 +1157,97 @@ pub struct ScreenshotItem {
     pub pretty_name: String,
     pub sort_time_millis: f64,
     pub thumbnail: Option<PathBuf>,
+    /// The thumbnail PNG's version (mtime plus length), so a row can tell a
+    /// re-scan that found the same file from one whose screenshot was
+    /// rewritten in place.
+    pub thumbnail_version: Option<u128>,
+}
+
+/// Whether a library row can keep the image it already has for `item`.
+///
+/// The PNG path and its version both have to match, the previous row must have
+/// finished decoding, and it must not already be waiting on a newer decode: a
+/// row whose decode never landed (or was cancelled) still has to ask again.
+pub(crate) fn screenshot_thumbnail_is_current(
+    item: &ScreenshotItem,
+    previous: Option<&ScreenshotItem>,
+    previous_has_thumbnail: bool,
+    previous_stale: bool,
+) -> bool {
+    !previous_stale
+        && previous.is_some_and(|previous| {
+            previous.thumbnail == item.thumbnail
+                && previous.thumbnail_version.is_some()
+                && previous.thumbnail_version == item.thumbnail_version
+                && previous_has_thumbnail
+        })
 }
 
 /// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
 /// sort key is the PNG's timestamp rather than the directory's.
 pub fn list_screenshots_in(dir: &Path) -> Vec<ScreenshotItem> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
+    screenshot_items_in(dir).collect()
+}
 
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let bundle = entry.path();
-        if !bundle.is_dir() || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") {
-            continue;
+fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
+    let mut bundles = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let bundle = entry.path();
+            if bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") || !bundle.is_dir() {
+                continue;
+            }
+            if let Some((png, sort_time_millis)) = screenshot_png(&bundle) {
+                bundles.push((bundle, png, sort_time_millis));
+            }
         }
-        let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
-            continue;
-        };
-        let Some(png) = std::fs::read_dir(&bundle).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
-        }) else {
-            continue;
-        };
-
-        out.push(ScreenshotItem {
-            path: png.clone(),
-            pretty_name: meta.pretty_name,
-            sort_time_millis: media_sort_time_millis(&png),
-            thumbnail: Some(png),
-            bundle,
-        });
     }
-    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-    out
+    bundles.sort_by(|(_, _, a), (_, _, b)| b.total_cmp(a));
+    bundles
+        .into_iter()
+        .filter_map(|(bundle, png, sort_time_millis)| {
+            let meta = RecordingMeta::load_for_project(&bundle).ok()?;
+            Some(ScreenshotItem {
+                path: png.clone(),
+                pretty_name: meta.pretty_name,
+                sort_time_millis,
+                thumbnail_version: source_version(&png),
+                thumbnail: Some(png),
+                bundle,
+            })
+        })
+}
+
+/// Whether a `.cap` directory is a screenshot rather than a recording. The
+/// same rule `list_screenshots` uses, so the two never disagree on a bundle.
+pub fn is_screenshot_bundle(bundle: &Path) -> bool {
+    bundle.extension().and_then(|ext| ext.to_str()) == Some("cap")
+        && bundle.is_dir()
+        && screenshot_png(bundle).is_some()
+}
+
+fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
+    let original = bundle.join("original.png");
+    if let Ok(metadata) = original.metadata() {
+        return Some((original, metadata_sort_time_millis(&metadata)));
+    }
+    let png = std::fs::read_dir(bundle)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))?;
+    let sort_time_millis = media_sort_time_millis(&png);
+    Some((png, sort_time_millis))
 }
 
 pub fn list_screenshots() -> Vec<ScreenshotItem> {
     list_screenshots_in(&screenshots_dir())
+}
+
+pub fn list_screenshots_limited(limit: usize) -> Vec<ScreenshotItem> {
+    screenshot_items_in(&screenshots_dir())
+        .take(limit)
+        .collect()
 }
 
 /// Delete the `.cap` bundle that owns `path` (the PNG or the directory).
@@ -750,16 +1290,20 @@ pub fn delete_screenshot(path: &Path) -> Result<(), String> {
 }
 
 fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
-    out.extend(list_screenshots_in(dir).into_iter().map(|item| RecentItem {
-        kind: MediaKind::Screenshot,
-        bundle: item.bundle,
-        pretty_name: item.pretty_name,
-        clip_count: 1,
-        sort_time_millis: item.sort_time_millis,
-        thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
-        thumbnail: item.thumbnail,
-        sharing: None,
-    }));
+    out.extend(
+        screenshot_items_in(dir)
+            .take(RECENT_MEDIA_LIMIT)
+            .map(|item| RecentItem {
+                kind: MediaKind::Screenshot,
+                bundle: item.bundle,
+                pretty_name: item.pretty_name,
+                clip_count: 1,
+                sort_time_millis: item.sort_time_millis,
+                thumbnail_version: item.thumbnail_version,
+                thumbnail: item.thumbnail,
+                sharing: None,
+            }),
+    );
 }
 
 fn newest_first(items: &mut [RecentItem]) {
@@ -777,13 +1321,8 @@ pub fn recent_media_in(recording_dirs: &[PathBuf], screenshots_dir: &Path) -> Ve
     let mut recordings = Vec::new();
     scan_recordings(recording_dirs, &mut recordings);
 
-    let mut screenshots = Vec::new();
-    scan_screenshots(screenshots_dir, &mut screenshots);
-    newest_first(&mut screenshots);
-    screenshots.truncate(RECENT_MEDIA_LIMIT);
-
     let mut merged = recordings;
-    merged.extend(screenshots);
+    scan_screenshots(screenshots_dir, &mut merged);
     newest_first(&mut merged);
     merged.truncate(RECENT_MEDIA_LIMIT);
     merged
@@ -911,6 +1450,24 @@ fn source_mtime_nanos(path: &Path) -> Option<u128> {
         .map(|elapsed| elapsed.as_nanos())
 }
 
+/// A source file's version: its mtime plus its length, so a rewrite that
+/// preserves the timestamp but changes the length (`cp -p` of a re-encoded
+/// file, `touch -r` after an edit) still invalidates the image a screenshot
+/// library row is holding and misses the decode cache. A rewrite that
+/// preserves both is undetectable without reading the file. The high and low
+/// halves cannot overlap (mtime is well under 2^64 nanos, length is shifted
+/// above it), so this is a lossless encoding rather than a hash.
+fn source_version(path: &Path) -> Option<u128> {
+    let metadata = path.metadata().ok()?;
+    let mtime = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(mtime ^ ((metadata.len() as u128) << 64))
+}
+
 /// FNV-1a, spelled out because `DefaultHasher`'s algorithm is unspecified
 /// across Rust releases and a silent change would orphan every cached file.
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -936,15 +1493,16 @@ fn is_bundle_display(path: &Path) -> bool {
             .is_some_and(|name| name == "screenshots")
 }
 
-/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<mtime>.jpg`.
+/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<version>.jpg`.
 ///
-/// The source's mtime is baked into the file name, so freshness is exact-name
-/// existence -- no comparison logic, and a source rewritten in place simply
-/// misses. [`Self::store`] sweeps the stale mtime variants after writing.
+/// The source's version (mtime plus length) is baked into the file name, so
+/// freshness is exact-name existence -- no comparison logic, and a source
+/// whose version changes simply misses. [`Self::store`] sweeps the stale
+/// version variants after writing.
 pub struct CacheSlot {
     dir: PathBuf,
     prefix: String,
-    mtime: u128,
+    version: u128,
 }
 
 impl CacheSlot {
@@ -954,7 +1512,7 @@ impl CacheSlot {
     /// screenshot PNGs live in bundles both apps extension-scan, so extra
     /// files are not written there.
     fn for_source(source: &Path) -> Option<Self> {
-        let mtime = source_mtime_nanos(source)?;
+        let version = source_version(source)?;
         if is_bundle_display(source) {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
@@ -963,7 +1521,7 @@ impl CacheSlot {
                 } else {
                     "thumbnail".to_string()
                 },
-                mtime,
+                version,
             });
         }
         Some(Self {
@@ -972,7 +1530,7 @@ impl CacheSlot {
                 "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
                 fnv1a64(source.to_string_lossy().as_bytes())
             ),
-            mtime,
+            version,
         })
     }
 
@@ -984,13 +1542,13 @@ impl CacheSlot {
         Some(Self {
             dir: thumbnail_cache_dir(),
             prefix,
-            mtime: source_mtime_nanos(source)?,
+            version: source_version(source)?,
         })
     }
 
     fn file(&self) -> PathBuf {
         self.dir
-            .join(format!("{}-{:x}.jpg", self.prefix, self.mtime))
+            .join(format!("{}-{:x}.jpg", self.prefix, self.version))
     }
 
     pub fn load(&self) -> Option<Arc<RenderImage>> {
@@ -1017,12 +1575,12 @@ impl CacheSlot {
             return;
         };
         let file = self.file();
-        // The prefix keeps two same-mtime slots (wallpapers installed in one
+        // The prefix keeps two same-version slots (wallpapers installed in one
         // copy) from interleaving writes into one tmp file.
         let tmp = self.dir.join(format!(
             "{}-{:x}.{}.tmp",
             self.prefix,
-            self.mtime,
+            self.version,
             std::process::id()
         ));
         if std::fs::write(&tmp, &encoded).is_err() || std::fs::rename(&tmp, &file).is_err() {
@@ -1032,7 +1590,7 @@ impl CacheSlot {
         self.remove_stale_variants(&file);
     }
 
-    /// Sweep the other `<prefix>-<hex>.jpg` mtime variants. The remainder must
+    /// Sweep the other `<prefix>-<hex>.jpg` version variants. The remainder must
     /// parse as bare hex so that one key can never delete another key's files
     /// when it happens to be a string prefix of it (`wallpaper-a-128` vs a
     /// hypothetical `wallpaper-a-128-128`), and so `display.jpg` next to a
@@ -1058,6 +1616,11 @@ impl CacheSlot {
             }
         }
     }
+}
+
+#[cfg(test)]
+pub fn thumbnail_cache_file(source: &Path) -> Option<PathBuf> {
+    CacheSlot::for_source(source).map(|slot| slot.file())
 }
 
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
@@ -1094,32 +1657,50 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .max(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .min(1.0);
-    let target_width = ((width as f32 * scale).round() as u32).max(1);
-    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        crate::jpeg_thumbnail::decode_jpeg_thumbnail(&bytes, |width, height| {
+            let (_, target_width, target_height) = crate::jpeg_thumbnail::cover_target(
+                width,
+                height,
+                THUMBNAIL_WIDTH,
+                THUMBNAIL_HEIGHT,
+            );
+            (target_width, target_height)
+        })
+        .or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
+    let (_, target_width, target_height) =
+        crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
     // nothing to avoid.
-    let rgba = if scale <= 0.5 {
-        decoded
+    let rgba = match crate::jpeg_thumbnail::thumbnail_resize(
+        decoded.width(),
+        decoded.height(),
+        target_width,
+        target_height,
+    ) {
+        crate::jpeg_thumbnail::ThumbnailResize::Box => decoded
             .thumbnail_exact(target_width, target_height)
-            .into_rgba8()
-    } else if scale < 1.0 {
-        decoded
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Triangle => decoded
             .resize_exact(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Triangle,
             )
-            .into_rgba8()
-    } else {
-        decoded.into_rgba8()
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Identity => decoded.into_rgba8(),
     };
 
     if let Some(cache) = &cache {
@@ -1143,14 +1724,33 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
 /// rather than deferred.
 ///
 /// Faithful in the parts that matter to the output: decode packets until the
-/// *first* video frame comes out, scale to RGB24 at the source's own size
-/// (`size: None` at both call sites, so a native-resolution JPEG, not a
-/// thumbnail), save as JPEG. Blocking; callers hand it to `spawn_blocking`.
+/// *first* video frame comes out and save it as a JPEG at the source's own
+/// size (`size: None` at every call site, so a native-resolution JPEG, not a
+/// thumbnail). Blocking; callers hand it to `spawn_blocking`.
 pub fn create_screenshot(
     input: &Path,
     output: &Path,
     size: Option<(u32, u32)>,
 ) -> Result<(), String> {
+    let frame = first_video_frame(input)?;
+    let size = size.unwrap_or((frame.width(), frame.height()));
+    let jpeg = match encode_mjpeg(&frame, size) {
+        Some(jpeg) => jpeg,
+        None => encode_rgb_jpeg(&frame, size)?,
+    };
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+    std::fs::write(&staged, jpeg)
+        .and_then(|()| std::fs::rename(&staged, output))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        })
+}
+
+fn first_video_frame(input: &Path) -> Result<ffmpeg::frame::Video, String> {
     let mut ictx = ffmpeg::format::input(input).map_err(|e| e.to_string())?;
     let input_stream = ictx
         .streams()
@@ -1164,65 +1764,123 @@ pub fn create_screenshot(
         .video()
         .map_err(|e| e.to_string())?;
 
-    let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::RGB24,
-        size.map_or(decoder.width(), |s| s.0),
-        size.map_or(decoder.height(), |s| s.1),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
-    )
-    .map_err(|e| e.to_string())?;
-
     let mut frame = ffmpeg::frame::Video::empty();
     for (stream, packet) in ictx.packets() {
         if stream.index() != video_stream_index {
             continue;
         }
         decoder.send_packet(&packet).map_err(|e| e.to_string())?;
-        if decoder.receive_frame(&mut frame).is_err() {
-            continue;
+        if decoder.receive_frame(&mut frame).is_ok() {
+            return Ok(frame);
         }
-
-        let mut rgb_frame = ffmpeg::frame::Video::empty();
-        scaler
-            .run(&frame, &mut rgb_frame)
-            .map_err(|e| e.to_string())?;
-
-        // The scaler's rows are padded to its own stride; the image buffer is
-        // tight, so the copy is row by row.
-        let width = rgb_frame.width() as usize;
-        let height = rgb_frame.height() as usize;
-        let src_stride = rgb_frame.stride(0);
-        let dst_stride = width * 3;
-        let buffer = cap_gpui_kernels::frame::copy_rows(
-            rgb_frame.data(0),
-            dst_stride,
-            src_stride,
-            height,
-            false,
-        )
-        .ok_or("Failed to create image from frame data")?;
-
-        let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
-            .ok_or("Failed to create image from frame data")?;
-        if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
-        cap_gpui_kernels::codec::save_rgb_image(&image, &staged, image::ImageFormat::Jpeg)
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&staged);
-                e.to_string()
-            })?;
-        return std::fs::rename(&staged, output).map_err(|e| {
-            let _ = std::fs::remove_file(&staged);
-            e.to_string()
-        });
     }
 
     Err("Failed to create screenshot".to_string())
+}
+
+/// FFmpeg's MJPEG encoder takes the decoded YUV frame directly, so a 4K
+/// thumbnail skips the RGB round trip and `image`'s much slower JPEG encoder.
+/// 4:4:4 at qscale 4 keeps the unsubsampled layout of the quality-75 JPEG
+/// `image` wrote, with at least its quality.
+fn encode_mjpeg(frame: &ffmpeg::frame::Video, (width, height): (u32, u32)) -> Option<Vec<u8>> {
+    const QSCALE: i32 = 4;
+    let format = ffmpeg::format::Pixel::YUV444P;
+    let codec = ffmpeg::codec::encoder::find(ffmpeg::codec::Id::MJPEG)?;
+    let mut scaler = ffmpeg::software::scaling::context::Context::get(
+        frame.format(),
+        frame.width(),
+        frame.height(),
+        format,
+        width,
+        height,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )
+    .ok()?;
+    write_full_range(&mut scaler)?;
+    let mut yuv = ffmpeg::frame::Video::empty();
+    scaler.run(frame, &mut yuv).ok()?;
+
+    let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+        .encoder()
+        .video()
+        .ok()?;
+    encoder.set_width(width);
+    encoder.set_height(height);
+    encoder.set_format(format);
+    encoder.set_color_range(ffmpeg::color::Range::JPEG);
+    encoder.set_time_base((1, 1));
+    encoder.set_flags(ffmpeg::codec::Flags::QSCALE);
+    encoder.set_global_quality(QSCALE * ffmpeg::ffi::FF_QP2LAMBDA);
+    encoder.set_qmin(QSCALE);
+    encoder.set_qmax(QSCALE);
+    let mut encoder = encoder.open().ok()?;
+
+    yuv.set_pts(Some(0));
+    encoder.send_frame(&yuv).ok()?;
+    encoder.send_eof().ok()?;
+    let mut packet = ffmpeg::Packet::empty();
+    encoder.receive_packet(&mut packet).ok()?;
+    packet.data().map(<[u8]>::to_vec)
+}
+
+/// JPEG stores full-range YUV, while swscale writes limited range unless told
+/// otherwise; the source keeps whatever range swscale detected for it.
+fn write_full_range(scaler: &mut ffmpeg::software::scaling::context::Context) -> Option<()> {
+    let mut inv_table = std::ptr::null_mut();
+    let mut table = std::ptr::null_mut();
+    let (mut src_range, mut dst_range) = (0, 0);
+    let (mut brightness, mut contrast, mut saturation) = (0, 0, 0);
+    unsafe {
+        let context = scaler.as_mut_ptr();
+        let read = ffmpeg::ffi::sws_getColorspaceDetails(
+            context,
+            &mut inv_table,
+            &mut src_range,
+            &mut table,
+            &mut dst_range,
+            &mut brightness,
+            &mut contrast,
+            &mut saturation,
+        );
+        (read >= 0
+            && ffmpeg::ffi::sws_setColorspaceDetails(
+                context, inv_table, src_range, table, 1, brightness, contrast, saturation,
+            ) >= 0)
+            .then_some(())
+    }
+}
+
+/// The original path, for an FFmpeg build without the MJPEG encoder.
+fn encode_rgb_jpeg(
+    frame: &ffmpeg::frame::Video,
+    (width, height): (u32, u32),
+) -> Result<Vec<u8>, String> {
+    let mut rgb_frame = ffmpeg::frame::Video::empty();
+    ffmpeg::software::scaling::context::Context::get(
+        frame.format(),
+        frame.width(),
+        frame.height(),
+        ffmpeg::format::Pixel::RGB24,
+        width,
+        height,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )
+    .map_err(|e| e.to_string())?
+    .run(frame, &mut rgb_frame)
+    .map_err(|e| e.to_string())?;
+
+    // The scaler's rows are padded to its own stride; the image buffer is
+    // tight, so the copy is row by row.
+    let row_bytes = width as usize * 3;
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        rgb_frame.data(0),
+        row_bytes,
+        rgb_frame.stride(0),
+        height as usize,
+        false,
+    )
+    .ok_or("Failed to create image from frame data")?;
+    cap_gpui_kernels::codec::encode_jpeg_rgb(&buffer, width, height, 75).map_err(|e| e.to_string())
 }
 
 pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
@@ -1232,6 +1890,13 @@ pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wait long enough that the next file gets a later timestamp. Kernels
+    /// stamp files from a coarse clock (one 4 to 10 ms tick), so a shorter
+    /// sleep can leave two bundles tied and sorted in directory order.
+    fn next_timestamp() {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 
     #[test]
     fn decode_jobs_stop_once_nobody_takes_the_results() {
@@ -1293,6 +1958,163 @@ mod tests {
         bundle
     }
 
+    fn psnr(jpeg: &[u8], screen: &image::RgbImage) -> f64 {
+        let decoded = image::load_from_memory(jpeg).unwrap().into_rgb8();
+        assert_eq!(decoded.dimensions(), screen.dimensions());
+        let squared: f64 = decoded
+            .as_raw()
+            .iter()
+            .zip(screen.as_raw())
+            .map(|(&a, &b)| (f64::from(a) - f64::from(b)).powi(2))
+            .sum();
+        10.0 * (255.0_f64.powi(2) * screen.as_raw().len() as f64 / squared).log10()
+    }
+
+    /// `screen` as a recording would hand it over: limited-range BT.709 4:2:0.
+    fn recorded_frame(screen: &image::RgbImage) -> ffmpeg::frame::Video {
+        let (width, height) = screen.dimensions();
+        let mut rgb = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB24, width, height);
+        let stride = rgb.stride(0);
+        for (row, pixels) in rgb
+            .data_mut(0)
+            .chunks_mut(stride)
+            .zip(screen.as_raw().chunks(width as usize * 3))
+        {
+            row[..pixels.len()].copy_from_slice(pixels);
+        }
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            ffmpeg::format::Pixel::RGB24,
+            width,
+            height,
+            ffmpeg::format::Pixel::YUV420P,
+            width,
+            height,
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .unwrap();
+        unsafe {
+            let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+            let set = ffmpeg::ffi::sws_setColorspaceDetails(
+                scaler.as_mut_ptr(),
+                bt709,
+                1,
+                bt709,
+                0,
+                0,
+                1 << 16,
+                1 << 16,
+            );
+            assert!(set >= 0);
+        }
+        let mut frame = ffmpeg::frame::Video::empty();
+        scaler.run(&rgb, &mut frame).unwrap();
+        frame.set_color_space(ffmpeg::color::Space::BT709);
+        frame.set_color_range(ffmpeg::color::Range::MPEG);
+        frame
+    }
+
+    #[test]
+    fn screenshot_is_written_with_the_mjpeg_encoder() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("mjpeg-screenshot");
+        let source = root.join("display.mp4");
+        std::fs::write(
+            &source,
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        let output = bundle_thumbnail_path(&root);
+
+        create_screenshot(&source, &output, None).unwrap();
+
+        let frame = first_video_frame(&source).unwrap();
+        let written = std::fs::read(&output).unwrap();
+        let size = (frame.width(), frame.height());
+        assert_eq!(written, encode_mjpeg(&frame, size).unwrap());
+        let decoded = image::load_from_memory_with_format(&written, image::ImageFormat::Jpeg);
+        assert_eq!(decoded.unwrap().to_rgb8().dimensions(), size);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mjpeg_screenshot_is_at_least_as_close_to_the_screen() {
+        ffmpeg::init().unwrap();
+        let screen = image::RgbImage::from_fn(640, 360, |x, y| {
+            let text = (x / 2 + y / 3) % 7 == 0 && y % 24 < 14;
+            match (x / 160, text) {
+                (0, _) => image::Rgb([61, 106, 242]),
+                (_, true) => image::Rgb([212, 212, 212]),
+                (3, false) => image::Rgb([(x - 480) as u8, 53, (y / 2) as u8 + 60]),
+                _ => image::Rgb([30, 31, 34]),
+            }
+        });
+        let frame = recorded_frame(&screen);
+        let size = screen.dimensions();
+
+        let mjpeg = psnr(&encode_mjpeg(&frame, size).unwrap(), &screen);
+        let rgb = psnr(&encode_rgb_jpeg(&frame, size).unwrap(), &screen);
+
+        assert!(mjpeg >= rgb, "mjpeg {mjpeg:.2} dB, rgb {rgb:.2} dB");
+    }
+
+    /// Each source is a video; a `.png` beside it with the same name is the
+    /// screen it recorded, which both JPEGs are scored against.
+    #[test]
+    #[ignore = "needs CAP_SCREENSHOT_BENCH_SOURCES"]
+    fn benchmark_create_screenshot() {
+        ffmpeg::init().unwrap();
+        let sources = std::env::var("CAP_SCREENSHOT_BENCH_SOURCES").unwrap();
+        let median = |mut runs: Vec<f64>| {
+            runs.sort_by(f64::total_cmp);
+            runs[runs.len() / 2]
+        };
+        println!(
+            "source,width,height,decode_ms,rgb_ms,mjpeg_ms,rgb_bytes,mjpeg_bytes,rgb_psnr,mjpeg_psnr"
+        );
+        for source in sources.split(',').map(Path::new) {
+            let started = std::time::Instant::now();
+            let frame = first_video_frame(source).unwrap();
+            let decode = started.elapsed().as_secs_f64() * 1e3;
+            let size = (frame.width(), frame.height());
+            let rgb = || encode_rgb_jpeg(&frame, size).unwrap();
+            let mjpeg = || encode_mjpeg(&frame, size).unwrap();
+            let time = |encode: &dyn Fn() -> Vec<u8>| {
+                let started = std::time::Instant::now();
+                std::hint::black_box(encode());
+                started.elapsed().as_secs_f64() * 1e3
+            };
+            let (mut rgb_runs, mut mjpeg_runs) = (Vec::new(), Vec::new());
+            for run in 0..15 {
+                if run % 2 == 0 {
+                    rgb_runs.push(time(&rgb));
+                    mjpeg_runs.push(time(&mjpeg));
+                } else {
+                    mjpeg_runs.push(time(&mjpeg));
+                    rgb_runs.push(time(&rgb));
+                }
+            }
+            let (rgb, mjpeg) = (rgb(), mjpeg());
+            let screen = image::open(source.with_extension("png")).map(|png| png.into_rgb8());
+            let score = |jpeg: &[u8]| {
+                screen
+                    .as_ref()
+                    .map_or(String::new(), |screen| format!("{:.2}", psnr(jpeg, screen)))
+            };
+            println!(
+                "{},{},{},{decode:.1},{:.1},{:.1},{},{},{},{}",
+                source.display(),
+                size.0,
+                size.1,
+                median(rgb_runs),
+                median(mjpeg_runs),
+                rgb.len(),
+                mjpeg.len(),
+                score(&rgb),
+                score(&mjpeg),
+            );
+        }
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "cap-gpui-library-{tag}-{}-{:?}",
@@ -1327,7 +2149,7 @@ mod tests {
         // Twelve recordings, oldest first, so the newest nine are 3..=11.
         for i in 0..12 {
             write_studio_bundle(&recordings, &format!("rec-{i:02}"), 1);
-            std::thread::sleep(std::time::Duration::from_millis(6));
+            next_timestamp();
         }
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1356,9 +2178,9 @@ mod tests {
         std::fs::create_dir_all(&screenshots).unwrap();
 
         write_studio_bundle(&recordings, "old-recording", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_screenshot_bundle(&screenshots, "middle-screenshot");
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&recordings, "new-recording", 3);
 
         let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
@@ -1455,15 +2277,15 @@ mod tests {
         std::fs::create_dir_all(&active).unwrap();
         std::fs::create_dir_all(&archived).unwrap();
         write_studio_bundle(&active, "old-studio", 1);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_studio_bundle(&archived, "new-studio", 3);
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &active,
             "instant",
             r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         std::fs::create_dir_all(archived.join("missing-meta")).unwrap();
         write_bundle(&active, "corrupt-meta", "{ not json ");
         std::fs::write(archived.join("loose.mp4"), b"").unwrap();
@@ -1479,6 +2301,130 @@ mod tests {
         assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_screenshots_match_the_full_listing_and_parse_lazily() {
+        fn eager_listing(dir: &Path) -> Vec<ScreenshotItem> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let bundle = entry.path();
+                if !bundle.is_dir()
+                    || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap")
+                {
+                    continue;
+                }
+                let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
+                    continue;
+                };
+                let Some(png) = std::fs::read_dir(&bundle)
+                    .unwrap()
+                    .flatten()
+                    .find_map(|entry| {
+                        let path = entry.path();
+                        (path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+                            .then_some(path)
+                    })
+                else {
+                    continue;
+                };
+                out.push(ScreenshotItem {
+                    path: png.clone(),
+                    pretty_name: meta.pretty_name,
+                    sort_time_millis: media_sort_time_millis(&png),
+                    thumbnail_version: source_version(&png),
+                    thumbnail: Some(png),
+                    bundle,
+                });
+            }
+            out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+            out
+        }
+
+        fn write_shot(dir: &Path, name: &str) -> PathBuf {
+            write_bundle(
+                dir,
+                name,
+                &format!(r#"{{"pretty_name":"{name}","sharing":null,"fps":0}}"#),
+            )
+        }
+
+        let root = temp_dir("bounded-screenshots");
+        let legacy = write_shot(&root, "legacy");
+        std::fs::write(legacy.join("shot.png"), b"png").unwrap();
+        write_shot(&root, "no-png");
+        let not_a_bundle = root.join("not-a-bundle");
+        std::fs::create_dir_all(&not_a_bundle).unwrap();
+        std::fs::write(not_a_bundle.join("original.png"), b"png").unwrap();
+        std::fs::write(root.join("loose.cap"), b"").unwrap();
+        for i in 0..30 {
+            next_timestamp();
+            let bundle = write_shot(&root, &format!("shot-{:02}", (i * 7) % 30));
+            std::fs::write(bundle.join("original.png"), b"png").unwrap();
+        }
+        next_timestamp();
+        let tie_a = write_shot(&root, "tie-a");
+        std::fs::write(tie_a.join("original.png"), b"png").unwrap();
+        let tie_b = write_shot(&root, "tie-b");
+        std::fs::hard_link(tie_a.join("original.png"), tie_b.join("original.png")).unwrap();
+        next_timestamp();
+        let corrupt = write_bundle(&root, "corrupt", "{ not json ");
+        std::fs::write(corrupt.join("original.png"), b"png").unwrap();
+
+        let full = list_screenshots_in(&root);
+        assert_eq!(full, eager_listing(&root));
+        assert_eq!(full.len(), 33);
+        assert!(full.iter().all(|item| item.bundle != corrupt));
+        let legacy_item = full.iter().find(|item| item.bundle == legacy).unwrap();
+        assert_eq!(legacy_item.path, legacy.join("shot.png"));
+
+        let read_dir_order: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        let read_dir_position = |bundle: &Path| {
+            read_dir_order
+                .iter()
+                .position(|path| path == bundle)
+                .unwrap()
+        };
+        let tie_time = |bundle: &Path| {
+            full.iter()
+                .find(|item| item.bundle == bundle)
+                .unwrap()
+                .sort_time_millis
+        };
+        assert_eq!(tie_time(&tie_a), tie_time(&tie_b));
+        assert!(
+            full.windows(2).all(|pair| {
+                pair[0].sort_time_millis > pair[1].sort_time_millis
+                    || (pair[0].sort_time_millis == pair[1].sort_time_millis
+                        && read_dir_position(&pair[0].bundle) < read_dir_position(&pair[1].bundle))
+            }),
+            "newest first, equal timestamps keep directory order"
+        );
+
+        for limit in [0, 1, 9, 20, 100] {
+            assert_eq!(
+                screenshot_items_in(&root).take(limit).collect::<Vec<_>>(),
+                full[..limit.min(full.len())],
+                "limit {limit}"
+            );
+        }
+
+        let mut lazy = screenshot_items_in(&root);
+        let head: Vec<_> = lazy.by_ref().take(RECENT_MEDIA_LIMIT).collect();
+        assert_eq!(head, full[..RECENT_MEDIA_LIMIT]);
+        for item in &full[RECENT_MEDIA_LIMIT..] {
+            std::fs::remove_file(item.bundle.join("recording-meta.json")).unwrap();
+        }
+        assert!(
+            lazy.next().is_none(),
+            "metas past the consumed prefix are read on demand"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1558,6 +2504,232 @@ mod tests {
         );
     }
 
+    /// Same-process old vs new benchmark for the startup recovery scan.
+    ///
+    /// Old is the pre-change implementation: `list_recordings_in` (a full
+    /// `RecordingItem` per recording) followed by the recovery filter. New is
+    /// `find_incomplete_recordings_in`, which filters on parsed metadata first.
+    ///
+    /// Set `CAP_GPUI_RECOVERY_BENCH_DIR` to measure a real library. Without it
+    /// the benchmark generates 600 complete Studio + 300 complete Instant
+    /// recordings, with thumbnails and saved upload state where real ones have
+    /// them, plus four recoverable incomplete recordings, one pre-cutoff
+    /// recording, one corrupt meta and one missing meta: 907 directories,
+    /// 905 parsed recordings. Run with:
+    ///
+    /// `cargo test -p cap-desktop-gpui recovery_scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual filesystem benchmark; set CAP_GPUI_RECOVERY_BENCH_DIR for a real library"]
+    fn recovery_scan_benchmark() {
+        fn write_complete_studio(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-studio-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            let segment_count = if index % 5 == 0 { 3 } else { 1 };
+            let segments: Vec<String> = (0..segment_count)
+                .map(|segment| {
+                    format!(
+                        r#"{{"display":{{"path":"content/segments/segment-{segment}/display.mp4","fps":30}}}}"#
+                    )
+                })
+                .collect();
+            let sharing = if index % 4 == 0 {
+                r#"{"id":"share","link":"https://cap.so/s/share"}"#
+            } else {
+                "null"
+            };
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Studio {index}","sharing":{sharing},"segments":[{}]}}"#,
+                    segments.join(",")
+                ),
+            )
+            .unwrap();
+            if index % 3 == 0 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(
+                    screenshots.join(if index % 6 == 0 {
+                        "preview.jpg"
+                    } else {
+                        "display.jpg"
+                    }),
+                    b"thumbnail",
+                )
+                .unwrap();
+            }
+        }
+
+        fn write_complete_instant(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-instant-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Instant {index}","sharing":null,"fps":30,"sample_rate":48000}}"#
+                ),
+            )
+            .unwrap();
+            if index % 2 == 0 {
+                let state = serde_json::json!({
+                    "version": 1,
+                    "video_id": format!("bench-{index}"),
+                    "server_url": "https://cap.example.invalid",
+                    "owner_id": null,
+                    "kind": "Mp4",
+                    "requested_audio": null,
+                    "preserve_local": true,
+                    "phase": "Verified",
+                    "attempt_count": 0,
+                    "last_error": null,
+                    "next_retry_at": null,
+                    "verification": null,
+                    "receipt": null,
+                });
+                std::fs::write(
+                    bundle.join("instant-upload.json"),
+                    serde_json::to_vec(&state).unwrap(),
+                )
+                .unwrap();
+            }
+            if index % 3 == 1 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(screenshots.join("display.jpg"), b"thumbnail").unwrap();
+            }
+        }
+
+        let from_env = std::env::var("CAP_GPUI_RECOVERY_BENCH_DIR").ok();
+        let generated = from_env.is_none().then(|| temp_dir("recovery-bench"));
+        let dirs = match (&from_env, &generated) {
+            (Some(dir), _) => vec![PathBuf::from(dir)],
+            (None, Some(root)) => {
+                let recordings = root.join("recordings");
+                std::fs::create_dir_all(&recordings).unwrap();
+                for index in 0..600 {
+                    write_complete_studio(&recordings, index);
+                }
+                for index in 0..300 {
+                    write_complete_instant(&recordings, index);
+                }
+                for index in 0..2 {
+                    write_incomplete_bundle(
+                        &recordings,
+                        &format!("incomplete-studio-{index}"),
+                        &format!("Cap 2026-02-0{index} at 10.00.00"),
+                        "InProgress",
+                        true,
+                    );
+                }
+                write_incomplete_bundle(
+                    &recordings,
+                    "remux-studio",
+                    "Cap 2026-02-03 at 10.00.00",
+                    "NeedsRemux",
+                    true,
+                );
+                write_incomplete_instant_bundle(
+                    &recordings,
+                    "incomplete-instant",
+                    "Cap 2026-02-04 at 10.00.00",
+                    false,
+                );
+                write_incomplete_bundle(
+                    &recordings,
+                    "pre-cutoff",
+                    "Cap 2025-12-31 at 10.00.00",
+                    "InProgress",
+                    true,
+                );
+                write_bundle(&recordings, "corrupt-meta", "{ not json ");
+                std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+                assert_eq!(
+                    std::fs::read_dir(&recordings).unwrap().count(),
+                    907,
+                    "the generated fixture must keep its documented shape"
+                );
+                vec![recordings]
+            }
+            (None, None) => unreachable!(),
+        };
+
+        let expected = find_incomplete_recordings_in(&dirs, None);
+        if from_env.is_none() {
+            assert_eq!(
+                expected.len(),
+                4,
+                "the generated fixture has four recoverable recordings"
+            );
+        }
+        assert_eq!(
+            find_incomplete_recordings_by_full_listing(&dirs, None),
+            expected,
+            "both implementations must agree before timing"
+        );
+
+        let old = || find_incomplete_recordings_by_full_listing(&dirs, None);
+        let new = || find_incomplete_recordings_in(&dirs, None);
+        let time = |scan: &dyn Fn() -> Vec<IncompleteRecordingItem>| {
+            let started = std::time::Instant::now();
+            let items = std::hint::black_box(scan());
+            let millis = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(items, expected);
+            millis
+        };
+
+        for _ in 0..3 {
+            std::hint::black_box(old());
+            std::hint::black_box(new());
+        }
+        let mut old_samples = Vec::new();
+        let mut new_samples = Vec::new();
+        for sample in 0..15 {
+            // Alternate the order so neither side systematically warms the
+            // directory and metadata caches for the other.
+            let (old_ms, new_ms) = if sample % 2 == 0 {
+                (time(&old), time(&new))
+            } else {
+                let new_ms = time(&new);
+                let old_ms = time(&old);
+                (old_ms, new_ms)
+            };
+            old_samples.push(old_ms);
+            new_samples.push(new_ms);
+        }
+        old_samples.sort_by(f64::total_cmp);
+        new_samples.sort_by(f64::total_cmp);
+        let median = |samples: &[f64]| samples[samples.len() / 2];
+
+        let recordings = scanned_recordings_in(&dirs).count();
+        let complete = scanned_recordings_in(&dirs)
+            .filter(|recording| recording.status() == RecordingStatus::Complete)
+            .count();
+        if from_env.is_none() {
+            assert_eq!(recordings, 905, "the generated fixture parses 905 bundles");
+            assert_eq!(
+                complete, 900,
+                "the generated fixture has 900 complete bundles"
+            );
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "fixture": if from_env.is_some() { "env" } else { "generated" },
+                "recordings": recordings,
+                "complete_recordings": complete,
+                "recovered_recordings": expected.len(),
+                "samples": old_samples.len(),
+                "old_median_ms": median(&old_samples),
+                "new_median_ms": median(&new_samples),
+                "speedup": median(&old_samples) / median(&new_samples),
+            })
+        );
+
+        if let Some(root) = generated {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
     /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the
     /// status for each shape of meta the two recorders write.
     #[test]
@@ -1575,13 +2747,13 @@ mod tests {
                 r#"{{"pretty_name":"Studio multi","sharing":{{"id":"abc","link":"https://cap.so/s/abc"}},"segments":[{segment},{segment},{segment}]}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-single",
             r#"{"pretty_name":"Studio single","sharing":null,"display":{"path":"content/display.mp4","fps":30}}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-failed",
@@ -1589,7 +2761,7 @@ mod tests {
                 r#"{{"pretty_name":"Studio failed","sharing":null,"segments":[{segment}],"status":{{"status":"Failed","error":"encoder died"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "studio-remux",
@@ -1597,19 +2769,39 @@ mod tests {
                 r#"{{"pretty_name":"Studio remux","sharing":null,"segments":[{segment}],"status":{{"status":"NeedsRemux"}}}}"#
             ),
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
-        write_bundle(
+        next_timestamp();
+        let instant_complete = write_bundle(
             &recordings,
             "instant-complete",
             r#"{"pretty_name":"Instant complete","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::fs::write(
+            instant_complete.join("instant-upload.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "video_id": "listing-instant",
+                "server_url": "https://cap.example.invalid",
+                "owner_id": null,
+                "kind": "Mp4",
+                "requested_audio": null,
+                "preserve_local": true,
+                "phase": "Verified",
+                "attempt_count": 0,
+                "last_error": null,
+                "next_retry_at": null,
+                "verification": null,
+                "receipt": null,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-progress",
             r#"{"pretty_name":"Instant in progress","sharing":null,"recording":true}"#,
         );
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        next_timestamp();
         write_bundle(
             &recordings,
             "instant-failed",
@@ -1653,7 +2845,7 @@ mod tests {
         );
         assert_eq!(multi.sharing.as_deref(), Some("https://cap.so/s/abc"));
         assert!(
-            multi.opens_editor(),
+            multi.opens_editor(None),
             "studio + Complete is the clickable row"
         );
         assert!(!multi.is_active());
@@ -1672,11 +2864,15 @@ mod tests {
             }
         );
         assert_eq!(failed.status.error(), Some("encoder died"));
-        assert!(!failed.opens_editor(), "a failed studio row is inert");
+        assert!(
+            failed.opens_editor(None),
+            "a failed studio row opens the editor, which recovers it first"
+        );
         assert!(!failed.is_active(), "Failed does not keep the poll running");
 
         let remux = by_name("Studio remux");
         assert_eq!(remux.status, RecordingStatus::NeedsRemux);
+        assert!(remux.opens_editor(None));
         assert!(
             !remux.is_active(),
             "deferred finalization does not keep polling"
@@ -1687,7 +2883,11 @@ mod tests {
         assert_eq!(complete.clip_count, 1, "an instant recording is one clip");
         assert_eq!(complete.status, RecordingStatus::Complete);
         assert!(
-            !complete.opens_editor(),
+            complete.upload.is_some(),
+            "the listing still reads saved instant upload state"
+        );
+        assert!(
+            !complete.opens_editor(None),
             "instant rows never open the editor, complete or not"
         );
 
@@ -1742,6 +2942,292 @@ mod tests {
             .unwrap();
         }
         bundle
+    }
+
+    fn write_incomplete_instant_bundle(
+        recordings: &Path,
+        name: &str,
+        pretty_name: &str,
+        recording: bool,
+    ) -> PathBuf {
+        let bundle = write_bundle(
+            recordings,
+            name,
+            &format!(r#"{{"pretty_name":"{pretty_name}","sharing":null,"recording":{recording}}}"#),
+        );
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        std::fs::write(display.join("segment_001.m4s"), complete_m4s_fragment()).unwrap();
+        bundle
+    }
+
+    /// The recovery scan before the lean path: list every recording (building
+    /// every `RecordingItem`), then filter. This is the reference implementation
+    /// production must agree with, and the "old" side of the benchmark.
+    fn find_incomplete_recordings_by_full_listing(
+        dirs: &[PathBuf],
+        active_recording: Option<&Path>,
+    ) -> Vec<IncompleteRecordingItem> {
+        list_recordings_in(dirs)
+            .into_iter()
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+                ) && active_recording != Some(item.path.as_path())
+                    && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            })
+            .filter_map(|item| {
+                if item.mode == RecordingMode::Instant {
+                    let display = item.path.join("content/display");
+                    if !display.join("init.mp4").is_file() {
+                        return None;
+                    }
+                    let segment_count = std::fs::read_dir(display)
+                        .ok()?
+                        .filter_map(Result::ok)
+                        .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
+                        .count();
+                    return (segment_count > 0).then_some(IncompleteRecordingItem {
+                        project_path: item.path,
+                        pretty_name: item.pretty_name,
+                        segment_count,
+                        estimated_duration_secs: 0.0,
+                    });
+                }
+                let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+                (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
+                    project_path: item.path,
+                    pretty_name: item.pretty_name,
+                    segment_count: incomplete.recoverable_segments.len(),
+                    estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
+                })
+            })
+            .collect()
+    }
+
+    fn recording_item_builds() -> usize {
+        RECORDING_ITEM_BUILDS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn lean_recovery_matches_the_full_listing_on_a_mixed_library() {
+        let root = temp_dir("recovery-equivalence");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // Created oldest first; the recovery scan's order is creation order
+        // reversed, so the expected output below is the reverse of the
+        // recoverable fixtures' creation order.
+        let pre_cutoff = write_incomplete_bundle(
+            &recordings,
+            "pre-cutoff",
+            "Cap 2025-12-31 at 23.59.59",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-02 at 10.00.00",
+            "Complete",
+            true,
+        );
+        next_timestamp();
+        write_bundle(&recordings, "corrupt-meta", "{ not json ");
+        next_timestamp();
+        std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+        next_timestamp();
+        let active = write_incomplete_bundle(
+            &recordings,
+            "active",
+            "Cap 2026-01-05 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-01 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        next_timestamp();
+        let remux = write_incomplete_bundle(
+            &recordings,
+            "remux",
+            "Cap 2026-01-04 at 10.00.00",
+            "NeedsRemux",
+            true,
+        );
+        next_timestamp();
+        let instant = write_incomplete_instant_bundle(
+            &recordings,
+            "instant-incomplete",
+            "Cap 2026-01-03 at 10.00.00",
+            false,
+        );
+        next_timestamp();
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-06 at 10.00.00",
+            false,
+        );
+        // Complete status with fragments still on disk: recovery must trust
+        // the metadata and leave them alone.
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-06 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        next_timestamp();
+        let unrecoverable = write_incomplete_bundle(
+            &recordings,
+            "unrecoverable",
+            "Cap 2026-01-07 at 10.00.00",
+            "InProgress",
+            false,
+        );
+
+        let dirs = std::slice::from_ref(&recordings);
+        let found = find_incomplete_recordings_in(dirs, Some(active.as_path()));
+        let reference = find_incomplete_recordings_by_full_listing(dirs, Some(active.as_path()));
+        assert_eq!(
+            found, reference,
+            "the lean scan must stay byte-for-byte equivalent to listing everything"
+        );
+
+        let names: Vec<&str> = found.iter().map(|item| item.pretty_name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Cap 2026-01-03 at 10.00.00",
+                "Cap 2026-01-04 at 10.00.00",
+                "Cap 2026-01-01 at 10.00.00",
+            ],
+            "newest first, with only the eligible recoverable recordings"
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|item| (item.project_path.clone(), item.segment_count))
+                .collect::<Vec<_>>(),
+            [
+                (instant.clone(), 1),
+                (remux.clone(), 1),
+                (in_progress.clone(), 1),
+            ]
+        );
+        assert!(
+            found
+                .iter()
+                .find(|item| item.project_path == instant)
+                .is_some_and(|item| item.estimated_duration_secs == 0.0),
+            "an Instant recording reports its measured segment count and zero duration"
+        );
+        for excluded in [
+            &pre_cutoff,
+            &complete_studio,
+            &complete_instant,
+            &active,
+            &unrecoverable,
+        ] {
+            assert!(
+                !found.iter().any(|item| &item.project_path == excluded),
+                "{} must not be recoverable",
+                excluded.display()
+            );
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_cutoff_is_strictly_after_2025() {
+        assert!(!is_recording_after_recovery_cutoff(
+            "Cap 2025-12-31 at 23.59.59",
+            0.0
+        ));
+        assert!(is_recording_after_recovery_cutoff(
+            "Cap 2026-01-01 at 00.00.00",
+            0.0
+        ));
+        assert!(
+            !is_recording_after_recovery_cutoff("Custom instant recording", 0.0),
+            "a name without a date falls back to the sort time"
+        );
+    }
+
+    #[test]
+    fn recovery_skips_full_item_work_and_inspection_for_complete_recordings() {
+        let root = temp_dir("recovery-lean");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // The complete Studio bundle contains exactly the fragments that make
+        // `inspect_recording` return a recoverable recording. The complete
+        // Instant bundle contains the init + m4s fragments the Instant path
+        // counts. Recovery must filter both out on metadata alone.
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-10 at 10.00.00",
+            "Complete",
+            true,
+        );
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-11 at 10.00.00",
+            false,
+        );
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-11 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-12 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        let remux_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "remux-instant",
+            "Cap 2026-01-13 at 10.00.00",
+            false,
+        );
+
+        let builds_before = recording_item_builds();
+        let found = find_incomplete_recordings_in(std::slice::from_ref(&recordings), None);
+        assert_eq!(
+            recording_item_builds(),
+            builds_before,
+            "recovery must not construct a full RecordingItem, even for complete recordings"
+        );
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|item| item.project_path == in_progress));
+        assert!(found.iter().any(|item| item.project_path == remux_instant));
+
+        // Behavior preservation: `inspect_recording` creates `.recovery.lock`
+        // in the bundle it examines (and leaves it there after unlocking), so
+        // a complete recording without one was never inspected.
+        assert!(in_progress.join(".recovery.lock").is_file());
+        assert!(!complete_studio.join(".recovery.lock").exists());
+        assert!(!complete_instant.join(".recovery.lock").exists());
+        assert!(
+            !remux_instant.join(".recovery.lock").exists(),
+            "instant recovery reads fragments directly and never calls inspect_recording"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1808,6 +3294,154 @@ mod tests {
             corrupt_before
         );
         assert!(active.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_scan_offers_failed_studio_recordings_that_kept_their_media() {
+        let _ = ffmpeg::init();
+        let root = temp_dir("recovery-failed-scan");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let failed_meta = r#"{"pretty_name":"Cap 2026-11-03 at 15.51.00","sharing":null,"segments":[],"status":{"status":"Failed","error":"stop_pipeline: display: Task capture-video failed: Capture setup cancelled"}}"#;
+        let failed = write_incomplete_bundle(
+            &recordings,
+            "failed",
+            "Cap 2026-11-03 at 15.51.00",
+            "InProgress",
+            true,
+        );
+        std::fs::write(failed.join("recording-meta.json"), failed_meta).unwrap();
+        let empty = write_incomplete_bundle(
+            &recordings,
+            "failed-empty",
+            "Cap 2026-11-03 at 15.52.00",
+            "InProgress",
+            false,
+        );
+        std::fs::write(empty.join("recording-meta.json"), failed_meta).unwrap();
+
+        let found = find_incomplete_recordings_in(std::slice::from_ref(&recordings), None);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].project_path, failed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_full_disk_inside_a_track_rebuild_gets_the_free_space_advice() {
+        use cap_enc_ffmpeg::remux::RemuxError;
+        use cap_recording::recovery::RecoveryError;
+        let path = Path::new("/recordings/Cap.cap");
+        let full = || std::io::Error::from(std::io::ErrorKind::StorageFull);
+        for error in [
+            RecoveryError::Io(full()),
+            RecoveryError::VideoConcat(RemuxError::Io(full())),
+            RecoveryError::AudioConcat(RemuxError::Io(full())),
+            RecoveryError::MediaMerge(RemuxError::Io(full())),
+        ] {
+            let message = recovery_failure_message(&error, path);
+            assert!(
+                message.starts_with("There is not enough free space"),
+                "{message}"
+            );
+        }
+        let message =
+            recovery_failure_message(&RecoveryError::VideoConcat(RemuxError::NoFragments), path);
+        assert!(message.starts_with("Cap could not rebuild"), "{message}");
+    }
+
+    #[test]
+    fn opening_an_interrupted_recording_recovers_it_or_explains_what_is_kept() {
+        let _ = ffmpeg::init();
+        let root = temp_dir("recovery-for-editing");
+        let recordings = root.join("recordings");
+        let outside = root.join("elsewhere");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dirs = std::slice::from_ref(&recordings);
+
+        let complete = write_incomplete_bundle(
+            &recordings,
+            "complete",
+            "Cap 2026-11-03 at 10.00.00",
+            "Complete",
+            true,
+        );
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &complete, None),
+            Ok(false)
+        );
+
+        let live = write_incomplete_bundle(
+            &recordings,
+            "live",
+            "Cap 2026-11-03 at 10.01.00",
+            "InProgress",
+            true,
+        );
+        let live_before = std::fs::read(live.join("recording-meta.json")).unwrap();
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &live, Some(&live)),
+            Ok(false)
+        );
+        assert_eq!(
+            std::fs::read(live.join("recording-meta.json")).unwrap(),
+            live_before
+        );
+
+        let foreign = write_incomplete_bundle(
+            &outside,
+            "foreign",
+            "Cap 2026-11-03 at 10.02.00",
+            "InProgress",
+            true,
+        );
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &foreign, None),
+            Ok(false)
+        );
+
+        let empty = write_incomplete_bundle(
+            &recordings,
+            "empty",
+            "Cap 2026-11-03 at 10.03.00",
+            "InProgress",
+            false,
+        );
+        let error = recover_interrupted_for_editing_in(dirs, &empty, None).unwrap_err();
+        assert!(error.starts_with("No video was saved"), "{error}");
+        assert!(error.contains(&empty.display().to_string()), "{error}");
+
+        let damaged = write_incomplete_bundle(
+            &recordings,
+            "damaged",
+            "Cap 2026-11-03 at 10.04.00",
+            "InProgress",
+            true,
+        );
+        let fragment = damaged.join("content/segments/segment-0/display/segment_001.m4s");
+        let fragment_before = std::fs::read(&fragment).unwrap();
+        let error = recover_interrupted_for_editing_in(dirs, &damaged, None).unwrap_err();
+        assert!(error.contains("Nothing was deleted"), "{error}");
+        assert_eq!(std::fs::read(&fragment).unwrap(), fragment_before);
+
+        #[cfg(unix)]
+        {
+            let linked = root.join("linked-recordings");
+            std::os::unix::fs::symlink(&recordings, &linked).unwrap();
+            let error = recover_interrupted_for_editing_in(
+                std::slice::from_ref(&linked),
+                &damaged.canonicalize().unwrap(),
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("Nothing was deleted"),
+                "an editor path in canonical form still reaches recovery: {error}"
+            );
+        }
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2045,6 +3679,365 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The folder of a recording still being captured or finalized is not
+    /// deletable through any path that leads to it until the recording lets
+    /// go. The recording registers the folder before creating it, as
+    /// `start_attempt_with_upload` does.
+    #[test]
+    fn delete_refuses_the_recording_in_progress() {
+        let root = temp_dir("delete-active");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut dirs = vec![recordings.clone()];
+        let live = recordings.join("live.cap");
+        let other = write_studio_bundle(&recordings, "other", 1);
+
+        let recording = RecordingInProgress::begin(&live);
+        let media = live.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(media.parent().unwrap()).unwrap();
+        std::fs::write(&media, b"live").unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![live.clone(), live.canonicalize().unwrap()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("live.cap"));
+            dirs.push(alias);
+        }
+        assert!(is_recording_in_progress(&live));
+        for spelling in &spellings {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, spelling),
+                Err(tr::dialog::delete_recording::recording_active().to_string()),
+                "{}",
+                spelling.display()
+            );
+            assert!(media.is_file(), "{}", spelling.display());
+        }
+        assert_eq!(delete_recording_directory_in(&dirs, &other), Ok(()));
+        assert!(!other.exists(), "other recordings stay deletable");
+
+        drop(recording);
+        assert!(!is_recording_in_progress(&live));
+        assert_eq!(delete_recording_directory_in(&dirs, &live), Ok(()));
+        assert!(!live.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A studio bundle with the files a finished recording has around its
+    /// video, and their paths relative to the bundle.
+    fn write_recorded_bundle(dir: &Path, name: &str) -> (PathBuf, Vec<PathBuf>) {
+        let bundle = write_studio_bundle(dir, name, 1);
+        for file in [
+            "content/cursors/cursor_0.png",
+            "content/segments/segment-0/cursor.json",
+            "content/segments/segment-0/display.mp4",
+            "content/segments/segment-0/keyboard.bin",
+            "project-config.json",
+            "screenshots/display.jpg",
+        ] {
+            let path = bundle.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"recorded").unwrap();
+        }
+        let files = files_under(&bundle);
+        assert_eq!(files.len(), 7);
+        (bundle, files)
+    }
+
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        fn collect(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect(&path, root, files);
+                } else {
+                    files.push(path.strip_prefix(root).unwrap().to_path_buf());
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(dir, dir, &mut files);
+        files.sort();
+        files
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A recording an editor window has open is not deletable through any
+    /// path that leads to it, and none of its files are touched, until the
+    /// window lets go. The editor registers the canonical path it opened.
+    #[test]
+    fn delete_refuses_a_recording_open_in_the_editor() {
+        let root = temp_dir("delete-open-in-editor");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut dirs = vec![recordings.clone()];
+        let (open, files) = write_recorded_bundle(&recordings, "open");
+        let (other, _) = write_recorded_bundle(&recordings, "other");
+
+        let editor = ProjectOpenInEditor::begin(&open.canonicalize().unwrap()).unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![open.clone(), open.canonicalize().unwrap()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("open.cap"));
+            dirs.push(alias);
+        }
+        for spelling in &spellings {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, spelling),
+                Err(tr::dialog::delete_recording::open_in_editor().to_string()),
+                "{}",
+                spelling.display()
+            );
+            assert_eq!(files_under(&open), files, "{}", spelling.display());
+        }
+        assert_eq!(delete_recording_directory_in(&dirs, &other), Ok(()));
+        assert!(!other.exists(), "other recordings stay deletable");
+
+        drop(editor);
+        assert_eq!(delete_recording_directory_in(&dirs, &open), Ok(()));
+        assert!(!open.exists());
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// While a delete has a recording reserved, which covers its wait on a
+    /// thumbnail still being written, an editor cannot open that recording
+    /// under any path that leads to it. Other recordings still open.
+    #[test]
+    fn an_editor_cannot_open_a_recording_that_is_being_deleted() {
+        let root = temp_dir("delete-reserved");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let (doomed, _) = write_recorded_bundle(&recordings, "doomed");
+        let (other, _) = write_recorded_bundle(&recordings, "other");
+        let key = doomed.canonicalize().unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![doomed.clone(), key.clone()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("doomed.cap"));
+        }
+        for spelling in &spellings {
+            let deleting = ProjectBeingDeleted::begin(spelling).unwrap();
+            assert!(
+                ProjectOpenInEditor::begin(&key).is_none(),
+                "{}",
+                spelling.display()
+            );
+            assert!(ProjectOpenInEditor::begin(&other.canonicalize().unwrap()).is_some());
+            drop(deleting);
+            assert!(
+                ProjectOpenInEditor::begin(&key).is_some(),
+                "{}",
+                spelling.display()
+            );
+        }
+
+        let editor = ProjectOpenInEditor::begin(&key).unwrap();
+        assert_eq!(
+            ProjectBeingDeleted::begin(&doomed).err(),
+            Some(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        drop(editor);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A delete moves the recording into a holding folder beside it before
+    /// removing it. Nothing of that is left behind, and what an earlier delete
+    /// staged there and could not remove goes with it.
+    #[test]
+    fn delete_leaves_no_holding_folder_and_sweeps_an_earlier_one() {
+        let root = temp_dir("delete-holding");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (first, _) = write_recorded_bundle(&recordings, "first");
+        let (second, _) = write_recorded_bundle(&recordings, "second");
+
+        assert_eq!(delete_recording_directory_in(&dirs, &first), Ok(()));
+        assert_eq!(names_in(&recordings), ["second.cap"]);
+
+        let stale = recordings
+            .join(DELETING_DIR)
+            .join("4242-1700000000000000000-7/content");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("display.mp4"), b"left behind").unwrap();
+        assert_eq!(delete_recording_directory_in(&dirs, &second), Ok(()));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A folder that already has the holding folder's name is not Cap's to
+    /// empty. The delete goes through it and removes only what it staged.
+    #[test]
+    fn delete_keeps_what_it_did_not_stage_in_the_holding_folder() {
+        let root = temp_dir("delete-holding-unowned");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, _) = write_recorded_bundle(&recordings, "doomed");
+        let holding = recordings.join(DELETING_DIR);
+        for kept in [
+            "notes/todo.txt",
+            "1-2-3-4/display.mp4",
+            "12-ab-3/display.mp4",
+        ] {
+            let path = holding.join(kept);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"not staged by a delete").unwrap();
+        }
+        std::fs::write(holding.join("1-2-3"), b"a file, not a staged folder").unwrap();
+        let kept = files_under(&holding);
+
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        assert_eq!(names_in(&recordings), [DELETING_DIR]);
+        assert_eq!(files_under(&holding), kept);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The holding folder is created by the delete itself. Something else
+    /// under its name, here a link out of the library, is neither followed
+    /// nor removed, and the recording stays whole.
+    #[cfg(unix)]
+    #[test]
+    fn delete_refuses_a_holding_folder_that_is_a_link() {
+        let root = temp_dir("delete-holding-link");
+        let recordings = root.join("recordings");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, files) = write_recorded_bundle(&recordings, "linked");
+        std::os::unix::fs::symlink(&outside, recordings.join(DELETING_DIR)).unwrap();
+
+        let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+        assert!(error.starts_with("Failed to delete recording"), "{error}");
+        assert_eq!(files_under(&bundle), files);
+        assert_eq!(names_in(&outside), ["keep.txt"]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Windows will not delete a file or folder another handle has open
+    /// without sharing deletion, which is how a decoder or a media player
+    /// opens a file and how a terminal holds its current directory. Removing
+    /// the folder in place stopped there with the files before it already
+    /// gone: the recording was left with its video and metadata but no cursor
+    /// data.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_nothing_when_something_in_the_recording_is_held_open() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ_WRITE: u32 = 0x3;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        for held in ["content/segments/segment-0/display.mp4", "content/segments"] {
+            let root = temp_dir("delete-held-open");
+            let recordings = root.join("recordings");
+            std::fs::create_dir_all(&recordings).unwrap();
+            let dirs = vec![recordings.clone()];
+            let (bundle, files) = write_recorded_bundle(&recordings, "open");
+
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(bundle.join(held))
+                .unwrap();
+            let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+            assert!(error.contains("os error 32"), "{held}: {error}");
+            assert_eq!(files_under(&bundle), files, "{held}: {error}");
+            assert_eq!(names_in(&recordings), ["open.cap"], "{held}");
+
+            drop(handle);
+            assert_eq!(
+                delete_recording_directory_in(&dirs, &bundle),
+                Ok(()),
+                "{held}"
+            );
+            assert_eq!(names_in(&recordings), Vec::<String>::new(), "{held}");
+
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// A handle that shares deletion (an Explorer window on a folder inside,
+    /// a file this app opened) stops Windows moving the folder but not
+    /// deleting it. Such a recording was deletable before and still is.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_a_recording_with_handles_that_share_deletion() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let root = temp_dir("delete-shared-handles");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, _) = write_recorded_bundle(&recordings, "shared");
+
+        let file =
+            std::fs::File::open(bundle.join("content/segments/segment-0/display.mp4")).unwrap();
+        let folder = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(bundle.join("content"))
+            .unwrap();
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        drop((file, folder));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A recording started through a symlinked library folder is recognised
+    /// when the library lists it under the real folder, where the row decides
+    /// whether to offer Delete without resolving anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_recording_started_through_a_symlink_is_in_progress_under_its_real_path() {
+        let root = temp_dir("delete-active-alias");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+
+        let recording = RecordingInProgress::begin(&alias.join("live.cap"));
+        let real = recordings.canonicalize().unwrap().join("live.cap");
+        assert!(is_recording_in_progress(&alias.join("live.cap")));
+        assert!(is_recording_in_progress(&real));
+        assert!(!is_recording_in_progress(&real.with_file_name("other.cap")));
+        drop(recording);
+        assert!(!is_recording_in_progress(&real));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The three `delete_recording_directory` guards, one test each.
     #[test]
     fn delete_rejects_traversal_paths_outside_and_symlink_escapes() {
@@ -2194,21 +4187,21 @@ mod tests {
 
         assert!(
             CacheSlot::for_source(&root.join("missing.jpg")).is_none(),
-            "no mtime, no slot"
+            "no version, no slot"
         );
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn store_sweeps_stale_mtime_variants_but_not_lookalike_keys() {
+    fn store_sweeps_stale_version_variants_but_not_lookalike_keys() {
         let root = temp_dir("sweep");
         let rgba = image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 40, 40, 255]));
 
         let stale = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 1,
+            version: 1,
         };
         stale.store(&rgba);
         assert!(stale.file().is_file());
@@ -2223,11 +4216,11 @@ mod tests {
         let fresh = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 2,
+            version: 2,
         };
         fresh.store(&rgba);
 
-        assert!(!stale.file().exists(), "the old mtime variant is swept");
+        assert!(!stale.file().exists(), "the old version variant is swept");
         assert!(fresh.file().is_file());
         assert!(lookalike.is_file(), "another key's file survives the sweep");
         assert!(display.is_file());
@@ -2238,11 +4231,11 @@ mod tests {
         let missing = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 3,
+            version: 3,
         };
         assert!(
             missing.load().is_none(),
-            "a missing mtime variant is a miss, not a fallback"
+            "a missing version variant is a miss, not a fallback"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -2295,5 +4288,191 @@ mod tests {
         assert_eq!(image::image_dimensions(&second[0]).unwrap(), (392, 392));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_same_mtime_length_change_misses_the_decode_cache() {
+        let root = temp_dir("same-mtime-cache");
+        let screenshots = root.join("bundle.cap").join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([10, 120, 240]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        let modified = std::fs::metadata(&display).unwrap().modified().unwrap();
+        let first_len = std::fs::metadata(&display).unwrap().len();
+
+        assert!(decode_thumbnail(&display).is_some());
+        let first = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_eq!(image::image_dimensions(&first).unwrap(), (392, 294));
+
+        // Rewrite the pixels, then put the old timestamp back: the only
+        // difference the scan can see is the length.
+        image::RgbImage::from_pixel(600, 600, image::Rgb([240, 120, 10]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&display)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&display).unwrap().len(),
+            first_len,
+            "the test needs a length change"
+        );
+
+        assert!(decode_thumbnail(&display).is_some());
+        let second = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_ne!(
+            second, first,
+            "a length change at the same mtime is a new cache slot"
+        );
+        assert_eq!(
+            image::image_dimensions(&second).unwrap(),
+            (392, 392),
+            "the new pixels are decoded, not the old cache entry"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn screenshot_thumbnail_reuse_tracks_the_png_version() {
+        let item = ScreenshotItem {
+            path: PathBuf::from("/lib/shot.cap/original.png"),
+            bundle: PathBuf::from("/lib/shot.cap"),
+            pretty_name: "shot".into(),
+            sort_time_millis: 1.,
+            thumbnail: Some(PathBuf::from("/lib/shot.cap/original.png")),
+            thumbnail_version: Some(1),
+        };
+        assert!(!screenshot_thumbnail_is_current(&item, None, false, false));
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), false, false),
+            "a row whose decode never landed still asks for one"
+        );
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), true, true),
+            "a row already waiting on a newer decode asks again"
+        );
+        assert!(screenshot_thumbnail_is_current(
+            &item,
+            Some(&item),
+            true,
+            false
+        ));
+
+        let mut changed = item.clone();
+        changed.thumbnail_version = Some(2);
+        assert!(
+            !screenshot_thumbnail_is_current(&changed, Some(&item), true, false),
+            "a rewritten png is a new version"
+        );
+
+        let mut moved = item.clone();
+        moved.thumbnail = Some(PathBuf::from("/lib/other.cap/original.png"));
+        assert!(
+            !screenshot_thumbnail_is_current(&moved, Some(&item), true, false),
+            "a different png path is a new source"
+        );
+
+        let mut unknown = item.clone();
+        unknown.thumbnail_version = None;
+        assert!(
+            !screenshot_thumbnail_is_current(&unknown, Some(&unknown), true, false),
+            "an unknown version cannot be reused"
+        );
+    }
+
+    #[test]
+    fn screenshot_items_stamp_the_png_they_thumbnail() {
+        let root = temp_dir("screenshot-version");
+        let bundle = write_screenshot_bundle(&root, "shot");
+        let png = bundle.join("shot.png");
+        let items = list_screenshots_in(&root);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].thumbnail.as_deref(), Some(png.as_path()));
+        assert_eq!(items[0].thumbnail_version, source_version(&png));
+
+        let modified = std::fs::metadata(&png).unwrap().modified().unwrap();
+        let original_len = std::fs::metadata(&png).unwrap().len();
+        std::fs::write(&png, b"new png with a different length").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&png)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&png).unwrap().len(),
+            original_len,
+            "the test needs a length change"
+        );
+        let rewritten = list_screenshots_in(&root);
+        assert_eq!(rewritten.len(), 1);
+        assert_ne!(
+            rewritten[0].thumbnail_version, items[0].thumbnail_version,
+            "a length change bumps the version even at the same mtime"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The library panel drops and rebuilds its rows on every open; before
+    /// the reconcile, that re-decoded all 20 thumbnails (a native PNG decode
+    /// on the first pass, then a cache JPEG decode plus an atlas upload).
+    #[test]
+    #[ignore = "manual screenshot thumbnail reuse benchmark"]
+    fn benchmark_screenshot_thumbnail_reuse() {
+        let root = temp_dir("screenshot-bench");
+        let dir = root.join("screenshots");
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(3024, 1964, image::Rgba([120, 90, 60, 255]))
+            .save_with_format(&source, image::ImageFormat::Png)
+            .unwrap();
+        for i in 0..20 {
+            let bundle = write_screenshot_bundle(&dir, &format!("shot-{i:02}"));
+            std::fs::copy(&source, bundle.join("shot.png")).unwrap();
+        }
+        let items = list_screenshots_in(&dir);
+        assert_eq!(items.len(), 20);
+        let thumbnails: Vec<_> = items
+            .iter()
+            .filter_map(|item| item.thumbnail.as_deref())
+            .collect();
+        assert_eq!(thumbnails.len(), 20);
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+
+        let cold_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let cold = cold_start.elapsed();
+
+        let warm_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let warm = warm_start.elapsed();
+
+        println!(
+            "screenshots=20 first_open_cold={:.1}ms reopen_warm={:.1}ms",
+            cold.as_secs_f64() * 1e3,
+            warm.as_secs_f64() * 1e3,
+        );
+
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+        std::fs::remove_dir_all(root).ok();
     }
 }

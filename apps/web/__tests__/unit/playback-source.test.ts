@@ -118,10 +118,35 @@ describe("resolvePlaybackSource", () => {
 				fetchImpl,
 				now: () => 123,
 			}),
-		).toEqual({ url: initialUrl, type: "mp4", supportsCrossOrigin: true });
+		).toEqual({
+			url: initialUrl,
+			type: "mp4",
+			supportsCrossOrigin: true,
+			fromInitialUrl: true,
+		});
 		expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(initialUrl, {
 			headers: { range: "bytes=0-0" },
 		});
+	});
+
+	it("retains the initial URL origin after a signed media redirect", async () => {
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+			createResponse("https://media.example.com/redirected.mp4", {
+				status: 206,
+				redirected: true,
+			}),
+		);
+		expect(
+			await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				initialUrl: "https://media.example.com/initial.mp4",
+				fetchImpl,
+			}),
+		).toMatchObject({
+			url: "https://media.example.com/redirected.mp4",
+			fromInitialUrl: true,
+		});
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([401, 403, 404, 500])(

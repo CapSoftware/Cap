@@ -4,7 +4,6 @@
 !crates
 !vendor
 !apps/cli
-!apps/desktop/src-tauri
 !apps/render-farm/src
 **/target
 **/node_modules

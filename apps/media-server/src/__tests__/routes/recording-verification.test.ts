@@ -1,6 +1,7 @@
 import {
 	afterAll,
 	afterEach,
+	beforeAll,
 	beforeEach,
 	describe,
 	expect,
@@ -14,6 +15,16 @@ import * as mediaProbe from "../../lib/media-probe";
 import type { RemoteRecordingVerificationResult } from "../../lib/recording-verification";
 import * as recordingVerification from "../../lib/recording-verification";
 import video from "../../routes/video";
+
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
 
 const originalFetch = globalThis.fetch;
 const originalSecret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
@@ -93,7 +104,9 @@ async function startJob(requestBody: Record<string, unknown> = body) {
 }
 
 async function status(jobId: string): Promise<JobProgress> {
-	const response = await video.request(`/process/${jobId}/status`);
+	const response = await video.request(`/process/${jobId}/status`, {
+		headers,
+	});
 	expect(response.status).toBe(200);
 	return response.json();
 }
@@ -106,6 +119,17 @@ async function terminalWebhook(jobId: string): Promise<JobProgress> {
 	const payload = webhooks.find(terminal);
 	if (!payload) throw new Error("Missing terminal webhook");
 	return payload;
+}
+
+function captureFailureLogs() {
+	const info = spyOn(console, "info");
+	const events = () =>
+		info.mock.calls.flatMap(([line]) => {
+			if (typeof line !== "string" || !line.startsWith("{")) return [];
+			const event = JSON.parse(line) as Record<string, unknown>;
+			return event.event === "recording_verification_failed" ? [event] : [];
+		});
+	return { events, restore: () => info.mockRestore() };
 }
 
 function waitForDecoderCancellation() {
@@ -508,4 +532,94 @@ describe("asynchronous recording verification", () => {
 			expect(failed.metadata).toBeUndefined();
 		},
 	);
+
+	test("logs why permanent verification failed without leaking the presigned URL", async () => {
+		const logs = captureFailureLogs();
+		try {
+			verify.mockRejectedValue(
+				new Error(
+					"Recording full decode failed: https://bucket.s3.amazonaws.com/user-1/video-1/raw.mp4?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef: Invalid data found when processing input",
+				),
+			);
+			const jobId = await startJob();
+			const failed = await terminalWebhook(jobId);
+			expect(failed.errorCode).toBe("source-invalid");
+			const [event, ...rest] = logs.events();
+			expect(rest).toEqual([]);
+			expect(event).toMatchObject({
+				jobId,
+				videoId: body.videoId,
+				phase: "error",
+				errorCode: "source-invalid",
+				retryable: false,
+				stage: "decode",
+				reason:
+					"Recording full decode failed: <url> Invalid data found when processing input",
+			});
+			const line = JSON.stringify(event);
+			expect(line).not.toContain("amazonaws");
+			expect(line).not.toContain("X-Amz");
+			expect(line).not.toContain("deadbeef");
+			expect(line).not.toContain(body.videoUrl);
+		} finally {
+			logs.restore();
+		}
+	});
+
+	test("logs which uploaded metadata check failed", async () => {
+		const logs = captureFailureLogs();
+		try {
+			probe.mockResolvedValue({ ...metadata, fileSize: 64, duration: 2 });
+			const jobId = await startJob();
+			const failed = await terminalWebhook(jobId);
+			expect(failed.errorCode).toBe("source-invalid");
+			expect(logs.events()).toEqual([
+				expect.objectContaining({
+					jobId,
+					errorCode: "source-invalid",
+					retryable: false,
+					stage: "metadata",
+					reason: "Uploaded recording does not match the completed local file",
+					mismatch: {
+						expectedFileSize: 128,
+						actualFileSize: 64,
+						expectedDuration: 5,
+						actualDuration: 2,
+						requiredAudio: false,
+						audioCodec: "aac",
+					},
+				}),
+			]);
+			expect(verify).not.toHaveBeenCalled();
+		} finally {
+			logs.restore();
+		}
+	});
+
+	test("logs the original probe error behind a retryable failure", async () => {
+		const logs = captureFailureLogs();
+		try {
+			probe.mockRejectedValue(
+				new Error(
+					"Media input is not accessible (503) for /tmp/cap-media-server/instance-1/user-1.mp4?X-Amz-Signature=deadbeef",
+				),
+			);
+			const jobId = await startJob();
+			const failed = await terminalWebhook(jobId);
+			expect(failed.error).toBe(
+				"Recording verification temporarily unavailable (503)",
+			);
+			expect(logs.events()).toEqual([
+				expect.objectContaining({
+					jobId,
+					errorCode: "processing-unavailable",
+					retryable: true,
+					stage: "probe",
+					reason: "Media input is not accessible (503) for <path>",
+				}),
+			]);
+		} finally {
+			logs.restore();
+		}
+	});
 });

@@ -176,6 +176,7 @@ async fn main() -> Result<()> {
             };
             project.background.source = case.source.clone();
             project.background.padding = 20.0;
+            let project = Arc::new(project);
             let duration = (args.frames + args.warmup) as f64 / 60.0;
             let mut zoom =
                 ZoomTransformTimeline::from_project(&project, &cursor, duration, screen_size);

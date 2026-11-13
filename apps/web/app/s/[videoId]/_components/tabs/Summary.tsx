@@ -2,14 +2,13 @@
 
 import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import {
-	faRectangleList,
-	faRotateRight,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faRectangleList } from "@fortawesome/free-solid-svg-icons/faRectangleList";
+import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { Edit3 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { formatPlayerTime } from "@/lib/player-time";
 import { type SummaryEditingState, SummaryEditor } from "./SummaryEditor";
 
 type AiGenerationStatus =
@@ -35,20 +34,13 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	isSummaryDisabled?: boolean;
+	areChaptersDisabled?: boolean;
 	ownerIsPro: boolean;
 	isOwner?: boolean;
 	transcriptionStatus?: string | null;
 	duration?: number | null;
 	onEditingStateChange?: (state: SummaryEditingState) => void;
 }
-
-const formatTime = (time: number) => {
-	const minutes = Math.floor(time / 60);
-	const seconds = Math.floor(time % 60);
-	return `${minutes.toString().padStart(2, "0")}:${seconds
-		.toString()
-		.padStart(2, "0")}`;
-};
 
 const SkeletonLoader = () => (
 	<div className="p-4 space-y-6 animate-pulse">
@@ -83,6 +75,7 @@ export const Summary: React.FC<SummaryProps> = ({
 	onSeek,
 	initialAiData,
 	isSummaryDisabled = false,
+	areChaptersDisabled = false,
 	aiGenerationEnabled = false,
 	ownerIsPro,
 	isOwner = false,
@@ -98,6 +91,7 @@ export const Summary: React.FC<SummaryProps> = ({
 
 	const aiData = initialAiData || null;
 	const aiGenerationStatus = aiData?.aiGenerationStatus;
+	const chapters = areChaptersDisabled ? [] : (aiData?.chapters ?? []);
 
 	const isLoading =
 		aiGenerationEnabled &&
@@ -236,7 +230,7 @@ export const Summary: React.FC<SummaryProps> = ({
 		);
 	}
 
-	if (!aiData?.summary && !aiData?.chapters?.length) {
+	if (!aiData?.summary && chapters.length === 0) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<FontAwesomeIcon
@@ -306,11 +300,11 @@ export const Summary: React.FC<SummaryProps> = ({
 						</div>
 					)}
 
-					{aiData?.chapters && aiData.chapters.length > 0 && (
+					{chapters.length > 0 && (
 						<div className={aiData?.summary ? "mt-6" : ""}>
 							<h3 className="mb-2 text-lg font-medium">Chapters</h3>
 							<div className="divide-y">
-								{aiData.chapters.map((chapter) => (
+								{chapters.map((chapter) => (
 									<button
 										type="button"
 										key={chapter.start}
@@ -318,7 +312,7 @@ export const Summary: React.FC<SummaryProps> = ({
 										onClick={() => handleSeek(chapter.start)}
 									>
 										<span className="w-16 text-xs text-gray-500">
-											{formatTime(chapter.start)}
+											{formatPlayerTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>
 									</button>

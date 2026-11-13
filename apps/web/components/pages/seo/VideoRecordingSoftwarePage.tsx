@@ -36,7 +36,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		{
 			title: "Open Source and Auditable",
 			description:
-				"Cap is fully open-source on GitHub and MIT-licensed. Inspect every line of code, verify how your recordings are handled, and contribute features back to the community. No black boxes, no vendor lock-in. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
+				"Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Inspect every line of code, verify how your recordings are handled, and contribute features back to the community. No black boxes, no vendor lock-in. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
 		},
 		{
 			title: "Separate Screen and Webcam Tracks",
@@ -249,17 +249,11 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		{
 			question: "Is Cap open-source video recording software?",
 			answer:
-				"Yes. Cap is fully open-source and MIT-licensed. The complete codebase — desktop app, web app, and media processing pipeline — is publicly available on GitHub. You can audit every line of code, fork the project, and contribute back to the community. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
+				"Yes. Cap is open source, with most code under AGPLv3 and specified Rust crates under MIT. The complete codebase — desktop app, web app, and media processing pipeline — is publicly available on GitHub. You can audit every line of code, fork the project, and contribute back to the community. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
 		},
 	],
 
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title:
-				"Cap video recording software demo showing HD screen capture, webcam overlay, and instant sharing",
-		},
-	},
+	video: {},
 
 	cta: {
 		title: "Start Recording Video for Free with Cap",

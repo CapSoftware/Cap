@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { hashPassword } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
-import { spaceMembers, spaces } from "@cap/database/schema";
+import { organizations, spaceMembers, spaces } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import {
 	type ImageUpload,
@@ -17,6 +17,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
+import { filterUsersInOrganization } from "./organization-member-ids";
 import {
 	getSpaceSettingsFromFormData,
 	hasProSpaceSettingsEnabled,
@@ -109,6 +110,29 @@ export async function createSpace(
 			};
 		}
 
+		const requestedMemberIds = formData
+			.getAll("members[]")
+			.filter(
+				(entry): entry is string =>
+					typeof entry === "string" && entry.length > 0 && entry !== user.id,
+			)
+			.map((entry) => User.UserId.make(entry));
+		const [organization] =
+			requestedMemberIds.length > 0
+				? await db()
+						.select({ ownerId: organizations.ownerId })
+						.from(organizations)
+						.where(eq(organizations.id, user.activeOrganizationId))
+						.limit(1)
+				: [];
+		const memberUserIds = organization
+			? await filterUsersInOrganization(
+					user.activeOrganizationId,
+					organization.ownerId,
+					requestedMemberIds,
+				)
+			: [];
+
 		const spaceId = Space.SpaceId.make(nanoId());
 		let iconUrl: ImageUpload.ImageUrlOrKey | null = null;
 		const hashedPassword =
@@ -128,30 +152,17 @@ export async function createSpace(
 				public: publicEnabled,
 			});
 
-			const memberUserIds: string[] = [];
-			for (const entry of formData.getAll("members[]")) {
-				if (typeof entry === "string" && entry.length > 0) {
-					memberUserIds.push(entry);
-				}
-			}
+			const spaceMembersToInsert = [user.id, ...memberUserIds].map((userId) => {
+				const role: SpaceMemberRole = userId === user.id ? "admin" : "member";
+				return {
+					id: SpaceMemberId.make(nanoId()),
+					spaceId,
+					userId,
+					role,
+				};
+			});
 
-			if (!memberUserIds.includes(user.id)) {
-				memberUserIds.push(user.id);
-			}
-
-			if (memberUserIds.length > 0) {
-				const spaceMembersToInsert = memberUserIds.map((userId) => {
-					const role: SpaceMemberRole = userId === user.id ? "admin" : "member";
-					return {
-						id: SpaceMemberId.make(nanoId()),
-						spaceId,
-						userId: User.UserId.make(userId),
-						role,
-					};
-				});
-
-				await tx.insert(spaceMembers).values(spaceMembersToInsert);
-			}
+			await tx.insert(spaceMembers).values(spaceMembersToInsert);
 		});
 
 		const iconFile = formData.get("icon") as File | null;

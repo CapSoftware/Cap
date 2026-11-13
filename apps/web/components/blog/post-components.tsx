@@ -1,5 +1,11 @@
 import type { MDXComponents } from "mdx/types";
 import { CapEmbed } from "./CapEmbed";
+import { BeforeAfter } from "./native/BeforeAfter";
+import { CodeCompare } from "./native/CodeCompare";
+import { ExportRace } from "./native/ExportRace";
+import { ResourceChart } from "./native/ResourceChart";
+import { Screenshot } from "./native/Screenshot";
+import { Tweet } from "./native/Tweet";
 import { ToggleDemo } from "./timeline/ToggleDemo";
 
 /**
@@ -17,6 +23,15 @@ const POST_COMPONENTS: Record<string, PostComponents> = {
 	},
 	"cap-v06": {
 		CapEmbed,
+	},
+	"rebuilding-cap-in-gpui": {
+		BeforeAfter,
+		CapEmbed,
+		CodeCompare,
+		ExportRace,
+		ResourceChart,
+		Screenshot,
+		Tweet,
 	},
 };
 

@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.4
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ffmpeg \
@@ -7,12 +7,18 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --production
+# The build stops here if the parser limits in patches/ were not applied.
+RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
 
+COPY bunfig.toml ./bunfig.toml
 COPY src ./src
 COPY capcodec.md ./capcodec.md
 
 ENV PORT=3456
+# Self-hosted storage usually sits on a private network next to this container.
+ENV MEDIA_SERVER_INTERNAL_MEDIA_HOSTS=*
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

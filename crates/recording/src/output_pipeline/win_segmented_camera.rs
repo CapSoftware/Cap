@@ -375,7 +375,7 @@ impl WindowsSegmentedCameraMuxer {
     }
 
     fn create_segment(&mut self, first_frame: &NativeCameraFrame) -> anyhow::Result<()> {
-        use crate::output_pipeline::win::camera_frame_to_ffmpeg;
+        use crate::output_pipeline::{mjpeg::MjpegDecoder, win::camera_frame_to_ffmpeg};
 
         let segment_path = self.current_segment_path();
 
@@ -595,6 +595,7 @@ impl WindowsSegmentedCameraMuxer {
                         );
 
                         let mut first_timestamp: Option<Duration> = None;
+                        let mut mjpeg_decoder = MjpegDecoder::default();
 
                         while let Ok(Some((frame, timestamp))) = video_rx.recv() {
                             let relative = if let Some(first) = first_timestamp {
@@ -604,7 +605,7 @@ impl WindowsSegmentedCameraMuxer {
                                 Duration::ZERO
                             };
 
-                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame) {
+                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame, &mut mjpeg_decoder) {
                                 Ok(f) => f,
                                 Err(e) => {
                                     warn!("Failed to convert camera frame: {e}");

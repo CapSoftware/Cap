@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
@@ -335,5 +335,150 @@ describe("media-client", () => {
 			expect(result).toBe(mockResponse);
 			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
+	});
+});
+
+describe("media-client retry body ownership", () => {
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		mockFetch.mockReset();
+		const { serverEnv } = await import("@cap/env");
+		vi.mocked(serverEnv).mockReturnValue(
+			mediaServerEnv as ReturnType<typeof serverEnv>,
+		);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const retryResponse = (status: number, cancel = vi.fn(async () => {})) => ({
+		response: new Response(
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode("upstream unavailable"));
+				},
+				cancel,
+			}),
+			{ status },
+		),
+		cancel,
+	});
+
+	it.each([502, 503, 504])(
+		"cancels a discarded %s body before retrying",
+		async (status) => {
+			const order: string[] = [];
+			const discarded = retryResponse(
+				status,
+				vi.fn(async () => {
+					order.push("cancel");
+				}),
+			);
+			mockFetch.mockImplementationOnce(async () => {
+				order.push("first fetch");
+				return discarded.response;
+			});
+			mockFetch.mockImplementationOnce(async () => {
+				order.push("second fetch");
+				return Response.json({ metadata: { duration: 42 } });
+			});
+			const pending = probeVideoViaMediaServer(
+				"https://example.com/video.mp4",
+				{ maxRetries: 1 },
+			);
+			await vi.runAllTimersAsync();
+			await expect(pending).resolves.toEqual({ duration: 42 });
+			expect(order).toEqual(["first fetch", "cancel", "second fetch"]);
+			expect(discarded.response.bodyUsed).toBe(true);
+		},
+	);
+
+	it("still retries when discarded-body cancellation rejects", async () => {
+		const discarded = retryResponse(
+			503,
+			vi.fn(async () => {
+				throw new Error("connection already closed");
+			}),
+		);
+		mockFetch.mockResolvedValueOnce(discarded.response);
+		mockFetch.mockResolvedValueOnce(
+			Response.json({ metadata: { duration: 42 } }),
+		);
+		const pending = probeVideoViaMediaServer("https://example.com/video.mp4", {
+			maxRetries: 1,
+		});
+		await vi.runAllTimersAsync();
+		await expect(pending).resolves.toEqual({ duration: 42 });
+		expect(discarded.cancel).toHaveBeenCalledTimes(1);
+		expect(mockFetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("preserves the final retryable response for the caller's error parser", async () => {
+		const discarded = retryResponse(503);
+		const final = Response.json(
+			{ error: "still busy", code: "SERVER_BUSY" },
+			{ status: 503 },
+		);
+		if (!final.body) throw new Error("Expected an error response body");
+		const cancelFinal = vi.spyOn(final.body, "cancel");
+		mockFetch.mockResolvedValueOnce(discarded.response);
+		mockFetch.mockResolvedValueOnce(final);
+		const rejected = probeVideoViaMediaServer("https://example.com/video.mp4", {
+			maxRetries: 1,
+		}).catch((error: unknown) => error);
+		await vi.runAllTimersAsync();
+		expect(await rejected).toMatchObject({ message: "still busy" });
+		expect(discarded.cancel).toHaveBeenCalledTimes(1);
+		expect(cancelFinal).not.toHaveBeenCalled();
+		expect(mockFetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not cancel a nonretryable error before parsing it", async () => {
+		const response = Response.json(
+			{ error: "invalid source", code: "BAD_REQUEST" },
+			{ status: 400 },
+		);
+		if (!response.body) throw new Error("Expected an error response body");
+		const cancel = vi.spyOn(response.body, "cancel");
+		mockFetch.mockResolvedValueOnce(response);
+		await expect(
+			probeVideoViaMediaServer("https://example.com/video.mp4"),
+		).rejects.toThrow("invalid source");
+		expect(cancel).not.toHaveBeenCalled();
+		expect(mockFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([200, 502])(
+		"keeps a conversion's %s response stream readable without retries",
+		async (status) => {
+			const response = new Response("converted bytes or final error", {
+				status,
+			});
+			if (!response.body) throw new Error("Expected a response body");
+			const cancel = vi.spyOn(response.body, "cancel");
+			mockFetch.mockResolvedValueOnce(response);
+			const result = await fetchConvertedVideoViaMediaServer(
+				"https://example.com/video.m3u8",
+			);
+			expect(result).toBe(response);
+			expect(result.bodyUsed).toBe(false);
+			expect(await result.text()).toBe("converted bytes or final error");
+			expect(cancel).not.toHaveBeenCalled();
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("retries an empty response body", async () => {
+		mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+		mockFetch.mockResolvedValueOnce(
+			Response.json({ metadata: { duration: 42 } }),
+		);
+		const pending = probeVideoViaMediaServer("https://example.com/video.mp4", {
+			maxRetries: 1,
+		});
+		await vi.runAllTimersAsync();
+		await expect(pending).resolves.toEqual({ duration: 42 });
+		expect(mockFetch).toHaveBeenCalledTimes(2);
 	});
 });

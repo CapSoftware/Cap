@@ -1,8 +1,18 @@
+import { serverEnv } from "@cap/env";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
 	type AiGenerationLanguageCode,
 } from "@cap/web-domain";
+import { AssemblyAI } from "assemblyai";
+
+export function createAssemblyAIClient() {
+	const env = serverEnv();
+	return new AssemblyAI({
+		apiKey: env.ASSEMBLY_API_KEY as string,
+		baseUrl: env.ASSEMBLY_BASE_URL,
+	});
+}
 
 export const ASSEMBLYAI_SPEECH_MODELS = [
 	"universal-3-5-pro",

@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SourceBindGroups;
 use crate::{MaskRenderMode, PreparedMask, RenderSession};
 
 const PIXELATE_MODE: u32 = 0;
@@ -11,12 +12,17 @@ const BLUR_VERTICAL_MODE: u32 = 3;
 pub struct MaskLayer {
     sampler: wgpu::Sampler,
     pipeline: MaskPipeline,
+    /// One uniform buffer per mask pass in a frame. Every pass of a frame is
+    /// encoded before it is submitted, so passes cannot share a buffer.
+    uniform_buffers: Vec<(wgpu::Buffer, MaskUniforms)>,
+    next_uniform_buffer: usize,
+    bind_groups: SourceBindGroups,
 }
 
 struct MaskPass<'a> {
     source_texture_view: &'a wgpu::TextureView,
     target_texture_view: &'a wgpu::TextureView,
-    render_pipeline: &'a wgpu::RenderPipeline,
+    blur_composite: bool,
     load: wgpu::LoadOp<wgpu::Color>,
     uniforms: MaskUniforms,
 }
@@ -34,13 +40,31 @@ impl MaskLayer {
                 ..Default::default()
             }),
             pipeline: MaskPipeline::new(device),
+            uniform_buffers: Vec::new(),
+            next_uniform_buffer: 0,
+            bind_groups: SourceBindGroups::default(),
         }
     }
 
+    pub fn begin_frame(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.next_uniform_buffer = 0;
+        self.bind_groups.retain_views(views);
+    }
+
+    #[cfg(test)]
+    pub fn bind_groups_created(&self) -> usize {
+        self.bind_groups.created()
+    }
+
+    #[cfg(test)]
+    pub fn uniform_buffer_count(&self) -> usize {
+        self.uniform_buffers.len()
+    }
+
     pub fn render(
-        &self,
+        &mut self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         session: &mut RenderSession,
         encoder: &mut wgpu::CommandEncoder,
         mask: &PreparedMask,
@@ -49,39 +73,42 @@ impl MaskLayer {
             MaskRenderMode::Blur => {
                 self.render_pass(
                     device,
+                    queue,
                     encoder,
                     MaskPass {
                         source_texture_view: session.current_texture_view(),
                         target_texture_view: session.other_texture_view(),
-                        render_pipeline: &self.pipeline.render_pipeline,
+                        blur_composite: false,
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         uniforms: MaskUniforms::from_mask(mask, BLUR_HORIZONTAL_MODE),
                     },
                 );
                 self.render_pass(
                     device,
+                    queue,
                     encoder,
                     MaskPass {
                         source_texture_view: session.other_texture_view(),
                         target_texture_view: session.current_texture_view(),
-                        render_pipeline: &self.pipeline.blur_composite_pipeline,
+                        blur_composite: true,
                         load: wgpu::LoadOp::Load,
                         uniforms: MaskUniforms::from_mask(mask, BLUR_VERTICAL_MODE),
                     },
                 );
             }
             MaskRenderMode::Pixelate => {
-                self.render_single_pass(device, session, encoder, mask, PIXELATE_MODE);
+                self.render_single_pass(device, queue, session, encoder, mask, PIXELATE_MODE);
             }
             MaskRenderMode::Highlight => {
-                self.render_single_pass(device, session, encoder, mask, HIGHLIGHT_MODE);
+                self.render_single_pass(device, queue, session, encoder, mask, HIGHLIGHT_MODE);
             }
         }
     }
 
     fn render_single_pass(
-        &self,
+        &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         session: &mut RenderSession,
         encoder: &mut wgpu::CommandEncoder,
         mask: &PreparedMask,
@@ -89,11 +116,12 @@ impl MaskLayer {
     ) {
         self.render_pass(
             device,
+            queue,
             encoder,
             MaskPass {
                 source_texture_view: session.current_texture_view(),
                 target_texture_view: session.other_texture_view(),
-                render_pipeline: &self.pipeline.render_pipeline,
+                blur_composite: false,
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 uniforms: MaskUniforms::from_mask(mask, mode),
             },
@@ -102,23 +130,42 @@ impl MaskLayer {
     }
 
     fn render_pass(
-        &self,
+        &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         config: MaskPass<'_>,
     ) {
-        let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mask Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[config.uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let index = self.next_uniform_buffer;
+        self.next_uniform_buffer += 1;
+        match self.uniform_buffers.get_mut(index) {
+            Some((buffer, written)) => {
+                if *written != config.uniforms {
+                    queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[config.uniforms]));
+                    *written = config.uniforms;
+                }
+            }
+            None => self.uniform_buffers.push((
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Mask Uniform Buffer"),
+                    contents: bytemuck::cast_slice(&[config.uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                }),
+                config.uniforms,
+            )),
+        }
+        let uniforms_buffer = &self.uniform_buffers[index].0;
 
-        let bind_group = self.pipeline.bind_group(
-            device,
-            &uniforms_buffer,
-            config.source_texture_view,
-            &self.sampler,
-        );
+        let bind_group =
+            self.bind_groups
+                .get_or_create(uniforms_buffer, config.source_texture_view, || {
+                    self.pipeline.bind_group(
+                        device,
+                        uniforms_buffer,
+                        config.source_texture_view,
+                        &self.sampler,
+                    )
+                });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Mask Pass"),
@@ -135,8 +182,12 @@ impl MaskLayer {
             occlusion_query_set: None,
         });
 
-        pass.set_pipeline(config.render_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_pipeline(if config.blur_composite {
+            &self.pipeline.blur_composite_pipeline
+        } else {
+            &self.pipeline.render_pipeline
+        });
+        pass.set_bind_group(0, bind_group, &[]);
         config.uniforms.draw(&mut pass);
 
         drop(pass);

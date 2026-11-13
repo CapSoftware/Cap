@@ -98,6 +98,7 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();
@@ -116,6 +117,7 @@ pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, 
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();
@@ -133,6 +135,12 @@ pub fn add_transition(config: &mut ProjectConfiguration, segment_index: u32, dur
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Mp4,
+    /// MP4 through the turbo export split into `chunks`. With a failing
+    /// chunk, the export has to fall back to the standard pipeline.
+    Mp4Turbo {
+        chunks: usize,
+        failing_chunk: Option<usize>,
+    },
     Gif,
     Mov,
 }
@@ -279,6 +287,42 @@ pub async fn export(
     out: &Path,
 ) -> Result<PathBuf, String> {
     let force = run.decoder == Decoder::Ffmpeg;
+    let resolution_base = XY::new(run.resolution.0, run.resolution.1);
+    if let Format::Mp4Turbo {
+        chunks,
+        failing_chunk,
+    } = run.format
+    {
+        let mut base = cap_export::ExporterBase::builder(project.path.clone())
+            .with_config(config)
+            .with_force_ffmpeg_decoder(force)
+            .with_output_path(out.to_path_buf())
+            .build_for_mp4(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                false,
+            )))
+            .await
+            .map_err(|e| format!("exporter build: {e}"))?;
+        if let Some(chunk) = failing_chunk {
+            base.fail_turbo_chunk(chunk);
+        }
+        return cap_export::mp4::Mp4ExportSettings {
+            fps: run.fps,
+            resolution_base,
+            compression: cap_export::mp4::ExportCompression::Social,
+            custom_bpp: run.custom_bpp,
+            force_ffmpeg_decoder: force,
+            optimize_filesize: false,
+        }
+        .export_prepared_turbo(
+            base,
+            cap_export::mp4::turbo::TurboOptions {
+                chunks: Some(chunks),
+                strict: failing_chunk.is_none(),
+            },
+            |_| true,
+        )
+        .await;
+    }
     let base = cap_export::ExporterBase::builder(project.path.clone())
         .with_config(config)
         .with_force_ffmpeg_decoder(force)
@@ -286,9 +330,8 @@ pub async fn export(
         .build()
         .await
         .map_err(|e| format!("exporter build: {e}"))?;
-    let resolution_base = XY::new(run.resolution.0, run.resolution.1);
     match run.format {
-        Format::Mp4 => {
+        Format::Mp4 | Format::Mp4Turbo { .. } => {
             cap_export::mp4::Mp4ExportSettings {
                 fps: run.fps,
                 resolution_base,
@@ -786,7 +829,7 @@ pub struct Player {
     layers: cap_rendering::RendererLayers,
     zooms: Vec<cap_rendering::ZoomTransformTimeline>,
     outgoing_zooms: std::collections::HashMap<u32, cap_rendering::ZoomTransformTimeline>,
-    config: ProjectConfiguration,
+    config: std::sync::Arc<ProjectConfiguration>,
     duration: f64,
     resolution: XY<u32>,
 }
@@ -848,7 +891,7 @@ impl Player {
             layers,
             zooms,
             outgoing_zooms: Default::default(),
-            config,
+            config: std::sync::Arc::new(config),
             duration,
             resolution: XY::new(resolution.0, resolution.1),
         })
@@ -1167,6 +1210,7 @@ pub async fn realtime_playback(
         music: cap_editor::MusicTracks::new(),
         audio_output: Arc::new(audio_output),
         telemetry: Some(telemetry),
+        preview_speed: Default::default(),
     };
     let started = std::time::Instant::now();
     let handle = playback

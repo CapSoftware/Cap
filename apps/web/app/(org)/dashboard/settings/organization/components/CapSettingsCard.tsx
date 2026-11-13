@@ -7,6 +7,7 @@ import {
 	type AiGenerationLanguage,
 	getAiGenerationLanguageName,
 	isAiGenerationLanguage,
+	type Organisation,
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -25,6 +26,7 @@ const defaultSettings: OrganizationSettings = {
 	disableChapters: false,
 	disableReactions: false,
 	disableTranscript: false,
+	disableDownloads: false,
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
@@ -81,6 +83,11 @@ const options: Array<{
 		description: "Show Cap branding at the top of shareable links",
 		pro: true,
 	},
+	{
+		label: "Enable downloads",
+		value: "disableDownloads",
+		description: "Allow viewers to download caps",
+	},
 ];
 
 const languageOptions = Object.entries(AI_GENERATION_LANGUAGES) as [
@@ -99,6 +106,22 @@ const mergeSettings = (
 });
 
 const CapSettingsCard = () => {
+	const { activeOrganization } = useDashboardContext();
+	const organizationId = activeOrganization?.organization.id;
+	if (!organizationId) return null;
+	return (
+		<OrganizationCapSettings
+			key={organizationId}
+			organizationId={organizationId}
+		/>
+	);
+};
+
+const OrganizationCapSettings = ({
+	organizationId,
+}: {
+	organizationId: Organisation.OrganisationId;
+}) => {
 	const { user, organizationSettings } = useDashboardContext();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
@@ -154,7 +177,10 @@ const CapSettingsCard = () => {
 				}
 
 				try {
-					await updateOrganizationSettings(debouncedUpdateSettings);
+					await updateOrganizationSettings(
+						debouncedUpdateSettings,
+						organizationId,
+					);
 
 					changedKeys.forEach((changedKey) => {
 						if (changedKey === "aiGenerationLanguage") {
@@ -204,7 +230,7 @@ const CapSettingsCard = () => {
 
 			handleUpdate();
 		}
-	}, [debouncedUpdateSettings, organizationSettings]);
+	}, [debouncedUpdateSettings, organizationSettings, organizationId]);
 
 	const handleToggle = (key: BooleanOrganizationSettingKey) => {
 		setSettings((prev) => {

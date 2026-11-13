@@ -5,33 +5,43 @@ import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Avatar, Logo } from "@cap/ui";
 import type { ViewerSettings } from "@cap/web-backend";
-import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
+import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
 	useState,
 } from "react";
-import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
-import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
-import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
-import {
-	formatChaptersAsVTT,
-	formatTranscriptAsVTT,
-	parseVTT,
-	type TranscriptEntry,
-} from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
+import { formatChaptersAsVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { formatPlayerTime } from "@/lib/player-time";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
+
+const CapVideoPlayer = dynamic(() =>
+	import("@/app/s/[videoId]/_components/CapVideoPlayer").then(
+		(m) => m.CapVideoPlayer,
+	),
+);
+const UploadProgressTracker = dynamic(
+	() => import("@/app/s/[videoId]/_components/UploadProgressTracker"),
+	{ ssr: false },
+);
+const HLSVideoPlayer = dynamic(() =>
+	import("@/app/s/[videoId]/_components/HLSVideoPlayer").then(
+		(m) => m.HLSVideoPlayer,
+	),
+);
 
 declare global {
 	interface Window {
@@ -90,16 +100,22 @@ export const EmbedVideo = forwardRef<
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 		usePlayerJsReceiver({ playerContainerRef, videoRef });
 
-		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 		const [longestDuration, setLongestDuration] = useState<number>(
 			data.duration ?? 0,
 		);
 		const [isPlaying, setIsPlaying] = useState(false);
 		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
-		const segmentUploadProgress = useUploadProgress(
-			data.id,
-			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
-		);
+		const trackUploadProgress =
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false);
+		const [segmentUploadProgress, setSegmentUploadProgress] =
+			useState<UploadProgress | null>(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		useEffect(() => {
+			setSegmentUploadProgress(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		}, [trackUploadProgress]);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const captionsDisabled = viewerSettings?.disableCaptions ?? false;
@@ -111,26 +127,21 @@ export const EmbedVideo = forwardRef<
 		);
 
 		useEffect(() => {
-			if (transcriptContent) {
-				const parsed = parseVTT(transcriptContent);
-				setTranscriptData(parsed);
-			} else if (transcriptError) {
+			if (transcriptError) {
 				console.error(
 					"[Transcript] Transcript error from React Query:",
 					transcriptError.message,
 				);
 			}
-		}, [transcriptContent, transcriptError]);
+		}, [transcriptError]);
 
 		useEffect(() => {
 			if (
 				!captionsDisabled &&
 				data.transcriptionStatus === "COMPLETE" &&
-				transcriptData &&
-				transcriptData.length > 0
+				transcriptContent?.includes("-->")
 			) {
-				const vttContent = formatTranscriptAsVTT(transcriptData);
-				const blob = new Blob([vttContent], { type: "text/vtt" });
+				const blob = new Blob([transcriptContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
 					if (prev) URL.revokeObjectURL(prev);
@@ -144,7 +155,7 @@ export const EmbedVideo = forwardRef<
 				if (prev) URL.revokeObjectURL(prev);
 				return null;
 			});
-		}, [captionsDisabled, data.transcriptionStatus, transcriptData]);
+		}, [captionsDisabled, data.transcriptionStatus, transcriptContent]);
 
 		useEffect(() => {
 			if (!chaptersDisabled && chapters?.length > 0) {
@@ -213,10 +224,8 @@ export const EmbedVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		}
 
-		useEffect(() => {
-			if (!videoRef.current) return;
-			const player = videoRef.current;
-			const handleLoadedMetadata = () => {
+		const handleLoadedMetadata = useCallback(
+			(player: HTMLVideoElement) => {
 				setLongestDuration(player.duration);
 
 				// Once only. HLS level switches and source swaps fire this again, and
@@ -232,18 +241,25 @@ export const EmbedVideo = forwardRef<
 				} catch (error) {
 					console.warn("Failed to seek embed to start time", error);
 				}
-			};
+			},
+			[startTime],
+		);
 
-			if (player.readyState >= 1) {
-				handleLoadedMetadata();
-			} else {
-				player.addEventListener("loadedmetadata", handleLoadedMetadata);
-			}
-
-			return () => {
-				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		useEffect(() => {
+			const container = playerContainerRef.current;
+			if (!container) return;
+			let currentPlayer: HTMLVideoElement | null = null;
+			const syncMetadata = () => {
+				const player = container.querySelector("video");
+				if (player === currentPlayer) return;
+				currentPlayer = player;
+				if (player && player.readyState >= 1) handleLoadedMetadata(player);
 			};
-		}, [startTime]);
+			const observer = new MutationObserver(syncMetadata);
+			observer.observe(container, { childList: true, subtree: true });
+			syncMetadata();
+			return () => observer.disconnect();
+		}, [handleLoadedMetadata]);
 
 		return (
 			<>
@@ -253,6 +269,11 @@ export const EmbedVideo = forwardRef<
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}
 					onEndedCapture={() => setIsPlaying(false)}
+					onLoadedMetadataCapture={(event) => {
+						if (event.target instanceof HTMLVideoElement) {
+							handleLoadedMetadata(event.target);
+						}
+					}}
 				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
@@ -387,6 +408,12 @@ export const EmbedVideo = forwardRef<
 							</div>
 						)}
 					</AnimatePresence>
+				)}
+				{trackUploadProgress && (
+					<UploadProgressTracker
+						videoId={data.id}
+						onChange={setSegmentUploadProgress}
+					/>
 				)}
 			</>
 		);

@@ -1,31 +1,40 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { videos, videoUploads } from "@cap/database/schema";
-import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
+import { provideOptionalAuth, Tinybird, VideosPolicy } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
+import { z } from "zod";
 
 import { getAnonymousName } from "@/lib/anonymous-names";
 import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 
-interface TrackPayload {
-	videoId: string;
-	orgId?: string | null;
-	ownerId?: string | null;
-	sessionId?: string;
-	pathname?: string;
-	hostname?: string | null;
-	userAgent?: string;
-	occurredAt?: string;
-}
+const trackPayloadSchema = z.object({
+	videoId: z.string().min(1).max(64),
+	sessionId: z.string().max(128).optional(),
+	userAgent: z.string().max(4096).optional(),
+	occurredAt: z.string().max(64).optional(),
+});
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
+const MAX_CLIENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+const viewTimestamp = (occurredAt: unknown, now: number) => {
+	const time =
+		typeof occurredAt === "string" ? Date.parse(occurredAt) : Number.NaN;
+	return Number.isFinite(time) &&
+		Math.abs(time - now) <= MAX_CLIENT_CLOCK_SKEW_MS
+		? new Date(time)
+		: new Date(now);
+};
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -42,21 +51,28 @@ const decodeUrlEncodedHeaderValue = (value?: string | null) => {
 };
 
 export async function POST(request: NextRequest) {
-	let body: TrackPayload;
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
+			headers: request.headers,
+		})
+	) {
+		return Response.json({ error: "Too many requests" }, { status: 429 });
+	}
+
+	let rawBody: unknown;
 	try {
-		body = (await request.json()) as TrackPayload;
+		rawBody = await request.json();
 	} catch (_error) {
 		return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
 	}
 
-	if (!body?.videoId) {
-		return Response.json({ error: "videoId is required" }, { status: 400 });
+	const parsedBody = trackPayloadSchema.safeParse(rawBody);
+	if (!parsedBody.success) {
+		return Response.json({ error: "Invalid payload" }, { status: 400 });
 	}
+	const body = parsedBody.data;
 
-	const parsedSessionId =
-		typeof body.sessionId === "string"
-			? body.sessionId.trim().slice(0, 128) || null
-			: null;
+	const parsedSessionId = body.sessionId?.trim() || null;
 	const sessionId =
 		parsedSessionId && parsedSessionId !== "anonymous" ? parsedSessionId : null;
 	const userAgent =
@@ -68,7 +84,7 @@ export async function POST(request: NextRequest) {
 	const osName = parser.getOS().name ?? "unknown";
 	const deviceType = parser.getDevice().type ?? "desktop";
 
-	const timestamp = body.occurredAt ? new Date(body.occurredAt) : new Date();
+	const timestamp = viewTimestamp(body.occurredAt, Date.now());
 
 	const country =
 		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
@@ -78,13 +94,6 @@ export async function POST(request: NextRequest) {
 		sanitizeString(
 			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
 		) || "";
-
-	const hostname =
-		sanitizeString(body.hostname) ||
-		sanitizeString(request.nextUrl.hostname) ||
-		"";
-
-	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
 	await runPromise(
 		Effect.gen(function* () {
@@ -107,7 +116,11 @@ export async function POST(request: NextRequest) {
 			const [videoRecord] = yield* Effect.tryPromise(() =>
 				db()
 					.select({
+						id: videos.id,
+						orgId: videos.orgId,
 						ownerId: videos.ownerId,
+						public: videos.public,
+						password: videos.password,
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
 						createdAt: videos.createdAt,
@@ -118,37 +131,27 @@ export async function POST(request: NextRequest) {
 					.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
 					.limit(1),
-			).pipe(
-				Effect.orElseSucceed(
-					() =>
-						[] as {
-							ownerId: string;
-							firstViewEmailSentAt: Date | null;
-							videoName: string;
-							createdAt: Date;
-							updatedAt: Date;
-							activeUploadVideoId: string | null;
-						}[],
-				),
-			);
+			).pipe(Effect.orElseSucceed(() => []));
 
-			if (videoRecord && userId === videoRecord.ownerId) {
+			if (!videoRecord || userId === videoRecord.ownerId) {
 				return;
 			}
 
 			if (
-				videoRecord &&
-				(videoRecord.activeUploadVideoId ||
-					Date.now() - videoRecord.updatedAt.getTime() < VIEW_TRACKING_DELAY_MS)
+				videoRecord.activeUploadVideoId ||
+				Date.now() - videoRecord.updatedAt.getTime() < VIEW_TRACKING_DELAY_MS
 			) {
 				return;
 			}
 
-			const tenantId =
-				body.orgId ||
-				videoRecord?.ownerId ||
-				body.ownerId ||
-				(hostname ? `domain:${hostname}` : "public");
+			const videosPolicy = yield* VideosPolicy;
+			const canView = yield* videosPolicy
+				.canViewLoaded(videoRecord, Option.fromNullable(videoRecord.password))
+				.pipe(
+					Effect.as(true),
+					Effect.orElseSucceed(() => false),
+				);
+			if (!canView) return;
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
@@ -157,9 +160,9 @@ export async function POST(request: NextRequest) {
 					session_id: sessionId ?? "anon",
 					action: "page_hit",
 					version: "1.0",
-					tenant_id: tenantId,
+					tenant_id: videoRecord.orgId || videoRecord.ownerId,
 					video_id: body.videoId,
-					pathname,
+					pathname: `/s/${body.videoId}`,
 					country,
 					region,
 					city,
@@ -170,8 +173,7 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
-			const isNewVideo =
-				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
+			const isNewVideo = videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 			const shouldSendFirstViewEmail =
 				isNewVideo && !videoRecord.firstViewEmailSentAt;
 
@@ -254,7 +256,11 @@ export async function POST(request: NextRequest) {
 					),
 				);
 			}
-		}).pipe(provideOptionalAuth),
+		}).pipe((trackView) =>
+			isCrossSiteCookieWrite(request)
+				? trackView
+				: provideOptionalAuth(trackView),
+		),
 	);
 
 	return Response.json({ success: true });

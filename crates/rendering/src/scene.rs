@@ -108,7 +108,9 @@ impl InterpolatedScene {
 
         let (current_mode, next_mode, transition_progress) = if let Some(segment) = cursor.segment {
             let transition_in = segment.transition_in.max(0.0);
-            let transition_out = segment.transition_out.max(0.0);
+            let transition_out = segment
+                .transition_out
+                .clamp(0.0, (segment.end - segment.start).max(0.0));
             let transition_start = segment.start - transition_in;
             let transition_end = segment.end - transition_out;
 
@@ -380,6 +382,78 @@ mod tests {
             transition_in: transition,
             transition_out: transition,
         }
+    }
+
+    #[test]
+    fn long_exit_transition_does_not_jump_at_scene_start() {
+        let values = |scene: InterpolatedScene| {
+            [
+                scene.camera_opacity,
+                scene.camera_only_transition_opacity(),
+                scene.camera_only_zoom,
+                scene.split_factor,
+                scene.floating_factor,
+            ]
+        };
+        for mode in [
+            SceneMode::CameraOnly,
+            SceneMode::HideCamera,
+            SceneMode::SplitScreen,
+            SceneMode::Floating,
+        ] {
+            for duration in [0.1, 1.0] {
+                let segments = [SceneSegment {
+                    end: 2.0 + duration,
+                    mode,
+                    transition_out: 2.0,
+                    ..camera_scene(0.3)
+                }];
+                let before = values(scene_at(2.0 - 1e-6, &segments));
+                let start = values(scene_at(2.0, &segments));
+                for (before, start) in before.into_iter().zip(start) {
+                    assert!(
+                        (before - start).abs() < 1e-5,
+                        "{mode:?}, {duration}s: jumped from {before} to {start}"
+                    );
+                }
+                let midpoint = scene_at(2.0 + duration / 2.0, &segments);
+                assert!((midpoint.transition_progress - 0.5).abs() < 1e-5);
+                let end = scene_at(segments[0].end, &segments);
+                assert!(matches!(end.scene_mode, SceneMode::Default));
+            }
+        }
+    }
+
+    #[test]
+    fn loaded_unsorted_scenes_fade_into_the_next_scene() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("project-config.json"),
+            r#"{
+                "timeline": {
+                    "segments": [{ "recordingSegment": 0, "start": 0.0, "end": 12.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "sceneSegments": [
+                        { "start": 8.0, "end": 10.0, "mode": "cameraOnly" },
+                        { "start": 1.0, "end": 3.0, "mode": "cameraOnly" },
+                        { "start": 5.0, "end": 7.0, "mode": "hideCamera" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let config = cap_project::ProjectConfiguration::load(project.path()).unwrap();
+        let segments = &config.timeline.as_ref().unwrap().scene_segments;
+        let before = scene_at(4.6, segments);
+        let during = scene_at(4.85, segments);
+        let after = scene_at(5.0, segments);
+        assert_eq!(before.camera_opacity, 1.0);
+        assert!(
+            (during.camera_opacity - 0.5).abs() < 1e-5,
+            "expected the camera halfway faded out, got {}",
+            during.camera_opacity
+        );
+        assert_eq!(after.camera_opacity, 0.0);
     }
 
     #[test]

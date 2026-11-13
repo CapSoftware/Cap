@@ -71,12 +71,13 @@ const fireEvent = {
 const mocks = vi.hoisted(() => ({
 	folders: vi.fn(),
 	import: vi.fn(),
+	csvImport: vi.fn(),
 	push: vi.fn(),
 	refresh: vi.fn(),
 }));
 vi.mock("@/app/(org)/dashboard/Contexts", () => ({
 	useDashboardContext: () => ({
-		user: { id: "owner", isPro: true },
+		user: { id: "owner", email: "owner@team.test", isPro: true },
 		activeOrganization: {
 			organization: { id: "org", name: "Team", ownerId: "owner" },
 			members: [],
@@ -96,10 +97,19 @@ vi.mock("next/link", () => ({
 	}: React.PropsWithChildren<Record<string, unknown>>) =>
 		React.createElement("a", props, children),
 }));
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+}));
+vi.mock("@/actions/loom-concierge", () => ({
+	answerLoomMigrationQuestion: vi.fn(),
+	confirmLoomMigrationInvite: vi.fn(),
+	getLoomMigrationDashboard: vi.fn(async () => ({ isPro: true, requests: [] })),
+	requestLoomMigration: vi.fn(),
+}));
 vi.mock("@/actions/loom", () => ({
 	getLoomImportFolders: mocks.folders,
 	importFromLoom: mocks.import,
-	importFromLoomCsv: vi.fn(),
+	importFromLoomCsv: mocks.csvImport,
 }));
 vi.mock("@cap/utils", async () => await import("@cap/utils/helpers"));
 vi.mock("@cap/ui", async () => ({
@@ -182,10 +192,73 @@ async function choose(name: string) {
 	});
 }
 
+function loomCsvRow(index: number) {
+	return `https://www.loom.com/share/${index.toString(16).padStart(32, "0")},user@team.test,`;
+}
+async function uploadCsv(rows: string[]) {
+	await act(async () => {
+		fireEvent.click(getByRole(container, "button", { name: "Bulk Import" }));
+	});
+	const csv = ["loom_video_url,user_email,space_name", ...rows].join("\n");
+	const file = new File([csv], "loom.csv", { type: "text/csv" });
+	Object.defineProperty(file, "text", { value: async () => csv });
+	const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!input) throw new Error("Missing CSV input");
+	Object.defineProperty(input, "files", { value: [file] });
+	await act(async () => {
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+	});
+}
+function csvRowResult(rowNumber: number, throttled: boolean) {
+	return throttled
+		? {
+				rowNumber,
+				userEmail: "user@team.test",
+				success: false,
+				error:
+					"Loom is temporarily unavailable. Please retry the import later.",
+				errorCode: "loom_temporarily_unavailable",
+			}
+		: { rowNumber, userEmail: "user@team.test", success: true };
+}
+async function startCsvImport() {
+	await waitFor(() =>
+		expect(
+			(
+				getByRole(container, "button", {
+					name: "Review Import",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false),
+	);
+	await act(async () => {
+		fireEvent.click(getByRole(container, "button", { name: "Review Import" }));
+	});
+	await waitFor(() =>
+		expect(
+			queryByRole(document.body, "button", { name: "Start Import" }),
+		).not.toBeNull(),
+	);
+	vi.useFakeTimers();
+	await act(async () => {
+		fireEvent.click(
+			getByRole(document.body, "button", { name: "Start Import" }),
+		);
+	});
+}
+async function advance(ms: number) {
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(ms);
+	});
+}
+
 describe("Loom importer component", () => {
 	it("shows the inherited subfolder and submits it then returns there", async () => {
 		await render({ folderId: Folder.FolderId.make("child") });
 		await ready();
+		await waitFor(() =>
+			expect(container.textContent).toContain("Moving a whole Loom workspace?"),
+		);
 		expect(
 			getByRole(container, "combobox", { name: "Import to" }).textContent,
 		).toContain("My Caps / Course / Live Calls - Two");
@@ -279,5 +352,117 @@ describe("Loom importer component", () => {
 		expect(mocks.push).toHaveBeenCalledWith(
 			"/dashboard/spaces/space/folder/child",
 		);
+	});
+	it("copies an agent migration prompt for this organization", async () => {
+		const writeText = vi.fn(async (_text: string) => {});
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText },
+		});
+		await render();
+		await waitFor(() =>
+			expect(container.textContent).toContain("Hand it to your agent"),
+		);
+
+		await act(async () => {
+			fireEvent.click(getByRole(container, "button", { name: "Copy prompt" }));
+		});
+
+		expect(writeText).toHaveBeenCalledTimes(1);
+		const prompt = writeText.mock.calls[0]?.[0] ?? "";
+		expect(prompt).toContain("Cap organization: Team");
+		expect(prompt).toContain("--organization org ");
+		expect(prompt).toContain("My Cap account: owner@team.test");
+	});
+
+	it("sends CSV files over the import limit to a concierge migration", async () => {
+		await render();
+		await uploadCsv(
+			Array.from({ length: 3001 }, (_, index) => loomCsvRow(index)),
+		);
+
+		await waitFor(() =>
+			expect(container.textContent).toContain(
+				"CSV imports are limited to 3,000 videos at a time.",
+			),
+		);
+		const conciergeLink = container.querySelector<HTMLAnchorElement>(
+			'a[href="#loom-concierge"]',
+		);
+		expect(conciergeLink?.textContent).toBe("request a concierge migration");
+		expect(container.querySelector("#loom-concierge")).not.toBeNull();
+		expect(
+			(
+				getByRole(container, "button", {
+					name: "Review Import",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+	});
+	it("retries only throttled CSV rows with growing waits and stops after four retries", async () => {
+		mocks.csvImport.mockImplementation(
+			async ({ rows }: { rows: { rowNumber: number }[] }) => ({
+				success: true,
+				importedCount: 0,
+				failedCount: 0,
+				results: rows.map((row) =>
+					csvRowResult(row.rowNumber, row.rowNumber === 2),
+				),
+			}),
+		);
+		await render();
+		await uploadCsv([loomCsvRow(1), loomCsvRow(2)]);
+		try {
+			await startCsvImport();
+			expect(mocks.csvImport).toHaveBeenCalledTimes(1);
+			expect(mocks.csvImport.mock.calls[0]?.[0]).toMatchObject({ bulk: false });
+
+			for (const [index, wait] of [
+				30_000, 60_000, 120_000, 240_000,
+			].entries()) {
+				await advance(wait - 1);
+				expect(mocks.csvImport).toHaveBeenCalledTimes(index + 1);
+				await advance(1);
+				expect(mocks.csvImport).toHaveBeenCalledTimes(index + 2);
+				expect(
+					mocks.csvImport.mock.calls[index + 1]?.[0].rows.map(
+						(row: { rowNumber: number }) => row.rowNumber,
+					),
+				).toEqual([2]);
+			}
+
+			await advance(600_000);
+			expect(mocks.csvImport).toHaveBeenCalledTimes(5);
+			expect(container.textContent).toContain("1 started, 1 failed");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops retrying once throttled CSV rows import", async () => {
+		mocks.csvImport
+			.mockResolvedValueOnce({
+				success: true,
+				importedCount: 1,
+				failedCount: 1,
+				results: [csvRowResult(2, true), csvRowResult(3, false)],
+			})
+			.mockResolvedValueOnce({
+				success: true,
+				importedCount: 1,
+				failedCount: 0,
+				results: [csvRowResult(2, false)],
+			});
+		await render();
+		await uploadCsv([loomCsvRow(1), loomCsvRow(2)]);
+		try {
+			await startCsvImport();
+			await advance(30_000);
+			await advance(600_000);
+			expect(mocks.csvImport).toHaveBeenCalledTimes(2);
+			expect(container.textContent).toContain("2 started, 0 failed");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

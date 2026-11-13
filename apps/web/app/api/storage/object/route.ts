@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import {
+	attachmentContentDisposition,
 	provideOptionalAuth,
 	Storage,
 	Videos,
@@ -26,6 +27,47 @@ const copyHeader = (
 ) => {
 	const value = source.get(sourceName);
 	if (value) target.set(targetName, value);
+};
+
+const INLINE_CONTENT_TYPES = new Set([
+	"video/mp4",
+	"video/webm",
+	"video/quicktime",
+	"video/x-matroska",
+	"video/x-msvideo",
+	"video/x-m4v",
+	"video/mp2t",
+	"video/mpeg",
+	"video/ogg",
+	"video/3gpp",
+	"audio/mp4",
+	"audio/mpeg",
+	"audio/aac",
+	"audio/webm",
+	"audio/ogg",
+	"image/jpeg",
+	"image/png",
+	"image/gif",
+	"image/webp",
+	"text/vtt",
+	"application/vnd.apple.mpegurl",
+	"application/x-mpegurl",
+	"application/json",
+]);
+
+const setObjectContentHeaders = (
+	headers: Headers,
+	contentType: string | null | undefined,
+) => {
+	headers.set("X-Content-Type-Options", "nosniff");
+	headers.set("Content-Security-Policy", "sandbox; default-src 'none'");
+	const essence = contentType?.split(";")[0]?.trim().toLowerCase();
+	if (contentType && essence && INLINE_CONTENT_TYPES.has(essence)) {
+		headers.set("Content-Type", contentType);
+		return;
+	}
+	headers.set("Content-Type", "application/octet-stream");
+	headers.set("Content-Disposition", "attachment");
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -142,6 +184,7 @@ export async function GET(request: NextRequest) {
 	const videoIdParam = request.nextUrl.searchParams.get("videoId");
 	const key = request.nextUrl.searchParams.get("key");
 	const token = request.nextUrl.searchParams.get("token");
+	const downloadName = request.nextUrl.searchParams.get("download");
 
 	if (!videoIdParam || !key) {
 		return new Response("Missing videoId or key", { status: 400 });
@@ -180,7 +223,9 @@ export async function GET(request: NextRequest) {
 
 		const [storage] = yield* Storage.getAccessForVideo(video);
 		if (!("getObjectResponse" in storage)) {
-			const url = yield* storage.getSignedObjectUrl(key);
+			const url = downloadName
+				? yield* storage.getSignedDownloadUrl(key, downloadName)
+				: yield* storage.getSignedObjectUrl(key);
 			return Response.redirect(url);
 		}
 
@@ -230,7 +275,12 @@ export async function GET(request: NextRequest) {
 			headers.set("Accept-Ranges", "bytes");
 			if (head.ContentLength !== undefined)
 				headers.set("Content-Length", String(head.ContentLength));
-			if (head.ContentType) headers.set("Content-Type", head.ContentType);
+			setObjectContentHeaders(headers, head.ContentType);
+			if (downloadName)
+				headers.set(
+					"Content-Disposition",
+					attachmentContentDisposition(downloadName),
+				);
 			return new Response(null, { status: 200, headers });
 		}
 		const upstream = identity
@@ -243,7 +293,12 @@ export async function GET(request: NextRequest) {
 				});
 		const headers = new Headers(CACHE_CONTROL_HEADERS);
 		if (identity) headers.set("ETag", identity);
-		copyHeader(upstream.headers, headers, "content-type", "Content-Type");
+		setObjectContentHeaders(headers, upstream.headers.get("content-type"));
+		if (downloadName)
+			headers.set(
+				"Content-Disposition",
+				attachmentContentDisposition(downloadName),
+			);
 		copyHeader(upstream.headers, headers, "content-length", "Content-Length");
 		copyHeader(upstream.headers, headers, "content-range", "Content-Range");
 		copyHeader(upstream.headers, headers, "accept-ranges", "Accept-Ranges");

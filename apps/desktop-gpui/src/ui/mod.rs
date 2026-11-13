@@ -45,7 +45,11 @@ mod collapsible;
 mod color_picker;
 mod editor_button;
 mod field;
+pub mod glass;
+mod glass_switch;
+mod hint;
 mod kbd;
+pub mod keyboard_nav;
 mod menu;
 mod microphone_level;
 mod number_field;
@@ -86,10 +90,12 @@ pub use editor_button::{EditorButton, EditorButtonVariant};
 #[allow(unused_imports)]
 pub use field::{Field, Subfield};
 #[allow(unused_imports)]
+pub use hint::{Hint, Hints, Side as HintSide};
+
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
-pub(crate) use microphone_level::MicrophoneLevel;
+pub(crate) use microphone_level::{MicrophoneLevel, MicrophoneLevelKind, moves_a_device_pixel};
 #[allow(unused_imports)]
 pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
@@ -121,6 +127,7 @@ pub use text_input::{
     text_input_has_focus,
 };
 #[allow(unused_imports)]
+pub use glass_switch::Switch as GlassSwitch;
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]
 pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};

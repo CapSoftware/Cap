@@ -2,7 +2,7 @@
 
 import { motion } from "motion/react";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { commentMediaUrl } from "@/lib/comment-media";
 import { formatMediaDuration } from "./format-media-duration";
 import type { MediaComment } from "./media-comment-types";
@@ -98,6 +98,7 @@ export const VideoCommentCard = ({
 	// losing the slot doesn't linger as a paused frame).
 	const collapse = useCallback(() => {
 		videoRef.current?.pause();
+		videoRef.current = null;
 		stopPainting();
 		setPlaying(false);
 	}, [stopPainting]);
@@ -113,7 +114,9 @@ export const VideoCommentCard = ({
 	// The mini player's own claim takes the slot over when its video mounts,
 	// and its close is what hands the main video back.
 	const expand = useCallback(() => {
+		const el = videoRef.current;
 		collapse();
+		videoRef.current = el;
 		setExpanded(true);
 	}, [collapse]);
 
@@ -121,8 +124,9 @@ export const VideoCommentCard = ({
 	// callback rather than an effect racing autoPlay.
 	const attachVideo = useCallback(
 		(el: HTMLVideoElement | null) => {
-			videoRef.current = el;
+			// Keep the claim reachable while the lazy mini player loads.
 			if (!el) return;
+			videoRef.current = el;
 			claimPlayback(el, collapse);
 			suspendMainVideo();
 			el.addEventListener("ended", () => {
@@ -134,7 +138,7 @@ export const VideoCommentCard = ({
 		[collapse, paintLoop],
 	);
 
-	useEffect(
+	useLayoutEffect(
 		() => () => {
 			stopPainting();
 			const el = videoRef.current;

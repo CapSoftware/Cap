@@ -98,24 +98,28 @@ describe("byteRangeFor", () => {
 
 describe("buildHeader", () => {
 	test("lays out ftyp, moov, padding and a 64-bit mdat header", () => {
+		const videoSizes = Uint32Array.of(0x01020304, 0x80000000, 300);
+		const audioSizes = Uint32Array.of(10, 20);
+		const videoBytes = videoSizes.reduce((sum, size) => sum + size, 0);
+		const payloadSize = videoBytes + 30;
 		const header = buildHeader({
 			width: 1920,
 			height: 1080,
 			fps: 30,
 			video: {
-				sizes: Uint32Array.from([100, 200, 300]),
+				sizes: videoSizes,
 				runs: [{ first: 0, count: 3, offset: 0 }],
 				keyframes: Uint32Array.from([0]),
 				avcC: avcC(ANNEX_B_PARAMETER_SETS),
 			},
 			audio: {
-				sizes: Uint32Array.from([10, 10]),
-				runs: [{ first: 0, count: 2, offset: 600 }],
+				sizes: audioSizes,
+				runs: [{ first: 0, count: 2, offset: videoBytes }],
 				asc: Uint8Array.of(0x11, 0x90),
 				totalSamples: 1024,
 				priming: 1024,
 			},
-			payloadSize: 620,
+			payloadSize,
 			minimumSize: 64 * 1024,
 		});
 		expect(header.byteLength).toBe(64 * 1024);
@@ -128,17 +132,29 @@ describe("buildHeader", () => {
 		]);
 		const mdat = boxes[3];
 		expect(u32(header, mdat?.start ?? 0)).toBe(1);
-		expect(u64(header, (mdat?.start ?? 0) + 8)).toBe(16 + 620);
+		expect(u64(header, (mdat?.start ?? 0) + 8)).toBe(16 + payloadSize);
 		const moov = boxes[1];
 		if (!moov) throw new Error("no moov");
 		const traks = parseBoxes(moov.body).filter((box) => box.type === "trak");
 		expect(traks).toHaveLength(2);
-		const stbl = child(
-			child(child(traks[0] ?? moov, "mdia") ?? moov, "minf") ?? moov,
-			"stbl",
-		);
-		const co64 = stbl && child(stbl, "co64");
-		expect(co64 && u64(co64.body, 8)).toBe(header.byteLength);
+		for (const [index, sizes] of [videoSizes, audioSizes].entries()) {
+			const stbl = child(
+				child(child(traks[index] ?? moov, "mdia") ?? moov, "minf") ?? moov,
+				"stbl",
+			);
+			const stsz = stbl && child(stbl, "stsz");
+			if (!stsz) throw new Error("no sample sizes");
+			expect(stsz.body.byteLength).toBe(12 + sizes.length * 4);
+			expect(u32(stsz.body, 4)).toBe(0);
+			expect(u32(stsz.body, 8)).toBe(sizes.length);
+			expect(sizes.map((_, sample) => u32(stsz.body, 12 + sample * 4))).toEqual(
+				sizes,
+			);
+			const co64 = stbl && child(stbl, "co64");
+			expect(co64 && u64(co64.body, 8)).toBe(
+				header.byteLength + (index === 0 ? 0 : videoBytes),
+			);
+		}
 	});
 });
 

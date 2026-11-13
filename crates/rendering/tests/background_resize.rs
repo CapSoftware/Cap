@@ -74,7 +74,7 @@ async fn image_background_resize_matches_fresh_layers() {
                 let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, screen_size);
                 let uniforms = ProjectUniforms::new(
                     &constants,
-                    &project,
+                    &std::sync::Arc::new(project.clone()),
                     0,
                     30,
                     XY::new(128, 128),

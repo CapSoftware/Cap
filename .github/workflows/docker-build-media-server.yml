@@ -129,6 +129,14 @@ jobs:
             src/__tests__/lib/media-routes-real-world.integration.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/media-video.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/video-input-validation.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/loom-importer/
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/hls-ladder.test.ts \
+            src/__tests__/lib/hls-ladder-encode.integration.test.ts \
+            src/__tests__/lib/hls-ladder-route.integration.test.ts
 
       - name: Verify long recording performance in the production image
         env:
@@ -199,7 +207,19 @@ jobs:
         run: |
           if [[ "$IMAGE_TAG" == "latest" ]]; then
             current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
-            [[ "$current" == "$GITHUB_SHA" ]] || exit 1
+            if [[ "$current" != "$GITHUB_SHA" ]]; then
+              # Merge trains move main during the build. Keep the tag only when this commit is on main and no newer commit changes this workflow's paths, so an older image can never replace a newer one.
+              comparison="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${current}")"
+              [[ "$(jq -r .status <<<"$comparison")" == "ahead" ]] || exit 1
+              (($(jq '.files | length' <<<"$comparison") < 300)) || exit 1
+              jq -e '[.files[] | .filename, (.previous_filename // empty)
+                | select(startswith("apps/media-server/")
+                  or . == "scripts/benchmark-instant-audio.py"
+                  or . == "scripts/benchmark-audio-intelligibility.py"
+                  or . == "scripts/test-audio-intelligibility.py"
+                  or . == ".github/workflows/docker-build-media-server.yml")]
+                | length == 0' <<<"$comparison" >/dev/null || exit 1
+            fi
           fi
           sources=()
           for path in /tmp/digests/*; do

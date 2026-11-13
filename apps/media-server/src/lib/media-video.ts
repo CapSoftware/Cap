@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type BunFile, file, spawn } from "bun";
+import { type BunFile, file } from "bun";
 import {
 	type CapcodecOptions,
 	capcodecOptionsForJob,
@@ -10,17 +10,53 @@ import {
 	remainingTimeoutMs,
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
+import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
+import {
+	type HdrColor,
+	type HdrTransfer,
+	hdrToSdrFilter,
+	hdrTransferFrom,
+	SDR_COLOR_ARGS,
+} from "./hdr";
 import type { VideoMetadata } from "./job-manager";
 import {
+	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
+	decodeThreadsFromEnv,
 	normalizeLocalPath,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
+import {
+	assertMediaFileContent,
+	assertTrustedStreamingUrl,
+	isMediaFileExtension,
+	trustLocalPlaylist,
+} from "./media-input-policy";
 import { probeVideoFile } from "./media-probe";
+import { spawn } from "./media-spawn";
 import { fetchMedia, materializeMedia } from "./media-transfer";
+import {
+	buildGpuDecodeInputArgs,
+	buildNvencEncodeArgs,
+	canDecodeOnGpu,
+	fitWithinEven,
+	GPU_DECODE_FORMAT_FILTER,
+	logNvencFallback,
+	type NvencOptions,
+	nvencFallbackReason,
+	nvencOptionsFromEnv,
+	recordNvencAttempt,
+	selectedVideoEncoder,
+} from "./nvenc-encoder";
+import {
+	DownloadTooLargeError,
+	downloadUrlToPathParallel,
+	parallelDownloadOptionsFromEnv,
+} from "./parallel-download";
 import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
@@ -36,12 +72,15 @@ import {
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const SHORT_CLIP_START_ALLOWANCE_MS = 10 * 60 * 1000;
+const SHORT_CLIP_FRAMES_PER_SECOND = 60;
+const SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME = 500;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a
 // long (e.g. 60+ minute) manifest with 1000+ segments.
 const STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS = 5_000;
-const MAX_STREAMING_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const MAX_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
@@ -58,6 +97,11 @@ const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+const MAX_DASH_SEGMENTS = 200_000;
+export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
+// Four hours, the longest source the web app accepts, at 70 Mbit/s. Without a
+// cap a source is bounded only by the download clock, on a disk every job shares.
+export const MAX_SOURCE_DOWNLOAD_BYTES = 128 * 1024 ** 3;
 
 export type StorageUploadTarget =
 	| {
@@ -77,6 +121,7 @@ export type StorageUploadTarget =
 			completeUrl: string;
 			abortUrl: string;
 			webhookSecret?: string;
+			loomImportAttemptId?: string;
 	  };
 
 export interface StorageUploadReceipt {
@@ -200,9 +245,8 @@ export function normalizeVideoInputExtension(
 	if (!inputExtension) return ".mp4";
 	const normalized = inputExtension.trim().toLowerCase();
 	if (!normalized) return ".mp4";
-	return normalized.startsWith(".")
-		? (normalized as `.${string}`)
-		: (`.${normalized}` as `.${string}`);
+	const extension = normalized.startsWith(".") ? normalized : `.${normalized}`;
+	return isMediaFileExtension(extension) ? (extension as `.${string}`) : ".mp4";
 }
 
 function isHlsUrl(url: string): boolean {
@@ -582,6 +626,7 @@ function buildDashSegments(
 	resourceBaseUrl: string,
 	query: string,
 	presentationDuration: number | null,
+	maxSegments: number,
 ): DashSegment[] {
 	const media = templateAttrs.media;
 	if (!media) {
@@ -596,12 +641,24 @@ function buildDashSegments(
 			? Math.ceil(presentationDuration * timescale)
 			: null;
 	const segments: DashSegment[] = [];
+	const assertWithinLimit = (count: number) => {
+		if (count > maxSegments) {
+			throw new Error(
+				`DASH manifest lists more than ${MAX_DASH_SEGMENTS} segments`,
+			);
+		}
+	};
 
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
 		let currentTime = 0;
+		let number = startNumber;
 
 		for (const [index, segment] of timelineSegments.entries()) {
+			if (parseNumber(segment.attributes.d) === 0) {
+				number++;
+				continue;
+			}
 			const duration = parsePositiveNumber(segment.attributes.d);
 			if (!duration) {
 				throw new Error("DASH SegmentTimeline entry is missing duration");
@@ -623,13 +680,13 @@ function buildDashSegments(
 				}
 				count = Math.max(0, Math.ceil((endTime - currentTime) / duration));
 			}
+			assertWithinLimit(segments.length + count);
 
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
-				const number = startNumber + segments.length;
 				const resource = substituteDashTemplate(media, {
 					bandwidth,
-					number,
+					number: number++,
 					representationId,
 					time,
 				});
@@ -654,6 +711,7 @@ function buildDashSegments(
 	}
 
 	const segmentCount = Math.max(1, Math.ceil(totalDurationTicks / duration));
+	assertWithinLimit(segmentCount);
 	for (let index = 0; index < segmentCount; index++) {
 		const remainingDuration = totalDurationTicks - duration * index;
 		const segmentDuration = Math.min(duration, remainingDuration);
@@ -679,7 +737,7 @@ function quoteHlsAttribute(value: string): string {
 	return `"${value.replace(/"/g, "%22").replace(/[\r\n]/g, "")}"`;
 }
 
-async function writeDashRepresentationPlaylist(
+export async function writeDashRepresentationPlaylist(
 	dirPath: string,
 	initUrl: string,
 	segments: DashSegment[],
@@ -688,10 +746,11 @@ async function writeDashRepresentationPlaylist(
 		throw new Error("DASH manifest did not resolve any media segments");
 	}
 
-	const targetDuration = Math.max(
-		1,
-		Math.ceil(Math.max(...segments.map((segment) => segment.duration))),
+	const longestSegment = segments.reduce(
+		(longest, segment) => Math.max(longest, segment.duration),
+		0,
 	);
+	const targetDuration = Math.max(1, Math.ceil(longestSegment));
 	const playlistPath = join(dirPath, `${randomUUID()}.m3u8`);
 	const lines = [
 		"#EXTM3U",
@@ -755,6 +814,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(periodAttrs.duration) ??
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
+	let segmentTotal = 0;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -821,7 +881,9 @@ export async function materializeMpdAsHlsPlaylist(
 				resourceBaseUrl,
 				query,
 				presentationDuration,
+				MAX_DASH_SEGMENTS - segmentTotal,
 			);
+			segmentTotal += segments.length;
 			const path = await writeDashRepresentationPlaylist(
 				dirPath,
 				initUrl,
@@ -894,8 +956,12 @@ export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	trustedHosts?: readonly string[],
 ): Promise<string> {
 	let inputPath: string;
+
+	if (isStreamingUrl(videoUrl))
+		assertTrustedStreamingUrl(videoUrl, trustedHosts);
 
 	if (isHlsUrl(videoUrl)) {
 		inputPath = await materializeHlsPlaylist(
@@ -927,6 +993,7 @@ export async function materializeStreamingInput(
 		}
 	}
 
+	trustLocalPlaylist(inputPath);
 	return inputPath;
 }
 
@@ -1175,7 +1242,7 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 	if (!durationSeconds) return DOWNLOAD_TIMEOUT_MS;
 
 	return Math.min(
-		MAX_STREAMING_DOWNLOAD_TIMEOUT_MS,
+		MAX_DOWNLOAD_TIMEOUT_MS,
 		Math.max(
 			DOWNLOAD_TIMEOUT_MS,
 			Math.ceil(durationSeconds * STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS),
@@ -1186,10 +1253,24 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 async function downloadStreamingVideoToTemp(
 	videoUrl: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	await ensureTempDir();
 	const manifestDir = await mkdtemp(join(getTempDir(), "stream-"));
 	const tempFile = await createTempFile(".mkv");
+	const sizeController = new AbortController();
+	const signal = AbortSignal.any([
+		sizeController.signal,
+		...(abortSignal ? [abortSignal] : []),
+	]);
+	const sizeCheck = maxBytes
+		? setInterval(() => {
+				if (file(tempFile.path).size > maxBytes) {
+					sizeController.abort(new Error("Loom imports are limited to 10 GB"));
+				}
+			}, 250)
+		: undefined;
+	sizeCheck?.unref();
 	const cleanup = async () => {
 		await tempFile.cleanup();
 		await rm(manifestDir, { force: true, recursive: true }).catch(() => {});
@@ -1200,7 +1281,7 @@ async function downloadStreamingVideoToTemp(
 		const inputPath = await materializeStreamingInput(
 			videoUrl,
 			manifestDir,
-			abortSignal,
+			signal,
 		);
 		const durationSeconds =
 			await estimateMaterializedStreamingDurationSeconds(manifestDir);
@@ -1213,8 +1294,11 @@ async function downloadStreamingVideoToTemp(
 				ffmpegHlsCapabilities,
 			),
 			downloadTimeoutMs,
-			abortSignal,
+			signal,
 		);
+		if (maxBytes && file(tempFile.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Streaming download produced empty file");
@@ -1226,7 +1310,10 @@ async function downloadStreamingVideoToTemp(
 		};
 	} catch (err) {
 		await cleanup();
+		if (sizeController.signal.aborted) throw sizeController.signal.reason;
 		throw err;
+	} finally {
+		if (sizeCheck) clearInterval(sizeCheck);
 	}
 }
 
@@ -1234,23 +1321,46 @@ export async function downloadVideoToTemp(
 	videoUrl: string,
 	inputExtension?: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	if (isStreamingUrl(videoUrl)) {
-		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
+		return await downloadStreamingVideoToTemp(videoUrl, abortSignal, maxBytes);
 	}
 
 	const local = await materializeMedia(videoUrl, abortSignal);
-	if (local) return { path: local.path, cleanup: async () => {} };
+	if (local) {
+		if (maxBytes && file(local.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
+		return { path: local.path, cleanup: async () => {} };
+	}
 
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);
 
 	try {
-		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		const timeoutSignal = AbortSignal.timeout(
+			maxBytes === undefined ? DOWNLOAD_TIMEOUT_MS : MAX_DOWNLOAD_TIMEOUT_MS,
+		);
 		const combinedSignal = abortSignal
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
+
+		const parallel = parallelDownloadOptionsFromEnv();
+		if (parallel.concurrency > 1 && maxBytes === undefined) {
+			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
+				...parallel,
+				signal: combinedSignal,
+				maxBytes: MAX_SOURCE_DOWNLOAD_BYTES,
+				fetchImpl: createGuardedMediaFetch(videoUrl, { fetchImpl: fetch }),
+			});
+			if (file(tempFile.path).size === 0) {
+				throw new Error("Downloaded video is empty");
+			}
+			await assertMediaFileContent(tempFile.path);
+			return tempFile;
+		}
 
 		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
@@ -1266,23 +1376,40 @@ export async function downloadVideoToTemp(
 		if (!response.body) {
 			throw new Error("No response body");
 		}
+		const byteLimit = maxBytes ?? MAX_SOURCE_DOWNLOAD_BYTES;
+		const tooLarge = () =>
+			maxBytes
+				? new Error("Loom imports are limited to 10 GB")
+				: new DownloadTooLargeError(byteLimit);
+		if (Number(response.headers.get("content-length")) > byteLimit) {
+			await response.body.cancel();
+			throw tooLarge();
+		}
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let downloadedBytes = 0;
+		let writerEnded = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
+				downloadedBytes += value.byteLength;
+				if (downloadedBytes > byteLimit) throw tooLarge();
 				writer.write(value);
 			}
+			writerEnded = true;
 			await writer.end();
 		} finally {
+			await reader.cancel().catch(() => {});
 			reader.releaseLock();
+			if (!writerEnded) await Promise.resolve(writer.end()).catch(() => {});
 		}
 
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Downloaded video is empty");
 		}
+		await assertMediaFileContent(tempFile.path);
 
 		return tempFile;
 	} catch (err) {
@@ -1307,13 +1434,46 @@ function needsVideoTranscode(
 	);
 }
 
-function needsAudioTranscode(metadata: VideoMetadata): boolean {
-	return Boolean(metadata.audioCodec && metadata.audioCodec !== "aac");
+// The probe names only the audio codecs it knows. A track in any other codec
+// (ALAC, DTS and the like) still reports its channels, so the track itself
+// says whether there is audio.
+export function sourceHasAudio(
+	metadata: Pick<VideoMetadata, "audioCodec" | "audioChannels">,
+): boolean {
+	return Boolean(metadata.audioCodec) || metadata.audioChannels !== null;
 }
 
-function getProcessTimeoutMs(
+function needsAudioTranscode(metadata: VideoMetadata): boolean {
+	return sourceHasAudio(metadata) && metadata.audioCodec !== "aac";
+}
+
+// With the frame size known, a short clip gets a deadline sized to its work
+// instead of the full base: ten minutes to start, then half a second for every
+// megapixel of every frame, counted at 60 frames a second because the probed
+// rate of a variable frame rate source can be far too low.
+function shortClipTimeoutMs(
+	durationSeconds: number,
+	frame: { width: number; height: number },
+): number {
+	const megapixels = (frame.width * frame.height) / 1_000_000;
+	if (!Number.isFinite(megapixels) || megapixels <= 0) {
+		return Number.POSITIVE_INFINITY;
+	}
+	return (
+		SHORT_CLIP_START_ALLOWANCE_MS +
+		Math.ceil(
+			durationSeconds *
+				SHORT_CLIP_FRAMES_PER_SECOND *
+				megapixels *
+				SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME,
+		)
+	);
+}
+
+export function getProcessTimeoutMs(
 	durationSeconds: number,
 	baseTimeoutMs: number,
+	frame?: { width: number; height: number },
 ): number {
 	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
 		return baseTimeoutMs;
@@ -1322,7 +1482,9 @@ function getProcessTimeoutMs(
 	return Math.min(
 		MAX_PROCESS_TIMEOUT_MS,
 		Math.max(
-			baseTimeoutMs,
+			frame
+				? Math.min(baseTimeoutMs, shortClipTimeoutMs(durationSeconds, frame))
+				: baseTimeoutMs,
 			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
 		),
 	);
@@ -1425,10 +1587,12 @@ export function pickMobileSafeH264Level(
 	return { value: 52, ffmpegValue: "5.2" };
 }
 
-async function probeH264Level(
+async function probeVideoStreamEntries(
 	inputPath: string,
+	showEntries: string,
 	abortSignal?: AbortSignal,
-): Promise<number | null> {
+	keyed = false,
+): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
 			cmd: [
@@ -1438,9 +1602,9 @@ async function probeH264Level(
 				"-select_streams",
 				"v:0",
 				"-show_entries",
-				"stream=level",
+				showEntries,
 				"-of",
-				"default=noprint_wrappers=1:nokey=1",
+				`default=noprint_wrappers=1:nokey=${keyed ? 0 : 1}`,
 				inputPath,
 			],
 			stdout: "pipe",
@@ -1472,10 +1636,7 @@ async function probeH264Level(
 		);
 		const exitCode = await proc.exited;
 		if (exitCode !== 0) return null;
-
-		const rawLevel = stdout.trim().split(/\s+/)[0] ?? "";
-		const level = Number.parseInt(rawLevel, 10);
-		return Number.isFinite(level) && level > 0 ? level : null;
+		return stdout.trim();
 	} catch {
 		return null;
 	} finally {
@@ -1486,6 +1647,131 @@ async function probeH264Level(
 	}
 }
 
+async function probeH264Level(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=level",
+		abortSignal,
+	);
+	if (stdout === null) return null;
+	const rawLevel = stdout.split(/\s+/)[0] ?? "";
+	const level = Number.parseInt(rawLevel, 10);
+	return Number.isFinite(level) && level > 0 ? level : null;
+}
+
+// Safari, phones and Firefox on Windows play H.264 through hardware decoders that only take 8-bit 4:2:0.
+const BROWSER_H264_PIXEL_FORMATS = new Set(["yuv420p", "yuvj420p"]);
+
+async function probeH264PixelFormat(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<string | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=pix_fmt",
+		abortSignal,
+	);
+	return stdout?.split(/\s+/)[0] || null;
+}
+
+export async function probeVideoRotation(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream_side_data=rotation",
+		abortSignal,
+	);
+	if (stdout === null) return null;
+	const rawRotation = stdout.split(/\s+/)[0] ?? "";
+	if (rawRotation === "") return 0;
+	const rotation = Number.parseFloat(rawRotation);
+	return Number.isFinite(rotation) ? rotation : null;
+}
+
+export interface VideoSourceTraits {
+	rotation: number | null;
+	hdr: HdrTransfer | null;
+	hdrColor?: HdrColor;
+}
+
+interface ProbedSourceTraits extends VideoSourceTraits {
+	unconvertibleDolbyVision: boolean;
+}
+
+async function readVideoSourceTraits(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<ProbedSourceTraits | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=color_transfer,color_primaries,color_space:stream_side_data=rotation,dv_profile",
+		abortSignal,
+		true,
+	);
+	if (stdout === null) return null;
+	const value = (key: string) =>
+		stdout.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? null;
+	const rawRotation = value("rotation");
+	const rotation = rawRotation === null ? 0 : Number.parseFloat(rawRotation);
+	const hdr = hdrTransferFrom(value("color_transfer"));
+	return {
+		rotation: Number.isFinite(rotation) ? rotation : null,
+		hdr,
+		...(hdr === null
+			? {}
+			: {
+					hdrColor: {
+						primaries: value("color_primaries"),
+						matrix: value("color_space"),
+					},
+				}),
+		// Dolby Vision profile 5 has no HDR10 or HLG picture underneath: its
+		// pixels only make sense through Dolby's own metadata, whatever the
+		// stream's colour tags say.
+		unconvertibleDolbyVision: value("dv_profile") === "5",
+	};
+}
+
+// One ffprobe for the two things that decide how a source is decoded: a
+// rotated source cannot be decoded on the GPU, and an HDR source has to be
+// converted to standard range on the CPU.
+export async function probeVideoSourceTraits(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	const probed = await readVideoSourceTraits(inputPath, abortSignal);
+	if (probed === null) return { rotation: null, hdr: null };
+	const { unconvertibleDolbyVision: _, ...traits } = probed;
+	return traits;
+}
+
+// The traits an encode is planned from. Guessing standard range for a source
+// that could not be probed turns an HDR upload into a grey, flat video that
+// looks like a finished job, so the encode stops instead.
+export async function requireVideoSourceTraits(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const probed = await readVideoSourceTraits(inputPath, abortSignal);
+		abortSignal?.throwIfAborted();
+		if (probed === null) continue;
+		const { unconvertibleDolbyVision, ...traits } = probed;
+		if (unconvertibleDolbyVision) {
+			throw new Error(
+				"Dolby Vision profile 5 video has no HDR10 or HLG base layer and cannot be converted to standard range",
+			);
+		}
+		return traits;
+	}
+	throw new Error("Could not read the colour information of the source video");
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -1494,29 +1780,53 @@ export async function processVideo(
 	abortSignal?: AbortSignal,
 	resilientFlags?: ResilientInputFlags,
 ): Promise<TempFileHandle> {
+	abortSignal?.throwIfAborted();
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, value]) => value !== undefined),
 	) as VideoProcessingOptions;
 	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
-	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
-	const sourceH264Level =
+	const [sourceH264Level, sourcePixelFormat] =
 		!remuxOnly && metadata.videoCodec === "h264"
-			? await probeH264Level(inputPath, abortSignal)
-			: null;
+			? await Promise.all([
+					probeH264Level(inputPath, abortSignal),
+					probeH264PixelFormat(inputPath, abortSignal),
+				])
+			: [null, null];
+	abortSignal?.throwIfAborted();
+	const browserPixelFormat =
+		sourcePixelFormat === null ||
+		BROWSER_H264_PIXEL_FORMATS.has(sourcePixelFormat);
+	// 8-bit H.264 is never HDR, so the common source is not probed for it.
+	const traits =
+		remuxOnly || (metadata.videoCodec === "h264" && browserPixelFormat)
+			? null
+			: await requireVideoSourceTraits(inputPath, abortSignal);
+	abortSignal?.throwIfAborted();
+	const hdr = traits?.hdr ?? null;
+	// Created only once nothing above can throw, so a job cancelled while its
+	// source is probed leaves no output path behind.
+	const outputTempFile = await createTempFile(".mp4");
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
 		metadata.videoCodec === "h264" &&
+		browserPixelFormat &&
 		sourceH264Level !== null &&
 		sourceH264Level > targetH264Level.value &&
 		metadata.width <= opts.maxWidth &&
 		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
-		: needsVideoTranscode(metadata, opts, sourceH264Level);
-	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
+		: hdr !== null ||
+			!browserPixelFormat ||
+			needsVideoTranscode(metadata, opts, sourceH264Level);
+	// A remux copies audio as it is, but a codec the probe cannot name is not
+	// known to fit in an MP4, so that one is still encoded.
+	const audioTranscode = remuxOnly
+		? sourceHasAudio(metadata) && !metadata.audioCodec
+		: needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
 		? buildExtraInputFlags(resilientFlags)
 		: [];
@@ -1526,9 +1836,12 @@ export async function processVideo(
 	const processTimeoutMs = getProcessTimeoutMs(
 		metadata.duration,
 		opts.timeoutMs,
+		metadata,
 	);
 	const capcodec =
-		videoTranscode && !normalizeH264Level ? capcodecOptionsForJob(opts) : null;
+		videoTranscode && !normalizeH264Level && hdr === null
+			? capcodecOptionsForJob(opts)
+			: null;
 	if (capcodec) {
 		try {
 			await processVideoWithCapcodec(
@@ -1544,44 +1857,209 @@ export async function processVideo(
 				onProgress,
 				abortSignal,
 			);
+			abortSignal?.throwIfAborted();
 			return outputTempFile;
 		} catch (err) {
 			await outputTempFile.cleanup();
+			abortSignal?.throwIfAborted();
 			throw err;
 		}
 	}
+	const argsInput: ProcessVideoArgsInput = {
+		inputPath,
+		outputPath: outputTempFile.path,
+		videoCodec: metadata.videoCodec,
+		hasAudio: sourceHasAudio(metadata),
+		opts,
+		targetH264Level: targetH264Level.ffmpegValue,
+		normalizeH264Level,
+		videoTranscode,
+		audioTranscode,
+		extraInputArgs,
+		extraOutputArgs,
+		sourceWidth: metadata.width,
+		sourceHeight: metadata.height,
+		hdr,
+		hdrColor: traits?.hdrColor,
+		// NVENC leaves the CPU free, so decode (and scale) can use every core.
+		decodeThreads: decodeThreadsFromEnv(
+			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
+			selectedVideoEncoder() === "nvenc" ? 0 : 2,
+		),
+	};
+	const totalDurationUs = metadata.duration * 1_000_000;
+	const nvenc =
+		videoTranscode && !normalizeH264Level ? nvencOptionsFromEnv() : null;
+
+	try {
+		if (nvenc) {
+			const gpuDecode =
+				hdr === null &&
+				canDecodeOnGpu(
+					metadata.videoCodec,
+					traits
+						? traits.rotation
+						: await probeVideoRotation(inputPath, abortSignal),
+					nvenc.gpuDecodeCodecs,
+				);
+			try {
+				await runTranscodeCommand(
+					buildProcessVideoArgs({
+						...argsInput,
+						nvenc: { options: nvenc, gpuDecode },
+					}),
+					outputTempFile.path,
+					totalDurationUs,
+					processTimeoutMs,
+					onProgress,
+					abortSignal,
+				);
+				recordNvencAttempt("process");
+				abortSignal?.throwIfAborted();
+				return outputTempFile;
+			} catch (error) {
+				const reason = nvencFallbackReason(
+					error,
+					abortSignal?.aborted ?? false,
+				);
+				if (reason === null) throw error;
+				recordNvencAttempt("process", reason);
+				logNvencFallback({
+					job: "process",
+					sourceCodec: metadata.videoCodec,
+					gpuDecode,
+					reason,
+				});
+			}
+		}
+
+		await runTranscodeCommand(
+			buildProcessVideoArgs(argsInput),
+			outputTempFile.path,
+			totalDurationUs,
+			processTimeoutMs,
+			onProgress,
+			abortSignal,
+		);
+		abortSignal?.throwIfAborted();
+		return outputTempFile;
+	} catch (err) {
+		await outputTempFile.cleanup();
+		abortSignal?.throwIfAborted();
+		throw err;
+	}
+}
+
+export interface ProcessVideoArgsInput {
+	inputPath: string;
+	outputPath: string;
+	videoCodec: string;
+	hasAudio: boolean;
+	opts: Pick<
+		Required<VideoProcessingOptions>,
+		"maxWidth" | "maxHeight" | "preset" | "crf" | "audioBitrate"
+	>;
+	targetH264Level: string;
+	normalizeH264Level: boolean;
+	videoTranscode: boolean;
+	audioTranscode: boolean;
+	extraInputArgs: string[];
+	extraOutputArgs: string[];
+	decodeThreads: string;
+	sourceWidth?: number;
+	sourceHeight?: number;
+	hdr?: HdrTransfer | null;
+	hdrColor?: HdrColor | null;
+	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
+}
+
+export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
+	const { opts, nvenc } = input;
+	const hdr = input.hdr ?? null;
+	const gpuDecode = Boolean(
+		hdr === null && nvenc?.gpuDecode && input.sourceWidth && input.sourceHeight,
+	);
+	const source = {
+		width: input.sourceWidth ?? 0,
+		height: input.sourceHeight ?? 0,
+	};
+	const fitScaleFilter = `scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
+	const cpuScaleFilter =
+		hdr === null
+			? fitScaleFilter
+			: `${hdrToSdrFilter(
+					hdr,
+					source.width > 0 && source.height > 0
+						? fitWithinEven(
+								source.width,
+								source.height,
+								opts.maxWidth,
+								opts.maxHeight,
+							)
+						: undefined,
+					input.hdrColor,
+				)},${fitScaleFilter}`;
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
-		"2",
-		...extraInputArgs,
+		input.decodeThreads,
+		...(gpuDecode
+			? buildGpuDecodeInputArgs(
+					input.videoCodec,
+					source,
+					fitWithinEven(
+						source.width,
+						source.height,
+						opts.maxWidth,
+						opts.maxHeight,
+					),
+				)
+			: []),
+		...input.extraInputArgs,
+		// Browser captures change size when the tab resizes. FFmpeg rebuilds the filter graph and scales every frame
+		// back to the first size, for NVENC as for libx264. Keeping the first graph instead (-reinit_filter 0) feeds
+		// frames of the new size through filters set up for the old one, and h264_nvenc stalls then segfaults.
 		"-i",
-		inputPath,
+		input.inputPath,
 	];
 
-	if (normalizeH264Level) {
+	if (input.normalizeH264Level) {
 		ffmpegArgs.push(
 			"-c:v",
 			"copy",
 			"-bsf:v",
-			`h264_metadata=level=${targetH264Level.ffmpegValue}`,
+			`h264_metadata=level=${input.targetH264Level}`,
 		);
-	} else if (videoTranscode) {
-		ffmpegArgs.push(
-			"-c:v",
-			"libx264",
-			"-preset",
-			opts.preset,
-			"-crf",
-			opts.crf.toString(),
-			"-vf",
-			`scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`,
-			"-pix_fmt",
-			"yuv420p",
-			"-level:v",
-			targetH264Level.ffmpegValue,
-		);
-		if (metadata.videoCodec === "vp8" || metadata.videoCodec === "vp9") {
+	} else if (input.videoTranscode) {
+		if (nvenc) {
+			ffmpegArgs.push(
+				...buildNvencEncodeArgs(nvenc.options, opts.crf),
+				...(gpuDecode
+					? ["-vf", GPU_DECODE_FORMAT_FILTER]
+					: ["-vf", cpuScaleFilter, "-pix_fmt", "yuv420p"]),
+			);
+		} else {
+			ffmpegArgs.push(
+				"-c:v",
+				"libx264",
+				"-preset",
+				opts.preset,
+				"-crf",
+				opts.crf.toString(),
+				"-vf",
+				cpuScaleFilter,
+				"-pix_fmt",
+				"yuv420p",
+			);
+		}
+		if (nvenc) {
+			// h264_nvenc refuses to open when the nominal frame rate exceeds the level (browser WebM often reports 1000 fps); libx264 only writes it into the SPS, so tag it the same way.
+			ffmpegArgs.push("-bsf:v", `h264_metadata=level=${input.targetH264Level}`);
+		} else {
+			ffmpegArgs.push("-level:v", input.targetH264Level);
+		}
+		if (hdr !== null) ffmpegArgs.push(...SDR_COLOR_ARGS);
+		if (input.videoCodec === "vp8" || input.videoCodec === "vp9") {
 			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
 			ffmpegArgs.push("-bf", "0");
 		}
@@ -1589,8 +2067,8 @@ export async function processVideo(
 		ffmpegArgs.push("-c:v", "copy");
 	}
 
-	if (metadata.audioCodec) {
-		if (audioTranscode) {
+	if (input.hasAudio) {
+		if (input.audioTranscode) {
 			ffmpegArgs.push("-c:a", "aac", "-b:a", opts.audioBitrate);
 		} else {
 			ffmpegArgs.push("-c:a", "copy");
@@ -1602,13 +2080,25 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
-		...extraOutputArgs,
+		...input.extraOutputArgs,
 		"-progress",
 		"pipe:2",
 		"-y",
-		outputTempFile.path,
+		input.outputPath,
 	);
+	return ffmpegArgs;
+}
 
+export async function runTranscodeCommand(
+	ffmpegArgs: string[],
+	outputPath: string,
+	totalDurationUs: number,
+	processTimeoutMs: number,
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+	stallWindows?: EncodeStallWindows,
+): Promise<void> {
+	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
 		spawn({
 			cmd: ffmpegArgs,
@@ -1616,7 +2106,6 @@ export async function processVideo(
 			stderr: "pipe",
 		}),
 	);
-	const totalDurationUs = metadata.duration * 1_000_000;
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
@@ -1627,6 +2116,13 @@ export async function processVideo(
 
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
+	const errorLines: string[] = [];
+	const progressWatch = watchEncodeProgress(outputPath, stallWindows);
+	let stallError: unknown;
+	progressWatch.stalled.catch((error: unknown) => {
+		stallError = error;
+		void terminateProcess(proc);
+	});
 
 	try {
 		await withTimeout(
@@ -1653,6 +2149,8 @@ export async function processVideo(
 							if (stderrLines.length > maxStderrLines) {
 								stderrLines.shift();
 							}
+							collectFfmpegErrorLine(errorLines, line);
+							progressWatch.observe(line);
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -1665,12 +2163,13 @@ export async function processVideo(
 
 				const exitCode = await proc.exited;
 				if (exitCode !== 0) {
-					throw new Error(
+					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+						errorLines,
 					);
 				}
 
-				const outputSize = await file(outputTempFile.path).size;
+				const outputSize = await file(outputPath).size;
 				if (outputSize === 0) {
 					throw new Error("FFmpeg produced empty output file");
 				}
@@ -1678,12 +2177,10 @@ export async function processVideo(
 			processTimeoutMs,
 			() => terminateProcess(proc),
 		);
-
-		return outputTempFile;
-	} catch (err) {
-		await outputTempFile.cleanup();
-		throw err;
+	} catch (error) {
+		throw stallError ?? error;
 	} finally {
+		progressWatch.stop();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
@@ -1735,7 +2232,7 @@ async function processVideoWithCapcodec(
 			"-i",
 			videoOnly.path,
 		];
-		if (metadata.audioCodec) {
+		if (sourceHasAudio(metadata)) {
 			muxArgs.push(
 				...extraInputArgs,
 				"-i",
@@ -2389,6 +2886,7 @@ async function getMultipartPartUrl(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			partNumber,
@@ -2490,6 +2988,7 @@ async function completeMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			parts,
@@ -2524,6 +3023,7 @@ async function abortMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 		},
@@ -2537,34 +3037,47 @@ async function abortMultipartUpload(
 	await response.body?.cancel().catch(() => {});
 }
 
-async function uploadFileMultipart(
+export function multipartUploadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(env.MEDIA_SERVER_UPLOAD_CONCURRENCY ?? "", 10);
+	return Number.isFinite(value) && value > 0 ? Math.min(value, 16) : 1;
+}
+
+async function uploadMultipartParts(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
 	abortSignal?: AbortSignal,
-): Promise<StorageUploadReceipt> {
+): Promise<UploadedPart[]> {
 	const fileHandle = file(filePath);
 	const contentLength = fileHandle.size;
 	const partSize = Math.floor(target.partSize);
 	const parts: UploadedPart[] = [];
 
-	try {
-		abortSignal?.throwIfAborted();
-		if (contentLength <= 0) {
-			throw new Error("Multipart upload requires a non-empty file");
-		}
+	abortSignal?.throwIfAborted();
+	if (contentLength <= 0) {
+		throw new Error("Multipart upload requires a non-empty file");
+	}
 
-		if (partSize < MULTIPART_MIN_PART_SIZE_BYTES) {
-			throw new Error("Multipart upload part size is too small");
-		}
+	if (partSize < MULTIPART_MIN_PART_SIZE_BYTES) {
+		throw new Error("Multipart upload part size is too small");
+	}
 
-		const partCount = Math.ceil(contentLength / partSize);
-		if (partCount > MULTIPART_MAX_PARTS) {
-			throw new Error(
-				`Multipart upload would require too many parts: ${partCount}/${MULTIPART_MAX_PARTS}`,
-			);
-		}
+	const partCount = Math.ceil(contentLength / partSize);
+	if (partCount > MULTIPART_MAX_PARTS) {
+		throw new Error(
+			`Multipart upload would require too many parts: ${partCount}/${MULTIPART_MAX_PARTS}`,
+		);
+	}
 
-		for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+	const failed = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, failed.signal])
+		: failed.signal;
+	let nextPart = 1;
+	const worker = async () => {
+		while (nextPart <= partCount) {
+			const partNumber = nextPart++;
 			const start = (partNumber - 1) * partSize;
 			const end = Math.min(start + partSize, contentLength);
 			const partLength = end - start;
@@ -2572,28 +3085,98 @@ async function uploadFileMultipart(
 				target,
 				partNumber,
 				partLength,
-				abortSignal,
+				signal,
 			);
 			const etag = await uploadMultipartPart(
 				url,
 				fileHandle.slice(start, end),
 				partLength,
 				partNumber,
-				abortSignal,
+				signal,
 			);
 			parts.push({ partNumber, etag, size: partLength });
 		}
-
-		return await completeMultipartUpload(target, parts, abortSignal);
+	};
+	const workers = Array.from(
+		{ length: Math.min(multipartUploadConcurrencyFromEnv(), partCount) },
+		() => worker(),
+	);
+	try {
+		await Promise.all(workers);
 	} catch (error) {
-		await abortMultipartUpload(target).catch((abortError) => {
-			console.warn(
-				"Multipart upload abort failed:",
-				abortError instanceof Error ? abortError.message : abortError,
-			);
-		});
+		failed.abort();
+		await Promise.allSettled(workers);
 		throw error;
 	}
+	return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
+async function abortMultipartUploadQuietly(
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+) {
+	await abortMultipartUpload(target).catch((abortError) => {
+		console.warn(
+			"Multipart upload abort failed:",
+			abortError instanceof Error ? abortError.message : abortError,
+		);
+	});
+}
+
+async function uploadFileMultipart(
+	filePath: string,
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+	abortSignal?: AbortSignal,
+): Promise<StorageUploadReceipt> {
+	try {
+		const parts = await uploadMultipartParts(filePath, target, abortSignal);
+		return await completeMultipartUpload(target, parts, abortSignal);
+	} catch (error) {
+		await abortMultipartUploadQuietly(target);
+		throw error;
+	}
+}
+
+export interface PendingStorageUpload {
+	// Publishes the upload; for multipart targets this is the only step that creates the object.
+	finish(): Promise<StorageUploadReceipt>;
+	// Stops early work and waits for it to settle, leaving the target to the caller's abort.
+	cancel(): Promise<void>;
+}
+
+// Multipart parts are invisible until the upload is completed, so they can be sent while the caller
+// is still checking the file; single PUT targets only upload once finish() is called.
+export function beginStorageUpload(
+	filePath: string,
+	target: StorageUploadTarget,
+	contentType: string,
+	abortSignal?: AbortSignal,
+): PendingStorageUpload {
+	if (target.type !== "multipart")
+		return {
+			finish: () =>
+				uploadFileToStorage(filePath, target, contentType, abortSignal),
+			cancel: async () => {},
+		};
+	const early = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, early.signal])
+		: early.signal;
+	const parts = uploadMultipartParts(filePath, target, signal);
+	parts.catch(() => {});
+	return {
+		finish: async () => {
+			try {
+				return await completeMultipartUpload(target, await parts, abortSignal);
+			} catch (error) {
+				await abortMultipartUploadQuietly(target);
+				throw error;
+			}
+		},
+		cancel: async () => {
+			early.abort();
+			await parts.catch(() => {});
+		},
+	};
 }
 
 export async function abortStorageUploadTarget(

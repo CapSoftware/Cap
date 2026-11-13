@@ -20,6 +20,7 @@
 	],
 	"scripts": {
 		"build": "tsup",
+		"test": "bun test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {},

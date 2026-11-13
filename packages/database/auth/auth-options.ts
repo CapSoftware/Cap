@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
@@ -7,17 +7,28 @@ import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
 import AppleProvider from "next-auth/providers/apple";
+import CredentialsProvider from "next-auth/providers/credentials";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
-import { sendEmail } from "../emails/config.ts";
+import { getEmailDeliveryStatus, sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
+import {
+	DUB_CLICK_ID_COOKIE,
+	DUB_PARTNER_DATA_COOKIE,
+	dubCookieDomain,
+	parseDubClickId,
+	trackReferralLead,
+} from "../referrals.ts";
 import { users } from "../schema.ts";
+import { isDisposableEmailSignup } from "./disposable-signup.ts";
 import {
 	isBlockedAccountEmail,
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
+	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import {
@@ -31,6 +42,10 @@ import { ssoLoginErrorPath } from "./sso-state.ts";
 export const maxDuration = 120;
 
 const OTP_CODE_MAX_AGE_SECONDS = 10 * 60;
+
+// authOptions() is rebuilt per request (getServerSession, getCurrentUser), so
+// the trusted-proxy warning is gated at module scope to log once per process.
+let trustedProxyWarned = false;
 
 export async function decodeSessionToken(
 	params: JWTDecodeParams,
@@ -59,6 +74,58 @@ export async function decodeSessionToken(
 
 	return token;
 }
+
+// Credits a new account to the partner link it came from. Runs inside the
+// NextAuth callback, so it must never throw: a Dub outage cannot block sign-up.
+async function trackReferralSignup(user: {
+	id: string;
+	email?: string | null;
+	name?: string | null;
+	image?: string | null;
+}) {
+	try {
+		const { cookies, headers } = await import("next/headers");
+		const cookieStore = await cookies();
+		const clickId = parseDubClickId(
+			cookieStore.get(DUB_CLICK_ID_COOKIE)?.value,
+		);
+		if (!clickId) return;
+
+		const tracked = await trackReferralLead({
+			clickId,
+			user: {
+				id: user.id,
+				email: user.email,
+				name: user.name,
+				image: user.image,
+			},
+		});
+		if (!tracked) return;
+
+		// The click now belongs to this user; clear it so another account
+		// created in the same browser is not credited to the same partner.
+		const domain = dubCookieDomain((await headers()).get("host") ?? "");
+		for (const name of [DUB_CLICK_ID_COOKIE, DUB_PARTNER_DATA_COOKIE]) {
+			cookieStore.set(name, "", { domain, path: "/", maxAge: 0 });
+		}
+	} catch (error) {
+		console.error("[referrals] Failed to track referral sign-up", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+const OIDC_PROVIDER_ID = "oidc";
+
+type OidcClaims = {
+	sub: string;
+	email?: string;
+	email_verified?: boolean;
+	name?: string;
+	preferred_username?: string;
+	picture?: string;
+};
 
 export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
@@ -90,7 +157,52 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_providers) return _providers;
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
+			const oidcIssuer = serverEnv().OIDC_ISSUER;
+			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
+			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
+			const trustedProxyEnabled =
+				serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
+				serverEnv().TRUSTED_PROXY_AUTH_EMAIL &&
+				serverEnv().TRUSTED_PROXY_AUTH_SECRET?.trim();
+			if (!trustedProxyWarned && trustedProxyEnabled) {
+				trustedProxyWarned = true;
+				console.warn(
+					"[auth] trusted-proxy sign-in is ENABLED. Keep the origin private and use an authenticating reverse proxy that strips client-sent copies of both the trust and secret headers and sets them only on owner-authenticated requests.",
+				);
+			}
 			_providers = [
+				...(oidcIssuer && oidcClientId && oidcClientSecret
+					? [
+							{
+								id: OIDC_PROVIDER_ID,
+								name: serverEnv().OIDC_NAME || "SSO",
+								type: "oauth" as const,
+								wellKnown: `${oidcIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
+								issuer: oidcIssuer,
+								clientId: oidcClientId,
+								clientSecret: oidcClientSecret,
+								idToken: true,
+								checks: ["state" as const, "pkce" as const],
+								authorization: { params: { scope: "openid email profile" } },
+								// Linking is gated on a verified email in the signIn callback,
+								// because a generic issuer is not known to verify addresses.
+								allowDangerousEmailAccountLinking: true,
+								profile(profile: OidcClaims) {
+									const email = profile.email?.trim().toLowerCase();
+									return {
+										id: profile.sub,
+										name:
+											profile.name ||
+											profile.preferred_username ||
+											email?.split("@")[0] ||
+											profile.sub,
+										email,
+										image: profile.picture ?? null,
+									};
+								},
+							},
+						]
+					: []),
 				...(appleClientId && appleClientSecret
 					? [
 							AppleProvider({
@@ -135,22 +247,88 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							}),
 						]
 					: []),
+				...(trustedProxyEnabled
+					? [
+							CredentialsProvider({
+								id: "trusted-proxy",
+								name: "Reverse Proxy",
+								credentials: {},
+								// SECURITY: this header is trusted ONLY because the operator
+								// opted in via env, asserting Cap runs behind a reverse proxy
+								// that strips client-sent copies of both trust headers and sets
+								// them only on owner-authenticated requests. Never enable without such a
+								// proxy — it would be a login bypass. Fails closed below.
+								async authorize(_credentials, req) {
+									const env = serverEnv();
+									const header = env.TRUSTED_PROXY_AUTH_HEADER?.toLowerCase();
+									const email = env.TRUSTED_PROXY_AUTH_EMAIL?.toLowerCase();
+									const secret = env.TRUSTED_PROXY_AUTH_SECRET;
+									if (!header || !email || !secret?.trim()) return null;
+									// The router is the sole authority for this header (it strips
+									// any client-sent copy), so its presence means the request was
+									// owner-authenticated. Fail closed on anything else.
+									if (req?.headers?.[header] !== "true") return null;
+
+									// Always require the proxy's secret, even if a caller can reach
+									// the origin directly. Compare fixed-size digests in constant time.
+									const provided = req?.headers?.["x-trusted-proxy-secret"];
+									if (typeof provided !== "string" || !provided) return null;
+									const digest = (s: string) =>
+										crypto.createHash("sha256").update(s).digest();
+									if (!crypto.timingSafeEqual(digest(provided), digest(secret)))
+										return null;
+
+									const [user] = await db()
+										.select({
+											id: users.id,
+											email: users.email,
+											name: users.name,
+											image: users.image,
+										})
+										.from(users)
+										.where(eq(users.email, email))
+										.limit(1);
+									if (!user) return null;
+
+									return {
+										id: user.id,
+										email: user.email,
+										name: user.name,
+										image: user.image,
+									};
+								},
+							}),
+						]
+					: []),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
 					// practical brute-force target. The OTP email and the dev console
 					// have always told users 10 minutes; this makes that true.
 					maxAge: OTP_CODE_MAX_AGE_SECONDS,
+					normalizeIdentifier(identifier) {
+						const email = normalizeSignInEmail(identifier);
+						if (!email) throw new Error("Invalid email address format.");
+						return email;
+					},
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						if (!serverEnv().RESEND_API_KEY) {
+						const emailStatus = getEmailDeliveryStatus();
+						if (!emailStatus.configured) {
+							if (
+								process.env.NODE_ENV === "production" &&
+								buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+							) {
+								throw new Error(emailStatus.reason);
+							}
 							console.log("\n");
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
-							console.log("🔐 VERIFICATION CODE (Development Mode)");
+							console.log("🔐 VERIFICATION CODE (email delivery disabled)");
+							console.log(`ℹ️  ${emailStatus.reason}`);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
@@ -166,11 +344,16 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						} else {
 							const { OTPEmail } = await import("../emails/otp-email");
 							const email = OTPEmail({ code: token, email: identifier });
-							await sendEmail({
+							const delivery = await sendEmail({
 								email: identifier,
 								subject: `Your Cap Verification Code`,
 								react: email,
 							});
+							if (delivery?.error) {
+								throw new Error(
+									`Failed to send verification email: ${delivery.error.message}`,
+								);
+							}
 						}
 					},
 				}),
@@ -210,6 +393,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 		},
 		callbacks: {
 			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === OIDC_PROVIDER_ID) {
+					const claims = profile as OidcClaims | undefined;
+					if (!claims?.email || claims.email_verified !== true) {
+						return "/login?error=OidcEmailUnverified";
+					}
+				}
 				if (account?.provider === "workos") {
 					validatedSsoIdentity = null;
 					try {
@@ -233,7 +422,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							? credentials.email
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
-				const userEmail = rawEmail.toLowerCase();
+				const userEmail = normalizeEmailAddress(rawEmail);
 
 				if (
 					isEmailBlockedFromSignup(
@@ -243,6 +432,15 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				) {
 					console.warn(`Sign-in blocked for email: ${userEmail}`);
 					return "/login?error=SignupBlocked";
+				}
+
+				if (
+					account?.provider !== "workos" &&
+					account?.provider !== OIDC_PROVIDER_ID &&
+					(await isDisposableEmailSignup(userEmail))
+				) {
+					console.warn(`Sign-up refused for disposable email: ${userEmail}`);
+					return "/login?error=DisposableEmail";
 				}
 
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
@@ -323,6 +521,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				}
 
 				return token;
+			},
+		},
+		events: {
+			async signIn({ user, isNewUser }) {
+				if (isNewUser && user?.id) await trackReferralSignup(user);
 			},
 		},
 	};

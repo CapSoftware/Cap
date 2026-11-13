@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { handleAudioLevelPublication } from "@/lib/audio-level-publication";
 import { SourceCommitPendingError } from "@/lib/desktop-recording-jobs";
@@ -14,7 +14,15 @@ import {
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
+import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
+import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
+import {
+	MEDIA_INPUT_POLICY_ERROR_CODE,
+	MEDIA_INPUT_REJECTED_ERROR_PREFIX,
+} from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
@@ -44,6 +52,7 @@ interface ProgressWebhookPayload {
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: string;
 	metadata?: {
 		duration: number;
 		width: number;
@@ -56,6 +65,7 @@ interface ProgressWebhookPayload {
 		bitrate: number;
 		fileSize: number;
 	};
+	deferredSourceKey?: string;
 }
 
 function getValidDuration(duration: number) {
@@ -110,7 +120,32 @@ export async function POST(request: NextRequest) {
 			body.kind === "audio-levels"
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
+		const developerVideoPart =
+			request.nextUrl.searchParams.get("developerVideo");
+		if (developerVideoPart && body && typeof body === "object")
+			return NextResponse.json(
+				await applyDeveloperVideoProgress(
+					body,
+					developerVideoPart,
+					request.nextUrl.searchParams.get("token"),
+				),
+			);
 		const payload = body as ProgressWebhookPayload;
+		const isInputPolicyViolation =
+			payload.phase === "error" &&
+			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
+		if (isInputPolicyViolation && typeof payload.videoId === "string") {
+			try {
+				await recordMediaInputPolicyStrike({
+					videoId: payload.videoId as Video.VideoId,
+				});
+			} catch (error) {
+				console.error("[media-server-webhook] Failed to record input policy", {
+					videoId: payload.videoId,
+					error,
+				});
+			}
+		}
 		if (
 			await applyEditProgress(
 				payload,
@@ -146,7 +181,9 @@ export async function POST(request: NextRequest) {
 		}
 		const isRetryableWorkflowError =
 			request.nextUrl.searchParams.get("retryable") === "true" &&
-			payload.phase === "error";
+			(payload.phase === "error" ||
+				(payload.phase === "cancelled" &&
+					payload.message === MEDIA_SERVER_SHUTDOWN_MESSAGE));
 
 		console.log(
 			"[media-server-webhook] Received progress update for video %s: %s (%d%%)",
@@ -228,6 +265,48 @@ export async function POST(request: NextRequest) {
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
+			const transcribeOnView =
+				request.nextUrl.searchParams.get("transcription") === "on-view";
+			const previewOnView =
+				request.nextUrl.searchParams.get("preview") === "on-view";
+			const deferredSourceKey =
+				currentVideo &&
+				typeof payload.deferredSourceKey === "string" &&
+				payload.deferredSourceKey.startsWith(
+					`${currentVideo.ownerId}/${currentVideo.id}/`,
+				) &&
+				payload.deferredSourceKey.endsWith(".webm")
+					? payload.deferredSourceKey
+					: undefined;
+			const metadataUpdates = [
+				...(transcribeOnView
+					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
+					: []),
+				...(previewOnView && !payload.deferredSourceKey
+					? [
+							sql`'$.loomPreviewGif', COALESCE(JSON_EXTRACT(${videos.metadata}, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))`,
+						]
+					: []),
+				...(currentVideo?.metadata?.loomDeferredProcessing &&
+				currentUpload?.rawFileKey ===
+					currentVideo.metadata.loomDeferredProcessing.rawFileKey
+					? [sql`'$.loomDeferredProcessing.status', 'complete'`]
+					: []),
+				...(deferredSourceKey
+					? [
+							sql`'$.loomDeferredProcessing', IF(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing') IS NULL, JSON_OBJECT('rawFileKey', ${deferredSourceKey}, 'status', 'pending'), JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing'))`,
+						]
+					: []),
+			];
+			if (currentVideo && metadataUpdates.length > 0) {
+				await db()
+					.update(videos)
+					.set({
+						metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(metadataUpdates, sql`, `)})`,
+					})
+					.where(eq(videos.id, currentVideo.id));
+			}
+
 			if (receipt) {
 				await db()
 					.update(videos)
@@ -256,13 +335,24 @@ export async function POST(request: NextRequest) {
 			} else {
 				await db()
 					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+					.where(
+						and(
+							eq(videoUploads.videoId, payload.videoId as Video.VideoId),
+							deferredSourceKey
+								? or(
+										isNull(videoUploads.rawFileKey),
+										ne(videoUploads.rawFileKey, deferredSourceKey),
+									)
+								: undefined,
+						),
+					);
 			}
 			await invalidateGoogleDriveStorageQuotaCache(
 				currentVideo?.storageIntegrationId,
 			);
 
 			if (
+				!transcribeOnView &&
 				shouldQueueTranscriptionAfterMediaComplete(
 					currentVideo?.source.type,
 					Boolean(isEditUpload),
@@ -286,9 +376,11 @@ export async function POST(request: NextRequest) {
 				}
 			}
 		} else if (dbPhase === "error") {
-			const processingError =
-				payload.error || payload.message || "Unknown error";
-			if (isRetryableWorkflowError) {
+			const detail = payload.error || payload.message || "Unknown error";
+			const processingError = isInputPolicyViolation
+				? `${MEDIA_INPUT_REJECTED_ERROR_PREFIX}: ${detail}`
+				: detail;
+			if (isRetryableWorkflowError && !isInputPolicyViolation) {
 				await db()
 					.update(videoUploads)
 					.set({
@@ -322,6 +414,13 @@ export async function POST(request: NextRequest) {
 				})
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 		}
+
+		if (dbPhase === "complete" || dbPhase === "error")
+			await signalLoomImportFinished(
+				request.nextUrl.searchParams.get("signal"),
+				payload.videoId,
+				payload.phase,
+			);
 
 		return NextResponse.json({ success: true });
 	} catch (error) {

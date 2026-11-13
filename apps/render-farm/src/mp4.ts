@@ -485,18 +485,13 @@ function sampleTable(
 			}),
 		),
 	);
-	parts.push(
-		fullBox(
-			"stsz",
-			0,
-			0,
-			build((writer) => {
-				writer.u32(0);
-				writer.u32(table.sizes.length);
-				for (const size of table.sizes) writer.u32(size);
-			}),
-		),
-	);
+	const sampleSizes = new Uint8Array(8 + table.sizes.length * 4);
+	const sampleSizesView = new DataView(sampleSizes.buffer);
+	sampleSizesView.setUint32(4, table.sizes.length);
+	table.sizes.forEach((size, index) => {
+		sampleSizesView.setUint32(8 + index * 4, size);
+	});
+	parts.push(fullBox("stsz", 0, 0, sampleSizes));
 	parts.push(
 		fullBox(
 			"co64",

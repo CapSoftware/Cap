@@ -34,7 +34,7 @@ import {
 	LucideZoomOut,
 } from "./capIcons";
 import { TrafficLights, WindowsCaptionControls } from "./chrome";
-import { useVideoAttrs, VIDEO_POSTERS } from "./media";
+import { PresenterSources, useVideoAttrs, VIDEO_POSTERS } from "./media";
 import { useIsWindowsDemo } from "./platform";
 
 const C = {
@@ -64,7 +64,7 @@ const WALLPAPERS = [
 ].map((city) => ({
 	id: city,
 	thumb: `/backgrounds/thumbs/${city}.webp`,
-	full: `/backgrounds/${city}.webp`,
+	full: `/backgrounds/landing/${city}.webp`,
 }));
 
 const WALLPAPER_THEMES = [
@@ -419,12 +419,13 @@ export const CapEditorWindow = ({
 											<video
 												ref={camVideoRef}
 												className="h-full w-full object-cover"
-												src="/videos/home-two/webcam.mp4"
 												muted
 												loop
 												playsInline
 												{...cameraVideo}
-											/>
+											>
+												<PresenterSources />
+											</video>
 										</div>
 										{canvasChildren}
 									</div>

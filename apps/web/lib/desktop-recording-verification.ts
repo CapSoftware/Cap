@@ -3,7 +3,9 @@ import {
 	getRecordingObjectIdentity,
 	type RecordingObjectHead,
 } from "@cap/web-backend/src/Storage/recording-object-identity";
+import type { Video } from "@cap/web-domain";
 import { z } from "zod";
+import { integer } from "@/utils/zod";
 
 const positiveNumber = z.number().finite().positive();
 const positiveSize = positiveNumber.int().max(Number.MAX_SAFE_INTEGER);
@@ -70,12 +72,12 @@ export type RecordingSourceProof = z.infer<typeof recordingSourceProofSchema>;
 export const recordingOutputSha256Schema = sha256;
 
 const segmentSchema = z.union([
-	z.number().int().positive(),
-	z.object({ index: z.number().int().positive(), duration: positiveNumber }),
+	integer().positive(),
+	z.object({ index: integer().positive(), duration: positiveNumber }),
 ]);
 
 const completedManifestSchema = z.object({
-	version: z.number().int().positive(),
+	version: integer().positive(),
 	video_init_uploaded: z.literal(true),
 	audio_init_uploaded: z.boolean(),
 	video_segments: z.array(segmentSchema).min(1),
@@ -107,11 +109,52 @@ export function readCompletedRecordingManifest(json: string) {
 	};
 }
 
+function isContiguousSegmentList(
+	segments: Video.SegmentManifestType["video_segments"],
+) {
+	for (let position = 0; position < segments.length; position++) {
+		const entry = segments[position];
+		if (typeof entry === "number") {
+			if (entry !== position + 1) return false;
+			continue;
+		}
+		if (
+			typeof entry !== "object" ||
+			entry === null ||
+			entry.index !== position + 1 ||
+			typeof entry.duration !== "number" ||
+			!Number.isFinite(entry.duration) ||
+			entry.duration <= 0
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+export function isCompletedRecordingManifest(
+	manifest: Video.SegmentManifestType,
+) {
+	return (
+		Number.isInteger(manifest.version) &&
+		manifest.version > 0 &&
+		manifest.video_init_uploaded === true &&
+		typeof manifest.audio_init_uploaded === "boolean" &&
+		manifest.is_complete === true &&
+		Array.isArray(manifest.video_segments) &&
+		Array.isArray(manifest.audio_segments) &&
+		manifest.video_segments.length > 0 &&
+		manifest.audio_init_uploaded === manifest.audio_segments.length > 0 &&
+		isContiguousSegmentList(manifest.video_segments) &&
+		isContiguousSegmentList(manifest.audio_segments)
+	);
+}
+
 export const recordingOutputSchema = z.object({
 	fileSize: positiveSize,
 	duration: positiveNumber,
-	width: positiveNumber.int(),
-	height: positiveNumber.int(),
+	width: integer().positive(),
+	height: integer().positive(),
 	videoCodec: z.string().min(1),
 	audioCodec: z.string().min(1).nullable(),
 });

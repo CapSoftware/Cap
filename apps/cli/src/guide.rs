@@ -194,15 +194,28 @@ fn build() -> Guide {
                 notes: Some(
                     "EXCEPTION: export NDJSON uses PascalCase `type` tags and snake_case fields \
                      (rendered_count, total_frames) for desktop compatibility. --format selects the \
-                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output.",
+                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output. Pass several projects to export them in one run; each is written to '<project name>.<ext>' inside the output directory.",
                 ),
                 ..cmd(
                     "export",
-                    "Render a .cap project to a video file.",
+                    "Render one or more .cap projects to video files.",
                     OutputMode::Ndjson,
-                    &["Progress", "Completed", "Error"],
+                    &[
+                        "Progress",
+                        "Completed",
+                        "Error",
+                        "FileStarted",
+                        "FileFailed",
+                        "BatchCompleted",
+                    ],
                 )
             },
+            cmd(
+                "export-preview",
+                "Render a still frame from a .cap project at a given timestamp. JSON emits jpeg_base64 plus frame metadata.",
+                OutputMode::AlwaysJson,
+                &[],
+            ),
             cmd(
                 "screenshot",
                 "Capture a still of a screen/window. JSON emits {path,width,height}.",
@@ -211,7 +224,7 @@ fn build() -> Guide {
             ),
             cmd(
                 "upload",
-                "Upload a .cap project or video file; returns a shareable link. Authenticates via Cap Desktop's login or CAP_API_KEY.",
+                "Upload a .cap project or video file to your personal Cap library; returns a shareable link. Authenticates via Cap Desktop's login or CAP_API_KEY. To upload to a Cap Infra developer app use `developers videos upload`.",
                 OutputMode::SingleJson,
                 &[],
             ),
@@ -330,8 +343,8 @@ fn build() -> Guide {
                 &[],
             ),
             cmd(
-                "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transactions",
-                "Manage developer apps, SDK videos, credit history, domains, credentials, auto top-up, and credit checkout. New credentials are returned only by confirmed CLI commands.",
+                "developers list|get|create|update|delete|usage|domains|keys|auto-top-up|credits|videos|transcripts|transactions",
+                "Manage Cap Infra developer apps: videos, transcripts, usage, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file> --wait` uploads a local video and returns it once it is ready, with its status, playback id and playback, share and embed links. `developers videos get|wait|list` read the same fields later. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. Audio with no speech completes with empty text and is billed for its length. `developers usage <app>` shows stored minutes, the credit balance and whether uploads are allowed. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. Delete and rotate commands take --dry-run. In JSON mode a failure prints one object with error, code, message, and when known hint, requestId and the id being waited on. New credentials are returned only by confirmed CLI commands.",
                 OutputMode::SingleJson,
                 &[],
             ),
@@ -412,6 +425,7 @@ fn build() -> Guide {
              are skipped on the CLI. List them with `cap automations list`.",
             "Cap library reads and waits never start transcription, AI generation, or other paid processing.",
             "MCP never accepts passwords, S3 credentials, image files, or newly issued developer credentials. Use confirmed secure CLI commands for those values.",
+            "Developer video uploads and transcripts read a local file path and send it straight to Cap storage. Signed upload URLs stay inside the CLI and are never printed or returned by MCP.",
         ],
     }
 }

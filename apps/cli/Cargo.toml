@@ -1,6 +1,6 @@
 [package]
 name = "cap"
-version = "0.1.0"
+version = "0.6.3"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ clap = { version = "4.5.23", features = ["derive"] }
 clap_complete = "4.5.38"
 cap-project = { path = "../../crates/project" }
 cap-recording = { path = "../../crates/recording" }
+cap-rendering = { path = "../../crates/rendering" }
 cap-editor = { path = "../../crates/editor" }
 cap-export = { path = "../../crates/export" }
 cap-media-info = { path = "../../crates/media-info" }
@@ -47,6 +48,9 @@ cpal = { workspace = true }
 winit = "0.30"
 softbuffer = "0.4"
 workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
+
+[target.'cfg(not(unix))'.dependencies]
+same-file = "1.0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -274,7 +274,7 @@ export const AgentScene = (props: SceneProps) => {
 					<span
 						className={classNames(
 							MONO,
-							"ml-3 text-[11px] uppercase tracking-[0.05em] text-[rgba(255,255,255,0.45)]",
+							"ml-3 text-[11px] text-[rgba(255,255,255,0.45)]",
 						)}
 					>
 						agent session · ~/checkout
@@ -396,7 +396,7 @@ export const AgentScene = (props: SceneProps) => {
 									Checkout bug repro
 								</span>
 								<span className="block text-[12px] text-[rgba(17,17,17,0.55)]">
-									cap.so/s/x7f2k9 · 0:20 · AI summary ready
+									Cap.so/s/x7f2k9 · 0:20 · AI summary ready
 								</span>
 							</span>
 						</div>
@@ -429,7 +429,7 @@ export const AgentScene = (props: SceneProps) => {
 								commentVisible={ui.comment}
 								videoRef={shareVideoRef}
 								title="Checkout bug repro"
-								url="cap.so/s/x7f2k9"
+								url="Cap.so/s/x7f2k9"
 								duration="0:20"
 							/>
 						</div>

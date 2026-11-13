@@ -15,15 +15,17 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { after } from "next/server";
 import { z } from "zod";
+import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
+import { getDesktopShareUrl } from "@/lib/desktop-share-url";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
+import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -31,6 +33,7 @@ import {
 	UPLOAD_PROGRESS_VERSION,
 } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
@@ -176,6 +179,7 @@ app.get(
 
 					return c.json({
 						id: video.id,
+						share_url: await getDesktopShareUrl(video.orgId, video.id),
 						// All deprecated
 						user_id: user.id,
 						aws_region: "n/a",
@@ -304,9 +308,13 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
+
+			await db().transaction(async (tx) => {
+				await tx.insert(videos).values({
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
@@ -330,16 +338,12 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			const clientSupportsUploadProgress = isFromDesktopSemver(
-				c.req,
-				UPLOAD_PROGRESS_VERSION,
-			);
-
-			if (clientSupportsUploadProgress && !isScreenshot)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+				if (clientSupportsUploadProgress && !isScreenshot)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+						mode: "singlepart",
+					});
+			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
 				// Off the response path: this endpoint gates recording start on the
@@ -391,6 +395,7 @@ app.get(
 
 			return c.json({
 				id: idToUse,
+				share_url: await getDesktopShareUrl(videoOrgId, idToUse),
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",
@@ -442,6 +447,17 @@ app.delete(
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);
+
+			const cleanup = readInstantCleanupReport(
+				c.req.query("reason"),
+				c.req.query("cause"),
+				hasDesktopFeature(c.req, "gpui"),
+			);
+			if (cleanup)
+				trackServerEvent(user.id, "desktop_instant_cleanup", {
+					...cleanup,
+					sourceType: result.video.source?.type ?? null,
+				});
 
 			return c.json(true);
 		} catch (error) {

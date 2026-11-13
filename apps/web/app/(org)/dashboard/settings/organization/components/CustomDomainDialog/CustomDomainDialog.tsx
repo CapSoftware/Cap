@@ -7,8 +7,8 @@ import {
 	DialogTitle,
 } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
-import { faGlobe, faRefresh } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faRefresh } from "@fortawesome/free-solid-svg-icons/faRefresh";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
@@ -18,6 +18,7 @@ import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
 import type { ConfettiRef } from "@/app/(org)/dashboard/_components/Confetti";
 import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useDashboardContext } from "../../../../Contexts";
 import DomainStep from "./DomainStep";
 import { Stepper } from "./Stepper";
@@ -267,6 +268,22 @@ const CustomDomainDialog = ({
 		onClose();
 	}, [handleReset, onClose]);
 
+	const handleCloseRef = useRef(handleClose);
+	handleCloseRef.current = handleClose;
+
+	useEffect(() => {
+		if (isVerified) {
+			dispatch({ type: "GO_TO_STEP", payload: 2 });
+		}
+	}, [isVerified]);
+
+	useEffect(() => {
+		if (stepState.currentIndex !== 2) return;
+		// Read handleClose via a ref: the parent passes an inline onClose, so depending on it would restart the countdown on every parent render.
+		const timer = setTimeout(() => handleCloseRef.current(), 8000);
+		return () => clearTimeout(timer);
+	}, [stepState.currentIndex]);
+
 	const checkVerification = useCallback(
 		(showToasts = true) => {
 			if (
@@ -342,17 +359,6 @@ const CustomDomainDialog = ({
 			orgId: activeOrganization?.organization.id as string,
 		});
 	};
-
-	useEffect(() => {
-		//if current step is success, close dialog in 8 seconds
-		if (stepState.currentIndex === 2) {
-			setTimeout(() => {
-				handleClose();
-			}, 8000);
-		} else if (isVerified) {
-			handleNext();
-		}
-	}, [isVerified, stepState.currentIndex, handleClose, handleNext]);
 
 	return (
 		<>

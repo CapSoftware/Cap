@@ -148,7 +148,7 @@ fn skipped_result(
 }
 
 struct FixtureContext {
-    project: ProjectConfiguration,
+    project: Arc<ProjectConfiguration>,
     render_constants: Arc<RenderVideoConstants>,
     segments: Vec<cap_editor::SegmentMedia>,
 }
@@ -642,7 +642,7 @@ async fn load_fixture(recording_path: &Path) -> Result<FixtureContext> {
     }
 
     Ok(FixtureContext {
-        project,
+        project: Arc::new(project),
         render_constants,
         segments,
     })

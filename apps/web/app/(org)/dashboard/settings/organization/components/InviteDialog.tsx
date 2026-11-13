@@ -11,13 +11,13 @@ import {
 	Select,
 	Switch,
 } from "@cap/ui";
-import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useDashboardContext } from "../../../Contexts";
 
 interface InviteDialogProps {
@@ -114,13 +114,18 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			);
 		},
 		onSuccess: (result) => {
+			if (result.skippedEmails.length > 0) {
+				toast.warning(
+					`Invites created but not emailed because email is not configured. Share the invite links with: ${result.skippedEmails.join(", ")}`,
+				);
+			}
 			if (result.failedEmails.length > 0) {
 				toast.warning(
 					sendEmailNotifications
-						? `Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`
+						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
 						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
 				);
-			} else {
+			} else if (result.skippedEmails.length === 0) {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"

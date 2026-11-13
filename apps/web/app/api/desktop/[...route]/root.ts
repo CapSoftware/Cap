@@ -12,6 +12,7 @@ import {
 import { serverEnv } from "@cap/env";
 import {
 	isProSubscription,
+	isValidStripePlanPriceId,
 	STRIPE_AVAILABLE,
 	stripe,
 	userIsPro,
@@ -19,19 +20,27 @@ import {
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
+import {
+	createWithReferralDiscount,
+	referralDiscountForCheckout,
+	referralDiscountMetadata,
+	referralDiscountParams,
+} from "@/lib/checkout/referral";
 import {
 	confirmedDesktopLogWebhookUrl,
 	createDesktopLogUpload,
 } from "@/lib/desktop-log-upload";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
 	canEditOrganizationBranding,
@@ -208,6 +217,15 @@ app.post(
 			context,
 		} = c.req.valid("form");
 		const user = c.get("user");
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.DESKTOP_LOGS, {
+				headers: c.req.raw.headers,
+				...(user ? { key: `desktop-logs:${user.id}` } : {}),
+			})
+		) {
+			return c.json({ error: "Too many log uploads" }, { status: 429 });
+		}
 
 		try {
 			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
@@ -546,7 +564,20 @@ app.post(
 	zValidator(
 		"json",
 		z.object({
-			priceId: z.string(),
+			priceId: z
+				.string()
+				.refine(
+					(id) =>
+						isValidStripePlanPriceId(
+							id,
+							serverEnv().VERCEL_ENV === "production"
+								? "production"
+								: "development",
+						),
+					{
+						message: "Invalid priceId",
+					},
+				),
 			platform: z.literal("mobile").optional(),
 		}),
 	),
@@ -573,6 +604,18 @@ app.post(
 				{ status: 503 },
 			);
 		}
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+				key: `checkout:${user.id}`,
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json({ error: true, code: "rate_limited" }, { status: 429 });
+		}
+
+		// Starts now so the Dub lookup overlaps the Stripe customer calls below.
+		const referralDiscountLookup = referralDiscountForCheckout(user);
 
 		let customerId = user.stripeCustomerId;
 
@@ -616,20 +659,34 @@ app.post(
 			customerId = customer.id;
 		}
 
+		if (customerId && (await hasLiveProSubscription(customerId))) {
+			console.log("[POST] Error: Stripe customer already has Pro");
+			return c.json({ error: true, subscription: true }, { status: 400 });
+		}
+
 		console.log("[POST] Creating checkout session");
+		const referralDiscount = await referralDiscountLookup;
 		const redirects = getCheckoutRedirectUrls(
 			checkoutPlatform,
 			serverEnv().WEB_URL,
 		);
-		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: 1 }],
-			mode: "subscription",
-			success_url: redirects.successUrl,
-			cancel_url: redirects.cancelUrl,
-			allow_promotion_codes: true,
-			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
-		});
+		const checkoutSession = await createWithReferralDiscount(
+			referralDiscount,
+			(discount) =>
+				stripe().checkout.sessions.create({
+					customer: customerId as string,
+					line_items: [{ price: priceId, quantity: 1 }],
+					mode: "subscription",
+					success_url: redirects.successUrl,
+					cancel_url: redirects.cancelUrl,
+					...referralDiscountParams(discount),
+					metadata: {
+						platform: checkoutPlatform,
+						dubCustomerId: user.id,
+						...referralDiscountMetadata(discount),
+					},
+				}),
+		);
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");

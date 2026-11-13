@@ -3,7 +3,7 @@
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { useCurrency } from "hooks/useCurrency";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Gift } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const { symbol } = useCurrency();
 	const [licenses, setLicenses] = useState(1);
 	const [yearly, setYearly] = useState(true);
+	const [gift, setGift] = useState(false);
 	const [loading, setLoading] = useState(false);
 
 	const perLicense = yearly ? copy.pricing.yearly : copy.pricing.lifetime;
@@ -32,6 +33,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 			cta_action: "commercial_checkout",
 			target_billing_period: yearly ? "yearly" : "lifetime",
 			quantity: licenses,
+			gift,
 		});
 		setLoading(true);
 		try {
@@ -41,6 +43,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 				body: JSON.stringify({
 					type: yearly ? "yearly" : "lifetime",
 					quantity: licenses,
+					...(gift ? { gift: true } : {}),
 				}),
 			});
 			const data = await response.json();
@@ -111,19 +114,48 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 				</>
 			}
 			cta={
-				<button
-					type="button"
-					onClick={checkout}
-					disabled={loading}
-					className={classNames(
-						BTN_SECONDARY,
-						"w-full disabled:cursor-not-allowed disabled:opacity-60",
-					)}
-				>
-					{loading ? "Opening checkout..." : copy.cta}
-				</button>
+				<div className="flex gap-2">
+					<button
+						type="button"
+						onClick={checkout}
+						disabled={loading}
+						className={classNames(
+							BTN_SECONDARY,
+							"min-w-0 flex-1 px-4 disabled:cursor-not-allowed disabled:opacity-60",
+						)}
+					>
+						{loading
+							? "Opening checkout..."
+							: gift
+								? "Gift Desktop License"
+								: copy.cta}
+					</button>
+					<button
+						type="button"
+						onClick={() => setGift((on) => !on)}
+						aria-pressed={gift}
+						aria-label="Send as a gift"
+						title="Send as a gift"
+						className="grid size-[48px] shrink-0 place-items-center rounded-[10px] border border-[#D3DCE6] bg-white text-[#111111] transition-colors duration-200 hover:bg-[#EDF1F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+						style={
+							gift
+								? {
+										background: theme.chip,
+										borderColor: theme.accent,
+										color: theme.glyph,
+									}
+								: undefined
+						}
+					>
+						<Gift className="size-[18px]" strokeWidth={1.75} />
+					</button>
+				</div>
 			}
-			ctaNote="One user per license. Works fully offline."
+			ctaNote={
+				gift
+					? "They claim it with a link you send."
+					: "One user per license. Works fully offline."
+			}
 			featuresTitle="What's included"
 			features={copy.features}
 			footer={

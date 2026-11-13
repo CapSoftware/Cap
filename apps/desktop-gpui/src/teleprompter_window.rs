@@ -29,6 +29,8 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     platform,
     session::{Phase, RecordingSession},
@@ -254,7 +256,6 @@ impl TeleprompterWindow {
         let script_input = cx.new(|cx| {
             let mut input = ui::TextInputState::multi_line(window, cx);
             input.set_text(state.script.clone(), cx);
-            input.set_placeholder("Paste or type your script\u{2026}");
             input
         });
         let script_events = cx.subscribe_in(
@@ -575,6 +576,9 @@ fn stepped(fraction: f32, minimum: f32, maximum: f32, step: f32) -> f32 {
 impl Render for TeleprompterWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.script_input.update(cx, |input, _| {
+            input.set_placeholder(tr::dialog::teleprompter::placeholder())
+        });
         let theme = self.theme;
 
         div()
@@ -593,6 +597,7 @@ impl Render for TeleprompterWindow {
                 this.border_1().border_color(color)
             })
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))
@@ -660,9 +665,9 @@ impl TeleprompterWindow {
                             .text_color(Hsla::from(theme.gray_9)),
                     )
                     .child(if self.playback_state.recording_paused {
-                        "Scrolling paused with recording"
+                        tr::dialog::teleprompter::paused()
                     } else {
-                        "This window is hidden from Cap recordings"
+                        tr::dialog::teleprompter::hidden()
                     }),
             );
 
@@ -866,7 +871,9 @@ impl TeleprompterWindow {
                             .text_right()
                             .text_size(px(10.))
                             .text_color(Hsla::from(theme.gray_9))
-                            .child(format!("{} wpm", self.state.words_per_minute)),
+                            .child(tr::dialog::teleprompter::words_per_minute(
+                                self.state.words_per_minute,
+                            )),
                     ),
             )
             .child(
@@ -1025,7 +1032,7 @@ impl TeleprompterWindow {
                 .child(self.render_setting_toggle(
                     "cue-markers",
                     "icons/chevron-right.svg",
-                    "Cue markers",
+                    tr::dialog::teleprompter::cue_markers(),
                     self.state.show_cue_markers,
                     cx.listener(|this, _, window, cx| {
                         this.state.show_cue_markers = !this.state.show_cue_markers;
@@ -1036,7 +1043,7 @@ impl TeleprompterWindow {
                 .child(self.render_setting_toggle(
                     "mirror",
                     "icons/flip-horizontal-2.svg",
-                    "Mirror text",
+                    tr::dialog::teleprompter::mirror(),
                     self.state.mirror,
                     cx.listener(|this, _, window, cx| {
                         // Persisted, but inert: this gpui rev has no flip
@@ -1078,6 +1085,7 @@ impl TeleprompterWindow {
                     .flex()
                     .flex_row()
                     .items_center()
+                    .min_w_0()
                     .gap(px(8.))
                     .child(
                         svg()
@@ -1086,7 +1094,7 @@ impl TeleprompterWindow {
                             .flex_shrink_0()
                             .text_color(Hsla::from(theme.gray_10)),
                     )
-                    .child(label),
+                    .child(div().min_w_0().truncate().child(label)),
             )
             // `<Toggle size="sm">` on bare glass.
             .child(ui::Toggle::glass(

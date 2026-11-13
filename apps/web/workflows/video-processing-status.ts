@@ -3,6 +3,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
+import { isMediaPolicyProcessingError } from "@/lib/media-processing-policy";
 
 export interface ProcessedVideoMetadata {
 	duration: number;
@@ -69,6 +70,9 @@ export async function readVideoProcessingStatus(
 			},
 		};
 	}
+	if (isMediaPolicyProcessingError(upload.processingError)) {
+		return { status: "error", message: upload.processingError };
+	}
 	if (upload.processingError || upload.phase === "error") {
 		return {
 			status: "failed",
@@ -106,6 +110,36 @@ export async function waitForVideoProcessing(
 		if (result.status === "error") throw new FatalError(result.message);
 		lastStatus = result.message;
 		await sleep(Math.min(5_000 * (attempt + 1), 30_000));
+	}
+	throw new FatalError(`Video processing timed out while ${lastStatus}`);
+}
+
+const SIGNALLED_WAIT_FALLBACK_MS = 5 * 60 * 1000;
+
+export async function waitForSignalledVideoProcessing(
+	videoId: string,
+	signal: PromiseLike<unknown>,
+): Promise<ProcessedVideoMetadata> {
+	const deadline = Date.now() + 60 * 60 * 1000;
+	const signalReceived = Promise.resolve(signal).then(() => true);
+	let signalled = false;
+	let lastStatus = "processing";
+	for (let attempt = 0; Date.now() < deadline; attempt++) {
+		if (signalled) {
+			await sleep(Math.min(5_000 * attempt, 30_000));
+		} else {
+			signalled = await Promise.race([
+				signalReceived,
+				sleep(SIGNALLED_WAIT_FALLBACK_MS).then(() => false),
+			]);
+		}
+		const result = await readVideoProcessingStatus(videoId);
+		if (result.status === "complete") return result.metadata;
+		if (result.status === "failed") {
+			throw new VideoProcessingFailedError(result.message);
+		}
+		if (result.status === "error") throw new FatalError(result.message);
+		lastStatus = result.message;
 	}
 	throw new FatalError(`Video processing timed out while ${lastStatus}`);
 }

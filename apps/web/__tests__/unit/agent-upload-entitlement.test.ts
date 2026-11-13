@@ -136,6 +136,32 @@ describe("agent upload entitlement", () => {
 		expect(accept).toBeLessThan(processing);
 	});
 
+	it("checks the accepted upload key against the video before processing", () => {
+		const source = readFileSync(
+			join(process.cwd(), "app/api/v1/[...route]/route.ts"),
+			"utf8",
+		);
+		const completionSource = source.slice(
+			source.indexOf('.handle("completeUpload"'),
+			source.indexOf('.handle("importLoomCap"'),
+		);
+		const acceptedKeyCheck = completionSource.search(
+			/isVideoStorageKey\(\s*\{ id: path\.id, ownerId: principal\.id \},\s*acceptedRawFileKey,/,
+		);
+		const stateKeyCheck = completionSource.search(
+			/isVideoStorageKey\(\s*\{ id: state\.id, ownerId: state\.ownerId \},\s*state\.rawFileKey,/,
+		);
+
+		expect(acceptedKeyCheck).toBeGreaterThan(-1);
+		expect(stateKeyCheck).toBeGreaterThan(-1);
+		expect(acceptedKeyCheck).toBeLessThan(
+			completionSource.indexOf("runAgentMutation"),
+		);
+		expect(stateKeyCheck).toBeLessThan(
+			completionSource.indexOf("startVideoProcessingWorkflow"),
+		);
+	});
+
 	it("durably rejects only marked agent uploads and cleans storage first", () => {
 		const source = readFileSync(
 			join(process.cwd(), "app/api/v1/[...route]/route.ts"),

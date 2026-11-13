@@ -135,6 +135,7 @@ pub struct OfflinePlayer {
     generation: Option<u64>,
     /// Pulls whose samples did not render in time (silence was played).
     pub starved: usize,
+    pub preview_speed: cap_editor::PreviewSpeedHandle,
 }
 
 impl OfflinePlayer {
@@ -163,6 +164,7 @@ impl OfflinePlayer {
             playhead: None,
             generation: None,
             starved: 0,
+            preview_speed: Default::default(),
         }
     }
 
@@ -179,6 +181,7 @@ impl OfflinePlayer {
                 duration_secs: self.duration,
                 start_playhead_secs: start,
                 playhead_rx: rx,
+                preview_speed: self.preview_speed.clone(),
             })
             .expect("offline audio output accepted the play request");
         self.playhead = Some(tx);
@@ -266,6 +269,20 @@ pub async fn export(
     resolution: (u32, u32),
     dir: &Path,
 ) -> Result<PathBuf, String> {
+    export_failing_encoder_at(project, config, path, fps, resolution, dir, None).await
+}
+
+/// [`export`], with the MP4 video encoder failing after
+/// `video_encoder_failure_at` frames as a hardware encoder does at runtime.
+pub async fn export_failing_encoder_at(
+    project: &Project,
+    config: ProjectConfiguration,
+    path: ExportPath,
+    fps: u32,
+    resolution: (u32, u32),
+    dir: &Path,
+    video_encoder_failure_at: Option<u32>,
+) -> Result<PathBuf, String> {
     let out = dir.join(format!("out.{}", path.extension()));
     let builder = cap_export::ExporterBase::builder(project.path.clone())
         .with_config(config)
@@ -282,17 +299,23 @@ pub async fn export(
     match path {
         ExportPath::App => {
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let base = builder
+            let mut base = builder
                 .build_for_mp4(cancel)
                 .await
                 .map_err(|e| format!("exporter build: {e}"))?;
+            if let Some(frames) = video_encoder_failure_at {
+                base.fail_video_encoder_at(frames);
+            }
             mp4.export_prepared(base, |_| true).await
         }
         ExportPath::Plain => {
-            let base = builder
+            let mut base = builder
                 .build()
                 .await
                 .map_err(|e| format!("exporter build: {e}"))?;
+            if let Some(frames) = video_encoder_failure_at {
+                base.fail_video_encoder_at(frames);
+            }
             mp4.export(base, |_| true).await
         }
         ExportPath::Mov => {

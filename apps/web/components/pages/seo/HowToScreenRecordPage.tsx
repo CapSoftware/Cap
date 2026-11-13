@@ -211,16 +211,11 @@ export const howToScreenRecordContent: SeoPageContent = {
 		{
 			question: "What format do screen recordings save in?",
 			answer:
-				"Cap saves screen recordings in widely compatible formats that work across all devices and platforms. You can export your recordings as MP4 files, which are supported everywhere. When sharing via Cap's instant link feature, videos are automatically optimized for web playback. Cap also supports exporting to other formats based on your needs. If you need to <a href='/tools/mp4-to-gif-converter'>convert your recording to GIF</a>, Cap has tools for that as well.",
+				"Cap saves screen recordings in widely compatible formats that work across all devices and platforms. You can export your recordings as MP4 files, which are supported everywhere. When sharing via Cap's instant link feature, videos are automatically optimized for web playback. Cap also supports exporting to other formats based on your needs. If you need to <a href='/tools/convert/mp4-to-gif'>convert your recording to GIF</a>, Cap has tools for that as well.",
 		},
 	],
 
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "How to screen record with Cap on Mac and Windows",
-		},
-	},
+	video: {},
 
 	cta: {
 		title: "Start Screen Recording for Free with Cap",

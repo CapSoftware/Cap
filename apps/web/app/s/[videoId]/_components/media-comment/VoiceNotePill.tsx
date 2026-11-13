@@ -150,7 +150,12 @@ export const VoiceNotePill = ({
 		}
 		claimPlayback(el, handleRegistryStop);
 		suspendMainVideo();
-		void el.play();
+		void el.play().catch((cause: unknown) => {
+			if (cause instanceof DOMException && cause.name === "AbortError") return;
+			console.error("Failed to play voice note", cause);
+			handleRegistryStop();
+			releasePlayback(el, { resumeMain: true });
+		});
 		setPlaying(true);
 		paintLoop();
 	}, [ensureAudio, handleRegistryStop, paintLoop, playing, stopPainting]);

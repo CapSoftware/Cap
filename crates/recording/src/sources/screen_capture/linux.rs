@@ -1,5 +1,6 @@
 use super::cadence::FrameCadenceGate;
-use super::linux_shm::{self, ShmSegment};
+use super::linux_dmabuf_import;
+use super::linux_shm::{self, SharedMapping, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -34,6 +35,16 @@ use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, EventMask, ImageFormat, ImageOrder, MapState,
 };
 use x11rb::rust_connection::RustConnection;
+
+mod frame_scaler;
+
+#[cfg(test)]
+mod x11_tests;
+
+#[cfg(test)]
+mod system_audio_channel_tests;
+
+use frame_scaler::FrameScaler;
 
 #[derive(Debug)]
 pub struct X11Capture;
@@ -141,9 +152,13 @@ impl ScreenCaptureConfig<X11Capture> {
                 if matches!(&self.config.linux_source, LinuxCaptureSource::Window { .. }) {
                     self.video_info
                 } else {
+                    let output_size = constrain_capture_size(
+                        PhysicalSize::new(f64::from(width), f64::from(height)),
+                        Some((self.video_info.width, self.video_info.height)),
+                    );
                     VideoInfo {
-                        width,
-                        height,
+                        width: output_size.width() as u32,
+                        height: output_size.height() as u32,
                         ..self.video_info
                     }
                 };
@@ -160,8 +175,8 @@ impl ScreenCaptureConfig<X11Capture> {
                     },
                     x,
                     y,
-                    width: video_info.width,
-                    height: video_info.height,
+                    width,
+                    height,
                     fps: self.config.fps,
                     show_cursor: self.config.show_cursor,
                 }),
@@ -184,12 +199,41 @@ pub fn x11_capture_rect(
     display_height: f64,
     crop: Option<(f64, f64, f64, f64)>,
 ) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let (x, y, width, height) =
+        x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 2)?;
+    Ok((x, y, ensure_even(width), ensure_even(height)))
+}
+
+pub fn x11_screenshot_rect(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
+    x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 1)
+}
+
+fn x11_capture_bounds(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+    minimum: i32,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
     let display_left = floor_i32(display_x, "display x")?;
     let display_top = floor_i32(display_y, "display y")?;
-    let display_right = ceil_i32(display_x + display_width.max(2.0), "display right")?;
-    let display_bottom = ceil_i32(display_y + display_height.max(2.0), "display bottom")?;
+    let display_right = ceil_i32(
+        display_x + display_width.max(f64::from(minimum)),
+        "display right",
+    )?;
+    let display_bottom = ceil_i32(
+        display_y + display_height.max(f64::from(minimum)),
+        "display bottom",
+    )?;
 
-    if display_right - display_left < 2 || display_bottom - display_top < 2 {
+    if display_right - display_left < minimum || display_bottom - display_top < minimum {
         bail!("X11 display bounds are too small for capture");
     }
 
@@ -197,23 +241,24 @@ pub fn x11_capture_rect(
         Some((x, y, width, height)) => (
             floor_i32(display_x + x, "capture x")?,
             floor_i32(display_y + y, "capture y")?,
-            ceil_i32(display_x + x + width.max(2.0), "capture right")?,
-            ceil_i32(display_y + y + height.max(2.0), "capture bottom")?,
+            ceil_i32(
+                display_x + x + width.max(f64::from(minimum)),
+                "capture right",
+            )?,
+            ceil_i32(
+                display_y + y + height.max(f64::from(minimum)),
+                "capture bottom",
+            )?,
         ),
         None => (display_left, display_top, display_right, display_bottom),
     };
 
-    let left = raw_left.clamp(display_left, display_right - 2);
-    let top = raw_top.clamp(display_top, display_bottom - 2);
-    let right = raw_right.clamp(left + 2, display_right);
-    let bottom = raw_bottom.clamp(top + 2, display_bottom);
+    let left = raw_left.clamp(display_left, display_right - minimum);
+    let top = raw_top.clamp(display_top, display_bottom - minimum);
+    let right = raw_right.clamp(left + minimum, display_right);
+    let bottom = raw_bottom.clamp(top + minimum, display_bottom);
 
-    Ok((
-        left,
-        top,
-        ensure_even((right - left) as u32),
-        ensure_even((bottom - top) as u32),
-    ))
+    Ok((left, top, (right - left) as u32, (bottom - top) as u32))
 }
 
 fn floor_i32(value: f64, label: &str) -> anyhow::Result<i32> {
@@ -299,6 +344,9 @@ struct PipewireCaptureState {
     rate_limited: Arc<AtomicU64>,
     capture_clock: Instant,
     cadence_gate: FrameCadenceGate,
+    /// Reads frames with a GPU-tiled modifier; `None` without a usable EGL.
+    importer: Option<linux_dmabuf_import::DmaBufImporter>,
+    imported: Vec<u8>,
 }
 
 impl PipewireCaptureState {
@@ -473,7 +521,43 @@ fn capture_wayland(
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
-    let _portal_session = input.portal_session;
+    let WaylandInputConfig {
+        fd,
+        node_id,
+        fps,
+        crop_bounds,
+        portal_session: _portal_session,
+    } = input;
+    capture_pipewire_node(
+        video_info,
+        PipewireNodeInput {
+            fd,
+            node_id,
+            fps,
+            crop_bounds,
+        },
+        video_tx,
+        stop_token,
+        health_tx,
+    )
+}
+
+/// A PipeWire video node to capture: the portal's remote and node, or in
+/// tests any producer on a PipeWire daemon.
+struct PipewireNodeInput {
+    fd: OwnedFd,
+    node_id: u32,
+    fps: u32,
+    crop_bounds: Option<CropBounds>,
+}
+
+fn capture_pipewire_node(
+    video_info: VideoInfo,
+    input: PipewireNodeInput,
+    video_tx: mpsc::Sender<FFmpegVideoFrame>,
+    stop_token: CancellationToken,
+    health_tx: output_pipeline::HealthSender,
+) -> anyhow::Result<()> {
     let stop_requested = Arc::new(AtomicBool::new(false));
     let fatal_error = Arc::new(parking_lot::Mutex::new(None));
     let sent = Arc::new(AtomicU64::new(0));
@@ -489,6 +573,18 @@ fn capture_wayland(
         .connect_fd(input.fd, None)
         .context("connect to PipeWire remote")?;
 
+    let mut importer = match linux_dmabuf_import::DmaBufImporter::new() {
+        Ok(importer) => Some(importer),
+        Err(error) => {
+            tracing::info!(%error, "no GPU import for tiled DMA-BUF screencasts");
+            None
+        }
+    };
+    let imported_params = importer
+        .as_mut()
+        .map(|importer| pipewire_imported_format_params(input.fps, importer))
+        .unwrap_or_default();
+
     let state = PipewireCaptureState {
         format: Default::default(),
         scaler: None,
@@ -503,6 +599,8 @@ fn capture_wayland(
         rate_limited: rate_limited.clone(),
         capture_clock: started,
         cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
+        importer,
+        imported: Vec::new(),
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -523,9 +621,17 @@ fn capture_wayland(
                 state.set_fatal_error(format!("PipeWire screen capture stream failed: {error}"));
             }
         })
-        .param_changed(|_, state, id, param| {
-            if let Err(error) = update_pipewire_format(state, id, param) {
-                state.set_fatal_error(error.to_string());
+        .param_changed(|stream, state, id, param| {
+            match update_pipewire_format(state, id, param) {
+                Ok(PipewireFormatChange::DmaBuf) => {
+                    // A compositor that only shares DMA-BUFs (niri) still has to
+                    // be told the consumer takes them.
+                    if let Err(error) = request_dmabuf_buffers(stream) {
+                        state.set_fatal_error(error.to_string());
+                    }
+                }
+                Ok(PipewireFormatChange::None | PipewireFormatChange::Memory) => {}
+                Err(error) => state.set_fatal_error(error.to_string()),
             }
         })
         .process(|stream, state| {
@@ -550,9 +656,23 @@ fn capture_wayland(
         .register()
         .context("register PipeWire stream listener")?;
 
-    let param_bytes = pipewire_format_param(input.fps)?;
-    let mut params = [spa::pod::Pod::from_bytes(&param_bytes)
-        .ok_or_else(|| anyhow!("create PipeWire format parameter"))?];
+    // Shared memory first, so compositors that offer it (GNOME, KDE, wlroots)
+    // keep negotiating it; LINEAR DMA-BUFs for those that share nothing else.
+    // Shared memory, then LINEAR DMA-BUFs, both read on the CPU; then the
+    // tiled modifiers a GPU can import, for compositors that cannot render
+    // LINEAR. PipeWire takes the first offer the producer can meet.
+    let mut param_bytes = vec![
+        pipewire_format_param(input.fps)?,
+        pipewire_dmabuf_format_param(input.fps)?,
+    ];
+    param_bytes.extend(imported_params);
+    let mut params = param_bytes
+        .iter()
+        .map(|bytes| {
+            spa::pod::Pod::from_bytes(bytes)
+                .ok_or_else(|| anyhow!("create PipeWire format parameter"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     stream
         .connect(
@@ -591,16 +711,23 @@ fn capture_wayland(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PipewireFormatChange {
+    None,
+    Memory,
+    DmaBuf,
+}
+
 fn update_pipewire_format(
     state: &mut PipewireCaptureState,
     id: u32,
     param: Option<&spa::pod::Pod>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PipewireFormatChange> {
     let Some(param) = param else {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     };
     if id != spa::param::ParamType::Format.as_raw() {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     }
 
     let (media_type, media_subtype) =
@@ -608,7 +735,7 @@ fn update_pipewire_format(
     if media_type != spa::param::format::MediaType::Video
         || media_subtype != spa::param::format::MediaSubtype::Raw
     {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     }
 
     let mut format = spa::param::video::VideoInfoRaw::default();
@@ -623,7 +750,141 @@ fn update_pipewire_format(
     })?;
     state.format = format;
 
-    Ok(())
+    let dmabuf = param.as_object().is_ok_and(|object| {
+        object
+            .find_prop(spa::utils::Id(
+                spa::param::format::FormatProperties::VideoModifier.0,
+            ))
+            .is_some()
+    });
+    if dmabuf {
+        tracing::info!(
+            modifier = format.modifier(),
+            format = ?format.format(),
+            "PipeWire screen capture negotiated DMA-BUF frames"
+        );
+    }
+    Ok(if dmabuf {
+        PipewireFormatChange::DmaBuf
+    } else {
+        PipewireFormatChange::Memory
+    })
+}
+
+fn request_dmabuf_buffers(stream: &pw::stream::Stream) -> anyhow::Result<()> {
+    let dmabuf = 1 << spa::buffer::DataType::DmaBuf.as_raw();
+    let object = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamBuffers,
+        spa::param::ParamType::Buffers,
+        spa::pod::Property::new(
+            spa::sys::SPA_PARAM_BUFFERS_dataType,
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Flags {
+                    default: dmabuf,
+                    flags: vec![dmabuf],
+                },
+            ))),
+        )
+    );
+    let bytes = serialize_pod(object, "PipeWire buffers parameter")?;
+    let pod = spa::pod::Pod::from_bytes(&bytes)
+        .ok_or_else(|| anyhow!("create PipeWire buffers parameter"))?;
+    stream
+        .update_params(&mut [pod])
+        .context("ask PipeWire for DMA-BUF screen capture buffers")
+}
+
+/// A DMA-BUF the producer did not map, mapped for reading one frame. LINEAR
+/// buffers are plain rows a CPU can read once the kernel syncs the buffer.
+struct DmaBufMapping {
+    fd: std::os::fd::RawFd,
+    pointer: *mut libc::c_void,
+    len: usize,
+}
+
+const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+const DMA_BUF_SYNC_READ: u64 = 1;
+const DMA_BUF_SYNC_END: u64 = 1 << 2;
+
+impl DmaBufMapping {
+    fn map(fd: std::os::fd::RawFd, minimum_len: usize) -> anyhow::Result<Self> {
+        if fd < 0 {
+            bail!("PipeWire screen capture DMA-BUF had no file descriptor");
+        }
+        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        let len = usize::try_from(size)
+            .ok()
+            .filter(|len| *len > 0)
+            .unwrap_or(minimum_len);
+        if len < minimum_len {
+            bail!(
+                "PipeWire screen capture DMA-BUF holds {len} bytes, the frame needs {minimum_len}"
+            );
+        }
+        let pointer = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if pointer == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error())
+                .context("map the PipeWire screen capture DMA-BUF");
+        }
+        let mapping = Self { fd, pointer, len };
+        mapping
+            .sync(DMA_BUF_SYNC_READ)
+            .context("sync the PipeWire screen capture DMA-BUF for reading")?;
+        Ok(mapping)
+    }
+
+    /// The kernel's DMA-BUF read fence. A buffer that is not a DMA-BUF (a
+    /// memfd standing in for one) has none and answers ENOTTY.
+    fn sync(&self, flags: u64) -> std::io::Result<()> {
+        let sync = flags;
+        loop {
+            let result = unsafe { libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync as *const u64) };
+            if result == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR | libc::EAGAIN) => continue,
+                Some(libc::ENOTTY) => return Ok(()),
+                _ => return Err(error),
+            }
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.pointer as *const u8, self.len) }
+    }
+}
+
+impl Drop for DmaBufMapping {
+    fn drop(&mut self) {
+        if let Err(error) = self.sync(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END) {
+            tracing::warn!(%error, "ending the PipeWire screen capture DMA-BUF read failed");
+        }
+        unsafe {
+            libc::munmap(self.pointer, self.len);
+        }
+    }
+}
+
+fn serialize_pod(object: spa::pod::Object, what: &str) -> anyhow::Result<Vec<u8>> {
+    Ok(spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(object),
+    )
+    .map_err(|error| anyhow!("serialize {what}: {error:?}"))?
+    .0
+    .into_inner())
 }
 
 fn process_pipewire_frame(
@@ -650,8 +911,25 @@ fn process_pipewire_frame(
         return Ok(None);
     }
 
-    let Some(raw_frame) = frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
-    else {
+    let modifier = state.format.modifier();
+    let tiled = datas[0].type_() == spa::buffer::DataType::DmaBuf
+        && modifier != linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR
+        && modifier != linux_dmabuf_import::DRM_FORMAT_MOD_INVALID;
+    let raw_frame = if tiled {
+        let Some(importer) = state.importer.as_mut() else {
+            bail!("PipeWire screen capture sent a tiled DMA-BUF Cap cannot import");
+        };
+        imported_pipewire_frame(
+            &datas[0],
+            state.format,
+            state.crop_bounds,
+            importer,
+            &mut state.imported,
+        )?
+    } else {
+        frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
+    };
+    let Some(raw_frame) = raw_frame else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
     };
     let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
@@ -733,11 +1011,22 @@ fn frame_from_pipewire_data(
     };
     let (crop_x, crop_y, crop_width, crop_height) =
         pipewire_crop(source_width, source_height, crop_bounds)?;
-    let source = data
-        .data()
-        .ok_or_else(|| anyhow!("PipeWire screen capture buffer was not memory-mapped"))?;
     let offset = chunk_offset as usize;
-    let source_limit = if chunk_size > 0 {
+    let dmabuf_fd = (data.type_() == spa::buffer::DataType::DmaBuf).then(|| data.fd() as i32);
+    let mapping;
+    let source: &[u8] = match data.data() {
+        Some(source) => source,
+        None => {
+            let Some(fd) = dmabuf_fd else {
+                bail!("PipeWire screen capture buffer was not memory-mapped");
+            };
+            mapping = DmaBufMapping::map(fd, offset + source_stride * source_height)?;
+            mapping.bytes()
+        }
+    };
+    // DMA-BUF producers may leave the chunk size unset (the PipeWire DMA-BUF
+    // docs tell consumers to ignore it), so the mapping bounds the frame.
+    let source_limit = if chunk_size > 0 && dmabuf_fd.is_none() {
         offset
             .checked_add(chunk_size as usize)
             .map(|limit| limit.min(source.len()))
@@ -775,6 +1064,61 @@ fn frame_from_pipewire_data(
             .copy_from_slice(&source[source_start..source_end]);
     }
 
+    Ok(Some(frame))
+}
+
+/// A frame with a GPU-tiled modifier, read back through EGL as RGBA.
+fn imported_pipewire_frame(
+    data: &spa::buffer::Data,
+    format: spa::param::video::VideoInfoRaw,
+    crop_bounds: Option<CropBounds>,
+    importer: &mut linux_dmabuf_import::DmaBufImporter,
+    scratch: &mut Vec<u8>,
+) -> anyhow::Result<Option<ffmpeg::frame::Video>> {
+    if data
+        .chunk()
+        .flags()
+        .contains(spa::buffer::ChunkFlags::CORRUPTED)
+    {
+        return Ok(None);
+    }
+    let fourcc = linux_dmabuf_import::drm_fourcc(format.format()).ok_or_else(|| {
+        anyhow!(
+            "Unsupported tiled PipeWire screen capture format: {:?}",
+            format.format()
+        )
+    })?;
+    let size = format.size();
+    let (width, height) = (size.width as usize, size.height as usize);
+    if width == 0 || height == 0 {
+        bail!("PipeWire screen capture stream did not provide frame dimensions");
+    }
+    let stride = u32::try_from(data.chunk().stride())
+        .map_err(|_| anyhow!("PipeWire screen capture frame used a negative stride"))?;
+    scratch.resize(width * height * 4, 0);
+    importer.read_rgba(
+        data.fd(),
+        fourcc,
+        format.modifier(),
+        size.width,
+        size.height,
+        data.chunk().offset(),
+        stride,
+        scratch,
+    )?;
+    let (crop_x, crop_y, crop_width, crop_height) = pipewire_crop(width, height, crop_bounds)?;
+    let mut frame = ffmpeg::frame::Video::new(
+        ffmpeg::format::Pixel::RGBA,
+        crop_width as u32,
+        crop_height as u32,
+    );
+    let target_stride = frame.stride(0);
+    let row_bytes = crop_width * 4;
+    for y in 0..crop_height {
+        let source = ((crop_y + y) * width + crop_x) * 4;
+        frame.data_mut(0)[y * target_stride..y * target_stride + row_bytes]
+            .copy_from_slice(&scratch[source..source + row_bytes]);
+    }
     Ok(Some(frame))
 }
 
@@ -898,6 +1242,136 @@ fn pipewire_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
     .map_err(|error| anyhow!("serialize PipeWire format parameter: {error:?}"))?
     .0
     .into_inner())
+}
+
+/// The offer for compositors that share only DMA-BUFs with a mandatory
+/// modifier (niri 26.04): LINEAR, so the frames can be read on the CPU.
+fn pipewire_dmabuf_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
+    use spa::param::video::VideoFormat;
+    pipewire_dmabuf_format_param_for(
+        fps,
+        &[
+            VideoFormat::BGRx,
+            VideoFormat::BGRA,
+            VideoFormat::RGBx,
+            VideoFormat::RGBA,
+        ],
+        &[linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR as i64],
+    )
+}
+
+/// A DMA-BUF offer for `formats` with `modifiers`. More than one modifier
+/// lets the producer choose (DONT_FIXATE), as the PipeWire DMA-BUF protocol
+/// asks.
+fn pipewire_dmabuf_format_param_for(
+    fps: u32,
+    formats: &[spa::param::video::VideoFormat],
+    modifiers: &[i64],
+) -> anyhow::Result<Vec<u8>> {
+    let fps = fps.max(1);
+    let (Some(first_format), Some(first_modifier)) = (formats.first(), modifiers.first()) else {
+        bail!("a DMA-BUF offer needs a format and a modifier");
+    };
+    let mut modifier_flags = spa::pod::PropertyFlags::MANDATORY;
+    if modifiers.len() > 1 {
+        modifier_flags = spa::pod::PropertyFlags::from_bits_retain(
+            modifier_flags.bits() | spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE,
+        );
+    }
+    let object = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamFormat,
+        spa::param::ParamType::EnumFormat,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaType,
+            Id,
+            spa::param::format::MediaType::Video
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaSubtype,
+            Id,
+            spa::param::format::MediaSubtype::Raw
+        ),
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoFormat.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Id(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: spa::utils::Id(first_format.as_raw()),
+                    alternatives: formats
+                        .iter()
+                        .map(|format| spa::utils::Id(format.as_raw()))
+                        .collect(),
+                },
+            ))),
+        ),
+        spa::pod::Property {
+            key: spa::param::format::FormatProperties::VideoModifier.as_raw(),
+            flags: modifier_flags,
+            value: spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: *first_modifier,
+                    alternatives: modifiers.to_vec(),
+                },
+            ))),
+        },
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoSize,
+            Choice,
+            Range,
+            Rectangle,
+            spa::utils::Rectangle {
+                width: 1920,
+                height: 1080
+            },
+            spa::utils::Rectangle {
+                width: 1,
+                height: 1
+            },
+            spa::utils::Rectangle {
+                width: 8192,
+                height: 8192
+            }
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFramerate,
+            Choice,
+            Range,
+            Fraction,
+            spa::utils::Fraction { num: fps, denom: 1 },
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction {
+                num: 1000,
+                denom: 1
+            }
+        )
+    );
+    serialize_pod(object, "PipeWire DMA-BUF format parameter")
+}
+
+/// Offers for the GPU-tiled modifiers this machine can import, one per
+/// format: what a compositor that cannot render LINEAR (niri on NVIDIA)
+/// shares.
+fn pipewire_imported_format_params(
+    fps: u32,
+    importer: &mut linux_dmabuf_import::DmaBufImporter,
+) -> Vec<Vec<u8>> {
+    use spa::param::video::VideoFormat;
+    [VideoFormat::BGRx, VideoFormat::BGRA]
+        .into_iter()
+        .filter_map(|format| {
+            let fourcc = linux_dmabuf_import::drm_fourcc(format)?;
+            let modifiers = importer
+                .modifiers(fourcc)
+                .into_iter()
+                .filter(|modifier| *modifier != linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR)
+                .map(|modifier| modifier as i64)
+                .collect::<Vec<_>>();
+            (!modifiers.is_empty())
+                .then(|| pipewire_dmabuf_format_param_for(fps, &[format], &modifiers).ok())
+                .flatten()
+        })
+        .collect()
 }
 
 pub struct SystemAudioSourceConfig {
@@ -1341,7 +1815,12 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
-        let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
+        let setup = crate::sources::Microphone::setup_with_channels(
+            config.feed_lock,
+            tx,
+            ctx,
+            X11Capture::audio_info().channels,
+        );
         async move {
             let inner = setup
                 .await
@@ -1903,75 +2382,15 @@ fn pactl_default_device(command: &str) -> Option<String> {
         .filter(|sink| !sink.is_empty())
 }
 
-struct FrameScaler {
-    context: ffmpeg::software::scaling::Context,
-    source_format: ffmpeg::format::Pixel,
-    source_width: u32,
-    source_height: u32,
-}
-
-impl FrameScaler {
-    fn new(
-        source_format: ffmpeg::format::Pixel,
-        source_width: u32,
-        source_height: u32,
-        output: VideoInfo,
-    ) -> anyhow::Result<Self> {
-        let context = ffmpeg::software::scaling::Context::get(
-            source_format,
-            source_width,
-            source_height,
-            output.pixel_format,
-            output.width,
-            output.height,
-            ffmpeg::software::scaling::Flags::BILINEAR,
-        )?;
-
-        Ok(Self {
-            context,
-            source_format,
-            source_width,
-            source_height,
-        })
-    }
-
-    fn matches(&self, frame: &ffmpeg::frame::Video) -> bool {
-        self.source_format == frame.format()
-            && self.source_width == frame.width()
-            && self.source_height == frame.height()
-    }
-
-    fn scale(
-        &mut self,
-        frame: &ffmpeg::frame::Video,
-        output: VideoInfo,
-    ) -> anyhow::Result<ffmpeg::frame::Video> {
-        if frame.format() == output.pixel_format
-            && frame.width() == output.width
-            && frame.height() == output.height
-        {
-            return Ok(frame.clone());
-        }
-
-        if !self.matches(frame) {
-            *self = Self::new(frame.format(), frame.width(), frame.height(), output)?;
-        }
-
-        let mut scaled = ffmpeg::frame::Video::empty();
-        self.context.run(frame, &mut scaled)?;
-        scaled.set_pts(frame.pts());
-        Ok(scaled)
-    }
-}
-
 fn capture_x11(
-    _video_info: VideoInfo,
+    video_info: VideoInfo,
     input_config: X11InputConfig,
     mut video_tx: mpsc::Sender<FFmpegVideoFrame>,
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
     let mut grabber = X11Grabber::new(&input_config)?;
+    grabber.output = video_info;
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(input_config.fps.max(1)));
     let started = Instant::now();
     let mut next_capture = Instant::now();
@@ -2052,11 +2471,188 @@ pub struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+    force_shm_row_copy: bool,
 }
 
 enum GrabBackend {
-    Shm(ShmSegment),
+    Shm(ShmPool),
     GetImage,
+}
+
+/// In-flight SHM frames keep their mapping. Past this many outstanding
+/// frames, capture copies into an owned ffmpeg buffer instead of attaching
+/// another segment.
+#[doc(hidden)]
+pub const X11_SHM_PUBLISH_SLOTS: usize = 4;
+
+/// Matches `AV_INPUT_BUFFER_PADDING_SIZE`. Consumers such as swscale may
+/// overread a plane by this many bytes.
+const SHM_PLANE_PADDING: usize = 64;
+
+struct ShmPool {
+    conn: Arc<RustConnection>,
+    slots: Vec<ShmSegment>,
+    scratch: Option<ShmSegment>,
+    logged_copy_fallback: bool,
+}
+
+impl ShmPool {
+    fn new(conn: Arc<RustConnection>, segment: ShmSegment) -> Self {
+        Self {
+            conn,
+            slots: vec![segment],
+            scratch: None,
+            logged_copy_fallback: false,
+        }
+    }
+
+    fn segment_size(image_bytes: usize) -> anyhow::Result<usize> {
+        image_bytes
+            .checked_add(SHM_PLANE_PADDING)
+            .context("X11 shared-memory size overflowed")
+    }
+
+    fn read_frame(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        self.slots.retain(|slot| slot.len() == required);
+
+        if let Some(index) = self.slots.iter_mut().position(|slot| slot.is_exclusive()) {
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        if !force_copy && self.slots.len() < X11_SHM_PUBLISH_SLOTS {
+            self.slots.push(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory frame")?,
+            );
+            let index = self.slots.len() - 1;
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        self.copy_from_scratch(drawable, x, y, width, height, required, format, force_copy)
+    }
+
+    fn publish_or_copy_slot(
+        &mut self,
+        index: usize,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let segment = &mut self.slots[index];
+        let written = segment
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        segment.zero_tail(written);
+        let width_px = usize::from(width);
+        let height_px = usize::from(height);
+        if !force_copy
+            && let Some(linesize) = shm_plane_linesize(written, width_px, height_px, segment.len())
+            && let Ok(frame) =
+                publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+        {
+            return Ok(frame);
+        }
+
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &self.slots[index].bytes()[..written],
+            width_px,
+            height_px,
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn copy_from_scratch(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        required: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        if !force_copy && !self.logged_copy_fallback {
+            self.logged_copy_fallback = true;
+            tracing::debug!(
+                slots = self.slots.len(),
+                "X11 SHM frames are still referenced; copying this frame out of shared memory"
+            );
+        }
+        if self
+            .scratch
+            .as_ref()
+            .is_none_or(|segment| segment.len() != required)
+        {
+            self.scratch = Some(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory scratch")?,
+            );
+        }
+        let scratch = self
+            .scratch
+            .as_mut()
+            .context("X11 shared-memory scratch missing")?;
+        let written = scratch
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        scratch.zero_tail(written);
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &scratch.bytes()[..written],
+            usize::from(width),
+            usize::from(height),
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn publish_idle(
+        &mut self,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        let Some(index) = self
+            .slots
+            .iter_mut()
+            .position(|slot| slot.len() == required && slot.is_exclusive())
+        else {
+            bail!("no idle X11 shared-memory segment to publish");
+        };
+        let segment = &self.slots[index];
+        let linesize = shm_plane_linesize(
+            image_bytes,
+            usize::from(width),
+            usize::from(height),
+            segment.len(),
+        )
+        .context("X11 shared-memory layout is not publishable")?;
+        publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+    }
 }
 
 struct X11WindowCapture {
@@ -2194,6 +2790,7 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
+            force_shm_row_copy: false,
         };
         grabber.refresh_window_pixmap()?;
         grabber.backend = grabber.initial_backend(allow_shm);
@@ -2215,7 +2812,7 @@ impl X11Grabber {
         match self.create_shm_segment() {
             Ok(segment) => {
                 tracing::info!(bytes = segment.len(), "X11 capture using MIT-SHM");
-                GrabBackend::Shm(segment)
+                GrabBackend::Shm(ShmPool::new(Arc::clone(&self.conn), segment))
             }
             Err(error) => {
                 tracing::info!(error = %format!("{error:#}"), "X11 MIT-SHM unavailable, using GetImage");
@@ -2232,7 +2829,7 @@ impl X11Grabber {
             );
         }
         linux_shm::query_shm_support(&self.conn)?;
-        ShmSegment::new(&self.conn, self.shm_image_size()?)
+        ShmSegment::new(&self.conn, ShmPool::segment_size(self.shm_image_size()?)?)
     }
 
     fn shm_image_size(&self) -> anyhow::Result<usize> {
@@ -2255,6 +2852,29 @@ impl X11Grabber {
 
     pub fn uses_shm(&self) -> bool {
         matches!(self.backend, GrabBackend::Shm(_))
+    }
+
+    #[doc(hidden)]
+    pub fn force_shm_row_copy(&mut self, force: bool) {
+        self.force_shm_row_copy = force;
+    }
+
+    #[doc(hidden)]
+    pub fn set_output_size(&mut self, width: u32, height: u32) {
+        self.output.width = width;
+        self.output.height = height;
+    }
+
+    #[doc(hidden)]
+    pub fn publish_idle_shm_frame(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
+            bail!("X11 MIT-SHM backend is not active");
+        };
+        pool.publish_idle(width, height, image_bytes, format)
     }
 
     fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
@@ -2338,25 +2958,27 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
-        let mut source = ffmpeg::frame::Video::new(
-            self.source_pixel,
-            u32::from(self.width),
-            u32::from(self.height),
-        );
-        if self.uses_shm() {
-            if let Err(shm_error) = self.read_shm_image(drawable, x, y, &mut source) {
-                // Only abandon MIT-SHM once GetImage succeeds on the same frame;
-                // if both fail the cause is the drawable/region, not SHM.
-                self.read_get_image(drawable, x, y, &mut source)?;
-                tracing::warn!(
-                    error = %format!("{shm_error:#}"),
-                    "X11 MIT-SHM capture failed, switching to GetImage"
-                );
-                self.backend = GrabBackend::GetImage;
+        let source = if self.uses_shm() {
+            match self.read_shm_frame(drawable, x, y) {
+                Ok(frame) => frame,
+                Err(shm_error) => {
+                    // Only abandon MIT-SHM once GetImage succeeds on the same frame;
+                    // if both fail the cause is the drawable/region, not SHM.
+                    let mut source = self.allocate_source_frame();
+                    self.read_get_image(drawable, x, y, &mut source)?;
+                    tracing::warn!(
+                        error = %format!("{shm_error:#}"),
+                        "X11 MIT-SHM capture failed, switching to GetImage"
+                    );
+                    self.backend = GrabBackend::GetImage;
+                    source
+                }
             }
         } else {
+            let mut source = self.allocate_source_frame();
             self.read_get_image(drawable, x, y, &mut source)?;
-        }
+            source
+        };
 
         let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
 
@@ -2369,23 +2991,38 @@ impl X11Grabber {
         Ok(frame)
     }
 
-    fn read_shm_image(
+    fn allocate_source_frame(&self) -> ffmpeg::frame::Video {
+        ffmpeg::frame::Video::new(
+            self.source_pixel,
+            u32::from(self.width),
+            u32::from(self.height),
+        )
+    }
+
+    fn read_shm_frame(
         &mut self,
         drawable: u32,
         x: i16,
         y: i16,
-        dst: &mut ffmpeg::frame::Video,
-    ) -> anyhow::Result<()> {
-        let required = self.shm_image_size()?;
-        let GrabBackend::Shm(segment) = &mut self.backend else {
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let force_copy = self.force_shm_row_copy;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
             bail!("X11 MIT-SHM backend is not active");
         };
-        if segment.len() != required {
-            *segment = ShmSegment::new(&self.conn, required)
-                .context("resize X11 shared-memory segment")?;
-        }
-        let data = segment.get_image(drawable, x, y, self.width, self.height)?;
-        copy_image_rows(data, usize::from(self.width), usize::from(self.height), dst)
+        pool.read_frame(
+            drawable,
+            x,
+            y,
+            width,
+            height,
+            image_bytes,
+            format,
+            force_copy,
+        )
     }
 
     fn read_get_image(
@@ -2485,6 +3122,101 @@ impl X11Grabber {
 
         Ok(())
     }
+}
+
+/// Linesize for a packed 32-bit SHM image, when the mapping has room for the
+/// plane plus SIMD overread padding. `None` means the caller must copy.
+fn shm_plane_linesize(
+    written: usize,
+    width: usize,
+    height: usize,
+    mapping_len: usize,
+) -> Option<i32> {
+    if height == 0 {
+        return None;
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let stride = written / height;
+    if stride < row_bytes {
+        return None;
+    }
+    let plane = stride.checked_mul(height)?;
+    if plane > written || plane > mapping_len {
+        return None;
+    }
+    if mapping_len - plane < SHM_PLANE_PADDING {
+        return None;
+    }
+    i32::try_from(stride).ok()
+}
+
+fn publish_shm_frame(
+    mapping: SharedMapping,
+    linesize: i32,
+    width: u16,
+    height: u16,
+    format: ffmpeg::format::Pixel,
+) -> anyhow::Result<ffmpeg::frame::Video> {
+    let mut frame = ffmpeg::frame::Video::empty();
+    frame.set_format(format);
+    frame.set_width(u32::from(width));
+    frame.set_height(u32::from(height));
+
+    let data = mapping.as_ptr();
+    let size = mapping.len();
+    if data.is_null() || size == 0 {
+        bail!("X11 shared-memory mapping is empty");
+    }
+    let plane = usize::try_from(linesize)
+        .ok()
+        .and_then(|stride| stride.checked_mul(usize::from(height)))
+        .filter(|plane| *plane <= size)
+        .context("X11 shared-memory plane does not fit the mapping")?;
+    if plane == 0 {
+        bail!("X11 shared-memory plane is empty");
+    }
+
+    let opaque = mapping.into_raw();
+    // SAFETY: `data`/`size` describe the live SysV mapping owned by `opaque`.
+    // The callback drops that owner when the last AVBufferRef is released, which
+    // is after every consumer of this frame has finished. The buffer is writable
+    // so cursor compositing can update pixels before the frame is shared further.
+    let buffer = unsafe {
+        ffmpeg::ffi::av_buffer_create(data, size, Some(release_shared_mapping), opaque, 0)
+    };
+    if buffer.is_null() {
+        // SAFETY: `av_buffer_create` failed and did not take `opaque`.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+        bail!("failed to publish X11 shared-memory frame");
+    }
+    // SAFETY: `frame` came from `av_frame_alloc`. Plane 0 points into `buffer`,
+    // whose free callback keeps the mapping mapped for the frame's lifetime.
+    unsafe {
+        let raw = frame.as_mut_ptr();
+        (*raw).data[0] = data;
+        (*raw).linesize[0] = linesize;
+        (*raw).buf[0] = buffer;
+        (*raw).extended_data = std::ptr::addr_of_mut!((*raw).data).cast();
+    }
+    Ok(frame)
+}
+
+unsafe extern "C" fn release_shared_mapping(opaque: *mut libc::c_void, _data: *mut u8) {
+    if !opaque.is_null() {
+        // SAFETY: `opaque` is the `SharedMapping::into_raw` pointer stored on the
+        // AVBuffer and released exactly once.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+    }
+}
+
+#[doc(hidden)]
+pub fn copy_x11_image_rows(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    dst: &mut ffmpeg::frame::Video,
+) -> anyhow::Result<()> {
+    copy_image_rows(data, width, height, dst)
 }
 
 fn copy_image_rows(
@@ -2975,9 +3707,189 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
-        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+        FrameScaler, LinuxCaptureSource, PipewireNodeInput, VideoInfo, capture_pipewire_node,
+        frame_from_pipewire_data, pipewire_dmabuf_format_param, pipewire_format_param,
+        prefers_wayland_environment, prepare_pipewire_frame, spa, wayland_area_matches_display,
+        wayland_video_info,
     };
+    use std::os::fd::AsRawFd;
+
+    /// GitHub #2941: niri 26.04 shares screencasts only as DMA-BUFs with a
+    /// mandatory modifier, which 0.6.1 never offered, so nothing was ever
+    /// captured. This records from a producer that negotiates and shares
+    /// frames the way niri does (scripts/linux-desktop-harness/niri-screencast)
+    /// through Cap's real PipeWire capture loop.
+    #[test]
+    #[ignore = "needs a PipeWire daemon and CAP_FAKE_NIRI_PRODUCER"]
+    fn frames_from_a_producer_that_shares_only_dmabufs_are_captured() {
+        use std::io::BufRead;
+
+        let producer = std::env::var("CAP_FAKE_NIRI_PRODUCER")
+            .expect("set CAP_FAKE_NIRI_PRODUCER to the built producer");
+        let mut child = std::process::Command::new(producer)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        struct Kill(std::process::Child);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let stdout = child.stdout.take().unwrap();
+        let child = Kill(child);
+        let (node_tx, node_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Some(node) = line.strip_prefix("node ") {
+                    let _ = node_tx.send(node.trim().parse::<u32>().unwrap());
+                }
+            }
+        });
+        let node_id = node_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the producer announced no node");
+
+        let runtime = std::env::var("PIPEWIRE_RUNTIME_DIR")
+            .or_else(|_| std::env::var("XDG_RUNTIME_DIR"))
+            .unwrap();
+        let socket =
+            std::os::unix::net::UnixStream::connect(format!("{runtime}/pipewire-0")).unwrap();
+        let (video_tx, mut video_rx) = futures::channel::mpsc::channel(4);
+        let (health_tx, _health_rx) = tokio::sync::mpsc::channel(16);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let capture = std::thread::spawn({
+            let stop = stop.clone();
+            move || {
+                capture_pipewire_node(
+                    VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 640, 360, 30),
+                    PipewireNodeInput {
+                        fd: socket.into(),
+                        node_id,
+                        fps: 30,
+                        crop_bounds: None,
+                    },
+                    video_tx,
+                    stop,
+                    health_tx,
+                )
+            }
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut frames = Vec::new();
+        loop {
+            if frames.len() >= 10 || std::time::Instant::now() >= deadline || capture.is_finished()
+            {
+                break;
+            }
+            match video_rx.try_next() {
+                Ok(Some(frame)) => frames.push(frame.inner),
+                Ok(None) => break,
+                Err(_) => std::thread::park_timeout(std::time::Duration::from_millis(10)),
+            }
+        }
+        stop.cancel();
+        let result = capture.join().unwrap();
+        drop(child);
+        assert!(
+            frames.len() >= 10,
+            "captured {} frames; capture ended with {result:?}",
+            frames.len()
+        );
+        result.unwrap();
+        let mut levels = std::collections::BTreeSet::new();
+        for frame in &frames {
+            assert_eq!((frame.width(), frame.height()), (640, 360));
+            let pixel = &frame.data(0)[..4];
+            assert_eq!(&pixel[1..3], &[0x40, 0x80], "{pixel:?}");
+            levels.insert(pixel[0]);
+        }
+        assert!(
+            levels.len() > 1,
+            "every captured frame was the same picture"
+        );
+    }
+
+    /// niri 26.04 shares only DMA-BUFs: the buffer is not mapped for the
+    /// consumer, `maxsize` is 1 and the chunk carries just stride and offset.
+    /// 0.6.1 rejected every such frame ("buffer was not memory-mapped").
+    #[test]
+    fn an_unmapped_dmabuf_frame_is_read_from_its_file_descriptor() {
+        let (width, height, stride) = (4usize, 3usize, 24usize);
+        let mut bytes = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = &mut bytes[y * stride + x * 4..][..4];
+                pixel.copy_from_slice(&[x as u8, y as u8, 0x80, 0xff]);
+            }
+        }
+        let file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut &file, &bytes).unwrap();
+
+        let mut chunk = spa::sys::spa_chunk {
+            offset: 0,
+            size: 0,
+            stride: stride as i32,
+            flags: 0,
+        };
+        let mut raw: spa::sys::spa_data = unsafe { std::mem::zeroed() };
+        raw.type_ = spa::sys::SPA_DATA_DmaBuf;
+        raw.flags = spa::sys::SPA_DATA_FLAG_READWRITE;
+        raw.fd = i64::from(file.as_raw_fd());
+        raw.maxsize = 1;
+        raw.data = std::ptr::null_mut();
+        raw.chunk = &mut chunk;
+        let data = unsafe { &mut *(&mut raw as *mut spa::sys::spa_data as *mut spa::buffer::Data) };
+
+        let mut format = spa::param::video::VideoInfoRaw::new();
+        format.set_format(spa::param::video::VideoFormat::BGRx);
+        format.set_size(spa::utils::Rectangle {
+            width: width as u32,
+            height: height as u32,
+        });
+        format.set_modifier(0);
+        let frame = frame_from_pipewire_data(data, format, None)
+            .unwrap()
+            .expect("a frame");
+        assert_eq!((frame.width(), frame.height()), (4, 3));
+        assert_eq!(frame.format(), ffmpeg::format::Pixel::BGRZ);
+        for y in 0..height {
+            let row = &frame.data(0)[y * frame.stride(0)..][..width * 4];
+            assert_eq!(row, &bytes[y * stride..][..width * 4], "row {y}");
+        }
+    }
+
+    #[test]
+    fn dmabuf_offer_follows_shared_memory_with_a_mandatory_linear_modifier() {
+        let shm = pipewire_format_param(30).unwrap();
+        let shm = spa::pod::Pod::from_bytes(&shm)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        let modifier = spa::utils::Id(spa::param::format::FormatProperties::VideoModifier.0);
+        assert!(shm.find_prop(modifier).is_none());
+
+        let bytes = pipewire_dmabuf_format_param(30).unwrap();
+        let object = spa::pod::Pod::from_bytes(&bytes)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        let prop = object.find_prop(modifier).expect("a modifier property");
+        assert!(prop.flags().contains(spa::pod::PodPropFlags::MANDATORY));
+        let (_, value) = spa::pod::deserialize::PodDeserializer::deserialize_from::<
+            spa::utils::Choice<i64>,
+        >(prop.value().as_bytes())
+        .unwrap();
+        let spa::utils::ChoiceEnum::Enum { alternatives, .. } = value.1 else {
+            panic!("modifier is not an enum choice");
+        };
+        assert_eq!(alternatives, vec![0]);
+    }
 
     #[test]
     fn wayland_area_requires_the_selected_monitor_in_the_portal() {
@@ -3097,5 +4009,60 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+}
+
+#[cfg(test)]
+mod shm_publish_tests {
+    use super::{SHM_PLANE_PADDING, shm_plane_linesize};
+
+    #[test]
+    fn packed_32bpp_frames_publish_with_their_native_stride() {
+        let stride = 1920 * 4;
+        let height = 1080;
+        let written = stride * height;
+        assert_eq!(
+            shm_plane_linesize(written, 1920, height, written + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        let four_k = 3840 * 4;
+        let four_k_rows = 2160;
+        let four_k_bytes = four_k * four_k_rows;
+        assert_eq!(
+            shm_plane_linesize(
+                four_k_bytes,
+                3840,
+                four_k_rows,
+                four_k_bytes + SHM_PLANE_PADDING
+            ),
+            Some(four_k as i32)
+        );
+    }
+
+    #[test]
+    fn padded_and_short_rows_follow_the_mapping() {
+        let written = 8usize;
+        assert_eq!(
+            shm_plane_linesize(written, 1, 1, written + SHM_PLANE_PADDING),
+            Some(8)
+        );
+        let stride = 333 * 4;
+        let height = 211;
+        let plane = stride * height;
+        assert_eq!(
+            shm_plane_linesize(plane, 333, height, plane + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        assert_eq!(shm_plane_linesize(plane, 333, height, plane + 63), None);
+        assert_eq!(shm_plane_linesize(plane - 1, 333, height, plane + 64), None);
+        assert_eq!(shm_plane_linesize(0, 16, 0, 64), None);
+    }
+
+    #[test]
+    fn padding_matches_ffmpeg_input_overread() {
+        assert_eq!(
+            SHM_PLANE_PADDING,
+            ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize
+        );
     }
 }

@@ -30,6 +30,9 @@
 //!
 //! Deliberate deviations:
 //!
+//! * Windows and Linux capture at full resolution, so a source more than
+//!   eight times the thumbnail is box-averaged before the Lanczos3 pass
+//!   (`cap_gpui_kernels::thumbnail::fit_centered_capture`).
 //! * No base64 and no PNG round-trip. The Tauri command has to hand bytes to a
 //!   webview; here the RGBA buffer goes straight to `RenderImage`, which skips
 //!   a PNG encode and a base64 encode per target per refresh.
@@ -71,6 +74,69 @@ pub const THUMBNAIL_STALE_TIME: Duration = Duration::from_secs(10);
 /// idle timeout is the deadline that branch would have used anyway.
 pub const PREWARM_DELAY: Duration = Duration::from_millis(250);
 
+/// A ScreenCaptureKit request that has not answered by now is treated as hung.
+/// A healthy 320x180 thumbnail or shareable-content read takes milliseconds.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long thumbnail captures stay paused after one hangs. A hung
+/// `SCScreenshotManager` request cannot be cancelled and keeps macOS's capture
+/// session (and the purple indicator) open in `replayd`, so retrying on every
+/// picker poll would only pile up more of them:
+/// https://github.com/CapSoftware/Cap/issues/2339
+const CAPTURE_HANG_PAUSE: Duration = Duration::from_secs(5 * 60);
+
+static CAPTURE_PAUSE: CapturePause = CapturePause::new();
+
+pub fn captures_paused() -> bool {
+    CAPTURE_PAUSE.active_at(std::time::Instant::now())
+}
+
+struct CapturePause(std::sync::Mutex<Option<std::time::Instant>>);
+
+impl CapturePause {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    fn active_at(&self, now: std::time::Instant) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|until| now < until)
+    }
+
+    fn start_at(&self, now: std::time::Instant) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now + CAPTURE_HANG_PAUSE);
+    }
+}
+
+/// `None` when `future` outlives `limit`, which also starts `pause`. The
+/// dropped request may still be pending inside ScreenCaptureKit; this only
+/// stops the sweep from waiting on it forever.
+async fn within_capture_timeout<T>(
+    what: &'static str,
+    limit: Duration,
+    pause: &CapturePause,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    match tokio::time::timeout(limit, future).await {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(
+                what,
+                timeout_ms = limit.as_millis() as u64,
+                pause_secs = CAPTURE_HANG_PAUSE.as_secs(),
+                "thumbnail capture did not answer; pausing thumbnail captures"
+            );
+            pause.start_at(std::time::Instant::now());
+            None
+        }
+    }
+}
+
 /// A card's images. Both halves are optional and independent: a window can have
 /// an icon and no thumbnail (capture refused) or the reverse (no bundle icon).
 #[derive(Clone, Default)]
@@ -97,7 +163,25 @@ pub enum WindowEvent {
         image: Option<Arc<RenderImage>>,
         /// Raw PNG bytes from `Window::app_icon()` (`thumbnails/mod.rs:113-122`).
         app_icon: Option<Vec<u8>>,
+        entry: CapturedWindow,
     },
+}
+
+/// What a window thumbnail was captured from: the row's
+/// [`window_entry_signature`] and the capture time.
+#[derive(Clone, Debug)]
+pub struct CapturedWindow {
+    signature: String,
+    at: std::time::Instant,
+}
+
+impl CapturedWindow {
+    pub fn new(window: &WindowOption, at: std::time::Instant) -> Self {
+        Self {
+            signature: window_entry_signature(window),
+            at,
+        }
+    }
 }
 
 /// Per-view thumbnail state.
@@ -117,6 +201,9 @@ pub enum WindowEvent {
 pub struct ThumbnailCache {
     displays: HashMap<String, Arc<RenderImage>>,
     windows: HashMap<String, TargetThumb>,
+    /// What each window thumbnail in `windows` was captured from, so a sweep
+    /// only re-captures the windows that changed or have gone stale.
+    window_entries: HashMap<String, CapturedWindow>,
     /// Signature of the list the cached display thumbnails were captured from.
     display_signature: Option<String>,
     window_signature: Option<String>,
@@ -158,13 +245,18 @@ impl ThumbnailCache {
         id: &WindowId,
         image: Option<Arc<RenderImage>>,
         app_icon: Option<Arc<gpui::Image>>,
+        entry: CapturedWindow,
     ) -> Option<Arc<RenderImage>> {
-        let slot = self.windows.entry(id.to_string()).or_default();
+        let key = id.to_string();
+        let slot = self.windows.entry(key.clone()).or_default();
         // A refresh that failed to capture must not blank a thumbnail that is
         // already on screen: only a real capture replaces one. Same for the
         // icon, which the Tauri card keeps for the life of the row.
         let replaced = match image {
-            Some(image) => slot.image.replace(image),
+            Some(image) => {
+                self.window_entries.insert(key, entry);
+                slot.image.replace(image)
+            }
             None => None,
         };
         if app_icon.is_some() {
@@ -205,7 +297,12 @@ impl ThumbnailCache {
                 false
             }
         });
+        self.window_entries.retain(|id, _| live.contains(id));
         dropped
+    }
+
+    pub fn captured_windows(&self) -> HashMap<String, CapturedWindow> {
+        self.window_entries.clone()
     }
 
     pub fn display_inflight(&self) -> bool {
@@ -291,29 +388,35 @@ pub fn render_thumbnail_slot(
     };
 
     let black = |alpha: f32| hsla(0., 0., 0., alpha);
-    // The inner corner radius: the card is `rounded(8.)` with a 1px border.
-    const TOP_RADIUS: f32 = 7.;
+    const RADIUS: f32 = 8.;
+    let glass = |light: f32, dark: f32| {
+        if theme.is_dark() {
+            hsla(0., 0., 1., dark)
+        } else {
+            hsla(0., 0., 0., light)
+        }
+    };
 
     div()
         .relative()
         .w_full()
-        .h(px(76.))
+        .h(px(84.))
         .overflow_hidden()
-        .rounded_t(px(TOP_RADIUS))
-        .bg(theme.body_fill(4))
+        .rounded(px(RADIUS))
+        .bg(glass(0.04, 0.08))
         .child(match thumb.image {
             Some(image) => img(image)
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
-                .rounded_t(px(TOP_RADIUS))
+                .rounded(px(RADIUS))
                 .into_any_element(),
             None => div()
                 .flex()
                 .size_full()
                 .items_center()
                 .justify_center()
-                .rounded_t(px(TOP_RADIUS))
-                .bg(theme.body_fill(4))
+                .rounded(px(RADIUS))
+                .bg(glass(0.04, 0.08))
                 .child(
                     // `svg()` does not inherit `text_color`; the fallback icon
                     // has to set its own or it paints black.
@@ -332,7 +435,7 @@ pub fn render_thumbnail_slot(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_t(px(TOP_RADIUS))
+                    .rounded(px(RADIUS))
                     .bg(black(0.45))
                     .child(
                         img(app_icon)
@@ -351,10 +454,9 @@ pub fn render_thumbnail_slot(
             div()
                 .absolute()
                 .inset_0()
-                .rounded_t(px(TOP_RADIUS))
+                .rounded(px(RADIUS))
                 .border_1()
-                // `border-black/5` under `opacity-60`.
-                .border_color(black(0.03)),
+                .border_color(glass(0.08, 0.1)),
         )
         .child(
             div()
@@ -363,6 +465,7 @@ pub fn render_thumbnail_slot(
                 .left_0()
                 .right_0()
                 .h(px(40.))
+                .rounded_b(px(RADIUS))
                 .bg(linear_gradient(
                     0.,
                     linear_color_stop(black(0.4), 0.),
@@ -380,23 +483,42 @@ pub fn render_thumbnail_slot(
 /// only ever compared against another string this function produced.
 pub fn window_signature(list: &[WindowOption]) -> String {
     list.iter()
-        .map(|window| {
-            let (x, y) = window.position.unwrap_or((0., 0.));
-            let (width, height) = window.size.unwrap_or((0, 0));
-            format!(
-                "{}:{}:{}:{}:{}:{}:{}:{}",
-                window.id,
-                window.app,
-                window.label,
-                x,
-                y,
-                width,
-                height,
-                window.refresh_rate.unwrap_or(0.),
-            )
-        })
+        .map(window_entry_signature)
         .collect::<Vec<_>>()
         .join("|")
+}
+
+pub fn window_entry_signature(window: &WindowOption) -> String {
+    let (x, y) = window.position.unwrap_or((0., 0.));
+    let (width, height) = window.size.unwrap_or((0, 0));
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        window.id,
+        window.app,
+        window.label,
+        x,
+        y,
+        width,
+        height,
+        window.refresh_rate.unwrap_or(0.),
+    )
+}
+
+/// Whether a sweep has to capture `window` again: it is new, its last capture
+/// missed, it moved, resized, or changed since, or its thumbnail is at least
+/// [`THUMBNAIL_STALE_TIME`] old. A sweep only runs when the list signature
+/// changed, so the age rule keeps the refresh that any list change (a focus
+/// switch reorders it) used to give every window, without re-capturing a
+/// window captured moments ago on every step of a drag.
+pub fn window_needs_capture(
+    captured: &HashMap<String, CapturedWindow>,
+    window: &WindowOption,
+    now: std::time::Instant,
+) -> bool {
+    captured.get(&window.id.to_string()).is_none_or(|entry| {
+        entry.signature != window_entry_signature(window)
+            || now.saturating_duration_since(entry.at) >= THUMBNAIL_STALE_TIME
+    })
 }
 
 /// `createDisplaySignature` (`new-main/index.tsx:400-408`): id, name, refresh
@@ -438,6 +560,7 @@ pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
 }
 
 /// `normalize_thumbnail_dimensions` (`thumbnails/mod.rs:44-87`), verbatim.
+#[cfg(any(target_os = "macos", test))]
 pub fn normalize_thumbnail_dimensions(image: &RgbaImage) -> RgbaImage {
     cap_gpui_kernels::thumbnail::fit_centered(image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
 }
@@ -461,7 +584,10 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     let joined = tokio::task::spawn_blocking(move || {
-        match tokio::runtime::Builder::new_current_thread().build() {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        {
             Ok(runtime) => runtime.block_on(make()),
             Err(error) => tracing::error!("could not start the thumbnail runtime: {error}"),
         }
@@ -480,9 +606,13 @@ pub async fn capture_displays(events: flume::Sender<DisplayEvent>) {
 
 /// The window twin. `collect_windows_with_thumbnails` (`thumbnails/mod.rs:107-137`)
 /// also reads `Window::app_icon()` per row, which is what the card's centred
-/// icon-on-scrim overlay paints.
-pub async fn capture_windows(events: flume::Sender<WindowEvent>) {
-    run_capture(move || capture_windows_inner(events)).await
+/// icon-on-scrim overlay paints. Windows whose thumbnail in `current` is still
+/// up to date are listed but not captured again.
+pub async fn capture_windows(
+    events: flume::Sender<WindowEvent>,
+    current: HashMap<String, CapturedWindow>,
+) {
+    run_capture(move || capture_windows_inner(events, current)).await
 }
 
 async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
@@ -496,14 +626,34 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
         return;
     }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     let total = targets.len();
     let mut captured = 0usize;
     for (option, display) in targets {
-        let Some(rgba) = capture_display_thumbnail(&display, content.retained()).await else {
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "display thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_display_thumbnail(&display, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let Some(rgba) = capture else {
             tracing::debug!(id = %option.id, "display thumbnail capture missed");
             continue;
         };
@@ -521,7 +671,15 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
     tracing::debug!(captured, total, "display thumbnail sweep finished");
 }
 
-async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
+async fn capture_windows_inner(
+    events: flume::Sender<WindowEvent>,
+    current: HashMap<String, CapturedWindow>,
+) {
+    #[cfg(target_os = "windows")]
+    let mut window_cache = scap_targets::platform::WindowListCache::default();
+    #[cfg(target_os = "windows")]
+    let targets = crate::devices::list_window_targets_inner(&mut window_cache);
+    #[cfg(not(target_os = "windows"))]
     let targets = crate::devices::list_window_targets();
     let total = targets.len();
     let mut captured = 0usize;
@@ -533,16 +691,47 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
     {
         return;
     }
+    let now = std::time::Instant::now();
+    let targets: Vec<_> = targets
+        .into_iter()
+        .filter(|(option, _)| window_needs_capture(&current, option, now))
+        .collect();
+    if targets.is_empty() {
+        tracing::debug!(total, "window thumbnails all current");
+        return;
+    }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     for (option, window) in targets {
-        let image = capture_window_thumbnail(&window, content.retained())
-            .await
-            .map(crate::library::rgba_to_render_image);
-        let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "window thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_window_thumbnail(&window, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let image = capture.map(crate::library::rgba_to_render_image);
+        #[cfg(target_os = "windows")]
+        let app_icon = window_cache.app_icon(&window);
+        #[cfg(not(target_os = "windows"))]
+        let app_icon = window.app_icon();
+        let app_icon = app_icon.filter(|bytes| !bytes.is_empty());
         if image.is_some() {
             captured += 1;
         }
@@ -552,6 +741,7 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
         }
         if events
             .send(WindowEvent::Captured {
+                entry: CapturedWindow::new(&option, std::time::Instant::now()),
                 id: option.id,
                 image,
                 app_icon,
@@ -887,8 +1077,6 @@ mod platform {
     use cap_recording::sources::screen_capture::ScreenCaptureTarget;
     use image::RgbaImage;
 
-    use super::normalize_thumbnail_dimensions;
-
     #[derive(Clone)]
     pub struct ShareableContent;
 
@@ -923,7 +1111,7 @@ mod platform {
         }
 
         let image = match capture_screenshot(target).await {
-            Ok(image) => image.into_rgba8(),
+            Ok(image) => image,
             Err(error) => {
                 tracing::warn!(%error, "target thumbnail capture failed");
                 return None;
@@ -934,7 +1122,11 @@ mod platform {
             return None;
         }
 
-        Some(normalize_thumbnail_dimensions(&image))
+        Some(cap_gpui_kernels::thumbnail::fit_centered_capture(
+            image,
+            super::THUMBNAIL_WIDTH,
+            super::THUMBNAIL_HEIGHT,
+        ))
     }
 }
 
@@ -1045,6 +1237,7 @@ mod tests {
     use super::*;
     use scap_targets::{DisplayId, WindowId};
     use std::str::FromStr;
+    use std::time::Instant;
 
     fn solid(width: u32, height: u32, colour: [u8; 4]) -> RgbaImage {
         RgbaImage::from_pixel(width, height, image::Rgba(colour))
@@ -1332,13 +1525,27 @@ mod tests {
 
         assert!(
             cache
-                .insert_window(&id, Some(image.clone()), None)
+                .insert_window(
+                    &id,
+                    Some(image.clone()),
+                    None,
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
                 .is_none()
         );
         assert!(cache.window(&id).image.is_some());
 
         // A refresh with no capture and no icon: the slot survives untouched.
-        assert!(cache.insert_window(&id, None, None).is_none());
+        assert!(
+            cache
+                .insert_window(
+                    &id,
+                    None,
+                    None,
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
+                .is_none()
+        );
         assert!(cache.window(&id).image.is_some());
 
         // An icon arriving on its own does not disturb the thumbnail either.
@@ -1346,7 +1553,16 @@ mod tests {
             gpui::ImageFormat::Png,
             vec![0u8; 4],
         ));
-        assert!(cache.insert_window(&id, None, Some(icon)).is_none());
+        assert!(
+            cache
+                .insert_window(
+                    &id,
+                    None,
+                    Some(icon),
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
+                .is_none()
+        );
         let thumb = cache.window(&id);
         assert!(thumb.image.is_some());
         assert!(thumb.app_icon.is_some());
@@ -1399,6 +1615,117 @@ mod tests {
         assert!(cache.windows_stale(&moved));
     }
 
+    fn insert_captured(cache: &mut ThumbnailCache, window: &WindowOption, at: Instant) {
+        let image = crate::library::rgba_to_render_image(solid(2, 2, [1, 2, 3, 255]));
+        let _ = cache.insert_window(
+            &window.id,
+            Some(image),
+            None,
+            CapturedWindow::new(window, at),
+        );
+    }
+
+    #[test]
+    fn a_sweep_recaptures_only_the_windows_that_changed() {
+        let now = Instant::now();
+        let mut cache = ThumbnailCache::default();
+        let list = [
+            window("1", "Cap", "Main"),
+            window("2", "Finder", "Downloads"),
+            window("3", "Safari", "Docs"),
+        ];
+        assert!(list.iter().all(|window| window_needs_capture(
+            &cache.captured_windows(),
+            window,
+            now
+        )));
+
+        for window in &list[..2] {
+            insert_captured(&mut cache, window, now);
+        }
+        let _ = cache.insert_window(&list[2].id, None, None, CapturedWindow::new(&list[2], now));
+        let current = cache.captured_windows();
+        assert!(!window_needs_capture(&current, &list[0], now));
+        assert!(!window_needs_capture(&current, &list[1], now));
+        assert!(window_needs_capture(&current, &list[2], now));
+
+        let mut moved = list[1].clone();
+        moved.position = Some((40., 12.));
+        let mut resized = list[0].clone();
+        resized.size = Some((1280, 720));
+        let mut renamed = list[0].clone();
+        renamed.label = "Settings".into();
+        for changed in [&moved, &resized, &renamed] {
+            assert!(window_needs_capture(&current, changed, now));
+        }
+
+        cache.set_window_signature(window_signature(&list[..2]));
+        let reordered = [list[1].clone(), list[0].clone()];
+        assert!(cache.windows_stale(&reordered));
+        assert!(
+            reordered
+                .iter()
+                .all(|window| !window_needs_capture(&current, window, now))
+        );
+
+        let dropped = cache.retain_windows(&list[1..]);
+        assert_eq!(dropped.len(), 1);
+        assert!(window_needs_capture(
+            &cache.captured_windows(),
+            &list[0],
+            now
+        ));
+        assert!(!window_needs_capture(
+            &cache.captured_windows(),
+            &list[1],
+            now
+        ));
+    }
+
+    #[test]
+    fn a_sweep_recaptures_unchanged_windows_once_their_thumbnail_is_stale() {
+        let captured_at = Instant::now();
+        let mut cache = ThumbnailCache::default();
+        let list = [
+            window("1", "Cap", "Main"),
+            window("2", "Finder", "Downloads"),
+        ];
+        insert_captured(&mut cache, &list[0], captured_at);
+        insert_captured(&mut cache, &list[1], captured_at + Duration::from_secs(4));
+        let current = cache.captured_windows();
+
+        let fresh = captured_at + THUMBNAIL_STALE_TIME.saturating_sub(Duration::from_millis(1));
+        assert!(!window_needs_capture(&current, &list[0], fresh));
+        assert!(!window_needs_capture(&current, &list[1], fresh));
+
+        let stale = captured_at + THUMBNAIL_STALE_TIME;
+        assert!(window_needs_capture(&current, &list[0], stale));
+        assert!(!window_needs_capture(&current, &list[1], stale));
+
+        let later = captured_at + Duration::from_secs(4) + THUMBNAIL_STALE_TIME;
+        assert!(window_needs_capture(&current, &list[1], later));
+
+        insert_captured(&mut cache, &list[0], stale);
+        assert!(!window_needs_capture(
+            &cache.captured_windows(),
+            &list[0],
+            stale
+        ));
+    }
+
+    #[test]
+    fn window_signature_is_its_entries_joined() {
+        let list = [window("1", "Cap", "Main"), window("2", "Cap", "Editor")];
+        assert_eq!(
+            window_signature(&list),
+            format!(
+                "{}|{}",
+                window_entry_signature(&list[0]),
+                window_entry_signature(&list[1])
+            )
+        );
+    }
+
     #[test]
     fn prewarm_is_a_one_shot_latch() {
         let mut cache = ThumbnailCache::default();
@@ -1426,5 +1753,46 @@ mod tests {
             let _ = tx.send("captured");
         }));
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!["captured"]);
+    }
+
+    #[test]
+    fn a_hung_capture_times_out_inside_a_sweep_and_pauses_captures() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let pause = Arc::new(CapturePause::new());
+        let sweep_pause = pause.clone();
+        let (tx, rx) = flume::unbounded();
+        runtime.block_on(run_capture(move || async move {
+            let hung = within_capture_timeout(
+                "test capture",
+                Duration::from_millis(20),
+                &sweep_pause,
+                std::future::pending::<()>(),
+            )
+            .await;
+            let answered = within_capture_timeout(
+                "test capture",
+                Duration::from_secs(5),
+                &sweep_pause,
+                async { 7 },
+            )
+            .await;
+            let _ = tx.send((hung, answered));
+        }));
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![(None, Some(7))]);
+        assert!(pause.active_at(std::time::Instant::now()));
+    }
+
+    #[test]
+    fn capture_pause_lasts_for_the_hang_pause() {
+        let pause = CapturePause::new();
+        let now = std::time::Instant::now();
+        assert!(!pause.active_at(now));
+        pause.start_at(now);
+        assert!(pause.active_at(now));
+        assert!(pause.active_at(now + CAPTURE_HANG_PAUSE.saturating_sub(Duration::from_millis(1))));
+        assert!(!pause.active_at(now + CAPTURE_HANG_PAUSE));
     }
 }

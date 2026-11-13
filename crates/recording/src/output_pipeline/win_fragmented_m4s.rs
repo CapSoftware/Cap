@@ -3,6 +3,7 @@ use super::core::{
     combine_finish_errors, wait_for_blocking_thread_finish,
 };
 use super::frame_pacing::{FramePacer, Paced};
+use super::mjpeg::MjpegDecoder;
 use super::win::reference_video_frame;
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
@@ -12,10 +13,11 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
-    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+    DiskSpaceCallback, QueueFrameError, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use std::{
+    cell::{Cell, RefCell},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -65,7 +67,6 @@ impl FrameDropTracker {
         self.check_drop_rate();
     }
 
-    #[allow(dead_code)]
     fn record_drop(&mut self) {
         self.drops_in_window += 1;
         self.total_drops += 1;
@@ -106,6 +107,43 @@ impl FrameDropTracker {
     }
 }
 
+/// Logs the first encode failures, then every 300th: a warning per frame from
+/// a dead encoder pushed its first error out of the size-capped log upload.
+fn report_encode_result(
+    encoder: &mut SegmentedVideoEncoder,
+    result: Result<(), QueueFrameError>,
+    failures: &Cell<u64>,
+    encode_drops: &RefCell<FrameDropTracker>,
+    health_tx: &SharedHealthSender,
+    track: &'static str,
+) -> bool {
+    let encoded = result.is_ok();
+    if let Err(error) = result {
+        let count = failures.get() + 1;
+        failures.set(count);
+        if count <= 3 || count.is_multiple_of(300) {
+            warn!(track, failures = count, "Failed to encode frame: {error}");
+        }
+        encode_drops.borrow_mut().record_drop();
+    } else {
+        encode_drops.borrow_mut().record_frame();
+    }
+    if let Some(fallback) = encoder.take_encoder_fallback() {
+        warn!(
+            track,
+            failed_encoder = %fallback.failed_encoder,
+            error = %fallback.error,
+            replacement = %fallback.replacement,
+            "Video encoder replaced mid-recording"
+        );
+        health_tx.emit(PipelineHealthEvent::EncoderRebuilt {
+            backend: fallback.replacement,
+            attempt: 1,
+        });
+    }
+    encoded
+}
+
 fn finish_encoder_thread(
     handle: JoinHandle<anyhow::Result<()>>,
     label: &str,
@@ -116,7 +154,34 @@ fn finish_encoder_thread(
 trait FinishableEncoderState {
     fn close_channel(&self, thread_label: &str);
     fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>>;
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()>;
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()>;
+}
+
+fn finish_and_report_flush_failure(
+    encoder: &mut SegmentedVideoEncoder,
+    timestamp: Duration,
+    finish_label: &str,
+    health_tx: &SharedHealthSender,
+) -> anyhow::Result<()> {
+    let result = encoder
+        .finish_with_timestamp(timestamp)
+        .map_err(|error| anyhow!("{finish_label}: {error:#}"));
+    if let Some(failure) = encoder.take_flush_failure() {
+        warn!(
+            encoder = %failure.encoder,
+            error = %failure.error,
+            "{finish_label}: frames the encoder held at stop were lost"
+        );
+        health_tx.emit(PipelineHealthEvent::EncoderTailLost {
+            encoder: failure.encoder,
+        });
+    }
+    result
 }
 
 impl FinishableEncoderState for EncoderState {
@@ -130,11 +195,16 @@ impl FinishableEncoderState for EncoderState {
         self.encoder_handle.take()
     }
 
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => encoder
-                .finish_with_timestamp(timestamp)
-                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Ok(mut encoder) => {
+                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
+            }
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -153,11 +223,16 @@ impl FinishableEncoderState for CameraEncoderState {
         self.encoder_handle.take()
     }
 
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => encoder
-                .finish_with_timestamp(timestamp)
-                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Ok(mut encoder) => {
+                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
+            }
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -170,6 +245,7 @@ fn finish_segmented_encoder_impl(
     timestamp: Duration,
     thread_label: &str,
     finish_label: &str,
+    health_tx: &SharedHealthSender,
 ) -> anyhow::Result<()> {
     state.close_channel(thread_label);
 
@@ -184,7 +260,9 @@ fn finish_segmented_encoder_impl(
         BlockingThreadFinish::TimedOut(error) => return Err(error),
     };
 
-    let finalize_error = state.finish_encoder(timestamp, finish_label).err();
+    let finalize_error = state
+        .finish_encoder(timestamp, finish_label, health_tx)
+        .err();
 
     match (thread_error, finalize_error) {
         (None, None) => Ok(()),
@@ -308,6 +386,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 timestamp,
                 "Windows M4S encoder",
                 "Failed to finish segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));
@@ -381,6 +460,11 @@ impl WindowsFragmentedM4SMuxer {
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
+                let encode_failures = Cell::new(0u64);
+                let encode_drops = RefCell::new(FrameDropTracker::new(
+                    health_tx.clone(),
+                    "encoder:windows-fragmented",
+                ));
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -400,18 +484,24 @@ impl WindowsFragmentedM4SMuxer {
                  -> anyhow::Result<()> {
                     let encode_start = std::time::Instant::now();
 
-                    match encoder.lock() {
+                    let encoded = match encoder.lock() {
                         Ok(mut enc) => {
-                            if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                warn!("Failed to encode frame: {e}");
-                            }
+                            let result = enc.queue_frame(ffmpeg_frame, timestamp);
+                            report_encode_result(
+                                &mut enc,
+                                result,
+                                &encode_failures,
+                                &encode_drops,
+                                &health_tx,
+                                "screen",
+                            )
                         }
                         Err(_) => {
                             return Err(anyhow!(
                                 "Encoder mutex poisoned - all subsequent frames would be lost"
                             ));
                         }
-                    }
+                    };
 
                     let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
@@ -427,7 +517,9 @@ impl WindowsFragmentedM4SMuxer {
                         }
                     }
 
-                    *total_frames += 1;
+                    if encoded {
+                        *total_frames += 1;
+                    }
                     Ok(())
                 };
 
@@ -717,6 +809,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 timestamp,
                 "Windows M4S camera encoder",
                 "Failed to finish camera segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));
@@ -830,7 +923,13 @@ impl WindowsFragmentedM4SCameraMuxer {
                 let mut duplicated_frames = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
+                let mut mjpeg_decoder = MjpegDecoder::default();
                 const SLOW_THRESHOLD_MS: u128 = 5;
+                let encode_failures = Cell::new(0u64);
+                let encode_drops = RefCell::new(FrameDropTracker::new(
+                    health_tx.clone(),
+                    "encoder:windows-fragmented-camera",
+                ));
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -848,10 +947,11 @@ impl WindowsFragmentedM4SCameraMuxer {
                      slow_convert_count: &mut u32,
                      slow_encode_count: &mut u32,
                      total_frames: &mut u64,
-                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>,
+                     mjpeg_decoder: &mut MjpegDecoder|
                      -> anyhow::Result<()> {
                         let convert_start = std::time::Instant::now();
-                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame);
+                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame, mjpeg_decoder);
                         let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                         if convert_elapsed_ms > SLOW_THRESHOLD_MS {
@@ -866,22 +966,28 @@ impl WindowsFragmentedM4SCameraMuxer {
                             }
                         }
 
-                        match ffmpeg_frame_result {
+                        let encoded = match ffmpeg_frame_result {
                             Ok(ffmpeg_frame) => {
                                 let encode_start = std::time::Instant::now();
 
-                                match encoder.lock() {
+                                let encoded = match encoder.lock() {
                                     Ok(mut enc) => {
-                                        if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                            warn!("Failed to encode camera frame: {e}");
-                                        }
+                                        let result = enc.queue_frame(ffmpeg_frame, timestamp);
+                                        report_encode_result(
+                                            &mut enc,
+                                            result,
+                                            &encode_failures,
+                                            &encode_drops,
+                                            &health_tx,
+                                            "camera",
+                                        )
                                     }
                                     Err(_) => {
                                         return Err(anyhow!(
                                             "Camera encoder mutex poisoned - all subsequent frames would be lost"
                                         ));
                                     }
-                                }
+                                };
 
                                 let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
@@ -898,13 +1004,17 @@ impl WindowsFragmentedM4SCameraMuxer {
                                         );
                                     }
                                 }
+                                encoded
                             }
                             Err(e) => {
                                 warn!("Failed to convert camera frame: {e:?}");
+                                false
                             }
-                        }
+                        };
 
-                        *total_frames += 1;
+                        if encoded {
+                            *total_frames += 1;
+                        }
                         Ok(())
                     };
 
@@ -949,6 +1059,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                                             &mut slow_encode_count,
                                             &mut total_frames,
                                             &encoder_clone,
+                                            &mut mjpeg_decoder,
                                         ) {
                                             warn!("Failed to encode drained camera frame: {e}");
                                             break;
@@ -983,6 +1094,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                         &mut slow_encode_count,
                         &mut total_frames,
                         &encoder_clone,
+                        &mut mjpeg_decoder,
                     ) {
                         error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
                         return Err(e);

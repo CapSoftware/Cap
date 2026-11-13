@@ -94,6 +94,7 @@ const FolderPage = async (props: {
 		// actually belong to the routed space/org — getFolderById is unscoped,
 		// so a foreign folderId must not surface another collection's settings.
 		const folderBelongsToContext = currentFolder.spaceId === params.spaceId;
+		if (!folderBelongsToContext) notFound();
 		const canManageCollection =
 			folderBelongsToContext &&
 			(spaceOrOrg.variant === "space"
@@ -114,7 +115,10 @@ const FolderPage = async (props: {
 		return (
 			<div>
 				<div className="flex gap-2 items-center mb-10">
-					<NewSubfolderButton parentFolderId={params.folderId} />
+					<NewSubfolderButton
+						parentFolderId={params.folderId}
+						spaceId={params.spaceId}
+					/>
 					<AddVideosButton
 						folderId={params.folderId}
 						spaceId={params.spaceId}

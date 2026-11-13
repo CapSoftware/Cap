@@ -29,7 +29,7 @@ const schema = z.array(
 	z.object({
 		label: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 		provider: z.enum(["s3", "googleDrive"]),
-		manifest: z.record(z.unknown()),
+		manifest: z.record(z.string(), z.unknown()),
 		fragments: z.array(
 			z.object({
 				track: z.enum(["video", "audio"]),
@@ -165,7 +165,7 @@ function replay(sample: Sample) {
 		getInternalSignedObjectUrl: (name: string) =>
 			checked(() => `https://replay.invalid/${name}`),
 	};
-	mocks.storage.mockReturnValue(Effect.succeed([bucket]));
+	mocks.storage.mockReturnValue(Effect.succeed([bucket, Option.none()]));
 	const manifest = (complete: boolean) => {
 		const parsed = readCompletedRecordingManifest(
 			JSON.stringify(sample.manifest),

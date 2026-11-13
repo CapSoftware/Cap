@@ -3,6 +3,7 @@ import { STRIPE_PLAN_IDS } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { type PropsWithChildren, Suspense } from "react";
 import { SonnerToaster } from "@/components/SonnerToastProvider";
+import { inAppCheckoutKey } from "@/lib/checkout/enabled";
 import { runPromise } from "@/lib/server";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AnalyticsIdentify } from "./AnalyticsIdentify";
@@ -22,12 +23,18 @@ export async function AppProviders({ children }: PropsWithChildren) {
 		<TooltipPrimitive.Provider>
 			<AuthContextProvider user={runPromise(resolveCurrentUser)}>
 				<SessionProvider>
-					<StripeContextProvider plans={plans}>
+					<StripeContextProvider plans={plans} checkoutKey={inAppCheckoutKey()}>
 						<PublicEnvContext
 							value={{
 								webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 								workosAuthAvailable: !!serverEnv().WORKOS_CLIENT_ID,
 								googleAuthAvailable: !!serverEnv().GOOGLE_CLIENT_ID,
+								oidcAuthAvailable: !!(
+									serverEnv().OIDC_ISSUER &&
+									serverEnv().OIDC_CLIENT_ID &&
+									serverEnv().OIDC_CLIENT_SECRET
+								),
+								oidcName: serverEnv().OIDC_NAME || "SSO",
 							}}
 						>
 							<ReactQueryProvider>

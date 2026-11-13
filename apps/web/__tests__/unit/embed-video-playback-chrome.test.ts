@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
+import { Blob as NodeBlob } from "node:buffer";
 import {
 	act,
 	type ComponentProps,
+	type ComponentType,
 	createElement,
 	type MouseEventHandler,
 	type ReactNode,
@@ -13,6 +15,7 @@ import {
 	afterAll,
 	afterEach,
 	beforeAll,
+	beforeEach,
 	describe,
 	expect,
 	it,
@@ -24,6 +27,50 @@ import {
 	type SharePageBrandingInput,
 } from "@/lib/share-branding";
 
+const dynamicImports = vi.hoisted(() => [] as Promise<unknown>[]);
+const dynamicControl = vi.hoisted(() => ({
+	gate: null as Promise<void> | null,
+	metadataReady: false,
+}));
+
+vi.mock("next/dynamic", async () => {
+	const { createElement, useEffect, useState } = await import("react");
+	return {
+		default: (
+			loader: () => Promise<
+				ComponentType<object> | { default: ComponentType<object> }
+			>,
+		) => {
+			let Loaded: ComponentType<object> | null = null;
+			dynamicImports.push(
+				loader().then((module) => {
+					Loaded = "default" in module ? module.default : module;
+				}),
+			);
+			return (props: object) => {
+				const [Player, setPlayer] = useState<ComponentType<object> | null>(
+					() => (dynamicControl.gate ? null : Loaded),
+				);
+				useEffect(() => {
+					let cancelled = false;
+					const pendingLoad = async () => {
+						await dynamicControl.gate;
+						const module = await loader();
+						if (!cancelled) {
+							setPlayer(() => ("default" in module ? module.default : module));
+						}
+					};
+					void pendingLoad();
+					return () => {
+						cancelled = true;
+					};
+				}, []);
+				return Player ? createElement(Player, props) : null;
+			};
+		},
+	};
+});
+
 vi.mock("@cap/env", () => ({ NODE_ENV: "test" }));
 
 vi.mock("@cap/ui", async () => {
@@ -34,7 +81,7 @@ vi.mock("@cap/ui", async () => {
 	};
 });
 
-vi.mock("framer-motion", async () => {
+vi.mock("motion/react", async () => {
 	const { createElement } = await import("react");
 	type MotionProps = {
 		children?: ReactNode;
@@ -62,8 +109,10 @@ vi.mock("framer-motion", async () => {
 	};
 });
 
+const transcript = vi.hoisted(() => ({ content: null as string | null }));
+
 vi.mock("hooks/use-transcript", () => ({
-	useTranscript: () => ({ data: null, error: null }),
+	useTranscript: () => ({ data: transcript.content, error: null }),
 }));
 
 vi.mock("@/app/s/[videoId]/_components/ProgressCircle", () => ({
@@ -79,21 +128,39 @@ vi.mock("@/app/embed/[videoId]/_components/use-player-js-receiver", () => ({
 	usePlayerJsReceiver: () => undefined,
 }));
 
+function attachVideoRef(
+	ref: Ref<HTMLVideoElement>,
+	video: HTMLVideoElement | null,
+) {
+	if (video && dynamicControl.metadataReady) {
+		Object.defineProperties(video, {
+			duration: { configurable: true, value: 60 },
+			readyState: { configurable: true, value: 1 },
+		});
+	}
+	if (typeof ref === "function") return ref(video);
+	if (ref) ref.current = video;
+}
+
 vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 	const { createElement, useEffect, useState } = await import("react");
 	const DeferredVideoPlayer = ({
 		videoRef,
 		defaultPlaybackSpeed,
+		captionsSrc,
 	}: {
 		videoRef: Ref<HTMLVideoElement>;
 		defaultPlaybackSpeed?: number;
+		captionsSrc?: string;
 	}) => {
 		const [isMounted, setIsMounted] = useState(false);
 		useEffect(() => setIsMounted(true), []);
 		return isMounted
 			? createElement("video", {
-					ref: videoRef,
+					ref: (video: HTMLVideoElement | null) =>
+						attachVideoRef(videoRef, video),
 					"data-default-speed": defaultPlaybackSpeed,
+					"data-captions-src": captionsSrc,
 				})
 			: null;
 	};
@@ -111,7 +178,8 @@ vi.mock("@/app/s/[videoId]/_components/HLSVideoPlayer", async () => {
 			defaultPlaybackSpeed?: number;
 		}) =>
 			createElement("video", {
-				ref: videoRef,
+				ref: (video: HTMLVideoElement | null) =>
+					attachVideoRef(videoRef, video),
 				"data-default-speed": defaultPlaybackSpeed,
 			}),
 	};
@@ -176,14 +244,73 @@ const expectChromeHidden = (container: HTMLElement) => {
 	expect(container.querySelector('[aria-label="Powered by Cap"]')).toBeNull();
 };
 
+beforeAll(async () => {
+	await Promise.all(dynamicImports);
+});
+
 describe("EmbedVideo playback chrome", () => {
 	beforeAll(() => {
 		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 	});
 
 	afterEach(() => {
+		dynamicControl.gate = null;
+		dynamicControl.metadataReady = false;
 		document.body.replaceChildren();
 	});
+
+	it.each(
+		[
+			{ type: "desktopMP4" } as const,
+			{ type: "MediaConvert" } as const,
+		].flatMap((source) =>
+			[false, true].map((metadataReady) => ({ source, metadataReady })),
+		),
+	)(
+		"seeks and updates chrome when the $source.type player loads after mount with metadataReady=$metadataReady",
+		async ({ source, metadataReady }) => {
+			dynamicControl.metadataReady = metadataReady;
+			let release = () => {};
+			dynamicControl.gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			await act(async () => {
+				root.render(
+					createElement(EmbedVideo, { ...createProps(source), startTime: 15 }),
+				);
+			});
+			expect(container.querySelector("video")).toBeNull();
+			expectChromeVisible(container);
+			await act(async () => {
+				release();
+				await dynamicControl.gate;
+			});
+			const video = container.querySelector("video");
+			if (!video) throw new Error("Player did not load");
+			if (!metadataReady) {
+				Object.defineProperty(video, "duration", { value: 60 });
+				await act(async () => {
+					video.dispatchEvent(new Event("loadedmetadata"));
+				});
+			}
+			expect(video.currentTime).toBe(15);
+			await act(async () => {
+				video.dispatchEvent(new Event("play"));
+			});
+			expectChromeHidden(container);
+			video.currentTime = 25;
+			await act(async () => {
+				video.dispatchEvent(new Event("pause"));
+				video.dispatchEvent(new Event("loadedmetadata"));
+			});
+			expectChromeVisible(container);
+			expect(video.currentTime).toBe(25);
+			await act(async () => root.unmount());
+		},
+	);
 
 	afterAll(() => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
@@ -279,6 +406,76 @@ describe("EmbedVideo playback chrome", () => {
 		await act(async () => {
 			root.unmount();
 		});
+	});
+});
+
+describe("EmbedVideo captions", () => {
+	const createObjectURL = URL.createObjectURL;
+	const revokeObjectURL = URL.revokeObjectURL;
+	let blobs: Map<string, Blob>;
+
+	beforeAll(() => {
+		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+	});
+
+	beforeEach(() => {
+		blobs = new Map();
+		vi.stubGlobal("Blob", NodeBlob);
+		URL.createObjectURL = (blob: Blob) => {
+			const url = `blob:captions-${blobs.size}`;
+			blobs.set(url, blob);
+			return url;
+		};
+		URL.revokeObjectURL = () => {};
+	});
+
+	afterEach(() => {
+		transcript.content = null;
+		URL.createObjectURL = createObjectURL;
+		URL.revokeObjectURL = revokeObjectURL;
+		vi.unstubAllGlobals();
+		document.body.replaceChildren();
+	});
+
+	afterAll(() => {
+		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+	});
+
+	const renderCaptionsSrc = async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+		const props = createProps({ type: "desktopMP4" });
+		await act(async () => {
+			root.render(
+				createElement(EmbedVideo, {
+					...props,
+					data: { ...props.data, transcriptionStatus: "COMPLETE" },
+				}),
+			);
+		});
+		const src = container.querySelector("video")?.dataset.captionsSrc;
+		await act(async () => root.unmount());
+		return src;
+	};
+
+	it("keeps each caption's own start and end time", async () => {
+		const vtt =
+			"WEBVTT\n\n1\n00:00:01.240 --> 00:00:02.880\nHi there.\n\n2\n00:00:02.950 --> 00:00:03.990\nLet's start.\n\n3\n00:00:09.700 --> 00:00:10.600\nAfter a pause.\n\n";
+		transcript.content = vtt;
+
+		const src = await renderCaptionsSrc();
+		const blob = src ? blobs.get(src) : undefined;
+		if (!blob) throw new Error("Missing captions track");
+		expect(blob.type).toBe("text/vtt");
+		expect(await blob.text()).toBe(vtt);
+	});
+
+	it("adds no captions track for a transcript without captions", async () => {
+		transcript.content = "WEBVTT\n\n";
+
+		expect(await renderCaptionsSrc()).toBe("");
+		expect(blobs.size).toBe(0);
 	});
 });
 
