@@ -38,6 +38,29 @@ export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
+const ENCODE_LENGTH_MARGIN_SECONDS = 2;
+const ENCODE_LENGTH_MARGIN_RATIO = 0.02;
+
+// The longest output an encode of a source this long may write: the probed
+// length, with room for a last frame the probe and FFmpeg time differently.
+// An encode follows the timestamps it finds, so without a limit a file that
+// plays for longer than the probe measured would be encoded, and its job
+// slot held, for as long as it lasts. Null when the length is not known.
+export function maxEncodeSeconds(probedSeconds: number): number | null {
+	if (!Number.isFinite(probedSeconds) || probedSeconds <= 0) return null;
+	const margin = Math.max(
+		ENCODE_LENGTH_MARGIN_SECONDS,
+		probedSeconds * ENCODE_LENGTH_MARGIN_RATIO,
+	);
+	return Math.ceil((probedSeconds + margin) * 1000) / 1000;
+}
+
+export function outputLengthCapArgs(
+	maxOutputSeconds: number | null | undefined,
+): string[] {
+	return maxOutputSeconds ? ["-t", String(maxOutputSeconds)] : [];
+}
+
 export function decodeThreadsFromEnv(
 	name: string,
 	fallback: number,
@@ -128,10 +151,27 @@ function withInheritedQuery(path: string, query: string): string {
 function createHttpSource(
 	path: string,
 	onRefused: (reason: string) => void,
+	onTransportFailure: () => void,
 ): Source {
 	const root = new URL(path);
+	const guarded = createGuardedMediaFetch(path);
+	// A range past the end of the file (416) is the file's own fault: a
+	// field in it points at bytes it does not have.
+	const fetchFn = Object.assign(
+		async (...args: Parameters<typeof fetch>) => {
+			try {
+				const response = await guarded(...args);
+				if (!response.ok && response.status !== 416) onTransportFailure();
+				return response;
+			} catch (error) {
+				onTransportFailure();
+				throw error;
+			}
+		},
+		{ preconnect: guarded.preconnect },
+	) as typeof fetch;
 	const options = {
-		fetchFn: createGuardedMediaFetch(path),
+		fetchFn,
 		getRetryDelay: () => null,
 	};
 
@@ -188,14 +228,26 @@ export function mediaInputRefusal(input: Input<Source>): string | undefined {
 	return refusedInputs.get(input);
 }
 
+const transportFailedInputs = new WeakSet<Input<Source>>();
+
+// Whether a remote input failed to fetch something it asked for. An error
+// from reading such an input is about the network, not about the file.
+export function mediaInputTransportFailed(input: Input<Source>): boolean {
+	return transportFailedInputs.has(input);
+}
+
 export function createMediaInput(path: string): Input<Source> {
 	registerMediaEngine();
 	if (isHttpUrl(path)) {
 		const input: Input<Source> = withSafeDispose(
 			new Input({
-				source: createHttpSource(path, (reason) => {
-					if (!refusedInputs.has(input)) refusedInputs.set(input, reason);
-				}),
+				source: createHttpSource(
+					path,
+					(reason) => {
+						if (!refusedInputs.has(input)) refusedInputs.set(input, reason);
+					},
+					() => transportFailedInputs.add(input),
+				),
 				formats: ALL_FORMATS,
 			}),
 		);

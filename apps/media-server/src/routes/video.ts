@@ -222,6 +222,7 @@ const processSchema = z.object({
 	remuxOnly: z.boolean().optional(),
 	normalizeH264Level: z.boolean().optional(),
 	importedOriginal: z.boolean().optional(),
+	infra: z.boolean().optional(),
 });
 
 const ladderSchema = z.object({
@@ -244,6 +245,7 @@ const ladderSchema = z.object({
 	thumbnailPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
+	infra: z.boolean().optional(),
 });
 
 export function isCompleteRecovery(
@@ -914,7 +916,12 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		result.data.priority === "bulk" &&
 		capacity.effectiveMaxVideoProcesses > 1 &&
 		capacity.activeVideoProcesses >= capacity.effectiveMaxVideoProcesses - 1;
-	if (bulkCapacityReached || !canAcceptNewVideoProcess()) {
+	if (
+		bulkCapacityReached ||
+		!(result.data.infra
+			? canAcceptNewVideoProcess("interactive", { infra: true })
+			: canAcceptNewVideoProcess())
+	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(capacity), 503);
 	}
@@ -1004,7 +1011,11 @@ video.post("/ladder", async (c) => {
 			503,
 		);
 	}
-	if (!canAcceptNewVideoProcess()) {
+	if (
+		!(result.data.infra
+			? canAcceptNewVideoProcess("interactive", { infra: true })
+			: canAcceptNewVideoProcess())
+	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}

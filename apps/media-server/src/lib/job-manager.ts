@@ -352,16 +352,40 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+const DEFAULT_RESERVED_REGULAR_VIDEO_SLOTS = 1;
+
+// Slots that Cap Infra jobs leave free. Infra work arrives in batches of any
+// size from any customer, and a recording made in Cap must not wait behind
+// it. An instance with a single slot has nothing to hold back.
+export function getReservedRegularVideoSlots(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const configured = Number.parseInt(
+		env.MEDIA_SERVER_RESERVED_REGULAR_VIDEO_SLOTS ?? "",
+		10,
+	);
+	return Math.min(
+		Number.isInteger(configured) && configured >= 0
+			? configured
+			: DEFAULT_RESERVED_REGULAR_VIDEO_SLOTS,
+		Math.max(0, getMaxConcurrentVideoProcesses() - 1),
+	);
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
+	options: { infra?: boolean } = {},
 ): boolean {
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
+	const limit =
+		priority === "recovery" && resources.effectiveMax > 1
+			? Math.max(1, Math.floor(resources.effectiveMax / 2))
+			: resources.effectiveMax;
+	if (!options.infra) return active < limit;
 	return (
 		active <
-		(priority === "recovery" && resources.effectiveMax > 1
-			? Math.max(1, Math.floor(resources.effectiveMax / 2))
-			: resources.effectiveMax)
+		Math.min(limit, resources.effectiveMax - getReservedRegularVideoSlots())
 	);
 }
 

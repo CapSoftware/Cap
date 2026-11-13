@@ -24,7 +24,9 @@ import {
 	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
+	maxEncodeSeconds,
 	normalizeLocalPath,
+	outputLengthCapArgs,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
@@ -1750,9 +1752,11 @@ export async function probeVideoSourceTraits(
 	return traits;
 }
 
-// The traits an encode is planned from. Guessing standard range for a source
-// that could not be probed turns an HDR upload into a grey, flat video that
-// looks like a finished job, so the encode stops instead.
+// The traits an encode is planned from. A source that is positively HDR is
+// converted and Dolby Vision profile 5 is refused. A source whose colour
+// tags cannot be read at all is encoded as standard range, which is what
+// nearly every such source is: failing it instead turned ordinary browser
+// and phone recordings into errors whenever the probe could not answer.
 export async function requireVideoSourceTraits(
 	inputPath: string,
 	abortSignal?: AbortSignal,
@@ -1769,7 +1773,10 @@ export async function requireVideoSourceTraits(
 		}
 		return traits;
 	}
-	throw new Error("Could not read the colour information of the source video");
+	console.warn(
+		"[media-video] Could not read the colour information of the source video, encoding it as standard range",
+	);
+	return { rotation: null, hdr: null };
 }
 
 export async function processVideo(
@@ -1838,6 +1845,11 @@ export async function processVideo(
 		opts.timeoutMs,
 		metadata,
 	);
+	// A damaged source is read with its timestamps rebuilt, which the probe
+	// did not see, so a recovery attempt is bounded by its deadline alone.
+	const maxOutputSeconds = resilientFlags
+		? null
+		: maxEncodeSeconds(metadata.duration);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
 			? capcodecOptionsForJob(opts)
@@ -1854,6 +1866,7 @@ export async function processVideo(
 				extraInputArgs,
 				extraOutputArgs,
 				processTimeoutMs,
+				maxOutputSeconds,
 				onProgress,
 				abortSignal,
 			);
@@ -1881,6 +1894,7 @@ export async function processVideo(
 		sourceHeight: metadata.height,
 		hdr,
 		hdrColor: traits?.hdrColor,
+		maxOutputSeconds,
 		// NVENC leaves the CPU free, so decode (and scale) can use every core.
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
@@ -1971,6 +1985,7 @@ export interface ProcessVideoArgsInput {
 	hdr?: HdrTransfer | null;
 	hdrColor?: HdrColor | null;
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
+	maxOutputSeconds?: number | null;
 }
 
 export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
@@ -2078,6 +2093,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	}
 
 	ffmpegArgs.push(
+		...outputLengthCapArgs(input.maxOutputSeconds),
 		"-movflags",
 		"+faststart",
 		...input.extraOutputArgs,
@@ -2198,6 +2214,7 @@ async function processVideoWithCapcodec(
 	extraInputArgs: string[],
 	extraOutputArgs: string[],
 	processTimeoutMs: number,
+	maxOutputSeconds: number | null,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
@@ -2215,6 +2232,7 @@ async function processVideoWithCapcodec(
 		maxWidth: opts.maxWidth,
 		maxHeight: opts.maxHeight,
 		extraInputArgs,
+		maxOutputSeconds,
 		options: capcodec,
 		totalDurationUs: metadata.duration * 1_000_000,
 		onProgress,
@@ -2253,6 +2271,7 @@ async function processVideoWithCapcodec(
 			muxArgs.push("-map", "0:v:0", "-c:v", "copy", "-an");
 		}
 		muxArgs.push(
+			...outputLengthCapArgs(maxOutputSeconds),
 			"-movflags",
 			"+faststart",
 			...extraOutputArgs,
