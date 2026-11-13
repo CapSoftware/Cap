@@ -22,6 +22,7 @@ import {
 	type DeliveryRow,
 	type DeliveryStore,
 	deliveryDayFinalAt,
+	deliveryDayPartsWindow,
 	deliveryLogHour,
 	readDeliveryLogLocation,
 	rollupDeliveryDay,
@@ -793,13 +794,25 @@ class MemoryStore implements DeliveryStore {
 		];
 		return "written" as const;
 	}
-	async finalizeDay(day: string, now: Date) {
-		for (const row of this.day(day)) {
-			if (!row.final) {
-				row.final = true;
-				row.finalizedAt = now;
-			}
+	async finalizeDay(
+		day: string,
+		coverage: { file: string; etag: string }[],
+		now: Date,
+	) {
+		if (this.day(day).some((row) => row.final)) return "already-final" as const;
+		if (
+			coverage.some(({ file, etag }) => this.files.get(file)?.etag !== etag)
+		) {
+			return "incomplete" as const;
 		}
+		const { from, to } = deliveryDayPartsWindow(day);
+		await this.replaceDay(
+			day,
+			rollupDeliveryDay(day, await this.partsNear(from, to)),
+			now,
+			true,
+		);
+		return "final" as const;
 	}
 	async pruneFiles(before: Date) {
 		for (const [file, row] of this.files) {
@@ -986,6 +999,7 @@ describe("runDeliveryMetering", () => {
 				...row,
 				final: true,
 				finalizedAt: at("2026-11-14T02:00:00Z"),
+				updatedAt: at("2026-11-14T02:00:00Z"),
 			})),
 		);
 	});
@@ -1060,6 +1074,98 @@ describe("runDeliveryMetering", () => {
 			requests: 2,
 			final: true,
 		});
+	});
+
+	it("finalizes complete totals when an overlapping run wrote partial totals last", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		logs.put("D.2026-11-12-10.a.gz", [play("2026-11-12")]);
+		logs.put("D.2026-11-12-11.b.gz", [play("2026-11-12")]);
+
+		const open = logs.open.bind(logs);
+		logs.open = async (file) => {
+			if (file.includes("-11.")) throw new Error("boom");
+			return open(file);
+		};
+		await run(logs, store, at("2026-11-13T10:00:30Z"));
+		const partial = store
+			.day("2026-11-12")
+			.map(
+				({
+					day: _day,
+					final: _final,
+					finalizedAt: _at,
+					updatedAt: _updated,
+					...row
+				}) => row,
+			);
+		expect(partial[0]?.requests).toBe(1);
+
+		logs.open = open;
+		await run(logs, store, at("2026-11-13T10:00:00Z"));
+		expect(store.day("2026-11-12")[0]?.requests).toBe(2);
+
+		await store.replaceDay(
+			"2026-11-12",
+			partial,
+			at("2026-11-13T10:00:30Z"),
+			false,
+		);
+		expect(store.day("2026-11-12")[0]?.requests).toBe(1);
+
+		const due = await run(logs, store, at("2026-11-14T02:00:00Z"));
+		expect(due.finalized).toEqual(["2026-11-12"]);
+		expect(store.day("2026-11-12")).toMatchObject([
+			{ requests: 2, seconds: 8, bytes: 200800, final: true },
+		]);
+	});
+
+	it("does not finalize when a covering file changes between listing and finalizing", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		logs.put("D.2026-11-12-10.a.gz", [play("2026-11-12")]);
+		await run(logs, store, at("2026-11-13T10:00:00Z"));
+		const finalize = store.finalizeDay.bind(store);
+		store.finalizeDay = async (day, coverage, now) => {
+			const recorded = store.files.get("D.2026-11-12-10.a.gz");
+			if (recorded) recorded.etag = '"changed"';
+			return finalize(day, coverage, now);
+		};
+		const due = await run(logs, store, at("2026-11-14T02:00:00Z"));
+		expect(due).toMatchObject({ finalized: [], deferred: ["2026-11-12"] });
+		expect(store.day("2026-11-12")[0]?.final).toBe(false);
+	});
+
+	it("leaves final rows unchanged when an older run replaces the day afterwards", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		logs.put("D.2026-11-12-10.a.gz", [play("2026-11-12")]);
+		await run(logs, store, at("2026-11-13T23:23:00Z"));
+		await run(logs, store, at("2026-11-14T02:23:00Z"));
+		const closed = structuredClone(store.day("2026-11-12"));
+		expect(closed[0]?.final).toBe(true);
+		expect(
+			await store.replaceDay(
+				"2026-11-12",
+				[
+					{
+						appId: APP,
+						tier: "720p",
+						seconds: 1,
+						bytes: 1,
+						requests: 1,
+						abandonedBytes: 0,
+					},
+				],
+				at("2026-11-13T23:59:00Z"),
+				false,
+			),
+		).toBe("final");
+		expect(store.day("2026-11-12")).toEqual(closed);
+		expect(
+			await store.finalizeDay("2026-11-12", [], at("2026-11-15T02:00:00Z")),
+		).toBe("already-final");
+		expect(store.day("2026-11-12")).toEqual(closed);
 	});
 
 	it("never rewrites or deletes a final day", async () => {

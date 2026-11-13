@@ -55,7 +55,11 @@ export interface DeliveryStore {
 		now: Date,
 		final: boolean,
 	): Promise<"written" | "final">;
-	finalizeDay(day: string, now: Date): Promise<void>;
+	finalizeDay(
+		day: string,
+		coverage: { file: string; etag: string }[],
+		now: Date,
+	): Promise<"final" | "incomplete" | "already-final">;
 	pruneFiles(before: Date): Promise<void>;
 }
 
@@ -102,6 +106,14 @@ function addDays(day: string, days: number) {
 
 export function deliveryDayFinalAt(day: string) {
 	return new Date(dayStart(day).getTime() + DELIVERY_FINAL_AFTER_MS);
+}
+
+export function deliveryDayPartsWindow(day: string) {
+	const start = dayStart(day).getTime();
+	return {
+		from: new Date(start - DAY_MS),
+		to: new Date(start + 2 * DAY_MS),
+	};
 }
 
 export function deliveryDayCoverage(
@@ -222,7 +234,6 @@ export async function runDeliveryMetering({
 
 	const cached = cachedDeliveryResolver(resolver);
 	const unsettled = new Set<string>();
-	const readNow = new Set<string>();
 	const methods = emptyMethodTotals();
 	let next = 0;
 	let processed = 0;
@@ -238,7 +249,6 @@ export async function runDeliveryMetering({
 				);
 				await store.saveFile(file, metered.parts, now);
 				addMethodTotals(methods, metered.methods);
-				readNow.add(file.file);
 				processed++;
 			} catch (error) {
 				failed++;
@@ -254,12 +264,8 @@ export async function runDeliveryMetering({
 	for (const file of due.slice(next)) unsettled.add(file.file);
 
 	const rowsFor = async (day: string) => {
-		const start = dayStart(day);
-		const parts = await store.partsNear(
-			new Date(start.getTime() - DAY_MS),
-			new Date(start.getTime() + 2 * DAY_MS),
-		);
-		return rollupDeliveryDay(day, parts);
+		const { from, to } = deliveryDayPartsWindow(day);
+		return rollupDeliveryDay(day, await store.partsNear(from, to));
 	};
 
 	const recomputed: string[] = [];
@@ -285,20 +291,20 @@ export async function runDeliveryMetering({
 			});
 			continue;
 		}
-		const state = states.get(day);
-		const stale =
-			!state ||
-			coverage.some(
-				(file) =>
-					readNow.has(file.file) ||
-					(known.get(file.file)?.processedAt ?? now) > state.updatedAt,
-			);
-		if (stale) {
-			await store.replaceDay(day, await rowsFor(day), now, true);
-		} else {
-			await store.finalizeDay(day, now);
+		const outcome = await store.finalizeDay(
+			day,
+			coverage.map(({ file, etag }) => ({ file, etag })),
+			now,
+		);
+		if (outcome === "incomplete") {
+			deferred.push(day);
+			console.info("[developer-delivery] Finalization deferred", {
+				day,
+				reason: "a covering file changed during the run",
+			});
+			continue;
 		}
-		finalized.push(day);
+		if (outcome === "final") finalized.push(day);
 	}
 
 	if (processed > 0) {

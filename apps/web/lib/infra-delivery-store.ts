@@ -26,8 +26,11 @@ import {
 	type DeliveryLogLocation,
 	type DeliveryLogSource,
 	type DeliveryProcessedFile,
+	type DeliveryRow,
 	type DeliveryStore,
+	deliveryDayPartsWindow,
 	deliveryLogHour,
+	rollupDeliveryDay,
 } from "./infra-delivery-metering";
 
 const CHUNK = 500;
@@ -112,6 +115,63 @@ export const storageDeliveryResolver: DeliveryResolver = {
 	},
 };
 
+type Transaction = Parameters<
+	Parameters<ReturnType<typeof db>["transaction"]>[0]
+>[0];
+
+async function dayIsFinal(tx: Transaction, day: string) {
+	const rows = await tx
+		.select({ final: developerDeliveryDaily.final })
+		.from(developerDeliveryDaily)
+		.where(eq(developerDeliveryDaily.day, day))
+		.for("update");
+	return rows.some((row) => row.final);
+}
+
+async function withKnownApps(
+	day: string,
+	rows: DeliveryRow[],
+	now: Date,
+	final: boolean,
+	reader: Pick<Transaction, "select"> = db(),
+) {
+	const known = new Set<string>();
+	for (const batch of chunks([...new Set(rows.map((row) => row.appId))])) {
+		const apps = await reader
+			.select({ id: developerApps.id })
+			.from(developerApps)
+			.where(inArray(developerApps.id, batch));
+		for (const app of apps) known.add(app.id);
+	}
+	return rows
+		.filter((row) => known.has(row.appId))
+		.map((row) => ({
+			...row,
+			day,
+			final,
+			finalizedAt: final ? now : null,
+			updatedAt: now,
+		}));
+}
+
+async function writeDay(
+	tx: Transaction,
+	day: string,
+	values: Awaited<ReturnType<typeof withKnownApps>>,
+) {
+	await tx
+		.delete(developerDeliveryDaily)
+		.where(
+			and(
+				eq(developerDeliveryDaily.day, day),
+				eq(developerDeliveryDaily.final, false),
+			),
+		);
+	for (const batch of chunks(values)) {
+		await tx.insert(developerDeliveryDaily).values(batch);
+	}
+}
+
 export const databaseDeliveryStore: DeliveryStore = {
 	async processedFiles(files) {
 		const known = new Map<string, DeliveryProcessedFile>();
@@ -185,61 +245,52 @@ export const databaseDeliveryStore: DeliveryStore = {
 		return states;
 	},
 	async replaceDay(day, rows, now, final) {
-		const appIds = [...new Set(rows.map((row) => row.appId))];
-		const known = new Set<string>();
-		for (const batch of chunks(appIds)) {
-			const apps = await db()
-				.select({ id: developerApps.id })
-				.from(developerApps)
-				.where(inArray(developerApps.id, batch));
-			for (const app of apps) known.add(app.id);
-		}
-		const values = rows
-			.filter((row) => known.has(row.appId))
-			.map((row) => ({
-				...row,
-				day,
-				final,
-				finalizedAt: final ? now : null,
-				updatedAt: now,
-			}));
+		const values = await withKnownApps(day, rows, now, final);
 		return db().transaction(async (tx) => {
-			const [closed] = await tx
-				.select({ appId: developerDeliveryDaily.appId })
-				.from(developerDeliveryDaily)
-				.where(
-					and(
-						eq(developerDeliveryDaily.day, day),
-						eq(developerDeliveryDaily.final, true),
-					),
-				)
-				.limit(1)
-				.for("update");
-			if (closed) return "final" as const;
-			await tx
-				.delete(developerDeliveryDaily)
-				.where(
-					and(
-						eq(developerDeliveryDaily.day, day),
-						eq(developerDeliveryDaily.final, false),
-					),
-				);
-			for (const batch of chunks(values)) {
-				await tx.insert(developerDeliveryDaily).values(batch);
-			}
+			if (await dayIsFinal(tx, day)) return "final" as const;
+			await writeDay(tx, day, values);
 			return "written" as const;
 		});
 	},
-	async finalizeDay(day, now) {
-		await db()
-			.update(developerDeliveryDaily)
-			.set({ final: true, finalizedAt: now })
-			.where(
-				and(
-					eq(developerDeliveryDaily.day, day),
-					eq(developerDeliveryDaily.final, false),
-				),
+	async finalizeDay(day, coverage, now) {
+		return db().transaction(async (tx) => {
+			if (await dayIsFinal(tx, day)) return "already-final" as const;
+			for (const batch of chunks(coverage)) {
+				const recorded = await tx
+					.select({
+						file: developerDeliveryLogFiles.logFile,
+						etag: developerDeliveryLogFiles.etag,
+					})
+					.from(developerDeliveryLogFiles)
+					.where(
+						inArray(
+							developerDeliveryLogFiles.logFile,
+							batch.map((f) => f.file),
+						),
+					)
+					.for("update");
+				const etags = new Map(recorded.map((row) => [row.file, row.etag]));
+				if (batch.some((file) => etags.get(file.file) !== file.etag)) {
+					return "incomplete" as const;
+				}
+			}
+			const { from, to } = deliveryDayPartsWindow(day);
+			const stored = await tx
+				.select({ parts: developerDeliveryLogFiles.parts })
+				.from(developerDeliveryLogFiles)
+				.where(
+					and(
+						gte(developerDeliveryLogFiles.logHour, from),
+						lt(developerDeliveryLogFiles.logHour, to),
+					),
+				);
+			const rows = rollupDeliveryDay(
+				day,
+				stored.flatMap((row) => readDeliveryParts(row.parts)),
 			);
+			await writeDay(tx, day, await withKnownApps(day, rows, now, true, tx));
+			return "final" as const;
+		});
 	},
 	async pruneFiles(before) {
 		await db()
