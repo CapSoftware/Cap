@@ -31,6 +31,15 @@ vi.mock("@/lib/rate-limit", () => ({
 			return count > REQUESTS_PER_IP_LIMIT;
 		},
 	),
+	clientAddress: (headers: Headers) => headers.get("x-real-ip") ?? undefined,
+}));
+
+vi.mock("@/lib/visitor-location", () => ({
+	geoIpLocation: vi.fn((ip: string | null | undefined) =>
+		ip === "198.51.100.7"
+			? { country: "VE", region: "Zulia", city: "Maracaibo" }
+			: null,
+	),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -128,12 +137,21 @@ vi.mock("@/lib/Notification", () => ({
 
 const { POST } = await import("@/app/api/analytics/track/route");
 const { createAnonymousViewNotification } = await import("@/lib/Notification");
+const { geoIpLocation } = await import("@/lib/visitor-location");
 
-const track = (body: Record<string, unknown>, ip = "203.0.113.1") =>
+const track = (
+	body: Record<string, unknown>,
+	ip = "203.0.113.1",
+	headers: Record<string, string> = {},
+) =>
 	POST(
 		new Request("https://cap.so/api/analytics/track", {
 			method: "POST",
-			headers: { "content-type": "application/json", "x-real-ip": ip },
+			headers: {
+				"content-type": "application/json",
+				"x-real-ip": ip,
+				...headers,
+			},
 			body: JSON.stringify(body),
 		}) as unknown as NextRequest,
 	);
@@ -150,6 +168,7 @@ describe("POST /api/analytics/track", () => {
 		mocks.requestsPerIp.clear();
 		mocks.rateLimitCalls = [];
 		vi.mocked(createAnonymousViewNotification).mockClear();
+		vi.mocked(geoIpLocation).mockClear();
 		mocks.userId = null;
 		mocks.orgMember = false;
 		mocks.verifiedPasswords = [];
@@ -185,6 +204,34 @@ describe("POST /api/analytics/track", () => {
 				pathname: `/s/${VIDEO_ID}`,
 				session_id: "session-1",
 			}),
+		]);
+	});
+
+	it("takes the location from Vercel's headers when present", async () => {
+		await track({ videoId: VIDEO_ID }, "198.51.100.7", {
+			"x-vercel-ip-country": "GB",
+			"x-vercel-ip-country-region": "ENG",
+			"x-vercel-ip-city": "London",
+		});
+
+		expect(geoIpLocation).not.toHaveBeenCalled();
+		expect(recordedEvents()).toEqual([
+			expect.objectContaining({ country: "GB", region: "ENG", city: "London" }),
+		]);
+	});
+
+	it("falls back to the GeoIP database without Vercel's headers", async () => {
+		await track({ videoId: VIDEO_ID }, "198.51.100.7");
+		await track({ videoId: VIDEO_ID }, "203.0.113.50");
+
+		expect(geoIpLocation).toHaveBeenCalledWith("198.51.100.7");
+		expect(recordedEvents()).toEqual([
+			expect.objectContaining({
+				country: "VE",
+				region: "Zulia",
+				city: "Maracaibo",
+			}),
+			expect.objectContaining({ country: "", region: "", city: "" }),
 		]);
 	});
 
