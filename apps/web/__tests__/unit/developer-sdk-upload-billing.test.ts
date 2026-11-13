@@ -935,7 +935,7 @@ describe("removing files that were assembled but never recorded", () => {
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
 
-		expect(mocks.events).toEqual(["lock", "lock", "retire"]);
+		expect(mocks.events).toEqual(["lock", "lock", "retire", "cancel"]);
 		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
 		expect(mocks.listUploads).toHaveBeenCalledTimes(2);
