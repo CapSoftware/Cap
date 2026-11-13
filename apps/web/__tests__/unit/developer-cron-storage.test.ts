@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	selects: [] as Record<string, unknown>[][],
+	page: [] as Record<string, unknown>[],
+	accountsTable: { id: "id", appId: "appId" },
+	appsTable: { id: "id", deletedAt: "deletedAt" },
 	getStorageUsageByApp: vi.fn(),
 	chargeStorageDay: vi.fn(),
 	latestStorageCharges: vi.fn(),
@@ -11,12 +14,23 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@cap/database", () => ({
 	db: () => {
+		let table: unknown;
+		const read = () => {
+			if (table === mocks.appsTable) {
+				return mocks.page.map((account) => ({ id: account.appId }));
+			}
+			const rows = mocks.selects.shift() ?? [];
+			if (table === mocks.accountsTable) mocks.page = rows;
+			return rows;
+		};
 		const chain = {
 			select: () => chain,
-			from: () => chain,
-			innerJoin: () => chain,
+			from: (next: unknown) => {
+				table = next;
+				return chain;
+			},
 			where: () => {
-				const rows = Promise.resolve(mocks.selects.shift() ?? []);
+				const rows = Promise.resolve(read());
 				return Object.assign(rows, {
 					orderBy: () => ({ limit: () => rows }),
 				});
@@ -26,8 +40,8 @@ vi.mock("@cap/database", () => ({
 	},
 }));
 vi.mock("@cap/database/schema", () => ({
-	developerApps: { id: "id", deletedAt: "deletedAt" },
-	developerCreditAccounts: { id: "id", appId: "appId" },
+	developerApps: mocks.appsTable,
+	developerCreditAccounts: mocks.accountsTable,
 	developerCreditTransactions: {
 		accountId: "accountId",
 		referenceId: "referenceId",
@@ -97,6 +111,7 @@ const authorized = () => run(`Bearer ${CRON_SECRET}`);
 beforeEach(() => {
 	process.env.CRON_SECRET = CRON_SECRET;
 	mocks.selects = [];
+	mocks.page = [];
 	for (const mock of [
 		mocks.getStorageUsageByApp,
 		mocks.chargeStorageDay,

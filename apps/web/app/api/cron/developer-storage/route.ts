@@ -66,29 +66,34 @@ export async function GET(request: Request) {
 	let cursor: string | null = null;
 
 	while (!complete && !outOfTime(STORAGE_UNTIL_MS)) {
-		const accounts: { id: string; appId: string }[] = await db()
+		const page: { id: string; appId: string }[] = await db()
 			.select({
 				id: developerCreditAccounts.id,
 				appId: developerCreditAccounts.appId,
 			})
 			.from(developerCreditAccounts)
-			.innerJoin(
-				developerApps,
-				eq(developerCreditAccounts.appId, developerApps.id),
-			)
-			.where(
-				and(
-					isNull(developerApps.deletedAt),
-					cursor ? gt(developerCreditAccounts.id, cursor) : undefined,
-				),
-			)
+			.where(cursor ? gt(developerCreditAccounts.id, cursor) : undefined)
 			.orderBy(asc(developerCreditAccounts.id))
 			.limit(PAGE_SIZE);
-		const lastAccount = accounts.at(-1);
+		const lastAccount = page.at(-1);
 		if (!lastAccount) {
 			complete = true;
 			break;
 		}
+		const liveApps = await db()
+			.select({ id: developerApps.id })
+			.from(developerApps)
+			.where(
+				and(
+					inArray(
+						developerApps.id,
+						page.map((account) => account.appId),
+					),
+					isNull(developerApps.deletedAt),
+				),
+			);
+		const liveAppIds = new Set(liveApps.map((app) => app.id));
+		const accounts = page.filter((account) => liveAppIds.has(account.appId));
 
 		const billedToday = await db()
 			.select({ accountId: developerCreditTransactions.accountId })
@@ -174,7 +179,7 @@ export async function GET(request: Request) {
 		}
 		if (cutOff) break;
 
-		complete = accounts.length < PAGE_SIZE;
+		complete = page.length < PAGE_SIZE;
 		cursor = lastAccount.id;
 	}
 

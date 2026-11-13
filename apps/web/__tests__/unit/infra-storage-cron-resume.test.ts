@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
 	accounts: [] as { id: string; appId: string }[],
+	deletedApps: new Set<string>(),
 	charged: new Map<string, number>(),
 	chargeCalls: [] as string[],
 	accountReads: [] as { cursor: string | null; limit: number | null }[],
+	accountSql: [] as string[],
 	longestIdList: 0,
 	secondsPerCharge: 0,
 	topUps: vi.fn(),
@@ -17,6 +19,7 @@ vi.mock("@cap/database", async () => {
 			const limit = /limit \?/.test(sql) ? Number(params.at(-1)) : null;
 			const cursor = /`id` > \?/.test(sql) ? String(params[0]) : null;
 			state.accountReads.push({ cursor, limit });
+			state.accountSql.push(sql);
 			const after = state.accounts.filter(
 				(account) => cursor === null || account.id > cursor,
 			);
@@ -24,6 +27,14 @@ vi.mock("@cap/database", async () => {
 				rows: (limit === null ? after : after.slice(0, limit)).map(
 					(account) => [account.id, account.appId],
 				),
+			};
+		}
+		if (sql.includes("from `developer_apps`")) {
+			return {
+				rows: params
+					.map(String)
+					.filter((appId) => !state.deletedApps.has(appId))
+					.map((appId) => [appId]),
 			};
 		}
 		if (sql.includes("from `developer_credit_transactions`")) {
@@ -100,9 +111,11 @@ beforeEach(() => {
 		const serial = String(index).padStart(4, "0");
 		return { id: `account-${serial}`, appId: `app-${serial}` };
 	});
+	state.deletedApps = new Set();
 	state.charged = new Map();
 	state.chargeCalls = [];
 	state.accountReads = [];
+	state.accountSql = [];
 	state.longestIdList = 0;
 	state.secondsPerCharge = 0;
 	state.topUps.mockReset();
@@ -124,6 +137,18 @@ describe("storage cron paging and time budget", () => {
 			{ cursor: "account-0399", limit: 200 },
 		]);
 		expect(state.longestIdList).toBe(200);
+	});
+
+	it("pages on the account id alone and leaves out accounts of deleted apps", async () => {
+		state.deletedApps = new Set(["app-0003", "app-0250"]);
+
+		const body = await run();
+
+		expect(body).toMatchObject({ complete: true, appsProcessed: ACCOUNTS - 2 });
+		expect(state.charged.has("account-0003")).toBe(false);
+		expect(state.charged.has("account-0250")).toBe(false);
+		expect(state.accountSql.every((sql) => !sql.includes("join"))).toBe(true);
+		expect(state.accountReads).toHaveLength(3);
 	});
 
 	it("stops before the function limit and says the run is not complete", async () => {
