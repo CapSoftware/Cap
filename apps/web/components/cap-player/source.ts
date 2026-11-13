@@ -608,8 +608,11 @@ export const attachSource = (
 			const watchFirstFrame = () => {
 				if (framed || watchingFrame) return;
 				watchingFrame = true;
-				if ("requestVideoFrameCallback" in video) {
-					video.requestVideoFrameCallback(onFirstFrame);
+				const frames = video as {
+					requestVideoFrameCallback?: HTMLVideoElement["requestVideoFrameCallback"];
+				};
+				if (frames.requestVideoFrameCallback) {
+					frames.requestVideoFrameCallback.call(video, onFirstFrame);
 				} else {
 					video.addEventListener("timeupdate", onFirstFrame);
 				}
