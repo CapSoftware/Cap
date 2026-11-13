@@ -75,6 +75,7 @@ import { docsConfig } from "../../app/(docs)/docs/docs-config";
 
 const billing = getDocBySlug("api/billing")?.content ?? "";
 const rest = getDocBySlug("api/rest-api")?.content ?? "";
+const getStarted = getDocBySlug("api/get-started")?.content ?? "";
 
 const wholeDollars = (cents: number) =>
 	`$${(cents / 100).toLocaleString("en-US")}`;
@@ -249,6 +250,18 @@ describe("the Billing page", () => {
 		expect(billing).toContain(
 			`The month is ${STORAGE_BILLING_DAYS_PER_MONTH} UTC days`,
 		);
+	});
+
+	it("states the first month rule and its example the same way in the billing and get started docs", () => {
+		const rule =
+			"Each video is charged one month of storage when it first becomes ready, then daily after that. Uploading and encoding stay free.";
+		const tenMinutes = { durationSeconds: 600, tier: "1080p" as const };
+		const example = `A 10 minute 1080p video costs ${formatCharge(firstMonthStorageMicroCredits(tenMinutes))} when it becomes ready, then ${formatCharge(dailyStorageMicroCredits({ ...emptyStorageMinutes(), "1080p": 10 }))} a day after its first month.`;
+
+		for (const doc of [billing, getStarted]) {
+			expect(doc).toContain(rule);
+			expect(doc).toContain(example);
+		}
 	});
 
 	it("works every speech example out from the pricing functions", () => {
