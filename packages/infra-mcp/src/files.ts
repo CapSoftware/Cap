@@ -17,8 +17,23 @@ const CONTENT_TYPES: Record<string, string> = {
 	".webm": "video/webm",
 	".mov": "video/quicktime",
 	".mkv": "video/x-matroska",
-	".avi": "video/avi",
 };
+
+export const SUPPORTED_VIDEO_FORMATS =
+	"MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video";
+
+const UNSUPPORTED_VIDEO_EXTENSIONS = new Set([".avi"]);
+
+export function refuseUnsupportedVideo(file: LocalFile) {
+	if (!UNSUPPORTED_VIDEO_EXTENSIONS.has(extname(file.fileName).toLowerCase())) {
+		return;
+	}
+	throw new LocalError(
+		"unsupported_format",
+		`${file.fileName} is not a format Cap Infra can play`,
+		`Cap Infra accepts ${SUPPORTED_VIDEO_FORMATS}. Export it as an MP4 and upload that.`,
+	);
+}
 
 const GIGABYTE = 1e9;
 

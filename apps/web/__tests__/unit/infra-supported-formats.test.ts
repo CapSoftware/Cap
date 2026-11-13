@@ -8,6 +8,7 @@ import {
 	INFRA_VIDEO_FILE_ACCEPT,
 	isRefusedUploadContentType,
 } from "@/lib/infra-video-formats";
+import { SUPPORTED_VIDEO_FORMATS as MCP_SUPPORTED_VIDEO_FORMATS } from "../../../../packages/infra-mcp/src/files";
 
 const SENTENCE =
 	"MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video";
@@ -21,6 +22,7 @@ const doc = (name: string) =>
 describe("supported video formats", () => {
 	it("is one sentence, word for word", () => {
 		expect(INFRA_SUPPORTED_VIDEO_FORMATS).toBe(SENTENCE);
+		expect(MCP_SUPPORTED_VIDEO_FORMATS).toBe(SENTENCE);
 	});
 
 	it.each(["rest-api", "get-started"])("appears verbatim in %s.mdx", (name) => {
