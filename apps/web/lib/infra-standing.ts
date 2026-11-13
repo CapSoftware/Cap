@@ -173,8 +173,10 @@ async function latestDeliveryCharge(
 // than by its day key. The later posted daily charge carries the standing,
 // exactly as the latest storage day does on its own.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
-	const storage = await latestStorageDayCharge(executor, accountId);
-	const delivery = await latestDeliveryCharge(executor, accountId);
+	const [storage, delivery] = await Promise.all([
+		latestStorageDayCharge(executor, accountId),
+		latestDeliveryCharge(executor, accountId),
+	]);
 	const latest =
 		delivery &&
 		(!storage ||
