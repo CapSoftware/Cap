@@ -957,7 +957,7 @@ A video is billed at the lower of two tiers: the tier its source falls in by pix
 | `grace` | A storage charge, for a day or for a video's first month, was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
 | `paused` | Playback is paused until credits are added. Videos stay stored. |
 
-Adding credits that cover one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
+Once the available balance covers the charge that fell short, one day of storage or a video's first month, the app returns to `active` at once, whether credit was added or a transcript's hold was released. A later charge falling short starts a new grace period. What it could not pay is not charged afterwards.
 
 ### List Transactions
 

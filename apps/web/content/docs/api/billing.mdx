@@ -148,7 +148,7 @@ Auto top-up adds credit from a saved card when an app's balance runs low. It is 
 | `grace` | A storage charge, for a day or for a video's first month, was more than the balance. What was there was taken, uploads and new transcripts are refused, and playback continues until `standing.pausesAt`, 7 days after the app first fell short. |
 | `paused` | Playback is paused until credit is added. Videos stay stored. |
 
-Adding credit that covers the charge that fell short, one day of storage or the video's first month, returns the app to `active` at once. What it could not pay is not charged afterwards.
+Once the available balance covers the charge that fell short, one day of storage or the video's first month, the app returns to `active` at once, whether credit was added or a transcript's hold was released. From the next storage charge that shortfall stays settled even if the balance drops again, and only a new charge falling short starts a new grace period. What it could not pay is not charged afterwards.
 
 An app that stores nothing owes nothing, so it stays `active` with a zero balance. It cannot upload or start a transcript until it has credit.
 
