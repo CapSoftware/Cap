@@ -1815,7 +1815,16 @@ pub fn carry_keyboard_with_clips(
     let old_holds = before.hold_windows();
     let new_holds = timeline.hold_windows();
     let clips = &timeline.segments;
-    let carry = |output: f64| -> Option<f64> {
+    let old_end = |index: usize| {
+        effective_to_output(
+            &old_holds,
+            old_offsets[index] + before.segments[index].duration(),
+        )
+    };
+    let new_end = |index: usize| {
+        effective_to_output(&new_holds, new_offsets[index] + clips[index].duration())
+    };
+    let locate = |output: f64| -> Option<(Option<usize>, f64)> {
         let held = old_holds
             .iter()
             .find(|(start, end)| output >= *start && output < *end)
@@ -1837,14 +1846,14 @@ pub fn carry_keyboard_with_clips(
             })
             .peekable();
         if owners.peek().is_none() {
-            return Some(output);
+            return Some((None, output));
         }
         owners.find_map(|(index, (clip, offset))| {
             let source = clip.start + (effective - offset) * clip.timescale;
             let target = new_index(index);
             let clip = clips.get(target)?;
             let moved = new_offsets[target] + (source - clip.start) / clip.timescale;
-            match held {
+            let carried = match held {
                 Some(into) => (clip.start <= source && source <= clip.end).then(|| {
                     let frame = effective_to_output_end(&new_holds, moved);
                     let still_held = new_holds
@@ -1855,9 +1864,50 @@ pub fn carry_keyboard_with_clips(
                 None => (clip.start..clip.end)
                     .contains(&source)
                     .then(|| effective_to_output(&new_holds, moved)),
-            }
+            }?;
+            Some((Some(index), carried))
         })
     };
+    let carry = |output: f64| locate(output).map(|(_, carried)| carried);
+    let torn_apart = |first: usize, second: usize| {
+        let gap = new_index(second) as isize - new_index(first) as isize;
+        let old_gap = second as isize - first as isize;
+        gap != old_gap && !(0..=old_gap).contains(&gap)
+    };
+    timeline.keyboard_segments = std::mem::take(&mut timeline.keyboard_segments)
+        .into_iter()
+        .flat_map(|segment| {
+            let owned: Vec<(f64, usize)> = segment
+                .keys
+                .iter()
+                .map(|key| segment.start + key.time_offset / 1000.0)
+                .filter_map(|time| Some((time, locate(time)?.0?)))
+                .collect();
+            let cuts: Vec<f64> = owned
+                .windows(2)
+                .filter(|pair| torn_apart(pair[0].1, pair[1].1))
+                .map(|pair| {
+                    let ((first, owner), (second, _)) = (pair[0], pair[1]);
+                    let clip_end = old_end(owner);
+                    if first < clip_end && clip_end <= second {
+                        clip_end
+                    } else {
+                        second
+                    }
+                })
+                .collect();
+            let mut pieces = Vec::with_capacity(cuts.len() + 1);
+            let mut rest = segment;
+            for cut in cuts {
+                if let Some((head, tail)) = split_keyboard_segment(&rest, cut) {
+                    pieces.push(head);
+                    rest = tail;
+                }
+            }
+            pieces.push(rest);
+            pieces
+        })
+        .collect();
     timeline.keyboard_segments.retain_mut(|segment| {
         let times: Vec<f64> = if segment.keys.is_empty() {
             vec![segment.start]
@@ -1868,7 +1918,12 @@ pub fn carry_keyboard_with_clips(
                 .map(|key| segment.start + key.time_offset / 1000.0)
                 .collect()
         };
-        let carried: Vec<Option<f64>> = times.iter().map(|time| carry(*time)).collect();
+        let located: Vec<Option<(Option<usize>, f64)>> =
+            times.iter().map(|time| locate(*time)).collect();
+        let carried: Vec<Option<f64>> = located
+            .iter()
+            .map(|located| located.map(|(_, carried)| carried))
+            .collect();
         let Some((first, moved)) = times
             .iter()
             .zip(&carried)
@@ -1897,7 +1952,23 @@ pub fn carry_keyboard_with_clips(
         let lead_survives =
             carry(segment.start).is_some_and(|start| (moved - lead - start).abs() < 1e-6);
         let start = if lead_survives { moved - lead } else { moved };
-        segment.end = (segment.end + last_moved - last).max(start);
+        let mut end = segment.end + last_moved - last;
+        if let Some(owner) = located
+            .iter()
+            .rev()
+            .flatten()
+            .next()
+            .and_then(|(owner, _)| *owner)
+        {
+            let target = new_index(owner);
+            let successor = |index: usize, count: usize| (index + 1 < count).then_some(index + 1);
+            let same_neighbor = successor(owner, before.segments.len()).map(&new_index)
+                == successor(target, clips.len());
+            if segment.end <= old_end(owner) + 1e-9 || !same_neighbor {
+                end = end.min(new_end(target));
+            }
+        }
+        segment.end = end.max(start);
         segment.start = start;
         let mut carried = carried.into_iter();
         segment
@@ -5053,6 +5124,78 @@ mod tests {
             .map(|segment| (segment.id.as_str(), segment.start))
             .collect();
         assert_eq!(starts, vec![("after-hold", 3.5), ("next-clip", 13.0)]);
+    }
+
+    fn trim_two_clips(
+        keyboard: serde_json::Value,
+        trim: impl FnOnce(&mut TimelineConfiguration),
+    ) -> TimelineConfiguration {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "keyboardSegments": keyboard
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = timeline.clone();
+        trim(timeline);
+        carry_keyboard_with_clips(&before, timeline, |index| index);
+        timeline.clone()
+    }
+
+    #[test]
+    fn trimming_keeps_a_segment_typed_across_a_clip_boundary_whole() {
+        let timeline = trim_two_clips(
+            serde_json::json!([{
+                "id": "across", "start": 9.5, "end": 11.0, "displayText": "ab",
+                "keys": [
+                    { "key": "a", "timeOffset": 0.0 },
+                    { "key": "b", "timeOffset": 1000.0 }
+                ]
+            }]),
+            |timeline| timeline.segments[0].start = 1.0,
+        );
+        assert_spans(&timeline, &[("ab", 8.5, 10.0, &[8.5, 9.5])]);
+        assert_eq!(timeline.keyboard_segments[0].id, "across");
+    }
+
+    #[test]
+    fn trimming_a_clip_end_stops_its_text_at_the_new_end() {
+        let dropped = trim_two_clips(
+            serde_json::json!([{
+                "id": "typed", "start": 8.0, "end": 9.5, "displayText": "ab",
+                "keys": [
+                    { "key": "a", "timeOffset": 0.0 },
+                    { "key": "b", "timeOffset": 1000.0 }
+                ]
+            }]),
+            |timeline| timeline.segments[0].end = 8.5,
+        );
+        assert_spans(&dropped, &[("a", 8.0, 8.5, &[8.0])]);
+        let lingering = trim_two_clips(
+            serde_json::json!([{
+                "id": "typed", "start": 8.0, "end": 9.5,
+                "displayText": "a", "keys": [{ "key": "a", "timeOffset": 0.0 }]
+            }]),
+            |timeline| timeline.segments[0].end = 8.5,
+        );
+        assert_spans(&lingering, &[("a", 8.0, 8.5, &[8.0])]);
+    }
+
+    #[test]
+    fn trimming_keeps_text_that_already_ran_into_the_next_clip() {
+        let timeline = trim_two_clips(
+            serde_json::json!([{
+                "id": "typed", "start": 9.5, "end": 10.8,
+                "displayText": "a", "keys": [{ "key": "a", "timeOffset": 0.0 }]
+            }]),
+            |timeline| timeline.segments[0].start = 1.0,
+        );
+        assert_spans(&timeline, &[("a", 8.5, 9.8, &[8.5])]);
     }
 
     fn hold_project(text: serde_json::Value) -> ProjectConfiguration {

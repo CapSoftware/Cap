@@ -4206,6 +4206,89 @@ mod tests {
         );
     }
 
+    fn typed_across(start: f64, end: f64, keys: &[f64]) -> cap_project::KeyboardTrackSegment {
+        let text: String = ["a", "b", "c"][..keys.len()].concat();
+        serde_json::from_value(serde_json::json!({
+            "id": "typed", "start": start, "end": end, "displayText": text,
+            "keys": keys.iter().zip(text.chars()).map(|(time, key)| serde_json::json!({
+                "key": key.to_string(), "timeOffset": (time - start) * 1000.0
+            })).collect::<Vec<_>>()
+        }))
+        .unwrap()
+    }
+
+    fn keypress_spans(timeline: &TimelineConfiguration) -> Vec<(String, f64, f64, Vec<f64>)> {
+        timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.display_text.clone(),
+                    segment.start,
+                    segment.end,
+                    segment
+                        .keys
+                        .iter()
+                        .map(|key| segment.start + key.time_offset / 1000.0)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn swapping_clips_splits_a_segment_typed_across_them() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(0, 20.0, 30.0)]);
+        config.keyboard_segments = vec![typed_across(9.5, 11.0, &[9.5, 10.5])];
+        assert!(move_clip(&mut config, 0, 2));
+        assert_eq!(
+            keypress_spans(&config),
+            vec![
+                ("b".into(), 0.0, 1.0, vec![0.5]),
+                ("a".into(), 19.5, 20.0, vec![19.5]),
+            ]
+        );
+    }
+
+    #[test]
+    fn moving_a_clip_away_splits_only_where_the_typing_is_torn_apart() {
+        let clips = || {
+            let mut config = timeline(vec![
+                segment(0, 0.0, 10.0),
+                segment(0, 20.0, 30.0),
+                segment(0, 40.0, 50.0),
+            ]);
+            config.keyboard_segments = vec![typed_across(9.5, 11.0, &[9.5, 10.5])];
+            config
+        };
+        let mut config = clips();
+        assert!(move_clip(&mut config, 1, 3));
+        assert_eq!(
+            keypress_spans(&config),
+            vec![
+                ("a".into(), 9.5, 10.0, vec![9.5]),
+                ("b".into(), 20.0, 21.0, vec![20.5]),
+            ]
+        );
+        let mut config = clips();
+        assert!(move_clip(&mut config, 2, 0));
+        assert_eq!(
+            keypress_spans(&config),
+            vec![("ab".into(), 19.5, 21.0, vec![19.5, 20.5])]
+        );
+    }
+
+    #[test]
+    fn a_swap_stops_lingering_text_at_its_clips_new_end() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0), segment(0, 20.0, 30.0)]);
+        config.keyboard_segments = vec![typed_across(9.5, 10.8, &[9.5])];
+        assert!(move_clip(&mut config, 0, 2));
+        assert_eq!(
+            keypress_spans(&config),
+            vec![("a".into(), 19.5, 20.0, vec![19.5])]
+        );
+    }
+
     #[test]
     fn move_clip_to_the_front_and_the_back() {
         let mut config = timeline(vec![
