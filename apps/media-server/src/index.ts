@@ -14,6 +14,7 @@ import {
 	sweepMediaTransferCache,
 } from "./lib/media-transfer";
 import { installUnhandledRejectionGuard } from "./lib/process-guards";
+import { hideServerFromChildren } from "./lib/process-hardening";
 import { removeOwnTempDir, startTempDirMaintenance } from "./lib/temp-files";
 
 installUnhandledRejectionGuard();
@@ -21,6 +22,11 @@ installUnhandledRejectionGuard();
 const port = Number(process.env.PORT) || 3456;
 
 console.log(`[media-server] Starting on port ${port}`);
+
+const hidden = hideServerFromChildren();
+console.log(
+	`[media-server] Running as uid ${process.getuid?.() ?? "unknown"}${hidden ? ", hidden from child processes" : ""}`,
+);
 
 warmProbeWorkers();
 

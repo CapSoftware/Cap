@@ -50,14 +50,19 @@ as_user() {
 	setpriv --reuid "$uid" --regid "$gid" --groups "$groups" "$@"
 }
 
-for dir in "$temp_root/cap-media-server" "$temp_root/cap-media-download-cache"; do
+# The GPU driver keeps its compiled kernels in CUDA_CACHE_PATH, usually a
+# volume the host owns.
+owned_dirs="$temp_root/cap-media-server $temp_root/cap-media-download-cache"
+[ -n "${CUDA_CACHE_PATH:-}" ] && owned_dirs="$owned_dirs $CUDA_CACHE_PATH"
+
+for dir in $owned_dirs; do
 	mkdir -p "$dir" 2>/dev/null || true
 	chown -R "$uid:$gid" "$dir" 2>/dev/null || true
 done
 as_user test -w "$temp_root" || chmod 1777 "$temp_root" 2>/dev/null || true
 
 problem=""
-for dir in "$temp_root" "$temp_root/cap-media-server" "$temp_root/cap-media-download-cache"; do
+for dir in "$temp_root" $owned_dirs; do
 	as_user test -w "$dir" || problem="$run_as cannot write $dir"
 done
 for device in /dev/nvidia*; do

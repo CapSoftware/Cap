@@ -16,6 +16,9 @@ COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
 COPY apps/media-server/capcodec.md ./capcodec.md
 
+# The suites run as the user the server runs as.
+USER bun
+
 RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \
 	&& bun test src/__tests__/lib/audio-levels.integration.test.ts \
@@ -35,7 +38,9 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/live-transcribe.test.ts src/__tests__/routes/live-transcribe.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
-	&& bun test src/__tests__/lib/media-video.integration.test.ts
+	&& bun test src/__tests__/lib/media-video.integration.test.ts \
+	&& bun test src/__tests__/lib/isolated-worker-pool.test.ts src/__tests__/lib/media-probe-hardening.test.ts src/__tests__/lib/process-hardening.test.ts \
+	&& bun test src/__tests__/routes/thumbnail-remote.test.ts src/__tests__/routes/health.test.ts
 
 RUN MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 bun test \
 	src/__tests__/lib/recording-verification.integration.test.ts \
@@ -45,14 +50,17 @@ RUN MEDIA_SERVER_TRANSFER_PERFORMANCE_TESTS=1 bun test \
 	src/__tests__/lib/media-transfer.integration.test.ts \
 	src/__tests__/lib/drive-resumable-upload.test.ts
 
+USER root
+
 ENV PORT=3456
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then(async (response) => process.exit(response.ok || (await response.json().catch(() => ({}))).status === 'draining' ? 0 : 1)).catch(() => process.exit(1))"]
 
-# Starts as root to hand the temp directory to the bun user, then runs the
-# server as that user. See docker-entrypoint.sh.
+# The container starts as root only to hand its temp and GPU cache volumes
+# and the GPU devices to the bun user; the entrypoint then runs the server,
+# and every FFmpeg it starts, as that user. See docker-entrypoint.sh.
 COPY apps/media-server/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod 755 ./docker-entrypoint.sh
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

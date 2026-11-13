@@ -147,6 +147,29 @@ jobs:
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/encode-stall.test.ts \
             src/__tests__/lib/media-edit-stderr.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/isolated-worker-pool.test.ts \
+            src/__tests__/lib/media-probe-hardening.test.ts \
+            src/__tests__/lib/colour-probe-fallback.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/routes/thumbnail-remote.test.ts \
+            src/__tests__/routes/health.test.ts \
+            src/__tests__/routes/peer-jobs.test.ts
+
+      - name: Verify the server runs without root in the production image
+        env:
+          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
+        run: |
+          test "$(docker run --rm --network none "$MEDIA_IMAGE" id -u)" = 1000
+          docker volume create media-gpu-cache
+          docker run --rm --network none --init \
+            -e CUDA_CACHE_PATH=/gpu-cache -v media-gpu-cache:/gpu-cache \
+            --device /dev/null:/dev/nvidia0 --entrypoint sh "$MEDIA_IMAGE" -c \
+            'chmod 660 /dev/nvidia0 && chgrp 44 /dev/nvidia0 && exec /app/docker-entrypoint.sh sh -c "test \$(id -u) = 1000 && touch /gpu-cache/probe && mktemp -p /tmp && test -r /dev/nvidia0 && test -w /dev/nvidia0"'
+          docker run --rm --network none --init "$MEDIA_IMAGE" bun test \
+            src/__tests__/lib/process-hardening.test.ts \
+            src/__tests__/lib/media-probe-sample-counts.test.ts \
+            src/__tests__/lib/media-input-policy.test.ts
 
       - name: Verify long recording performance in the production image
         env:
