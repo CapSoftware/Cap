@@ -737,7 +737,7 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 			});
 
-			it("pays nothing when deleted before any encode was handed to the farm", async () => {
+			it("pays nothing when deleted before any encode was handed to the farm, including a slot reserved but not yet sent", async () => {
 				const { appId, accountId } = await makeApp(1_000_000);
 				const notClaimed = await makeVideo(appId, {
 					status: "uploading",
@@ -753,7 +753,21 @@ describe.runIf(Boolean(databaseUrl))(
 						attempts: { hls: 0, mp4: 0 },
 					},
 				});
-				for (const videoId of [notClaimed, claimedNotSent]) {
+				const reservedNotSent = await makeVideo(appId, {
+					createdAt: new Date(),
+					status: "processing",
+					processing: {
+						...processing(),
+						mp4: {
+							state: "running",
+							token: "t-mp4",
+							jobId: null,
+							startedAt: Date.now(),
+						},
+						attempts: { hls: 0, mp4: 1 },
+					},
+				});
+				for (const videoId of [notClaimed, claimedNotSent, reservedNotSent]) {
 					await deleteNow(videoId);
 					expect(await settleFirstMonthAtDelete(videoId)).toEqual({
 						state: "skipped",
