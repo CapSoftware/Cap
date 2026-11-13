@@ -22,7 +22,10 @@ import {
 	sql,
 } from "drizzle-orm";
 import { start } from "workflow/api";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import {
+	developerIdFromKey,
+	isDeveloperIdempotencyKey,
+} from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -181,12 +184,7 @@ export function transcriptIdForIdempotencyKey(appId: string, key: string) {
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 128 &&
-		/^[A-Za-z0-9._-]+$/.test(value)
-	);
+	return isDeveloperIdempotencyKey(value);
 }
 
 export type TranscriptOptionsInput = {
@@ -1015,8 +1013,10 @@ export async function deleteTranscript(
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
 	if (!transcript) {
-		await syncDeletedTranscriptCaptions(appId, transcriptId);
-		return NOT_FOUND;
+		const deleted = await findTranscriptAnyState(appId, transcriptId);
+		if (!deleted?.deletedAt) return NOT_FOUND;
+		await deleteTranscriptObjects(appId, deleted.id);
+		return { ok: true };
 	}
 
 	await db()
