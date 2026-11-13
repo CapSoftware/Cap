@@ -1,3 +1,4 @@
+import { developerVideoTakenDownSql } from "@cap/database/developer-video-takedown";
 import * as Db from "@cap/database/schema";
 import {
 	type Folder,
@@ -29,6 +30,7 @@ const developerVideoColumns = {
 	renditions: Db.developerVideos.renditions,
 	transcriptionStatus: Db.developerVideos.transcriptionStatus,
 	processing: Db.developerVideos.processing,
+	takenDown: developerVideoTakenDownSql(),
 	createdAt: Db.developerVideos.createdAt,
 	updatedAt: Db.developerVideos.updatedAt,
 };

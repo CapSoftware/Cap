@@ -135,6 +135,43 @@ describe("create upload with an Idempotency-Key", () => {
 		expect(state.videos.size).toBe(1);
 	});
 
+	it("never stores Cap's takedown marker from a client's metadata, and replays the request", async () => {
+		const withMarker = {
+			...request,
+			metadata: {
+				project: "alpha",
+				tags: ["a", "b"],
+				__capTakedown: { at: "2026-11-13T12:00:00.000Z", metadata: null },
+			},
+		};
+		const first = await createInfraVideo(withMarker);
+		const id = developerVideoIdForIdempotencyKey("app-1", KEY);
+
+		expect(first.status).toBe(200);
+		expect(state.videos.get(id)?.metadata).toEqual({
+			project: "alpha",
+			tags: ["a", "b"],
+		});
+		expect(await createInfraVideo(withMarker)).toEqual(first);
+		expect(state.inserts).toBe(1);
+	});
+
+	it("replays an unchanged request for a video Cap took down", async () => {
+		const first = await createInfraVideo(request);
+		const id = developerVideoIdForIdempotencyKey("app-1", KEY);
+		const stored = state.videos.get(id);
+		if (!stored) throw new Error("missing video");
+		stored.metadata = {
+			__capTakedown: {
+				at: "2026-11-13T12:00:00.000Z",
+				metadata: stored.metadata,
+			},
+		};
+
+		expect(await createInfraVideo(request)).toEqual(first);
+		expect(state.inserts).toBe(1);
+	});
+
 	it("makes one video when the same request races itself", async () => {
 		const results = await Promise.all(
 			Array.from({ length: 5 }, () => createInfraVideo(request)),
