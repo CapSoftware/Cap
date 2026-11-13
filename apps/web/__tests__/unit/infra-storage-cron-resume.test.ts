@@ -3,15 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
 	accounts: [] as { id: string; appId: string }[],
 	deletedApps: new Set<string>(),
+	unpaid: new Set<string>(),
 	charged: new Map<string, number>(),
-	chargeCalls: [] as string[],
+	chargeCalls: [] as { accountId: string; dateKey: string }[],
 	accountReads: [] as { cursor: string | null; limit: number | null }[],
 	accountSql: [] as string[],
 	longestIdList: 0,
 	secondsPerCharge: 0,
 	topUps: vi.fn(),
+	afters: [] as Promise<unknown>[],
+	continuations: [] as { url: string; authorization: string | null }[],
+	continuationStatus: 200,
 }));
 
+vi.mock("next/server", async (original) => ({
+	...(await original<typeof import("next/server")>()),
+	after: (task: Promise<unknown>) => {
+		state.afters.push(task);
+	},
+}));
 vi.mock("@cap/database", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
 	const client = drizzle(async (sql, params) => {
@@ -39,9 +49,12 @@ vi.mock("@cap/database", async () => {
 		}
 		if (sql.includes("from `developer_credit_transactions`")) {
 			const ids = params.slice(0, -2).map(String);
+			const date = String(params.at(-2));
 			state.longestIdList = Math.max(state.longestIdList, ids.length);
 			return {
-				rows: ids.filter((id) => state.charged.has(id)).map((id) => [id]),
+				rows: ids
+					.filter((id) => state.charged.has(`${id}|${date}`))
+					.map((id) => [id]),
 			};
 		}
 		throw new Error(`Unexpected query: ${sql}`);
@@ -64,11 +77,21 @@ vi.mock("@/lib/infra-storage", () => ({
 		),
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
-	chargeStorageDay: async ({ accountId }: { accountId: string }) => {
-		state.chargeCalls.push(accountId);
+	chargeStorageDay: async ({
+		accountId,
+		dateKey,
+	}: {
+		accountId: string;
+		dateKey: string;
+	}) => {
+		state.chargeCalls.push({ accountId, dateKey });
 		vi.setSystemTime(Date.now() + state.secondsPerCharge * 1000);
-		if (state.charged.has(accountId)) return { state: "skipped" };
-		state.charged.set(accountId, (state.charged.get(accountId) ?? 0) + 1);
+		if (state.unpaid.has(accountId)) {
+			return { state: "unpaid", shortSince: new Date("2026-11-01T00:00:00Z") };
+		}
+		const key = `${accountId}|${dateKey}`;
+		if (state.charged.has(key)) return { state: "skipped" };
+		state.charged.set(key, 1);
 		return {
 			state: "billed",
 			owedMicroCredits: 28,
@@ -82,7 +105,6 @@ vi.mock("@/lib/infra-storage-billing", () => ({
 vi.mock("@/lib/infra-standing", () => ({
 	INFRA_GRACE_DAYS: 7,
 	STORAGE_DAY_REFERENCE_TYPE: "storage_day",
-	latestStorageCharge: async () => null,
 	latestStorageCharges: async () => new Map(),
 }));
 vi.mock("@/lib/infra-auto-top-up", () => ({ runDueAutoTopUps: state.topUps }));
@@ -90,18 +112,68 @@ vi.mock("@/lib/infra-billing-emails", () => ({
 	sendInfraOutOfCreditEmail: vi.fn(),
 }));
 
-import { GET, maxDuration } from "@/app/api/cron/developer-storage/route";
+import {
+	GET,
+	MAX_STORAGE_HOPS,
+	maxDuration,
+} from "@/app/api/cron/developer-storage/route";
 
 const ACCOUNTS = 450;
+const ORIGIN = "https://cap.example";
+const PATH = "/api/cron/developer-storage";
 
-const run = async () => {
+type Body = {
+	success?: boolean;
+	error?: string;
+	date: string;
+	complete: boolean;
+	continued: boolean;
+	hop: number;
+	appsProcessed: number;
+	appsShort: number;
+};
+
+const call = async (query = "") => {
 	const response = await GET(
-		new Request("https://localhost/api/cron/developer-storage", {
+		new Request(`${ORIGIN}${PATH}${query}`, {
 			headers: { authorization: "Bearer cron-secret" },
 		}),
 	);
-	return response.json();
+	return { status: response.status, body: (await response.json()) as Body };
 };
+
+const run = async (query = "") => (await call(query)).body;
+
+const lastContinuation = () => {
+	const last = state.continuations.at(-1);
+	if (!last) throw new Error("no continuation was started");
+	return new URL(last.url);
+};
+
+const followChain = async (
+	first: Body,
+	between: () => void = () => {},
+	limit = MAX_STORAGE_HOPS + 2,
+) => {
+	const bodies = [first];
+	let body = first;
+	while (body.continued) {
+		if (bodies.length > limit) throw new Error("chain did not end");
+		between();
+		const next = lastContinuation();
+		body = await run(next.search);
+		bodies.push(body);
+	}
+	return bodies;
+};
+
+const chargedFor = (date: string) =>
+	[...state.charged.keys()]
+		.filter((key) => key.endsWith(`|${date}`))
+		.map((key) => key.split("|")[0])
+		.sort();
+
+const allIds = () => state.accounts.map((account) => account.id);
 
 beforeEach(() => {
 	process.env.CRON_SECRET = "cron-secret";
@@ -112,31 +184,52 @@ beforeEach(() => {
 		return { id: `account-${serial}`, appId: `app-${serial}` };
 	});
 	state.deletedApps = new Set();
+	state.unpaid = new Set();
 	state.charged = new Map();
 	state.chargeCalls = [];
 	state.accountReads = [];
 	state.accountSql = [];
 	state.longestIdList = 0;
 	state.secondsPerCharge = 0;
+	state.afters = [];
+	state.continuations = [];
+	state.continuationStatus = 200;
 	state.topUps.mockReset();
 	state.topUps.mockResolvedValue({ attempted: 0, succeeded: 0, failed: 0 });
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: URL | string, init?: RequestInit) => {
+			state.continuations.push({
+				url: String(url),
+				authorization: new Headers(init?.headers).get("authorization"),
+			});
+			return new Response(null, { status: state.continuationStatus });
+		}),
+	);
 });
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
-describe("storage cron paging and time budget", () => {
+describe("storage cron paging", () => {
 	it("reads accounts a page at a time, by id, and never sends every id at once", async () => {
 		const body = await run();
 
-		expect(body).toMatchObject({ complete: true, appsProcessed: ACCOUNTS });
+		expect(body).toMatchObject({
+			complete: true,
+			continued: false,
+			appsProcessed: ACCOUNTS,
+		});
 		expect(state.accountReads).toEqual([
 			{ cursor: null, limit: 200 },
 			{ cursor: "account-0199", limit: 200 },
 			{ cursor: "account-0399", limit: 200 },
 		]);
 		expect(state.longestIdList).toBe(200);
+		expect(state.continuations).toEqual([]);
 	});
 
 	it("pages on the account id alone and leaves out accounts of deleted apps", async () => {
@@ -145,67 +238,211 @@ describe("storage cron paging and time budget", () => {
 		const body = await run();
 
 		expect(body).toMatchObject({ complete: true, appsProcessed: ACCOUNTS - 2 });
-		expect(state.charged.has("account-0003")).toBe(false);
-		expect(state.charged.has("account-0250")).toBe(false);
+		expect(chargedFor("2026-11-12")).not.toContain("account-0003");
+		expect(chargedFor("2026-11-12")).not.toContain("account-0250");
 		expect(state.accountSql.every((sql) => !sql.includes("join"))).toBe(true);
-		expect(state.accountReads).toHaveLength(3);
 	});
+});
 
-	it("stops before the function limit and says the run is not complete", async () => {
+describe("a cut-off sweep continues itself", () => {
+	it("hands the date, the last attempted account and the next hop to a request to itself", async () => {
 		state.secondsPerCharge = 1.6;
 		const startedAt = Date.now();
 
 		const body = await run();
 
-		expect(body).toMatchObject({ complete: false, appsProcessed: 130 });
-		expect(state.charged.size).toBe(130);
+		expect(body).toMatchObject({
+			date: "2026-11-12",
+			complete: false,
+			continued: true,
+			hop: 0,
+			appsProcessed: 130,
+		});
 		expect(Date.now() - startedAt).toBeLessThan(maxDuration * 1000);
-		expect(maxDuration).toBe(300);
+		expect(state.afters).toHaveLength(1);
+		await Promise.all(state.afters);
+		expect(state.continuations).toHaveLength(1);
+		const next = lastContinuation();
+		expect(next.origin).toBe(ORIGIN);
+		expect(next.pathname).toBe(PATH);
+		expect(Object.fromEntries(next.searchParams)).toEqual({
+			date: "2026-11-12",
+			after: "account-0129",
+			hop: "1",
+		});
+		expect(state.continuations[0]?.authorization).toBe("Bearer cron-secret");
 	});
 
-	it("carries on from a cut-off run without charging twice or skipping an account", async () => {
+	it("resumes a page cut off part way at the first account it did not attempt", async () => {
 		state.secondsPerCharge = 1.6;
-		const first = await run();
-		expect(first).toMatchObject({ complete: false, appsProcessed: 130 });
-		const chargedInFirstRun = new Set(state.charged.keys());
+		await run();
+		const attempted = state.chargeCalls.map((call) => call.accountId);
 		state.chargeCalls = [];
+		state.accountReads = [];
 		state.secondsPerCharge = 0;
 
-		const second = await run();
+		const body = await run(lastContinuation().search);
 
-		expect(second).toMatchObject({
+		expect(attempted.at(-1)).toBe("account-0129");
+		expect(state.chargeCalls[0]?.accountId).toBe("account-0130");
+		expect(state.accountReads).toEqual([
+			{ cursor: "account-0129", limit: 200 },
+			{ cursor: "account-0329", limit: 200 },
+		]);
+		expect(body).toMatchObject({
 			complete: true,
+			continued: false,
+			hop: 1,
 			appsProcessed: ACCOUNTS - 130,
 		});
-		expect(state.chargeCalls.some((id) => chargedInFirstRun.has(id))).toBe(
-			false,
-		);
-		expect([...state.charged.keys()].sort()).toEqual(
-			state.accounts.map((account) => account.id),
-		);
-		expect([...state.charged.values()].every((count) => count === 1)).toBe(
-			true,
-		);
-
-		state.chargeCalls = [];
-		const third = await run();
-
-		expect(third).toMatchObject({ complete: true, appsProcessed: 0 });
-		expect(state.chargeCalls).toEqual([]);
+		expect(chargedFor("2026-11-12")).toEqual(allIds());
 	});
 
-	it("gives each auto top-up pass a deadline inside the function limit", async () => {
-		const startedAt = Date.now();
+	it("never charges again an account an earlier hop charged", async () => {
+		state.secondsPerCharge = 1.6;
+		const hops: string[][] = [];
+		let seen = 0;
+		const bodies = await followChain(await run(), () => {
+			hops.push(state.chargeCalls.slice(seen).map((call) => call.accountId));
+			seen = state.chargeCalls.length;
+		});
+		hops.push(state.chargeCalls.slice(seen).map((call) => call.accountId));
+
+		expect(bodies.length).toBeGreaterThan(2);
+		expect(bodies.at(-1)).toMatchObject({ complete: true, continued: false });
+		const everyCall = hops.flat();
+		expect(new Set(everyCall).size).toBe(everyCall.length);
+		expect(chargedFor("2026-11-12")).toEqual(allIds());
+		expect(bodies.reduce((total, body) => total + body.appsProcessed, 0)).toBe(
+			ACCOUNTS,
+		);
+	});
+
+	it("still charges every account for the day when the last run of that day is cut off", async () => {
+		vi.setSystemTime(new Date("2026-11-12T23:56:00Z"));
+		state.secondsPerCharge = 1.6;
+
+		const first = await run();
+		expect(first).toMatchObject({ date: "2026-11-12", continued: true });
+		vi.setSystemTime(new Date("2026-11-13T00:02:00Z"));
+		state.secondsPerCharge = 0;
+
+		const bodies = await followChain(first);
+
+		expect(bodies.every((body) => body.date === "2026-11-12")).toBe(true);
+		expect(chargedFor("2026-11-12")).toEqual(allIds());
+		expect(chargedFor("2026-11-13")).toEqual([]);
+		expect(
+			state.chargeCalls.every((call) => call.dateKey === "2026-11-12"),
+		).toBe(true);
+	});
+
+	it("reaches funded accounts behind a run of unpaid accounts longer than one run's budget", async () => {
+		state.unpaid = new Set(allIds().slice(0, 300));
+		state.secondsPerCharge = 1.6;
+
+		const bodies = await followChain(await run());
+
+		const funded = allIds().slice(300);
+		expect(chargedFor("2026-11-12")).toEqual(funded);
+		expect(bodies.at(-1)).toMatchObject({ complete: true });
+		const unpaidCalls = state.chargeCalls.filter((call) =>
+			state.unpaid.has(call.accountId),
+		);
+		expect(unpaidCalls).toHaveLength(300);
+		expect(new Set(unpaidCalls.map((call) => call.accountId)).size).toBe(300);
+	});
+});
+
+describe("the chain is bounded", () => {
+	it("stops at the hop limit and logs it", async () => {
+		state.secondsPerCharge = 1.6;
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const body = await run(
+			`?date=2026-11-12&after=account-0099&hop=${MAX_STORAGE_HOPS}`,
+		);
+
+		expect(body).toMatchObject({
+			complete: false,
+			continued: false,
+			hop: MAX_STORAGE_HOPS,
+		});
+		expect(state.afters).toEqual([]);
+		expect(state.continuations).toEqual([]);
+		expect(errors).toHaveBeenCalledWith(
+			"[developer-storage] Sweep stopped at the hop limit",
+			expect.objectContaining({ date: "2026-11-12", hop: MAX_STORAGE_HOPS }),
+		);
+	});
+
+	it("logs a continuation the route refused", async () => {
+		state.secondsPerCharge = 1.6;
+		state.continuationStatus = 500;
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		await run();
+		await Promise.all(state.afters);
 
-		const deadlines = state.topUps.mock.calls.map(
-			([, options]) => (options as { until: number }).until - startedAt,
+		expect(errors).toHaveBeenCalledWith(
+			"[developer-storage] Continuation refused",
+			expect.objectContaining({ status: 500, hop: 1 }),
 		);
-		expect(deadlines).toHaveLength(2);
-		for (const deadline of deadlines) {
-			expect(deadline).toBeGreaterThan(0);
-			expect(deadline).toBeLessThan(maxDuration * 1000);
+	});
+
+	it("refuses a date other than today or yesterday and any malformed continuation", async () => {
+		for (const query of [
+			"?date=2026-11-10&hop=1",
+			"?date=2026-11-13&hop=1",
+			"?date=2026-1-12&hop=1",
+			"?date=yesterday&hop=1",
+			"?date=2026-11-12",
+			"?hop=1",
+			"?after=account-0001",
+			"?date=2026-11-12&hop=0",
+			`?date=2026-11-12&hop=${MAX_STORAGE_HOPS + 1}`,
+			"?date=2026-11-12&hop=1&after=a%20b",
+			"?date=2026-11-12&hop=1x",
+		]) {
+			const { status, body } = await call(query);
+			expect({ query, status, error: body.error }).toEqual({
+				query,
+				status: 400,
+				error: "Invalid continuation",
+			});
 		}
+		expect(state.chargeCalls).toEqual([]);
+		expect(state.topUps).not.toHaveBeenCalled();
+		expect((await call("?date=2026-11-11&hop=1")).status).toBe(200);
+	});
+});
+
+describe("auto top-ups run once per sweep", () => {
+	it("runs before charging on the scheduled run and after charging on the last hop only", async () => {
+		state.secondsPerCharge = 1.6;
+		const startedAt = Date.now();
+
+		const first = await run();
+		expect(state.topUps).toHaveBeenCalledTimes(1);
+		const [[, before]] = state.topUps.mock.calls as [[Date, { until: number }]];
+		expect(before.until - startedAt).toBeGreaterThan(0);
+		expect(before.until - startedAt).toBeLessThan(maxDuration * 1000);
+
+		state.topUps.mockClear();
+		const second = await run(lastContinuation().search);
+		expect(second.continued).toBe(true);
+		expect(state.topUps).not.toHaveBeenCalled();
+
+		state.secondsPerCharge = 0;
+		const bodies = await followChain(second);
+		expect(bodies.at(-1)).toMatchObject({ complete: true });
+		expect(state.topUps).toHaveBeenCalledTimes(1);
+		expect(first.continued).toBe(true);
+	});
+
+	it("runs both passes on a scheduled run that finishes", async () => {
+		await run();
+
+		expect(state.topUps).toHaveBeenCalledTimes(2);
 	});
 });
