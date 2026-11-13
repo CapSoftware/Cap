@@ -271,8 +271,13 @@ describe("slice results arriving", () => {
 	it("refuses a slice whose renditions differ from the others", () => {
 		let { state } = begin(fresh(), ["a", "b", "c"]);
 		state = complete(state, "a", 20);
-		const odd = sliceResult(96);
-		odd.renditions[0] = { ...odd.renditions[0], width: 1280, height: 720 };
+		const even = sliceResult(96);
+		const odd = {
+			...even,
+			renditions: even.renditions.map((rendition, index) =>
+				index === 0 ? { ...rendition, width: 1280, height: 720 } : rendition,
+			),
+		};
 
 		const refused = settleSlice(state, "b", { type: "complete", result: odd });
 
