@@ -13,8 +13,11 @@ import { GET as libraryCardJson } from "@/app/.well-known/mcp/server-card.json/r
 import { GET as infraProtectedResource } from "@/app/.well-known/oauth-protected-resource/api/developer/mcp/route";
 import { GET as libraryProtectedResource } from "@/app/.well-known/oauth-protected-resource/api/mcp/route";
 import { GET as rootProtectedResource } from "@/app/.well-known/oauth-protected-resource/route";
+import { GET as infraLlmsRoute } from "@/app/(infra-site)/infra/llms.txt/route";
+import { GET as infraLlmsFullRoute } from "@/app/(infra-site)/infra/llms-full.txt/route";
 import { GET as infraMarkdownRoute } from "@/app/infra-markdown/route";
 import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
+import { INFRA_DOC_SLUGS } from "@/lib/infra-markdown";
 
 const LIBRARY_CARD = `{
   "$schema": "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
@@ -138,5 +141,73 @@ describe("/infra as Markdown", () => {
 			new Request("https://preview.example/infra-markdown"),
 		).text();
 		expect(markdown).toContain("https://preview.example/docs/api/rest-api");
+	});
+});
+
+describe("/infra/llms.txt", () => {
+	it("follows the llms.txt layout and links every Infra doc as Markdown", async () => {
+		const response = infraLlmsRoute(
+			new Request("https://cap.so/infra/llms.txt"),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toBe(
+			"text/plain; charset=utf-8",
+		);
+		const text = await response.text();
+		const lines = text.split("\n");
+		expect(lines[0]).toBe("# Cap Infra");
+		expect(lines[2]?.startsWith("> ")).toBe(true);
+		for (const slug of INFRA_DOC_SLUGS) {
+			expect(text).toContain(`](https://cap.so/docs/${slug}.md): `);
+		}
+		for (const link of [
+			"https://cap.so/infra/llms-full.txt",
+			"https://cap.so/openapi.json",
+			"https://cap.so/infra.md",
+			"https://cap.so/api/developer/mcp",
+			"https://cap.so/.well-known/mcp/infra/server-card.json",
+		]) {
+			expect(text).toContain(link);
+		}
+		const links = lines.filter((line) => line.startsWith("- "));
+		for (const line of links) {
+			expect(line).toMatch(/^- \[[^\]]+\]\([^)]+\)(: .+)?$/);
+		}
+	});
+
+	it("links the origin it was asked on", async () => {
+		const text = await infraLlmsRoute(
+			new Request("https://preview.example/infra/llms.txt"),
+		).text();
+		expect(text).toContain("https://preview.example/docs/api/rest-api.md");
+	});
+});
+
+describe("/infra/llms-full.txt", () => {
+	it("holds the Infra overview and every Infra doc in full, in order", async () => {
+		const response = infraLlmsFullRoute(
+			new Request("https://cap.so/infra/llms-full.txt"),
+		);
+		expect(response.status).toBe(200);
+		const text = await response.text();
+		expect(text.startsWith("# Cap Infra\n")).toBe(true);
+		expect(text).toContain(CAP_INFRA_AGENT_PROMPT);
+
+		const positions = INFRA_DOC_SLUGS.map((slug) =>
+			text.indexOf(`Source: https://cap.so/docs/${slug}\n`),
+		);
+		for (const position of positions) expect(position).toBeGreaterThan(0);
+		expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+
+		for (const heading of [
+			"# Get Started",
+			"# REST API",
+			"# Webhooks",
+			"# Billing",
+		]) {
+			expect(text).toContain(`\n${heading}\n`);
+		}
+		expect(text).not.toMatch(/^<[A-Z]/m);
+		expect(text).not.toContain("](/");
 	});
 });
