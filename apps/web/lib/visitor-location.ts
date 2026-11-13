@@ -60,10 +60,6 @@ function geoIpReader(): GeoIpReader | null {
 	return reader;
 }
 
-/**
- * Location of an IP from the GeoIP database in CAP_GEOIP_DATABASE_PATH, for
- * hosts other than Vercel, which sends no x-vercel-ip-* headers.
- */
 export function geoIpLocation(
 	ip: string | null | undefined,
 ): VisitorLocation | null {
