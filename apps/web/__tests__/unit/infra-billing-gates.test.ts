@@ -227,7 +227,9 @@ describe("creating an upload", () => {
 });
 
 describe("console upload route", () => {
-	it("is refused for an account outside the preview list without reading the app", async () => {
+	it("checks ownership for any signed-in account, not a preview list", async () => {
+		mocks.selects = [[]];
+
 		expect(await ownsInfraApp(outsider as never, "app-1")).toBe(false);
 		expect(mocks.selects).toHaveLength(0);
 	});
@@ -254,10 +256,11 @@ describe("console upload route", () => {
 });
 
 describe("saving a card", () => {
-	it("refuses an account outside the preview list before reaching the payment provider", async () => {
+	it("treats any signed-in account by ownership before reaching the payment provider", async () => {
 		mocks.user = outsider;
+		mocks.selects = [[]];
 
-		expect(await cardCheckout()).toEqual({ status: "forbidden" });
+		expect(await cardCheckout()).toEqual({ status: "not_found" });
 		expect(mocks.ensureCustomer).not.toHaveBeenCalled();
 		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
@@ -337,11 +340,12 @@ describe("auto top-up settings action", () => {
 		extra: Partial<Parameters<typeof updateDeveloperAutoTopUp>[0]> = {},
 	) => updateDeveloperAutoTopUp({ appId: "app-1", enabled: true, ...extra });
 
-	it("refuses a signed-out user and an account outside the preview list", async () => {
+	it("refuses a signed-out user, and any account for an app it does not own", async () => {
 		mocks.user = null;
 		await expect(save()).rejects.toThrow("Unauthorized");
 		mocks.user = outsider;
-		await expect(save()).rejects.toThrow("Unauthorized");
+		mocks.selects = [[]];
+		await expect(save()).rejects.toThrow("App not found");
 		expect(mocks.sets).toHaveLength(0);
 	});
 
@@ -422,11 +426,15 @@ describe("auto top-up settings action", () => {
 });
 
 describe("removing a saved card", () => {
-	it("refuses an account outside the preview list", async () => {
-		mocks.user = outsider;
-
+	it("refuses a signed-out user, and any account for an app it does not own", async () => {
+		mocks.user = null;
 		await expect(removeDeveloperSavedCard("app-1")).rejects.toThrow(
 			"Unauthorized",
+		);
+		mocks.user = outsider;
+		mocks.selects = [[]];
+		await expect(removeDeveloperSavedCard("app-1")).rejects.toThrow(
+			"App not found",
 		);
 		expect(mocks.detach).not.toHaveBeenCalled();
 	});
