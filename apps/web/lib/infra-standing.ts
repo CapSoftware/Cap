@@ -146,10 +146,24 @@ const storageDayRows = () =>
 const latestStorageDay = (accountId: string, ceiling: string) =>
 	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
 
+const anchoringDeliveryDays = (accountId: string) =>
+	and(
+		eq(developerCreditTransactions.accountId, accountId),
+		eq(developerCreditTransactions.type, DELIVERY_DAY_TRANSACTION_TYPE),
+		eq(developerCreditTransactions.referenceType, DELIVERY_DAY_REFERENCE_TYPE),
+		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.duringShortfall') IS NULL`,
+	);
+
 async function latestDeliveryCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ) {
+	const latestSecond = executor
+		.select({ createdAt: developerCreditTransactions.createdAt })
+		.from(developerCreditTransactions)
+		.where(anchoringDeliveryDays(accountId))
+		.orderBy(desc(developerCreditTransactions.createdAt))
+		.limit(1);
 	const [row] = await executor
 		.select({
 			id: developerCreditTransactions.id,
@@ -159,17 +173,11 @@ async function latestDeliveryCharge(
 		.from(developerCreditTransactions)
 		.where(
 			and(
-				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, DELIVERY_DAY_TRANSACTION_TYPE),
-				eq(
-					developerCreditTransactions.referenceType,
-					DELIVERY_DAY_REFERENCE_TYPE,
-				),
-				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.duringShortfall') IS NULL`,
+				anchoringDeliveryDays(accountId),
+				eq(developerCreditTransactions.createdAt, sql`(${latestSecond})`),
 			),
 		)
 		.orderBy(
-			desc(developerCreditTransactions.createdAt),
 			desc(developerCreditTransactions.referenceId),
 			desc(developerCreditTransactions.id),
 		)
