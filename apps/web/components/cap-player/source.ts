@@ -18,6 +18,8 @@ export interface Attachment {
 	warm: () => void;
 	setLevel: (index: number) => void;
 	seekDuringSwitch: (time: number) => boolean;
+	heldTime: () => number | null;
+	takeSwitchPlay: () => boolean;
 }
 
 export interface AttachOptions {
@@ -309,16 +311,38 @@ export const attachSource = (
 	// the MP4. Whether it plays is read from the element each time: a pause in
 	// that window must hold.
 	let switchingFrom: number | null = null;
+	// A seek made as a new source loads can read zero until it lands. Its
+	// place is held for the events the page is sent and for a switch or
+	// fallback made meanwhile, but only while the element still reads zero:
+	// any other time it reports is newer, such as the viewer's own seek.
+	let held: number | null = null;
+	const releaseHeld = () => {
+		held = null;
+	};
+	const now = () =>
+		held !== null && video.currentTime === 0 ? held : video.currentTime;
 	const position = () => ({
-		resumeAt: switchingFrom ?? video.currentTime,
+		resumeAt: switchingFrom ?? now(),
 		wasPlaying: !video.paused,
 	});
+
+	const seekHolding = (time: number) => {
+		held = time;
+		video.removeEventListener("seeked", releaseHeld);
+		video.addEventListener("seeked", releaseHeld, { once: true });
+		video.currentTime = time;
+	};
+	const heldTime = () => {
+		if (switchingFrom !== null) return switchingFrom;
+		if (held !== null && video.currentTime === 0) return held;
+		return startPending && !hlsSeeks && startAt > 0 ? startAt : null;
+	};
 
 	const seekToStart = () => {
 		if (!startPending || hlsSeeks) return;
 		startPending = false;
 		const at = startWithin(startAt, video.duration);
-		if (at > 0) video.currentTime = at;
+		if (at > 0) seekHolding(at);
 	};
 
 	// WebKit holds the document's load event, and with it the load event of a
@@ -340,6 +364,9 @@ export const attachSource = (
 	let nativeSrc = "";
 	let listing: AbortController | null = null;
 	let resumeAfterSwitch: (() => void) | null = null;
+	// A source swapped while playing is played again at once, which the
+	// element reports as a new play. That one is not the viewer's.
+	let switchPlay = false;
 
 	function onNativeError() {
 		playFile();
@@ -366,6 +393,7 @@ export const attachSource = (
 		}
 		resumeAfterSwitch = null;
 		switchingFrom = null;
+		switchPlay = false;
 	}
 
 	function pickNativeLevel(index: number) {
@@ -376,7 +404,7 @@ export const attachSource = (
 				? hls
 				: renditionSource(hls, nativeLevels[index]?.uri);
 		if (!next || next === nativeSrc) return;
-		const resumeAt = switchingFrom ?? video.currentTime;
+		const resumeAt = switchingFrom ?? now();
 		const wasPlaying = !video.paused;
 		const speed = video.playbackRate;
 		dropResume();
@@ -388,12 +416,16 @@ export const attachSource = (
 			const at = switchingFrom ?? resumeAt;
 			resumeAfterSwitch = null;
 			switchingFrom = null;
+			switchPlay = false;
 			video.playbackRate = speed;
-			if (at > 0) video.currentTime = at;
+			if (at > 0) seekHolding(at);
 		};
 		resumeAfterSwitch = resume;
 		video.addEventListener("loadedmetadata", resume, { once: true });
-		if (wasPlaying) void video.play().catch(() => undefined);
+		if (wasPlaying) {
+			switchPlay = true;
+			void video.play().catch(() => undefined);
+		}
 	}
 
 	// When hls.js fails, the browser's own HLS is tried before the MP4. Only
@@ -416,7 +448,7 @@ export const attachSource = (
 		video.src = source.hls;
 		if (resumeAt > 0) {
 			startPending = false;
-			video.currentTime = resumeAt;
+			seekHolding(resumeAt);
 		}
 		if (wasPlaying) void video.play().catch(() => undefined);
 		else warmAfterLoad(resumeAt === 0);
@@ -442,7 +474,7 @@ export const attachSource = (
 		video.src = source.mp4;
 		if (resumeAt > 0) {
 			startPending = false;
-			video.currentTime = resumeAt;
+			seekHolding(resumeAt);
 		}
 		if (wasPlaying) void video.play().catch(() => undefined);
 		else warmAfterLoad(resumeAt === 0);
@@ -456,6 +488,8 @@ export const attachSource = (
 		video.removeEventListener("error", onNativeError);
 		video.removeEventListener("loadedmetadata", listNativeLevels);
 		video.removeEventListener("loadedmetadata", seekToStart);
+		video.removeEventListener("seeked", releaseHeld);
+		held = null;
 		detach();
 	};
 
@@ -477,11 +511,19 @@ export const attachSource = (
 		return true;
 	};
 
+	const takeSwitchPlay = () => {
+		const taken = switchPlay;
+		switchPlay = false;
+		return taken;
+	};
+
 	const attachment: Attachment = {
 		stop,
 		warm,
 		setLevel: (index) => setLevel(index),
 		seekDuringSwitch,
+		heldTime,
+		takeSwitchPlay,
 	};
 
 	if (mode === "none") {
@@ -491,6 +533,8 @@ export const attachSource = (
 			warm: () => undefined,
 			setLevel: () => undefined,
 			seekDuringSwitch: () => false,
+			heldTime: () => null,
+			takeSwitchPlay: () => false,
 		};
 	}
 

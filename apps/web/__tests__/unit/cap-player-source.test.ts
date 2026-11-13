@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	connectMessages,
+	type MessageTarget,
+} from "@/components/cap-player/messages";
+import {
 	AUTO_LEVEL,
 	attachSource,
 	isSharper,
@@ -1600,5 +1604,235 @@ describe("native HLS renditions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(onLevels).toHaveBeenCalledTimes(1);
+	});
+});
+
+// Safari's own HLS player, as measured on iPhone: after a new source is set
+// the element reads time zero and no duration until its metadata is in, and a
+// seek reads zero until it lands. The events sent to the page must not.
+describe("events sent from Safari's own HLS player", () => {
+	const iosPlayer = async (startAt?: number) => {
+		iphone(true);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(MASTER)),
+		);
+		const video = new FakeVideo(true);
+		Object.assign(video, { currentSrc: "", getAttribute: () => null });
+		const attached = attach(video, { hls: HLS, mp4: MP4 }, { startAt });
+		const posted: Record<string, unknown>[] = [];
+		const target = Object.assign(new EventTarget(), {
+			parent: {
+				postMessage: (message: unknown) =>
+					posted.push(message as Record<string, unknown>),
+			},
+		}) as unknown as MessageTarget;
+		const connection = connectMessages(
+			target,
+			video as unknown as HTMLVideoElement,
+			{
+				setQuality: () => undefined,
+				seekDuringSwitch: attached.seekDuringSwitch,
+				heldTime: attached.heldTime,
+				takeSwitchPlay: attached.takeSwitchPlay,
+			},
+		);
+		const sequence = () =>
+			posted
+				.filter((message) => message.event !== "timeupdate")
+				.map(
+					(message) =>
+						`${message.event} ${message.currentTime} ${message.duration}${message.paused ? " paused" : ""}`,
+				);
+		const swapSource = () => {
+			video.currentTime = 0;
+			video.duration = Number.NaN;
+		};
+		const land = () => video.dispatchEvent(new Event("seeked"));
+		return {
+			video,
+			connection,
+			posted,
+			sequence,
+			swapSource,
+			land,
+			...attached,
+		};
+	};
+
+	const loaded = async (player: Awaited<ReturnType<typeof iosPlayer>>) => {
+		player.video.reach(30);
+		await vi.waitFor(() => expect(player.onLevels).toHaveBeenCalledTimes(2));
+		const levels = player.onLevels.mock.calls[1]?.[0] as ReturnType<
+			typeof listLevels
+		>;
+		return (label: string) => {
+			const level = levels.find((entry) => entry.label === label);
+			if (!level) throw new Error(`no ${label}`);
+			return level.index;
+		};
+	};
+
+	it("keeps the time and sends no play when a rendition is picked while playing", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 6.3;
+
+		player.setLevel(index("1080p"));
+		player.swapSource();
+		player.connection.send("qualitychange", { quality: "1080p", auto: false });
+		video.dispatchEvent(new Event("timeupdate"));
+		video.reach(30);
+		expect(video.currentTime).toBe(6.3);
+		player.land();
+		video.currentTime = 7.5;
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"qualitychange 6.3 30",
+			"pause 7.5 30 paused",
+		]);
+		expect(
+			player.posted
+				.filter((message) => message.event === "timeupdate")
+				.map((message) => message.currentTime),
+		).toEqual([6.3]);
+	});
+
+	it("keeps the time of a paused switch, then sends the viewer's play from it", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		video.currentTime = 7.5;
+
+		player.setLevel(index("360p"));
+		player.swapSource();
+		player.connection.send("qualitychange", { quality: "360p", auto: false });
+		video.reach(30);
+		player.land();
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"qualitychange 7.5 30 paused",
+			"play 7.5 30",
+		]);
+	});
+
+	it("sends a play the viewer makes after pausing during a switch", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 4;
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"pause 4 30 paused",
+			"play 4 30",
+		]);
+	});
+
+	it("does not hold back a later play when the switch's own play never came", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 4;
+		video.refusals.push("AbortError");
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		video.paused = true;
+		video.reach(30);
+		player.land();
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"play 4 30",
+		]);
+	});
+
+	it("reports the start time from the first play when t is set", async () => {
+		const player = await iosPlayer(10);
+		const { video } = player;
+
+		await video.play();
+		video.dispatchEvent(new Event("timeupdate"));
+		video.reach(30);
+		expect(video.currentTime).toBe(10);
+		player.land();
+		video.currentTime = 10.4;
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+
+		expect(player.sequence()).toEqual([
+			"ready 10 0 paused",
+			"play 10 0",
+			"pause 10.4 30 paused",
+		]);
+	});
+
+	it("reports the real time once a start past the end is dropped", async () => {
+		const player = await iosPlayer(300);
+		const { video } = player;
+
+		video.reach(30);
+		await video.play();
+
+		expect(player.sequence()).toEqual(["ready 300 0 paused", "play 0 30"]);
+	});
+
+	it("lets a seek made while a switch loads set the time the events carry", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 6;
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		expect(player.seekDuringSwitch(20)).toBe(true);
+		player.connection.send("qualitychange", { quality: "720p", auto: false });
+		video.reach(30);
+		player.land();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"qualitychange 20 30",
+		]);
+		expect(video.currentTime).toBe(20);
+	});
+
+	it("leaves the events of hls.js and of an unswitched native player as they were", async () => {
+		const player = await iosPlayer();
+		await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 3;
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect(player.heldTime()).toBeNull();
+		expect(player.takeSwitchPlay()).toBe(false);
+		expect(player.sequence()).toEqual(["ready 0 0 paused", "play 0 30"]);
+		expect(player.posted.at(-1)).toMatchObject({
+			event: "timeupdate",
+			currentTime: 3,
+		});
 	});
 });

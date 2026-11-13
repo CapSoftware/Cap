@@ -1169,6 +1169,8 @@ export const CapPlayer = ({
 			setQuality: (name) => live.current.setQuality(name),
 			seekDuringSwitch: (time) =>
 				attachmentRef.current?.seekDuringSwitch(time) ?? false,
+			heldTime: () => attachmentRef.current?.heldTime() ?? null,
+			takeSwitchPlay: () => attachmentRef.current?.takeSwitchPlay() ?? false,
 		});
 		messages.current = connection;
 		return () => {
