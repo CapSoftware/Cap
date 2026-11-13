@@ -12,6 +12,18 @@ use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use crate::text::{PreparedText, REFERENCE_HEIGHT, StaggerEdge, stagger_alpha};
 
+// Shaped buffers normally arrive in the same order as the previous frame.
+// Keep that order reversed in the cache so unchanged overlays take the O(1)
+// last entry. Edits, reorders and duplicate keys still use a full equality
+// check, rather than risking a stale text layout from a hash collision.
+fn take_cached_shape<K: PartialEq, V>(previous: &mut Vec<(K, V)>, requested: &K) -> Option<(K, V)> {
+    if previous.last().is_some_and(|(key, _)| key == requested) {
+        return previous.pop();
+    }
+    let index = previous.iter().position(|(key, _)| key == requested)?;
+    Some(previous.swap_remove(index))
+}
+
 #[derive(PartialEq)]
 struct ShapeKey {
     content: String,
@@ -432,12 +444,7 @@ impl TextLayer {
             wrap_width: wrap_width.to_bits(),
             colors: colors.map(<[Color]>::to_vec),
         };
-        if let Some(index) = self
-            .previous_buffers
-            .iter()
-            .position(|(previous, _)| *previous == key)
-        {
-            let (key, buffer) = self.previous_buffers.swap_remove(index);
+        if let Some((key, buffer)) = take_cached_shape(&mut self.previous_buffers, &key) {
             self.buffers.push(buffer);
             self.buffer_keys.push(key);
             return self.buffers.len() - 1;
@@ -488,6 +495,10 @@ impl TextLayer {
             .into_iter()
             .zip(self.buffers.drain(..))
             .collect();
+        // The next frame normally shapes the same overlays in the same order.
+        // A reverse now makes each matching buffer a cheap pop from the end,
+        // rather than repeatedly scanning and swap-removing the whole cache.
+        self.previous_buffers.reverse();
         self.draws.clear();
         let mut backgrounds: Vec<TextBackgroundUniforms> = Vec::new();
         let output_px = [output_size.0.max(1) as f32, output_size.1.max(1) as f32];
@@ -845,6 +856,71 @@ impl TextLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shaped_text_cache_reuses_stable_order_and_falls_back_for_edits() {
+        let mut previous = vec![(1, "first"), (2, "second"), (3, "third")];
+        previous.reverse();
+        assert_eq!(take_cached_shape(&mut previous, &1), Some((1, "first")));
+        // The next frame can reorder text overlays and still reuse by key.
+        assert_eq!(take_cached_shape(&mut previous, &3), Some((3, "third")));
+        // A changed key must miss rather than draw stale text.
+        assert_eq!(take_cached_shape(&mut previous, &4), None);
+        assert_eq!(take_cached_shape(&mut previous, &2), Some((2, "second")));
+        assert!(previous.is_empty());
+    }
+
+    #[test]
+    fn shaped_text_cache_consumes_duplicate_keys_at_most_once() {
+        let mut previous = vec![(1, "first"), (2, "middle"), (1, "second")];
+        previous.reverse();
+        let first = take_cached_shape(&mut previous, &1).unwrap().1;
+        let second = take_cached_shape(&mut previous, &1).unwrap().1;
+        assert_ne!(first, second);
+        assert_eq!(take_cached_shape(&mut previous, &1), None);
+        assert_eq!(take_cached_shape(&mut previous, &2), Some((2, "middle")));
+    }
+
+    #[test]
+    fn stable_shape_cache_lookup_checks_each_key_only_once() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct CountedKey {
+            index: usize,
+            comparisons: Arc<AtomicUsize>,
+        }
+        impl PartialEq for CountedKey {
+            fn eq(&self, other: &Self) -> bool {
+                self.comparisons.fetch_add(1, Ordering::Relaxed);
+                self.index == other.index
+            }
+        }
+        let comparisons = Arc::new(AtomicUsize::new(0));
+        let mut previous: Vec<_> = (0..256)
+            .map(|index| {
+                (
+                    CountedKey {
+                        index,
+                        comparisons: comparisons.clone(),
+                    },
+                    index,
+                )
+            })
+            .collect();
+        previous.reverse();
+        for index in 0..256 {
+            let request = CountedKey {
+                index,
+                comparisons: comparisons.clone(),
+            };
+            let (_, value) = take_cached_shape(&mut previous, &request).unwrap();
+            assert_eq!(value, index);
+        }
+        assert_eq!(comparisons.load(Ordering::Relaxed), 256);
+    }
 
     #[test]
     fn words_and_letters_map_bytes_to_reveal_units() {
