@@ -4,6 +4,7 @@ import {
 	developerApiError,
 	developerApiNotFound,
 	developerRateLimiter,
+	developerResponseHeaders,
 } from "../../../utils";
 
 import * as transactions from "./transactions";
@@ -15,6 +16,7 @@ import * as webhooks from "./webhooks";
 
 const app = new Hono()
 	.basePath("/api/developer/v1")
+	.use(developerResponseHeaders)
 	.use(developerRateLimiter)
 	.route("/videos", videos.app)
 	.route("/uploads", uploads.app)

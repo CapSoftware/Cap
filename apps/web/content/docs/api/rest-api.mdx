@@ -75,7 +75,7 @@ If you are self-hosting Cap, replace `cap.so` with your custom domain.
 
 ## Error Handling
 
-Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text.
+Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text. Every response on cap.so carries an `X-Request-Id` header: quote it when you contact support about a call.
 
 ```json
 {
@@ -186,6 +186,8 @@ POST /api/developer/v1/uploads
 | `maxBytes` | integer | No | Largest file the token may upload, in bytes, from `1` to `36000000000`. Leave it out for no cap beyond the 36 GB limit |
 
 The body is optional. A request with no body creates an upload with the defaults.
+
+Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
 A field this list does not have returns `400` with the code `invalid_request`, and the error names the field. Field names are case-sensitive, so `user_id` in place of `userId` is refused instead of creating a video with no user:
 
@@ -390,6 +392,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
       "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
       "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+      "outputs": { "hls": "ready", "mp4": "ready" },
       "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
       "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
     },
@@ -416,6 +419,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "hlsUrl": null,
       "mp4Url": null,
       "posterUrl": null,
+      "outputs": { "hls": "processing", "mp4": "processing" },
       "shareUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M",
       "embedUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M/embed"
     }
@@ -487,6 +491,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" },
     "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
     "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
   }
@@ -545,7 +550,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     ],
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
-    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" }
   }
 }
 ```
@@ -559,6 +565,8 @@ Poll this endpoint every few seconds after completing an upload, and stop when `
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
+
+`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed.
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
 
@@ -891,6 +899,8 @@ DELETE /api/developer/v1/transcripts/:id
 ```
 
 Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed. It stays deleted: it is not listed and its text is not kept.
+
+Deleting a transcript this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 
 #### Transcript billing
 
@@ -1506,7 +1516,7 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file |
+| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed |
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
@@ -1521,6 +1531,7 @@ The full video object returned by list and get endpoints:
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
+| `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
