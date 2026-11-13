@@ -266,7 +266,8 @@ describe("developer transcribe workflow", () => {
 		expect([...context.objects.keys()]).toEqual([RESULT_KEY]);
 
 		const again = await run();
-		expect(again.message).toBe("Transcript is not waiting to run");
+		expect(again.message).toBe("Transcript completed");
+		expect([...context.objects.keys()]).toEqual([RESULT_KEY]);
 		expect(ledger()).toHaveLength(1);
 		expect(context.transcribe).toHaveBeenCalledTimes(1);
 	});

@@ -317,11 +317,59 @@ describe("the fast path", () => {
 		const second = await fast();
 
 		expect(first).toMatchObject({ resume: "done", settlement: "complete" });
-		expect(second).toEqual({ resume: "unclaimed" });
+		expect(second).toEqual({ resume: "finalize", settlement: "complete" });
 		expect(context.transcribe).toHaveBeenCalledTimes(1);
 		expect(context.writes.get(RESULT_KEY)).toBe(1);
 		expect(ledger()).toHaveLength(1);
 		expect(balance()).toBe(100_000 - cost);
+	});
+
+	it("still cleans up and writes captions when it runs again after its settle was saved", async () => {
+		const cost = thirtySeconds();
+		expect(await fast()).toMatchObject({ resume: "done" });
+		context.objects.set(SOURCE_KEY, wavHeader());
+
+		const result = await run();
+
+		expect(result).toEqual({ success: true, message: "Transcript completed" });
+		expect([...context.objects.keys()]).toEqual([RESULT_KEY]);
+		expect(context.transcribe).toHaveBeenCalledTimes(1);
+		expect(ledger()).toHaveLength(1);
+		expect(balance()).toBe(100_000 - cost);
+	});
+
+	it("cleans up when it runs again after its own settle ended the transcript for lack of credit", async () => {
+		thirtySeconds();
+		const settled = context.transcribe.getMockImplementation();
+		context.transcribe.mockImplementationOnce(async (...args: unknown[]) => {
+			const account = fake().rows(developerCreditAccounts)[0];
+			if (account) account.balanceMicroCredits = 0;
+			return settled ? settled(...args) : undefined;
+		});
+		expect(await fast()).toMatchObject({
+			resume: "done",
+			settlement: "insufficient_credits",
+		});
+		context.objects.set(SOURCE_KEY, wavHeader());
+
+		const result = await run();
+
+		expect(result).toEqual({
+			success: false,
+			message: "Transcript was not completed: skipped",
+		});
+		expect([...context.objects.keys()]).toEqual([]);
+		expect(ledger()).toHaveLength(0);
+	});
+
+	it("leaves a transcript another run owns alone even when it is finished", async () => {
+		thirtySeconds();
+		await fast();
+		const row = transcript();
+		if (row) row.runId = "run-2";
+
+		expect(await fast()).toEqual({ resume: "unclaimed" });
+		expect(context.objects.has(RESULT_KEY)).toBe(true);
 	});
 
 	it("does not transcribe or charge twice when it runs again after the settle failed", async () => {
