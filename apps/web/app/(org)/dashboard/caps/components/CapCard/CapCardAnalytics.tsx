@@ -12,6 +12,9 @@ import {
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 
+export const capAnalyticsHref = (capId: string) =>
+	`/dashboard/analytics?capId=${capId}`;
+
 interface CapCardAnalyticsProps {
 	capId: string;
 	displayCount: number;
@@ -41,7 +44,7 @@ export const CapCardAnalytics = Object.assign(
 						delayDuration={100}
 					>
 						<Link
-							href={`/dashboard/analytics?capId=${capId}`}
+							href={capAnalyticsHref(capId)}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faEye}>
@@ -55,7 +58,7 @@ export const CapCardAnalytics = Object.assign(
 						delayDuration={100}
 					>
 						<Link
-							href={`/dashboard/analytics?capId=${capId}`}
+							href={capAnalyticsHref(capId)}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faComment}>
@@ -69,7 +72,7 @@ export const CapCardAnalytics = Object.assign(
 						delayDuration={100}
 					>
 						<Link
-							href={`/dashboard/analytics?capId=${capId}`}
+							href={capAnalyticsHref(capId)}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faSmile}>
@@ -80,7 +83,7 @@ export const CapCardAnalytics = Object.assign(
 				</div>
 				{isOwner && (
 					<Link
-						href={`/dashboard/analytics?capId=${capId}`}
+						href={capAnalyticsHref(capId)}
 						target="_blank"
 						rel="noopener noreferrer"
 						className="text-xs text-blue-600 hover:underline"
