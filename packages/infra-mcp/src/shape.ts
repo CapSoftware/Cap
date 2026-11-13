@@ -72,7 +72,7 @@ export function transcriptView(
 }
 
 export const CAPTIONS_NEXT =
-	"This transcript came from a stored video, so that video's player, share page and embed now offer it as captions. videos_get lists them under captions, with the url of each WebVTT file.";
+	"This transcript came from a stored video, so its captions are added to that video's player, share page and embed, usually within a few seconds of completing. videos_get lists them under captions, with the url of each WebVTT file; a url can answer 404 for those first seconds.";
 
 export const captionsNext = (transcript: Fields) =>
 	transcript.status === "complete" &&
