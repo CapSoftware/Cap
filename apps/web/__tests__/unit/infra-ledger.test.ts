@@ -286,6 +286,19 @@ describe("a video's first month of storage", () => {
 		});
 	});
 
+	it("names a paid month as paid while it carries an earlier unpaid month", () => {
+		const row = firstMonth(-850, 850, "2026-11-12T14:05:09.000Z");
+		expect(
+			describeLedgerRow({
+				...row,
+				metadata: {
+					...(row.metadata as Record<string, unknown>),
+					outstandingMicroCredits: 16_800,
+				},
+			}).label,
+		).toBe("Storage, first month");
+	});
+
 	it("says when the balance paid part of the month or none of it", () => {
 		const since = "2026-11-12T14:05:09.000Z";
 		expect(describeLedgerRow(firstMonth(-300, 850, since)).label).toBe(

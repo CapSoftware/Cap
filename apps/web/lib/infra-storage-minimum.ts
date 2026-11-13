@@ -246,6 +246,16 @@ async function settleFirstMonth(
 		unresolvedShortSince,
 		now,
 	});
+	const carried = unresolvedShortSince ? lastCharge : null;
+	const standingShortSince =
+		settled.shortSince ?? (carried?.firstMonth ? unresolvedShortSince : null);
+	const outstandingMicroCredits =
+		carried && standingShortSince
+			? Math.max(
+					carried.owedMicroCredits,
+					settled.shortSince ? settled.owedMicroCredits : 0,
+				)
+			: null;
 
 	if (settled.chargedMicroCredits > 0) {
 		await tx
@@ -267,7 +277,8 @@ async function settleFirstMonth(
 		metadata: {
 			owedMicroCredits: settled.owedMicroCredits,
 			chargedMicroCredits: settled.chargedMicroCredits,
-			shortSince: settled.shortSince?.toISOString() ?? null,
+			shortSince: standingShortSince?.toISOString() ?? null,
+			...(outstandingMicroCredits !== null ? { outstandingMicroCredits } : {}),
 			fellShort: settled.fellShort,
 			durationSeconds,
 			tier,
@@ -492,13 +503,34 @@ export async function openFirstMonthShortfalls(
 	executor: InfraDbExecutor = db(),
 ) {
 	if (accountIds.length === 0) return new Set<string>();
+	const ofAccounts = and(
+		inArray(developerCreditTransactions.accountId, [...accountIds]),
+		eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+	);
+	const latest = executor
+		.select({
+			accountId: developerCreditTransactions.accountId,
+			createdAt: sql`max(${developerCreditTransactions.createdAt})`.as(
+				"latestCreatedAt",
+			),
+		})
+		.from(developerCreditTransactions)
+		.where(ofAccounts)
+		.groupBy(developerCreditTransactions.accountId)
+		.as("latest");
 	const rows = await executor
 		.selectDistinct({ accountId: developerCreditTransactions.accountId })
 		.from(developerCreditTransactions)
+		.innerJoin(
+			latest,
+			and(
+				eq(latest.accountId, developerCreditTransactions.accountId),
+				eq(latest.createdAt, developerCreditTransactions.createdAt),
+			),
+		)
 		.where(
 			and(
-				inArray(developerCreditTransactions.accountId, [...accountIds]),
-				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+				ofAccounts,
 				sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')), 'null') <> 'null'`,
 				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
 			),

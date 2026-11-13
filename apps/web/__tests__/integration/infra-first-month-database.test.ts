@@ -66,6 +66,7 @@ const {
 	shortfallsAwaitingNotice,
 	markShortfallsNotified,
 	markStorageDayNotified,
+	openFirstMonthShortfalls,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
 const {
@@ -664,6 +665,109 @@ describe.runIf(Boolean(databaseUrl))(
 				new Date(Date.now() + 10 * DAY_MS),
 			);
 			expect(later.standing).toEqual({ state: "active", pausesAt: null });
+		});
+
+		it("keeps an unpaid month in grace from its first short date when a later, smaller month is paid in full", async () => {
+			const { appId, accountId } = await makeApp(900);
+			const transcriptId = id();
+			await database().insert(developerTranscripts).values({
+				id: transcriptId,
+				appId,
+				status: "processing",
+				sourceType: "upload",
+				reservedMicroCredits: 900,
+			});
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, {
+					duration: 3_600,
+					width: 3840,
+					height: 2160,
+					maxResolutionTier: "2160p",
+				}),
+				deletedAt: null,
+			});
+			const [unpaid] = await firstMonthRows(accountId);
+			expect(unpaid).toMatchObject({ amountMicroCredits: 0 });
+			expect(unpaid?.metadata).toMatchObject({ owedMicroCredits: 16_800 });
+			const movedTo = new Date(Math.floor(Date.now() / 1000) * 1000 - 5_000);
+			await database()
+				.update(developerCreditTransactions)
+				.set({ createdAt: movedTo })
+				.where(eq(developerCreditTransactions.id, unpaid?.id ?? ""));
+			const shortSince = new Date(
+				(unpaid?.metadata as { shortSince: string }).shortSince,
+			);
+			const pausesAt = new Date(shortSince.getTime() + 7 * DAY_MS);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt,
+			});
+
+			await database()
+				.update(developerTranscripts)
+				.set({ status: "complete", reservedMicroCredits: 0 })
+				.where(eq(developerTranscripts.id, transcriptId));
+			const paidVideo = await makeVideo(appId);
+			await settleFirstMonthAtReady({ id: paidVideo, deletedAt: null });
+
+			const paid = (await firstMonthRows(accountId)).find(
+				(row) => row.referenceId === paidVideo,
+			);
+			expect(paid).toMatchObject({
+				amountMicroCredits: -850,
+				balanceAfterMicroCredits: 50,
+			});
+			expect(paid?.metadata).toMatchObject({
+				owedMicroCredits: 850,
+				chargedMicroCredits: 850,
+				outstandingMicroCredits: 16_800,
+				shortSince: shortSince.toISOString(),
+				fellShort: false,
+			});
+			expect(paid?.createdAt.getTime()).toBeGreaterThan(movedTo.getTime());
+			const billing = await getInfraBilling(appId);
+			expect(billing.standing).toEqual({ state: "grace", pausesAt });
+			expect(billing.admission).toMatchObject({
+				allowed: false,
+				reason: "out_of_credit",
+			});
+			expect(await openFirstMonthShortfalls([accountId])).toEqual(
+				new Set([accountId]),
+			);
+			expect(
+				(
+					await shortfallsAwaitingNotice(
+						[accountId],
+						new Date(Date.now() - DAY_MS),
+					)
+				).get(accountId),
+			).toEqual({ shortSince, ids: [unpaid?.id] });
+
+			await addCreditsToAccount({
+				accountId,
+				amountCents: 17,
+				referenceId: id(),
+				referenceType: "stripe_payment_intent",
+			});
+			expect(await balanceOf(accountId)).toBe(17_050);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+
+			await database()
+				.update(developerCreditTransactions)
+				.set({ createdAt: new Date(movedTo.getTime() + 2_000) })
+				.where(eq(developerCreditTransactions.id, paid?.id ?? ""));
+			const afterVideo = await makeVideo(appId);
+			await settleFirstMonthAtReady({ id: afterVideo, deletedAt: null });
+			const after = (await firstMonthRows(accountId)).find(
+				(row) => row.referenceId === afterVideo,
+			);
+			expect(after?.metadata).toMatchObject({ shortSince: null });
+			expect(after?.metadata).not.toHaveProperty("outstandingMicroCredits");
+			expect((await getInfraBilling(appId)).standing.state).toBe("active");
+			expect(await openFirstMonthShortfalls([accountId])).toEqual(new Set());
 		});
 
 		describe("a video deleted while it encodes", () => {

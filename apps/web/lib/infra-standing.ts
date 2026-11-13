@@ -93,7 +93,11 @@ export function parseStorageCharge(row: {
 	return {
 		...(row.id ? { id: row.id } : {}),
 		createdAt: new Date(row.createdAt),
-		owedMicroCredits: Math.max(0, Number(fields.owedMicroCredits) || 0),
+		owedMicroCredits: Math.max(
+			0,
+			Number(fields.owedMicroCredits) || 0,
+			Number(fields.outstandingMicroCredits) || 0,
+		),
 		shortSince: dateField(fields.shortSince),
 		...(resolvedAt ? { resolvedAt } : {}),
 	};

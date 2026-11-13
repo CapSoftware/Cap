@@ -561,4 +561,38 @@ describe("standing", () => {
 				.shortSince,
 		).toBe(null);
 	});
+
+	it("keeps a carried first month shortfall in grace until the balance covers what is still unpaid", () => {
+		const carried = parseStorageCharge({
+			createdAt: at("2026-11-12T09:00:00Z"),
+			metadata: {
+				owedMicroCredits: 850,
+				chargedMicroCredits: 850,
+				outstandingMicroCredits: 16_800,
+				shortSince: shortSince.toISOString(),
+				fellShort: false,
+			},
+		});
+
+		expect(carried).toMatchObject({ owedMicroCredits: 16_800, shortSince });
+		expect(
+			resolveStanding({
+				balanceMicroCredits: 50,
+				lastCharge: carried,
+				restored: false,
+				now: at("2026-11-12T09:00:00Z"),
+			}),
+		).toEqual({
+			state: "grace",
+			pausesAt: at("2026-11-18T06:41:00Z"),
+		});
+		expect(
+			resolveStanding({
+				balanceMicroCredits: 16_800,
+				lastCharge: carried,
+				restored: false,
+				now: at("2026-11-12T09:00:00Z"),
+			}).state,
+		).toBe("active");
+	});
 });

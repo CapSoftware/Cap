@@ -101,8 +101,8 @@ function ledgerLabel(row: LedgerRow) {
 }
 
 function firstMonthFellShort(row: LedgerRow) {
-	const charge = parseStorageCharge(row);
-	return charge.owedMicroCredits > Math.abs(row.amountMicroCredits);
+	const owed = metadataAmount(row.metadata, "owedMicroCredits") ?? 0;
+	return owed > Math.abs(row.amountMicroCredits);
 }
 
 function ledgerReference(row: LedgerRow) {
