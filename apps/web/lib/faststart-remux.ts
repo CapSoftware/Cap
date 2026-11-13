@@ -50,13 +50,25 @@ async function sendFaststartRemux(
 	}
 }
 
-// A full or restarting media server answers 5xx, and one that cannot be
-// reached throws. Both pass. A 4xx is an answer about this request and would
-// be the same again.
+// A full or draining media server answers 503 (or 429), and a gateway in
+// front of one that is restarting answers 502 or 504. A media server that
+// cannot be reached makes fetch throw a TypeError. All of these mean the job
+// was not taken. Every other answer is about this request and would be the
+// same again, and an attempt that timed out may have been taken, so neither
+// is sent again.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
 const mayClear = (error: unknown) =>
-	!(error instanceof RemuxRefused) ||
-	error.status >= 500 ||
-	error.status === 429;
+	error instanceof RemuxRefused
+		? RETRYABLE_STATUSES.has(error.status)
+		: error instanceof TypeError;
+
+const reasonOf = (error: unknown) =>
+	error instanceof RemuxRefused
+		? `status ${error.status}`
+		: error instanceof Error
+			? error.name
+			: String(error);
 
 const pause = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -64,21 +76,32 @@ const pause = (ms: number) =>
 async function retryFaststartRemux(
 	send: (signal: AbortSignal) => Promise<void>,
 	videoId: string,
+	firstError: unknown,
 	delaysMs: readonly number[],
 ): Promise<boolean> {
-	for (const delay of delaysMs) {
-		await pause(delay * (0.75 + Math.random() / 2));
+	let lastError = firstError;
+	for (const [index, delay] of delaysMs.entries()) {
+		const waitMs = Math.round(delay * (0.75 + Math.random() / 2));
+		console.warn("[faststart-remux] retrying", {
+			videoId,
+			attempt: index + 2,
+			waitMs,
+			after: reasonOf(lastError),
+		});
+		await pause(waitMs);
 		try {
 			await send(AbortSignal.timeout(RETRY_ATTEMPT_TIMEOUT_MS));
 			return true;
 		} catch (error) {
-			if (!mayClear(error)) {
-				console.error("Failed to queue faststart remux:", error);
-				return false;
-			}
+			lastError = error;
+			if (!mayClear(error)) break;
 		}
 	}
-	console.error("Failed to queue faststart remux after retries:", videoId);
+	console.error("[faststart-remux] gave up", {
+		videoId,
+		reason: reasonOf(lastError),
+		error: lastError,
+	});
 	return false;
 }
 
@@ -100,13 +123,14 @@ export async function startFaststartRemux(input: {
 			input.request,
 			signal,
 		);
+	let firstError: Error;
 	try {
 		await send();
 		return "queued";
 	} catch (cause) {
-		const error = cause instanceof Error ? cause : new Error(String(cause));
-		console.error("Failed to queue faststart remux:", error);
-		if (!mayClear(error)) return "failed";
+		firstError = cause instanceof Error ? cause : new Error(String(cause));
+		console.error("Failed to queue faststart remux:", firstError);
+		if (!mayClear(firstError)) return "failed";
 	}
 
 	const defer = input.defer ?? after;
@@ -119,6 +143,7 @@ export async function startFaststartRemux(input: {
 			retryFaststartRemux(
 				send,
 				input.request.videoId,
+				firstError,
 				input.retryDelaysMs ?? RETRY_DELAYS_MS,
 			),
 		)

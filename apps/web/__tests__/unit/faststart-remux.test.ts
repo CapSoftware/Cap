@@ -39,6 +39,7 @@ describe("faststart remux dispatch", () => {
 		settled.mockResolvedValue(undefined);
 		vi.stubGlobal("fetch", fetchMock);
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	});
 
 	afterEach(() => {
@@ -130,6 +131,76 @@ describe("faststart remux dispatch", () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(4);
 		expect(settled.mock.calls).toEqual([[false]]);
+		const retryLines = vi
+			.mocked(console.warn)
+			.mock.calls.filter(([line]) => line === "[faststart-remux] retrying");
+		expect(retryLines.map(([, detail]) => detail)).toEqual([
+			expect.objectContaining({ videoId: "video-1", attempt: 2 }),
+			expect.objectContaining({ videoId: "video-1", attempt: 3 }),
+			expect.objectContaining({ videoId: "video-1", attempt: 4 }),
+		]);
+		const gaveUp = vi
+			.mocked(console.error)
+			.mock.calls.filter(([line]) => line === "[faststart-remux] gave up");
+		expect(gaveUp).toEqual([
+			[
+				"[faststart-remux] gave up",
+				expect.objectContaining({ videoId: "video-1", reason: "status 503" }),
+			],
+		]);
+	});
+
+	it("retries a rate limited answer", async () => {
+		fetchMock
+			.mockResolvedValueOnce(answer(429))
+			.mockResolvedValue(answer(200, "{}"));
+
+		expect(await start()).toBe("retrying");
+		await deferred[0];
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(settled.mock.calls).toEqual([[true]]);
+	});
+
+	it("does not retry an internal error, which would be the same again", async () => {
+		fetchMock.mockResolvedValue(answer(500, "boom"));
+
+		expect(await start()).toBe("failed");
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(deferred).toHaveLength(0);
+		expect(console.warn).not.toHaveBeenCalled();
+	});
+
+	it("never sends again after a retry that timed out, since it may have been taken", async () => {
+		fetchMock
+			.mockResolvedValueOnce(answer(503, "SERVER_BUSY"))
+			.mockRejectedValueOnce(
+				new DOMException("The operation timed out.", "TimeoutError"),
+			)
+			.mockResolvedValue(answer(200, "{}"));
+
+		expect(await start()).toBe("retrying");
+		await deferred[0];
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(settled.mock.calls).toEqual([[false]]);
+		expect(console.error).toHaveBeenCalledWith(
+			"[faststart-remux] gave up",
+			expect.objectContaining({ reason: "TimeoutError" }),
+		);
+	});
+
+	it("gives each retry its own timeout and the first attempt none, as before", async () => {
+		fetchMock
+			.mockResolvedValueOnce(answer(503))
+			.mockResolvedValue(answer(200, "{}"));
+
+		await start();
+		await deferred[0];
+
+		expect(fetchMock.mock.calls[0]?.[1].signal).toBeUndefined();
+		expect(fetchMock.mock.calls[1]?.[1].signal).toBeInstanceOf(AbortSignal);
 	});
 
 	it("does not retry a request the media server refused", async () => {
