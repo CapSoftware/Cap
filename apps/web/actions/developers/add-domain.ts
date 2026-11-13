@@ -6,18 +6,17 @@ import { nanoId } from "@cap/database/helpers";
 import { developerAppDomains, developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
+import { actionFailure } from "@/lib/infra-action-result";
+import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 
 export async function addDeveloperDomain(appId: string, domain: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
-	const trimmed = domain.trim().toLowerCase();
-	if (!trimmed) throw new Error("Domain is required");
-
-	const urlPattern = /^https?:\/\/[a-z0-9.-]+(:[0-9]+)?$/;
-	if (!urlPattern.test(trimmed)) {
-		throw new Error("Domain must be a valid origin (e.g. https://myapp.com)");
-	}
+	const allowed = normalizeAllowedOrigin(domain);
+	if (!allowed.ok) return actionFailure(allowed.message);
+	const { origin } = allowed;
 
 	const [app] = await db()
 		.select()
@@ -33,12 +32,24 @@ export async function addDeveloperDomain(appId: string, domain: string) {
 
 	if (!app) throw new Error("App not found");
 
+	const [existing] = await db()
+		.select({ id: developerAppDomains.id })
+		.from(developerAppDomains)
+		.where(
+			and(
+				eq(developerAppDomains.appId, appId),
+				eq(developerAppDomains.domain, origin),
+			),
+		)
+		.limit(1);
+	if (existing) return actionFailure(`${origin} is already allowed.`);
+
 	await db().insert(developerAppDomains).values({
 		id: nanoId(),
 		appId,
-		domain: trimmed,
+		domain: origin,
 	});
 
 	revalidatePath("/dashboard/infra", "layout");
-	return { success: true };
+	return { success: true as const, domain: origin };
 }

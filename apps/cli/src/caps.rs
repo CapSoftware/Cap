@@ -566,7 +566,7 @@ struct SpaceShareRemoveArgs {
     format: OutputFormat,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApiError {
     pub code: String,
@@ -574,6 +574,16 @@ pub struct AgentApiError {
     pub retryable: bool,
     pub retry_after_ms: Option<u64>,
     pub request_id: Option<String>,
+    #[serde(flatten)]
+    pub context: Box<AgentErrorContext>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct AgentErrorContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(flatten, skip_deserializing)]
+    pub details: serde_json::Map<String, Value>,
 }
 
 impl std::fmt::Display for AgentApiError {
@@ -584,15 +594,70 @@ impl std::fmt::Display for AgentApiError {
 
 impl std::error::Error for AgentApiError {}
 
+impl From<String> for AgentApiError {
+    fn from(message: String) -> Self {
+        let first_line = message.lines().next().unwrap_or_default();
+        match first_line.split_once(": ") {
+            Some((code, text))
+                if !code.is_empty()
+                    && code
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_') =>
+            {
+                Self::local(code, text)
+            }
+            _ => Self::local("COMMAND_FAILED", first_line),
+        }
+    }
+}
+
 impl AgentApiError {
-    fn local(code: &str, message: impl Into<String>) -> Self {
+    pub fn local(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             message: message.into(),
-            retryable: false,
-            retry_after_ms: None,
-            request_id: None,
+            ..Default::default()
         }
+    }
+
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.context.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_detail(mut self, key: &str, value: impl Into<Value>) -> Self {
+        self.context.details.insert(key.to_string(), value.into());
+        self
+    }
+
+    pub fn describe(&self) -> String {
+        let mut text = self.to_string();
+        for (key, value) in &self.context.details {
+            let value = match value {
+                Value::String(value) => value.clone(),
+                other => other.to_string(),
+            };
+            text.push_str(&format!("\n{key}: {value}"));
+        }
+        if let Some(hint) = &self.context.hint
+            && !self.message.contains(hint.as_str())
+        {
+            text.push_str(&format!("\nhint: {hint}"));
+        }
+        text
+    }
+
+    pub fn emit_json(&self) {
+        #[derive(Serialize)]
+        struct JsonError<'a> {
+            error: &'a str,
+            #[serde(flatten)]
+            details: &'a AgentApiError,
+        }
+        let _ = write_json(&JsonError {
+            error: &self.message,
+            details: self,
+        });
     }
 }
 
@@ -708,7 +773,11 @@ impl AgentClient {
                         retryable: true,
                         retry_after_ms: Some(500),
                         request_id: None,
-                    };
+                        ..Default::default()
+                    }
+                    .with_hint(
+                        "Cap could not be reached. Check the network and CAP_SERVER_URL, then retry.",
+                    );
                     if attempt >= 2 {
                         return Err(error);
                     }
@@ -1147,18 +1216,9 @@ impl CapsArgs {
         if let Err(error) = &result
             && output_format == OutputFormat::Json
         {
-            #[derive(Serialize)]
-            struct JsonError<'a> {
-                error: &'a str,
-                #[serde(flatten)]
-                details: &'a AgentApiError,
-            }
-            let _ = write_json(&JsonError {
-                error: &error.message,
-                details: error,
-            });
+            error.emit_json();
         }
-        result.map_err(|error| error.to_string())
+        result.map_err(|error| error.describe())
     }
 
     async fn run_inner(self, global_json: bool) -> Result<(), AgentApiError> {
@@ -1247,6 +1307,7 @@ impl CapsArgs {
                                 .get("requestId")
                                 .and_then(Value::as_str)
                                 .map(str::to_string),
+                            ..Default::default()
                         });
                     }
                     let base = 500_u64.saturating_mul(1_u64 << attempt.min(4));

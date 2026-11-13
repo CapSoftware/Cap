@@ -46,16 +46,75 @@ export function developerVideoPlaybackUrls(
 	};
 }
 
+export function developerVideoPageUrls(
+	playbackId: string,
+	webUrl: string = serverEnv().WEB_URL,
+): { shareUrl: string; embedUrl: string } {
+	const shareUrl = `${webUrl.replace(/\/+$/, "")}/dev/${playbackId}`;
+	return { shareUrl, embedUrl: `${shareUrl}/embed` };
+}
+
+export type AgentDeveloperVideoRow = Pick<
+	DeveloperVideoRow,
+	| "id"
+	| "appId"
+	| "externalUserId"
+	| "name"
+	| "status"
+	| "errorReason"
+	| "playbackId"
+	| "duration"
+	| "width"
+	| "height"
+	| "fps"
+	| "maxResolutionTier"
+	| "renditions"
+	| "transcriptionStatus"
+	| "processing"
+	| "createdAt"
+	| "updatedAt"
+>;
+
+export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
+	const status = developerVideoIsReady(video) ? "ready" : video.status;
+	return {
+		id: video.id,
+		appId: video.appId,
+		externalUserId: video.externalUserId,
+		name: video.name,
+		status,
+		errorReason: status === "errored" ? video.errorReason : null,
+		playbackId: video.playbackId,
+		durationSeconds: video.duration,
+		width: video.width,
+		height: video.height,
+		fps: video.fps,
+		maxResolutionTier: video.maxResolutionTier,
+		renditions: video.renditions ?? [],
+		transcriptionStatus: video.transcriptionStatus,
+		...developerVideoPlaybackUrls(video),
+		...(video.playbackId
+			? developerVideoPageUrls(video.playbackId)
+			: { shareUrl: null, embedUrl: null }),
+		createdAt: video.createdAt.toISOString(),
+		updatedAt: video.updatedAt.toISOString(),
+	};
+}
+
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,
 		filesDeletedAt: _filesDeletedAt,
+		s3Key: _s3Key,
 		...fields
 	} = video;
 	return {
 		...fields,
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
+		...(video.playbackId
+			? developerVideoPageUrls(video.playbackId)
+			: { shareUrl: null, embedUrl: null }),
 	};
 }
 
@@ -76,6 +135,7 @@ export function developerVideoIsReady(
 export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 	return {
 		id: video.id,
+		externalUserId: video.externalUserId,
 		duration: video.duration,
 		width: video.width,
 		height: video.height,

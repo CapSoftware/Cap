@@ -19,6 +19,7 @@ import type {
 import {
 	beginRecordingProcessing,
 	beginRecordingVerification,
+	canAcceptNewInfraVideoProcess,
 	canAcceptNewVideoProcess,
 	claimRecordingWorker,
 	createJob,
@@ -45,14 +46,23 @@ import {
 	trackBackgroundTask,
 } from "../lib/lifecycle";
 import { logReason } from "../lib/log-redaction";
-import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
+import {
+	createGuardedMediaFetch,
+	PROCESS_TIMEOUT_MS,
+	UPLOAD_TIMEOUT_MS,
+} from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
 	renderEditedVideo,
 } from "../lib/media-edit";
 import {
+	INPUT_POLICY_VIOLATION,
+	MediaInputPolicyError,
+} from "../lib/media-input-policy";
+import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	isUnreadableMediaInput,
 	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
@@ -131,6 +141,7 @@ const RECORDING_VERIFICATION_RETRY_ERROR =
 	"Recording verification temporarily unavailable (503)";
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
+const UNREADABLE_INPUT_CODE = "UNREADABLE_INPUT";
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
@@ -212,6 +223,7 @@ const processSchema = z.object({
 	remuxOnly: z.boolean().optional(),
 	normalizeH264Level: z.boolean().optional(),
 	importedOriginal: z.boolean().optional(),
+	infra: z.boolean().optional(),
 });
 
 const ladderSchema = z.object({
@@ -234,6 +246,7 @@ const ladderSchema = z.object({
 	thumbnailPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
+	infra: z.boolean().optional(),
 });
 
 export function isCompleteRecovery(
@@ -575,6 +588,22 @@ video.post("/probe", async (c) => {
 		const metadata = await probeVideo(result.data.videoUrl);
 		return c.json({ metadata });
 	} catch (err) {
+		if (isUnreadableMediaInput(err)) {
+			const details = err instanceof Error ? err.message : String(err);
+			console.warn("[video/probe] Unreadable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+
 		console.error("[video/probe] Error:", err);
 
 		if (isBusyError(err)) {
@@ -888,7 +917,11 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		result.data.priority === "bulk" &&
 		capacity.effectiveMaxVideoProcesses > 1 &&
 		capacity.activeVideoProcesses >= capacity.effectiveMaxVideoProcesses - 1;
-	if (bulkCapacityReached || !canAcceptNewVideoProcess()) {
+	if (
+		bulkCapacityReached ||
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true && !canAcceptNewInfraVideoProcess(false))
+	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(capacity), 503);
 	}
@@ -978,7 +1011,14 @@ video.post("/ladder", async (c) => {
 			503,
 		);
 	}
-	if (!canAcceptNewVideoProcess()) {
+	const infraHeavyLadder =
+		result.data.infra === true &&
+		(result.data.maxTier === "1440p" || result.data.maxTier === "2160p");
+	if (
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true &&
+			!canAcceptNewInfraVideoProcess(infraHeavyLadder))
+	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
@@ -986,6 +1026,7 @@ video.post("/ladder", async (c) => {
 	const { videoId, userId, webhookUrl, webhookSecret } = result.data;
 	const jobId = generateJobId();
 	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	if (infraHeavyLadder) job.infraHeavyLadder = true;
 
 	void trackBackgroundTask(
 		withMediaTransfers(32 * 1024 ** 3, () =>
@@ -1515,24 +1556,26 @@ async function encodeLadderAsync(
 					throw error;
 				}),
 			);
-			const failed = (await Promise.allSettled(uploads)).find(
+			const posterUrl = options.thumbnailPresignedUrl;
+			const poster = posterUrl
+				? generateThumbnail(
+						ladder.poster.path,
+						ladder.poster.durationSeconds,
+						{},
+						uploadSignal,
+					)
+						.then((image) =>
+							uploadToS3(image, posterUrl, "image/jpeg", uploadSignal),
+						)
+						.catch((error) => {
+							uploadsStopped.abort();
+							throw error;
+						})
+				: null;
+			const failed = (await Promise.allSettled([...uploads, poster])).find(
 				(upload) => upload.status === "rejected",
 			);
 			if (failed?.status === "rejected") throw failed.reason;
-			if (options.thumbnailPresignedUrl) {
-				const thumbnailData = await generateThumbnail(
-					input.path,
-					metadata.duration,
-					{},
-					signal,
-				);
-				await uploadToS3(
-					thumbnailData,
-					options.thumbnailPresignedUrl,
-					"image/jpeg",
-					signal,
-				);
-			}
 		});
 		signal.throwIfAborted();
 
@@ -1728,8 +1771,6 @@ async function editVideoAsync(
 		if (completedJob) {
 			await sendWebhook(completedJob);
 		}
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		if (!signal.aborted) {
 			console.error(`[video/edit] Error editing job ${jobId}:`, err);
@@ -1741,12 +1782,8 @@ async function editVideoAsync(
 			message: "Edit failed",
 		});
 
-		try {
-			if (updatedJob) {
-				await sendWebhook(updatedJob);
-			}
-		} finally {
-			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
 		}
 	} finally {
 		await cleanupTempFiles([inputTempFile, outputTempFile]);
@@ -2101,8 +2138,6 @@ async function processVideoAsync(
 				webhookUrl: options.webhookUrl,
 				webhookSecret: options.webhookSecret,
 			});
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		await abortPendingUploads();
 		if (!signal.aborted) {
@@ -3141,7 +3176,9 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetch(url, { signal: budget });
+					const response = await createGuardedMediaFetch(url, {
+						fetchImpl: fetch,
+					})(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;

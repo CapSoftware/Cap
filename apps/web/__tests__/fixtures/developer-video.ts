@@ -52,20 +52,52 @@ export function developerVideo(
 
 export interface DeveloperVideoStore {
 	video: DeveloperVideoFixture | null;
+	more?: DeveloperVideoFixture[];
 	appDeleted: boolean;
 	updates: Partial<DeveloperVideoFixture>[];
 }
+
+// MySQL compares the externalUserId column with utf8mb4_0900_ai_ci, which
+// treats case and accent variants as equal. The fake does the same so a query
+// that relies on plain equality behaves here as it does in the database.
+const equalInColumnCollation = (left: string, right: string) =>
+	left.localeCompare(right, "en", { sensitivity: "base" }) === 0;
 
 export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
 	const dialect = new MySqlDialect();
 	type Condition = Parameters<typeof dialect.sqlToQuery>[0];
 
+	const sortKey = (video: DeveloperVideoFixture, column: string) => {
+		const value = (video as Record<string, unknown>)[column];
+		return value instanceof Date ? value.getTime() : String(value);
+	};
+
+	let listings = 0;
+	// MySQL promises no order between rows the ORDER BY leaves tied, so every
+	// other listing starts from the reverse order and only the listed columns
+	// decide where a row lands.
+	const ordered = (videos: DeveloperVideoFixture[], order: Condition[]) => {
+		const terms = order.map((term) => {
+			const [, column, direction] =
+				dialect.sqlToQuery(term).sql.match(/`(\w+)` (asc|desc)$/) ?? [];
+			if (!column) throw new Error("The fake cannot order by this term");
+			return { column, sign: direction === "desc" ? -1 : 1 };
+		});
+		const start = listings++ % 2 === 0 ? [...videos] : [...videos].reverse();
+		return start.sort((left, right) => {
+			for (const { column, sign } of terms) {
+				const a = sortKey(left, column);
+				const b = sortKey(right, column);
+				if (a !== b) return (a < b ? -1 : 1) * sign;
+			}
+			return 0;
+		});
+	};
+
 	const select = (fields?: Record<string, unknown>) => {
 		let joined = false;
-		const rows = (condition: Condition) => {
-			const video = store.video;
-			if (!video || (joined && store.appDeleted)) return [];
+		const matches = (video: DeveloperVideoFixture, condition: Condition) => {
 			const query = dialect.sqlToQuery(condition);
 			const identified =
 				(!query.sql.includes("`id` = ?") || query.params.includes(video.id)) &&
@@ -77,9 +109,27 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 				query.params.includes(video.appId);
 			const live =
 				!query.sql.includes("`deletedAt` is null") || video.deletedAt === null;
-			if (!identified || !scoped || !live) return [];
-			return fields && "video" in fields ? [{ video }] : [video];
+			const externalUserId = video.externalUserId;
+			const owned =
+				!query.sql.includes("`externalUserId` = ?") ||
+				(externalUserId !== null &&
+					query.params.some(
+						(param) =>
+							typeof param === "string" &&
+							(query.sql.includes(
+								"`externalUserId` AS BINARY) = CAST(? AS BINARY)",
+							)
+								? param === externalUserId
+								: equalInColumnCollation(param, externalUserId)),
+					));
+			return identified && scoped && live && owned;
 		};
+		const found = (condition: Condition) =>
+			!store.video || (joined && store.appDeleted)
+				? []
+				: [store.video, ...(store.more ?? [])].filter((video) =>
+						matches(video, condition),
+					);
 		const chain = {
 			from: () => chain,
 			innerJoin: () => {
@@ -87,12 +137,19 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 				return chain;
 			},
 			where: (condition: Condition) => {
-				const result = rows(condition);
+				const videos = found(condition);
+				const result =
+					fields && "video" in fields
+						? videos.map((video) => ({ video }))
+						: videos;
 				return Object.assign(Promise.resolve(result), {
 					limit: async () => result,
 					for: async () => result,
-					orderBy: () => ({
-						limit: () => ({ offset: async () => result }),
+					orderBy: (...order: Condition[]) => ({
+						limit: (limit: number) => ({
+							offset: async (offset: number) =>
+								ordered(videos, order).slice(offset, offset + limit),
+						}),
 					}),
 				});
 			},

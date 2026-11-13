@@ -29,6 +29,8 @@ import {
 	getInfraAppStanding,
 	getInfraBilling,
 	getInfraUploadAdmission,
+	latestStorageCharge,
+	latestStorageCharges,
 } from "@/lib/infra-standing";
 import { getAppStorageUsage } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
@@ -51,6 +53,20 @@ const charge = async () =>
 		dateKey: dateKey(),
 		now: new Date(ledger.now),
 	});
+
+const finish = async (day: string) =>
+	chargeStorageDay({
+		appId: "app-1",
+		accountId: "account-1",
+		usage: await getAppStorageUsage("app-1"),
+		dateKey: day,
+		now: new Date(ledger.now),
+		retryUnpaid: false,
+	});
+
+const later = (hours: number) => {
+	ledger.now = new Date(ledger.now.getTime() + hours * 60 * 60 * 1000);
+};
 
 const credit = (microCredits: number) => {
 	ledger.account.balanceMicroCredits += microCredits;
@@ -114,6 +130,51 @@ describe("daily storage charge", () => {
 				processedAt: ledger.now,
 			},
 		]);
+	});
+
+	it("leaves credit held for a running transcript alone", async () => {
+		ledger.account.balanceMicroCredits = 10_100;
+		ledger.heldMicroCredits = 10_000;
+
+		const result = await charge();
+
+		expect(result).toMatchObject({
+			state: "billed",
+			owedMicroCredits: 144,
+			chargedMicroCredits: 100,
+			balanceMicroCredits: 10_000,
+			fellShort: true,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(10_000);
+		expect(storageRows()).toEqual([
+			expect.objectContaining({
+				amountMicroCredits: -100,
+				balanceAfterMicroCredits: 10_000,
+			}),
+		]);
+	});
+
+	it("takes nothing when the whole balance is held, then charges in full once the hold is released", async () => {
+		ledger.account.balanceMicroCredits = 10_000;
+		ledger.heldMicroCredits = 10_000;
+
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 0,
+			fellShort: true,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(10_000);
+		expect((await standing()).state).toBe("grace");
+
+		ledger.heldMicroCredits = 0;
+		expect((await standing()).state).toBe("active");
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+			shortSince: null,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(9_856);
 	});
 
 	it("charges once per day however often it runs", async () => {
@@ -184,6 +245,161 @@ describe("daily storage charge", () => {
 		expect(ledger.account.balanceMicroCredits).toBe(0);
 		expect(ledger.snapshots).toHaveLength(4);
 		expect(ledger.snapshots.at(-1)?.microCreditsCharged).toBe(0);
+	});
+
+	it("leaves a billed day alone when it is finished later", async () => {
+		credit(500_000);
+		expect(await charge()).toMatchObject({ state: "billed" });
+		const snapshot = { ...ledger.snapshots[0] };
+		const day = dateKey();
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([snapshot]);
+		expect(ledger.account.balanceMicroCredits).toBe(500_000 - 144);
+	});
+
+	it("leaves a short day alone when it is finished later", async () => {
+		credit(50);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 50,
+			fellShort: true,
+		});
+		const snapshot = { ...ledger.snapshots[0] };
+		const day = dateKey();
+		credit(500_000);
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([snapshot]);
+	});
+
+	it("does not write an unpaid day again when it is finished later, even after a top-up", async () => {
+		await charge();
+		advanceDays(1);
+		expect(await charge()).toMatchObject({ state: "unpaid" });
+		const day = dateKey();
+		const recorded = {
+			...ledger.snapshots.find((snapshot) => snapshot.snapshotDate === day),
+		};
+		credit(500_000);
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(
+			ledger.snapshots.find((snapshot) => snapshot.snapshotDate === day),
+		).toEqual(recorded);
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.account.balanceMicroCredits).toBe(500_000);
+	});
+
+	it("records an unpaid day once when it is first reached while finishing", async () => {
+		await charge();
+		advanceDays(1);
+
+		expect(await finish(dateKey())).toMatchObject({ state: "unpaid" });
+		expect(await finish(dateKey())).toEqual({ state: "skipped" });
+
+		expect(
+			ledger.snapshots.filter(
+				(snapshot) => snapshot.snapshotDate === dateKey(),
+			),
+		).toHaveLength(1);
+	});
+
+	it("charges a day over an idle visit marker and replaces it", async () => {
+		credit(500_000);
+		ledger.snapshots = [
+			{
+				snapshotDate: dateKey(),
+				totalDurationMinutes: 0,
+				videoCount: 0,
+				microCreditsCharged: 0,
+				processedAt: new Date(ledger.now),
+			},
+		];
+
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+		});
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([
+			expect.objectContaining({
+				snapshotDate: dateKey(),
+				videoCount: 3,
+				microCreditsCharged: 144,
+			}),
+		]);
+		expect(ledger.snapshots[0]?.totalDurationMinutes).toBeGreaterThan(0);
+	});
+
+	it("reads the latest billed day, not the last write, when two days are written in the same second", async () => {
+		const yesterday = new Date(ledger.now.getTime() - DAY_MS)
+			.toISOString()
+			.slice(0, 10);
+		const shortSince = new Date(ledger.now);
+		ledger.account.balanceMicroCredits = 0;
+		ledger.rows.push(
+			{
+				id: "row-a",
+				accountId: "account-1",
+				type: "storage_daily",
+				amountMicroCredits: -50,
+				balanceAfterMicroCredits: 0,
+				referenceId: dateKey(),
+				referenceType: "storage_day",
+				metadata: {
+					snapshotDate: dateKey(),
+					owedMicroCredits: 144,
+					chargedMicroCredits: 50,
+					shortSince: shortSince.toISOString(),
+				},
+				createdAt: new Date(ledger.now),
+			},
+			{
+				id: "row-b",
+				accountId: "account-1",
+				type: "storage_daily",
+				amountMicroCredits: -144,
+				balanceAfterMicroCredits: 50,
+				referenceId: yesterday,
+				referenceType: "storage_day",
+				metadata: {
+					snapshotDate: yesterday,
+					owedMicroCredits: 144,
+					chargedMicroCredits: 144,
+					shortSince: null,
+				},
+				createdAt: new Date(ledger.now),
+			},
+		);
+
+		expect(await latestStorageCharge(fakeDb as never, "account-1")).toEqual({
+			createdAt: new Date(ledger.now),
+			owedMicroCredits: 144,
+			shortSince,
+		});
+		expect(
+			(await latestStorageCharges(fakeDb as never, ["account-1"])).get(
+				"account-1",
+			),
+		).toEqual({
+			createdAt: new Date(ledger.now),
+			owedMicroCredits: 144,
+			shortSince,
+		});
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		advanceDays(1);
+		expect(await charge()).toEqual({ state: "unpaid", shortSince });
 	});
 
 	it("does not bill an app that stores nothing", async () => {
@@ -553,9 +769,12 @@ describe("which videos are billed after the pipeline measures them", () => {
 });
 
 describe("available balance", () => {
-	it("is the account balance today, and nothing for an app with no account", async () => {
+	it("is the account balance less credit held for running transcripts, and nothing for an app with no account", async () => {
 		ledger.account.balanceMicroCredits = 1234;
 		expect(await availableBalance("app-1")).toBe(1234);
+
+		ledger.heldMicroCredits = 1000;
+		expect(await availableBalance("app-1")).toBe(234);
 
 		ledger.account.exists = false;
 		expect(await availableBalance("app-1")).toBe(null);

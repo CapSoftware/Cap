@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { useState } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
@@ -9,10 +9,12 @@ import { SubfolderDialog } from "./SubfolderDialog";
 
 interface NewSubfolderButtonProps {
 	parentFolderId: Folder.FolderId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
 export const NewSubfolderButton = ({
 	parentFolderId,
+	spaceId,
 }: NewSubfolderButtonProps) => {
 	const [openDialog, setOpenDialog] = useState(false);
 
@@ -31,6 +33,7 @@ export const NewSubfolderButton = ({
 				open={openDialog}
 				onOpenChange={setOpenDialog}
 				parentFolderId={parentFolderId}
+				spaceId={spaceId}
 			/>
 		</>
 	);
