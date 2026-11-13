@@ -1344,6 +1344,22 @@ function reloadPlaylist() {
 
 Call it when a viewer comes back to a player that loaded its playlist more than 12 hours ago, then call `video.play()`. It does nothing once the page has switched to the MP4. In Safari, set `video.src` to the `hlsUrl` again and then set `video.currentTime`.
 
+### Shorter Playlists for Long Videos
+
+A playlist lists one signed URL for every few seconds of video, so it grows with the video. For a 21 minute video the video and audio playlists are about 250 KB each, and a player loads both before it can start. On a slow connection that delays the first frame.
+
+A player built on hls.js can ask for a shorter form by adding `?segments=short` to `hlsUrl`:
+
+```js
+hls.loadSource(`${hlsUrl}?segments=short`);
+```
+
+- A playlist with more than 15 segments, about a minute of video, then signs only its first segment. It lists the rest by file name next to the playlist, and each of those answers with a `302` redirect to the signed URL, as `mp4Url` does. Shorter playlists are the same in both forms.
+- The master playlist passes the choice on to the playlists it lists, so the parameter on `hlsUrl` is all you add.
+- In our test with a 21 minute video the playlists loaded before playback went from about 500 KB to about 40 KB, and the first frame on a 400 kbps connection came about 8 seconds sooner. On a fast connection the first frame and seeking were unchanged.
+- Use it with hls.js. Leave it off for native HLS in Safari and for AVPlayer: those players ask for the redirect again on every segment, which made seeking slower in the same test.
+- Any other value of `segments` is ignored and you get the usual playlists.
+
 ### Content Security Policy
 
 A site with a Content Security Policy has to allow two hosts: `https://cap.so`, which serves the playback URLs, and `https://v.cap.so`, which serves the media they point to. For the hls.js page above:
