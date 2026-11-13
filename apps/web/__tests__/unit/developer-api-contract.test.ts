@@ -4,7 +4,8 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	keyRows: [] as { appId: string; environment?: string }[],
+	keyRows: [] as { appId: string; ownerId?: string; environment?: string }[],
+	hashKey: vi.fn(),
 	accounts: [] as { balanceMicroCredits: number }[],
 	videoStats: [] as Record<string, unknown>[],
 	storedVideos: [] as Record<string, unknown>[],
@@ -59,9 +60,7 @@ vi.mock("@cap/env", () => ({
 		NEXTAUTH_SECRET: "unit-test-signing-secret",
 	}),
 }));
-vi.mock("@/lib/developer-key-hash", () => ({
-	hashKey: async (key: string) => `hash:${key}`,
-}));
+vi.mock("@/lib/developer-key-hash", () => ({ hashKey: mocks.hashKey }));
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: vi.fn(),
 }));
@@ -108,6 +107,7 @@ import {
 } from "@/lib/developer-pricing";
 import {
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
 } from "@/lib/developer-rate-limits";
 import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
@@ -121,6 +121,7 @@ type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 const ORIGIN = "https://cap.so";
 let keySerial = 0;
+let ownerSerial = 0;
 const freshKey = (prefix: "csk" | "cpk" | "cut") =>
 	prefix === "cut"
 		? createDeveloperUploadToken({
@@ -165,7 +166,14 @@ const billingOf = async (billing: Record<string, unknown>) => ({
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
+	mocks.hashKey.mockImplementation(async (key: string) => `hash:${key}`);
+	mocks.keyRows = [
+		{
+			appId: "app-1",
+			ownerId: `owner-${++ownerSerial}`,
+			environment: "development",
+		},
+	];
 	mocks.accounts = [{ balanceMicroCredits: 4_532_000 }];
 	mocks.videoStats = [{ createdVideos: 5, uploadedVideos: 4 }];
 	mocks.storedVideos = [
@@ -287,11 +295,12 @@ describe("rate limit headers", () => {
 		expect(rateLimit(other).remaining).toBe("59");
 	});
 
-	it("carries the headers on errors too", async () => {
+	it("carries the headers on errors too, and spends none of a key's budget on a key that was not accepted", async () => {
 		const key = freshKey("csk");
+		const accepted = mocks.keyRows;
 		mocks.keyRows = [];
 		const unauthorized = await getUsage(key);
-		mocks.keyRows = [{ appId: "app-1" }];
+		mocks.keyRows = accepted;
 		const notFound = await call(rest, "GET", "/api/developer/v1/nope", { key });
 		const wrongMethod = await call(rest, "POST", "/api/developer/v1/usage", {
 			key,
@@ -306,10 +315,10 @@ describe("rate limit headers", () => {
 				rateLimit(response).remaining,
 			]),
 		).toEqual([
-			[401, "59"],
-			[404, "58"],
-			[405, "57"],
-			[500, "56"],
+			[401, null],
+			[404, "59"],
+			[405, "58"],
+			[500, "57"],
 		]);
 	});
 
@@ -433,7 +442,9 @@ describe("rate limit shared across servers", () => {
 		await getUsage(freshKey("csk"));
 		await initiate(token);
 
-		const [first, again, other, upload] = firewallCalls();
+		const [first, again, other, upload] = firewallCalls().filter(
+			(asked) => asked.ruleId !== "rl_developer_api_owner",
+		);
 		expect([first, again, other, upload].map((asked) => asked?.ruleId)).toEqual(
 			[
 				"rl_developer_api_key",
@@ -487,6 +498,306 @@ describe("rate limit shared across servers", () => {
 			reset: "35",
 			retryAfter: "35",
 		});
+	});
+});
+
+describe("one account's keys share a budget", () => {
+	const ownedBy = (ownerId: string) => {
+		mocks.keyRows = [{ appId: "app-1", ownerId }];
+	};
+
+	it("allows 300 requests a minute across every key of an account, then answers 429", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
+		ownedBy("owner-shared");
+		const keys = Array.from({ length: 6 }, () => freshKey("csk"));
+
+		for (const key of keys) {
+			for (let request = 1; request <= 50; request++) {
+				expect((await getUsage(key)).status).toBe(200);
+			}
+		}
+		vi.advanceTimersByTime(20_000);
+		const limited = await getUsage(freshKey("csk"));
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toEqual({
+			limit: "60",
+			remaining: "0",
+			reset: "40",
+			retryAfter: "40",
+		});
+		expect(await limited.json()).toMatchObject({
+			code: "rate_limited",
+			hint: "Wait for the Retry-After seconds, then retry. Each account, across all of its keys, allows 300 requests per minute.",
+		});
+		expect(mocks.billing).toHaveBeenCalledTimes(300);
+
+		ownedBy("owner-other");
+		expect((await getUsage(freshKey("csk"))).status).toBe(200);
+
+		ownedBy("owner-shared");
+		vi.advanceTimersByTime(40_001);
+		expect((await getUsage(keys[0] as string)).status).toBe(200);
+	});
+
+	it("takes the account from the key lookup, with no query of its own", async () => {
+		const response = await call(rest, "GET", "/api/developer/v1/nope", {
+			key: freshKey("csk"),
+		});
+
+		expect(response.status).toBe(404);
+		expect(mocks.selected).toHaveLength(1);
+		expect(Object.keys(mocks.selected[0] ?? {}).sort()).toEqual([
+			"appId",
+			"ownerId",
+		]);
+		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks the shared rule about the account by its id", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		ownedBy("owner-asked");
+
+		await getUsage(freshKey("csk"));
+
+		const asked = mocks.firewall.mock.calls.map(([ruleId, options]) => [
+			ruleId,
+			options.rateLimitKey,
+		]);
+		expect(asked).toContainEqual(["rl_developer_api_owner", "owner-asked"]);
+		expect(asked).toHaveLength(2);
+	});
+
+	it("rejects when the shared rule for the account says so", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		ownedBy("owner-limited");
+		mocks.firewall.mockImplementation(async (ruleId: string) => ({
+			rateLimited: ruleId === "rl_developer_api_owner",
+		}));
+
+		const limited = await getUsage(freshKey("csk"));
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toMatchObject({
+			limit: "60",
+			remaining: "0",
+			retryAfter: "60",
+		});
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+});
+
+describe("credentials that are not accepted", () => {
+	const from = (address: string) => ({ "x-forwarded-for": address });
+
+	it.each([
+		["no credential", undefined],
+		["a credential with no prefix", "Bearer not-a-key"],
+		["a public key", "Bearer cpk_public_1"],
+		["an oversized key", `Bearer csk_${"a".repeat(200)}`],
+		["a key with characters no key has", "Bearer csk_abc!def"],
+	] as const)(
+		"refuses %s without hashing, looking up or counting anything",
+		async (_label, authorization) => {
+			vi.stubEnv("NODE_ENV", "production");
+
+			const response = await call(rest, "GET", "/api/developer/v1/usage", {
+				headers: authorization ? { Authorization: authorization } : {},
+			});
+
+			expect(response.status).toBe(401);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_secret_key",
+			});
+			expect(rateLimit(response)).toEqual({
+				limit: null,
+				remaining: null,
+				reset: null,
+				retryAfter: null,
+			});
+			expect(mocks.hashKey).not.toHaveBeenCalled();
+			expect(mocks.selected).toHaveLength(0);
+			expect(mocks.firewall).not.toHaveBeenCalled();
+		},
+	);
+
+	it("answers an unknown key 401 on any path, and stops looking keys up for an address after 30 of them in a minute", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
+		mocks.keyRows = [];
+		const address = from("203.0.113.9");
+
+		for (let attempt = 1; attempt <= 30; attempt++) {
+			const refused = await call(rest, "GET", "/api/developer/v1/nope", {
+				key: freshKey("csk"),
+				headers: address,
+			});
+			expect(refused.status).toBe(401);
+		}
+		expect(mocks.hashKey).toHaveBeenCalledTimes(30);
+
+		const limited = await getUsage(freshKey("csk"), address);
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("Retry-After")).toBe("60");
+		expect(await limited.json()).toMatchObject({
+			code: "rate_limited",
+			error: "Too many requests with a key or token that was not accepted",
+		});
+		expect(mocks.hashKey).toHaveBeenCalledTimes(31);
+
+		mocks.hashKey.mockClear();
+		mocks.selected = [];
+		for (let attempt = 1; attempt <= 50; attempt++) {
+			expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
+		}
+		expect(mocks.hashKey).not.toHaveBeenCalled();
+		expect(mocks.selected).toHaveLength(0);
+
+		const elsewhere = await getUsage(freshKey("csk"), from("198.51.100.4"));
+		expect(elsewhere.status).toBe(401);
+
+		vi.advanceTimersByTime(60_001);
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(401);
+	});
+
+	it("keeps a key it accepted in the last minute working from an address that is being refused", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T11:00:00Z"));
+		const address = from("203.0.113.77");
+		const accepted = mocks.keyRows;
+		const customer = freshKey("csk");
+		expect((await getUsage(customer, address)).status).toBe(200);
+
+		mocks.keyRows = [];
+		for (let attempt = 1; attempt <= 31; attempt++) {
+			await getUsage(freshKey("csk"), address);
+		}
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
+
+		mocks.keyRows = accepted;
+		expect((await getUsage(customer, address)).status).toBe(200);
+	});
+
+	it("counts by the address the platform reports, not one the caller writes", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T12:00:00Z"));
+		vi.stubEnv("VERCEL", "1");
+		mocks.keyRows = [];
+		const statuses: number[] = [];
+
+		for (let attempt = 1; attempt <= 32; attempt++) {
+			const response = await getUsage(freshKey("csk"), {
+				"x-real-ip": "203.0.113.200",
+				"x-forwarded-for": `10.0.0.${attempt}, 203.0.113.200`,
+				"x-client-ip": `10.9.9.${attempt}`,
+			});
+			statuses.push(response.status);
+		}
+
+		expect(statuses.slice(0, 30)).toEqual(Array(30).fill(401));
+		expect(statuses.slice(30)).toEqual([429, 429]);
+	});
+
+	it("asks the shared rule about the address, sending it no credential", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.keyRows = [];
+		const key = freshKey("csk");
+
+		const refused = await getUsage(key, { "x-real-ip": "203.0.113.50" });
+
+		expect(refused.status).toBe(401);
+		expect(mocks.firewall).toHaveBeenCalledTimes(1);
+		const [ruleId, options] = mocks.firewall.mock.calls[0] ?? [];
+		expect(ruleId).toBe("rl_developer_auth_failure");
+		expect(options.rateLimitKey).toBeUndefined();
+		expect(options.request.headers.get("x-real-ip")).toBe("203.0.113.50");
+		expect(JSON.stringify([...options.request.headers])).not.toContain(key);
+	});
+
+	it("answers 429 as soon as the shared rule says the address has sent too many", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.keyRows = [];
+		mocks.firewall.mockResolvedValue({ rateLimited: true });
+		const address = { "x-real-ip": "203.0.113.60" };
+
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
+		mocks.hashKey.mockClear();
+		mocks.firewall.mockClear();
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
+		expect(mocks.hashKey).not.toHaveBeenCalled();
+		expect(mocks.firewall).not.toHaveBeenCalled();
+	});
+
+	it("does not count an upload token that is malformed, expired or simply absent", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		const send = (authorization?: string) =>
+			call(sdk, "POST", "/api/developer/sdk/v1/upload/multipart/initiate", {
+				headers: {
+					"Content-Type": "application/json",
+					...(authorization ? { Authorization: authorization } : {}),
+				},
+				body: "{}",
+			});
+		const expired = createDeveloperUploadToken({
+			appId: "app-1",
+			videoId: "video-expired",
+			expiresAt: Date.now() - 1,
+			corsOrigin: null,
+		});
+
+		const answers = [
+			await send(),
+			await send("Bearer csk_secret_on_the_wrong_route"),
+			await send("Bearer cpk_public_1"),
+			await send(`Bearer ${expired}`),
+		];
+
+		expect(answers.map((response) => response.status)).toEqual([
+			401, 401, 403, 401,
+		]);
+		expect(mocks.firewall).not.toHaveBeenCalled();
+		for (const response of answers) {
+			expect(rateLimit(response).limit).toBeNull();
+		}
+	});
+
+	it("counts a forged upload token against the address and still words the refusal as before", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T13:00:00Z"));
+		const forged = () =>
+			call(sdk, "POST", "/api/developer/sdk/v1/upload/multipart/initiate", {
+				key: `${freshKey("cut")}x`,
+				headers: {
+					"Content-Type": "application/json",
+					"x-forwarded-for": "203.0.113.120",
+				},
+				body: "{}",
+			});
+
+		const first = await forged();
+		expect(first.status).toBe(401);
+		expect(await first.json()).toMatchObject({ code: "invalid_upload_token" });
+		for (let attempt = 2; attempt <= 30; attempt++) await forged();
+
+		const limited = await forged();
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("Access-Control-Allow-Origin")).toBe("*");
+
+		const genuine = await call(
+			sdk,
+			"POST",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
+			{
+				key: freshKey("cut"),
+				headers: {
+					"Content-Type": "application/json",
+					"x-forwarded-for": "203.0.113.120",
+				},
+				body: "{}",
+			},
+		);
+		expect(genuine.status).toBe(200);
 	});
 });
 
@@ -549,6 +860,12 @@ describe("upload tokens have their own budget", () => {
 		);
 		expect(spec.info.description).toContain(
 			`each upload token to ${token} requests per minute`,
+		);
+		expect(docs).toContain(
+			`All the keys of one account together allow ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE} requests per minute`,
+		);
+		expect(spec.info.description).toContain(
+			`all the keys of one account together to ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE}`,
 		);
 	});
 });
