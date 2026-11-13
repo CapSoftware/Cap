@@ -1,5 +1,3 @@
-// A worker for the isolated worker pool tests. It answers with its own pid so
-// a test can tell which process served a request.
 process.on("message", (request: { id: number; op: string; ms?: number }) => {
 	const reply = (body: object) => process.send?.({ id: request.id, ...body });
 	if (request.op === "pid") reply({ ok: true, value: process.pid });
