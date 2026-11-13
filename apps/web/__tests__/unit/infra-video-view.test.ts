@@ -18,6 +18,7 @@ import {
 	INFRA_VIDEO_FAILURE_FALLBACK,
 	INFRA_VIDEO_PAGE_MAX,
 	INFRA_VIDEO_PUBLIC_FAILURE,
+	INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
 	infraRefreshDelayMs,
 	infraVideoDisplayState,
 	infraVideoEmbedCode,
@@ -144,11 +145,19 @@ describe("infraVideoFailure", () => {
 });
 
 describe("the sentence a viewer of the public page gets", () => {
-	it("is one sentence with no advice and nothing about the owner's account", () => {
-		expect(INFRA_VIDEO_PUBLIC_FAILURE).toBe("This video is not available.");
-		expect(INFRA_VIDEO_PUBLIC_FAILURE).not.toMatch(
-			/credit|balance|billing|payment|upload|export|owner/i,
+	it("is a heading and one line with no advice and nothing about the owner's account", () => {
+		expect(INFRA_VIDEO_PUBLIC_FAILURE).toBe("This video isn't available");
+		expect(INFRA_VIDEO_PUBLIC_FAILURE_DETAIL).toBe(
+			"There is nothing to play at this link.",
 		);
+		for (const text of [
+			INFRA_VIDEO_PUBLIC_FAILURE,
+			INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
+		]) {
+			expect(text).not.toMatch(
+				/credit|balance|billing|payment|upload|export|owner|process/i,
+			);
+		}
 	});
 });
 

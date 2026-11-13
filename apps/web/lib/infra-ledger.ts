@@ -28,6 +28,7 @@ const TYPE_LABELS: Record<string, string> = {
 	topup: "Top-up",
 	video_create: "Storage, first month",
 	storage_daily: "Storage",
+	delivery_daily: "Delivery",
 	transcription: "Transcription",
 	refund: "Refund",
 	adjustment: "Adjustment",
@@ -40,6 +41,7 @@ const REFERENCE_KINDS: Record<string, string> = {
 	developer_transcript: "Transcript",
 	developer_video: "Video",
 	storage_day: "Day",
+	delivery_day: "Day",
 	stripe_payment_intent: "Payment",
 	stripe_checkout_session: "Checkout",
 	auto_top_up: "Payment",
@@ -92,12 +94,45 @@ function ledgerLabel(row: LedgerRow) {
 			? "Storage, unpaid"
 			: "Storage, part paid";
 	}
+	if (row.type === "delivery_daily" && parseStorageCharge(row).shortSince) {
+		return row.amountMicroCredits === 0
+			? "Delivery, unpaid"
+			: "Delivery, part paid";
+	}
 	if (row.type === "video_create" && firstMonthFellShort(row)) {
 		return row.amountMicroCredits === 0
 			? "Storage, first month, unpaid"
 			: "Storage, first month, part paid";
 	}
 	return TYPE_LABELS[row.type] ?? row.type;
+}
+
+const minutesFormat = new Intl.NumberFormat("en-US", {
+	maximumFractionDigits: 2,
+});
+
+function deliveryNote(row: LedgerRow) {
+	const fields = metadataFields(row.metadata);
+	const byTier =
+		typeof fields.minutesByTier === "object" && fields.minutesByTier !== null
+			? Object.entries(fields.minutesByTier as Record<string, unknown>)
+					.map(([tier, minutes]) => [tier, Number(minutes)] as const)
+					.filter(([, minutes]) => Number.isFinite(minutes) && minutes > 0)
+					.sort(([a], [b]) => Number.parseInt(b, 10) - Number.parseInt(a, 10))
+			: [];
+	const total = byTier.reduce((sum, [, minutes]) => sum + minutes, 0);
+	const minutes =
+		byTier.length > 0
+			? `${minutesFormat.format(total)} minutes delivered (${byTier
+					.map(([tier, value]) => `${tier} ${minutesFormat.format(value)}`)
+					.join(", ")}).`
+			: null;
+	const short = parseStorageCharge(row).shortSince
+		? row.amountMicroCredits === 0
+			? "The balance could not pay for this day. It is not charged later."
+			: "The balance paid for part of this day. The rest is not charged later."
+		: null;
+	return [minutes, short].filter(Boolean).join(" ") || null;
 }
 
 function firstMonthFellShort(row: LedgerRow) {
@@ -115,17 +150,22 @@ function ledgerReference(row: LedgerRow) {
 	};
 }
 
-function metadataAmount(metadata: unknown, field: string) {
+function metadataFields(metadata: unknown): Record<string, unknown> {
 	let fields: unknown = metadata;
 	if (typeof fields === "string") {
 		try {
 			fields = JSON.parse(fields);
 		} catch {
-			return null;
+			return {};
 		}
 	}
-	if (typeof fields !== "object" || fields === null) return null;
-	const amount = (fields as Record<string, unknown>)[field];
+	return typeof fields === "object" && fields !== null
+		? (fields as Record<string, unknown>)
+		: {};
+}
+
+function metadataAmount(metadata: unknown, field: string) {
+	const amount = metadataFields(metadata)[field];
 	return typeof amount === "number" &&
 		Number.isSafeInteger(amount) &&
 		amount >= 0
@@ -134,6 +174,7 @@ function metadataAmount(metadata: unknown, field: string) {
 }
 
 function ledgerNote(row: LedgerRow, label: string) {
+	if (row.type === "delivery_daily") return deliveryNote(row);
 	const fixed = NOTES[label];
 	if (fixed) return fixed;
 	const reversal = REVERSAL_NOTES[label];

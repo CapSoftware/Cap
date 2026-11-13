@@ -986,7 +986,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listTransactions",
 				summary: "List transactions",
 				description:
-					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
+					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, daily delivery, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
 				tags: ["Usage"],
 				security: secretAuth,
 				parameters: [
@@ -1566,12 +1566,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					type: {
 						type: "string",
 						description:
-							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), delivery_daily (one row per app per delivered day), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
 					},
 					description: {
 						type: "string",
 						description:
-							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment.",
+							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Delivery, Transcription or Adjustment.",
 					},
 					note: {
 						type: ["string", "null"],
@@ -1603,6 +1603,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"manual",
 							"pro_monthly_credit",
 							"storage_day",
+							"delivery_day",
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
@@ -1615,7 +1616,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					referenceId: {
 						type: ["string", "null"],
 						description:
-							"The transcript ID, the UTC day a storage charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
+							"The transcript ID, the UTC day a storage or delivery charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
 					},
 					createdAt: { type: "string", format: "date-time" },
 				},
@@ -1645,6 +1646,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"availableMicroCredits",
 					"heldMicroCredits",
 					"speech",
+					"delivery",
 					"totalVideos",
 					"uploadingVideos",
 					"totalDurationMinutes",
@@ -1698,6 +1700,36 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							},
 						},
 					},
+					delivery: {
+						type: ["object", "null"],
+						description:
+							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech, and null until delivery has been measured for this app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.",
+						required: ["minutes", "minutesByTier", "finalThrough"],
+						properties: {
+							minutes: {
+								type: "number",
+								description: "Delivered minutes across every rendition tier.",
+							},
+							minutesByTier: {
+								type: "object",
+								description: "Delivered minutes for each rendition tier.",
+								required: ["360p", "720p", "1080p", "1440p", "2160p"],
+								properties: {
+									"360p": { type: "number" },
+									"720p": { type: "number" },
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							finalThrough: {
+								type: ["string", "null"],
+								format: "date",
+								description:
+									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
+							},
+						},
+					},
 					balanceDollars: {
 						type: "string",
 						description:
@@ -1726,7 +1758,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage or delivery charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],
@@ -1826,6 +1858,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						required: [
 							"microCreditsPerDollar",
 							"storageDollarsPer1000MinutesPerMonth",
+							"deliveryDollarsPer1000Minutes",
 							"speechDollarsPerHour",
 							"uploadAdmissionDays",
 						],
@@ -1845,6 +1878,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 										{ type: "number" },
 									]),
 								),
+							},
+							deliveryDollarsPer1000Minutes: {
+								type: "number",
+								description:
+									"Dollars per 1,000 delivered minutes, one flat rate at every resolution. Each day is charged once, when its figures become final.",
 							},
 							speechDollarsPerHour: {
 								type: "number",

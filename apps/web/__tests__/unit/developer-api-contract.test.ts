@@ -123,6 +123,7 @@ import {
 } from "@/lib/developer-rate-limits";
 import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
 import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
@@ -1585,6 +1586,7 @@ describe("usage", () => {
 			microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 			storageDollarsPer1000MinutesPerMonth:
 				INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+			deliveryDollarsPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 			speechDollarsPerHour: SPEECH_DOLLARS_PER_HOUR,
 			uploadAdmissionDays: UPLOAD_ADMISSION_DAYS,
 		});

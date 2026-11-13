@@ -17,6 +17,15 @@ vi.mock("next/font/google", () => {
 	return { Geist: font, Geist_Mono: font };
 });
 vi.mock("@/app/utils/analytics", () => ({ trackEvent: vi.fn() }));
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-query")>()),
+	useMutation: () => ({ mutate: vi.fn(), isPending: false, reset: vi.fn() }),
+}));
+vi.mock("next/navigation", () => ({
+	useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+	usePathname: () => "/dashboard/infra/app-1/billing",
+	useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@number-flow/react", async () => {
 	const { createElement } = await import("react");
 	return {
@@ -29,9 +38,15 @@ vi.mock("@cap/database/helpers", () => ({
 	nanoIdLength: 15,
 }));
 
+import type { BillingAccount } from "@/app/(infra)/dashboard/infra/[appId]/billing/billing-view";
 import { parseAmount } from "@/components/pages/infra/amount";
 import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
 import {
+	INFRA_DELIVERY_BILLED_FROM_TEXT,
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_DELIVERY_PRICE,
+	INFRA_DELIVERY_PRICE_TEXT,
+	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -102,6 +117,9 @@ describe("the Cap Infra landing page", () => {
 			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 		);
 		expect(content.PRICES.speechPerHour).toBe(INFRA_SPEECH_DOLLARS_PER_HOUR);
+		expect(content.PRICES.deliveryPer1000Minutes).toBe(
+			INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+		);
 		expect(content.PRICES.proMonthlyCredit).toBe(PRO_MONTHLY_CREDIT_DOLLARS);
 		expect(content.TIERS).toEqual(INFRA_RESOLUTION_TIERS);
 
@@ -124,11 +142,11 @@ describe("the Cap Infra landing page", () => {
 		const content = await load("true");
 
 		expect(billing).toContain(
-			"Two things are charged: stored video and speech to text. Uploading and encoding are free.",
+			"Three things are charged: stored video, delivered video and speech to text. Uploading and encoding are free.",
 		);
 		expect(
 			content.PRICE_ROWS.filter((row) => row.unit).map((row) => row.meter),
-		).toEqual(["Storage"]);
+		).toEqual(["Storage", "Delivery"]);
 
 		const text = [
 			content.infraSeo.description,
@@ -139,7 +157,7 @@ describe("the Cap Infra landing page", () => {
 			...pageSources().map((source) => source.text),
 		].join("\n");
 
-		expect(text).not.toMatch(/\bdelivery\b|\bwatched\b|\bwebhooks?\b/i);
+		expect(text).not.toMatch(/\bwatched\b|\bwebhooks?\b/i);
 		expect(text).not.toContain(String.fromCodePoint(0x2014));
 	});
 
@@ -153,7 +171,7 @@ describe("the Cap Infra landing page", () => {
 				(faq) => faq.question === "What does Cap Infra charge for?",
 			)?.answer,
 		).toBe(
-			`Two things: stored video and speech to text. ${content.STORAGE_RULE}`,
+			`Three things: stored video, delivered video and speech to text. ${content.STORAGE_RULE} ${content.DELIVERY_RULE}`,
 		);
 		expect(
 			pageSources().find((source) => source.file === "Pricing.tsx")?.text,
@@ -292,6 +310,179 @@ describe("the rendered page", () => {
 		).toBeLessThanOrEqual(PRO_MONTHLY_CREDIT_DOLLARS);
 		expect(days31).toBeGreaterThan(PRO_MONTHLY_CREDIT_DOLLARS);
 		expect(billing).toContain("A month is counted as 30 days");
+	});
+});
+
+describe("delivery pricing", () => {
+	const PRICE_PATTERN = /\$(\d+(?:\.\d+)?) per 1,000 delivered minutes/g;
+	const MEASURE =
+		"A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second.";
+	const DEFINITION = `${MEASURE} Playlists, posters, \`HEAD\` requests, responses other than \`200\` or \`206\` and empty responses are never counted.`;
+	const PLAIN_DEFINITION = `${MEASURE} Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.`;
+	const FREE_DELIVERY = [
+		/\b(?:delivery|delivered|streaming|streams?|bandwidth|egress|playback|views?)\b[^.\n]*\b(?:free|unmetered|unlimited|included|not charged|no charge)\b/i,
+		/\b(?:free|unmetered|unlimited|included)\b[^.\n]*\b(?:delivery|streaming|bandwidth|egress)\b/i,
+	];
+
+	const readTree = (dir: string): { file: string; text: string }[] =>
+		fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) return readTree(full);
+			if (!/\.(ts|tsx|mdx|txt)$/.test(entry.name)) return [];
+			return [{ file: full, text: fs.readFileSync(full, "utf8") }];
+		});
+
+	const llmsInfra = () =>
+		["public/llms-full.txt", "public/llms.txt"]
+			.flatMap((file) =>
+				fs.readFileSync(path.join(process.cwd(), file), "utf8").split("\n"),
+			)
+			.filter((line) => /Cap Infra|\/api\/developer|delivered/.test(line))
+			.join("\n");
+
+	const sourceSurfaces = () => [
+		...pageSources(),
+		...readTree(path.join(process.cwd(), "app/(infra)/dashboard/infra")),
+		...readTree(path.join(process.cwd(), "../../packages/infra-mcp/src")),
+		...["lib/developer-openapi.ts", "data/infra-agent-prompt.ts"].map(
+			(file) => ({
+				file,
+				text: fs.readFileSync(path.join(process.cwd(), file), "utf8"),
+			}),
+		),
+	];
+
+	it("states the one delivery price exactly once on the /infra page, in the docs, in the llms file and on the console Billing page", async () => {
+		await load("true");
+		const { InfraPage } = await import("@/components/pages/infra/InfraPage");
+		const { BillingView } = await import(
+			"@/app/(infra)/dashboard/infra/[appId]/billing/billing-view"
+		);
+		const { getAllDocs } = await import("@/utils/docs");
+		const landing =
+			parse(renderToStaticMarkup(React.createElement(InfraPage))).body
+				.textContent ?? "";
+		const consoleText = (
+			account: BillingAccount | null,
+			deliveryBilledFrom: string | null = null,
+		) =>
+			parse(
+				renderToStaticMarkup(
+					React.createElement(BillingView, {
+						app: { id: "app-1", name: "Fixture" },
+						account,
+						proCredit: {
+							status: "not_pro",
+							nextDate: "2026-12-01T00:00:00Z",
+						},
+						standing: { state: "active", pausesAt: null },
+						shortfallMicroCredits: 0,
+						autoTopUpFailure: null,
+						transactions: [],
+						ledgerPage: { newer: null, older: null },
+						deliveryBilledFrom,
+					}),
+				),
+			).body.textContent ?? "";
+		const docs = getAllDocs()
+			.filter((doc) => doc.slug.startsWith("api/"))
+			.map((doc) => doc.content)
+			.join("\n");
+		const occurrences = (text: string, needle: string) =>
+			text.split(needle).length - 1;
+
+		expect(INFRA_DELIVERY_PRICE).toBe(
+			`$${INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES.toFixed(2)}`,
+		);
+		expect(INFRA_DELIVERY_PRICE_TEXT).toBe(
+			`${INFRA_DELIVERY_PRICE} ${INFRA_DELIVERY_PRICE_UNIT}`,
+		);
+		for (const [surface, text] of Object.entries({
+			landing,
+			console: consoleText({
+				balanceMicroCredits: 0,
+				hasCard: false,
+				autoTopUpEnabled: false,
+				autoTopUpThresholdMicroCredits: 0,
+				autoTopUpAmountCents: 0,
+			}),
+			docs,
+			llms: llmsInfra(),
+		})) {
+			expect(occurrences(text, INFRA_DELIVERY_PRICE), surface).toBe(1);
+			for (const match of text.matchAll(PRICE_PATTERN)) {
+				expect(`$${match[1]}`, surface).toBe(INFRA_DELIVERY_PRICE);
+			}
+			expect(occurrences(text, INFRA_DELIVERY_PRICE_UNIT), surface).toBe(1);
+			expect(text, surface).not.toMatch(/\bmux\b/i);
+		}
+		expect(occurrences(docs, INFRA_DELIVERY_PRICE_TEXT)).toBe(1);
+		expect(occurrences(llmsInfra(), INFRA_DELIVERY_PRICE_TEXT)).toBe(1);
+
+		for (const doc of [billing, getStarted, llmsInfra()]) {
+			expect(doc).toContain(DEFINITION);
+		}
+		expect(landing).toContain(PLAIN_DEFINITION);
+		expect(occurrences(billing, INFRA_DELIVERY_BILLED_FROM_TEXT)).toBe(1);
+		expect(INFRA_DELIVERY_BILLED_FROM_TEXT).toBe(
+			"Delivery is billed from 14 November 2026. Earlier days are not charged.",
+		);
+		expect(occurrences(landing, INFRA_DELIVERY_BILLED_FROM_TEXT)).toBe(1);
+		expect(
+			occurrences(
+				consoleText(null, "2026-11-14"),
+				INFRA_DELIVERY_BILLED_FROM_TEXT,
+			),
+		).toBe(1);
+		expect(consoleText(null, "2026-11-20")).toContain(
+			"Delivery is billed from 20 November 2026. Earlier days are not charged.",
+		);
+		expect(
+			occurrences(consoleText(null, null), INFRA_DELIVERY_BILLED_FROM_TEXT),
+		).toBe(1);
+
+		for (const source of sourceSurfaces()) {
+			if (source.file.endsWith(".css")) continue;
+			expect(source.text, source.file).not.toContain(INFRA_DELIVERY_PRICE);
+			expect(source.text, source.file).not.toMatch(
+				new RegExp(PRICE_PATTERN.source),
+			);
+		}
+	});
+
+	it("never says delivery, streaming or bandwidth is free on an Infra surface", async () => {
+		const content = await load("true");
+		const { InfraPage } = await import("@/components/pages/infra/InfraPage");
+		const page = parse(renderToStaticMarkup(React.createElement(InfraPage)));
+
+		const surfaces = [
+			{ file: "page", text: page.body.textContent ?? "" },
+			{ file: "billing", text: billing },
+			{ file: "rest", text: rest },
+			{ file: "getStarted", text: getStarted },
+			{ file: "llms", text: llmsInfra() },
+			{
+				file: "content",
+				text: [
+					content.infraSeo.description,
+					content.infraSoftwareSchema.offers.description,
+					...content.infraFaqs.map((faq) => faq.answer),
+					...content.PRICE_ROWS.map((row) =>
+						[row.meter, row.unit, row.price, row.note].join(" "),
+					),
+				].join("\n"),
+			},
+			...sourceSurfaces(),
+		];
+		for (const { file, text } of surfaces) {
+			for (const pattern of FREE_DELIVERY) {
+				expect(text, file).not.toMatch(pattern);
+			}
+		}
+		expect(billing).toContain(
+			"Three things are charged: stored video, delivered video and speech to text.",
+		);
+		expect(billing).not.toMatch(/\bfrom today\b/i);
 	});
 });
 

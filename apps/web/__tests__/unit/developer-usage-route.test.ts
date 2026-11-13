@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	rows: [] as Record<string, unknown>[],
 	speech: vi.fn(),
+	delivered: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => {
@@ -46,6 +47,10 @@ vi.mock("@/lib/infra-standing", () => ({
 vi.mock("@/lib/developer-transcript-usage", () => ({
 	getSpeechUsage: mocks.speech,
 }));
+vi.mock("@/lib/infra-delivery", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/infra-delivery")>()),
+	getDeliveredUsage: mocks.delivered,
+}));
 
 import { app } from "@/app/api/developer/v1/[...route]/usage";
 
@@ -60,6 +65,8 @@ beforeEach(() => {
 		},
 	];
 	mocks.speech.mockReset();
+	mocks.delivered.mockReset();
+	mocks.delivered.mockResolvedValue(null);
 	mocks.speech.mockResolvedValue({
 		balanceMicroCredits: 949_286,
 		availableMicroCredits: 909_286,
@@ -139,5 +146,50 @@ describe("GET /usage", () => {
 			]),
 		);
 		expect(data.balanceDollars).toBe("9.49286");
+	});
+
+	it("reports delivery as null until it has been measured", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+
+		expect(data).toHaveProperty("delivery", null);
+		expect(mocks.delivered).toHaveBeenCalledWith("app-1");
+	});
+
+	it("reports delivered minutes in total and by rendition tier, with the last final day", async () => {
+		mocks.delivered.mockResolvedValue({
+			seconds: 74_910,
+			secondsByTier: {
+				"360p": 750,
+				"720p": 20_160,
+				"1080p": 54_000,
+				"1440p": 0,
+				"2160p": 0,
+			},
+			finalThrough: "2026-11-18",
+		});
+
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+
+		expect(data.delivery).toEqual({
+			minutes: 1248.5,
+			minutesByTier: {
+				"360p": 12.5,
+				"720p": 336,
+				"1080p": 900,
+				"1440p": 0,
+				"2160p": 0,
+			},
+			finalThrough: "2026-11-18",
+		});
 	});
 });

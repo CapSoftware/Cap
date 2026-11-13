@@ -15,6 +15,7 @@ import {
 	AVAILABLE_AFTER_FIELD,
 	heldTranscriptsQuery,
 } from "@/lib/infra-balance";
+import { deliveryBillingStart } from "@/lib/infra-delivery-flag";
 import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
@@ -25,6 +26,8 @@ import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
+export const DELIVERY_DAY_TRANSACTION_TYPE = "delivery_daily" as const;
+export const DELIVERY_DAY_REFERENCE_TYPE = "delivery_day" as const;
 export { FIRST_MONTH_REFERENCE_TYPE, FIRST_MONTH_TRANSACTION_TYPE };
 export const STRIPE_DISPUTE_REFERENCE_TYPE = "stripe_dispute" as const;
 export const DISPUTE_REVIEW_REFERENCE_TYPE = "manual" as const;
@@ -145,7 +148,75 @@ const storageDayRows = () =>
 const latestStorageDay = (accountId: string, ceiling: string) =>
 	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
 
+const anchoringDeliveryDays = (accountId: string) =>
+	and(
+		eq(developerCreditTransactions.accountId, accountId),
+		eq(developerCreditTransactions.type, DELIVERY_DAY_TRANSACTION_TYPE),
+		eq(developerCreditTransactions.referenceType, DELIVERY_DAY_REFERENCE_TYPE),
+		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.duringShortfall') IS NULL`,
+	);
+
+async function latestDeliveryCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
+	const latestSecond = executor
+		.select({ createdAt: developerCreditTransactions.createdAt })
+		.from(developerCreditTransactions)
+		.where(anchoringDeliveryDays(accountId))
+		.orderBy(desc(developerCreditTransactions.createdAt))
+		.limit(1);
+	const [row] = await executor
+		.select({
+			id: developerCreditTransactions.id,
+			createdAt: developerCreditTransactions.createdAt,
+			metadata: developerCreditTransactions.metadata,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				anchoringDeliveryDays(accountId),
+				eq(developerCreditTransactions.createdAt, sql`(${latestSecond})`),
+			),
+		)
+		.orderBy(
+			desc(developerCreditTransactions.referenceId),
+			desc(developerCreditTransactions.id),
+		)
+		.limit(1);
+	return row ?? null;
+}
+
+// A delivery day is charged once its CDN logs are final, at least two days
+// after it ends, so it is ordered against storage days by when it was posted
+// rather than by its day key. createdAt has whole-second precision and ids are
+// random, so delivery days posted in the same second, which a sweep settles
+// oldest first, are ordered by their day. A day charged while a shortfall was
+// already open never carries the standing: delivery days vary in size, so a
+// small one, paid in full or short, would otherwise clear the shortfall or
+// replace what it needs to recover. Only a day charged with no shortfall open
+// can start or clear one. The later posted daily charge carries the standing,
+// exactly as the latest storage day does on its own. While delivery billing
+// is off, no delivery row is read, so standing is exactly as before.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
+	const [storage, delivery] = await Promise.all([
+		latestStorageDayCharge(executor, accountId),
+		deliveryBillingStart() ? latestDeliveryCharge(executor, accountId) : null,
+	]);
+	const latest =
+		delivery &&
+		(!storage ||
+			new Date(delivery.createdAt).getTime() >=
+				new Date(storage.createdAt).getTime())
+			? delivery
+			: storage;
+	return latest ? parseStorageCharge(latest) : null;
+}
+
+async function latestStorageDayCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
 	const [row] = await executor
 		.select({
 			id: developerCreditTransactions.id,
@@ -165,7 +236,7 @@ async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
 			desc(developerCreditTransactions.id),
 		)
 		.limit(1);
-	return row ? parseStorageCharge(row) : null;
+	return row ?? null;
 }
 
 async function latestFirstMonthCharge(
@@ -221,6 +292,7 @@ const shortfallRows = (accountId: string, shortSince: Date) =>
 		inArray(developerCreditTransactions.type, [
 			FIRST_MONTH_TRANSACTION_TYPE,
 			"storage_daily",
+			DELIVERY_DAY_TRANSACTION_TYPE,
 		]),
 		openShortfall(shortSince),
 	);
@@ -285,10 +357,14 @@ export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ): Promise<StorageCharge | null> {
+	const [latestFirstMonth, latestDaily] = await Promise.all([
+		latestFirstMonthCharge(executor, accountId),
+		latestDailyCharge(executor, accountId),
+	]);
 	const firstMonth = await sizedShortfall(
 		executor,
 		accountId,
-		await latestFirstMonthCharge(executor, accountId),
+		latestFirstMonth,
 	);
 	if (
 		firstMonth?.shortSince &&
@@ -296,11 +372,7 @@ export async function latestStorageCharge(
 	) {
 		return { ...firstMonth, firstMonth: true };
 	}
-	return sizedShortfall(
-		executor,
-		accountId,
-		await latestDailyCharge(executor, accountId),
-	);
+	return sizedShortfall(executor, accountId, latestDaily);
 }
 
 export async function latchCoveredShortfall(

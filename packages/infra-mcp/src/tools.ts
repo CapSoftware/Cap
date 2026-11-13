@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { creditLinkFor } from "./credit-link";
+import { createDocsTool, fetchDocs } from "./docs";
 import {
 	ApiError,
 	isCreditCode,
@@ -282,10 +283,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 		}
 	};
 
-	const videoTranscriptSource = async (
-		id: string,
-		call: ToolCall,
-	): Promise<{ url: string; name: string | undefined }> => {
+	const waitForVideoMp4 = async (id: string, call: ToolCall): Promise<void> => {
 		const outcome = await waitFor({
 			poll: async (deadlineAt) =>
 				dataOf(
@@ -328,10 +326,6 @@ export function createTools(deps: ToolDeps): Tool[] {
 				context,
 			);
 		}
-		return {
-			url: video.mp4Url,
-			name: typeof video.name === "string" ? video.name : undefined,
-		};
 	};
 
 	const tools = [
@@ -339,7 +333,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_upload",
 			title: "Upload a video",
 			description:
-				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to retry a failed upload into the same video.",
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to retry a failed upload into the same video.",
 			kind: "write",
 			input: {
 				path: z
@@ -610,7 +604,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "transcripts_create",
 			title: "Create a transcript",
 			description: local
-				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
+				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
 				: "Turn speech into text from exactly one source: url (a public audio or video link) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
 			kind: "write",
 			input: {
@@ -699,7 +693,8 @@ export function createTools(deps: ToolDeps): Tool[] {
 					};
 				}
 
-				if (!local && args.videoId !== undefined) {
+				if (args.videoId !== undefined) {
+					if (local) await waitForVideoMp4(args.videoId, call);
 					const created = dataOf(
 						await client.call("createTranscript", {
 							body: {
@@ -716,24 +711,14 @@ export function createTools(deps: ToolDeps): Tool[] {
 					return { ...(await transcript(created, false, call.signal)), next };
 				}
 
-				const fromVideo =
-					args.videoId === undefined
-						? null
-						: await videoTranscriptSource(args.videoId, call);
-				const url = fromVideo?.url ?? args.url;
-				const name = args.name ?? fromVideo?.name;
-				const stored =
-					args.videoId === undefined
-						? args.metadata
-						: { ...args.metadata, videoId: args.videoId };
-
 				const created = dataOf(
 					await client.call("createTranscript", {
 						body: {
-							url,
+							url: args.url,
 							...options,
-							...(name === undefined ? {} : { name }),
-							...(stored === undefined ? {} : { metadata: stored }),
+							...(args.metadata === undefined
+								? {}
+								: { metadata: args.metadata }),
 						},
 						headers,
 						signal: call.signal,
@@ -962,11 +947,10 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
-	// The npm package lists its tools in a README that changes only with a
-	// release, so the stdio server gets videos_import in its next release.
-	if (local) return tools.filter((entry) => entry.name !== "videos_import");
+	if (local) return tools;
 	return [
 		...createHostedUploadTools(deps),
 		...tools.filter((entry) => entry.name !== "videos_upload"),
