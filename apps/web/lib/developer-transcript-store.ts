@@ -350,7 +350,7 @@ async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
 	const refusal = await transcriptStartRefusal(appId);
 	if (!refusal) return null;
-	scheduleAutoTopUp({ appId });
+	await scheduleAutoTopUp({ appId });
 	return fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT);
 }
 

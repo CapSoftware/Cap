@@ -187,7 +187,7 @@ export async function holdTranscriptCredits(input: {
 
 		return { state: "held", reservedMicroCredits: needed };
 	});
-	if (hold.state !== "skipped") scheduleAutoTopUp({ appId });
+	if (hold.state !== "skipped") await scheduleAutoTopUp({ appId });
 	return hold;
 }
 
@@ -249,7 +249,7 @@ export async function reserveTranscriptCredits(input: {
 
 		return { state: "reserved", reservedMicroCredits: cost };
 	});
-	if (outcome.state !== "skipped") scheduleAutoTopUp({ appId });
+	if (outcome.state !== "skipped") await scheduleAutoTopUp({ appId });
 	return outcome;
 }
 
@@ -362,7 +362,7 @@ export async function settleTranscript(input: {
 		settled.state === "insufficient_credits" ||
 		(settled.state === "complete" && settled.chargedMicroCredits > 0)
 	) {
-		scheduleAutoTopUp({ appId });
+		await scheduleAutoTopUp({ appId });
 	}
 	return settled;
 }
