@@ -5,7 +5,6 @@ const mockDb = {
 	insert: vi.fn(),
 	update: vi.fn(),
 	from: vi.fn(),
-	innerJoin: vi.fn(),
 	set: vi.fn(),
 	where: vi.fn(),
 	limit: vi.fn(),
@@ -23,7 +22,6 @@ function resetMockDb() {
 	mockDb.insert.mockReturnValue(mockDb);
 	mockDb.update.mockReturnValue(mockDb);
 	mockDb.from.mockReturnValue(mockDb);
-	mockDb.innerJoin.mockReturnValue(mockDb);
 	mockDb.set.mockReturnValue(mockDb);
 	mockDb.where.mockReturnValue(mockDb);
 	mockDb.limit.mockReturnValue(Promise.resolve([]));
@@ -47,14 +45,7 @@ vi.mock("@cap/database/schema", () => ({
 	developerCreditAccounts: {
 		id: "id",
 		appId: "appId",
-		ownerId: "accountOwnerId",
 		stripeCustomerId: "stripeCustomerId",
-	},
-	developerCreditTransactions: {
-		id: "transactionId",
-		accountId: "transactionAccountId",
-		type: "transactionType",
-		referenceType: "transactionReferenceType",
 	},
 	users: { id: "id" },
 }));
@@ -182,62 +173,34 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 
-	const checkoutWith = async (
-		amountCents: number,
-		earlierPurchases: { id: string }[] = [],
-	) => {
+	it("opens a $10,000 purchase", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit
 			.mockResolvedValueOnce([mockApp])
-			.mockResolvedValueOnce([{ ...mockAccount, stripeCustomerId: "cus_acct" }])
-			.mockResolvedValueOnce(earlierPurchases);
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_acct" },
+			]);
 		mockStripe.checkout.sessions.create.mockResolvedValue({
 			url: "https://checkout.stripe.com/test",
 		});
-		const res = await POST(makeRequest({ appId: "app-456", amountCents }));
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1_000_000 }),
+		);
+
 		expect(res.status).toBe(200);
-		const [params] =
-			mockStripe.checkout.sessions.create.mock.calls.at(-1) ?? [];
-		return params;
-	};
-
-	it("opens a $10,000 first purchase for card only, asking for 3D Secure", async () => {
-		const params = await checkoutWith(1_000_000);
-
-		expect(params.line_items[0].price_data.unit_amount).toBe(1_000_000);
-		expect(params.metadata.amountCents).toBe("1000000");
-		expect(params.payment_method_types).toEqual(["card"]);
-		expect(params.payment_method_options).toEqual({
-			card: { request_three_d_secure: "any" },
-		});
-		expect(mockDb.innerJoin).toHaveBeenCalledTimes(1);
-		expect(mockDb.where).toHaveBeenLastCalledWith([
-			{ eq: ["accountOwnerId", mockUser.id] },
-			{ eq: ["transactionType", "topup"] },
-			{ eq: ["transactionReferenceType", "stripe_payment_intent"] },
-		]);
-	});
-
-	it("asks for 3D Secure from $1,000.01 but not at $1,000", async () => {
-		const atLimit = await checkoutWith(100_000);
-		expect(atLimit.payment_method_types).toEqual(["card", "link"]);
-		expect(atLimit).not.toHaveProperty("payment_method_options");
-		expect(mockDb.innerJoin).not.toHaveBeenCalled();
-
-		mockDb.limit.mockReset();
-		mockDb.limit.mockReturnValue(Promise.resolve([]));
-		const overLimit = await checkoutWith(100_001);
-		expect(overLimit.payment_method_types).toEqual(["card"]);
-		expect(overLimit.payment_method_options).toEqual({
-			card: { request_three_d_secure: "any" },
-		});
-	});
-
-	it("leaves a large purchase alone once the owner has paid for credit before", async () => {
-		const params = await checkoutWith(500_000, [{ id: "txn-1" }]);
-
-		expect(params.payment_method_types).toEqual(["card", "link"]);
-		expect(params).not.toHaveProperty("payment_method_options");
+		expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				line_items: [
+					expect.objectContaining({
+						price_data: expect.objectContaining({ unit_amount: 1_000_000 }),
+					}),
+				],
+				metadata: expect.objectContaining({ amountCents: "1000000" }),
+				payment_method_types: ["card"],
+				payment_method_options: { card: { request_three_d_secure: "any" } },
+			}),
+		);
 	});
 
 	it("returns 400 when amountCents is not an integer", async () => {

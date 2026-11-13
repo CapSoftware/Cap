@@ -5,6 +5,7 @@ vi.mock("@/lib/developer-credits-product", () => ({
 }));
 
 import {
+	CREDIT_CHECKOUT_3DS_OVER_CENTS,
 	creditCheckoutSessionParams,
 	creditPurchaseDescription,
 	STRIPE_DESCRIPTION_LIMIT,
@@ -40,10 +41,54 @@ describe("credit purchase text", () => {
 			appName: "Course site",
 			amountCents: 1000,
 			receiptEmail: "owner@example.com",
-			firstLargePurchase: false,
 		});
 		expect(params.line_items[0]?.price_data.product).toBe("prod_credits");
 		expect(params.payment_method_types).toEqual(["card", "link"]);
+	});
+});
+
+describe("3D Secure on large credit purchases", () => {
+	const paramsFor = (amountCents: number) =>
+		creditCheckoutSessionParams({
+			customerId: "cus_1",
+			accountId: "account-1",
+			appName: "Course site",
+			amountCents,
+			receiptEmail: "owner@example.com",
+		});
+
+	it("leaves exactly $1,000 on card and Link with no card options", () => {
+		expect(CREDIT_CHECKOUT_3DS_OVER_CENTS).toBe(100_000);
+		const params = paramsFor(100_000);
+		expect(params.payment_method_types).toEqual(["card", "link"]);
+		expect(params).not.toHaveProperty("payment_method_options");
+	});
+
+	it("asks for 3D Secure and offers card only from $1,000.01", () => {
+		for (const amountCents of [100_001, 500_000, 1_000_000]) {
+			const params = paramsFor(amountCents);
+			expect(params.payment_method_types).toEqual(["card"]);
+			expect(params.payment_method_options).toEqual({
+				card: { request_three_d_secure: "any" },
+			});
+		}
+	});
+
+	it("changes nothing else about the session", () => {
+		const {
+			payment_method_types: _largeTypes,
+			payment_method_options: _options,
+			line_items: largeItems,
+			...large
+		} = paramsFor(100_001);
+		const {
+			payment_method_types: _smallTypes,
+			line_items: smallItems,
+			...small
+		} = paramsFor(100_000);
+		expect(large).toEqual(small);
+		expect(largeItems[0]?.price_data.unit_amount).toBe(100_001);
+		expect(smallItems[0]?.price_data.unit_amount).toBe(100_000);
 	});
 });
 

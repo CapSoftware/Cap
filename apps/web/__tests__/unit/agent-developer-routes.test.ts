@@ -17,7 +17,6 @@ const state = vi.hoisted(() => ({
 	apps: [] as { id: string; appName?: string }[],
 	videos: [] as Record<string, unknown>[],
 	transactions: [] as Record<string, unknown>[],
-	paidPurchases: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
 	tables: {} as Record<string, unknown>,
 	redrive: vi.fn(async (_videoId: string) => false),
@@ -75,7 +74,6 @@ vi.mock("@cap/database", () => {
 		if (table === tables.developerCreditTransactions) {
 			return state.transactions;
 		}
-		if (table === tables.developerCreditAccounts) return state.paidPurchases;
 		if (table === tables.agentApiIdempotency) {
 			return state.idempotency ? [state.idempotency] : [];
 		}
@@ -175,7 +173,6 @@ describe("developer routes of the agent API", () => {
 			developerApiKeys: schema.developerApiKeys,
 			developerVideos: schema.developerVideos,
 			developerCreditTransactions: schema.developerCreditTransactions,
-			developerCreditAccounts: schema.developerCreditAccounts,
 			agentApiIdempotency: schema.agentApiIdempotency,
 			users: schema.users,
 		};
@@ -193,7 +190,6 @@ describe("developer routes of the agent API", () => {
 		state.apps = [];
 		state.videos = [];
 		state.transactions = [];
-		state.paidPurchases = [];
 		state.idempotency = null;
 		state.users = [];
 		state.createCheckoutSession.mockReset();
@@ -397,7 +393,6 @@ describe("developer routes of the agent API", () => {
 				appName: "Course site",
 				amountCents: 2500,
 				receiptEmail: "owner@example.com",
-				firstLargePurchase: false,
 			}),
 			success_url: "http://localhost/cli/complete?developerCredits=success",
 			cancel_url: "http://localhost/cli/complete?developerCredits=cancelled",
@@ -460,26 +455,6 @@ describe("developer routes of the agent API", () => {
 		expect(params.payment_method_options).toEqual({
 			card: { request_three_d_secure: "any" },
 		});
-	});
-
-	it("keeps card and Link without 3D Secure for an owner who has paid for credit before", async () => {
-		state.apps = [{ id: "account-1" }];
-		state.users = [{ stripeCustomerId: "cus_agent" }];
-		state.paidPurchases = [{ id: "txn-1" }];
-		state.createCheckoutSession.mockResolvedValue({
-			url: "https://checkout.stripe.com/agent",
-		});
-
-		const opened = await call(
-			"POST",
-			`/developer/apps/${APP}/credits/checkout`,
-			{ amountCents: 500_000 },
-		);
-
-		expect(opened.status).toBe(200);
-		const [params] = state.createCheckoutSession.mock.calls[0] ?? [];
-		expect(params.payment_method_types).toEqual(["card", "link"]);
-		expect(params).not.toHaveProperty("payment_method_options");
 	});
 
 	it("says what to do when the developer scope is missing", async () => {

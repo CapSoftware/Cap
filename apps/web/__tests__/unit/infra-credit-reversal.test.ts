@@ -138,7 +138,6 @@ const checkoutPaymentTag = creditCheckoutSessionParams({
 	appName: "Demo",
 	amountCents: 2500,
 	receiptEmail: "owner@example.com",
-	firstLargePurchase: false,
 }).payment_intent_data.metadata;
 
 const payments: Record<
