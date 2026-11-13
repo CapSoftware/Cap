@@ -110,6 +110,10 @@ export interface VideoMetadata {
 	sampleRate: number | null;
 	bitrate: number;
 	fileSize: number;
+	// How long the file's timestamps run, when the probe measured them. An
+	// encode is held to the longer of this and duration, and is not held at
+	// all when it is unknown.
+	timestampSpan?: number | null;
 }
 
 export interface Job {
