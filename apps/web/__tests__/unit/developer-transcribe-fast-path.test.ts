@@ -372,6 +372,119 @@ describe("the fast path", () => {
 		expect(context.objects.has(RESULT_KEY)).toBe(true);
 	});
 
+	const stopAfterExtraction = () => {
+		let calls = 0;
+		return vi
+			.spyOn(performance, "now")
+			.mockImplementation(() => (calls++ < 2 ? 0 : FAST_PATH_BUDGET_MS + 1));
+	};
+
+	const deleteWhileProcessing = () => {
+		const row = transcript();
+		if (!row) throw new Error("no transcript");
+		row.deletedAt = new Date("2026-11-13T05:00:00.000Z");
+		row.text = null;
+	};
+
+	it("charges a transcript deleted after its speech finished when the whole step runs again", async () => {
+		const cost = thirtySeconds();
+		failSettleOnce();
+		expect(await fast()).toMatchObject({ resume: "settle" });
+		expect(transcript()?.status).toBe("processing");
+		deleteWhileProcessing();
+
+		const retry = await fast();
+
+		expect(retry).toMatchObject({ resume: "done", settlement: "complete" });
+		expect(context.transcribe).toHaveBeenCalledTimes(1);
+		expect(ledger()).toHaveLength(1);
+		expect(balance()).toBe(100_000 - cost);
+		expect(transcript()).toMatchObject({
+			status: "complete",
+			billedMicroCredits: cost,
+			reservedMicroCredits: 0,
+			text: null,
+		});
+		expect(transcript()?.deletedAt).toBeInstanceOf(Date);
+
+		expect((await run()).success).toBe(true);
+		expect([...context.objects.keys()]).toEqual([]);
+		expect(ledger()).toHaveLength(1);
+	});
+
+	it("does not ask for the source hold again when it runs again after extraction", async () => {
+		const cost = thirtySeconds();
+		const clock = stopAfterExtraction();
+		expect(await fast()).toEqual({ resume: "transcribe" });
+		clock.mockRestore();
+		expect(Number(transcript()?.reservedMicroCredits)).toBe(cost);
+		fake().seed(developerTranscripts, {
+			id: "tr-other",
+			appId: "app-1",
+			status: "processing",
+			reservedMicroCredits: 99_500,
+		});
+
+		const retry = await fast();
+
+		expect(retry).toMatchObject({ resume: "done", settlement: "complete" });
+		expect(media.convertCalls).toBe(1);
+		expect(context.transcribe).toHaveBeenCalledTimes(1);
+		expect(ledger()).toHaveLength(1);
+		expect(balance()).toBe(100_000 - cost);
+	});
+
+	it("finishes through the workflow without a new hold when it runs again after extraction", async () => {
+		const cost = thirtySeconds();
+		const clock = stopAfterExtraction();
+		await fast();
+		clock.mockRestore();
+		fake().seed(developerTranscripts, {
+			id: "tr-other",
+			appId: "app-1",
+			status: "processing",
+			reservedMicroCredits: 99_500,
+		});
+
+		const result = await run();
+
+		expect(result).toEqual({ success: true, message: "Transcript completed" });
+		expect(context.transcribe).toHaveBeenCalledTimes(1);
+		expect(ledger()).toHaveLength(1);
+		expect(balance()).toBe(100_000 - cost);
+	});
+
+	it("ends a transcript deleted before its speech without a charge when the step runs again", async () => {
+		thirtySeconds();
+		const clock = stopAfterExtraction();
+		await fast();
+		clock.mockRestore();
+		deleteWhileProcessing();
+
+		const result = await run();
+
+		expect(result.success).toBe(false);
+		expect(context.transcribe).not.toHaveBeenCalled();
+		expect(transcript()).toMatchObject({
+			status: "error",
+			billedMicroCredits: 0,
+			reservedMicroCredits: 0,
+		});
+		expect(ledger()).toHaveLength(0);
+		expect([...context.objects.keys()]).toEqual([]);
+	});
+
+	it("leaves a run that was never claimed alone", async () => {
+		thirtySeconds();
+		const row = transcript();
+		if (row) row.status = "processing";
+		if (row) row.runId = "run-other";
+
+		expect(await fast()).toEqual({ resume: "unclaimed" });
+		expect(media.convertCalls).toBe(0);
+		expect(context.transcribe).not.toHaveBeenCalled();
+	});
+
 	it("does not transcribe or charge twice when it runs again after the settle failed", async () => {
 		const cost = thirtySeconds();
 		failSettleOnce();
