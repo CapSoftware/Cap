@@ -29,6 +29,7 @@ import {
 	getInfraAppStanding,
 	getInfraBilling,
 	getInfraUploadAdmission,
+	latestStorageCharge,
 } from "@/lib/infra-standing";
 import { getAppStorage } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
@@ -522,6 +523,71 @@ describe("a shortfall the available balance comes to cover without new credit", 
 			pausesAt: new Date(ledger.now.getTime() + 7 * DAY_MS),
 		});
 		expect(month.metadata.resolvedAt).toBe(latched);
+	});
+});
+
+describe("an unpaid first month is not masked by daily rows", () => {
+	const unpaidMonth = () => {
+		const shortSince = new Date(ledger.now);
+		ledger.rows.push({
+			id: "first-month-unpaid",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 16_800,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			},
+			createdAt: new Date(ledger.now),
+		});
+		return shortSince;
+	};
+
+	it("keeps a first month that settled short in effect over a newer fully paid storage_daily row", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = unpaidMonth();
+		advanceDays(1);
+		credit(1_000);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+			shortSince: null,
+		});
+
+		expect(
+			await latestStorageCharge(fakeDb as never, "account-1"),
+		).toMatchObject({ firstMonth: true, owedMicroCredits: 16_800, shortSince });
+		expect((await standing()).state).not.toBe("active");
+	});
+
+	it("keeps the shortfall when a partly paid daily row is followed by a day with nothing charged daily", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = unpaidMonth();
+		advanceDays(1);
+		credit(10);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 10,
+			shortSince,
+		});
+
+		advanceDays(1);
+		ledger.videos = [];
+		const rowsBefore = ledger.rows.length;
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.rows).toHaveLength(rowsBefore);
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
 	});
 });
 
