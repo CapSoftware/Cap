@@ -18,7 +18,7 @@ Webhooks belong to an app in [Cap Infra](/dashboard/infra) and are managed with 
 
 A video sends `video.ready` or `video.errored` once. Handlers should ignore a type they do not know, so a new event type never breaks them.
 
-On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. No second event is sent when it arrives. Read it with [Get Video](/docs/api/rest-api#get-video).
+`video.ready` arrives once every playback URL is ready, so `hlsUrl` is set unless HLS failed. In the rare case that an output is still encoding 30 minutes after the video could first be played, the event is sent without it, and [Get Video](/docs/api/rest-api#get-video) returns it once it is ready.
 
 ## Create an endpoint
 
@@ -88,7 +88,7 @@ Anything else returns `400` with code `invalid_webhook_url`. An app can have 5 e
 | `POST /api/developer/v1/webhooks/:id/rotate-secret` | [Rotate the signing secret](#rotate-the-signing-secret) |
 | `POST /api/developer/v1/webhooks/:id/test` | [Send a test event](#send-a-test-event) |
 
-An ID that does not belong to the app returns `404` with code `webhook_not_found`.
+An ID that does not belong to the app returns `404` with code `webhook_not_found`. Deleting an endpoint that is already deleted returns `200`, the same as deleting a video twice, so a retried delete is safe.
 
 Every endpoint is returned with these fields:
 
@@ -143,7 +143,7 @@ Cap-Event-Type: video.ready
     "width": 1920,
     "height": 1080,
     "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-    "hlsUrl": null,
+    "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
   }
@@ -178,21 +178,21 @@ Sign the body exactly as it arrived, byte for byte. Parsing the JSON and seriali
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export function verifyCapWebhook(rawBody, signatureHeader, secret) {
-	const parts = Object.fromEntries(
-		String(signatureHeader ?? "")
-			.split(",")
-			.map((part) => part.split("=")),
-	);
-	const timestamp = Number(parts.t);
-	if (!Number.isInteger(timestamp) || !parts.v1) return false;
-	if (Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
-	const expected = createHmac("sha256", secret)
-		.update(`${parts.t}.${rawBody}`)
-		.digest();
-	const received = Buffer.from(parts.v1, "hex");
-	return (
-		received.length === expected.length && timingSafeEqual(received, expected)
-	);
+  const parts = Object.fromEntries(
+    String(signatureHeader ?? "")
+      .split(",")
+      .map((part) => part.split("=")),
+  );
+  const timestamp = Number(parts.t);
+  if (!Number.isInteger(timestamp) || !parts.v1) return false;
+  if (Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
+  const expected = createHmac("sha256", secret)
+    .update(`${parts.t}.${rawBody}`)
+    .digest();
+  const received = Buffer.from(parts.v1, "hex");
+  return (
+    received.length === expected.length && timingSafeEqual(received, expected)
+  );
 }
 ```
 
@@ -222,6 +222,48 @@ def verify_cap_webhook(raw_body: bytes, signature_header: str, secret: str) -> b
     ).hexdigest()
     return hmac.compare_digest(expected, received)
 ```
+
+### A complete receiver
+
+This server uses only Node.js. Save the function above as `verify-cap-webhook.mjs` next to it and start it with your signing secret in `CAP_WEBHOOK_SECRET`. It reads the raw body, checks the signature, answers `200` straight away, then handles the event.
+
+```js
+import { createServer } from "node:http";
+import { verifyCapWebhook } from "./verify-cap-webhook.mjs";
+
+const secret = process.env.CAP_WEBHOOK_SECRET;
+const handled = new Set();
+
+function handleEvent(event) {
+  if (handled.has(event.id)) return;
+  handled.add(event.id);
+  if (event.type === "video.ready") {
+    console.log("ready", event.data.id, event.data.hlsUrl ?? event.data.mp4Url);
+  } else if (event.type === "video.errored") {
+    console.log("errored", event.data.id, event.data.errorReason);
+  }
+}
+
+createServer((req, res) => {
+  if (req.method !== "POST" || req.url !== "/webhooks/cap") {
+    res.writeHead(404).end();
+    return;
+  }
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", () => {
+    const rawBody = Buffer.concat(chunks).toString("utf8");
+    if (!verifyCapWebhook(rawBody, req.headers["cap-signature"], secret)) {
+      res.writeHead(400).end();
+      return;
+    }
+    res.writeHead(200).end();
+    handleEvent(JSON.parse(rawBody));
+  });
+}).listen(Number(process.env.PORT ?? 3000));
+```
+
+With Express, read this route's body with `express.raw({ type: "application/json" })`, not `express.json()`: a parsed and re-serialised body no longer matches the signature. Keep the ids you have handled in your database rather than in memory, so a restart does not forget them.
 
 ## Respond
 
