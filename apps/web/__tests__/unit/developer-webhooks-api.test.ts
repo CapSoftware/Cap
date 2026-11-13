@@ -190,6 +190,16 @@ describe("creating a webhook endpoint", () => {
 			"Invalid request: events: events must list at least one of: video.ready, video.errored",
 		);
 		expect(unknown.body.docs).toBe("https://cap.so/docs/api/rest-api");
+
+		const objectEvent = await create(A, {
+			url: "https://a.example/x",
+			events: [{ toString: null }],
+		});
+		expect(objectEvent.status).toBe(400);
+		expect(objectEvent.body.message).toBe(
+			"Invalid request: events.0: Unknown event. Use video.ready or video.errored.",
+		);
+		expect(rows()).toHaveLength(0);
 	});
 
 	it("links webhook errors to the webhooks guide", async () => {

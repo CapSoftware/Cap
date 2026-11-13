@@ -34,7 +34,7 @@ const endpointFields = {
 		.array(
 			z.enum(WEBHOOK_EVENT_TYPES, {
 				error: (issue) =>
-					`Unknown event ${JSON.stringify(String(issue.input).slice(0, 100))}. Use ${WEBHOOK_EVENT_TYPES.join(" or ")}.`,
+					`Unknown event${typeof issue.input === "string" ? ` ${JSON.stringify(issue.input.slice(0, 100))}` : ""}. Use ${WEBHOOK_EVENT_TYPES.join(" or ")}.`,
 			}),
 		)
 		.min(1, {
