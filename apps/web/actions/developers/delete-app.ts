@@ -9,6 +9,7 @@ import {
 } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { canUseInfra } from "@/lib/infra-access";
 
 export async function deleteDeveloperApp(appId: string) {
@@ -55,6 +56,7 @@ export async function deleteDeveloperApp(appId: string) {
 				),
 			);
 	});
+	await cancelDeveloperVideoEncodes({ appId });
 
 	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };

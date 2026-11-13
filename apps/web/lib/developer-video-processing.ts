@@ -12,6 +12,7 @@ import { billableVideo } from "@/lib/developer-pricing";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
+import { cancelDeveloperVideoJobs } from "./developer-video-cancel";
 import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
@@ -717,13 +718,16 @@ export async function dispatchDeveloperVideoPart(
 	const started = await startMediaServerVideoJob(request.path, request.body);
 
 	if (started.status === "started") {
-		await mutateEncode(videoId, encodeId, (processing) => {
+		const recorded = await mutateEncode(videoId, encodeId, (processing) => {
 			const dispatched = markPartDispatched(processing, part, {
 				token,
 				jobId: started.jobId,
 			});
 			return dispatched ? { processing: dispatched } : null;
 		});
+		if (!recorded && (await findDeveloperVideo(videoId))?.deletedAt) {
+			await cancelDeveloperVideoJobs(videoId, [started.jobId]);
+		}
 		return "dispatched";
 	}
 	if (started.status === "unconfirmed") return "unconfirmed";
@@ -961,12 +965,23 @@ export async function applyDeveloperVideoProgress(
 		return ignored;
 	}
 	const { encodeId } = processing;
+	const finished =
+		payload.phase === "complete" ||
+		payload.phase === "error" ||
+		payload.phase === "cancelled";
 
-	if (
-		payload.phase !== "complete" &&
-		payload.phase !== "error" &&
-		payload.phase !== "cancelled"
-	) {
+	// A deleted video's job is stopped, never settled: its result could
+	// otherwise requeue, retry or charge for a video nobody can see. This also
+	// catches a job whose start was never confirmed, so its id was never stored
+	// for the delete to cancel.
+	if (video.deletedAt) {
+		if (!finished && typeof payload.jobId === "string" && payload.jobId) {
+			await cancelDeveloperVideoJobs(video.id, [payload.jobId]);
+		}
+		return ignored;
+	}
+
+	if (!finished) {
 		const jobId = payload.jobId;
 		if (current.jobId === null && typeof jobId === "string" && jobId) {
 			await mutateEncode(video.id, encodeId, (latest) => {
