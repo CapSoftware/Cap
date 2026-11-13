@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatAudioLength,
+	formatBalanceCents,
 	formatBytes,
 	formatCharge,
 	formatCredits,
@@ -138,5 +139,24 @@ describe("formatDurationOrDash", () => {
 
 	it("shows a measured length as minutes and seconds", () => {
 		expect(formatDurationOrDash(120)).toBe("2:00");
+	});
+});
+
+describe("formatBalanceCents", () => {
+	it("rounds down to whole cents so it never shows more than the balance", () => {
+		expect(formatBalanceCents(999_816)).toBe("$9.99");
+		expect(formatBalanceCents(9_998_160)).toBe("$99.98");
+	});
+
+	it("shows a positive balance under a cent as under a cent", () => {
+		expect(formatBalanceCents(999)).toBe("<$0.01");
+	});
+
+	it("shows zero as zero", () => {
+		expect(formatBalanceCents(0)).toBe("$0.00");
+	});
+
+	it("groups thousands", () => {
+		expect(formatBalanceCents(123_456_789_000)).toBe("$1,234,567.89");
 	});
 });
