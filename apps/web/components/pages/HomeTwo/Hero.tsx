@@ -123,11 +123,11 @@ export const Hero = () => {
 			/>
 			<div className="relative mx-auto flex max-w-[1020px] flex-col items-center text-center">
 				<Link
-					href="/blog/rebuilding-cap-in-gpui"
+					href="/blog/introducing-cap-infra"
 					onClick={() =>
 						trackEvent("release_notice_clicked", {
 							source_page: "home_hero",
-							release: "v0.6.1",
+							release: "cap-infra",
 						})
 					}
 					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
@@ -135,9 +135,9 @@ export const Hero = () => {
 					<span className="rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111]">
 						New
 					</span>
-					<span className="truncate">Cap's migration to GPUI</span>
+					<span className="truncate">Introducing Cap Infra</span>
 					<span className="hidden text-white/60 transition-colors duration-200 group-hover:text-white sm:inline">
-						Read the deep dive
+						Read the post
 					</span>
 					<ArrowRight className="size-3.5 text-white/70 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-white" />
 				</Link>
