@@ -11,7 +11,7 @@ export type LocalFile = {
 	contentType: string;
 };
 
-const CONTENT_TYPES: Record<string, string> = {
+export const CONTENT_TYPES: Record<string, string> = {
 	".mp4": "video/mp4",
 	".m4v": "video/mp4",
 	".webm": "video/webm",

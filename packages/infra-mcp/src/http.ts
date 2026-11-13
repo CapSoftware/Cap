@@ -118,6 +118,8 @@ export class InfraClient {
 	constructor(
 		private readonly config: Pick<Config, "apiUrl" | "secretKey">,
 		private readonly tuning: ClientTuning = DEFAULT_CLIENT_TUNING,
+		private readonly transport: typeof fetch = (input, init) =>
+			fetch(input, init),
 	) {}
 
 	async call(name: RouteName, input: CallInput = {}): Promise<unknown> {
@@ -263,7 +265,7 @@ export class InfraClient {
 
 		const limit = timeLimit(budget, input.signal);
 		try {
-			const response = await fetch(url, {
+			const response = await this.transport(url, {
 				method: route.method,
 				headers: {
 					Accept: "application/json",
