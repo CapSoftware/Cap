@@ -621,8 +621,11 @@ export async function completeInfraUpload({
 		};
 
 		if (!measured.assembled) {
-			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			const admission = await admitDeveloperVideoUpload(upload);
+			const [recorded, admission] = await Promise.all([
+				videoIsRecorded(db(), videoId),
+				admitDeveloperVideoUpload(upload),
+			]);
+			if (recorded) return ok({ success: true });
 			if (!admission.allowed) {
 				return { status: 402, body: uploadAdmissionError(admission) };
 			}
