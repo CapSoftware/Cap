@@ -134,6 +134,8 @@ const invoice = {
 	},
 };
 
+const paymentTag = { type: "developer_credits", accountId: "account-1" };
+
 const paymentIntent = {
 	id: PAYMENT_INTENT,
 	object: "payment_intent",
@@ -142,7 +144,7 @@ const paymentIntent = {
 	amount_received: 2500,
 	currency: "usd",
 	invoice: INVOICE,
-	metadata: {},
+	metadata: paymentTag,
 };
 
 const charge = {
@@ -151,7 +153,7 @@ const charge = {
 	payment_intent: PAYMENT_INTENT,
 	invoice: INVOICE,
 	amount: 2500,
-	metadata: {},
+	metadata: paymentTag,
 };
 
 const invoicePayment = {
