@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
@@ -7,6 +8,8 @@ import {
 	type CapPlayerControl,
 } from "@/components/cap-player/CapPlayer";
 import { Lockup } from "@/components/infra/Lockup";
+import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { developerVideoOEmbedHref } from "@/lib/developer-video-oembed";
 import {
 	cappedPlaylistUrl,
 	type DeveloperVideoPlayback,
@@ -21,7 +24,10 @@ import {
 	DEVELOPER_VIDEO_UNAVAILABLE,
 	developerVideoReportHref,
 } from "@/lib/developer-video-takedown";
-import { INFRA_VIDEO_PUBLIC_FAILURE } from "@/lib/infra-video-view";
+import {
+	INFRA_VIDEO_PUBLIC_FAILURE,
+	INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
+} from "@/lib/infra-video-view";
 import { EmbedError } from "./EmbedError";
 import { RefreshUntilReady } from "./RefreshUntilReady";
 
@@ -29,8 +35,11 @@ export type DeveloperVideoPageVariant = "share" | "embed";
 
 const loadPlayer = cache(loadDeveloperVideoPlayer);
 
+// The embed document leaves out the video tags and the oEmbed link: it is
+// loaded on other sites' pages, where they would only add bytes.
 export async function developerVideoMetadata(
 	playbackId: string,
+	variant: DeveloperVideoPageVariant = "share",
 ): Promise<Metadata> {
 	const player = await loadPlayer(playbackId);
 	const title =
@@ -39,7 +48,7 @@ export async function developerVideoMetadata(
 			: (player?.name ?? "Video not found");
 	const images =
 		player?.kind === "playing" && player.poster ? [player.poster] : [];
-	return {
+	const metadata: Metadata = {
 		title,
 		description: null,
 		robots: { index: false, follow: false },
@@ -48,6 +57,39 @@ export async function developerVideoMetadata(
 			card: images.length > 0 ? "summary_large_image" : "summary",
 			title,
 			images,
+		},
+	};
+	if (variant !== "share" || !player || player.kind === "taken_down") {
+		return metadata;
+	}
+	const webUrl = serverEnv().WEB_URL;
+	const { shareUrl } = developerVideoPageUrls(playbackId, webUrl);
+	const mp4 = player.kind === "playing" ? player.source.mp4 : undefined;
+	return {
+		...metadata,
+		openGraph: {
+			title,
+			type: "video.other",
+			url: shareUrl,
+			images,
+			...(mp4
+				? {
+						videos: [
+							{
+								url: mp4,
+								secureUrl: mp4.startsWith("https:") ? mp4 : undefined,
+								type: "video/mp4",
+								width: player.width,
+								height: player.height,
+							},
+						],
+					}
+				: null),
+		},
+		alternates: {
+			types: {
+				"application/json+oembed": developerVideoOEmbedHref(shareUrl, webUrl),
+			},
 		},
 	};
 }
@@ -146,7 +188,10 @@ function Stage({
 	if (player.kind === "failed") {
 		return (
 			<>
-				<Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />
+				<Notice
+					title={INFRA_VIDEO_PUBLIC_FAILURE}
+					detail={INFRA_VIDEO_PUBLIC_FAILURE_DETAIL}
+				/>
 				{playback.events && <EmbedError code="unavailable" />}
 			</>
 		);

@@ -1583,7 +1583,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 
 The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
 
-- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
+- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link. Pasted into a chat or a page builder, it previews as the video: the page carries `og:video` tags for the MP4 and an oEmbed link to `https://cap.so/api/developer/oembed?url=SHARE_URL`, which answers with the embed's iframe. A video in an app with [Allowed Sites](#allowed-sites) gets no iframe from it, since other sites could not show one.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe, unless you limit it to your own sites with [Allowed Sites](#allowed-sites):
 
 ```html
@@ -1596,6 +1596,8 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
   loading="lazy"
 ></iframe>
 ```
+
+`allow="autoplay"` lets a play command your page sends after a click start the video with sound. Firefox does not know that name and logs a harmless warning about it.
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
@@ -1618,7 +1620,7 @@ Add these to `embedUrl` as query parameters, for example `https://cap.so/dev/Zk3
 | `autoplay=1` | Starts playing when the player loads. A browser that refuses to autoplay with sound gets the video muted, and one that refuses autoplay altogether shows the paused player |
 | `muted=1` | Starts with the sound off. The viewer can turn it on |
 | `loop=1` | Starts again from the beginning when the video ends |
-| `t=90` | Starts at that many seconds. Decimals work, such as `t=12.5`. A time past the end is ignored. `shareUrl` takes this parameter too |
+| `t=90` | Starts at that time. Seconds work, with decimals such as `t=12.5`, and so do hours, minutes and seconds such as `t=1m30s`, `t=90s` or `t=1h2m3s`. A time past the end is ignored. `shareUrl` takes this parameter too |
 | `controls=0` | Hides the control bar. A play button stays on a paused video and the keyboard keeps working |
 | `captions=1` | Starts with captions on, for a video that has them. The viewer can turn them off |
 
