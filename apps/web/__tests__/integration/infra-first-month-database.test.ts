@@ -348,6 +348,36 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 		});
 
+		it("does not charge a day the first month covers when the video turned ready after the day was measured", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const videoId = await makeVideo(appId);
+			const at = new Date();
+			const measure = async (executor?: never) =>
+				(
+					await getStorageUsageByApp([appId], undefined, executor, {
+						dailyChargeAt: at,
+					})
+				).get(appId) ??
+				(() => {
+					throw new Error("no usage");
+				})();
+			const stale = await measure();
+			expect(stale.totalMinutes).toBe(10);
+
+			await chargeDeveloperVideoFirstMonth(videoId, { now: at });
+			const result = await chargeStorageDay({
+				appId,
+				accountId,
+				usage: stale,
+				measure: (tx) => measure(tx as never),
+				dateKey: at.toISOString().slice(0, 10),
+				now: at,
+			});
+
+			expect(result).toEqual({ state: "skipped" });
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+		});
+
 		it("keeps the month paid for a video deleted an hour after it became ready", async () => {
 			const { appId, accountId } = await makeApp(1_000_000);
 			const videoId = await makeVideo(appId);

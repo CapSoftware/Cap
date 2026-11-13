@@ -107,6 +107,12 @@ export async function GET(request: Request) {
 						appId: account.appId,
 						accountId: account.id,
 						usage,
+						measure: async (tx) =>
+							(
+								await getStorageUsageByApp([account.appId], undefined, tx, {
+									dailyChargeAt: now,
+								})
+							).get(account.appId) ?? usage,
 						dateKey: today,
 						now,
 					});

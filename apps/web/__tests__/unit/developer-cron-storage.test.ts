@@ -171,6 +171,17 @@ describe("developer-storage cron job", () => {
 				dateKey: body.date,
 			}),
 		);
+		const measured = new Map([["app-2", usage(56)]]);
+		mocks.getStorageUsageByApp.mockResolvedValueOnce(measured);
+		const tx = { lock: "held" };
+		const [{ measure }] = mocks.chargeStorageDay.mock.calls[1] ?? [{}];
+		expect(await measure(tx)).toEqual(usage(56));
+		expect(mocks.getStorageUsageByApp).toHaveBeenLastCalledWith(
+			["app-2"],
+			undefined,
+			tx,
+			{ dailyChargeAt: expect.any(Date) },
+		);
 	});
 
 	it("skips accounts already billed today", async () => {

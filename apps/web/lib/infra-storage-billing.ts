@@ -9,6 +9,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { StorageUsage } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import {
+	type InfraDbExecutor,
 	latestStorageCharge,
 	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
@@ -56,13 +57,15 @@ export function settleStorageDay({
 export async function chargeStorageDay({
 	appId,
 	accountId,
-	usage,
+	usage: measuredBefore,
+	measure,
 	dateKey,
 	now,
 }: {
 	appId: string;
 	accountId: string;
 	usage: StorageUsage;
+	measure?: (tx: InfraDbExecutor) => Promise<StorageUsage>;
 	dateKey: string;
 	now: Date;
 }): Promise<StorageDayResult> {
@@ -131,6 +134,7 @@ export async function chargeStorageDay({
 			return { state: "skipped" as const };
 		}
 
+		const usage = measure ? await measure(tx) : measuredBefore;
 		const lastCharge = await latestStorageCharge(tx, accountId);
 		const unresolvedShortSince =
 			lastCharge?.shortSince &&
