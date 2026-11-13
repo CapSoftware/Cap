@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { claimDeveloperProCredit } from "@/actions/developers/claim-pro-credit";
 import { useEffectMutation } from "@/lib/EffectRuntime";
+import { PRO_CREDIT_TRIAL_MESSAGE } from "@/lib/infra-pro-credit-eligibility";
 import type { InfraProCredit } from "../infra-data";
 import { actionMessage, runAction } from "./run-action";
 import { Button, TEXT_LINK } from "./ui";
@@ -51,6 +52,10 @@ export function ProCredit({
 				</Link>
 			</p>
 		);
+	}
+
+	if (credit.status === "trial") {
+		return <p className={NOTE}>{PRO_CREDIT_TRIAL_MESSAGE}</p>;
 	}
 
 	if (claimedHere || credit.status === "claimed") {

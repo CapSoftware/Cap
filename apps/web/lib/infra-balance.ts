@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 export async function lockInfraAccount(
@@ -33,7 +33,6 @@ const heldTranscriptsQuery = (
 			and(
 				eq(developerTranscripts.appId, appId),
 				eq(developerTranscripts.status, "processing"),
-				isNull(developerTranscripts.deletedAt),
 				exceptTranscriptId
 					? ne(developerTranscripts.id, exceptTranscriptId)
 					: undefined,
@@ -92,3 +91,19 @@ export async function availableBalance(
 		(await heldTranscriptMicroCredits(executor, appId))
 	);
 }
+
+export const heldTranscriptsByApp = (
+	executor: Pick<InfraDbExecutor, "select">,
+) =>
+	executor
+		.select({
+			appId: developerTranscripts.appId,
+			heldMicroCredits:
+				sql<number>`COALESCE(SUM(${developerTranscripts.reservedMicroCredits}), 0)`.as(
+					"heldMicroCredits",
+				),
+		})
+		.from(developerTranscripts)
+		.where(eq(developerTranscripts.status, "processing"))
+		.groupBy(developerTranscripts.appId)
+		.as("held");

@@ -6,6 +6,25 @@ export class LoomDownloadTemporaryError extends Error {
 	}
 }
 
+export class LoomDownloadUnavailableError extends Error {
+	constructor() {
+		super(
+			"Loom has no video file for this recording, so it can't be imported. The recording may not have finished uploading to Loom.",
+		);
+	}
+}
+
+const LOOM_SOURCE_PROCESSING_GRACE_MS = 24 * 60 * 60 * 1000;
+
+function isPastProcessingGrace(createdAt: unknown) {
+	if (typeof createdAt !== "string") return false;
+	const created = Date.parse(createdAt);
+	return (
+		Number.isFinite(created) &&
+		Date.now() - created > LOOM_SOURCE_PROCESSING_GRACE_MS
+	);
+}
+
 export function getReusableLoomDownloadUrl(value: string | undefined) {
 	if (!value) return null;
 	try {
@@ -181,7 +200,7 @@ async function fetchPublicLoomPlaybackUrl(
 					acceptableMimes: ["DASH", "M3U8", "MP4", "WEBM"],
 				},
 				query:
-					"query GetVideoSource($videoId: ID!, $password: String, $acceptableMimes: [CloudfrontVideoAcceptableMime]) { getVideo(id: $videoId, password: $password) { ... on RegularUserVideo { id downloadable download_enabled nullableRawCdnUrl(acceptableMimes: $acceptableMimes, password: $password) { url credentials { Policy Signature KeyPairId } } } __typename } }",
+					"query GetVideoSource($videoId: ID!, $password: String, $acceptableMimes: [CloudfrontVideoAcceptableMime]) { getVideo(id: $videoId, password: $password) { ... on RegularUserVideo { id createdAt downloadable download_enabled nullableRawCdnUrl(acceptableMimes: $acceptableMimes, password: $password) { url credentials { Policy Signature KeyPairId } } } __typename } }",
 			}),
 			signal: AbortSignal.timeout(15_000),
 		});
@@ -225,6 +244,12 @@ async function fetchPublicLoomPlaybackUrl(
 		)
 			return null;
 		const source = video.nullableRawCdnUrl;
+		if (
+			source === null &&
+			"createdAt" in video &&
+			isPastProcessingGrace(video.createdAt)
+		)
+			throw new LoomDownloadUnavailableError();
 		if (typeof source !== "object" || source === null)
 			throw new LoomDownloadTemporaryError(60_000);
 		const credentials = "credentials" in source ? source.credentials : null;
@@ -246,7 +271,8 @@ async function fetchPublicLoomPlaybackUrl(
 		});
 		if (!url) throw new LoomDownloadTemporaryError(60_000);
 		return url;
-	} catch {
+	} catch (error) {
+		if (error instanceof LoomDownloadUnavailableError) throw error;
 		throw new LoomDownloadTemporaryError(60_000);
 	}
 }
