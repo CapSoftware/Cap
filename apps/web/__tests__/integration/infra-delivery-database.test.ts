@@ -61,6 +61,17 @@ const { formatMinutes } = await import("@/lib/infra-usage");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 
+const CREATE_TABLE_WITHOUT_FINAL = `CREATE TABLE developer_delivery_daily (
+	appId varchar(15) NOT NULL,
+	day date NOT NULL,
+	tier varchar(8) NOT NULL,
+	seconds bigint NOT NULL,
+	bytes bigint NOT NULL,
+	requests int NOT NULL,
+	updatedAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (appId, day, tier)
+)`;
+
 const CREATE_TABLE = `CREATE TABLE developer_delivery_daily (
 	appId varchar(15) NOT NULL,
 	day date NOT NULL,
@@ -68,6 +79,8 @@ const CREATE_TABLE = `CREATE TABLE developer_delivery_daily (
 	seconds bigint NOT NULL,
 	bytes bigint NOT NULL,
 	requests int NOT NULL,
+	final boolean NOT NULL DEFAULT false,
+	finalizedAt timestamp NULL,
 	updatedAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (appId, day, tier)
 )`;
@@ -132,19 +145,32 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(html).toContain(NO_DELIVERY);
 		});
 
+		it("reports no delivery while the table has no final column yet", async () => {
+			await pool.query(CREATE_TABLE_WITHOUT_FINAL);
+			await pool.query(
+				"INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests) VALUES (?, '2026-11-02', '1080p', 600, 1, 1)",
+				[fixture.appId],
+			);
+			await expect(getDeliveredUsage(fixture.appId)).resolves.toBeNull();
+			await expect(usageDelivery()).resolves.toBeNull();
+			await pool.query("DROP TABLE developer_delivery_daily");
+		});
+
 		it("gives the same minutes in the console and in GET /usage", async () => {
 			await pool.query(CREATE_TABLE);
 			await pool.query(
-				`INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests) VALUES
-				(?, '2026-11-01', '1080p', 36000, 900000000, 1200),
-				(?, '2026-11-01', '720p', 7200, 120000000, 300),
-				(?, '2026-11-15', '1080p', 18000, 450000000, 600),
-				(?, '2026-11-30', '360p', 750, 4000000, 40),
-				(?, '2026-11-30', '720p', 12960, 210000000, 500),
-				(?, '2026-10-31', '1080p', 99999, 1, 1),
-				(?, '2026-12-01', '1080p', 99999, 1, 1),
-				('otherapp0000001', '2026-11-10', '1080p', 99999, 1, 1)`,
-				Array(7).fill(fixture.appId),
+				`INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests, final, finalizedAt) VALUES
+				(?, '2026-11-01', '1080p', 36000, 900000000, 1200, true, '2026-11-03 02:05:00'),
+				(?, '2026-11-01', '720p', 7200, 120000000, 300, true, '2026-11-03 02:05:00'),
+				(?, '2026-11-01', 'audio', 0, 5000000, 90, true, '2026-11-03 02:05:00'),
+				(?, '2026-11-15', '1080p', 18000, 450000000, 600, true, '2026-11-17 02:05:00'),
+				(?, '2026-11-19', '360p', 750, 4000000, 40, false, NULL),
+				(?, '2026-11-19', '720p', 12960, 210000000, 500, false, NULL),
+				(?, '2026-11-19', 'audio', 0, 3000000, 60, false, NULL),
+				(?, '2026-10-31', '1080p', 99999, 1, 1, true, '2026-11-02 02:05:00'),
+				(?, '2026-12-01', '1080p', 99999, 1, 1, false, NULL),
+				('otherapp0000001', '2026-11-18', '1080p', 99999, 1, 1, true, '2026-11-20 02:05:00')`,
+				Array(9).fill(fixture.appId),
 			);
 
 			const usage = await getDeliveredUsage(fixture.appId);
@@ -157,6 +183,7 @@ describe.runIf(Boolean(databaseUrl))(
 					"1440p": 0,
 					"2160p": 0,
 				},
+				finalThrough: "2026-11-15",
 			});
 
 			const api = await usageDelivery();
@@ -169,9 +196,11 @@ describe.runIf(Boolean(databaseUrl))(
 					"1440p": 0,
 					"2160p": 0,
 				},
-				measured: true,
-				billed: false,
+				finalThrough: "2026-11-15",
 			});
+			expect(
+				Object.keys((api as { minutesByTier: object }).minutesByTier),
+			).not.toContain("audio");
 
 			const shown = consoleRows(deliveryJson(usage));
 			const fromApi = api as {
@@ -188,7 +217,7 @@ describe.runIf(Boolean(databaseUrl))(
 
 		it("reads on the primary key", async () => {
 			const [plan] = (await pool.query(
-				"EXPLAIN SELECT tier, sum(seconds) FROM developer_delivery_daily WHERE appId = ? AND day >= ? AND day < ? GROUP BY tier",
+				"EXPLAIN SELECT tier, sum(seconds) FROM developer_delivery_daily WHERE appId = ? AND day >= ? AND day < ? AND tier <> 'audio' GROUP BY tier",
 				[fixture.appId, "2026-11-01", "2026-12-01"],
 			)) as unknown as [{ key: string | null }[]];
 			expect(plan[0]?.key).toBe("PRIMARY");
