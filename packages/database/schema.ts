@@ -2150,6 +2150,42 @@ export const developerDailyStorageSnapshots = mysqlTable(
 	(table) => [unique("app_date_unique").on(table.appId, table.snapshotDate)],
 );
 
+export const developerWebhookEndpoints = mysqlTable(
+	"developer_webhook_endpoints",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		url: varchar("url", { length: 2048 }).notNull(),
+		secretPrefix: varchar("secretPrefix", { length: 12 }).notNull(),
+		encryptedSecret: encryptedText("encryptedSecret").notNull(),
+		events: json("events").notNull().$type<string[]>(),
+		enabled: boolean("enabled").notNull().default(true),
+		disabledReason: varchar("disabledReason", { length: 32 }),
+		lastDeliveryAt: timestamp("lastDeliveryAt"),
+		lastDeliveryStatus: varchar("lastDeliveryStatus", {
+			length: 16,
+			enum: ["succeeded", "failed"],
+		}),
+		lastResponseStatus: int("lastResponseStatus"),
+		lastErrorCode: varchar("lastErrorCode", { length: 32 }),
+		consecutiveFailures: int("consecutiveFailures").notNull().default(0),
+		failingSince: timestamp("failingSince"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("dev_webhooks_app_list_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
 export const developerAppsRelations = relations(
 	developerApps,
 	({ one, many }) => ({
@@ -2238,6 +2274,16 @@ export const developerDailyStorageSnapshotsRelations = relations(
 	({ one }) => ({
 		app: one(developerApps, {
 			fields: [developerDailyStorageSnapshots.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerWebhookEndpointsRelations = relations(
+	developerWebhookEndpoints,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerWebhookEndpoints.appId],
 			references: [developerApps.id],
 		}),
 	}),

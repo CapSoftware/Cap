@@ -393,6 +393,13 @@
 			"when": 1794461929204,
 			"tag": "0055_developer_transcripts",
 			"breakpoints": true
+		},
+		{
+			"idx": 57,
+			"version": "5",
+			"when": 1794527001285,
+			"tag": "0057_developer_webhook_endpoints",
+			"breakpoints": true
 		}
 	]
 }
