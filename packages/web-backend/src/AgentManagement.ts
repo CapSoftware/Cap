@@ -7,7 +7,7 @@ import {
 	type User,
 	type Video,
 } from "@cap/web-domain";
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { Database } from "./Database.ts";
 
@@ -649,7 +649,15 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 											Db.developerDailyStorageSnapshots.totalDurationMinutes,
 									})
 									.from(Db.developerDailyStorageSnapshots)
-									.where(eq(Db.developerDailyStorageSnapshots.appId, appId))
+									.where(
+										and(
+											eq(Db.developerDailyStorageSnapshots.appId, appId),
+											gt(
+												Db.developerDailyStorageSnapshots.totalDurationMinutes,
+												0,
+											),
+										),
+									)
 									.orderBy(desc(Db.developerDailyStorageSnapshots.snapshotDate))
 									.limit(1),
 							]),

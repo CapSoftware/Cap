@@ -71,10 +71,12 @@ const ACCOUNT_SECTIONS = new Set<InfraSection>(["billing", "keys", "settings"]);
 export function Shell({
 	apps,
 	appId,
+	balanceMicroCredits,
 	children,
 }: {
 	apps: InfraAppSummary[];
 	appId: string;
+	balanceMicroCredits: number;
 	children: React.ReactNode;
 }) {
 	const pathname = usePathname();
@@ -218,7 +220,7 @@ export function Shell({
 										"m-0 mt-1.5 text-[21px] leading-[1.1] tracking-[-0.04em] tabular-nums text-white [overflow-wrap:anywhere]",
 									)}
 								>
-									{formatCredits(current.balanceMicroCredits)}
+									{formatCredits(balanceMicroCredits)}
 								</p>
 							</div>
 							<div
