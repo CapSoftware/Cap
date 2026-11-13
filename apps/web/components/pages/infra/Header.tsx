@@ -33,10 +33,12 @@ export const Header = ({ anchorBase = "" }: { anchorBase?: string }) => (
 				</nav>
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5">
+				{/* Back to Cap stays at every width. Below sm the link sheds padding
+				    to fit beside Start building, and Sign in gives way where space is
+				    short (Start building already goes through sign in). */}
 				<Link
 					href={LINKS.home}
-					aria-label="Back to Cap"
-					className={`${NAV_ITEM} group/back inline-flex items-center gap-1 pl-1.5`}
+					className={`${NAV_ITEM} group/back inline-flex items-center gap-1 pl-1 pr-1.5 sm:pl-1.5 sm:pr-2.5`}
 				>
 					<svg
 						aria-hidden="true"
@@ -52,20 +54,15 @@ export const Header = ({ anchorBase = "" }: { anchorBase?: string }) => (
 							strokeLinejoin="round"
 						/>
 					</svg>
-					<span className="min-[420px]:hidden md:inline lg:hidden">Cap</span>
-					<span className="hidden min-[420px]:inline md:hidden lg:inline">
-						Back to Cap
-					</span>
+					Back to Cap
 				</Link>
-				{/* A phone has room for one text link. Start building already sends a
-				    signed-out visitor through sign in, so that slot goes back to Cap. */}
 				<Link
 					href={LINKS.signIn}
-					className={`${NAV_ITEM} hidden sm:inline-flex`}
+					className={`${NAV_ITEM} hidden sm:inline-flex md:hidden lg:inline-flex`}
 				>
 					Sign in
 				</Link>
-				<StartLink className="inline-flex h-8 items-center whitespace-nowrap rounded-[7px] bg-[#E8ECF4] px-3 text-[13.5px] font-medium text-[#050506] transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]" />
+				<StartLink className="inline-flex h-8 max-[359px]:hidden items-center whitespace-nowrap rounded-[7px] bg-[#E8ECF4] px-3 text-[13.5px] font-medium text-[#050506] transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]" />
 			</div>
 		</div>
 	</header>
