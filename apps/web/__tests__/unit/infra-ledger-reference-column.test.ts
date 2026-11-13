@@ -106,17 +106,53 @@ describe("ledger Reference column", () => {
 		const cell = container.querySelectorAll("table tbody tr td")[2];
 		const reference = cell?.querySelector("[title]");
 		expect(reference?.className.split(" ")).toEqual([
-			"inline-block",
-			"max-w-[220px]",
-			"truncate",
-			"align-bottom",
+			"block",
+			"max-w-[124px]",
+			"xl:inline-block",
+			"xl:max-w-[220px]",
+			"xl:truncate",
+			"xl:align-bottom",
 		]);
+		const [kind, id] = Array.from(reference?.children ?? []);
+		expect(kind?.className).toBe("block truncate xl:inline");
+		expect(id?.className.split(" ")).toEqual(
+			expect.arrayContaining(["block", "truncate", "xl:inline"]),
+		);
 		expect(reference?.getAttribute("title")).toContain(session);
 		expect(reference?.textContent).toContain(session);
 
 		const card = container.querySelector("ul li [title]");
 		expect(card?.getAttribute("title")).toContain(session);
 		expect(card?.parentElement?.className).toContain("block truncate");
+	});
+
+	it("lets the Type label wrap at a readable width so it never runs into Reference", () => {
+		act(() =>
+			root.render(
+				createElement(CreditTransactionTable, { transactions: [row({})] }),
+			),
+		);
+
+		const typeCell = container.querySelectorAll("table tbody tr td")[1];
+		const classes = typeCell?.className.split(" ") ?? [];
+		expect(classes).toEqual(
+			expect.arrayContaining(["w-full", "min-w-[140px]", "whitespace-normal"]),
+		);
+		expect(classes).not.toContain("max-w-0");
+	});
+
+	it("keeps the phone card reference on one line", () => {
+		act(() =>
+			root.render(
+				createElement(CreditTransactionTable, { transactions: [row({})] }),
+			),
+		);
+
+		const reference = container.querySelector("ul li [title]");
+		expect(reference?.getAttribute("class")).toBeNull();
+		for (const part of Array.from(reference?.children ?? [])) {
+			expect(part.getAttribute("class") ?? "").not.toContain("block");
+		}
 	});
 
 	it("shows the same reference on phones", () => {
