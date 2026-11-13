@@ -1197,14 +1197,20 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("leaves the seek to a start time to hls.js", async () => {
+	it("measures the segment after hls.js has reached a start time", async () => {
 		lowEstimate();
-		const { hls } = await started(new FakeVideo(false), { startAt: 45 });
+		const video = new FakeVideo(false);
+		const { hls } = await started(video, { startAt: 45 });
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);
+
+		video.dispatchEvent(new Event("seeked"));
+		held(hls);
+
+		expect(hls.currentLevel).toBe(1);
 	});
 
 	it("swaps by resolution when bitrate does not rise with it", async () => {

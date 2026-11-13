@@ -463,9 +463,11 @@ export const attachSource = (
 					}
 					return;
 				}
-				if (measured) return;
+				// A start time is reached by hls.js's own seek; the segment after
+				// it is the one measured.
+				if (measured || startPending) return;
 				measured = true;
-				if (startPending || picked !== AUTO_LEVEL) return;
+				if (picked !== AUTO_LEVEL) return;
 				const level = pickStartingLevel(
 					hls.levels,
 					playerSize(),
