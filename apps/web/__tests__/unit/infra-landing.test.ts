@@ -419,7 +419,7 @@ describe("delivery pricing", () => {
 		expect(occurrences(docs, INFRA_DELIVERY_PRICE_TEXT)).toBe(1);
 		expect(occurrences(llmsInfra(), INFRA_DELIVERY_PRICE_TEXT)).toBe(1);
 
-		for (const doc of [billing, rest, getStarted, llmsInfra()]) {
+		for (const doc of [billing, getStarted, llmsInfra()]) {
 			expect(doc).toContain(DEFINITION);
 		}
 		expect(landing).toContain(PLAIN_DEFINITION);

@@ -26,10 +26,11 @@ type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export const INSTRUCTIONS = [
 	"Cap Infra hosts video and turns speech into text, billed from the app's prepaid credit.",
-	"Video: videos_upload a local file, videos_wait until it is ready, then use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
+	"Video: videos_upload a local file (or videos_import a public https link to one), videos_wait until it is ready, then use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
 	"Speech: transcripts_create from a url, a local path or a ready videoId, transcripts_wait, then transcripts_text.",
 	"Stored video is billed one month when it becomes ready, then daily until deleted, video that viewers stream is billed per delivered minute, and transcripts are billed per audio hour. Check account_usage before large jobs.",
 	"Credit can only be added in the console by a signed-in person. When a tool reports out of credit, give them the addCreditAt link.",
+	"For embed options, webhooks, billing rules and anything else in the docs, use docs_read.",
 ].join(" ");
 
 export function createInfraServer(config: Config, options: ServerOptions = {}) {

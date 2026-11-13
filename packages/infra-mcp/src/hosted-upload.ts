@@ -62,7 +62,7 @@ function uploadSteps(
 	}
 	return [
 		`Split the file into ${count} parts of ${partBytes} bytes, in order: split -b ${partBytes} <file> cap-part- (cap-part-aa is part 1, cap-part-ab is part 2, and so on).`,
-		`Upload each part in parts to its own url: ${put("cap-part-aa", "url of part 1")}, then the same for every other part. Keep the ETag response header of each.`,
+		`Upload each part listed in parts to its own url: ${put("cap-part-aa", "url of part 1")}, then the same for every other part. Keep the ETag response header of each.`,
 		...(nextFromPart === null
 			? []
 			: [

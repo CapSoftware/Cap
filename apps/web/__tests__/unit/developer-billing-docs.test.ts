@@ -93,6 +93,12 @@ const POLICY_SENTENCES = [
 	"If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.",
 ];
 
+const DELIVERY_SENTENCE =
+	"**Delivery.** `delivery` is the minutes of video delivered to your viewers in the same calendar month as `speech`, in total and for each rendition tier, and it is `null` until delivery has been measured for the app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, and `finalThrough` is the latest final day in the period, so today and yesterday may still change.";
+
+const DELIVERY_EXAMPLE =
+	/"delivery": \{[\s\S]*?"finalThrough": "\d{4}-\d{2}-\d{2}"\n {4}\},/;
+
 const wholeDollars = (cents: number) =>
 	`$${(cents / 100).toLocaleString("en-US")}`;
 
@@ -437,6 +443,9 @@ describe("the Billing page", () => {
 		}
 		expect(billing).not.toContain(String.fromCodePoint(0x2014));
 		expect(rest).not.toMatch(/\bwatched\b/i);
+		expect(rest.split(DELIVERY_SENTENCE)).toHaveLength(2);
+		expect(DELIVERY_SENTENCE).not.toMatch(/bill|price|charge|cost|credit|\$/i);
+		expect(rest).toMatch(DELIVERY_EXAMPLE);
 	});
 
 	it("documents delivery billing and its ledger rows the way the code writes them", () => {
@@ -457,9 +466,15 @@ describe("the Billing page", () => {
 		};
 		const transaction = spec.components.schemas.Transaction.properties;
 
-		for (const doc of [billing, rest, getStarted]) {
+		for (const doc of [billing, getStarted]) {
 			expect(doc).toContain(definition);
+		}
+		for (const doc of [billing, rest, getStarted]) {
 			expect(doc).not.toMatch(/\b(before|from) today\b/i);
+		}
+		for (const sentence of definition.split(/(?<=\.) (?=[A-Z])/).slice(1)) {
+			expect(rest.split(sentence), sentence).toHaveLength(2);
+			expect(billing.split(sentence), sentence).toHaveLength(2);
 		}
 		expect(billing).toContain(
 			"Delivery follows the same balance, shortfall and grace rules as storage.",
@@ -572,6 +587,24 @@ describe("examples in the REST API reference", () => {
 		);
 		expect(data.rates.speechDollarsPerHour).toBe(SPEECH_DOLLARS_PER_HOUR);
 		expect(data.rates.uploadAdmissionDays).toBe(UPLOAD_ADMISSION_DAYS);
+		expect(Object.keys(data.delivery)).toEqual([
+			"minutes",
+			"minutesByTier",
+			"finalThrough",
+		]);
+		expect(data.delivery.finalThrough).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(
+			Object.values(
+				data.delivery.minutesByTier as Record<string, number>,
+			).reduce((sum, minutes) => sum + minutes, 0),
+		).toBe(data.delivery.minutes);
+		expect(Object.keys(data.delivery.minutesByTier)).toEqual([
+			"360p",
+			"720p",
+			"1080p",
+			"1440p",
+			"2160p",
+		]);
 		expect(rest).toContain(
 			`2,999,901 micro-credits is \`"${creditDollars(2_999_901)}"\``,
 		);

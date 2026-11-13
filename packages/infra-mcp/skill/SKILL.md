@@ -15,7 +15,7 @@ Cap Infra stores and streams video and turns speech into text. It bills from pre
 
 ## Upload a video and get its links
 
-1. `videos_upload` with the absolute `path` of the file. Set `name` if the file name is not a good title, and `userId` if the video belongs to one of the user's own users.
+1. `videos_upload` with the absolute `path` of the file. Set `name` if the file name is not a good title, and `userId` if the video belongs to one of the user's own users. When the file is at a public https link instead, call `videos_import` with that `url`; Cap downloads it, and the rest of the steps are the same.
 2. Keep the `videoId` it returns. The `shareUrl` and `embedUrl` exist right away, but the video only plays once it is ready.
 3. `videos_wait` with that `videoId`. A video becomes `ready` when its first playback link exists and the other one usually follows within seconds, so by default the wait returns once both `hlsUrl` and `mp4Url` exist, together with `posterUrl`, `shareUrl` and `embedUrl`. It allows the second link 30 seconds after `ready`. Pass `output` (`mp4`, `hls` or `any`) when you need only one of them.
 4. Give the user the link that fits: `shareUrl` for a page to send someone, `embedUrl` for an iframe, `hlsUrl` for their own player, `mp4Url` for a download.
