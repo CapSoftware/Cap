@@ -213,9 +213,11 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
     });
   }
 
-  function putPart(url, blob, onSent) {
+  function putPart(url, blob, onSent, inFlight) {
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      inFlight.add(request);
+      request.onloadend = () => inFlight.delete(request);
       request.open("PUT", url);
       request.upload.onprogress = (event) => onSent(event.loaded);
       request.onload = () =>
@@ -223,6 +225,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
           ? resolve(request.getResponseHeader("ETag"))
           : reject(new Error(`part upload failed with ${request.status}`));
       request.onerror = () => reject(new Error("part upload failed"));
+      request.onabort = () => reject(new Error("part upload stopped"));
       request.send(blob);
     });
   }
@@ -259,15 +262,26 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
       return urls.get(partNumber);
     };
     const sentBytes = new Array(partCount).fill(0);
+    const inFlight = new Set();
+    let failure = null;
     const sendPart = async (partNumber) => {
       const start = (partNumber - 1) * PART_SIZE;
       const blob = file.slice(start, start + PART_SIZE);
-      const put = (url) =>
-        putPart(url, blob, (sent) => {
-          sentBytes[partNumber - 1] = sent;
-          onProgress(sentBytes.reduce((a, b) => a + b, 0) / file.size);
-        });
-      const etag = await put(await urlFor(partNumber)).catch(async () => {
+      const put = async (url) => {
+        if (failure) throw failure;
+        return putPart(
+          url,
+          blob,
+          (sent) => {
+            if (failure) return;
+            sentBytes[partNumber - 1] = sent;
+            onProgress(sentBytes.reduce((a, b) => a + b, 0) / file.size);
+          },
+          inFlight,
+        );
+      };
+      const etag = await put(await urlFor(partNumber)).catch(async (error) => {
+        if (failure) throw error;
         await sign(partNumber, partNumber);
         return put(urls.get(partNumber));
       });
@@ -275,20 +289,22 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
     };
     const parts = [];
     let nextPart = 1;
-    let failed = false;
     const sendParts = async () => {
       try {
-        while (!failed && nextPart <= partCount) {
+        while (!failure && nextPart <= partCount) {
           parts.push(await sendPart(nextPart++));
         }
       } catch (error) {
-        failed = true;
-        throw error;
+        if (!failure) {
+          failure = error;
+          for (const request of inFlight) request.abort();
+        }
       }
     };
-    await Promise.all(
+    await Promise.allSettled(
       Array.from({ length: Math.min(PARTS_AT_ONCE, partCount) }, sendParts),
     );
+    if (failure) throw failure;
     parts.sort((a, b) => a.partNumber - b.partNumber);
     await uploadStep(upload, "complete", { uploadId, parts, ...info });
   }
@@ -332,7 +348,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
 - **File size.** Initiate takes the file's size as `contentLength`, so a file over the token's `maxBytes` is refused with the code `file_too_large` before any of it is sent.
 - **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The page adds up the bytes sent for every part, and the bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
-- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload: no new parts start, and the error is shown.
+- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload: the parts still sending are stopped, no new parts start, the bar stops moving, and the first error is shown once every part has stopped.
 - **An expired token.** A call that answers `upload_token_expired` gets a new token from your server and is sent again. Nothing already uploaded is lost.
 - **Resuming.** Calling initiate again returns the same `uploadId` when the upload was opened in the last 6 hours, with the same token or a renewed one. Keep each finished part's `partNumber`, `etag` and `size`, upload only the parts that are missing, then list every part in complete.
 
