@@ -433,6 +433,42 @@ pub async fn authed_request_with(
     Ok(response)
 }
 
+pub async fn authed_raw_request(
+    method: reqwest::Method,
+    path: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Result<reqwest::Response, AuthApiError> {
+    let client = shared_api_client()?;
+    let (server, token) = if let Ok(context) = UPLOAD_REQUEST.try_with(Clone::clone) {
+        let token = context.credentials()?;
+        (context.server_url, token)
+    } else {
+        let auth = store::auth_snapshot();
+        (
+            normalize_server_url(&auth.server_url),
+            auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
+        )
+    };
+    let url = format!("{server}{path}");
+    let request = client
+        .request(method, url)
+        .header("Content-Type", content_type)
+        .body(body)
+        .bearer_auth(token);
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            AuthApiError::Timeout
+        } else {
+            AuthApiError::Other(error.to_string())
+        }
+    })?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    Ok(response)
+}
+
 pub fn process_auth_data(params: AuthParams) -> Result<(), String> {
     let (secret, user_id) = match params {
         AuthParams::ApiKey { api_key, user_id } => (json!({ "api_key": api_key }), user_id),

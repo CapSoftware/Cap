@@ -22,6 +22,7 @@ use crate::{
     feeds::{self, Feeds},
     library::{self, RecordingItem, ScreenshotItem},
     media_access::MediaAccess,
+    network_status::{HealthStatus, NetworkStatus},
     permissions::OSPermission,
     recording,
     session::{Phase, RecordingSession},
@@ -1110,6 +1111,8 @@ impl MainWindow {
         // Track the app-scoped feeds: the camera bubble's close button
         // deselects the camera there, and this window's selection has to
         // follow. Repaints are gated to what is actually visible.
+        cx.observe(&NetworkStatus::global(cx), |_, _, cx| cx.notify())
+            .detach();
         let feeds = Feeds::global(cx);
         let mic_level = feeds.read(cx).mic_level().clone();
         let microphone_level = cx.new(|cx| {
@@ -3085,6 +3088,7 @@ impl Render for MainWindow {
             .when_some(self.idle_error(cx), |this, error| {
                 this.child(self.render_idle_error(error, cx))
             })
+            .child(self.render_network_status(cx))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.dismiss_main(cx) {
                     cx.stop_propagation();
@@ -3968,6 +3972,31 @@ impl MainWindow {
                 cx.notify();
             }
         });
+    }
+
+    fn render_network_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let status = NetworkStatus::global(cx).read(cx);
+        let failed = status.health == HealthStatus::Failed;
+        let label = if failed {
+            "Upload check failed - contact support".to_string()
+        } else {
+            match status.upload_mbps {
+                Some(mbps) => format!("{mbps:.1} Mbps up"),
+                None => "Checking upload...".to_string(),
+            }
+        };
+        div()
+            .absolute()
+            .bottom(px(8.))
+            .left(px(8.))
+            .px_2()
+            .py_0p5()
+            .rounded_md()
+            .text_xs()
+            .bg(if failed { theme.red_9 } else { theme.gray_3 })
+            .text_color(if failed { theme.red_2 } else { theme.text_2 })
+            .child(label)
     }
 
     fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {

@@ -2541,7 +2541,10 @@ async fn start_attempt_with_upload(
         capture_keyboard_events: settings.capture_keyboard_events,
         crash_recovery_recording: settings.crash_recovery_recording,
         max_fps: settings.max_fps,
-        studio_recording_quality: settings.studio_recording_quality.into(),
+        studio_recording_quality: crate::network_status::effective_studio_quality(
+            settings.studio_recording_quality.into(),
+            crate::network_status::current_upload_mbps(),
+        ),
         out_of_process_muxer: settings.out_of_process_muxer,
         instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
     };

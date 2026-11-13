@@ -85,6 +85,7 @@ mod power;
 mod presets;
 mod style_presets;
 mod project_save;
+mod network_status;
 mod recording;
 mod screenshot;
 mod screenshot_annotations;
@@ -405,6 +406,7 @@ fn main() {
         platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
+        crate::network_status::NetworkStatus::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);
@@ -512,6 +514,7 @@ fn main() {
         app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
         upload::instant_cleanup::init(cx);
+        network_status::spawn_monitor(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu
