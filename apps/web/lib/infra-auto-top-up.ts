@@ -141,6 +141,12 @@ const SETTLED_REFERENCE_TYPES = [
 	AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
 ];
 
+const ATTEMPT_LEDGER_TYPES = {
+	[AUTO_TOP_UP_REFERENCE_TYPE]: "topup",
+	[AUTO_TOP_UP_FAILED_REFERENCE_TYPE]: "topup_failed",
+	[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]: "topup_pending",
+} as const;
+
 async function lastAttempt(
 	accountId: string,
 	referenceTypes: typeof ATTEMPT_REFERENCE_TYPES = ATTEMPT_REFERENCE_TYPES,
@@ -155,6 +161,10 @@ async function lastAttempt(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
+				inArray(
+					developerCreditTransactions.type,
+					referenceTypes.map((type) => ATTEMPT_LEDGER_TYPES[type]),
+				),
 				inArray(developerCreditTransactions.referenceType, referenceTypes),
 			),
 		)

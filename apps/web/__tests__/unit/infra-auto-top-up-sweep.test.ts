@@ -4,6 +4,7 @@ const state = vi.hoisted(() => ({
 	due: [] as string[],
 	pages: [] as { sql: string; cursor: string | null; limit: number }[],
 	accountReads: 0,
+	other: [] as { sql: string; params: unknown[] }[],
 }));
 
 vi.mock("@cap/database", async () => {
@@ -21,6 +22,7 @@ vi.mock("@cap/database", async () => {
 			};
 		}
 		state.accountReads += 1;
+		state.other.push({ sql, params });
 		return { rows: [] };
 	});
 	return { db: () => client };
@@ -38,7 +40,7 @@ vi.mock("@/lib/infra-billing-emails", () => ({
 	sendInfraTopUpFailedEmail: vi.fn(),
 }));
 
-import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
+import { getAutoTopUpFailure, runDueAutoTopUps } from "@/lib/infra-auto-top-up";
 
 beforeEach(() => {
 	state.due = Array.from(
@@ -47,6 +49,7 @@ beforeEach(() => {
 	);
 	state.pages = [];
 	state.accountReads = 0;
+	state.other = [];
 });
 
 describe("auto top-up sweep selection", () => {
@@ -94,5 +97,30 @@ describe("auto top-up sweep selection", () => {
 		clock.mockRestore();
 		expect(state.accountReads).toBe(10);
 		expect(state.pages).toHaveLength(1);
+	});
+});
+
+describe("last auto top-up lookup", () => {
+	it("reads the account's top-up rows by type, so the account and type index serves it", async () => {
+		expect(await getAutoTopUpFailure("account-0001")).toBeNull();
+
+		expect(state.other).toHaveLength(1);
+		const [{ sql, params }] = state.other as [
+			{ sql: string; params: unknown[] },
+		];
+		expect(sql).toContain(
+			"where (`developer_credit_transactions`.`accountId` = ? and `developer_credit_transactions`.`type` in (?, ?) and `developer_credit_transactions`.`referenceType` in (?, ?))",
+		);
+		expect(sql).toContain(
+			"order by `developer_credit_transactions`.`createdAt` desc limit ?",
+		);
+		expect(params).toEqual([
+			"account-0001",
+			"topup",
+			"topup_failed",
+			"auto_top_up",
+			"auto_top_up_failed",
+			1,
+		]);
 	});
 });
