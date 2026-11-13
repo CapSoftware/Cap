@@ -2,37 +2,26 @@ import {
 	DEFAULT_TIER,
 	PRICE_ROWS,
 	PRICES,
+	type PriceRow,
 	TIER_LABEL,
 	TIERS,
 	usd,
 } from "@/components/pages/infra/content";
 import { MONO } from "@/components/pages/infra/theme";
+import { INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES } from "@/lib/infra-pricing";
 import { HAIRLINE, InfraStage } from "./Stage";
 
 const ROW = `border-b ${HAIRLINE}`;
 
-/**
- * $0.95 per 1,000 delivered minutes at every resolution, billed from
- * 14 November 2026. Import INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES from
- * lib/infra-pricing once the delivery debit PR replaces main's per-tier record
- * with this flat number.
- */
-const DELIVERY_PER_1000_MINUTES = 0.95;
+const SPEECH_ROW: PriceRow = {
+	meter: "Speech to text",
+	price: usd(PRICES.speechPerHour),
+	note: "per audio hour",
+};
 
-const ROWS = [
-	...PRICE_ROWS.slice(0, 2),
-	{
-		meter: "Delivery",
-		price: usd(DELIVERY_PER_1000_MINUTES),
-		note: "per 1,000 delivered minutes, any resolution",
-	},
-	{
-		meter: "Speech to text",
-		price: usd(PRICES.speechPerHour),
-		note: "per audio hour",
-	},
-	...PRICE_ROWS.slice(2),
-];
+const ROWS = PRICE_ROWS.flatMap((row) =>
+	row.meter === "Player" ? [SPEECH_ROW, row] : [row],
+);
 
 const FIGURE = `${MONO} text-[13.5px] tabular-nums text-[#E8ECF4]`;
 
@@ -141,12 +130,12 @@ const COMPARE = [
 	{
 		what: "Delivering 1080p",
 		unit: "1,000 delivered minutes",
-		prices: [usd(DELIVERY_PER_1000_MINUTES), usd(1), usd(1)],
+		prices: [usd(INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES), usd(1), usd(1)],
 	},
 	{
 		what: "Delivering 4K",
 		unit: "1,000 delivered minutes",
-		prices: [usd(DELIVERY_PER_1000_MINUTES), usd(3.2), usd(1)],
+		prices: [usd(INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES), usd(3.2), usd(1)],
 	},
 ] as const;
 
