@@ -568,7 +568,7 @@ A video is `ready` as soon as its first output can be played, so playback can st
 
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
 
-`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed.
+`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed. While `takenDown` is `true` the playback URLs are `null` whatever `outputs` says, and `outputs` keeps describing what was encoded.
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
 

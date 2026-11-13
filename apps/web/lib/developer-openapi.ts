@@ -330,7 +330,7 @@ const playbackProperties = {
 		type: "object",
 		required: ["hls", "mp4"],
 		description:
-			"Whether each output is still coming. ready means its URL is set. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
+			"Whether each output is still coming. ready means its URL is set, except while takenDown is true, when every URL is null. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
 		properties: {
 			hls: {
 				type: "string",

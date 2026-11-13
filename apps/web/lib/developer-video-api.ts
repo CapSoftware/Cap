@@ -65,16 +65,19 @@ export interface DeveloperVideoOutputStates {
 }
 
 // A null hlsUrl or mp4Url alone cannot say whether that output is still being
-// encoded or will never exist. "ready" matches a non-null URL exactly. A part
-// waiting for a busy encoder to retry is still "processing". "none" is only
-// for videos uploaded before encoding existed, which never get these outputs.
+// encoded or will never exist. "ready" matches a non-null URL exactly, except
+// on a video Cap took down: its URLs are null while takenDown is true, and its
+// outputs keep saying what was encoded, so a restore needs no new encode and a
+// client is not told to keep waiting. A part waiting for a busy encoder to
+// retry is still "processing". "none" is only for videos uploaded before
+// encoding existed, which never get these outputs.
 export function developerVideoOutputStates(
 	video: Pick<
 		DeveloperVideoRow,
 		"status" | "playbackId" | "processing" | "duration" | "width"
 	>,
 ): DeveloperVideoOutputStates {
-	const outputs = developerVideoOutputs(video);
+	const outputs = developerVideoOutputs({ ...video, takenDown: false });
 	const processing = video.processing;
 	const state = (part: "hls" | "mp4"): DeveloperVideoOutputState => {
 		if (outputs[part]) return "ready";
