@@ -443,11 +443,13 @@ export async function presignInfraUploadParts({
 	videoId,
 	uploadId,
 	partNumbers,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
 	uploadId: string;
 	partNumbers: readonly number[];
+	maxBytes?: number | null;
 }): Promise<
 	UploadResult<{ parts: { partNumber: number; presignedUrl: string }[] }>
 > {
@@ -457,6 +459,25 @@ export async function presignInfraUploadParts({
 			"invalid_part_count",
 			`Ask for 1 to ${MAX_PRESIGN_BATCH} parts at a time`,
 			"Split the part numbers across several presign requests.",
+		);
+	}
+	const byteLimit = uploadByteLimit(maxBytes);
+	const highestPart = Math.max(1, Math.ceil(byteLimit / MIN_PART_BYTES));
+	const overPart = partNumbers.find((partNumber) => partNumber > highestPart);
+	if (overPart !== undefined) {
+		return fail(
+			400,
+			"part_number_too_large",
+			`Part number ${overPart} is over ${highestPart}, the highest part number this upload can use`,
+			[
+				byteLimit < MAX_UPLOAD_BYTES
+					? `Every part except the last is at least 5 MB, so a file within the ${byteLimit} byte limit set for this upload never needs a part number above ${highestPart}.`
+					: `Every part except the last is at least 5 MB, so a file within the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit never needs a part number above ${highestPart}.`,
+				"No part in this request was signed. Number the parts from 1 with no gaps",
+				byteLimit < MAX_UPLOAD_BYTES
+					? "and ask again, or get a token with a larger maxBytes from your server."
+					: "and ask again.",
+			].join(" "),
 		);
 	}
 	const upload = await openUpload(appId, videoId);
