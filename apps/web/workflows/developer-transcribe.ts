@@ -30,7 +30,7 @@ import {
 import {
 	claimTranscriptRun,
 	failTranscriptRun,
-	runFinishedTranscript,
+	runOwnedState,
 	transcriptAwaitsSpeech,
 } from "@/lib/developer-transcript-run";
 import {
@@ -370,39 +370,52 @@ export async function runTranscriptFastPath(
 
 	const startedAt = performance.now();
 	const overBudget = () => performance.now() - startedAt > FAST_PATH_BUDGET_MS;
+	let saved: ExtractedAudio | null;
 	try {
-		if (!(await claimTranscriptRun(transcriptId, runId))) {
-			const finished = await runFinishedTranscript(transcriptId, runId);
-			if (finished === "complete") {
+		if (await claimTranscriptRun(transcriptId, runId)) {
+			saved = await savedExtraction(transcriptId);
+		} else {
+			const state = await runOwnedState(transcriptId, runId);
+			if (state === "complete") {
 				return { resume: "finalize", settlement: "complete" };
 			}
-			return finished === "ended"
-				? { resume: "finalize", settlement: "skipped" }
-				: { resume: "unclaimed" };
+			if (state === "ended") {
+				return { resume: "finalize", settlement: "skipped" };
+			}
+			if (state !== "processing") return { resume: "unclaimed" };
+			saved = (await savedExtraction(transcriptId)) ?? {
+				ok: true,
+				audio: null,
+				durationSeconds: 0,
+			};
 		}
 	} catch (error) {
 		handOff(transcriptId, "claim", error);
 		return { resume: "claim" };
 	}
 
-	try {
-		const source = await prepareSource(transcriptId, null);
-		if (!source.ok) return { resume: "prepare", source };
-	} catch (error) {
-		handOff(transcriptId, "prepare", error);
-		return { resume: "prepare", source: null };
-	}
-
-	if (overBudget()) return { resume: "extract", audio: null };
-
 	let extracted: ExtractedAudio;
-	try {
-		const audio = await extractAudio(transcriptId);
-		if (!audio.ok) return { resume: "extract", audio };
-		extracted = audio;
-	} catch (error) {
-		handOff(transcriptId, "extract", error);
-		return { resume: "extract", audio: null };
+	if (saved) {
+		extracted = saved;
+	} else {
+		try {
+			const source = await prepareSource(transcriptId, null);
+			if (!source.ok) return { resume: "prepare", source };
+		} catch (error) {
+			handOff(transcriptId, "prepare", error);
+			return { resume: "prepare", source: null };
+		}
+
+		if (overBudget()) return { resume: "extract", audio: null };
+
+		try {
+			const audio = await extractAudio(transcriptId);
+			if (!audio.ok) return { resume: "extract", audio };
+			extracted = audio;
+		} catch (error) {
+			handOff(transcriptId, "extract", error);
+			return { resume: "extract", audio: null };
+		}
 	}
 
 	if (extracted.durationSeconds > FAST_PATH_MAX_AUDIO_SECONDS || overBudget()) {
@@ -428,6 +441,23 @@ export async function runTranscriptFastPath(
 		handOff(transcriptId, "settle", error);
 		return { resume: "settle", transcription };
 	}
+}
+
+async function savedExtraction(
+	transcriptId: string,
+): Promise<ExtractedAudio | null> {
+	const transcript = await loadTranscriptRow(transcriptId);
+	if (!transcript || transcript.durationSeconds === null) return null;
+	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
+	const audioSaved = ((await developerObjectSize(keys.audio)) ?? 0) > 0;
+	if (!audioSaved && (await getDeveloperObjectText(keys.result)) === null) {
+		return null;
+	}
+	return {
+		ok: true,
+		audio: null,
+		durationSeconds: transcript.durationSeconds,
+	};
 }
 
 async function claimTranscript(

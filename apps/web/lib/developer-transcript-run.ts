@@ -38,13 +38,14 @@ export async function claimTranscriptRun(transcriptId: string, runId: string) {
 	);
 }
 
-export async function runFinishedTranscript(
+export async function runOwnedState(
 	transcriptId: string,
 	runId: string,
-): Promise<"complete" | "ended" | null> {
+): Promise<"complete" | "ended" | "processing" | null> {
 	const row = await loadRun(transcriptId);
 	if (!row || row.runId !== runId) return null;
 	if (row.status === "complete") return "complete";
+	if (row.status === "processing") return "processing";
 	return row.status === "error" ? "ended" : null;
 }
 
