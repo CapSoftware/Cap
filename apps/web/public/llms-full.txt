@@ -19,6 +19,7 @@ Cap Infra is Cap's usage-billed API for building video and speech into your own 
 Auth:
 - Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code, a client bundle or a public environment variable.
 - To upload from a browser, the server calls `POST /api/developer/v1/uploads`, which creates the video and returns a short-lived upload token (`cut_`) for that one video. The browser sends the token as its Bearer credential to the multipart upload endpoints under `/api/developer/sdk/v1/upload/multipart/` (initiate, presign-part, complete). `POST /api/developer/v1/uploads/{id}/token` renews an expired token for the same video.
+- To import a file that is already online: For a video file already at a public https URL, send `POST /api/developer/v1/videos` with `{"url": "https://..."}` and Cap downloads and encodes it, with no upload. The answer is the video in status `uploading` with an `import` object. Private, non-https and dead links, web pages and files over 36 GB are refused on the request (`url_not_allowed`, `url_unreachable`, `unsupported_format`, `too_large`). The download must finish within 12 minutes. 2 imports per app at once, 30 per key per hour.
 - A public `cpk_` key cannot create or upload videos.
 
 Limits and polling:

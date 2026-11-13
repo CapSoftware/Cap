@@ -11,6 +11,7 @@ import {
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoImport,
 	videoLinks,
 	videoRow,
 } from "./shape";
@@ -79,9 +80,12 @@ const MISSING_LINK_ADVICE: Record<
 const videoCanPlay = (video: Record<string, unknown>) =>
 	video.ready === true || video.status === "ready";
 
+const videoIsDownloading = (video: Record<string, unknown>) =>
+	asRecord(video.import).state === "downloading";
+
 const videoIsFinal = (video: Record<string, unknown>) =>
 	video.status === "errored" ||
-	video.status === "uploading" ||
+	(video.status === "uploading" && !videoIsDownloading(video)) ||
 	(videoCanPlay(video) && video.playbackId === null);
 
 const videoId = z.string().min(1).describe("The video id");
@@ -368,6 +372,63 @@ export function createTools(deps: ToolDeps): Tool[] {
 			},
 		}),
 		tool({
+			name: "videos_import",
+			title: "Import a video from a URL",
+			description:
+				"Create a video from a public https link to a video file, such as an .mp4 on a CDN or storage bucket (not a page that plays it). Cap downloads and encodes it, so nothing is uploaded from here. Returns the video id with its share and embed links; call videos_wait, which keeps waiting while the file downloads. A link that is not public https, does not answer, is a web page or is over the size limit is refused straight away. The download must finish within 12 minutes; for larger or slower files upload them instead. Billed like an upload.",
+			kind: "write",
+			input: {
+				url: z
+					.string()
+					.url()
+					.max(2048)
+					.describe("Public https URL of the video file itself"),
+				name: z.string().max(255).optional().describe("Video name"),
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe("Your own user id for this video, used to filter lists"),
+				maxResolutionTier: z
+					.enum(RESOLUTION_TIERS)
+					.optional()
+					.describe(
+						"Highest resolution to encode and bill (default 1080p, the cheapest)",
+					),
+				metadata,
+				idempotencyKey: z
+					.string()
+					.regex(/^[A-Za-z0-9._-]{8,128}$/)
+					.optional()
+					.describe(
+						"Repeat the same key to get the same video back instead of a second download",
+					),
+			},
+			run: async (args, call) => {
+				const { idempotencyKey, ...body } = args;
+				const video = dataOf(
+					await client.call("importVideo", {
+						body,
+						headers:
+							idempotencyKey === undefined
+								? undefined
+								: { "Idempotency-Key": idempotencyKey },
+						signal: call.signal,
+					}),
+				);
+				const id = String(video.id ?? "");
+				call.announce("video_created", { videoId: id });
+				return {
+					videoId: id,
+					status: video.status ?? "uploading",
+					...videoImport(video),
+					...videoLinks(video),
+					next: "Call videos_wait with this videoId to get the playback links once the file is downloaded and encoded.",
+				};
+			},
+		}),
+		tool({
 			name: "videos_get",
 			title: "Get a video",
 			description:
@@ -459,7 +520,8 @@ export function createTools(deps: ToolDeps): Tool[] {
 								waitedSeconds: outcome.waitedSeconds,
 								next: MISSING_LINK_ADVICE[surface][firstAbsent],
 							}),
-					...(last.status === "uploading"
+					...videoImport(last),
+					...(last.status === "uploading" && !videoIsDownloading(last)
 						? {
 								next: UPLOADING_NEXT[surface],
 							}
@@ -867,7 +929,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 		}),
 	];
 
-	if (local) return tools;
+	// The npm package lists its tools in a README that changes only with a
+	// release, so the stdio server gets videos_import in its next release.
+	if (local) return tools.filter((entry) => entry.name !== "videos_import");
 	return [
 		...createHostedUploadTools(deps),
 		...tools.filter((entry) => entry.name !== "videos_upload"),
