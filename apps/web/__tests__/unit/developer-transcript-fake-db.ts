@@ -233,18 +233,25 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 			const state = {
 				condition: undefined as SQL | undefined,
 				ordered: false,
+				orderColumn: "createdAt",
+				ascending: false,
 				limit: undefined as number | undefined,
 				offset: 0,
 			};
 			const run = async () => {
 				let rows = rowsOf(table).filter(compile(state.condition));
 				if (state.ordered) {
+					const time = (row: Row) => {
+						const value = row[state.orderColumn];
+						return value instanceof Date ? value.getTime() : 0;
+					};
+					const direction = state.ascending ? -1 : 1;
 					rows = [...rows].sort((a, b) => {
-						const byDate =
-							(b.createdAt as Date).getTime() - (a.createdAt as Date).getTime();
-						return byDate !== 0
-							? byDate
-							: String(b.id).localeCompare(String(a.id));
+						const byDate = time(b) - time(a);
+						return (
+							direction *
+							(byDate !== 0 ? byDate : String(b.id).localeCompare(String(a.id)))
+						);
 					});
 				}
 				const scalars: Row = {};
@@ -284,8 +291,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 					state.condition = condition;
 					return chain;
 				},
-				orderBy() {
+				orderBy(first?: SQL) {
 					state.ordered = true;
+					const named = first
+						? dialect.sqlToQuery(first).sql.match(/`(\w+)`(?: (desc|asc))?$/i)
+						: null;
+					state.orderColumn = named?.[1] ?? "createdAt";
+					state.ascending = named?.[2]?.toLowerCase() === "asc";
 					return chain;
 				},
 				limit(count: number) {

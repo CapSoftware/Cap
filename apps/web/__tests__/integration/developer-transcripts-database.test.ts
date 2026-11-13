@@ -1207,6 +1207,15 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			...overrides,
 		});
 
+	const transcriptRow = async (transcriptId: string) => {
+		const [row] = await database()
+			.select()
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.id, transcriptId));
+		if (!row) throw new Error("Transcript fixture is missing.");
+		return row;
+	};
+
 	const makeCaptionSource = async (
 		appId: string,
 		videoId: string | null,
@@ -1239,6 +1248,7 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			wordCount: text.split(" ").length,
 			resultKey,
 			completedAt: new Date(),
+			requestedAt: overrides.createdAt ?? new Date(),
 			...overrides,
 		});
 		return transcriptId;
@@ -1430,17 +1440,19 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(await developerVideoCaptions({ id: videoId, appId })).toEqual([]);
 	});
 
-	it("orders two transcripts created in the same second the same way every time", async () => {
+	it("uses the transcript requested last when two were created in the same second", async () => {
 		const appId = await makeApp(50_000);
 		const videoId = await makeReadyVideo(appId);
 		const createdAt = new Date("2026-11-12T10:00:00.000Z");
 		const first = await makeCaptionSource(appId, videoId, "first words", {
-			id: `a${id().slice(1)}`,
-			createdAt,
-		});
-		const second = await makeCaptionSource(appId, videoId, "second words", {
 			id: `z${id().slice(1)}`,
 			createdAt,
+			requestedAt: new Date("2026-11-12T10:00:00.120Z"),
+		});
+		const second = await makeCaptionSource(appId, videoId, "second words", {
+			id: `a${id().slice(1)}`,
+			createdAt,
+			requestedAt: new Date("2026-11-12T10:00:00.870Z"),
 		});
 
 		for (let round = 0; round < 5; round++) {
@@ -1448,7 +1460,26 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 				await syncVideoCaptions({ appId, videoId, language: "en" }),
 			).toEqual({ state: "written", transcriptId: second });
 		}
+		expect((await transcriptRow(second)).requestedAt?.toISOString()).toBe(
+			"2026-11-12T10:00:00.870Z",
+		);
 		expect(first).not.toBe(second);
+	});
+
+	it("orders video transcripts created through the API within one second by when they were requested", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const created: string[] = [];
+		for (let index = 0; index < 3; index++) {
+			const result = await createTranscriptFromVideo(appId, { videoId });
+			if (!result.ok) throw new Error("Video transcript was not created.");
+			created.push(result.transcript.id);
+		}
+		const rows = await Promise.all(created.map(transcriptRow));
+		const times = rows.map((row) => row.requestedAt?.getTime() ?? 0);
+		expect(times.every((time) => time > 0)).toBe(true);
+		expect([...times].sort((a, b) => a - b)).toEqual(times);
+		expect(new Set(times).size).toBe(3);
 	});
 
 	it("repairs captions left by a failed delete from the hourly cleanup, reading through the status index", async () => {
@@ -1472,6 +1503,7 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		const result = await reconcileDeletedVideoCaptions();
 
 		expect(result.failed).toBe(0);
+		expect(result.finished).toBe(true);
 		expect(result.synced).toBeGreaterThanOrEqual(1);
 		expect(fixture.objects.get(key)).toContain("older words");
 		const plan = await explainLastQuery("`videoId` is not null");

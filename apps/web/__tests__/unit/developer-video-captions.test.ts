@@ -203,11 +203,14 @@ const resultFor = (text: string) =>
 		segments: [],
 	});
 
+let requests = 0;
+
 const seedCompleted = (
 	id: string,
 	text: string,
 	row: Record<string, unknown> = {},
 ) => {
+	requests += 1;
 	const resultKey = `developer/app-1/transcripts/${id}/result.json`;
 	context.objects.set(resultKey, resultFor(text));
 	return fake().seed(developerTranscripts, {
@@ -220,6 +223,7 @@ const seedCompleted = (
 		text,
 		wordCount: text.split(" ").length,
 		resultKey,
+		requestedAt: new Date(Date.parse("2026-11-12T10:00:00.000Z") + requests),
 		completedAt: new Date("2026-11-12T10:00:00.000Z"),
 		...row,
 	});
@@ -911,7 +915,7 @@ describe("the caption file of a video", () => {
 		const deleted = transcripts().find((row) => row.id === "tr-new");
 		expect(
 			await reconcileDeletedVideoCaptions(deleted?.updatedAt as Date),
-		).toEqual({ synced: 1, failed: 0 });
+		).toEqual({ synced: 1, failed: 0, finished: true });
 		expect(context.objects.get(EN_KEY)).toContain("older words");
 	});
 
@@ -943,6 +947,7 @@ describe("the caption file of a video", () => {
 		expect(await reconcileDeletedVideoCaptions(now)).toEqual({
 			synced: 1,
 			failed: 0,
+			finished: true,
 		});
 		expect(context.objects.has(EN_KEY)).toBe(false);
 		expect(context.objects.has(DE_KEY)).toBe(true);
@@ -961,6 +966,95 @@ describe("the caption file of a video", () => {
 
 		expect(
 			await reconcileDeletedVideoCaptions(latest?.updatedAt as Date),
-		).toEqual({ synced: 1, failed: 1 });
+		).toEqual({ synced: 1, failed: 1, finished: true });
+	});
+
+	it("uses the transcript requested last, even when both were created in the same second", async () => {
+		seedVideo();
+		const second = new Date("2026-11-12T10:00:00.000Z");
+		seedCompleted("tr-z-first", "first words", {
+			createdAt: second,
+			requestedAt: new Date("2026-11-12T10:00:00.100Z"),
+		});
+		seedCompleted("tr-a-second", "second words", {
+			createdAt: second,
+			requestedAt: new Date("2026-11-12T10:00:00.900Z"),
+		});
+
+		expect(await sync()).toEqual({
+			state: "written",
+			transcriptId: "tr-a-second",
+		});
+	});
+
+	it("records when a video transcript was requested, to the millisecond", async () => {
+		seedVideo();
+		const before = Date.now();
+		const created = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+		});
+		if (!created.ok) throw new Error("create failed");
+		const requestedAt = transcripts().find(
+			(row) => row.id === created.transcript.id,
+		)?.requestedAt as Date;
+
+		expect(requestedAt).toBeInstanceOf(Date);
+		expect(requestedAt.getTime()).toBeGreaterThanOrEqual(before);
+		expect(requestedAt.getTime()).toBeLessThanOrEqual(Date.now());
+	});
+
+	it("walks past the first page and repairs every group deleted in the window", async () => {
+		const base = Date.parse("2026-11-12T11:00:00.000Z");
+		for (let index = 0; index < 450; index++) {
+			seedVideo({ id: `video-${index}` });
+			const resultKey = `developer/app-1/transcripts/tr-${index}/result.json`;
+			context.objects.set(resultKey, resultFor("gone words"));
+			fake().seed(developerTranscripts, {
+				id: `tr-${index}`,
+				appId: "app-1",
+				status: "complete",
+				sourceType: "video",
+				videoId: `video-${index}`,
+				language: "en",
+				wordCount: 2,
+				resultKey,
+				deletedAt: new Date(base),
+				updatedAt: new Date(base + Math.floor(index / 3) * 1000),
+			});
+			context.objects.set(
+				`developer/app-1/video-${index}/captions/en.vtt`,
+				"WEBVTT\n\nstale\n",
+			);
+		}
+
+		expect(
+			await reconcileDeletedVideoCaptions(new Date(base + 600_000)),
+		).toEqual({ synced: 450, failed: 0, finished: true });
+		expect(
+			[...context.objects.keys()].filter((key) => key.endsWith(".vtt")),
+		).toEqual([]);
+	});
+
+	it("repairs each video and language once per run however many of its transcripts were deleted", async () => {
+		seedVideo();
+		for (const id of ["tr-1", "tr-2", "tr-3"]) {
+			seedCompleted(id, "gone words", { deletedAt: new Date() });
+		}
+		context.puts = [];
+		const latest = transcripts().find((row) => row.id === "tr-3");
+
+		expect(
+			await reconcileDeletedVideoCaptions(latest?.updatedAt as Date),
+		).toEqual({ synced: 1, failed: 0, finished: true });
+	});
+
+	it("stops at its time budget and says it did not finish", async () => {
+		seedVideo();
+		seedCompleted("tr-1", "gone words", { deletedAt: new Date() });
+		const latest = transcripts().find((row) => row.id === "tr-1");
+
+		expect(
+			await reconcileDeletedVideoCaptions(latest?.updatedAt as Date, 0),
+		).toEqual({ synced: 0, failed: 0, finished: false });
 	});
 });
