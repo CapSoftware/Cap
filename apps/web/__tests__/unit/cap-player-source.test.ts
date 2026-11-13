@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	connectMessages,
+	type MessageTarget,
+} from "@/components/cap-player/messages";
+import {
 	AUTO_LEVEL,
 	attachSource,
 	isSharper,
@@ -226,9 +230,20 @@ describe("startingEstimate", () => {
 	const hint = (connection?: object) =>
 		vi.stubGlobal("navigator", { vendor: "", connection });
 
-	it("assumes a line for the player's rendition when there is no hint", () => {
+	it("starts as low as Chrome's reading when the browser gives no hint", () => {
 		hint();
-		expect(startingEstimate()).toBe(5_000_000);
+		expect(startingEstimate()).toBe(1_200_000);
+	});
+
+	it("picks the smallest rendition of a 1136 px hero with no hint, so a slow line shows a frame soon", () => {
+		hint();
+		expect(
+			pickStartingLevel(
+				LADDER,
+				{ width: 1136, height: 639 },
+				startingEstimate(),
+			),
+		).toBe(0);
 	});
 
 	it("takes the browser's reading, never above the default", () => {
@@ -911,16 +926,101 @@ describe("attachSource with hls.js", () => {
 		expect(hls.startLoads).toEqual([-1]);
 	});
 
-	it("starts on the rendition that fits when the browser gives no connection estimate", async () => {
+	it("starts low when the browser gives no connection estimate, then steps up at the next segment without a flush", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+		let seekCount = 0;
+		Object.defineProperty(video, "currentTime", {
+			get: () => 0,
+			set: () => {
+				seekCount++;
+			},
+		});
+		const seeks = () => seekCount;
+
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+
+		expect(hls.startLevel).toBe(0);
+		expect(hls.loadLevel).toBe(0);
+		expect(hls.config.abrEwmaDefaultEstimate).toBe(1_200_000);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		expect(hls.currentLevel).toBe(-1);
+		void video.play();
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		video.dispatchEvent(new Event("timeupdate"));
+		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(1);
+		const before = seeks();
+
+		hls.emit("fragBuffered", { frag: { type: "main", level: 1, duration: 4 } });
+		expect(hls.loadLevel).toBe(AUTO_LEVEL);
+		expect(seeks()).toBe(before);
+	});
+
+	it("steps up only once a frame is on screen where the browser can say so", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+		let frame: (() => void) | null = null;
+		Object.assign(video, {
+			requestVideoFrameCallback: (callback: () => void) => {
+				frame = callback;
+				return 1;
+			},
+		});
+
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		(frame as (() => void) | null)?.();
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(1);
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("does not step up after it has stopped", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+
+		const { stop } = attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
+		stop();
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+	});
+
+	it("stays low at play when the first segment shows a slow line", async () => {
 		macSafari();
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS });
 		const hls = await hlsFor();
 		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_600_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
 
-		expect(hls.startLevel).toBe(1);
-		expect(hls.config.abrEwmaDefaultEstimate).toBe(5_000_000);
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("hands a fatal hls.js error in Safari to its own HLS player, then to the MP4", async () => {
@@ -1249,7 +1349,78 @@ describe("attachSource switching to the rendition that fits", () => {
 		setLevel(3);
 		video.dispatchEvent(new Event("seeked"));
 
+		expect(hls.currentLevel).toBe(3);
+	});
+
+	it("switches at once to a pick sharper than the picture, and redraws when it lands", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const seeks = countSeeks(video);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 0;
+		hls.bandwidthEstimate = (LADDER[2]?.bitrate ?? 0) * 4;
+		const before = seeks();
+
+		setLevel(2);
+
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		held(hls, 2);
+		expect(seeks()).toBe(before + 1);
+	});
+
+	it("changes to a sharper pick at the next segment when the line could not refill the buffer quickly", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 0;
+		hls.bandwidthEstimate = (LADDER[2]?.bitrate ?? 0) * 4 - 1;
+
+		setLevel(2);
+
+		expect(hls.currentLevel).toBe(0);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(2);
+	});
+
+	it("changes to a lower pick or to Auto at the next segment", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 2;
+		hls.bandwidthEstimate = 1_000_000_000;
+
+		setLevel(0);
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(0);
+
+		setLevel(AUTO_LEVEL);
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			AUTO_LEVEL,
+		);
+	});
+
+	it("keeps a pick made before play from loading anything until play", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+
+		setLevel(2);
 		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		void video.play();
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(2);
 	});
 
 	it("switches by resolution when bitrate does not rise with it", async () => {
@@ -1602,5 +1773,235 @@ describe("native HLS renditions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(onLevels).toHaveBeenCalledTimes(1);
+	});
+});
+
+// Safari's own HLS player, as measured on iPhone: after a new source is set
+// the element reads time zero and no duration until its metadata is in, and a
+// seek reads zero until it lands. The events sent to the page must not.
+describe("events sent from Safari's own HLS player", () => {
+	const iosPlayer = async (startAt?: number) => {
+		iphone(true);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(MASTER)),
+		);
+		const video = new FakeVideo(true);
+		Object.assign(video, { currentSrc: "", getAttribute: () => null });
+		const attached = attach(video, { hls: HLS, mp4: MP4 }, { startAt });
+		const posted: Record<string, unknown>[] = [];
+		const target = Object.assign(new EventTarget(), {
+			parent: {
+				postMessage: (message: unknown) =>
+					posted.push(message as Record<string, unknown>),
+			},
+		}) as unknown as MessageTarget;
+		const connection = connectMessages(
+			target,
+			video as unknown as HTMLVideoElement,
+			{
+				setQuality: () => undefined,
+				seekDuringSwitch: attached.seekDuringSwitch,
+				heldTime: attached.heldTime,
+				takeSwitchPlay: attached.takeSwitchPlay,
+			},
+		);
+		const sequence = () =>
+			posted
+				.filter((message) => message.event !== "timeupdate")
+				.map(
+					(message) =>
+						`${message.event} ${message.currentTime} ${message.duration}${message.paused ? " paused" : ""}`,
+				);
+		const swapSource = () => {
+			video.currentTime = 0;
+			video.duration = Number.NaN;
+		};
+		const land = () => video.dispatchEvent(new Event("seeked"));
+		return {
+			video,
+			connection,
+			posted,
+			sequence,
+			swapSource,
+			land,
+			...attached,
+		};
+	};
+
+	const loaded = async (player: Awaited<ReturnType<typeof iosPlayer>>) => {
+		player.video.reach(30);
+		await vi.waitFor(() => expect(player.onLevels).toHaveBeenCalledTimes(2));
+		const levels = player.onLevels.mock.calls[1]?.[0] as ReturnType<
+			typeof listLevels
+		>;
+		return (label: string) => {
+			const level = levels.find((entry) => entry.label === label);
+			if (!level) throw new Error(`no ${label}`);
+			return level.index;
+		};
+	};
+
+	it("keeps the time and sends no play when a rendition is picked while playing", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 6.3;
+
+		player.setLevel(index("1080p"));
+		player.swapSource();
+		player.connection.send("qualitychange", { quality: "1080p", auto: false });
+		video.dispatchEvent(new Event("timeupdate"));
+		video.reach(30);
+		expect(video.currentTime).toBe(6.3);
+		player.land();
+		video.currentTime = 7.5;
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"qualitychange 6.3 30",
+			"pause 7.5 30 paused",
+		]);
+		expect(
+			player.posted
+				.filter((message) => message.event === "timeupdate")
+				.map((message) => message.currentTime),
+		).toEqual([6.3]);
+	});
+
+	it("keeps the time of a paused switch, then sends the viewer's play from it", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		video.currentTime = 7.5;
+
+		player.setLevel(index("360p"));
+		player.swapSource();
+		player.connection.send("qualitychange", { quality: "360p", auto: false });
+		video.reach(30);
+		player.land();
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"qualitychange 7.5 30 paused",
+			"play 7.5 30",
+		]);
+	});
+
+	it("sends a play the viewer makes after pausing during a switch", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 4;
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"pause 4 30 paused",
+			"play 4 30",
+		]);
+	});
+
+	it("does not hold back a later play when the switch's own play never came", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 4;
+		video.refusals.push("AbortError");
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		video.paused = true;
+		video.reach(30);
+		player.land();
+		await video.play();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"play 4 30",
+		]);
+	});
+
+	it("reports the start time from the first play when t is set", async () => {
+		const player = await iosPlayer(10);
+		const { video } = player;
+
+		await video.play();
+		video.dispatchEvent(new Event("timeupdate"));
+		video.reach(30);
+		expect(video.currentTime).toBe(10);
+		player.land();
+		video.currentTime = 10.4;
+		video.paused = true;
+		video.dispatchEvent(new Event("pause"));
+
+		expect(player.sequence()).toEqual([
+			"ready 10 0 paused",
+			"play 10 0",
+			"pause 10.4 30 paused",
+		]);
+	});
+
+	it("reports the real time once a start past the end is dropped", async () => {
+		const player = await iosPlayer(300);
+		const { video } = player;
+
+		video.reach(30);
+		await video.play();
+
+		expect(player.sequence()).toEqual(["ready 300 0 paused", "play 0 30"]);
+	});
+
+	it("lets a seek made while a switch loads set the time the events carry", async () => {
+		const player = await iosPlayer();
+		const index = await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 6;
+
+		player.setLevel(index("720p"));
+		player.swapSource();
+		expect(player.seekDuringSwitch(20)).toBe(true);
+		player.connection.send("qualitychange", { quality: "720p", auto: false });
+		video.reach(30);
+		player.land();
+
+		expect(player.sequence()).toEqual([
+			"ready 0 0 paused",
+			"play 0 30",
+			"qualitychange 20 30",
+		]);
+		expect(video.currentTime).toBe(20);
+	});
+
+	it("leaves the events of hls.js and of an unswitched native player as they were", async () => {
+		const player = await iosPlayer();
+		await loaded(player);
+		const { video } = player;
+		await video.play();
+		video.currentTime = 3;
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect(player.heldTime()).toBeNull();
+		expect(player.takeSwitchPlay()).toBe(false);
+		expect(player.sequence()).toEqual(["ready 0 0 paused", "play 0 30"]);
+		expect(player.posted.at(-1)).toMatchObject({
+			event: "timeupdate",
+			currentTime: 3,
+		});
 	});
 });
