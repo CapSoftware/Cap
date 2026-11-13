@@ -31,7 +31,6 @@ vi.mock("@/lib/rate-limit", () => ({
 			return count > REQUESTS_PER_IP_LIMIT;
 		},
 	),
-	clientAddress: (headers: Headers) => headers.get("x-real-ip") ?? undefined,
 }));
 
 vi.mock("@/lib/visitor-location", () => ({
@@ -221,7 +220,11 @@ describe("POST /api/analytics/track", () => {
 	});
 
 	it("falls back to the GeoIP database without Vercel's headers", async () => {
-		await track({ videoId: VIDEO_ID }, "198.51.100.7");
+		// Railway's edge appends its own address to X-Forwarded-For; X-Real-IP
+		// is the client.
+		await track({ videoId: VIDEO_ID }, "198.51.100.7", {
+			"x-forwarded-for": "198.51.100.7, 203.0.113.250",
+		});
 		await track({ videoId: VIDEO_ID }, "203.0.113.50");
 
 		expect(geoIpLocation).toHaveBeenCalledWith("198.51.100.7");

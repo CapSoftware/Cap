@@ -10,11 +10,12 @@ import UAParser from "ua-parser-js";
 import { z } from "zod";
 
 import { getAnonymousName } from "@/lib/anonymous-names";
+import { getClientIp } from "@/lib/client-ip";
 import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
-import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { geoIpLocation } from "@/lib/visitor-location";
 
@@ -96,7 +97,9 @@ export async function POST(request: NextRequest) {
 			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
 		) || "";
 	if (!country) {
-		const location = geoIpLocation(clientAddress(request.headers));
+		const location = geoIpLocation(
+			getClientIp((name) => request.headers.get(name)),
+		);
 		if (location) ({ country, region, city } = location);
 	}
 

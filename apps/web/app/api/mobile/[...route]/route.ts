@@ -69,6 +69,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { getClientIp } from "@/lib/client-ip";
 import { isCommentRateLimited } from "@/lib/comment-rate-limit";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
@@ -2973,7 +2974,7 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 				region: readHeader(request, "x-vercel-ip-country-region"),
 				city: readHeader(request, "x-vercel-ip-city"),
 			}
-		: (geoIpLocation(clientAddress(toHeaders(request.headers))) ?? {
+		: (geoIpLocation(getClientIp((name) => request.headers[name])) ?? {
 				country: "",
 				region: "",
 				city: "",
