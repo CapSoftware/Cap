@@ -1,7 +1,7 @@
 import type { TranscriptErrorCode } from "@/lib/developer-transcripts";
 
 export type TranscriptRequestError = {
-	status: 400 | 402 | 403 | 404 | 409 | 503;
+	status: 400 | 402 | 403 | 404 | 409 | 429 | 503;
 	code: string;
 	meaning: string;
 };
@@ -104,6 +104,12 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		code: "upload_not_found",
 		meaning:
 			"The file has not been uploaded yet. If the upload URL expired, repeat the create request with the same Idempotency-Key to get a new one",
+	},
+	{
+		status: 429,
+		code: "too_many_transcripts",
+		meaning:
+			"The app already has 20 transcripts queued or processing. Wait for one to finish, then send the request again",
 	},
 	{
 		status: 503,
