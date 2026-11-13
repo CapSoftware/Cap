@@ -44,7 +44,6 @@ vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("@/actions/developers/delete-video", () => ({
 	deleteDeveloperVideo: mocks.deleteVideo,
 }));
-// Small parts so a few kilobytes make a many-part upload.
 vi.mock("@/lib/infra-upload", async (original) => ({
 	...(await original<typeof import("@/lib/infra-upload")>()),
 	partBytesFor: () => PART_BYTES,
@@ -74,7 +73,12 @@ const video = (
 	state,
 });
 
-type Pending = { part: number; finish: () => void; fail: () => void };
+type Pending = {
+	part: number;
+	report: (loaded: number) => void;
+	finish: () => void;
+	fail: () => void;
+};
 
 let stage: Stage;
 let presignCalls: number[][];
@@ -110,6 +114,7 @@ function stubStorage() {
 			};
 			pending.push({
 				part: this.part,
+				report: (loaded) => this.upload.onprogress?.({ loaded }),
 				finish: () => {
 					if (!settle()) return;
 					this.upload.onprogress?.({ loaded: body.size });
@@ -136,8 +141,6 @@ function stubStorage() {
 	vi.stubGlobal("XMLHttpRequest", FakeXhr);
 }
 
-// Settles every request in flight, failing the parts told to fail, and
-// repeats until nothing new starts.
 async function drain() {
 	for (let round = 0; round < 200; round++) {
 		await flush(5);
@@ -238,7 +241,6 @@ describe("console upload parts", () => {
 		expect(parts.map((part) => part.etag)).toEqual(
 			Array.from({ length: 26 }, (_, index) => `"etag-${index + 1}"`),
 		);
-		// Links come in batches of twenty: parts in flight together share one.
 		expect(presignCalls).toEqual([
 			Array.from({ length: 20 }, (_, index) => index + 1),
 			Array.from({ length: 6 }, (_, index) => index + 21),
@@ -269,17 +271,33 @@ describe("console upload parts", () => {
 		expect(completeBodies[0]?.parts.map((part) => part.partNumber)).toEqual([
 			1, 2, 3, 4, 5, 6, 7, 8,
 		]);
-		// The retry asked for a new link from part 3 on.
 		expect(presignCalls.length).toBe(2);
 		expect(presignCalls[1]?.[0]).toBe(3);
+	});
+
+	it("shows the bytes of every part in flight together, and drops a failed part's bytes", async () => {
+		await show();
+		await chooseFiles([file(PART_BYTES * 10)]);
+		await until(() => pending.length === 6, "six parts in flight");
+		for (const request of pending) request.report(PART_BYTES / 2);
+		await flush(20);
+		expect(text()).toContain("30%");
+
+		const first = pending.find((request) => request.part === 1) as Pending;
+		pending.splice(pending.indexOf(first), 1);
+		first.fail();
+		await flush(20);
+		expect(text()).toContain("25%");
+
+		pending[0]?.report(PART_BYTES);
+		await flush(20);
+		expect(text()).toContain("30%");
 	});
 
 	it("stops every other part when one fails for good, and never completes", async () => {
 		await show();
 		await chooseFiles([file(PART_BYTES * 30)]);
 		await until(() => pending.length === 6, "six parts in flight");
-		// Only part 2 ever answers, and always with a failure. The other five
-		// stay open until it has used all three attempts (pauses of 1 s, 2 s).
 		const failPartTwo = () => {
 			const request = pending.find((candidate) => candidate.part === 2);
 			if (!request) throw new Error("part 2 is not in flight");
