@@ -563,7 +563,7 @@ On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that ou
 
 ### Delete Video
 
-Delete a video. It is excluded from every query straight away, and its playback URLs stop answering new viewers within about a minute. Its files (the upload and every encoded output) are removed within about five minutes, and links that were already handed out stop working within about ten minutes of the delete. If the video was still being encoded when it was deleted, anything the encoder writes afterwards is removed within four hours.
+Delete a video. It is excluded from every query straight away, and its playback URLs stop answering new viewers within about a minute. Its files (the upload and every encoded output) are removed within about five minutes, and links that were already handed out stop working within about ten minutes of the delete. That includes signed media URLs, however long they still have before they expire. If the video was still being encoded when it was deleted, anything the encoder writes afterwards is removed within four hours.
 
 Deleting a video this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 
@@ -1326,7 +1326,7 @@ If the video's `hlsUrl` is still `null`, use its `mp4Url` as the `src`.
 
 - `hlsUrl`, `mp4Url` and `posterUrl` are stable. Store them and reuse them for as long as the video exists.
 - `mp4Url` and `posterUrl` answer with a `302` redirect to a signed URL on the media host, `v.cap.so`. Browsers and video players follow it. Do not store the URL you were redirected to.
-- The playlists behind `hlsUrl` list signed media URLs on the same host. A signed URL works for 12 hours. A player left paused for longer than that has to load the playlist again before it can fetch more of the video.
+- The playlists behind `hlsUrl` list signed media URLs on the same host. A signed URL works for at least 12 hours, and a file keeps the same signed URL for up to six hours, so a browser can reuse what it already downloaded when a viewer comes back. A player left paused for longer than 12 hours may have to load the playlist again before it can fetch more of the video.
 - Playback answers are cached for 60 seconds by browsers and shared caches, so a change such as a delete or a top-up can take up to a minute to show.
 
 The page above recovers from expired media URLs by itself, by switching to the MP4. To stay on HLS, add this function to the same script. It loads the playlist again and returns to the same position:

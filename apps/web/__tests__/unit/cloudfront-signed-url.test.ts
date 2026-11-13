@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+	cloudFrontExpiresAt,
 	createCloudFrontSignedUrl,
 	getCloudFrontObjectUrl,
 } from "../../../../packages/web-backend/src/S3Buckets/cloudfront-signed-url";
@@ -14,13 +15,13 @@ const { privateKey } = generateKeyPairSync("rsa", {
 
 const bucketUrl = "https://cdn.example.com";
 
-const sign = (key: string) =>
+const sign = (key: string, expiresAt = 1_900_000_000) =>
 	createCloudFrontSignedUrl({
 		bucketUrl,
 		key,
 		keyPairId: "K2JCJMDEHXQW5F",
 		privateKey,
-		expiresAt: 1_900_000_000,
+		expiresAt,
 	});
 
 const decodePolicy = (signedUrl: string) => {
@@ -81,5 +82,64 @@ describe("createCloudFrontSignedUrl", () => {
 			"https://cdn.example.com/user/video/my%20clip%20%281%29.mp4",
 		);
 		expect(baseOf(signedUrl)).toBe(resourceOf(signedUrl));
+	});
+
+	it("gives the same URL for the same key and expiry, and another for a later expiry", () => {
+		const signedUrl = sign("user/video/result.mp4");
+
+		expect(sign("user/video/result.mp4")).toBe(signedUrl);
+		expect(sign("user/video/result.mp4", 1_900_000_001)).not.toBe(signedUrl);
+		expect(sign("user/video/other.mp4")).not.toBe(signedUrl);
+	});
+});
+
+describe("cloudFrontExpiresAt", () => {
+	const now = 1_794_500_000_999;
+
+	it("counts from now when no signing date is given", () => {
+		expect(cloudFrontExpiresAt(undefined, now)).toBe(1_794_503_600);
+		expect(cloudFrontExpiresAt({}, now)).toBe(1_794_503_600);
+		expect(cloudFrontExpiresAt({ expiresIn: 43_200 }, now)).toBe(
+			Math.floor((now + 43_200 * 1000) / 1000),
+		);
+	});
+
+	it("counts from the signing date when one is given", () => {
+		const signingDate = new Date("2026-11-12T12:00:00.000Z");
+		const expected = signingDate.getTime() / 1000 + 600;
+
+		expect(cloudFrontExpiresAt({ signingDate, expiresIn: 600 }, now)).toBe(
+			expected,
+		);
+		expect(
+			cloudFrontExpiresAt(
+				{ signingDate: signingDate.toISOString(), expiresIn: 600 },
+				now,
+			),
+		).toBe(expected);
+		expect(
+			cloudFrontExpiresAt(
+				{ signingDate: signingDate.getTime() / 1000, expiresIn: 600 },
+				now,
+			),
+		).toBe(expected);
+		expect(
+			cloudFrontExpiresAt(
+				{ signingDate: String(signingDate.getTime() / 1000), expiresIn: 600 },
+				now,
+			),
+		).toBe(expected);
+	});
+
+	it("counts from now when the signing date cannot be read", () => {
+		expect(
+			cloudFrontExpiresAt({ signingDate: "not a date", expiresIn: 600 }, now),
+		).toBe(Math.floor((now + 600_000) / 1000));
+		expect(
+			cloudFrontExpiresAt(
+				{ signingDate: new Date(Number.NaN), expiresIn: 600 },
+				now,
+			),
+		).toBe(Math.floor((now + 600_000) / 1000));
 	});
 });
