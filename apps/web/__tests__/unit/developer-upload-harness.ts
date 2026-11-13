@@ -81,7 +81,7 @@ async function answer(query: string, params: unknown[]) {
 		}
 		const stored = storedKey(key, appId);
 		if (!stored || stored.revokedAt) return { rows: [] };
-		return { rows: [[appId, keyIdOf(key)]] };
+		return { rows: [[appId, keyIdOf(key), `owner-${appId}`]] };
 	}
 	if (query.includes("from `developer_videos` inner join `developer_apps`")) {
 		const [keyId, , videoId, appId] = params;

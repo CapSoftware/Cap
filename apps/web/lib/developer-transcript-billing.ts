@@ -18,7 +18,7 @@ import {
 	availableBalance,
 	heldTranscriptMicroCredits,
 } from "@/lib/infra-balance";
-import { accountStanding } from "@/lib/infra-standing";
+import { accountStanding, readStandingAccount } from "@/lib/infra-standing";
 
 export const INSUFFICIENT_CREDITS_MESSAGE =
 	"The credit balance could not cover this transcript. Nothing was charged.";
@@ -59,12 +59,10 @@ export async function transcriptStartRefusal(
 	appId: string,
 	now: Date = new Date(),
 ): Promise<TranscriptStartRefusal | null> {
-	const [account] = await db()
-		.select({ id: developerCreditAccounts.id })
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
-	const available = account ? await availableBalance(appId) : null;
+	const account = await readStandingAccount(appId);
+	const available = account
+		? account.balanceMicroCredits - account.heldMicroCredits
+		: null;
 	if (!account || available === null) {
 		return {
 			code: "insufficient_credits",
@@ -75,7 +73,11 @@ export async function transcriptStartRefusal(
 
 	const { standing, lastCharge } = await accountStanding(
 		db(),
-		{ id: account.id, balanceMicroCredits: available },
+		{
+			id: account.id,
+			balanceMicroCredits: available,
+			disputedAt: account.disputedAt,
+		},
 		now,
 	);
 	if (standing.state !== "active") {

@@ -6,8 +6,11 @@ import {
 } from "@/lib/developer-pricing";
 import {
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
+	DEVELOPER_TRANSCRIPT_POLL_SECONDS,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+	DEVELOPER_VIDEO_STATUS_POLL_SECONDS,
 } from "@/lib/developer-rate-limits";
 import {
 	TRANSCRIPT_FAILURE_CODES,
@@ -541,13 +544,15 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos, transcribe audio and video, and read credit usage.",
 			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for up to 50 parts at a time, then completeSdkUpload. If the token expires before the upload completes, renewUploadToken returns a new one for the same video and the upload continues with the same uploadId.",
 			"A public `cpk_` key cannot create or upload videos. Only an upload token made with the secret key can.",
-			"To transcribe a file at a public URL, call createTranscript. To transcribe a file you hold, call createTranscriptUpload, PUT the file to the URL it returns, then call startTranscript. Poll getTranscript until its status is `complete` or `error`.",
+			`To transcribe a file at a public URL, call createTranscript. To transcribe a file you hold, call createTranscriptUpload, PUT the file to the URL it returns, then call startTranscript. Poll getTranscript every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until its status is \`complete\` or \`error\`.`,
+			"",
+			`After completeSdkUpload, poll getDeveloperVideoStatus every ${DEVELOPER_VIDEO_STATUS_POLL_SECONDS} seconds until its status is \`ready\` or \`errored\`. A short video is usually ready on the first check.`,
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/infra. A step by step guide with browser, Node and Python examples is at https://cap.so/docs/api/get-started.",
 			"",
 			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress` from complete. The same 409 from abort means the upload is being completed: do not repeat the abort. Retry 5xx with backoff.",
 			"",
-			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
+			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, all the keys of one account together to ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE}, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses to an accepted key or token carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
 			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
 			"",
@@ -697,8 +702,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
-				description:
-					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.",
+				description: `Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this every ${DEVELOPER_VIDEO_STATUS_POLL_SECONDS} seconds after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.`,
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [videoIdParam, ...videoUserScopeParams],
@@ -761,8 +765,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			post: {
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
-				description:
-					"Creates a transcript from a public audio or video URL, or from a video the app already stores, and starts it. Send exactly one of url or videoId. The URL must use http or https on the default port and resolve to a public address, and the file must finish downloading within 15 minutes. With videoId the video must belong to this app, not be deleted and be ready: Cap reads its stored MP4 directly, so nothing is downloaded and the URL size limit does not apply. An unknown or deleted video returns 404 video_not_found, and one that is not ready returns 409 video_not_ready. A video transcript costs the transcript price only, $0.10 per audio hour. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A stored video is held for its known length. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every few seconds until status is complete or error. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header. A field the request does not know returns 400 with code invalid_request.",
+				description: `Creates a transcript from a public audio or video URL, or from a video the app already stores, and starts it. Send exactly one of url or videoId. The URL must use http or https on the default port and resolve to a public address, and the file must finish downloading within 15 minutes. With videoId the video must belong to this app, not be deleted and be ready: Cap reads its stored MP4 directly, so nothing is downloaded and the URL size limit does not apply. An unknown or deleted video returns 404 video_not_found, and one that is not ready returns 409 video_not_ready. A video transcript costs the transcript price only, $0.10 per audio hour. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A stored video is held for its known length. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until status is complete or error. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header. A field the request does not know returns 400 with code invalid_request.`,
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -833,8 +836,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getTranscript",
 				summary: "Get a transcript",
-				description:
-					"Returns the transcript with its status and, once complete, its text. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.",
+				description: `Returns the transcript with its status and, once complete, its text. Poll it every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until status is complete or error. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.`,
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
@@ -1318,7 +1320,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							words: {
 								type: ["array", "null"],
 								description:
-									"Each word with its start and end in seconds. Timings are in steps of 0.08 seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
+									"Each word with its start and end in seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
 								items: {
 									type: "object",
 									required: ["text", "start", "end"],
@@ -2212,7 +2214,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			RateLimited: {
 				...json(
 					ref("Error"),
-					`More requests in a minute than the credential allows: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token (code rate_limited).`,
+					`More requests in a minute than the credential allows: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE} for all the keys of one account, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token (code rate_limited).`,
 				),
 				headers: {
 					...rateLimitHeaders,

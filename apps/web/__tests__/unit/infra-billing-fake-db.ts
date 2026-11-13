@@ -184,9 +184,24 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		) {
 			return [];
 		}
-		return "heldMicroCredits" in query.fields
-			? [{ ...account, heldMicroCredits: ledger.heldMicroCredits }]
-			: [account];
+		if ("heldMicroCredits" in query.fields) {
+			const [dispute] = latestWritten(
+				ledger.rows.filter(
+					(row) =>
+						row.type === "adjustment" &&
+						["stripe_dispute", "manual"].includes(String(row.referenceType)),
+				),
+			);
+			return [
+				{
+					...account,
+					heldMicroCredits: ledger.heldMicroCredits,
+					disputeType: dispute?.referenceType ?? null,
+					disputeCreatedAt: dispute?.createdAt ?? null,
+				},
+			];
+		}
+		return [account];
 	}
 
 	if (query.table === developerCreditTransactions) {
@@ -221,9 +236,21 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					allowed.includes(row.type) && allowed.includes(row.referenceType),
 			);
 		}
+		if (keys === "value") {
+			const column = (query.fields.value as { name?: string }).name ?? "";
+			return latestWritten(
+				ledger.rows.filter(
+					(row) =>
+						row.type === "adjustment" &&
+						["stripe_dispute", "manual"].includes(String(row.referenceType)),
+				),
+			)
+				.slice(0, 1)
+				.map((row) => ({ value: row[column as keyof typeof row] ?? null }));
+		}
 		if (keys === "createdAt,referenceType") {
 			const types = rendered.params.slice(2);
-			return newestFirst(
+			return latestWritten(
 				ledger.rows.filter(
 					(row) =>
 						row.type === "adjustment" && types.includes(row.referenceType),

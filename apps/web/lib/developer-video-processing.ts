@@ -787,7 +787,9 @@ async function sendDeveloperVideoPart(
 	if (started.status === "busy" || started.status === "unreachable") {
 		await mutateEncode(videoId, encodeId, (processing) => {
 			const released = releasePart(processing, part, token);
-			return released ? { processing: released } : null;
+			return released
+				? { processing: { ...released, busyAt: Date.now() } }
+				: null;
 		});
 		return "busy";
 	}

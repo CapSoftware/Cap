@@ -391,7 +391,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 300 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 
@@ -435,28 +435,7 @@ Add this to `index.html`, below the other scripts:
     if (width && height) player.style.aspectRatio = `${width} / ${height}`;
 
     if (hlsUrl && window.Hls && Hls.isSupported()) {
-      const megabits = navigator.connection?.downlink;
-      const estimate = megabits > 0 ? megabits * 800000 : 1500000;
-      hls = new Hls({
-        autoStartLoad: false,
-        abrEwmaDefaultEstimate: estimate,
-        abrEwmaDefaultEstimateMax: estimate,
-        startFragPrefetch: true,
-        capLevelToPlayerSize: true,
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event, { levels }) => {
-        const wanted = player.clientWidth * window.devicePixelRatio;
-        let level = 0;
-        while (
-          levels[level + 1] &&
-          levels[level + 1].bitrate <= estimate &&
-          levels[level].width < wanted
-        ) {
-          level++;
-        }
-        hls.startLevel = level;
-        hls.startLoad();
-      });
+      hls = new Hls({ capLevelToPlayerSize: true });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal || data.response?.code === 403) playMp4();
       });
@@ -482,13 +461,12 @@ Safari plays HLS by itself. Every other browser needs [hls.js](https://github.co
 
 | Setting | Why |
 |---------|-----|
-| `autoStartLoad: false`, then `startLevel` and `startLoad()` | Start on a rendition the viewer's connection can carry. Without it hls.js starts on the first rendition the playlist lists, which is too large for a slow connection |
-| `abrEwmaDefaultEstimate` and `abrEwmaDefaultEstimateMax` | Give hls.js the browser's own estimate of the connection. Safari and Firefox do not give one, so the page assumes a slow connection there: the video starts on the smallest rendition and steps up once hls.js has measured a download |
-| `startFragPrefetch` | Fetch the first segment while the video element is still being set up |
 | `capLevelToPlayerSize` | Never load a rendition larger than the player on the page |
 | The `403` check | Media links inside the playlist expire after 12 hours. A `403` means one has expired, so switch to the MP4 at once instead of letting hls.js retry |
 | `playMp4` on a fatal error | Keep playing from the same position if HLS fails for any other reason |
 | `stopHls` at the start of `playVideo` | Stop the previous video's player before starting the next one on the same page |
+
+There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
 
 [Play a Video](/docs/api/rest-api#play-a-video) covers a Content Security Policy, bitrates and what happens when playback stops.
 
@@ -847,7 +825,9 @@ The same secret key turns an audio or video file into text. It is a separate cal
 
 1. Create the transcript with `POST /api/developer/v1/transcripts/uploads`, sending the file's exact size in bytes as `contentLength`. The response holds the transcript's `id` and a signed `upload.url`.
 2. `PUT` the file to `upload.url`.
-3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` until `status` is `complete` or `error`, leaving at least 3 seconds between checks. A complete transcript has its `text`.
+3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` every 5 seconds until `status` is `complete` or `error`. A complete transcript has its `text`.
+
+To wait on several transcripts, check them as a batch with one list call per status instead of one call each: `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`. Ask for `queued` first: a transcript only moves from `queued` to `processing` to a final status, so one missing from both lists has finished. Get it for its `text`, and keep checking it if its `status` is not yet `complete` or `error`. An app has at most 20 transcripts in flight, and checking each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
 
 A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
 
