@@ -1,8 +1,8 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "ae334805-3e34-4bb8-b485-75d29b3bde1e",
-	"prevId": "2773f4a4-e037-4a2a-9537-3e419186570c",
+	"id": "85c09243-a7b6-4390-ad3c-4d54450a0a8d",
+	"prevId": "7568082e-2748-491f-897f-16005b895884",
 	"tables": {
 		"accounts": {
 			"name": "accounts",
@@ -1068,6 +1068,11 @@
 					"name": "owner_idx",
 					"columns": ["ownerId"],
 					"isUnique": false
+				},
+				"auto_top_up_idx": {
+					"name": "auto_top_up_idx",
+					"columns": ["autoTopUpEnabled"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1172,6 +1177,11 @@
 				"account_ref_dedup_idx": {
 					"name": "account_ref_dedup_idx",
 					"columns": ["accountId", "referenceId", "referenceType"],
+					"isUnique": false
+				},
+				"reference_type_id_idx": {
+					"name": "reference_type_id_idx",
+					"columns": ["referenceType", "referenceId"],
 					"isUnique": false
 				}
 			},
@@ -1334,6 +1344,20 @@
 				"sourceUrl": {
 					"name": "sourceUrl",
 					"type": "varchar(2048)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"videoId": {
+					"name": "videoId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"requestedAt": {
+					"name": "requestedAt",
+					"type": "timestamp(3)",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
@@ -1503,6 +1527,33 @@
 				"dev_transcripts_status_updated_idx": {
 					"name": "dev_transcripts_status_updated_idx",
 					"columns": ["status", "updatedAt"],
+					"isUnique": false
+				},
+				"dev_transcripts_app_completed_idx": {
+					"name": "dev_transcripts_app_completed_idx",
+					"columns": [
+						"appId",
+						"status",
+						"completedAt",
+						"durationSeconds",
+						"billedMicroCredits"
+					],
+					"isUnique": false
+				},
+				"dev_transcripts_app_status_held_idx": {
+					"name": "dev_transcripts_app_status_held_idx",
+					"columns": [
+						"appId",
+						"status",
+						"createdAt",
+						"deletedAt",
+						"reservedMicroCredits"
+					],
+					"isUnique": false
+				},
+				"dev_transcripts_app_video_idx": {
+					"name": "dev_transcripts_app_video_idx",
+					"columns": ["appId", "videoId", "requestedAt", "id"],
 					"isUnique": false
 				}
 			},
@@ -1731,161 +1782,6 @@
 			"compositePrimaryKeys": {
 				"developer_videos_id": {
 					"name": "developer_videos_id",
-					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
-		"developer_webhook_endpoints": {
-			"name": "developer_webhook_endpoints",
-			"columns": {
-				"id": {
-					"name": "id",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"appId": {
-					"name": "appId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"url": {
-					"name": "url",
-					"type": "varchar(2048)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"secretPrefix": {
-					"name": "secretPrefix",
-					"type": "varchar(12)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"encryptedSecret": {
-					"name": "encryptedSecret",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"events": {
-					"name": "events",
-					"type": "json",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"enabled": {
-					"name": "enabled",
-					"type": "boolean",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": true
-				},
-				"disabledReason": {
-					"name": "disabledReason",
-					"type": "varchar(32)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastDeliveryAt": {
-					"name": "lastDeliveryAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastDeliveryStatus": {
-					"name": "lastDeliveryStatus",
-					"type": "varchar(16)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastResponseStatus": {
-					"name": "lastResponseStatus",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastErrorCode": {
-					"name": "lastErrorCode",
-					"type": "varchar(32)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"consecutiveFailures": {
-					"name": "consecutiveFailures",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"failingSince": {
-					"name": "failingSince",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"deletedAt": {
-					"name": "deletedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "(now())"
-				},
-				"updatedAt": {
-					"name": "updatedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"onUpdate": true,
-					"default": "(now())"
-				}
-			},
-			"indexes": {
-				"dev_webhooks_app_list_idx": {
-					"name": "dev_webhooks_app_list_idx",
-					"columns": ["appId", "deletedAt", "createdAt", "id"],
-					"isUnique": false
-				}
-			},
-			"foreignKeys": {
-				"developer_webhook_endpoints_appId_developer_apps_id_fk": {
-					"name": "developer_webhook_endpoints_appId_developer_apps_id_fk",
-					"tableFrom": "developer_webhook_endpoints",
-					"tableTo": "developer_apps",
-					"columnsFrom": ["appId"],
-					"columnsTo": ["id"],
-					"onDelete": "no action",
-					"onUpdate": "no action"
-				}
-			},
-			"compositePrimaryKeys": {
-				"developer_webhook_endpoints_id": {
-					"name": "developer_webhook_endpoints_id",
 					"columns": ["id"]
 				}
 			},

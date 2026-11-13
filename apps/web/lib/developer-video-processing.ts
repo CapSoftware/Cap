@@ -632,6 +632,8 @@ async function buildJobRequest(
 		),
 		webhookUrl: webhookUrl(part, token),
 		...(inputExtension ? { inputExtension } : {}),
+		// Lets the media server keep room for Cap's own recordings.
+		infra: true,
 	};
 
 	if (part === "mp4") {

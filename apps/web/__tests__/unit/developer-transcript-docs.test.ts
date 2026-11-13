@@ -7,6 +7,10 @@ import {
 	TRANSCRIPT_FAILURE_CODES,
 	TRANSCRIPT_REQUEST_ERRORS,
 } from "@/lib/developer-transcript-errors";
+import {
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
+	TRANSCRIPT_MAX_CONCURRENT,
+} from "@/lib/developer-transcripts";
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
@@ -130,6 +134,106 @@ describe("the language parameter", () => {
 			(code) => !transcriptDocs.includes(`\`${code}\` `),
 		);
 		expect(missing).toEqual([]);
+	});
+});
+
+describe("transcribing a stored video", () => {
+	const request = spec.components.schemas.CreateTranscriptRequest as {
+		oneOf?: { required: string[] }[];
+		required?: string[];
+		properties: Record<string, unknown>;
+	};
+	const transcript = spec.components.schemas.Transcript as {
+		properties: {
+			videoId?: { type: string[] };
+			source: { properties: { type: { enum: string[] } } };
+		};
+	};
+
+	it("accepts videoId or url on Create Transcript in the OpenAPI document", () => {
+		expect(Object.keys(request.properties)).toEqual(
+			expect.arrayContaining(["url", "videoId"]),
+		);
+		expect(request.required).toBeUndefined();
+		expect(request.oneOf).toEqual([
+			{ required: ["url"] },
+			{ required: ["videoId"] },
+		]);
+	});
+
+	it("describes the videoId field and the video source type on the transcript", () => {
+		expect(transcript.properties.videoId?.type).toEqual(["string", "null"]);
+		expect(transcript.properties.source.properties.type.enum).toEqual([
+			"upload",
+			"url",
+			"video",
+		]);
+	});
+
+	it("documents videoId, what it costs and that captions come from it", () => {
+		expect(transcriptDocs).toContain(
+			"| `videoId` | string | One of `url` or `videoId` |",
+		);
+		expect(transcriptDocs).toContain(
+			'"source": { "type": "video", "url": null }',
+		);
+		expect(transcriptDocs).toContain('"videoId": "abc123def456"');
+		expect(transcriptDocs).toContain(
+			"It costs the transcript price only, $0.10 per audio hour.",
+		);
+		expect(transcriptDocs).toContain(
+			"When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.",
+		);
+		expect(transcriptDocs).toContain("`videoId`, `contentLength`, `name`");
+	});
+
+	it("says only what ships: no player captions and no captions URL", () => {
+		for (const text of [transcriptDocs, specText]) {
+			expect(text).not.toMatch(/captions for the hosted player/i);
+			expect(text).not.toMatch(/\.vtt|captions\//i);
+		}
+		expect(transcriptDocs).not.toMatch(/player/i);
+	});
+});
+
+describe("limits and deletes that cost money", () => {
+	it("states the ceiling on running transcripts and how long to wait, from the code", () => {
+		expect(TRANSCRIPT_MAX_CONCURRENT).toBe(20);
+		expect(transcriptDocs).toContain(
+			`An app can have ${TRANSCRIPT_MAX_CONCURRENT} transcripts \`queued\` or \`processing\` at once.`,
+		);
+		expect(transcriptDocs).toContain(
+			`a \`Retry-After\` header of ${TRANSCRIPT_BUSY_RETRY_SECONDS} seconds`,
+		);
+		expect(transcriptDocs).toContain("| `429` | `too_many_transcripts` |");
+		for (const operation of ["createTranscript", "startTranscript"]) {
+			const described = Object.values(spec.paths)
+				.flatMap((path) => Object.values(path as Record<string, unknown>))
+				.find(
+					(entry) =>
+						(entry as { operationId?: string }).operationId === operation,
+				) as { description: string };
+			expect(described.description).toContain(
+				`${TRANSCRIPT_MAX_CONCURRENT} transcripts queued or processing at once`,
+			);
+		}
+	});
+
+	it("says a transcript deleted after its audio was sent is still charged", () => {
+		expect(transcriptDocs).not.toContain(
+			"A transcript deleted before it completes is not charged",
+		);
+		expect(specText).not.toContain(
+			"A transcript deleted before it completes is not charged",
+		);
+		for (const text of [transcriptDocs, specText]) {
+			expect(text).toContain(
+				"A transcript deleted before its audio is sent to speech recognition is not charged.",
+			);
+			expect(text).toContain(
+				"One deleted after that is still charged for the length of its audio when it finishes",
+			);
+		}
 	});
 });
 

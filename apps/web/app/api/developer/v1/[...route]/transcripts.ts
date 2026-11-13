@@ -1,9 +1,10 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	createTranscriptFromUrl,
+	createTranscriptFromVideo,
 	createTranscriptUpload,
 	deleteTranscript,
 	getTranscript,
@@ -16,6 +17,7 @@ import {
 import {
 	isTranscriptStatus,
 	serializeTranscript,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	TRANSCRIPT_STATUSES,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
@@ -31,6 +33,13 @@ export const app = new Hono<{
 
 const failureBody = (failure: TranscriptFailure) =>
 	apiErrorBody(failure.code, failure.message, failure.hint);
+
+const refuse = (c: Context, failure: TranscriptFailure) => {
+	if (failure.status === 429) {
+		c.header("Retry-After", String(TRANSCRIPT_BUSY_RETRY_SECONDS));
+	}
+	return c.json(failureBody(failure), failure.status);
+};
 
 const optionsSchema = {
 	name: z.string().max(255).optional(),
@@ -58,17 +67,36 @@ app.post(
 	"/",
 	developerZValidator(
 		"json",
-		z.strictObject({ url: z.string().min(1), ...optionsSchema }),
+		z
+			.strictObject({
+				url: z.string().min(1).optional(),
+				videoId: z.string().min(1).max(64).optional(),
+				...optionsSchema,
+			})
+			.refine(
+				(body) => (body.url === undefined) !== (body.videoId === undefined),
+				{ message: "Send exactly one of url or videoId" },
+			),
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
 		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
 
-		const result = await createTranscriptFromUrl(c.get("developerAppId"), {
-			...c.req.valid("json"),
-			idempotencyKey: idempotency.key,
-		});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		const { url, videoId, ...options } = c.req.valid("json");
+		const appId = c.get("developerAppId");
+		const result =
+			videoId !== undefined
+				? await createTranscriptFromVideo(appId, {
+						...options,
+						videoId,
+						idempotencyKey: idempotency.key,
+					})
+				: await createTranscriptFromUrl(appId, {
+						...options,
+						url: url ?? "",
+						idempotencyKey: idempotency.key,
+					});
+		if (!result.ok) return refuse(c, result);
 		return c.json({ data: serializeTranscript(result.transcript) });
 	},
 );
@@ -91,7 +119,7 @@ app.post(
 			...c.req.valid("json"),
 			idempotencyKey: idempotency.key,
 		});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		if (!result.ok) return refuse(c, result);
 		return c.json(
 			{
 				data: {
@@ -109,7 +137,7 @@ app.post("/:id/start", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ data: serializeTranscript(result.transcript) });
 });
 
@@ -226,6 +254,6 @@ app.delete("/:id", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ success: true });
 });

@@ -14,6 +14,8 @@ export const TRANSCRIPT_UPLOAD_URL_TTL_SECONDS = 60 * 60;
 export const TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 export const TRANSCRIPT_MAX_URL_LENGTH = 2_048;
 export const TRANSCRIPT_MAX_METADATA_BYTES = 8_192;
+export const TRANSCRIPT_MAX_CONCURRENT = 20;
+export const TRANSCRIPT_BUSY_RETRY_SECONDS = 15;
 
 export const TRANSCRIPT_STATUSES = [
 	"uploading",
@@ -165,7 +167,10 @@ export function serializeTranscript(
 		source:
 			row.sourceType === "url"
 				? { type: "url" as const, url: publicSourceUrl(row.sourceUrl) }
-				: { type: "upload" as const, url: null },
+				: row.sourceType === "video"
+					? { type: "video" as const, url: null }
+					: { type: "upload" as const, url: null },
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -199,6 +204,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		name: row.name,
 		sourceType: row.sourceType,
 		sourceUrl: publicSourceUrl(row.sourceUrl),
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,

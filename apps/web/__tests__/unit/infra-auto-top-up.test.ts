@@ -242,6 +242,25 @@ describe("auto top-up charge", () => {
 		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 	});
 
+	it("does not charge the card of an app whose payment was disputed", async () => {
+		arm();
+		ledger.rows.push({
+			id: "disputed",
+			accountId: "account-1",
+			type: "adjustment",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 30_000,
+			referenceId: "dp_1",
+			referenceType: "stripe_dispute",
+			createdAt: new Date(ledger.now),
+		});
+
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "disputed",
+		});
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+	});
 	it("charges the saved card off session and grants credit keyed by the payment intent", async () => {
 		const result = await runAutoTopUp("account-1", now());
 
@@ -277,6 +296,13 @@ describe("auto top-up charge", () => {
 				referenceId: "pi_1",
 			}),
 		]);
+	});
+
+	it("asks Stripe to email the receipt to the account owner", async () => {
+		await runAutoTopUp("account-1", now());
+
+		const [params] = mocks.createPaymentIntent.mock.calls[0] ?? [];
+		expect(params.receipt_email).toBe(ledger.account.email);
 	});
 
 	it("grants once when the webhook also reports the same payment", async () => {
@@ -657,6 +683,46 @@ describe("auto top-up sweep", () => {
 			succeeded: 0,
 			failed: 1,
 		});
+	});
+
+	it("does not read an account that is not due", async () => {
+		ledger.account.balanceMicroCredits =
+			ledger.account.autoTopUpThresholdMicroCredits;
+		const select = vi.spyOn(fakeDb, "select");
+
+		expect(await runDueAutoTopUps(now())).toEqual({
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+		});
+
+		expect(
+			select.mock.calls.filter(([fields]) => "autoTopUpAmountCents" in fields),
+		).toHaveLength(0);
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+		select.mockRestore();
+	});
+
+	it("still tops up an account that only held credit puts under its threshold", async () => {
+		ledger.account.balanceMicroCredits =
+			ledger.account.autoTopUpThresholdMicroCredits + 10;
+		ledger.heldMicroCredits = 11;
+
+		expect(await runDueAutoTopUps(now())).toEqual({
+			attempted: 1,
+			succeeded: 1,
+			failed: 0,
+		});
+	});
+
+	it("starts no top-up once its time is up", async () => {
+		expect(await runDueAutoTopUps(now(), { until: Date.now() - 1 })).toEqual({
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+		});
+
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 	});
 });
 

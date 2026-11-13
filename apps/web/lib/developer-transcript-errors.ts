@@ -1,7 +1,7 @@
 import type { TranscriptErrorCode } from "@/lib/developer-transcripts";
 
 export type TranscriptRequestError = {
-	status: 400 | 402 | 403 | 404 | 409 | 503;
+	status: 400 | 402 | 403 | 404 | 409 | 429 | 503;
 	code: string;
 	meaning: string;
 };
@@ -17,6 +17,11 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		status: 400,
 		code: "url_not_public",
 		meaning: "The URL points to a private or local address",
+	},
+	{
+		status: 400,
+		code: "invalid_video_id",
+		meaning: "videoId is empty or longer than 64 characters",
 	},
 	{
 		status: 400,
@@ -94,6 +99,17 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		meaning: "No transcript with this ID belongs to the app",
 	},
 	{
+		status: 404,
+		code: "video_not_found",
+		meaning: "No video with this ID belongs to the app, or it was deleted",
+	},
+	{
+		status: 409,
+		code: "video_not_ready",
+		meaning:
+			"The video is not ready yet, or it failed to process and has no file to transcribe. The message says which",
+	},
+	{
 		status: 409,
 		code: "idempotency_conflict",
 		meaning:
@@ -104,6 +120,12 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		code: "upload_not_found",
 		meaning:
 			"The file has not been uploaded yet. If the upload URL expired, repeat the create request with the same Idempotency-Key to get a new one",
+	},
+	{
+		status: 429,
+		code: "too_many_transcripts",
+		meaning:
+			"The app already has 20 transcripts queued or processing. Wait for one to finish, then send the request again",
 	},
 	{
 		status: 503,
@@ -129,7 +151,11 @@ export const TRANSCRIPT_FAILURE_CODES = [
 			"The URL, or a redirect from it, did not point to a public address",
 	},
 	{ code: "source_too_large", meaning: "The file is larger than 2 GB" },
-	{ code: "source_missing", meaning: "The uploaded file was not found" },
+	{
+		code: "source_missing",
+		meaning:
+			"The uploaded file was not found, or the video was deleted before the transcript ran",
+	},
 	{ code: "no_audio_track", meaning: "The file has no audio" },
 	{
 		code: "unsupported_format",
