@@ -154,15 +154,24 @@ const copyLinkItem = () => {
 };
 
 describe("cap card copy link", () => {
-	it("says the link was copied once the clipboard accepts it", async () => {
-		mocks.copy.mockResolvedValue(undefined);
+	it("says the link was copied only once the clipboard accepts it", async () => {
+		const copy = Promise.withResolvers<void>();
+		mocks.copy.mockReturnValue(copy.promise);
 		await renderCard();
+		const checkMark = () =>
+			container.querySelector('path[d="M20 6 9 17l-5-5"]');
 		await act(async () => copyLinkItem().click());
 
 		expect(mocks.copy).toHaveBeenCalledOnce();
+		expect(mocks.success).not.toHaveBeenCalled();
+		expect(checkMark()).toBeNull();
+
+		await act(async () => copy.resolve());
+
 		expect(mocks.success).toHaveBeenCalledExactlyOnceWith(
 			"Link copied to clipboard",
 		);
+		expect(checkMark()).not.toBeNull();
 		expect(mocks.error).not.toHaveBeenCalled();
 	});
 
