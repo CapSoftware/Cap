@@ -78,6 +78,7 @@ export type AutoTopUpResult =
 				| "disputed"
 				| "awaiting_payment"
 				| "reconciled"
+				| "app_deleted"
 				| "recent_decline"
 				| "daily_limit"
 				| "owner_daily_limit"
@@ -645,6 +646,7 @@ export async function runAutoTopUp(
 		.select({
 			appId: developerCreditAccounts.appId,
 			appName: developerApps.name,
+			appDeletedAt: developerApps.deletedAt,
 			ownerId: developerCreditAccounts.ownerId,
 			email: users.email,
 		})
@@ -654,18 +656,14 @@ export async function runAutoTopUp(
 			eq(developerCreditAccounts.appId, developerApps.id),
 		)
 		.innerJoin(users, eq(developerCreditAccounts.ownerId, users.id))
-		.where(
-			and(
-				eq(developerCreditAccounts.id, accountId),
-				isNull(developerApps.deletedAt),
-			),
-		)
+		.where(eq(developerCreditAccounts.id, accountId))
 		.limit(1);
 
 	if (!account) return { state: "skipped", reason: "not_found" };
 	if (await reconcileStalePayments(accountId, now)) {
 		return { state: "skipped", reason: "reconciled" };
 	}
+	if (account.appDeletedAt) return { state: "skipped", reason: "app_deleted" };
 	if (!canUseInfra(account.email)) {
 		return { state: "skipped", reason: "not_allowed" };
 	}
@@ -677,6 +675,14 @@ export async function runAutoTopUp(
 			.where(eq(developerCreditAccounts.ownerId, account.ownerId))
 			.orderBy(asc(developerCreditAccounts.id))
 			.for("update");
+		const [app] = await tx
+			.select({ appDeletedAt: developerApps.deletedAt })
+			.from(developerApps)
+			.where(eq(developerApps.id, account.appId))
+			.limit(1);
+		if (!app || app.appDeletedAt) {
+			return { kind: "skipped", reason: "app_deleted" };
+		}
 		const waits = autoTopUpWaits(now);
 		const [current] = await tx
 			.select({
@@ -925,9 +931,9 @@ function dueAutoTopUpsAfter(now: Date, cursor: DueCursor | null) {
 		.leftJoin(held, eq(held.appId, developerCreditAccounts.appId))
 		.where(
 			and(
-				isNull(developerApps.deletedAt),
 				or(
 					and(
+						isNull(developerApps.deletedAt),
 						eq(developerCreditAccounts.autoTopUpEnabled, true),
 						isNotNull(developerCreditAccounts.stripePaymentMethodId),
 						sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + coalesce(${held.heldMicroCredits}, 0)`,
