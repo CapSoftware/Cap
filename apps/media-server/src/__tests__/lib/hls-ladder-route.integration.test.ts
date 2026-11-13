@@ -25,6 +25,7 @@ const LADDER_FILES = [
 
 let app: typeof appType;
 let getJob: typeof import("../../lib/job-manager").getJob;
+let jobManager: typeof import("../../lib/job-manager");
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl = "";
 const workDir = mkdtempSync(join(tmpdir(), "cap-ladder-route-"));
@@ -67,7 +68,8 @@ beforeAll(async () => {
 	process.env.MEDIA_SERVER_WEBHOOK_SECRET = SECRET;
 	process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES = "4";
 	app = (await import("../../app")).default;
-	getJob = (await import("../../lib/job-manager")).getJob;
+	jobManager = await import("../../lib/job-manager");
+	getJob = jobManager.getJob;
 	const fixture = readFileSync(FIXTURE);
 	const largePath = join(workDir, "large.mp4");
 	execFileSync("ffmpeg", [
@@ -241,6 +243,41 @@ describe("POST /video/ladder", () => {
 		expect(uploads.has("slice/audio.m4s")).toBe(false);
 		expect(uploads.has("slice/master.m3u8")).toBe(true);
 	}, 120_000);
+
+	test("holds a slice back once half the worker's slots are taken and still takes a whole job", async () => {
+		const { effectiveMax } = jobManager.getSystemResources();
+		expect(effectiveMax).toBeGreaterThan(1);
+		const held = Array.from(
+			{ length: Math.floor(effectiveMax / 2) },
+			(_, index) => `held-${index}`,
+		);
+		for (const jobId of held) jobManager.createJob(jobId, "other", "user-1");
+		try {
+			const slice = await startLadder({
+				uploads: uploadTargets("held-slice"),
+				range: { startSeconds: 0, durationSeconds: 4 },
+			});
+			expect(slice.status).toBe(503);
+			expect(slice.headers.get("retry-after")).not.toBeNull();
+			expect(uploads.has("held-slice/master.m3u8")).toBe(false);
+
+			const whole = await startLadder({ uploads: uploadTargets("held-whole") });
+			expect(whole.status).toBe(200);
+			const { jobId } = (await whole.json()) as { jobId: string };
+			expect((await waitForTerminalJob(jobId)).phase).toBe("complete");
+
+			jobManager.deleteJob(held[0] as string);
+			const admitted = await startLadder({
+				uploads: uploadTargets("held-slice"),
+				range: { startSeconds: 0, durationSeconds: 4 },
+			});
+			expect(admitted.status).toBe(200);
+			const sliceJob = (await admitted.json()) as { jobId: string };
+			expect((await waitForTerminalJob(sliceJob.jobId)).phase).toBe("complete");
+		} finally {
+			for (const jobId of held) jobManager.deleteJob(jobId);
+		}
+	}, 180_000);
 
 	test("fails the job when a produced file has no upload target", async () => {
 		const response = await startLadder({
