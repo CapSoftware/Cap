@@ -11,8 +11,10 @@ import type { MoveLocation } from "@/lib/move-items";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
+import { DragHint } from "../../../caps/components/DragHint";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
+import { useCapsMoved } from "../../../caps/components/useCapsMoved";
 import { useUploadingStatus } from "../../../caps/UploadingContext";
 
 interface FolderVideosSectionProps {
@@ -39,6 +41,10 @@ export default function FolderVideosSection({
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
+
+	useCapsMoved((ids) =>
+		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+	);
 
 	const rpc = useRpcClient();
 
@@ -167,6 +173,7 @@ export default function FolderVideosSection({
 										? () => handleCapSelection(video.id)
 										: undefined
 								}
+								selectedIds={selectedCaps}
 								canMove={canMove}
 								moveLocation={location}
 								moveRootLabel={rootLabel}
@@ -183,6 +190,9 @@ export default function FolderVideosSection({
 					</>
 				)}
 			</div>
+			{canMove && (
+				<DragHint caps="Drop on a folder or the path above to move" />
+			)}
 			<SelectedCapsBar
 				selectedCaps={selectedCaps}
 				setSelectedCaps={setSelectedCaps}
