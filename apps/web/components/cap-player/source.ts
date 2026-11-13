@@ -158,6 +158,20 @@ export const pickStartingLevel = (
 	return pick;
 };
 
+// A long video's playlists sign every segment. Asked for the short form, the
+// server signs the first and lists the rest by name, which hls.js follows.
+// Safari's own player asks the server again for every segment, so only
+// hls.js gets this.
+export const withShortPlaylists = (hls: string) => {
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("segments", "short");
+		return url.toString();
+	} catch {
+		return hls;
+	}
+};
+
 export const startWithin = (startAt: number, duration: number) =>
 	Number.isFinite(duration) && startAt > 0 && startAt < duration ? startAt : 0;
 
@@ -455,7 +469,7 @@ export const attachSource = (
 				if (playRequested) hls.nextLevel = index;
 			};
 			video.preload = "auto";
-			hls.loadSource(source.hls);
+			hls.loadSource(withShortPlaylists(source.hls));
 			hls.attachMedia(video);
 			detach = destroy;
 			start();

@@ -7,6 +7,7 @@ import {
 	SECONDS_AHEAD_BEFORE_PLAY,
 	SECONDS_TO_SHARPEN,
 	startWithin,
+	withShortPlaylists,
 } from "@/components/cap-player/source";
 
 type Listener = (event: string, data: unknown) => void;
@@ -239,6 +240,7 @@ class FakeVideo extends EventTarget {
 
 const HLS = "https://media.example/film/master.m3u8";
 const MP4 = "https://media.example/film/video.mp4";
+const SHORT_HLS = `${HLS}?segments=short`;
 const LADDER_DATA = { levels: LADDER };
 
 const page = (options: {
@@ -609,7 +611,7 @@ describe("attachSource with hls.js", () => {
 		const hls = await hlsFor();
 
 		expect(video.preload).toBe("auto");
-		expect(hls.source).toBe(HLS);
+		expect(hls.source).toBe(SHORT_HLS);
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.startLoads).toEqual([]);
 
@@ -785,7 +787,7 @@ describe("attachSource with hls.js", () => {
 		hls.emit("manifestParsed", LADDER_DATA);
 
 		expect(video.src).toBe("");
-		expect(hls.source).toBe(HLS);
+		expect(hls.source).toBe(SHORT_HLS);
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.loadLevel).toBe(hls.startLevel);
 		expect(hls.startLoads).toEqual([-1]);
@@ -906,6 +908,33 @@ describe("attachSource with hls.js", () => {
 		stop();
 
 		expect(hls.destroyed).toBe(true);
+	});
+});
+
+describe("withShortPlaylists", () => {
+	it("asks for the short form and keeps any other query", () => {
+		vi.stubGlobal("document", { baseURI: "https://cap.so/dev/abc/embed" });
+
+		expect(withShortPlaylists(HLS)).toBe(SHORT_HLS);
+		expect(withShortPlaylists(`${HLS}?token=1`)).toBe(
+			`${HLS}?token=1&segments=short`,
+		);
+		expect(withShortPlaylists(`${HLS}?segments=long`)).toBe(SHORT_HLS);
+		expect(withShortPlaylists("/api/developer/playback/abc/master.m3u8")).toBe(
+			"https://cap.so/api/developer/playback/abc/master.m3u8?segments=short",
+		);
+	});
+
+	it("keeps the plain playlist for Safari's own player and the MP4", () => {
+		iphone(true);
+		const native = new FakeVideo(true);
+		attach(native, { hls: HLS, mp4: MP4 });
+
+		expect(native.src).toBe(HLS);
+
+		native.dispatchEvent(new Event("error"));
+
+		expect(native.src).toBe(MP4);
 	});
 });
 
