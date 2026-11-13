@@ -135,7 +135,7 @@ describe("processing retry limit", () => {
 		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
 	});
 
-	it("checks the limit before an agent retry reaches transcription or AI generation", () => {
+	it("decides an agent rerun from the video's current state before any work starts", () => {
 		const source = readFileSync(
 			join(process.cwd(), "app/api/v1/[...route]/route.ts"),
 			"utf8",
@@ -149,14 +149,23 @@ describe("processing retry limit", () => {
 			"processingRetryLimited(principal.id, headers)",
 		);
 
+		expect(handler).toMatch(
+			/const transcriptionRerun =\s*includesTranscript &&\s*payload\.retry === true &&\s*row\.transcriptionStatus === "ERROR";/,
+		);
+		expect(handler).toMatch(
+			/const aiRerun =\s*includesAi &&[\s\S]*?isAiGenerationRerun\(normalizeAgentMetadata\(row\.metadata\)\);/,
+		);
 		expect(limitCheck).toBeGreaterThan(
-			handler.indexOf("payload.retry === true"),
+			handler.indexOf("if (transcriptionRerun || aiRerun)"),
+		);
+		expect(limitCheck).toBeGreaterThan(
+			handler.indexOf("isAiGenerationEnabled("),
 		);
 		expect(limitCheck).toBeLessThan(handler.indexOf("runAgentMutation("));
 		expect(limitCheck).toBeLessThan(handler.indexOf("transcribeVideo("));
 		expect(limitCheck).toBeLessThan(handler.indexOf("startAiGeneration("));
 		expect(handler.slice(limitCheck)).toMatch(
-			/^processingRetryLimited\(principal\.id, headers\),\s*\)\s*\)\s*\{\s*return yield\* rateLimited\(requestId\);/,
+			/^processingRetryLimited\(principal\.id, headers\),\s*\)\s*\)\s*\{\s*return yield\* rateLimited\(\s*requestId,\s*PROCESSING_RETRY_WINDOW_MS,\s*\);/,
 		);
 	});
 });
