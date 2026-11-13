@@ -14,11 +14,11 @@ use crate::{
 
 const ABOUT: &str = "\
 Cap Infra is Cap's usage-billed video and speech API. A developer app holds its videos,
-transcripts, a stored list of origins, API keys and prepaid credits.
+transcripts, its allowed sites, API keys and prepaid credits.
 
-Origins added with `cap developers domains` are stored on the app and nothing checks them
-today: uploads, embeds and playback work from any origin. To limit a browser upload to one
-origin, set corsOrigin when your server creates the upload.
+Only the sites added with `cap developers domains` can embed the app's player. With none
+added, any site can. Share links, HLS, MP4 and poster URLs stay open to everyone. To limit
+a browser upload to one origin, set corsOrigin when your server creates the upload.
 
 Amounts: 100,000 micro-credits are $1. Credit purchases are in cents, from 500 ($5) to
 1000000 ($10,000). Durations are in seconds.
@@ -55,7 +55,7 @@ enum DeveloperCommands {
     Update(DeveloperUpdateArgs),
     /// Delete an app and revoke its keys
     Delete(DeveloperDeleteArgs),
-    /// Add or remove origins on an app's stored list. Nothing checks the list today
+    /// Add or remove the sites that can embed an app's player
     Domains(DeveloperDomainsArgs),
     /// Rotate an app's API keys
     Keys(DeveloperKeysArgs),
@@ -153,9 +153,9 @@ struct DeveloperDomainsArgs {
 
 #[derive(Subcommand)]
 enum DeveloperDomainCommands {
-    /// Store an origin on the app, for example https://app.example.com. It restricts nothing today
+    /// Allow a site to embed the player, for example https://app.example.com. Once one is added, only listed sites can
     Add(DeveloperDomainAddArgs),
-    /// Remove a stored origin by its id or by the origin itself
+    /// Remove an allowed site by its id or by the origin itself
     Remove(DeveloperDomainRemoveArgs),
 }
 
@@ -163,7 +163,7 @@ enum DeveloperDomainCommands {
 struct DeveloperDomainAddArgs {
     /// App id from `cap developers list`
     app: String,
-    /// Origin to store, for example https://app.example.com
+    /// Site to allow, for example https://app.example.com
     domain: String,
     /// Confirm without a prompt
     #[arg(long)]

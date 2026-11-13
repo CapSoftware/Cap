@@ -2,7 +2,7 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperApp } from "@/actions/developers/delete-app";
 import { updateDeveloperApp } from "@/actions/developers/update-app";
@@ -25,12 +25,14 @@ export function AppSettingsClient({
 	environment: initialEnvironment,
 	balanceMicroCredits,
 	videoCount,
+	domains,
 }: {
 	appId: string;
 	name: string;
 	environment: Environment;
 	balanceMicroCredits: number;
 	videoCount: number;
+	domains: ReactNode;
 }) {
 	const router = useRouter();
 	const nameId = useId();
@@ -106,6 +108,8 @@ export function AppSettingsClient({
 						</Button>
 					</form>
 				</Split>
+
+				{domains}
 
 				<Split
 					title="Delete app"

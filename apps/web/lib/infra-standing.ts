@@ -3,21 +3,27 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
-import { heldTranscriptsQuery } from "@/lib/infra-balance";
+import {
+	AVAILABLE_AFTER_FIELD,
+	heldTranscriptsQuery,
+} from "@/lib/infra-balance";
+import {
+	FIRST_MONTH_REFERENCE_TYPE,
+	FIRST_MONTH_TRANSACTION_TYPE,
+} from "@/lib/infra-first-month-start";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
-export const FIRST_MONTH_TRANSACTION_TYPE = "video_create" as const;
-export const FIRST_MONTH_REFERENCE_TYPE = "developer_video" as const;
+export { FIRST_MONTH_REFERENCE_TYPE, FIRST_MONTH_TRANSACTION_TYPE };
 export const STRIPE_DISPUTE_REFERENCE_TYPE = "stripe_dispute" as const;
 export const DISPUTE_REVIEW_REFERENCE_TYPE = "manual" as const;
 export const DISPUTED_UPLOAD_MESSAGE =
@@ -357,6 +363,9 @@ export async function latestStorageCharges(
 	return charges;
 }
 
+const availableAfterCredit = () =>
+	sql<number>`COALESCE(CAST(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${AVAILABLE_AFTER_FIELD}`}) AS SIGNED), ${developerCreditTransactions.balanceAfterMicroCredits})`;
+
 export async function restoredSinceCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
@@ -369,12 +378,9 @@ export async function restoredSinceCharge(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				gte(developerCreditTransactions.createdAt, charge.createdAt),
+				gt(developerCreditTransactions.createdAt, charge.createdAt),
 				gt(developerCreditTransactions.amountMicroCredits, 0),
-				gte(
-					developerCreditTransactions.balanceAfterMicroCredits,
-					charge.owedMicroCredits,
-				),
+				sql`${availableAfterCredit()} >= ${charge.owedMicroCredits}`,
 			),
 		)
 		.limit(1);

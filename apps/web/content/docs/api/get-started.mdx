@@ -500,6 +500,8 @@ Use the hosted player for the look and behaviour too: [Embed Options](/docs/api/
 
 When your backend already has the file, it can do the whole upload itself. It creates the upload without `corsOrigin`, then makes the same calls with the token.
 
+If the file is already at a public https URL, such as a CDN or a storage bucket, skip the upload: send the URL to `POST /api/developer/v1/videos` and Cap downloads it. See [Import from a URL](/docs/api/rest-api#import-from-a-url).
+
 A server has no `<video>` element to read the duration with. Send the real `durationInSecs`, `width` and `height` if you have them, for example from `ffprobe`. Otherwise send `durationInSecs: 1`, as these examples do, and Cap replaces it with the measured length.
 
 Both examples ask for a token that works for 24 hours, the longest allowed. The token never leaves your server, so a long life costs nothing, and a large file on a slow connection has time to finish. An upload that could take longer than that needs a new token part way through: see [Renew Upload Token](/docs/api/rest-api#renew-upload-token).
@@ -883,9 +885,18 @@ bearer_token_env_var = "CAP_SECRET_KEY"
 
 The tools:
 
+- `videos_import`: create a video from a public https link to the file. Cap downloads it, so nothing is uploaded.
 - `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
 - `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
 - `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
 - `account_usage` and `account_transactions`: the balance, prices and every charge.
 
 Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
+
+To upload a file from your disk in one call, run the MCP server locally instead. It needs Node 20 or newer and the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add cap-infra --env CAP_SECRET_KEY="$CAP_SECRET_KEY" -- npx -y @cap.so/infra-mcp
+```
+
+Its tools and setup for other clients are in the [package README](https://www.npmjs.com/package/@cap.so/infra-mcp).

@@ -97,8 +97,17 @@ function sweepRequestCounts(now: number) {
 // because this instance cannot see when the shared one began. Only a
 // credential that has already been accepted is counted, so a caller without
 // one cannot fill this map or spend a firewall call.
-async function countDeveloperRequest(
+function countDeveloperRequest(
 	c: Context,
+	rule: DeveloperRateLimit,
+	bucket: string,
+	sharedKey: string,
+): Promise<DeveloperWindow> {
+	return countRequest(c.req.raw.headers, rule, bucket, sharedKey);
+}
+
+async function countRequest(
+	headers: Headers,
 	{ ruleId, limit }: DeveloperRateLimit,
 	bucket: string,
 	sharedKey: string,
@@ -118,7 +127,7 @@ async function countDeveloperRequest(
 
 	const shared = await sharedRateLimitDecision(ruleId, {
 		key: sharedKey,
-		headers: c.req.raw.headers,
+		headers,
 	});
 	return {
 		limited: shared ?? count > limit,
@@ -175,6 +184,22 @@ const OWNER_RATE_LIMIT: DeveloperRateLimit = {
 	limit: DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	subject: "account, across all of its keys,",
 };
+// The console's webhook actions spend the account's REST budget: the same
+// firewall rule and key, and the same counter here when the firewall cannot
+// answer.
+export async function developerOwnerRequestLimited(
+	ownerId: string,
+	headers: Headers,
+): Promise<boolean> {
+	const window = await countRequest(
+		headers,
+		OWNER_RATE_LIMIT,
+		ownerId,
+		ownerId,
+	);
+	return window.limited;
+}
+
 const UPLOAD_TOKEN_RATE_LIMIT: DeveloperRateLimit = {
 	ruleId: RATE_LIMIT_IDS.DEVELOPER_UPLOAD_TOKEN,
 	limit: DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
