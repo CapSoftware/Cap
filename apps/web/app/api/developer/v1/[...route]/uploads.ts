@@ -20,6 +20,7 @@ import { withDeveloperSecretAuth } from "../../../utils";
 export const app = new Hono<{
 	Variables: {
 		developerAppId: string;
+		developerKeyId: string;
 		developerKeyType: "secret";
 	};
 }>().use(withDeveloperSecretAuth);
@@ -48,6 +49,7 @@ const tokenOptions = {
 
 function issueUploadToken(
 	appId: string,
+	keyId: string,
 	videoId: string,
 	options: { corsOrigin?: string; timeoutSeconds?: number; maxBytes?: number },
 ) {
@@ -64,6 +66,7 @@ function issueUploadToken(
 			expiresAt,
 			corsOrigin,
 			maxBytes: options.maxBytes,
+			keyId,
 		}),
 		expiresAt: new Date(expiresAt).toISOString(),
 		corsOrigin,
@@ -102,7 +105,7 @@ app.post(
 
 		return c.json({
 			data: {
-				...issueUploadToken(appId, videoId, {
+				...issueUploadToken(appId, c.get("developerKeyId"), videoId, {
 					corsOrigin,
 					timeoutSeconds,
 					maxBytes,
@@ -126,7 +129,12 @@ app.post(
 		if (upload.status !== 200) return c.json(upload.body, upload.status);
 
 		return c.json({
-			data: issueUploadToken(appId, videoId, c.req.valid("json")),
+			data: issueUploadToken(
+				appId,
+				c.get("developerKeyId"),
+				videoId,
+				c.req.valid("json"),
+			),
 		});
 	},
 );
