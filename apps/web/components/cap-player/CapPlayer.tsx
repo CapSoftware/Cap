@@ -73,7 +73,7 @@ const VOLUME_STEP = 0.05;
 const VOLUME_KEY = "cap-player-volume";
 const DEFAULT_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const MENU_CLEARANCE = 64;
-const MENU_MIN_HEIGHT = 76;
+const SHEET_INSET = 6;
 const HOVER_INTENT_MS = 100;
 const PLAYS = '[data-action="toggle"], [data-action="surface"]';
 const NO_CONTROLS: readonly CapPlayerControl[] = [];
@@ -205,6 +205,33 @@ interface MenuItem {
 	checked: boolean;
 }
 
+// A list taller than the room above the bar becomes a sheet over the player,
+// so a short phone player shows every row instead of a small scroll box. The
+// sheet is only as tall as its rows, centred, and scrolls from the top when
+// even the whole player is too short. It is placed again whenever the player
+// changes size, since it is positioned in pixels from the open player.
+const placeMenu = (menu: HTMLElement) => {
+	const player = menu.closest<HTMLElement>("[data-idle]");
+	if (!player) return;
+	const anchor = menu.offsetParent;
+	delete menu.dataset.sheet;
+	for (const name of ["left", "top", "width", "height"] as const) {
+		menu.style[name] = "";
+	}
+	const room = player.clientHeight - MENU_CLEARANCE;
+	menu.style.maxHeight = `${room}px`;
+	if (menu.scrollHeight <= room || !anchor) return;
+	const box = player.getBoundingClientRect();
+	const from = anchor.getBoundingClientRect();
+	menu.dataset.sheet = "true";
+	menu.style.maxHeight = "none";
+	menu.style.width = `${box.width - SHEET_INSET * 2}px`;
+	const height = Math.min(menu.scrollHeight, box.height - SHEET_INSET * 2);
+	menu.style.height = `${height}px`;
+	menu.style.left = `${box.left - from.left + SHEET_INSET}px`;
+	menu.style.top = `${box.top - from.top + (box.height - height) / 2}px`;
+};
+
 const Menu = ({
 	label,
 	items,
@@ -221,16 +248,17 @@ const Menu = ({
 	useLayoutEffect(() => {
 		const menu = ref.current;
 		if (!menu) return;
-		const player = menu.closest<HTMLElement>("[data-idle]");
-		if (player) {
-			const room = player.clientHeight - MENU_CLEARANCE;
-			menu.style.maxHeight = `${Math.max(MENU_MIN_HEIGHT, room)}px`;
-		}
+		placeMenu(menu);
 		const first =
 			menu.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
 			menu.querySelector<HTMLButtonElement>("button");
 		first?.focus({ preventScroll: true });
 		first?.scrollIntoView({ block: "nearest" });
+		const player = menu.closest<HTMLElement>("[data-idle]");
+		if (!player || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => placeMenu(menu));
+		observer.observe(player);
+		return () => observer.disconnect();
 	}, []);
 
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -311,6 +339,7 @@ export const CapPlayer = ({
 	const timeRef = useRef<HTMLSpanElement>(null);
 	const playRef = useRef<HTMLButtonElement>(null);
 	const coverRef = useRef<HTMLButtonElement>(null);
+	const startRef = useRef<HTMLButtonElement>(null);
 	const volumeRef = useRef<HTMLDivElement>(null);
 	const volumeFillRef = useRef<HTMLDivElement>(null);
 	const attachmentRef = useRef<Attachment | null>(null);
@@ -819,6 +848,7 @@ export const CapPlayer = ({
 			if (event.metaKey || event.ctrlKey || event.altKey) return;
 			const target = event.target instanceof Element ? event.target : null;
 			if (target?.closest('[role="menu"]')) return;
+			if (target?.closest("input, textarea, select, [contenteditable]")) return;
 			const onButton = target instanceof HTMLButtonElement;
 			const onVolumeSlider = target !== null && target === volumeRef.current;
 			const key = event.key.toLowerCase();
@@ -889,11 +919,23 @@ export const CapPlayer = ({
 			}
 		};
 
+		// The keys are heard on the root. A click on the picture or the big
+		// play button leaves focus on the page body in Chrome and WebKit (the
+		// big button unmounts once playing), so the root takes it instead.
+		const keepKeys = () => {
+			const active = document.activeElement;
+			if (active && root.contains(active) && active !== startRef.current) {
+				return;
+			}
+			root.focus({ preventScroll: true });
+		};
+
 		const onAction = (event: Event) => {
 			const target = event.target;
 			if (!(target instanceof Element)) return;
 			const action =
 				target.closest<HTMLElement>("[data-action]")?.dataset.action;
+			if (action === "surface" || action === "toggle") keepKeys();
 			if (action === "surface") {
 				if (tapClosedMenu || (pointerType === "touch" && tapWasIdle)) return;
 				toggle();
@@ -1151,6 +1193,7 @@ export const CapPlayer = ({
 			data-idle="false"
 			data-waiting="false"
 			data-menu={menu ?? undefined}
+			tabIndex={-1}
 		>
 			<video
 				ref={videoRef}
@@ -1188,6 +1231,7 @@ export const CapPlayer = ({
 			)}
 			{!controls || started || failed ? null : (
 				<button
+					ref={startRef}
 					type="button"
 					className={styles.start}
 					data-action="toggle"
