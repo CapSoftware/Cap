@@ -723,9 +723,6 @@ export async function dispatchDeveloperVideoPart(
 	return sendDeveloperVideoPart(video, video.processing, part, token);
 }
 
-// Begins every part that is due in one transaction, then sends them together.
-// A part another caller began first is left to that caller, as with
-// dispatchDeveloperVideoPart.
 export async function dispatchDeveloperVideoParts(
 	videoId: string,
 	encodeId: string,
