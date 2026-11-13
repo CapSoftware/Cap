@@ -21,6 +21,7 @@ const fixture = vi.hoisted(() => ({
 	>(),
 	created: [] as FakeIntent[],
 	createdKeys: [] as string[],
+	loseNextResponse: false,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -76,6 +77,12 @@ vi.mock("@cap/utils", () => ({
 				fixture.created.push(intent);
 				fixture.createdKeys.push(key);
 				fixture.keys.set(key, { state: "done", params: sent, intent });
+				if (fixture.loseNextResponse) {
+					fixture.loseNextResponse = false;
+					throw Object.assign(new Error("Request aborted due to timeout"), {
+						type: "StripeConnectionError",
+					});
+				}
 				return intent;
 			},
 		},
@@ -195,6 +202,44 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(fixture.created.length - before).toBe(1);
 			expect(await topUpsOf(accountId)).toHaveLength(1);
 			expect(await balanceOf(accountId)).toBe(530_000);
+		});
+
+		it("makes no second payment when the amount changes after a lost response", async () => {
+			const { runAutoTopUp, settleAutoTopUpPaymentIntent } = await import(
+				"@/lib/infra-auto-top-up"
+			);
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { accountId } = await makeAccount(30_000);
+			const before = fixture.created.length;
+
+			fixture.loseNextResponse = true;
+			expect(await runAutoTopUp(accountId)).toEqual({ state: "error" });
+			expect(await topUpsOf(accountId)).toHaveLength(0);
+
+			await pool.query(
+				"UPDATE developer_credit_accounts SET autoTopUpAmountCents = 2500 WHERE id = ?",
+				[accountId],
+			);
+			expect(await runAutoTopUp(accountId)).toEqual({
+				state: "skipped",
+				reason: "in_progress",
+			});
+			expect(fixture.created.length - before).toBe(1);
+
+			const [lost] = fixture.created.slice(before);
+			if (!lost) throw new Error("No payment was created");
+			await settleAutoTopUpPaymentIntent(
+				lost as unknown as Parameters<typeof settleAutoTopUpPaymentIntent>[0],
+				"succeeded",
+			);
+			await setBalance(accountId, 10);
+			expect(await runAutoTopUp(accountId)).toMatchObject({
+				state: "succeeded",
+			});
+			expect(
+				fixture.created.slice(before).map((intent) => intent.amount),
+			).toEqual([500, 2500]);
+			errors.mockRestore();
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {
