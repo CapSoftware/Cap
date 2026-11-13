@@ -30,6 +30,7 @@ const fixture = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => ({
 	admit: vi.fn(),
 	createInfraVideo: vi.fn(),
+	replay: vi.fn(),
 	initiate: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock("@/lib/developer-webhook-dispatch", () => ({
 }));
 vi.mock("@/lib/infra-video-upload", () => ({
 	createInfraVideo: mocks.createInfraVideo,
+	replayKeyedInfraVideo: mocks.replay,
 	initiateInfraUpload: mocks.initiate,
 	presignInfraUploadParts: mocks.presign,
 	completeInfraUpload: mocks.complete,
@@ -196,8 +198,7 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.completeResult = { status: 200, body: { success: true } };
 			mocks.admit.mockImplementation(async () => fixture.admission);
 			mocks.createInfraVideo.mockImplementation(
-				async (input: { appId: string; videoId?: string; name?: string }) => {
-					if (!input.videoId) return { status: 200, body: { replayed: true } };
+				async (input: { appId: string; videoId: string; name?: string }) => {
 					if (fixture.createStatus !== 200) {
 						return {
 							status: fixture.createStatus,
@@ -219,6 +220,10 @@ describe.runIf(Boolean(databaseUrl))(
 					return { status: 200, body: { videoId: input.videoId } };
 				},
 			);
+			mocks.replay.mockImplementation(async () => ({
+				status: 200,
+				body: { replayed: true },
+			}));
 			mocks.initiate.mockImplementation(async () => ({
 				status: 200,
 				body: { uploadId: "upload-1" },
@@ -342,6 +347,47 @@ describe.runIf(Boolean(databaseUrl))(
 					guards: serving(mp4Bytes(64)),
 				});
 				expect(otherKey.status).toBe(202);
+			});
+
+			it("lets a key try again once a reservation its request left behind is stale", async () => {
+				const appId = await seedApp();
+				const keyId = id();
+				const input = request(appId, keyId, { idempotencyKey: "stuck-key-1" });
+				const reserve = async (minutesAgo: number) => {
+					await database()
+						.delete(developerVideoImports)
+						.where(eq(developerVideoImports.videoId, input.videoId));
+					const at = new Date(Date.now() - minutesAgo * 60_000);
+					await database().insert(developerVideoImports).values({
+						videoId: input.videoId,
+						appId,
+						keyId,
+						sourceUrl: input.url,
+						startedAt: at,
+						createdAt: at,
+					});
+				};
+
+				await reserve(1);
+				const recent = await createInfraVideoImport(input, {
+					startImport,
+					guards: serving(mp4Bytes(64)),
+				});
+				expect(recent.status).toBe(409);
+				if (recent.status !== 409) return;
+				expect(recent.body.code).toBe("import_starting");
+
+				await reserve(IMPORT_STALE_SLOT_MS / 60_000 + 1);
+				const reclaimed = await createInfraVideoImport(input, {
+					startImport,
+					guards: serving(mp4Bytes(64)),
+				});
+				expect(reclaimed.status).toBe(202);
+				const row = await importRow(input.videoId);
+				expect(row?.state).toBe("downloading");
+				expect(Date.now() - (row?.createdAt.getTime() ?? 0)).toBeLessThan(
+					60_000,
+				);
 			});
 
 			it("refuses a key reused after a failed attempt, without opening the URL again", async () => {
@@ -482,7 +528,9 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 				expect(startImport).toHaveBeenCalledTimes(1);
 
-				mocks.createInfraVideo.mockResolvedValueOnce({
+				fixture.admission = { allowed: false };
+				fixture.createStatus = 402;
+				mocks.replay.mockResolvedValueOnce({
 					status: 409,
 					body: { code: "upload_already_completed" },
 				});
@@ -495,7 +543,7 @@ describe.runIf(Boolean(databaseUrl))(
 					videoId: input.videoId,
 					replayed: true,
 				});
-				mocks.createInfraVideo.mockResolvedValueOnce({
+				mocks.replay.mockResolvedValueOnce({
 					status: 409,
 					body: { code: "idempotency_conflict" },
 				});
@@ -505,6 +553,8 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 				expect(changedName.status).toBe(409);
 				expect(startImport).toHaveBeenCalledTimes(1);
+				expect(mocks.createInfraVideo).toHaveBeenCalledTimes(1);
+				expect(mocks.admit).toHaveBeenCalledTimes(1);
 
 				const other = await createInfraVideoImport(
 					{ ...input, url: "https://media.example.com/other.mp4" },

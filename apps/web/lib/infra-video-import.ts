@@ -41,6 +41,7 @@ import {
 	createInfraVideo,
 	initiateInfraUpload,
 	presignInfraUploadParts,
+	replayKeyedInfraVideo,
 	type UploadPart,
 } from "@/lib/infra-video-upload";
 import {
@@ -438,6 +439,7 @@ export async function reserveImportSlot(input: {
 			.select({
 				state: developerVideoImports.state,
 				errorCode: developerVideoImports.errorCode,
+				startedAt: developerVideoImports.startedAt,
 			})
 			.from(developerVideoImports)
 			.where(eq(developerVideoImports.videoId, input.videoId))
@@ -447,7 +449,13 @@ export async function reserveImportSlot(input: {
 		if (existing?.state === "failed") {
 			return { state: "spent", errorCode: existing.errorCode };
 		}
-		if (existing) return { state: "starting" };
+		// A request that died after reserving and before creating its video
+		// leaves a reservation no download will finish. Once it is stale the
+		// key may try again, still under both limits below.
+		const abandoned =
+			existing !== undefined &&
+			now.getTime() - existing.startedAt.getTime() > IMPORT_STALE_SLOT_MS;
+		if (existing && !abandoned) return { state: "starting" };
 
 		const [running] = await tx
 			.select({ total: count(), oldest: min(developerVideoImports.startedAt) })
@@ -489,15 +497,27 @@ export async function reserveImportSlot(input: {
 			};
 		}
 
-		await tx.insert(developerVideoImports).values({
-			videoId: input.videoId,
+		const row = {
 			appId: input.appId,
 			keyId: input.keyId,
 			sourceUrl: input.sourceUrl,
-			state: "downloading",
+			state: "downloading" as const,
+			bytes: null,
+			errorCode: null,
 			startedAt: now,
+			finishedAt: null,
 			createdAt: now,
-		});
+		};
+		if (abandoned) {
+			await tx
+				.update(developerVideoImports)
+				.set(row)
+				.where(eq(developerVideoImports.videoId, input.videoId));
+		} else {
+			await tx
+				.insert(developerVideoImports)
+				.values({ videoId: input.videoId, ...row });
+		}
 		return { state: "reserved" };
 	});
 }
@@ -658,7 +678,7 @@ export async function createInfraVideoImport(
 			if (!source || source.sourceUrl !== input.url) {
 				return idempotencyConflict();
 			}
-			const replay = await createInfraVideo({
+			const replay = await replayKeyedInfraVideo({
 				appId: input.appId,
 				name: input.name,
 				userId: input.userId,
@@ -669,9 +689,9 @@ export async function createInfraVideoImport(
 			// The import recorded the file, which a keyed upload reports as
 			// finished. A repeated import returns the video as it is now.
 			const finished =
-				replay.status === 409 &&
+				replay?.status === 409 &&
 				replay.body.code === "upload_already_completed";
-			if (replay.status !== 200 && !finished) return replay;
+			if (replay && replay.status !== 200 && !finished) return replay;
 			return { status: 202, videoId: input.videoId, replayed: true };
 		}
 
