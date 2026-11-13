@@ -16,7 +16,6 @@ export interface CapPlayerLevel {
 export interface Attachment {
 	stop: () => void;
 	warm: () => void;
-	sharpen: () => void;
 	setLevel: (index: number) => void;
 }
 
@@ -134,8 +133,8 @@ const DEFAULT_BITS_PER_SECOND = 1_500_000;
 // Any value below one segment loads exactly the segment under the playhead.
 export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 
-// Seconds a sharper first segment may take to arrive once the pointer rests
-// on play, before the click that usually follows.
+// Seconds the segment that fits the player may take to arrive, at the speed
+// measured on the segment held first, for it to replace that one before play.
 export const SECONDS_TO_SHARPEN = 0.5;
 
 type ConnectionHint = { downlink?: number };
@@ -264,7 +263,6 @@ export const attachSource = (
 	let startPending = startAt > 0;
 	let hlsSeeks = false;
 	let setLevel: (index: number) => void = () => undefined;
-	let sharpen = () => undefined;
 
 	const start = () => {
 		if (autoPlay) void playAllowingMuted(video);
@@ -427,7 +425,6 @@ export const attachSource = (
 	const attachment: Attachment = {
 		stop,
 		warm,
-		sharpen: () => sharpen(),
 		setLevel: (index) => setLevel(index),
 	};
 
@@ -436,7 +433,6 @@ export const attachSource = (
 		return {
 			stop: () => undefined,
 			warm: () => undefined,
-			sharpen: () => undefined,
 			setLevel: () => undefined,
 		};
 	}
@@ -498,7 +494,6 @@ export const attachSource = (
 			};
 			const destroy = () => {
 				hlsSeeks = false;
-				sharpen = () => undefined;
 				video.removeEventListener("play", bufferFreely);
 				video.removeEventListener("seeked", reachedStart);
 				hls.destroy();
@@ -521,41 +516,34 @@ export const attachSource = (
 				if (!playRequested) hls.loadLevel = level;
 				hls.startLoad(startPending ? startAt : -1);
 			});
-			// The segment held before play measures the line. When the pointer
-			// rests on play and that line can fetch a sharper first segment in
-			// time, the held one is swapped for the rendition that fits the
-			// player, so a fast line does not play its first seconds soft.
-			let heldSeconds = 0;
+			// The segment held before play is fetched at a rendition the line
+			// can surely carry, and it measures the line. Chrome's connection
+			// hint reads about 1.5 Mbps on fast lines, and other browsers give
+			// none. When the measured line can fetch the rendition that fits the
+			// player in time, the held segment is swapped for it, so the first
+			// seconds do not play soft.
 			let swappedTo = AUTO_LEVEL;
-			// A pointer can rest on play before the held segment has arrived.
-			// The swap then waits for it.
-			let sharpenWhenHeld = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
-				if (!playRequested) heldSeconds = data.frag.duration;
 				// Chrome keeps showing frames it decoded from the old segment
 				// until the next keyframe. A seek in place decodes the new one.
 				if (data.frag.level === swappedTo) {
 					swappedTo = AUTO_LEVEL;
 					const at = video.currentTime;
 					video.currentTime = at;
+					return;
 				}
-				if (sharpenWhenHeld) sharpen();
-			});
-			sharpen = () => {
 				if (playRequested || startPending || picked !== AUTO_LEVEL) return;
-				sharpenWhenHeld = !heldSeconds;
-				if (!heldSeconds) return;
+				if (swappedTo !== AUTO_LEVEL) return;
 				const level = pickStartingLevel(
 					hls.levels,
 					video.clientWidth * window.devicePixelRatio,
-					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / heldSeconds,
+					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
 				);
 				if (level <= hls.loadLevel) return;
-				heldSeconds = 0;
 				swappedTo = level;
 				hls.currentLevel = level;
-			};
+			});
 			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
 				if (!startPending) return;
 				if (startWithin(startAt, data.details.totalduration) === 0) {

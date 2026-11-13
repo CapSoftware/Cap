@@ -882,10 +882,10 @@ export const CapPlayer = ({
 				event.type === "pointerover" &&
 				event.target.closest('button[data-action="toggle"]')
 			) {
-				intentTimer = window.setTimeout(() => {
-					attachmentRef.current?.warm();
-					attachmentRef.current?.sharpen();
-				}, HOVER_INTENT_MS);
+				intentTimer = window.setTimeout(
+					() => attachmentRef.current?.warm(),
+					HOVER_INTENT_MS,
+				);
 			}
 		};
 
