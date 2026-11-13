@@ -11,9 +11,6 @@ export const MUTED = "text-[rgba(232,236,244,0.62)]";
 export const FAINT = "text-[rgba(232,236,244,0.44)]";
 export const RULE = "border-[rgba(222,230,246,0.08)]";
 
-// The console sits on a lifted charcoal, the same one the /infra page reads as
-// once its art is behind it. Surfaces are translucent so the light behind the
-// page shows through them.
 export const BG = "#0A0B0D";
 export const SURFACE =
 	"bg-[linear-gradient(180deg,rgba(222,230,246,0.045),rgba(222,230,246,0.022))] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.085),inset_0_1px_0_rgba(255,255,255,0.04)]";
@@ -189,8 +186,6 @@ export function Block({
 	);
 }
 
-// Rows inside a panel draw their own bottom rule; the panel's edge replaces the
-// last one.
 export const CARD_ROWS =
 	"min-w-0 [&>:last-child]:border-b-0 [&_li:last-child]:border-b-0 [&_tbody>tr:last-child]:border-b-0";
 
@@ -284,7 +279,7 @@ export function Disclosure({
 
 export function Figures({ children }: { children: ReactNode }) {
 	return (
-		<dl className="m-0 grid grid-cols-2 gap-3 sm:grid-flow-col sm:grid-cols-none sm:auto-cols-fr">
+		<dl className="m-0 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
 			{children}
 		</dl>
 	);
@@ -325,7 +320,7 @@ export function Figure({
 			<dd
 				className={clsx(
 					MONO,
-					"relative m-0 truncate text-[19px] leading-none tracking-[-0.04em] tabular-nums",
+					"relative m-0 text-[19px] leading-[1.1] tracking-[-0.04em] tabular-nums [overflow-wrap:anywhere]",
 					"sm:text-[22px] xl:text-[26px]",
 					lead ? "text-white" : "text-[rgba(232,236,244,0.82)]",
 				)}

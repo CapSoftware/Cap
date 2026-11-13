@@ -9,7 +9,6 @@ const INFRA_GLOBAL_CSS = [
 	"[data-sonner-toaster] [data-sonner-toast][data-type=error] [data-icon]{color:#F2A199!important}",
 ].join("");
 
-// Same film grain as the /infra page, drawn once and tiled.
 const NOISE = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1.1 -0.2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")`;
 
 export async function generateMetadata(): Promise<Metadata> {

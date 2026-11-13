@@ -109,7 +109,6 @@ export function AppSwitcher({
 	);
 }
 
-// A quiet monogram so apps can be told apart at a glance in the switcher.
 function AppMark({ name, small = false }: { name: string; small?: boolean }) {
 	const letter = Array.from(name.trim())[0]?.toUpperCase() ?? "A";
 	return (

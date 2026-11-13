@@ -66,7 +66,6 @@ const SECTION_ICONS: Record<InfraSection, LucideIcon> = {
 	settings: Settings2,
 };
 
-// Billing, keys and settings sit under a rule, apart from the work itself.
 const ACCOUNT_SECTIONS = new Set<InfraSection>(["billing", "keys", "settings"]);
 
 export function Shell({
@@ -216,7 +215,7 @@ export function Shell({
 								<p
 									className={clsx(
 										MONO,
-										"m-0 mt-1.5 truncate text-[21px] leading-none tracking-[-0.04em] tabular-nums text-white",
+										"m-0 mt-1.5 text-[21px] leading-[1.1] tracking-[-0.04em] tabular-nums text-white [overflow-wrap:anywhere]",
 									)}
 								>
 									{formatCredits(current.balanceMicroCredits)}
