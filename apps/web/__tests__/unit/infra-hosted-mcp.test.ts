@@ -230,11 +230,14 @@ async function callTool(
 		content: { text: string }[];
 		isError?: boolean;
 	};
-	return {
-		raw,
-		isError: result.isError === true,
-		body: JSON.parse(result.content[0]?.text ?? "null"),
-	};
+	const text = result.content[0]?.text ?? "null";
+	let body: Record<string, unknown> & { error?: Record<string, unknown> };
+	try {
+		body = JSON.parse(text);
+	} catch {
+		body = { text };
+	}
+	return { raw, isError: result.isError === true, body };
 }
 
 describe("hosted Cap Infra MCP auth", () => {
@@ -262,7 +265,7 @@ describe("hosted Cap Infra MCP auth", () => {
 			"cpk_app1_copied_from_a_page",
 			403,
 			"public_key_not_allowed",
-			"Public keys cannot call the REST API",
+			"Public keys cannot call this MCP server",
 		],
 		[
 			"an upload token",
@@ -292,6 +295,31 @@ describe("hosted Cap Infra MCP auth", () => {
 			expect(state.rest).toHaveLength(0);
 		},
 	);
+
+	it("links the MCP setup guide, not the REST reference, when refusing a key", async () => {
+		for (const credential of [
+			null,
+			"cpk_app1_copied",
+			"csk_app1_neverissued",
+		]) {
+			const body = await (await mcp(credential, initialize)).json();
+			expect(body.docs).toBe(
+				"https://cap.so/docs/api/get-started#10-use-with-agents-mcp",
+			);
+			expect(JSON.stringify(body)).not.toContain("REST API");
+		}
+	});
+
+	it("says the key is missing after Bearer when the header has none", async () => {
+		const response = await mcp(null, initialize, { Authorization: "Bearer " });
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_secret_key",
+			hint: expect.stringMatching(
+				/^The Authorization header has no key after Bearer\./,
+			),
+		});
+	});
 
 	it("sends the REST API's response headers on refusals and answers", async () => {
 		const refused = await mcp(null, initialize, {
@@ -350,7 +378,10 @@ describe("hosted Cap Infra MCP tools", () => {
 			message.result as {
 				tools: {
 					name: string;
-					inputSchema: { properties: Record<string, { maximum?: number }> };
+					inputSchema: {
+						properties: Record<string, { maximum?: number }>;
+						additionalProperties?: boolean;
+					};
 				}[];
 			}
 		).tools;
@@ -374,6 +405,13 @@ describe("hosted Cap Infra MCP tools", () => {
 		expect(Object.keys(create?.inputSchema.properties ?? {})).not.toContain(
 			"path",
 		);
+		for (const listed of tools) {
+			expect(listed.inputSchema, listed.name).toMatchObject({
+				additionalProperties: false,
+			});
+		}
+		const upload = tools.find((tool) => tool.name === "videos_create_upload");
+		expect(JSON.stringify(upload)).not.toContain("cannot read your files");
 		for (const name of ["videos_wait", "transcripts_wait"]) {
 			const wait = tools.find((tool) => tool.name === name);
 			expect(wait?.inputSchema.properties.timeoutSeconds?.maximum).toBe(45);
@@ -548,8 +586,81 @@ describe("hosted Cap Infra MCP tools", () => {
 			path: "/etc/passwd",
 		});
 		expect(result.isError).toBe(true);
-		expect(result.body.error.code).toBe("invalid_source");
+		expect(result.body.text).toContain('Unrecognized key: "path"');
+		expect(result.body.text).toContain("This tool accepts url, videoId,");
 		expect(state.rest).toHaveLength(0);
+	});
+
+	it("refuses a transcript with no source, with a hint and a status", async () => {
+		const result = await callTool(newKey(), "transcripts_create", {});
+		expect(result.isError).toBe(true);
+		expect(result.body.error).toMatchObject({
+			code: "invalid_source",
+			status: 400,
+			hint: expect.stringContaining("videoId for a ready video"),
+		});
+	});
+
+	it.each([
+		["url", { contentLength: 100, url: "https://example.com/a.mp4" }],
+		["videoID", { contentLength: 100, videoID: "video-1" }],
+	])(
+		"refuses an unknown %s argument instead of creating a video",
+		async (key, args) => {
+			const result = await callTool(newKey(), "videos_create_upload", args);
+			expect(result.isError).toBe(true);
+			expect(result.body.text).toContain(`Unrecognized key: "${key}"`);
+			expect(result.body.text).toContain(
+				"This tool accepts contentLength, fileName, contentType, name, userId, maxResolutionTier, metadata and videoId.",
+			);
+			expect(state.rest).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		[{ fileName: "notes.txt", contentType: "text/plain" }],
+		[{ fileName: "notes.txt" }],
+		[{ contentType: "application/pdf" }],
+		[{ fileName: "cover.png" }],
+		[{ contentType: "audio/mpeg" }],
+	])(
+		"refuses a file that is not a video before creating one: %o",
+		async (file) => {
+			const result = await callTool(newKey(), "videos_create_upload", {
+				contentLength: 20,
+				...file,
+			});
+			expect(result.isError).toBe(true);
+			expect(result.body.error).toMatchObject({
+				code: "unsupported_content_type",
+				status: 400,
+				message: expect.stringMatching(
+					/^This file could not be read as a video\. Upload MP4, MOV, MKV and WebM/,
+				),
+			});
+			expect(state.rest).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		[{ fileName: "talk.mp4", contentType: "video/mp4" }],
+		[{ fileName: "talk.mov", contentType: "video/quicktime" }],
+		[{ fileName: "talk.mkv", contentType: "video/x-matroska" }],
+		[{ fileName: "talk.webm", contentType: "video/webm" }],
+		[{ fileName: "talk.mkv", contentType: "application/octet-stream" }],
+		[{ fileName: "talk.mov", contentType: "" }],
+		[{ fileName: "talk.mkv" }],
+		[{ fileName: "capture.unknownext" }],
+		[{}],
+	])("still accepts a video upload: %o", async (file) => {
+		const args: Record<string, unknown> = { contentLength: 100, ...file };
+		if (args.contentType === "") delete args.contentType;
+		const result = await callTool(newKey(), "videos_create_upload", args);
+		expect(result.isError).toBe(false);
+		expect(result.body).toMatchObject({
+			videoId: "video-1",
+			uploadId: "upload-1",
+		});
 	});
 });
 
@@ -596,7 +707,56 @@ describe("hosted Cap Infra MCP limits", () => {
 		expect(limited.status).toBe(429);
 		expect(limited.headers.get("retry-after")).not.toBeNull();
 		expect(await limited.json()).toMatchObject({ code: "rate_limited" });
+		const initialize = await mcp(key, {
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {
+				protocolVersion: "2025-11-25",
+				capabilities: {},
+				clientInfo: { name: "test", version: "1.0.0" },
+			},
+		});
+		expect(initialize.status).toBe(429);
 		expect((await mcp(newKey(), list)).status).toBe(200);
+	});
+
+	it("answers a rate-limited tool call with a tool error that says how long to wait", async () => {
+		const key = newKey();
+		const list = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
+		for (let index = 0; index < DEVELOPER_KEY_REQUESTS_PER_MINUTE; index++) {
+			expect((await mcp(key, list)).status).toBe(200);
+		}
+		state.rest.length = 0;
+		const response = await mcp(key, {
+			jsonrpc: "2.0",
+			id: 7,
+			method: "tools/call",
+			params: { name: "account_usage", arguments: {} },
+		});
+		expect(response.status).toBe(200);
+		const retryAfter = Number(response.headers.get("retry-after"));
+		expect(retryAfter).toBeGreaterThan(0);
+		expect(response.headers.get("x-ratelimit-remaining")).toBe("0");
+		const message = await response.json();
+		expect(message).toMatchObject({
+			jsonrpc: "2.0",
+			id: 7,
+			result: { isError: true },
+		});
+		const { error } = JSON.parse(message.result.content[0].text);
+		expect(error).toMatchObject({
+			code: "rate_limited",
+			status: 429,
+			retryAfterSeconds: retryAfter,
+			hint: expect.stringMatching(
+				new RegExp(
+					`^Wait ${retryAfter} seconds, then call the tool again\\. Each key allows ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute\\.$`,
+				),
+			),
+		});
+		expect(state.rest).toHaveLength(0);
+		expect((await mcp(key, list)).status).toBe(429);
 	});
 
 	it("stops a tool that outlives its budget and says so", async () => {
