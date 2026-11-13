@@ -259,14 +259,133 @@ describe("transcript settlement", () => {
 		expect(transcript()?.status).toBe("error");
 	});
 
-	it("does not charge for a transcript deleted while it ran", async () => {
+	it("charges a transcript deleted while it was processing and keeps it hidden with no text", async () => {
+		const deletedAt = new Date("2026-11-12T10:00:00.000Z");
+		const current = transcript();
+		if (current) current.deletedAt = deletedAt;
+
+		const result = await settle();
+
+		expect(result).toEqual({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+			alreadySettled: false,
+		});
+		expect(account()?.balanceMicroCredits).toBe(40_000);
+		expect(ledger()).toHaveLength(1);
+		expect(ledger()[0]).toMatchObject({
+			type: "transcription",
+			amountMicroCredits: -10_000,
+			referenceId: "tr-1",
+			metadata: { durationSeconds: ONE_HOUR, billedSeconds: ONE_HOUR },
+		});
+		expect(transcript()).toMatchObject({
+			status: "complete",
+			deletedAt,
+			billedMicroCredits: 10_000,
+			reservedMicroCredits: 0,
+			durationSeconds: ONE_HOUR,
+			text: null,
+			language: null,
+			wordCount: null,
+			resultKey: null,
+		});
+	});
+
+	it("charges a deleted transcript once when the settle step is retried", async () => {
 		const current = transcript();
 		if (current) current.deletedAt = new Date();
-		const result = await settle();
-		expect(result).toEqual({ state: "skipped", reason: "deleted" });
-		expect(account()?.balanceMicroCredits).toBe(50_000);
-		expect(ledger()).toHaveLength(0);
+
+		await settle();
+		const retry = await settle();
+
+		expect(retry).toEqual({
+			state: "complete",
+			chargedMicroCredits: 0,
+			alreadySettled: true,
+		});
+		expect(account()?.balanceMicroCredits).toBe(40_000);
+		expect(ledger()).toHaveLength(1);
 	});
+
+	it("never charges a deleted transcript more than its hold", async () => {
+		const current = transcript();
+		if (current) {
+			current.deletedAt = new Date();
+			current.reservedMicroCredits = 5_000;
+		}
+
+		expect(await settle()).toMatchObject({ chargedMicroCredits: 5_000 });
+		expect(account()?.balanceMicroCredits).toBe(45_000);
+	});
+
+	it("uses the length measured before the delete when the step reports none", async () => {
+		const current = transcript();
+		if (current) {
+			current.deletedAt = new Date();
+			current.durationSeconds = 1800;
+			current.reservedMicroCredits = 5_000;
+		}
+
+		expect(await settle(Number.NaN)).toMatchObject({
+			chargedMicroCredits: 5_000,
+		});
+		expect(ledger()[0]).toMatchObject({
+			metadata: { durationSeconds: 1800, billedSeconds: 1800 },
+		});
+		expect(transcript()?.durationSeconds).toBe(1800);
+	});
+
+	it("charges what the hold covered when a deleted transcript can no longer be measured", async () => {
+		const current = transcript();
+		if (current) {
+			current.deletedAt = new Date();
+			current.durationSeconds = null;
+			current.reservedMicroCredits = 7_000;
+		}
+
+		expect(await settle(0)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 7_000,
+		});
+		expect(account()?.balanceMicroCredits).toBe(43_000);
+		expect(ledger()[0]).toMatchObject({
+			amountMicroCredits: -7_000,
+			metadata: { heldMicroCredits: 7_000 },
+		});
+		expect(transcript()).toMatchObject({
+			status: "complete",
+			billedMicroCredits: 7_000,
+			durationSeconds: null,
+		});
+	});
+
+	it("fails a deleted transcript without charging when the balance ran out", async () => {
+		const current = transcript();
+		if (current) current.deletedAt = new Date();
+		const credit = account();
+		if (credit) credit.balanceMicroCredits = 100;
+
+		expect(await settle()).toEqual({ state: "insufficient_credits" });
+		expect(ledger()).toHaveLength(0);
+		expect(transcript()).toMatchObject({ status: "error", text: null });
+	});
+
+	it.each(["uploading", "queued", "error"])(
+		"does not charge a deleted transcript that is %s",
+		async (status) => {
+			const current = transcript();
+			if (current) {
+				current.deletedAt = new Date();
+				current.status = status;
+			}
+
+			expect(await settle()).toEqual({ state: "skipped", reason: "deleted" });
+			expect(account()?.balanceMicroCredits).toBe(50_000);
+			expect(ledger()).toHaveLength(0);
+			expect(transcript()?.status).toBe(status);
+		},
+	);
 
 	it("does not charge for a transcript that already failed or timed out", async () => {
 		const current = transcript();
@@ -511,9 +630,15 @@ describe("holds and other usage", () => {
 		expect(account()?.balanceMicroCredits).toBe(45_000);
 	});
 
-	it("ignores holds on deleted transcripts and other apps", async () => {
+	it("ignores holds on other apps and on deleted transcripts that are not processing", async () => {
 		setBalance(10_000);
-		addTranscript("tr-deleted", {
+		addTranscript("tr-deleted-failed", {
+			status: "error",
+			reservedMicroCredits: 9_000,
+			deletedAt: new Date(),
+		});
+		addTranscript("tr-deleted-queued", {
+			status: "queued",
 			reservedMicroCredits: 9_000,
 			deletedAt: new Date(),
 		});
@@ -523,6 +648,26 @@ describe("holds and other usage", () => {
 			reservedMicroCredits: 9_000,
 		});
 		expect((await otherUsage(10_000, "video-1")).state).toBe("debited");
+	});
+
+	it("keeps the hold of a transcript deleted while processing until it settles", async () => {
+		setBalance(10_000);
+		addTranscript("tr-deleted", {
+			reservedMicroCredits: 9_000,
+			durationSeconds: 3240,
+			deletedAt: new Date(),
+		});
+
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(1_000);
+		expect(await otherUsage(5_000, "video-1")).toEqual({
+			state: "insufficient",
+		});
+		expect(await settle(3240, "tr-deleted")).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 9_000,
+		});
+		expect(account()?.balanceMicroCredits).toBe(1_000);
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(1_000);
 	});
 });
 

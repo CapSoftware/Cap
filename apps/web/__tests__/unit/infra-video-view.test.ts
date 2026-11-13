@@ -114,6 +114,17 @@ describe("infraVideoFailure", () => {
 		}
 	});
 
+	it("passes on the sentence about a disputed payment unchanged", () => {
+		const disputed =
+			"A payment for this app was disputed, so uploads are blocked and playback is paused. Contact us to restore it.";
+
+		expect(infraVideoFailure(disputed)).toBe(disputed);
+		expect(infraVideoFailure(`  ${disputed}\n`)).toBe(disputed);
+		expect(infraVideoFailure("A payment failed upstream")).toBe(
+			INFRA_VIDEO_FAILURE_FALLBACK,
+		);
+	});
+
 	it("replaces encoder wording with a sentence a customer can act on", () => {
 		for (const reason of [
 			"Encoded MP4 was not stored",

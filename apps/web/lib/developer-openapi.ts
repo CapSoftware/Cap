@@ -579,7 +579,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
 				description:
-					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. A field the request does not know returns 400 with code invalid_request.",
+					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header. A field the request does not know returns 400 with code invalid_request.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -629,7 +629,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "startTranscript",
 				summary: "Start an uploaded transcript",
 				description:
-					"Checks that the file was uploaded and starts transcription. Calling it again for a transcript that already started returns the transcript unchanged.",
+					"Checks that the file was uploaded and starts transcription. Calling it again for a transcript that already started returns the transcript unchanged. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [transcriptIdParam],
@@ -678,7 +678,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "deleteTranscript",
 				summary: "Delete a transcript",
 				description:
-					"Deletes the transcript, its text and its stored files. A transcript deleted before it completes is not charged.",
+					"Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [transcriptIdParam],
@@ -1165,6 +1165,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
+							"stripe_refund",
+							"stripe_dispute",
 							null,
 						],
 						description: "What referenceId identifies.",

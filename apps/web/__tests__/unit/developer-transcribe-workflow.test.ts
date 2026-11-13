@@ -370,4 +370,189 @@ describe("developer transcribe workflow", () => {
 		expect(context.objects.has(SOURCE_KEY)).toBe(true);
 		expect(context.objects.has(AUDIO_KEY)).toBe(false);
 	});
+
+	describe("a transcript deleted while it runs", () => {
+		const deletedAt = new Date("2026-11-12T10:00:00.000Z");
+		const thirtySeconds = () => {
+			const frames = Math.round(30 / FRAME_SECONDS);
+			media.convert = () =>
+				new Response(streamOf(mp3Frames(frames), 1), { status: 200 });
+			return transcriptionMicroCredits(frames * FRAME_SECONDS);
+		};
+		const deleteNow = () => {
+			const row = transcript();
+			if (row) {
+				row.deletedAt = deletedAt;
+				row.text = null;
+			}
+			for (const key of [SOURCE_KEY, AUDIO_KEY, RESULT_KEY]) {
+				context.objects.delete(key);
+			}
+		};
+		const speech = {
+			state: "ok",
+			text: "hello world",
+			words: [
+				{ text: "hello", start: 0, end: 400, confidence: 0.9 },
+				{ text: "world", start: 450, end: 900, confidence: 0.9 },
+			],
+			language: "en",
+			durationSeconds: 30,
+		};
+
+		it("is still charged for its measured length when deleted during the speech call", async () => {
+			const cost = thirtySeconds();
+			context.transcribe.mockImplementation(async () => {
+				deleteNow();
+				return speech;
+			});
+
+			const result = await run();
+
+			expect(result.success).toBe(true);
+			expect(context.transcribe).toHaveBeenCalledTimes(1);
+			expect(transcript()).toMatchObject({
+				status: "complete",
+				deletedAt,
+				billedMicroCredits: cost,
+				reservedMicroCredits: 0,
+				text: null,
+				resultKey: null,
+			});
+			expect(balance()).toBe(100_000 - cost);
+			expect(ledger()).toHaveLength(1);
+			expect(ledger()[0]).toMatchObject({
+				type: "transcription",
+				amountMicroCredits: -cost,
+				referenceId: "tr-1",
+			});
+			expect([...context.objects.keys()]).toEqual([]);
+		});
+
+		it("keeps its credit held from the delete until it is charged", async () => {
+			const cost = thirtySeconds();
+			let heldAfterDelete = -1;
+			context.transcribe.mockImplementation(async () => {
+				deleteNow();
+				heldAfterDelete = Number(transcript()?.reservedMicroCredits);
+				return speech;
+			});
+
+			await run();
+
+			expect(heldAfterDelete).toBe(cost);
+			expect(transcript()?.reservedMicroCredits).toBe(0);
+		});
+
+		it("costs nothing when deleted after the audio was read but before it was sent", async () => {
+			thirtySeconds();
+			const realFetch = globalThis.fetch;
+			vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+				const response = await realFetch(input);
+				if (String(input) === `http://storage.test/${AUDIO_KEY}`) deleteNow();
+				return response;
+			});
+
+			const result = await run();
+
+			expect(result.success).toBe(false);
+			expect(context.transcribe).not.toHaveBeenCalled();
+			expect(transcript()).toMatchObject({
+				status: "error",
+				deletedAt,
+				billedMicroCredits: 0,
+				reservedMicroCredits: 0,
+			});
+			expect(balance()).toBe(100_000);
+			expect(ledger()).toHaveLength(0);
+			expect([...context.objects.keys()]).toEqual([]);
+		});
+
+		it("costs nothing when deleted while the audio is being extracted", async () => {
+			const frames = Math.round(30 / FRAME_SECONDS);
+			media.convert = () => {
+				deleteNow();
+				return new Response(streamOf(mp3Frames(frames), 1), { status: 200 });
+			};
+
+			const result = await run();
+
+			expect(result.success).toBe(false);
+			expect(context.transcribe).not.toHaveBeenCalled();
+			expect(transcript()).toMatchObject({
+				status: "error",
+				billedMicroCredits: 0,
+				reservedMicroCredits: 0,
+			});
+			expect(balance()).toBe(100_000);
+			expect(ledger()).toHaveLength(0);
+		});
+
+		it("costs nothing when deleted while queued", async () => {
+			thirtySeconds();
+			deleteNow();
+
+			const result = await run();
+
+			expect(result.message).toBe("Transcript is not waiting to run");
+			expect(media.convertCalls).toBe(0);
+			expect(context.transcribe).not.toHaveBeenCalled();
+			expect(transcript()).toMatchObject({
+				status: "queued",
+				billedMicroCredits: 0,
+			});
+			expect(ledger()).toHaveLength(0);
+		});
+
+		it("costs nothing when the speech call fails after the delete", async () => {
+			thirtySeconds();
+			context.transcribe.mockImplementation(async () => {
+				deleteNow();
+				throw new Error("speech is down");
+			});
+
+			await expect(run()).rejects.toThrow("speech is down");
+
+			expect(transcript()).toMatchObject({
+				status: "error",
+				billedMicroCredits: 0,
+				reservedMicroCredits: 0,
+			});
+			expect(balance()).toBe(100_000);
+			expect(ledger()).toHaveLength(0);
+		});
+
+		it("is charged when deleted between the speech call and the settle", async () => {
+			const cost = thirtySeconds();
+			context.transcribe.mockResolvedValue(speech);
+			let resultReads = 0;
+			const storage = await import("@/lib/developer-transcript-storage");
+			const read = vi
+				.spyOn(storage, "getDeveloperObjectText")
+				.mockImplementation(async (key: string) => {
+					const bytes = context.objects.get(key);
+					if (key === RESULT_KEY && bytes) {
+						resultReads += 1;
+						const text = new TextDecoder().decode(bytes);
+						deleteNow();
+						return text;
+					}
+					return bytes ? new TextDecoder().decode(bytes) : null;
+				});
+
+			const result = await run();
+			read.mockRestore();
+
+			expect(resultReads).toBe(1);
+			expect(result.success).toBe(true);
+			expect(transcript()).toMatchObject({
+				status: "complete",
+				deletedAt,
+				billedMicroCredits: cost,
+				text: null,
+			});
+			expect(ledger()).toHaveLength(1);
+			expect([...context.objects.keys()]).toEqual([]);
+		});
+	});
 });

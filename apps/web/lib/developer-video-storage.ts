@@ -49,12 +49,12 @@ export function requestAsSeenByViewer(request: Request): Request {
 
 export function signedDeveloperVideoUrl(
 	key: string,
-	expiresIn: number,
+	validity: { signingDate: Date; expiresIn: number },
 	request: Request,
 ): Promise<string> {
 	return StorageRuntime.runPromise(
 		bucket.pipe(
-			Effect.flatMap((access) => access.getSignedObjectUrl(key, { expiresIn })),
+			Effect.flatMap((access) => access.getSignedObjectUrl(key, validity)),
 			Effect.provideService(
 				HttpServerRequest.HttpServerRequest,
 				HttpServerRequest.fromWeb(requestAsSeenByViewer(request)),

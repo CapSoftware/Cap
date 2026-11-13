@@ -1,5 +1,10 @@
+import { generateKeyPairSync } from "node:crypto";
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	cloudFrontExpiresAt,
+	createCloudFrontSignedUrl,
+} from "../../../../packages/web-backend/src/S3Buckets/cloudfront-signed-url";
 import {
 	type DeveloperVideoStore,
 	developerVideo,
@@ -34,6 +39,12 @@ vi.mock("@/lib/developer-video-storage", () => ({
 const { GET, HEAD, OPTIONS } = await import(
 	"@/app/api/developer/playback/[playbackId]/[file]/route"
 );
+const { signedUrlValidity } = await import("@/lib/developer-video-playback");
+
+const HOUR = 60 * 60 * 1000;
+const WINDOW_START = Date.UTC(2026, 10, 12, 12);
+const WINDOW_END = WINDOW_START + 6 * HOUR;
+const EXPIRES = (WINDOW_END + 12 * HOUR) / 1000;
 
 const PLAYBACK_ID = "playback-id-0123456789ab";
 const HLS_PREFIX = "developer/app-1/video-1/encode-1/hls-out/hls/";
@@ -97,14 +108,20 @@ const ladder = (...variants: string[][]) =>
 const order = (playlist: string) =>
 	playlist.split("\n").filter((line) => line.endsWith(".m3u8"));
 
+afterEach(() => {
+	vi.useRealTimers();
+});
+
 beforeEach(() => {
 	vi.clearAllMocks();
+	vi.useFakeTimers({ toFake: ["Date"] });
+	vi.setSystemTime(WINDOW_START + 2 * HOUR);
 	mocks.store.video = ready();
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
 	mocks.sign.mockImplementation(
-		async (key: string, expiresIn: number) =>
-			`https://cdn.example/${key}?expires=${expiresIn}&sig=a,b`,
+		async (key: string, validity: { signingDate: Date; expiresIn: number }) =>
+			`https://cdn.example/${key}?expires=${cloudFrontExpiresAt(validity, Date.now())}&sig=a,b`,
 	);
 	mocks.readText.mockImplementation(async (key: string) =>
 		key === `${HLS_PREFIX}master.m3u8`
@@ -114,6 +131,60 @@ beforeEach(() => {
 				: null,
 	);
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
+});
+
+describe("signed URL validity", () => {
+	const { privateKey } = generateKeyPairSync("rsa", {
+		modulusLength: 2048,
+		privateKeyEncoding: { type: "pkcs1", format: "pem" },
+		publicKeyEncoding: { type: "spki", format: "pem" },
+	});
+	const signAt = (now: number, key = "developer/app/video/hls/1080p.m4s") =>
+		createCloudFrontSignedUrl({
+			bucketUrl: "https://cdn.example",
+			key,
+			keyPairId: "K2JCJMDEHXQW5F",
+			privateKey,
+			expiresAt: cloudFrontExpiresAt(signedUrlValidity(now), now),
+		});
+
+	it("signs one file to one URL for the whole window", () => {
+		const url = signAt(WINDOW_START);
+
+		expect(signAt(WINDOW_START + 86_000)).toBe(url);
+		expect(signAt(WINDOW_START + 3 * HOUR + 1_234)).toBe(url);
+		expect(signAt(WINDOW_END - 1)).toBe(url);
+		expect(signAt(WINDOW_START, "developer/app/video/hls/audio.m4s")).not.toBe(
+			url,
+		);
+	});
+
+	it("signs a new URL in the next window", () => {
+		expect(signAt(WINDOW_END)).not.toBe(signAt(WINDOW_END - 1));
+		expect(signAt(WINDOW_START - 1)).not.toBe(signAt(WINDOW_START));
+	});
+
+	it("keeps every URL valid for at least 12 hours and at most 18", () => {
+		for (
+			let now = WINDOW_START - HOUR;
+			now <= WINDOW_END + HOUR;
+			now += 61_987
+		) {
+			const left =
+				cloudFrontExpiresAt(signedUrlValidity(now), now) * 1000 - now;
+
+			expect(left).toBeGreaterThanOrEqual(12 * HOUR);
+			expect(left).toBeLessThanOrEqual(18 * HOUR);
+		}
+		for (const now of [WINDOW_START, WINDOW_END - 1, WINDOW_END]) {
+			expect(
+				cloudFrontExpiresAt(signedUrlValidity(now), now) * 1000 - now,
+			).toBeGreaterThanOrEqual(12 * HOUR);
+		}
+		expect(
+			cloudFrontExpiresAt(signedUrlValidity(WINDOW_END - 1), WINDOW_END - 1),
+		).toBe(EXPIRES);
+	});
 });
 
 describe("developer video playback route", () => {
@@ -261,7 +332,7 @@ describe("developer video playback route", () => {
 
 	it("signs every media reference in a rendition playlist", async () => {
 		const response = await play("1080p.m3u8");
-		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=43200&sig=a,b`;
+		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=${EXPIRES}&sig=a,b`;
 
 		expect(response.status).toBe(200);
 		expect((await response.text()).split("\n")).toEqual([
@@ -278,7 +349,7 @@ describe("developer video playback route", () => {
 		expect(mocks.sign).toHaveBeenCalledTimes(1);
 		expect(mocks.sign).toHaveBeenCalledWith(
 			`${HLS_PREFIX}1080p.m4s`,
-			43200,
+			{ signingDate: new Date(WINDOW_START), expiresIn: 18 * 60 * 60 },
 			request,
 		);
 	});
@@ -298,11 +369,31 @@ describe("developer video playback route", () => {
 
 		expect(response.status).toBe(302);
 		expect(response.headers.get("location")).toBe(
-			`https://cdn.example/${key}?expires=43200&sig=a,b`,
+			`https://cdn.example/${key}?expires=${EXPIRES}&sig=a,b`,
 		);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("cache-control")).toContain("max-age=60");
 	});
+
+	it.each(["1080p.m3u8", "1080p.m4s", "video.mp4", "poster.jpg"])(
+		"gives %s the same signed URLs all through a window and new ones in the next",
+		async (file) => {
+			const answer = async (at: number) => {
+				vi.setSystemTime(at);
+				const response = await play(file);
+				return response.headers.get("location") ?? (await response.text());
+			};
+
+			const first = await answer(WINDOW_START);
+			expect(first).toContain(`expires=${EXPIRES}`);
+			expect(await answer(WINDOW_START + 86_000)).toBe(first);
+			expect(await answer(WINDOW_END - 1)).toBe(first);
+
+			const next = await answer(WINDOW_END);
+			expect(next).not.toBe(first);
+			expect(next).toContain(`expires=${EXPIRES + 6 * 60 * 60}`);
+		},
+	);
 
 	it.each([
 		{ name: "an unknown playback id", playbackId: "playback-id-0123456789zz" },
