@@ -52,6 +52,20 @@ const charge = async () =>
 		now: new Date(ledger.now),
 	});
 
+const finish = async (day: string) =>
+	chargeStorageDay({
+		appId: "app-1",
+		accountId: "account-1",
+		usage: await getAppStorageUsage("app-1"),
+		dateKey: day,
+		now: new Date(ledger.now),
+		retryUnpaid: false,
+	});
+
+const later = (hours: number) => {
+	ledger.now = new Date(ledger.now.getTime() + hours * 60 * 60 * 1000);
+};
+
 const credit = (microCredits: number) => {
 	ledger.account.balanceMicroCredits += microCredits;
 	ledger.rows.push({
@@ -229,6 +243,72 @@ describe("daily storage charge", () => {
 		expect(ledger.account.balanceMicroCredits).toBe(0);
 		expect(ledger.snapshots).toHaveLength(4);
 		expect(ledger.snapshots.at(-1)?.microCreditsCharged).toBe(0);
+	});
+
+	it("leaves a billed day alone when it is finished later", async () => {
+		credit(500_000);
+		expect(await charge()).toMatchObject({ state: "billed" });
+		const snapshot = { ...ledger.snapshots[0] };
+		const day = dateKey();
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([snapshot]);
+		expect(ledger.account.balanceMicroCredits).toBe(500_000 - 144);
+	});
+
+	it("leaves a short day alone when it is finished later", async () => {
+		credit(50);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 50,
+			fellShort: true,
+		});
+		const snapshot = { ...ledger.snapshots[0] };
+		const day = dateKey();
+		credit(500_000);
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([snapshot]);
+	});
+
+	it("does not write an unpaid day again when it is finished later, even after a top-up", async () => {
+		await charge();
+		advanceDays(1);
+		expect(await charge()).toMatchObject({ state: "unpaid" });
+		const day = dateKey();
+		const recorded = {
+			...ledger.snapshots.find((snapshot) => snapshot.snapshotDate === day),
+		};
+		credit(500_000);
+		later(20);
+
+		expect(await finish(day)).toEqual({ state: "skipped" });
+
+		expect(
+			ledger.snapshots.find((snapshot) => snapshot.snapshotDate === day),
+		).toEqual(recorded);
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.account.balanceMicroCredits).toBe(500_000);
+	});
+
+	it("records an unpaid day once when it is first reached while finishing", async () => {
+		await charge();
+		advanceDays(1);
+
+		expect(await finish(dateKey())).toMatchObject({ state: "unpaid" });
+		expect(await finish(dateKey())).toEqual({ state: "skipped" });
+
+		expect(
+			ledger.snapshots.filter(
+				(snapshot) => snapshot.snapshotDate === dateKey(),
+			),
+		).toHaveLength(1);
 	});
 
 	it("does not bill an app that stores nothing", async () => {

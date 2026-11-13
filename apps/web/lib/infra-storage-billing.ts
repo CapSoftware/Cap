@@ -59,12 +59,14 @@ export async function chargeStorageDay({
 	usage,
 	dateKey,
 	now,
+	retryUnpaid = true,
 }: {
 	appId: string;
 	accountId: string;
 	usage: StorageUsage;
 	dateKey: string;
 	now: Date;
+	retryUnpaid?: boolean;
 }): Promise<StorageDayResult> {
 	return db().transaction(async (tx) => {
 		const [account] = await tx
@@ -106,7 +108,10 @@ export async function chargeStorageDay({
 				),
 			)
 			.limit(1);
-		if (snapshot?.processedAt && Number(snapshot.microCreditsCharged) > 0) {
+		if (
+			snapshot?.processedAt &&
+			(Number(snapshot.microCreditsCharged) > 0 || !retryUnpaid)
+		) {
 			return { state: "skipped" as const };
 		}
 
