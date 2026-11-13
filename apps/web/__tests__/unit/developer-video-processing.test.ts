@@ -1432,6 +1432,20 @@ describe("developer video dispatch", () => {
 		expect(video().processing?.probing).toBeUndefined();
 	});
 
+	it("counts a probe the media server gave up on toward the limit instead of retrying it forever", async () => {
+		mocks.probe.mockResolvedValue({ status: "timed_out" });
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"unclear",
+		);
+		expect(video().status).toBe("processing");
+		expect(video().processing?.probe).toBeNull();
+		expect(video().processing?.probing).toBeUndefined();
+	});
+
 	it("probes a file once when two callers prepare it at the same time", async () => {
 		let finish: (value: unknown) => void = () => undefined;
 		mocks.probe.mockReturnValue(

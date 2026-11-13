@@ -464,6 +464,7 @@ export async function cancelMediaServerVideoJob(
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }
+	| { status: "timed_out" }
 	| { status: "rejected"; message: string; unusable: boolean };
 
 export async function tryProbeVideoViaMediaServer(
@@ -483,6 +484,18 @@ export async function tryProbeVideoViaMediaServer(
 		return { status: "unreachable" };
 	}
 
+	// The media server answers 504 with code TIMEOUT when it gave up reading
+	// this file. That says something about the file, so it is not retried as if
+	// the server were away. A 504 from anything in front of it still is.
+	if (response.status === 504) {
+		const body: unknown = await response.json().catch(() => null);
+		return body &&
+			typeof body === "object" &&
+			"code" in body &&
+			body.code === "TIMEOUT"
+			? { status: "timed_out" }
+			: { status: "unreachable" };
+	}
 	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
 		await response.body?.cancel().catch(() => {});
 		return { status: "unreachable" };

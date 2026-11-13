@@ -358,6 +358,8 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 
 Completing the upload starts processing. [Get Video Status](/docs/api/rest-api#get-video-status) moves from `uploading` to `processing`, then to `ready` or `errored`. The page asks your server, and your server asks Cap with the secret key.
 
+Or let Cap tell your server when it's ready: see [Webhooks](/docs/api/webhooks).
+
 Add this to `index.html`, below the upload script:
 
 ```html
@@ -468,7 +470,7 @@ Safari plays HLS by itself. Every other browser needs [hls.js](https://github.co
 | `playMp4` on a fatal error | Keep playing from the same position if HLS fails for any other reason |
 | `stopHls` at the start of `playVideo` | Stop the previous video's player before starting the next one on the same page |
 
-There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
+There is no start level to set. Players begin with the first rendition the master playlist lists, and Cap lists the largest one whose peak bitrate is at most 2.6 Mbps first, at 1080p or smaller. On most videos that is 720p. The player steps up or down from there.
 
 [Play a Video](/docs/api/rest-api#play-a-video) covers a Content Security Policy, bitrates and what happens when playback stops.
 
@@ -492,7 +494,7 @@ Every upload also returns `shareUrl` and `embedUrl`. They are Cap's hosted playe
 
 `loading="lazy"` leaves an embed further down the page unloaded until the viewer scrolls near it. The embed takes options in its URL, such as a start time, autoplay and loop. See [Embed Parameters](/docs/api/rest-api#embed-parameters).
 
-Use the hosted player when you want a video on a page with the least work. Build your own player, as above, when you need to control how it looks or react to what the viewer does. [Share and Embed](/docs/api/rest-api#share-and-embed) has the details.
+Use the hosted player for the look and behaviour too: [Embed Options](/docs/api/rest-api#embed-options) set its colour, corners and controls, [Embed Parameters](/docs/api/rest-api#embed-parameters) its start time and autoplay, and [Player Events](/docs/api/rest-api#player-events) tell your page what the viewer does. Build your own player, as above, only when you need full control of the UI. [Share and Embed](/docs/api/rest-api#share-and-embed) has the details.
 
 ## 6. Upload from your server
 
@@ -851,20 +853,21 @@ Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Co
 - URL: `https://cap.so/api/developer/mcp`
 - Header: `Authorization: Bearer` followed by the secret key
 
-Claude Code, with the key in `CAP_SECRET_KEY`:
+Claude Code, with the key in `CAP_SECRET_KEY`. If the key is in your project's `.env` file, export it to the shell first:
 
 ```bash
+set -a; source .env; set +a
 claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
 ```
 
-Cursor, in `.cursor/mcp.json`:
+Cursor, in `.cursor/mcp.json`, reading the key from `CAP_SECRET_KEY` so the file never holds it:
 
 ```json
 {
   "mcpServers": {
     "cap-infra": {
       "url": "https://cap.so/api/developer/mcp",
-      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+      "headers": { "Authorization": "Bearer ${env:CAP_SECRET_KEY}" }
     }
   }
 }

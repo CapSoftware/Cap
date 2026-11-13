@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compileMDX } from "next-mdx-remote/rsc";
@@ -16,6 +17,7 @@ const { app } = await import("@/app/api/developer/v1/[...route]/webhooks");
 const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
 const {
 	MAX_WEBHOOK_ENDPOINTS_PER_APP,
+	READY_EVENT_MAX_WAIT_MS,
 	WEBHOOK_DISABLE_AFTER_FAILURES,
 	WEBHOOK_DISABLE_AFTER_MS,
 	WEBHOOK_EVENT_TYPES,
@@ -141,6 +143,95 @@ describe("the webhooks guide", () => {
 		} finally {
 			rmSync(folder, { recursive: true, force: true });
 		}
+	});
+
+	it("gives a receiver that answers Cap's request and refuses a forged one", async () => {
+		const jsBlocks = [...guide.matchAll(/```js\n([\s\S]*?)```/g)].map(
+			([, code]) => code ?? "",
+		);
+		const verify = jsBlocks.find((code) => code.includes("timingSafeEqual"));
+		const receiver = jsBlocks.find((code) => code.includes("createServer"));
+		expect(receiver).toContain('from "./verify-cap-webhook.mjs"');
+		const folder = mkdtempSync(join(tmpdir(), "cap-webhook-receiver-"));
+		const port = await new Promise<number>((resolve) => {
+			const probe = createServer().listen(0, () => {
+				const address = probe.address();
+				probe.close(() =>
+					resolve(typeof address === "object" && address ? address.port : 0),
+				);
+			});
+		});
+		const secret = "cws_0123456789abcdefghjkmnpqrstvwx";
+		writeFileSync(join(folder, "verify-cap-webhook.mjs"), verify ?? "");
+		writeFileSync(join(folder, "server.mjs"), receiver ?? "");
+		const child = spawn(process.execPath, [join(folder, "server.mjs")], {
+			env: { ...process.env, PORT: String(port), CAP_WEBHOOK_SECRET: secret },
+		});
+		let output = "";
+		child.stdout.on("data", (chunk) => {
+			output += chunk;
+		});
+		try {
+			const url = `http://127.0.0.1:${port}/webhooks/cap`;
+			const body = JSON.stringify({
+				id: "evt_1",
+				type: "video.ready",
+				data: { id: "video-1", hlsUrl: "https://play/master.m3u8" },
+			});
+			const post = async (signature: string) => {
+				for (let tries = 0; ; tries++) {
+					try {
+						return await fetch(url, {
+							method: "POST",
+							headers: { "Cap-Signature": signature },
+							body,
+						});
+					} catch (error) {
+						if (tries > 50) throw error;
+						await new Promise((resolve) => setTimeout(resolve, 50));
+					}
+				}
+			};
+			const oversized = await post("").then(() =>
+				fetch(url, { method: "POST", body: "x".repeat(2_000_000) }).then(
+					(response) => response.status,
+					() => "reset",
+				),
+			);
+			expect([413, "reset"]).toContain(oversized);
+			const now = Math.floor(Date.now() / 1000);
+			expect(
+				(await post(signWebhookBody(`${secret}x`, body, now))).status,
+			).toBe(400);
+			expect((await post(signWebhookBody(secret, body, now))).status).toBe(200);
+			expect((await post(signWebhookBody(secret, body, now))).status).toBe(200);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			expect(output.trim().split("\n")).toEqual([
+				"ready video-1 https://play/master.m3u8",
+			]);
+		} finally {
+			child.kill();
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	it("says when video.ready is sent, matching the code", () => {
+		expect(guide).not.toContain("No second event is sent");
+		expect(guide).toContain(
+			"`video.ready` arrives once every playback URL is ready, so `hlsUrl` is set unless HLS failed",
+		);
+		expect(READY_EVENT_MAX_WAIT_MS).toBe(30 * 60 * 1000);
+		expect(guide).toContain("still encoding 30 minutes after");
+		expect(
+			(spec.webhooks as Record<string, { post: { description: string } }>)[
+				"video.ready"
+			]?.post.description,
+		).toContain("30 minutes after");
+	});
+
+	it("indents code like the rest of the docs", () => {
+		const blocks = [...guide.matchAll(/```\w*\n([\s\S]*?)```/g)];
+		for (const [, code] of blocks) expect(code).not.toMatch(/^\t/m);
 	});
 
 	it("teaches the REST API only", () => {

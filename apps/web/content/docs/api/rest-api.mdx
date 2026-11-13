@@ -500,7 +500,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
     "outputs": { "hls": "ready", "mp4": "ready" },
     "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
+    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed",
+    "captions": [{ "language": "en", "url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/captions-en.vtt" }]
   }
 }
 ```
@@ -572,7 +573,7 @@ Poll this endpoint every 3 seconds after completing an upload, and stop when `st
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
-On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
+On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime. A [webhook](/docs/api/webhooks)'s `video.ready` is sent once every playback URL is ready instead.
 
 `outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed. While `takenDown` is `true` the playback URLs are `null` whatever `outputs` says, and `outputs` keeps describing what was encoded.
 
@@ -1394,7 +1395,7 @@ Replace `HLS_URL`, `MP4_URL` and `POSTER_URL` with the video's `hlsUrl`, `mp4Url
 - If hls.js hits an error it cannot recover from, the page switches to the MP4 at the same position and keeps playing.
 - If the browser's own HLS player fails, the page loads the MP4 in its place. A viewer who had already pressed play may have to press it again.
 - `capLevelToPlayerSize` stops hls.js from loading a rendition larger than the player. Without it, a small player on a fast connection climbs to the largest rendition.
-- There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
+- There is no start level to set. Players begin with the first rendition the master playlist lists, and Cap lists the largest one whose peak bitrate is at most 2.6 Mbps first, at 1080p or smaller. On most videos that is 720p.
 
 ### Play in Safari
 
@@ -1625,6 +1626,7 @@ The full video object returned by list and get endpoints:
 | `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
+| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its `url` can briefly answer `404`. Not in webhook payloads |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |
