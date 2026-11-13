@@ -3,12 +3,13 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { organizationMembers, spaceMembers } from "@cap/database/schema";
-import { type Organisation, Space, User } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { spaceMembers } from "@cap/database/schema";
+import { Space, User } from "@cap/web-domain";
+import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
+import { assertUsersBelongToOrganization } from "@/actions/organization/organization-member-ids";
 import { requireSpaceManager } from "@/actions/organization/space-authorization";
 import {
 	canRemoveSpaceMember,
@@ -37,37 +38,6 @@ const addSpaceMembersSchema = z.object({
 	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
 	role: spaceRole,
 });
-
-async function assertUsersBelongToOrganization(
-	organizationId: Organisation.OrganisationId,
-	organizationOwnerId: User.UserId,
-	userIds: User.UserId[],
-) {
-	const uniqueUserIds = Array.from(new Set(userIds));
-	if (uniqueUserIds.length === 0) return;
-
-	const rows = await db()
-		.select({ userId: organizationMembers.userId })
-		.from(organizationMembers)
-		.where(
-			and(
-				eq(organizationMembers.organizationId, organizationId),
-				inArray(
-					organizationMembers.userId,
-					uniqueUserIds.map((id) => User.UserId.make(id)),
-				),
-			),
-		);
-	const allowedUserIds = new Set([
-		organizationOwnerId,
-		...rows.map((row) => row.userId),
-	]);
-	const invalidUserIds = uniqueUserIds.filter((id) => !allowedUserIds.has(id));
-
-	if (invalidUserIds.length > 0) {
-		throw new Error("All space members must belong to the organization");
-	}
-}
 
 export async function addSpaceMember(
 	data: z.infer<typeof addSpaceMemberSchema>,

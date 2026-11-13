@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
@@ -14,7 +15,14 @@ const VIEWER_SETTING_KEYS = [
 	"disableReactions",
 	"disableTranscript",
 	"disableComments",
+	"disableDownloads",
 ] as const;
+
+const PRO_VIEWER_SETTING_KEYS = new Set<(typeof VIEWER_SETTING_KEYS)[number]>([
+	"disableSummary",
+	"disableChapters",
+	"disableTranscript",
+]);
 
 export async function updateVideoSettings(
 	videoId: Video.VideoId,
@@ -25,6 +33,7 @@ export async function updateVideoSettings(
 		disableReactions?: boolean;
 		disableTranscript?: boolean;
 		disableComments?: boolean;
+		disableDownloads?: boolean;
 		defaultPlaybackSpeed?: number;
 	},
 ) {
@@ -47,8 +56,10 @@ export async function updateVideoSettings(
 		throw new Error("You don't have permission to update this video settings");
 	}
 
+	const canUseProSettings = userIsPro(user);
 	const settingsToSave: Record<string, boolean | number> = {};
 	for (const key of VIEWER_SETTING_KEYS) {
+		if (!canUseProSettings && PRO_VIEWER_SETTING_KEYS.has(key)) continue;
 		const value = videoSettings[key];
 		if (typeof value === "boolean") settingsToSave[key] = value;
 	}

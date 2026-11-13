@@ -1,9 +1,15 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
 	getContainerCpuLimit,
 	getContainerCpuUsageMicros,
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
+import type { HlsLadderResult } from "./hls-ladder-encode";
+import {
+	INPUT_POLICY_VIOLATION,
+	isInputPolicyViolationMessage,
+} from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
@@ -25,7 +31,8 @@ export type RecordingErrorCode =
 	| "source-changed"
 	| "output-invalid"
 	| "processing-unavailable"
-	| "processing-budget-exhausted";
+	| "processing-budget-exhausted"
+	| typeof INPUT_POLICY_VIOLATION;
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -78,6 +85,7 @@ export interface JobProgress {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -139,6 +147,7 @@ export interface Job {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -168,6 +177,9 @@ const WEBHOOK_TIMEOUT_MS = 5000;
 const RECORDING_HEARTBEAT_MS = 60_000;
 const MAX_RECORDING_WORKER_LEASE_MS = 5 * 60_000;
 const UNACKNOWLEDGED_TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
+// Finished jobs stay answerable until the sweeper removes them, so the count
+// is capped. A retained job is a few kilobytes; the oldest go first.
+export const MAX_RETAINED_TERMINAL_JOBS = 5_000;
 
 const configuredMaxProcesses =
 	Number.parseInt(
@@ -353,8 +365,21 @@ export function canAcceptNewVideoProcess(
 	);
 }
 
+function evictExcessTerminalJobs(): void {
+	let excess = -MAX_RETAINED_TERMINAL_JOBS;
+	for (const job of jobs.values()) {
+		if (!isActivePhase(job.phase)) excess++;
+	}
+	for (const [jobId, job] of jobs) {
+		if (excess <= 0) return;
+		if (isActivePhase(job.phase)) continue;
+		deleteJob(jobId);
+		excess--;
+	}
+}
+
 export function generateJobId(): string {
-	return `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+	return `job_${Date.now()}_${randomUUID()}`;
 }
 
 export function createJob(
@@ -378,6 +403,7 @@ export function createJob(
 	};
 	jobs.set(jobId, job);
 	jobTotals.created++;
+	evictExcessTerminalJobs();
 	return job;
 }
 
@@ -408,6 +434,7 @@ export function updateJob(
 			| "recordingVerification"
 			| "outputUrl"
 			| "deferredSourceKey"
+			| "ladder"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -430,6 +457,21 @@ export function updateJob(
 		if (job.phase === "complete") jobTotals.completed++;
 		else if (job.phase === "error") jobTotals.errored++;
 		else jobTotals.cancelled++;
+		if (
+			job.phase === "error" &&
+			!job.errorCode &&
+			isInputPolicyViolationMessage(job.error)
+		) {
+			job.errorCode = INPUT_POLICY_VIOLATION;
+			console.warn(
+				JSON.stringify({
+					event: "input_policy_violation",
+					jobId: job.jobId,
+					videoId: job.videoId,
+					userId: job.userId,
+				}),
+			);
+		}
 	}
 	if (!isActivePhase(job.phase) && job.webhookInFlight)
 		job.webhookPending = true;
@@ -693,6 +735,7 @@ export function getJobProgress(job: Job): JobProgress {
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
+		ladder: job.ladder,
 	};
 }
 
@@ -889,10 +932,18 @@ export function sendWebhook(
 			acknowledgement = await deliverWebhook(job, getJobProgress(job));
 		}
 		return acknowledgement;
-	})().finally(() => {
-		job.webhookInFlight = false;
-		job.webhookPromise = undefined;
-	});
+	})()
+		.catch((error: unknown) => {
+			console.error(
+				`[job-manager] Webhook delivery failed for job ${job.jobId}:`,
+				error,
+			);
+			return undefined;
+		})
+		.finally(() => {
+			job.webhookInFlight = false;
+			job.webhookPromise = undefined;
+		});
 	return job.webhookPromise;
 }
 

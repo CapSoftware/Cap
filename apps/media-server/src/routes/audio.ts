@@ -9,6 +9,7 @@ import {
 	restoreIdleTimeoutOnFirstChunk,
 	setRequestIdleTimeout,
 } from "../lib/lifecycle";
+import { assertRemoteMediaAllowed } from "../lib/media-address-guard";
 import {
 	canAcceptNewAudioOperation as canAcceptNewProcess,
 	checkHasAudioTrack,
@@ -19,6 +20,9 @@ import {
 
 const audio = new Hono();
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
+// A streamed MP3 of a multi-hour recording takes minutes to encode, so the
+// default 2-minute extraction limit would cut it off mid-response.
+const STREAMED_AUDIO_TIMEOUT_MS = 15 * 60 * 1000;
 
 const videoUrlSchema = z.object({
 	videoUrl: z.string().url(),
@@ -87,6 +91,7 @@ audio.post("/check", async (c) => {
 	if (isDraining()) return drainingResponse(c);
 
 	try {
+		await assertRemoteMediaAllowed(result.data.videoUrl);
 		const hasAudio = await checkHasAudioTrack(result.data.videoUrl);
 		return c.json({ hasAudio });
 	} catch (err) {
@@ -152,6 +157,7 @@ audio.post("/extract", async (c) => {
 	let streaming = false;
 
 	try {
+		await assertRemoteMediaAllowed(videoUrl);
 		const hasAudio = await checkHasAudioTrack(videoUrl);
 		if (!hasAudio) {
 			return c.json(
@@ -161,7 +167,9 @@ audio.post("/extract", async (c) => {
 		}
 
 		if (useStreaming) {
-			const { stream, cleanup } = extractAudioStream(videoUrl);
+			const { stream, cleanup } = extractAudioStream(videoUrl, {
+				timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
+			});
 
 			c.req.raw.signal.addEventListener("abort", () => {
 				cleanup();
@@ -252,9 +260,10 @@ audio.post("/convert", async (c) => {
 	let streaming = false;
 
 	try {
+		await assertRemoteMediaAllowed(audioUrl);
 		const { stream, cleanup } = extractAudioStream(audioUrl, {
 			bitrate,
-			timeoutMs: 15 * 60 * 1000,
+			timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
 		});
 
 		c.req.raw.signal.addEventListener("abort", () => {

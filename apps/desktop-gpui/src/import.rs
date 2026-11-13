@@ -25,6 +25,8 @@ use cap_project::{
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat};
 use gpui::{App, Global};
 
+use crate::i18n::tr;
+
 /// `import.rs:38-44` in the Tauri binary.
 pub const VIDEO_IMPORT_EXTENSIONS: &[&str] =
     &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
@@ -46,6 +48,8 @@ pub(crate) static IMPORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 /// (the user deleted it -- the Tauri cancellation seam, `import.rs:1253-1256`);
 /// the drain recognises it and skips the error dialog.
 const IMPORT_CANCELLED: &str = "Import cancelled";
+
+const IMPORT_STOPPED: &str = "The import stopped unexpectedly";
 
 fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
@@ -292,7 +296,11 @@ pub fn pick_and_import_video(cx: &mut App) {
     cx.spawn(async move |cx| {
         // Blocking modal, so from a spawned task with no borrow held -- the
         // `save_file_panel` rule.
-        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)], cx).await
+        let Some(path) = pick_import_file(
+            &[(tr::import::filter::video(), VIDEO_IMPORT_EXTENSIONS)],
+            cx,
+        )
+        .await
         else {
             return;
         };
@@ -303,7 +311,11 @@ pub fn pick_and_import_video(cx: &mut App) {
 
 pub fn pick_and_import_image(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)], cx).await
+        let Some(path) = pick_import_file(
+            &[(tr::import::filter::image(), IMAGE_IMPORT_EXTENSIONS)],
+            cx,
+        )
+        .await
         else {
             return;
         };
@@ -318,9 +330,9 @@ pub fn pick_and_import_media(cx: &mut App) {
     cx.spawn(async move |cx| {
         let Some(path) = pick_import_file(
             &[
-                ("Media Files", MEDIA_IMPORT_EXTENSIONS),
-                ("Video Files", VIDEO_IMPORT_EXTENSIONS),
-                ("Image Files", IMAGE_IMPORT_EXTENSIONS),
+                (tr::import::filter::media(), MEDIA_IMPORT_EXTENSIONS),
+                (tr::import::filter::video(), VIDEO_IMPORT_EXTENSIONS),
+                (tr::import::filter::image(), IMAGE_IMPORT_EXTENSIONS),
             ],
             cx,
         )
@@ -334,7 +346,7 @@ pub fn pick_and_import_media(cx: &mut App) {
             cx.update(|cx| import_image_from_path(path, cx));
         } else {
             tracing::error!(path = %path.display(), "unsupported media import path");
-            show_error_dialog("Unsupported media file.".to_string());
+            show_error_dialog(tr::import::unsupported().to_string());
         }
     })
     .detach();
@@ -373,20 +385,38 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
     }
 
     cx.spawn(async move |cx| {
+        // Every worker path ends each import it reported with Complete or
+        // Failed. One that panics drops the sender first, and its entry would
+        // otherwise keep `imports_in_flight` true for the rest of the session.
+        let mut unfinished: Vec<ImportProgress> = Vec::new();
         while let Ok(update) = rx.recv_async().await {
-            let failed = update.stage == ImportStage::Failed;
-            let cancelled = failed && update.message == IMPORT_CANCELLED;
-            let kind = update.kind;
-            let message = update.message.clone();
-            cx.update(|cx| apply_progress(update, cx));
-            if failed && !cancelled {
-                // Outside the update: the modal spins AppKit's own run loop
-                // and may not hold a gpui borrow (the `confirm_dialog` rule).
-                show_import_error(kind, &message);
+            unfinished.retain(|entry| entry.project_path != update.project_path);
+            if !matches!(update.stage, ImportStage::Complete | ImportStage::Failed) {
+                unfinished.push(update.clone());
             }
+            drain_progress(update, cx);
+        }
+        for mut update in unfinished {
+            update.stage = ImportStage::Failed;
+            update.progress = 0.0;
+            update.message = IMPORT_STOPPED.to_string();
+            drain_progress(update, cx);
         }
     })
     .detach();
+}
+
+fn drain_progress(update: ImportProgress, cx: &mut gpui::AsyncApp) {
+    let failed = update.stage == ImportStage::Failed;
+    let cancelled = failed && update.message == IMPORT_CANCELLED;
+    let kind = update.kind;
+    let message = update.message.clone();
+    cx.update(|cx| apply_progress(update, cx));
+    if failed && !cancelled {
+        // Outside the update: the modal spins AppKit's own run loop
+        // and may not hold a gpui borrow (the `confirm_dialog` rule).
+        show_import_error(kind, &message);
+    }
 }
 
 /// `NSOpenPanel` through the platform helper on macOS (the generic file panel
@@ -426,12 +456,19 @@ fn show_import_error(kind: ImportKind, message: &str) {
         ImportKind::Image => "image",
     };
     tracing::error!("failed to import {media}: {message}");
-    show_error_dialog(format!("Failed to import {media}: {message}"));
+    // A blocking native dialog would hang a headless test run.
+    if cfg!(test) {
+        return;
+    }
+    show_error_dialog(match kind {
+        ImportKind::Video => tr::import::video_failed(message),
+        ImportKind::Image => tr::import::image_failed(message),
+    });
 }
 
 fn show_error_dialog(description: String) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Import Error")
+        .set_title(tr::import::error_title())
         .set_description(description)
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
@@ -478,7 +515,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         pretty_name: &project_name,
     };
 
-    sink.send(ImportStage::Probing, 0.0, "Analyzing video file...");
+    sink.send(ImportStage::Probing, 0.0, tr::import::progress::analyzing());
     match probe_video_can_decode(source_path) {
         Ok(true) => {}
         Ok(false) => {
@@ -534,7 +571,11 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
-    sink.send(ImportStage::Converting, 0.0, "Starting conversion...");
+    sink.send(
+        ImportStage::Converting,
+        0.0,
+        tr::import::progress::starting(),
+    );
     let result = transcode_video(
         source_path,
         &output_video_path,
@@ -544,7 +585,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
             sink.send(
                 ImportStage::Converting,
                 progress,
-                &format!("Converting video... {}%", (progress * 100.0) as u32),
+                &tr::import::progress::converting((progress * 100.0) as u32),
             );
         },
         None,
@@ -583,7 +624,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     sink.send(
         ImportStage::Finalizing,
         0.95,
-        "Creating project metadata...",
+        tr::import::progress::metadata(),
     );
 
     // `import.rs:1490-1504`: an Opus file this small is headers with no
@@ -618,7 +659,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         tracing::warn!("could not write the imported video's thumbnail: {error}");
     }
 
-    sink.send(ImportStage::Complete, 1.0, "Import complete!");
+    sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "video import complete");
 }
 
@@ -665,7 +706,7 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         pretty_name: &project_name,
     };
 
-    sink.send(ImportStage::Probing, 0.0, "Importing image...");
+    sink.send(ImportStage::Probing, 0.0, tr::import::progress::image());
 
     let (width, height, rgba) = match decode_image_rgba(source_path) {
         Ok(decoded) => decoded,
@@ -729,7 +770,7 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
-    sink.send(ImportStage::Complete, 1.0, "Import complete!");
+    sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "image import complete");
 }
 
@@ -930,7 +971,7 @@ fn transcode_video(
     .map_err(|error| format!("Failed to open video file: {error}"))?;
     check_editor_import_cancelled(project_path, cancelled)?;
 
-    let (video_stream_index, video_time_base, frame_rate, source_width, source_height) = {
+    let (video_stream_index, video_time_base, frame_rate, unrotated_size, rotation) = {
         let stream = input
             .streams()
             .best(ffmpeg::media::Type::Video)
@@ -940,17 +981,23 @@ fn transcode_video(
             .decoder()
             .video()
             .map_err(|e| format!("Failed to create decoder: {e}"))?;
+        let stream_aspect =
+            ffmpeg::Rational::from(unsafe { (*stream.as_ptr()).sample_aspect_ratio });
         (
             stream.index(),
             stream.time_base(),
             stream.avg_frame_rate(),
-            decoder.width(),
-            decoder.height(),
+            square_pixel_size(
+                decoder.width(),
+                decoder.height(),
+                [stream_aspect, decoder.aspect_ratio()],
+            ),
+            SourceRotation::from_parameters(&stream.parameters()),
         )
     };
 
-    let output_width = ensure_even(source_width);
-    let output_height = ensure_even(source_height);
+    let (scaled_width, scaled_height) = unrotated_size;
+    let (output_width, output_height) = rotation.rotated_size(scaled_width, scaled_height);
     let fps = if frame_rate.denominator() > 0 {
         ((f64::from(frame_rate.numerator()) / f64::from(frame_rate.denominator())).round() as u32)
             .clamp(1, 120)
@@ -1105,9 +1152,10 @@ fn transcode_video(
                     &video_frame,
                     &mut scaler,
                     video_encoder.pixel_format,
-                    output_width,
-                    output_height,
+                    scaled_width,
+                    scaled_height,
                 )?;
+                let frame = rotation.apply(frame)?;
                 video_encoder.queue_frame(frame, timestamp, &mut output)?;
 
                 frames_processed += 1;
@@ -1164,9 +1212,10 @@ fn transcode_video(
             &video_frame,
             &mut scaler,
             video_encoder.pixel_format,
-            output_width,
-            output_height,
+            scaled_width,
+            scaled_height,
         )?;
+        let frame = rotation.apply(frame)?;
         video_encoder.queue_frame(frame, timestamp, &mut output)?;
     }
 
@@ -1290,6 +1339,163 @@ fn convert_for_encode(
         .map_err(|e| format!("Transcoding failed: {e}"))?;
     scaled.set_pts(frame.pts());
     Ok(scaled)
+}
+
+/// The coded size resampled to square pixels. Anamorphic sources (a non-1:1
+/// sample aspect ratio) otherwise reach the editor at their coded size, which
+/// stretches them because nothing downstream reads the ratio.
+fn square_pixel_size(width: u32, height: u32, sample_aspects: [ffmpeg::Rational; 2]) -> (u32, u32) {
+    let display_width = sample_aspects
+        .into_iter()
+        .find(|ratio| ratio.numerator() > 0 && ratio.denominator() > 0)
+        .map(|ratio| {
+            f64::from(width) * f64::from(ratio.numerator()) / f64::from(ratio.denominator())
+        })
+        .filter(|width| width.is_finite() && (2.0..=f64::from(MAX_IMAGE_DIMENSION)).contains(width))
+        .map_or(width, |width| width.round() as u32);
+    (ensure_even(display_width), ensure_even(height))
+}
+
+/// Clockwise turn that makes a source upright. Phone cameras store portrait
+/// video as landscape pixels plus a display matrix; the bundle's display.mp4
+/// carries no matrix and the editor never reads one, so the import bakes the
+/// turn into the pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceRotation {
+    None,
+    Clockwise90,
+    Clockwise180,
+    Clockwise270,
+}
+
+impl SourceRotation {
+    fn from_parameters(parameters: &avcodec::Parameters) -> Self {
+        let counterclockwise = unsafe {
+            let parameters = parameters.as_ptr();
+            let side_data = ffmpeg::ffi::av_packet_side_data_get(
+                (*parameters).coded_side_data,
+                (*parameters).nb_coded_side_data,
+                ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+            );
+            if side_data.is_null()
+                || (*side_data).data.is_null()
+                || (*side_data).size < 9 * std::mem::size_of::<i32>()
+            {
+                return Self::None;
+            }
+            ffmpeg::ffi::av_display_rotation_get((*side_data).data.cast::<i32>())
+        };
+        Self::from_counterclockwise_degrees(counterclockwise)
+    }
+
+    fn from_counterclockwise_degrees(degrees: f64) -> Self {
+        if !degrees.is_finite() {
+            return Self::None;
+        }
+        match (-degrees.round()).rem_euclid(360.0) as u32 {
+            90 => Self::Clockwise90,
+            180 => Self::Clockwise180,
+            270 => Self::Clockwise270,
+            _ => Self::None,
+        }
+    }
+
+    fn rotated_size(self, width: u32, height: u32) -> (u32, u32) {
+        match self {
+            Self::Clockwise90 | Self::Clockwise270 => (height, width),
+            Self::None | Self::Clockwise180 => (width, height),
+        }
+    }
+
+    fn apply(self, frame: ffmpeg::frame::Video) -> Result<ffmpeg::frame::Video, String> {
+        if self == Self::None {
+            return Ok(frame);
+        }
+        let format = frame.format();
+        if !matches!(format, avformat::Pixel::YUV420P | avformat::Pixel::NV12) {
+            return Err(format!("Cannot rotate {format:?} video frames"));
+        }
+        let (width, height) = self.rotated_size(frame.width(), frame.height());
+        let mut rotated = ffmpeg::frame::Video::new(format, width, height);
+        for plane in 0..frame.planes() {
+            let sample_bytes = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let source = SourcePlane {
+                data: frame.data(plane),
+                stride: frame.stride(plane),
+                width: frame.plane_width(plane) as usize,
+                height: frame.plane_height(plane) as usize,
+                sample_bytes,
+            };
+            let dst_stride = rotated.stride(plane);
+            source.rotate_into(rotated.data_mut(plane), dst_stride, self);
+        }
+        rotated.set_pts(frame.pts());
+        Ok(rotated)
+    }
+}
+
+struct SourcePlane<'a> {
+    data: &'a [u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    sample_bytes: usize,
+}
+
+impl SourcePlane<'_> {
+    fn rotate_into(&self, dst: &mut [u8], dst_stride: usize, rotation: SourceRotation) {
+        match self.sample_bytes {
+            2 => self.rotate_samples::<2>(dst, dst_stride, rotation),
+            _ => self.rotate_samples::<1>(dst, dst_stride, rotation),
+        }
+    }
+
+    fn rotate_samples<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        rotation: SourceRotation,
+    ) {
+        let (width, height) = (self.width, self.height);
+        match rotation {
+            SourceRotation::None => self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (x, y)),
+            SourceRotation::Clockwise90 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (height - 1 - y, x))
+            }
+            SourceRotation::Clockwise180 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (width - 1 - x, height - 1 - y))
+            }
+            SourceRotation::Clockwise270 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (y, width - 1 - x))
+            }
+        }
+    }
+
+    fn copy_tiles<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        destination: impl Fn(usize, usize) -> (usize, usize),
+    ) {
+        const TILE: usize = 64;
+        for tile_y in (0..self.height).step_by(TILE) {
+            for tile_x in (0..self.width).step_by(TILE) {
+                for y in tile_y..(tile_y + TILE).min(self.height) {
+                    let row = &self.data[y * self.stride..];
+                    for x in tile_x..(tile_x + TILE).min(self.width) {
+                        let (dst_x, dst_y) = destination(x, y);
+                        let to = dst_y * dst_stride + dst_x * SAMPLE;
+                        let from = x * SAMPLE;
+                        dst[to..to + SAMPLE].copy_from_slice(&row[from..from + SAMPLE]);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,6 +2192,43 @@ mod tests {
         assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline);
     }
 
+    /// A worker that panics never sends Complete or Failed, so its import has
+    /// to leave the list anyway or `imports_in_flight` stays true for good.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_panicking_import_worker_leaves_no_import_in_flight(cx: &mut gpui::TestAppContext) {
+        let _imports = IMPORT_TEST_LOCK.lock().unwrap();
+        let baseline = ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire);
+        let root = temp_dir("worker-panic");
+        let project_path = root.join("Imported Video.cap");
+        cx.update(|cx| {
+            spawn_import(cx, move |tx| {
+                let _ = tx.send(ImportProgress {
+                    kind: ImportKind::Video,
+                    project_path,
+                    pretty_name: "Imported Video".to_string(),
+                    stage: ImportStage::Converting,
+                    progress: 0.5,
+                    message: String::new(),
+                });
+                panic!("import worker panicked mid-conversion");
+            });
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire) != baseline {
+            assert!(std::time::Instant::now() < deadline, "worker never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(imports_snapshot(cx).is_empty());
+            assert!(!imports_in_flight(cx));
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn extension_filters_are_case_insensitive_and_file_gated() {
         let dir = temp_dir("extensions");
@@ -2203,6 +2446,395 @@ mod tests {
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn display_matrix_angles_map_to_the_clockwise_turn_ffmpeg_applies() {
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-90.0),
+            SourceRotation::Clockwise90
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(90.0),
+            SourceRotation::Clockwise270
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-0.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(45.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(f64::NAN),
+            SourceRotation::None
+        );
+    }
+
+    #[test]
+    fn anamorphic_sources_resample_to_square_pixels() {
+        let unset = ffmpeg::Rational::new(0, 1);
+        assert_eq!(
+            square_pixel_size(1440, 1080, [ffmpeg::Rational::new(4, 3), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(720, 720, [unset, ffmpeg::Rational::new(9, 16)]),
+            (404, 720)
+        );
+        assert_eq!(square_pixel_size(1920, 1080, [unset, unset]), (1920, 1080));
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(1, 1), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(100, 1), unset]),
+            (1920, 1080)
+        );
+    }
+
+    /// Encodes a clip whose top-left quadrant is bright and everything else
+    /// dark, tagged with the display matrix and sample aspect ratio a phone or
+    /// editing app would write. The angle is the counterclockwise rotation
+    /// ffprobe reports (-90 for an iPhone portrait clip); `av_display_rotation_set`
+    /// takes the clockwise angle.
+    fn write_tagged_source(
+        path: &Path,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) {
+        let mut output = avformat::output(path).unwrap();
+        let mut encoder =
+            open_h264_encoder(&mut output, width, height, 10, (1, 10).into()).unwrap();
+        unsafe {
+            let stream = (*output.as_mut_ptr())
+                .streams
+                .add(encoder.stream_index)
+                .read();
+            let parameters = (*stream).codecpar;
+            if let Some(degrees) = counterclockwise_degrees {
+                let side_data = ffmpeg::ffi::av_packet_side_data_new(
+                    &mut (*parameters).coded_side_data,
+                    &mut (*parameters).nb_coded_side_data,
+                    ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+                    9 * std::mem::size_of::<i32>(),
+                    0,
+                );
+                assert!(!side_data.is_null());
+                ffmpeg::ffi::av_display_rotation_set((*side_data).data.cast::<i32>(), -degrees);
+            }
+            if let Some((num, den)) = sample_aspect {
+                let ratio = ffmpeg::ffi::AVRational { num, den };
+                (*parameters).sample_aspect_ratio = ratio;
+                (*stream).sample_aspect_ratio = ratio;
+            }
+        }
+        output.write_header().unwrap();
+        for index in 0..10u64 {
+            let mut frame = ffmpeg::frame::Video::new(encoder.pixel_format, width, height);
+            let luma_stride = frame.stride(0);
+            let luma = frame.data_mut(0);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let bright = x < width as usize / 2 && y < height as usize / 2;
+                    luma[y * luma_stride + x] = if bright { 235 } else { 16 };
+                }
+            }
+            for plane in 1..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_millis(index * 100), &mut output)
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+    }
+
+    fn first_frame_luma(path: &Path) -> (u32, u32, Vec<u8>) {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            if decoder.receive_frame(&mut frame).is_ok() {
+                break;
+            }
+        }
+        if frame.width() == 0 {
+            decoder.send_eof().unwrap();
+            decoder.receive_frame(&mut frame).unwrap();
+        }
+        let mut gray = ffmpeg::frame::Video::empty();
+        ffmpeg::software::scaling::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            avformat::Pixel::GRAY8,
+            frame.width(),
+            frame.height(),
+            ffmpeg::software::scaling::Flags::POINT,
+        )
+        .unwrap()
+        .run(&frame, &mut gray)
+        .unwrap();
+        let (width, height, stride) = (gray.width(), gray.height(), gray.stride(0));
+        let luma = (0..height as usize)
+            .flat_map(|y| gray.data(0)[y * stride..y * stride + width as usize].to_vec())
+            .collect();
+        (width, height, luma)
+    }
+
+    /// Whether each quadrant is bright, in top-left, top-right, bottom-left,
+    /// bottom-right order.
+    fn quadrant_brightness(width: u32, height: u32, luma: &[u8]) -> [bool; 4] {
+        let (width, height) = (width as usize, height as usize);
+        let mut sums = [0u64; 4];
+        let mut counts = [0u64; 4];
+        for y in 0..height {
+            for x in 0..width {
+                let quadrant = usize::from(x >= width / 2) + 2 * usize::from(y >= height / 2);
+                sums[quadrant] += u64::from(luma[y * width + x]);
+                counts[quadrant] += 1;
+            }
+        }
+        std::array::from_fn(|quadrant| sums[quadrant] / counts[quadrant].max(1) > 128)
+    }
+
+    fn import_tagged_source(
+        tag: &str,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) -> (u32, u32, [bool; 4]) {
+        ffmpeg::init().unwrap();
+        let root = temp_dir(tag);
+        let source = root.join("source.mp4");
+        write_tagged_source(
+            &source,
+            width,
+            height,
+            counterclockwise_degrees,
+            sample_aspect,
+        );
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        transcode_video(&source, &output, None, &root, &|_| {}, None).unwrap();
+        let (out_width, out_height, luma) = first_frame_luma(&output);
+        std::fs::remove_dir_all(root).unwrap();
+        (
+            out_width,
+            out_height,
+            quadrant_brightness(out_width, out_height, &luma),
+        )
+    }
+
+    #[test]
+    fn untagged_sources_import_unchanged() {
+        assert_eq!(
+            import_tagged_source("untagged", 320, 240, None, None),
+            (320, 240, [true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn iphone_portrait_video_imports_upright_and_portrait() {
+        assert_eq!(
+            import_tagged_source("rotate-cw", 320, 240, Some(-90.0), None),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
+    #[test]
+    fn counterclockwise_and_upside_down_sources_import_upright() {
+        assert_eq!(
+            import_tagged_source("rotate-ccw", 320, 240, Some(90.0), None),
+            (240, 320, [false, false, true, false])
+        );
+        assert_eq!(
+            import_tagged_source("rotate-180", 320, 240, Some(180.0), None),
+            (320, 240, [false, false, false, true])
+        );
+    }
+
+    #[test]
+    fn anamorphic_video_imports_at_its_display_shape() {
+        assert_eq!(
+            import_tagged_source("anamorphic", 160, 240, None, Some((2, 1))),
+            (320, 240, [true, false, false, false])
+        );
+        assert_eq!(
+            import_tagged_source("anamorphic-rotated", 160, 240, Some(-90.0), Some((2, 1))),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
+    const ALL_TURNS: [SourceRotation; 3] = [
+        SourceRotation::Clockwise90,
+        SourceRotation::Clockwise180,
+        SourceRotation::Clockwise270,
+    ];
+
+    /// The source position whose sample lands at (x, y) of a plane turned
+    /// clockwise, written from the output side so it does not mirror
+    /// `rotate_samples`.
+    fn source_position(
+        rotation: SourceRotation,
+        source_width: usize,
+        source_height: usize,
+        x: usize,
+        y: usize,
+    ) -> (usize, usize) {
+        match rotation {
+            SourceRotation::None => (x, y),
+            SourceRotation::Clockwise90 => (y, source_height - 1 - x),
+            SourceRotation::Clockwise180 => (source_width - 1 - x, source_height - 1 - y),
+            SourceRotation::Clockwise270 => (source_width - 1 - y, x),
+        }
+    }
+
+    /// Every sample in every plane gets its own value, and U never equals V,
+    /// so a misplaced, swapped or split chroma sample changes the result.
+    fn distinct_sample(plane: usize, channel: usize, x: usize, y: usize) -> u8 {
+        let base = [0, 64, 160][plane + channel];
+        (base + y * 8 + x) as u8
+    }
+
+    /// 8x6 luma with 4x3 chroma: small enough that every sample value above
+    /// stays distinct within its plane.
+    fn distinct_frame(format: avformat::Pixel) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, 8, 6);
+        frame.set_pts(Some(42));
+        for plane in 0..frame.planes() {
+            let channels = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let (width, height) = (frame.plane_width(plane), frame.plane_height(plane));
+            let stride = frame.stride(plane);
+            let data = frame.data_mut(plane);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    for channel in 0..channels {
+                        data[y * stride + x * channels + channel] =
+                            distinct_sample(plane, channel, x, y);
+                    }
+                }
+            }
+        }
+        frame
+    }
+
+    /// (plane, channel) for U and V in each supported layout.
+    fn chroma_channels(format: avformat::Pixel) -> [(usize, usize); 2] {
+        if format == avformat::Pixel::NV12 {
+            [(1, 0), (1, 1)]
+        } else {
+            [(1, 0), (2, 0)]
+        }
+    }
+
+    fn assert_turned_exactly(format: avformat::Pixel, rotation: SourceRotation) {
+        let rotated = rotation.apply(distinct_frame(format)).unwrap();
+        let (expected_width, expected_height) = rotation.rotated_size(8, 6);
+        assert_eq!(
+            (rotated.format(), rotated.width(), rotated.height()),
+            (format, expected_width, expected_height),
+            "{format:?} {rotation:?}"
+        );
+        assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
+
+        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
+        let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+        for (plane, channel, channels, source_width, source_height) in [
+            (0, 0, 1, 8, 6),
+            (u_plane, u_channel, chroma_samples, 4, 3),
+            (v_plane, v_channel, chroma_samples, 4, 3),
+        ] {
+            let (width, height) = rotation.rotated_size(source_width as u32, source_height as u32);
+            assert_eq!(
+                (rotated.plane_width(plane), rotated.plane_height(plane)),
+                (width, height),
+                "{format:?} {rotation:?} plane {plane}"
+            );
+            let (width, height) = (width as usize, height as usize);
+            let stride = rotated.stride(plane);
+            for y in 0..height {
+                for x in 0..width {
+                    let (source_x, source_y) =
+                        source_position(rotation, source_width, source_height, x, y);
+                    assert_eq!(
+                        rotated.data(plane)[y * stride + x * channels + channel],
+                        distinct_sample(plane, channel, source_x, source_y),
+                        "{format:?} {rotation:?} plane {plane} channel {channel} at ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn planar_chroma_lands_where_each_turn_puts_it() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::YUV420P, rotation);
+        }
+    }
+
+    #[test]
+    fn interleaved_nv12_chroma_pairs_turn_together_in_order() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::NV12, rotation);
+        }
+    }
+
+    #[test]
+    fn turned_chroma_corners_match_hand_worked_positions() {
+        // Source chroma is 4x3. A clockwise quarter turn moves the source's
+        // bottom-left sample to the top-left, so U there is distinct_sample
+        // at (0, 2); a counterclockwise one moves the top-right there.
+        for format in [avformat::Pixel::YUV420P, avformat::Pixel::NV12] {
+            let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+            for (rotation, (source_x, source_y)) in [
+                (SourceRotation::Clockwise90, (0, 2)),
+                (SourceRotation::Clockwise180, (3, 2)),
+                (SourceRotation::Clockwise270, (3, 0)),
+            ] {
+                let rotated = rotation.apply(distinct_frame(format)).unwrap();
+                assert_eq!(
+                    (
+                        rotated.data(u_plane)[u_channel],
+                        rotated.data(v_plane)[v_channel],
+                    ),
+                    (
+                        distinct_sample(1, 0, source_x, source_y),
+                        distinct_sample(1, 1, source_x, source_y),
+                    ),
+                    "{format:?} {rotation:?}"
+                );
+            }
+        }
     }
 
     /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`

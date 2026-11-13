@@ -5,11 +5,19 @@ const MIN_PART_BYTES = 1024 * 1024;
 // bigger is a bad Content-Range header, not a real object.
 export const MAX_RANGED_TOTAL_BYTES = 1024 ** 4;
 
+export class DownloadTooLargeError extends Error {
+	constructor(maxBytes: number) {
+		super(`Download is larger than the ${maxBytes} byte limit`);
+		this.name = "DownloadTooLargeError";
+	}
+}
+
 export interface ParallelDownloadOptions {
 	concurrency: number;
 	partBytes: number;
 	signal?: AbortSignal;
 	fetchImpl?: typeof fetch;
+	maxBytes?: number;
 }
 
 export interface ParallelDownloadResult {
@@ -80,9 +88,18 @@ async function readInto(
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
+			const read = offset - start + value.byteLength;
+			if (expected !== null && read > expected) {
+				throw new Error(
+					`Ranged download returned more than expected ${expected} bytes`,
+				);
+			}
 			await write(value, offset);
 			offset += value.byteLength;
 		}
+	} catch (error) {
+		await reader.cancel(error).catch(() => {});
+		throw error;
 	} finally {
 		reader.releaseLock();
 	}
@@ -102,8 +119,15 @@ export async function downloadUrlToPathParallel(
 ): Promise<ParallelDownloadResult> {
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const partBytes = Math.max(MIN_PART_BYTES, options.partBytes);
+	const maxBytes = Math.min(
+		options.maxBytes ?? MAX_RANGED_TOTAL_BYTES,
+		MAX_RANGED_TOTAL_BYTES,
+	);
 	const handle = await open(path, "w");
+	let received = 0;
 	const write = async (chunk: Uint8Array, offset: number) => {
+		received += chunk.byteLength;
+		if (received > maxBytes) throw new DownloadTooLargeError(maxBytes);
 		let written = 0;
 		while (written < chunk.byteLength) {
 			const { bytesWritten } = await handle.write(
@@ -152,6 +176,10 @@ export async function downloadUrlToPathParallel(
 			await first.body?.cancel().catch(() => {});
 			throw new Error(`Ranged download reported an invalid size: ${total}`);
 		}
+		if (total > maxBytes) {
+			await first.body?.cancel().catch(() => {});
+			throw new DownloadTooLargeError(maxBytes);
+		}
 		const firstBytes = range.end + 1;
 		const etag = first.headers.get("etag");
 		const ranges = planRanges(total, firstBytes, partBytes);
@@ -173,14 +201,28 @@ export async function downloadUrlToPathParallel(
 						`Ranged download part failed: ${response.status} ${response.statusText}`,
 					);
 				}
+				const receivedRange = parseContentRange(
+					response.headers.get("content-range"),
+				);
+				if (
+					receivedRange === null ||
+					receivedRange.start !== part.start ||
+					receivedRange.end !== part.end ||
+					receivedRange.total !== total
+				) {
+					await response.body?.cancel().catch(() => {});
+					throw new Error(
+						"Ranged download part returned an unexpected Content-Range",
+					);
+				}
 				await readInto(response, write, part.start, part.end - part.start + 1);
 			}
 		};
 		const workers = Array.from(
-			{ length: Math.max(1, Math.min(options.concurrency - 1, ranges.count)) },
+			{ length: Math.max(0, Math.min(options.concurrency - 1, ranges.count)) },
 			() => worker(),
 		);
-		const firstRead = readInto(first, write, 0, firstBytes);
+		const firstRead = readInto(first, write, 0, firstBytes).then(worker);
 		try {
 			await Promise.all([firstRead, ...workers]);
 		} catch (error) {

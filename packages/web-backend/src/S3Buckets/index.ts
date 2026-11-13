@@ -6,7 +6,10 @@ import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
-import { createCloudFrontSignedUrl } from "./cloudfront-signed-url.ts";
+import {
+	cloudFrontExpiresAt,
+	createCloudFrontSignedUrl,
+} from "./cloudfront-signed-url.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
@@ -110,19 +113,16 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					const getCloudFrontSignedUrl = (
 						key: string,
 						signingArgs?: RequestPresigningArguments,
-					) => {
-						const expiresIn = signingArgs?.expiresIn ?? 3600;
-
-						return Effect.succeed(
+					) =>
+						Effect.succeed(
 							createCloudFrontSignedUrl({
 								bucketUrl: cloudfrontEnvs.bucketUrl,
 								key,
 								keyPairId: cloudfrontEnvs.keypairId,
 								privateKey: cloudfrontEnvs.privateKey,
-								expiresAt: Math.floor((Date.now() + expiresIn * 1000) / 1000),
+								expiresAt: cloudFrontExpiresAt(signingArgs, Date.now()),
 							}),
 						);
-					};
 
 					return Effect.succeed<typeof s3>({
 						...s3,
@@ -189,11 +189,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				function* (userId: User.UserId) {
 					return yield* repo
 						.getForUser(userId)
-						.pipe(
-							Effect.option,
-							Effect.map(Option.flatten),
-							Effect.flatMap(getBucketAccess),
-						);
+						.pipe(Effect.flatMap(getBucketAccess));
 				},
 			),
 			getBucketAccessForOrganization: Effect.fn(

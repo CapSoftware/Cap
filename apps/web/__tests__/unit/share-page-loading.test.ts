@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Context, Effect, Option } from "effect";
 import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +9,15 @@ const mocks = vi.hoisted(() => ({
 	policy: vi.fn(),
 	thumbnailUrl: vi.fn(),
 	playbackUrl: vi.fn(),
+	defaultStorage: true,
+	userAgent: "",
+	buildEnv: {
+		NEXT_PUBLIC_WEB_URL: "https://cap.so",
+		NEXT_PUBLIC_IS_CAP: undefined as string | undefined,
+	},
 	quota: vi.fn(),
+	restrictedRedirect: vi.fn(),
+	foreignRedirect: vi.fn(),
 	user: vi.fn(),
 	authenticated: false,
 	ownerIsPro: false,
@@ -16,12 +26,16 @@ const mocks = vi.hoisted(() => ({
 		name: string;
 		organizationId: string;
 	}[],
+	organizationDomains: {} as Record<
+		string,
+		{ customDomain: string; domainVerified: Date }
+	>,
 }));
 
 vi.mock("@cap/database", () => ({ db: () => ({ select: mocks.select }) }));
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: mocks.user }));
 vi.mock("@cap/env", () => ({
-	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
+	buildEnv: mocks.buildEnv,
 	serverEnv: () => ({}),
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
@@ -64,10 +78,15 @@ vi.mock("@/lib/server", () => ({
 			Effect.runPromise,
 		),
 }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({
+	headers: async () => new Headers({ "user-agent": mocks.userAgent }),
+}));
 vi.mock("next/navigation", () => ({
 	notFound: () => {
 		throw new Error("NOT_FOUND");
+	},
+	redirect: (url: string) => {
+		throw new Error(`REDIRECT ${url}`);
 	},
 }));
 vi.mock("@/lib/video-view-count", () => ({
@@ -80,17 +99,30 @@ vi.mock("@/lib/ai/provider", () => ({ isAiConfigured: () => false }));
 vi.mock("@/lib/desktop-segments-recovery", () => ({
 	completeDesktopSegmentsManifestAndQueue: vi.fn(),
 }));
-vi.mock("@/lib/Notification", () => ({ createNotification: vi.fn() }));
+vi.mock("@/lib/Notification", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/public-share-video", () => ({ getPublicShareVideo: vi.fn() }));
-vi.mock("@/lib/share-playback", () => ({
-	getSharePlaybackUrl: mocks.playbackUrl,
+vi.mock("@/lib/share-playback", async (importActual) => ({
+	canStartPlaybackInHtml: (
+		await importActual<typeof import("@/lib/share-playback")>()
+	).canStartPlaybackInHtml,
+	getSharePlaybackSource: async (video: unknown) => {
+		const url = (await mocks.playbackUrl(video)) as string | null;
+		return url ? { url, defaultStorage: mocks.defaultStorage } : null;
+	},
 }));
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoOverShareableLinkLimit: mocks.quota,
 }));
-vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveShareWebUrl: vi.fn(),
+	resolveRestrictedShareRedirect: mocks.restrictedRedirect,
+	resolveForeignShareRedirect: mocks.foreignRedirect,
+}));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
-vi.mock("@/lib/video-download-permissions", () => ({
+vi.mock("@/lib/video-download-permissions", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@/lib/video-download-permissions")
+	>()),
 	canUserDownloadVideo: async () => false,
 }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => false }));
@@ -124,7 +156,11 @@ const createVideo = () => ({
 	metadata: null,
 	videoSettings: {
 		callToAction: { label: "Book a call", url: "https://example.com/" },
+	} as {
+		callToAction: { label: string; url: string };
+		disableDownloads?: boolean;
 	},
+	orgSettings: null as { disableDownloads?: boolean } | null,
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -132,26 +168,40 @@ const createVideo = () => ({
 
 function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	mocks.select.mockImplementation((selection: Record<string, unknown>) => {
-		const result =
-			"ownerId" in selection
+		const resultFor = (condition: SQL) => {
+			if ("customDomain" in selection) {
+				const [organizationId] = new MySqlDialect().sqlToQuery(
+					condition,
+				).params;
+				const domain = mocks.organizationDomains[String(organizationId)];
+				return domain ? [domain] : [];
+			}
+			return "ownerId" in selection
 				? rows
 				: "organizationId" in selection && !("settings" in selection)
 					? mocks.sharedOrganizations
 					: [];
+		};
 		const query = {
 			from: () => query,
 			leftJoin: () => query,
 			innerJoin: () => query,
-			where: () => Promise.resolve(result),
+			where: (condition: SQL) => {
+				const result = Promise.resolve(resultFor(condition));
+				return Object.assign(result, { limit: () => result });
+			},
 		};
 		return query;
 	});
 }
 
-const renderPage = () =>
+const renderPage = (
+	videoId = "video",
+	searchParams: Record<string, string> = {},
+) =>
 	ShareVideoPage({
-		params: Promise.resolve({ videoId: "video" }),
-		searchParams: Promise.resolve({}),
+		params: Promise.resolve({ videoId }),
+		searchParams: Promise.resolve(searchParams),
 	});
 
 async function renderAuthorizedContent() {
@@ -164,7 +214,9 @@ async function renderAuthorizedContent() {
 		content.props,
 	)) as ReactElement<{
 		children: ReactElement<{
+			header: ReactElement<{ canDownload: boolean; hasEdits: boolean }>;
 			initialPlaybackUrl?: Promise<string | null>;
+			serverPlaybackUrl?: string | null;
 			screenshotImageUrl?: string | null;
 			data: {
 				sharedOrganizations: unknown[];
@@ -183,11 +235,88 @@ describe("share page loading", () => {
 		);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
+		mocks.restrictedRedirect.mockResolvedValue(null);
+		mocks.foreignRedirect.mockResolvedValue(null);
+		mocks.defaultStorage = true;
+		mocks.userAgent = "";
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
 		mocks.user.mockResolvedValue(null);
 		mocks.authenticated = false;
 		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
+		mocks.organizationDomains = {};
 		arrangeRows([createVideo()]);
+	});
+
+	it("renders the private state for a restricted video on the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		const page = (await renderPage()) as ReactElement<{ videoId: string }>;
+		expect(isValidElement(page)).toBe(true);
+		expect(page.props.videoId).toBe(createVideo().id);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+	});
+
+	it("sends a restricted video on a custom domain to the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("keeps password gates on the custom domain", async () => {
+		mocks.policy.mockReturnValue(
+			Effect.fail({ _tag: "VerifyVideoPasswordError" }),
+		);
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		const page = (await renderPage()) as ReactElement;
+		expect(page.type).toBe(PasswordGate);
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
+	});
+
+	it("sends another organization's video on a custom domain to the main origin", async () => {
+		mocks.foreignRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.foreignRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			"video",
+			{},
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("sends the owner landing after a recording on a custom domain to the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		mocks.restrictedRedirect.mockResolvedValue(
+			`https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		await expect(
+			renderPage(videoId, { recordingStopped: "1" }),
+		).rejects.toThrow(
+			`REDIRECT https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			videoId,
+			{ recordingStopped: "1" },
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner landing after a recording on the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		await renderPage(videoId, { recordingStopped: "1" });
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+		expect(mocks.select).toHaveBeenCalled();
+	});
+
+	it("does not look up the host for authorized videos", async () => {
+		await renderAuthorizedContent();
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
 	});
 
 	it.each([false, true])(
@@ -203,6 +332,45 @@ describe("share page loading", () => {
 			} else {
 				expect(callToAction).toBeNull();
 			}
+		},
+	);
+
+	it.each([
+		{
+			viewerId: "owner",
+			videoOrganizationDomain: "videos.team.test",
+			expected: "videos.team.test",
+		},
+		{ viewerId: "owner", videoOrganizationDomain: null, expected: null },
+		{
+			viewerId: "viewer",
+			videoOrganizationDomain: "videos.team.test",
+			expected: null,
+		},
+	])(
+		"gives only the owner the custom domain of the video's organization: %j",
+		async ({ viewerId, videoOrganizationDomain, expected }) => {
+			mocks.user.mockResolvedValue({
+				id: viewerId,
+				activeOrganizationId: "other-organization",
+			});
+			mocks.organizationDomains = {
+				"other-organization": {
+					customDomain: "videos.other-team.test",
+					domainVerified: new Date(),
+				},
+			};
+			if (videoOrganizationDomain) {
+				mocks.organizationDomains.organization = {
+					customDomain: videoOrganizationDomain,
+					domainVerified: new Date(),
+				};
+			}
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props).toMatchObject({
+				customDomain: expected,
+				domainVerified: expected !== null,
+			});
 		},
 	);
 
@@ -289,6 +457,57 @@ describe("share page loading", () => {
 		expect(mocks.playbackUrl).toHaveBeenCalledOnce();
 	});
 
+	const headerProps = async () =>
+		(await renderAuthorizedContent()).props.children.props.header.props;
+
+	it("offers a download to a signed-out viewer by default", async () => {
+		expect(await headerProps()).toMatchObject({
+			canDownload: true,
+			hasEdits: false,
+		});
+	});
+
+	it.each([
+		[null, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{ disableDownloads: true }, {}, false],
+		[null, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
+	])(
+		"with organization %j and video %j, a signed-out viewer can download: %s",
+		async (orgSettings, videoSettings, canDownload) => {
+			const video = createVideo();
+			arrangeRows([
+				{
+					...video,
+					orgSettings,
+					videoSettings: { ...video.videoSettings, ...videoSettings },
+				},
+			]);
+			expect(await headerProps()).toMatchObject({
+				canDownload,
+				hasEdits: false,
+			});
+		},
+	);
+
+	it.each([
+		["the share limit hides the video", { quota: true }],
+		["the video is still uploading", { hasActiveUpload: true }],
+		["the video is a screenshot", { isScreenshot: true }],
+		[
+			"the cap is an older MediaConvert one",
+			{ source: { type: "MediaConvert" } },
+		],
+		["the cap is an older local one", { source: { type: "local" } }],
+	])("offers no viewer download when %s", async (_label, state) => {
+		if ("quota" in state) mocks.quota.mockResolvedValue(true);
+		const { quota: _quota, ...row } = { quota: false, ...state };
+		arrangeRows([{ ...createVideo(), ...row }]);
+		expect(await headerProps()).toMatchObject({ canDownload: false });
+	});
+
 	it("does not sign media hidden by the shareable link quota", async () => {
 		mocks.quota.mockResolvedValue(true);
 		const content = await renderAuthorizedContent();
@@ -327,5 +546,98 @@ describe("share page loading", () => {
 		expect(content.props.children.props.screenshotImageUrl).toBe(
 			"https://media.example.com/image.jpg",
 		);
+	});
+});
+
+describe("share page MP4 source in the HTML", () => {
+	const CHROME =
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+	const SIGNED = "https://media.example.com/result.mp4";
+
+	beforeEach(() => {
+		mocks.policy.mockReturnValue(Effect.void);
+		mocks.thumbnailUrl.mockReturnValue(
+			Effect.succeed(Option.some("https://media.example.com/image.jpg")),
+		);
+		mocks.playbackUrl.mockResolvedValue(SIGNED);
+		mocks.quota.mockResolvedValue(false);
+		mocks.user.mockResolvedValue(null);
+		mocks.authenticated = false;
+		mocks.ownerIsPro = false;
+		mocks.sharedOrganizations = [];
+		mocks.defaultStorage = true;
+		mocks.userAgent = CHROME;
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		arrangeRows([createVideo()]);
+	});
+
+	it("renders the signed URL for Cap's own storage", async () => {
+		const content = await renderAuthorizedContent();
+		expect(content.props.children.props.serverPlaybackUrl).toBe(SIGNED);
+		expect(await content.props.children.props.initialPlaybackUrl).toBe(SIGNED);
+		expect(mocks.playbackUrl).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		[
+			"outside Cap Cloud",
+			() => {
+				mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
+			},
+		],
+		[
+			"for a storage integration reported by the signer",
+			() => {
+				mocks.defaultStorage = false;
+			},
+		],
+		[
+			"over the shareable link quota",
+			() => {
+				mocks.quota.mockResolvedValue(true);
+			},
+		],
+		[
+			"for iPhone Safari",
+			() => {
+				mocks.userAgent =
+					"Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1";
+			},
+		],
+		[
+			"for desktop Safari, which may be an iPad",
+			() => {
+				mocks.userAgent =
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+			},
+		],
+	])("keeps client-side resolution %s", async (_name, arrange) => {
+		arrange();
+		const content = await renderAuthorizedContent();
+		expect(content.props.children.props.serverPlaybackUrl).toBeNull();
+	});
+
+	it.each([{ bucket: "custom-bucket" }, { storageIntegrationId: "drive" }])(
+		"does not wait for signing for %j",
+		async (changes) => {
+			arrangeRows([{ ...createVideo(), ...changes }]);
+			mocks.playbackUrl.mockReturnValue(new Promise(() => {}));
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props.serverPlaybackUrl).toBeNull();
+			expect(content.props.children.props.initialPlaybackUrl).toBeInstanceOf(
+				Promise,
+			);
+		},
+	);
+
+	it("renders without the URL when signing is slow and still streams it to the player", async () => {
+		mocks.playbackUrl.mockReturnValue(
+			new Promise((resolve) => setTimeout(() => resolve(SIGNED), 200)),
+		);
+		const started = Date.now();
+		const content = await renderAuthorizedContent();
+		expect(Date.now() - started).toBeLessThan(180);
+		expect(content.props.children.props.serverPlaybackUrl).toBeNull();
+		expect(await content.props.children.props.initialPlaybackUrl).toBe(SIGNED);
 	});
 });

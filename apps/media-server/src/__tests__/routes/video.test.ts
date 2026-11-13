@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
@@ -8,6 +17,16 @@ import {
 	tryAcquireDirectVideoProcessSlot,
 	type VideoProcessSlot,
 } from "../../lib/video-capacity";
+
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -38,6 +57,7 @@ describe("GET /video/status", () => {
 		const response = await app.fetch(
 			new Request("http://localhost/video/status", {
 				method: "GET",
+				headers: AUTH_HEADERS,
 			}),
 		);
 
@@ -122,6 +142,30 @@ describe("POST /video/probe", () => {
 		expect(response.status).toBe(200);
 		const data = await response.json();
 		expect(data.metadata).toEqual(mockMetadata);
+	});
+
+	test("returns 422 with the reason when the input cannot be used", async () => {
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: async () => {
+				throw new mediaProbe.UnreadableMediaInputError(
+					"Media input could not be read",
+				);
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(422);
+		const data = await response.json();
+		expect(data.code).toBe("UNREADABLE_INPUT");
+		expect(data.details).toBe("Media input could not be read");
 	});
 
 	test("returns 503 when server is busy", async () => {
@@ -804,6 +848,7 @@ describe("GET /video/process/:jobId/status", () => {
 		const response = await appWithMock.fetch(
 			new Request("http://localhost/video/process/test-job-id/status", {
 				method: "GET",
+				headers: AUTH_HEADERS,
 			}),
 		);
 

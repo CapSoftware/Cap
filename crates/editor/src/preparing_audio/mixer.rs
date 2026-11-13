@@ -75,6 +75,7 @@ impl PreparingAudioSources {
                 || segment.timescale != 1.0
                 || segment.speed_audio_mode.is_some()
                 || segment.volume() != 1.0
+                || segment.active_voice_eq().is_some()
                 || !segment.end.is_finite()
                 || segment.end <= 0.0
             {
@@ -427,6 +428,10 @@ impl PreparingAudioMixer {
                 &mut samples,
             );
         }
+        if let Some(timeline) = self.sources.project.timeline.as_ref() {
+            let joins = crate::join_fade::hard_cut_joins(timeline, AudioData::SAMPLE_RATE);
+            crate::join_fade::apply_join_fades(&mut samples, self.position, &joins);
+        }
         self.sources.check_terminal()?;
         let start_frame = self.position;
         self.position = end;
@@ -493,6 +498,7 @@ mod tests {
                     audio_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     camera3d_segments: Vec::new(),
                 }),
                 clips: (0..count)

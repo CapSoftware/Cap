@@ -24,6 +24,8 @@ use std::{
 use tokio::sync::Notify;
 use tracing::{info, trace, warn};
 
+pub mod turbo;
+
 enum Mp4PipelineError {
     Interrupted,
     Failure(String),
@@ -209,6 +211,64 @@ impl Mp4ExportSettings {
         self.export(base.0, on_progress)
     }
 
+    /// Exports with every core: see [`turbo`]. Falls back to the standard
+    /// export when the turbo pipeline fails, unless it was cancelled or its
+    /// destination appeared while it ran.
+    pub async fn export_prepared_turbo(
+        self,
+        base: Mp4ExporterBase,
+        options: turbo::TurboOptions,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        let mut base = base.0;
+        let on_progress = Arc::new(Mutex::new(on_progress));
+        let user_cancellation = base
+            .audio_cancellation
+            .as_ref()
+            .map(|control| control.user.clone());
+        let destination_exists = |path: &std::path::Path| {
+            std::fs::symlink_metadata(path).map_or_else(
+                |error| error.kind() != std::io::ErrorKind::NotFound,
+                |_| true,
+            )
+        };
+        let destination_was_free = !destination_exists(&base.output_path);
+        match turbo::export(self, &mut base, options, on_progress.clone()).await {
+            Ok(path) => Ok(path),
+            Err(turbo::TurboError::Cancelled) => Err("Export cancelled".to_string()),
+            Err(turbo::TurboError::Publish(error)) => Err(error),
+            Err(turbo::TurboError::Failed(error)) if options.strict => Err(error),
+            Err(turbo::TurboError::Failed(error)) => {
+                warn!(%error, "Turbo export failed, exporting with the standard pipeline");
+                base.reopen_streaming(user_cancellation).await?;
+                // Turbo staged its output, but a standard export that is not
+                // staged writes in place and would truncate a file created
+                // at the destination meanwhile.
+                if destination_was_free
+                    && base.streaming_output.is_none()
+                    && destination_exists(&base.output_path)
+                {
+                    return Err(error);
+                }
+                let output_size = ProjectUniforms::get_output_size(
+                    &base.render_constants.options,
+                    &base.project_config,
+                    self.resolution_base,
+                );
+                self.export_nv12(
+                    base,
+                    output_size,
+                    self.fps,
+                    move |frame| {
+                        (on_progress.lock().unwrap_or_else(PoisonError::into_inner))(frame)
+                    },
+                    ExportNv12Mode::default(),
+                )
+                .await
+            }
+        }
+    }
+
     pub async fn export(
         self,
         base: ExporterBase,
@@ -245,9 +305,12 @@ impl Mp4ExportSettings {
 
     async fn export_inner(
         self,
-        base: ExporterBase,
+        mut base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        // `MP4File` writes to an `.mp4` path whatever extension it is given, so
+        // the path returned to the caller has to carry it too.
+        base.output_path.set_extension("mp4");
         info!("Exporting mp4 with settings: {:?}", &self);
         info!("Expected to render {} frames", base.total_frames(self.fps));
 
@@ -755,7 +818,9 @@ impl Mp4ExportSettings {
             nv12_render_startup_breakdown_ms,
             audio_cancellation.is_some(),
             on_progress,
-            base.project_path.clone(),
+            base.sample_windows
+                .is_none()
+                .then(|| base.project_path.clone()),
         )
         .then(move |v| async move {
             let result = v.map_err(|error| match &error {
@@ -1294,7 +1359,7 @@ impl TemporaryExportOutput {
                 path: self.path,
             });
         }
-        self.path.persist_noclobber(output)
+        persist_without_replacing(self.path, output)
     }
 
     pub(crate) fn persist_replace(
@@ -1310,6 +1375,59 @@ impl TemporaryExportOutput {
         }
         self.path.persist(output)
     }
+}
+
+#[cfg(unix)]
+fn persist_without_replacing(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    match path.persist_noclobber(output) {
+        Err(error) if error.error.raw_os_error() == Some(libc::ENOTSUP) => {
+            persist_into_reserved_name(error.path, output)
+        }
+        result => result,
+    }
+}
+
+#[cfg(not(unix))]
+fn persist_without_replacing(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    path.persist_noclobber(output)
+}
+
+/// exFAT on macOS (and some network volumes) rejects both the exclusive
+/// rename and hard links with ENOTSUP, so the destination name is claimed
+/// with O_EXCL and the export renamed over that empty placeholder. An existing
+/// file is never replaced; only a writer that replaces the placeholder in the
+/// moment before the rename can still be overwritten.
+#[cfg(unix)]
+fn persist_into_reserved_name(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    use std::os::unix::fs::MetadataExt;
+    let reservation = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+    {
+        Ok(file) => file,
+        Err(error) => return Err(tempfile::PathPersistError { error, path }),
+    };
+    let error = match path.persist(output) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    if let (Ok(reserved), Ok(current)) = (reservation.metadata(), std::fs::symlink_metadata(output))
+        && reserved.dev() == current.dev()
+        && reserved.ino() == current.ino()
+    {
+        let _ = std::fs::remove_file(output);
+    }
+    Err(error)
 }
 
 pub(crate) fn temporary_export_output(
@@ -1576,11 +1694,10 @@ async fn export_render_to_channel(
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
     stop_on_encoder_drop: bool,
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
-    project_path: PathBuf,
+    screenshot_project_path: Option<PathBuf>,
 ) -> Result<(), cap_rendering::RenderingError> {
     let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
-    let screenshot_project_path = frame_windows.is_none().then_some(project_path);
     let sampling = frame_windows.is_some();
 
     let render_result = {
@@ -2018,6 +2135,112 @@ mod tests {
             std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(unix)]
+    fn leftover_temporary_outputs(directory: &std::path::Path) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().contains(".cap-export-"))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserved_name_fallback_publishes_without_replacing_or_leaking() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"completed").unwrap();
+        persist_into_reserved_name(temporary.path, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"replacement").unwrap();
+        let error = persist_into_reserved_name(temporary.path, &output).unwrap_err();
+        assert_eq!(error.error.kind(), std::io::ErrorKind::AlreadyExists);
+        drop(error);
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(directory.path()).is_empty());
+
+        let missing = directory.path().join("missing.mp4");
+        let temporary = temporary_export_output(&missing).unwrap();
+        std::fs::remove_file(&temporary).unwrap();
+        drop(persist_into_reserved_name(temporary.path, &missing).unwrap_err());
+        assert!(!missing.exists());
+        assert!(leftover_temporary_outputs(directory.path()).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    struct ExfatVolume {
+        mount: std::path::PathBuf,
+        _image: tempfile::TempDir,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl ExfatVolume {
+        fn attach() -> Option<Self> {
+            use std::process::Command;
+            let image = tempfile::tempdir().ok()?;
+            let disk = image.path().join("volume.dmg");
+            let mount = image.path().join("mount");
+            std::fs::create_dir(&mount).ok()?;
+            let created = Command::new("hdiutil")
+                .args(["create", "-quiet", "-size", "16m", "-fs", "ExFAT"])
+                .args(["-volname", "CAPEXPORT"])
+                .arg(&disk)
+                .status()
+                .ok()?;
+            if !created.success() {
+                return None;
+            }
+            let attached = Command::new("hdiutil")
+                .args(["attach", "-quiet", "-nobrowse", "-mountpoint"])
+                .arg(&mount)
+                .arg(&disk)
+                .status()
+                .ok()?;
+            attached.success().then_some(Self {
+                mount,
+                _image: image,
+            })
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for ExfatVolume {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-quiet", "-force"])
+                .arg(&self.mount)
+                .status();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_output_persists_onto_exfat_without_replacing() {
+        let Some(volume) = ExfatVolume::attach() else {
+            eprintln!("skipping: hdiutil could not attach an exFAT image");
+            return;
+        };
+        let directory = volume.mount.join("exports");
+        std::fs::create_dir(&directory).unwrap();
+        let output = directory.join("export.mp4");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"completed").unwrap();
+        temporary.persist_noclobber(&output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(&directory).is_empty());
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"replacement").unwrap();
+        drop(temporary.persist_noclobber(&output).unwrap_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(&directory).is_empty());
     }
 
     #[test]

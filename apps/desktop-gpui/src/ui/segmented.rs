@@ -98,6 +98,7 @@ pub struct SegmentedControl {
     hover_bg: Option<Hsla>,
     selected_shadow: Vec<gpui::BoxShadow>,
     stretch: bool,
+    tab_stops: bool,
     on_select: Option<SegmentHandler>,
 }
 
@@ -126,6 +127,7 @@ impl SegmentedControl {
             hover_bg: None,
             selected_shadow: Vec::new(),
             stretch: false,
+            tab_stops: false,
             on_select: None,
         }
     }
@@ -223,6 +225,13 @@ impl SegmentedControl {
         self
     }
 
+    /// Makes every enabled segment a Tab stop that Enter and Space activate,
+    /// for a control that is the only way to reach what it switches to.
+    pub fn tab_stops(mut self) -> Self {
+        self.tab_stops = true;
+        self
+    }
+
     pub fn text_size(mut self, size: Pixels) -> Self {
         self.text_size = size;
         self
@@ -275,6 +284,7 @@ impl RenderOnce for SegmentedControl {
             hover_bg,
             selected_shadow,
             stretch,
+            tab_stops,
             on_select,
         } = self;
 
@@ -314,7 +324,10 @@ impl RenderOnce for SegmentedControl {
                     .when_some(item_height, |this, height| this.h(height))
                     .rounded(item_radius)
                     .text_size(text_size)
-                    .when(stretch, |this| this.flex_1())
+                    .when(stretch, |this| this.flex_1().min_w_0())
+                    .when(tab_stops && !disabled, |this| {
+                        crate::ui::keyboard_nav::ring(this.tab_index(0))
+                    })
                     .when_some(font_weight, |this, weight| this.font_weight(weight))
                     .when(disabled, |this| this.opacity(0.5))
                     .map(|this| {
@@ -347,7 +360,13 @@ impl RenderOnce for SegmentedControl {
                             .flex_shrink_0()
                             .text_color(if selected { selected_text } else { idle_text })
                     }))
-                    .children(option.label)
+                    .children(option.label.map(|label| {
+                        if stretch {
+                            div().min_w_0().truncate().child(label).into_any_element()
+                        } else {
+                            label.into_any_element()
+                        }
+                    }))
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })

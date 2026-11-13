@@ -1,14 +1,18 @@
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import clsx from "clsx";
-import moment from "moment";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
+import { formatDateTime, formatFromNow } from "@/lib/date-format";
 import type { CapCardProps } from "./CapCard";
+
+// Only typed dates need moment's parser, so it loads when the date editor opens
+// instead of shipping with every dashboard page.
+const loadMoment = () => import("moment").then((module) => module.default);
 
 interface CapContentProps {
 	cap: CapCardProps["cap"];
@@ -32,24 +36,44 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		? new Date(cap.metadata.customCreatedAt)
 		: cap.createdAt;
 
-	const [dateValue, setDateValue] = useState(
-		moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"),
-	);
+	const [dateValue, setDateValue] = useState(formatDateTime(effectiveDate));
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
 	const [title, setTitle] = useState(cap.name);
+	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
+	// The field stays editable while a save is in flight, so the save reads
+	// the latest draft and the editor state to avoid replacing text typed
+	// after the blur.
+	const draftRef = useRef(cap.name);
+	const editingRef = useRef(false);
 
-	const handleTitleBlur = async (capName: string) => {
-		if (!title || capName === title) {
-			setIsEditing(false);
+	const setEditing = (value: boolean) => {
+		editingRef.current = value;
+		setIsEditing(value);
+	};
+
+	const setDraft = (value: string) => {
+		draftRef.current = value;
+		setTitle(value);
+	};
+
+	const handleTitleBlur = async () => {
+		const next = title.trim();
+		if (!next || next === savedTitle) {
+			setDraft(savedTitle);
+			setEditing(false);
 			return;
 		}
 
 		try {
-			await editTitle(cap.id, title);
+			await editTitle(cap.id, next);
+			setSavedTitle(next);
 			toast.success("Video title updated");
-			setIsEditing(false);
+			if (!editingRef.current || draftRef.current.trim() === next) {
+				setDraft(next);
+				setEditing(false);
+			}
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
@@ -63,6 +87,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const handleDateClick = () => {
 		if (userId === cap.ownerId) {
 			if (!isDateEditing) {
+				loadMoment().catch(() => {});
 				setIsDateEditing(true);
 			}
 		} else {
@@ -81,11 +106,18 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	};
 
 	const handleDateBlur = async () => {
+		let moment: Awaited<ReturnType<typeof loadMoment>>;
+		try {
+			moment = await loadMoment();
+		} catch {
+			toast.error("Failed to update date - please try again.");
+			return;
+		}
 		const isValidDate = moment(dateValue).isValid();
 
 		if (!isValidDate) {
 			toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm:ss");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 			return;
 		}
@@ -95,7 +127,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 		if (selectedDate.isAfter(currentDate)) {
 			toast.error("Cannot set a date in the future");
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 			return;
 		}
@@ -124,7 +156,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 			e.preventDefault();
 			handleDateBlur();
 		} else if (e.key === "Escape") {
-			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+			setDateValue(formatDateTime(effectiveDate));
 			setIsDateEditing(false);
 		}
 	};
@@ -176,8 +208,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 					<textarea
 						rows={1}
 						value={title}
-						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
+						onChange={(e) => setDraft(e.target.value)}
+						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
 					/>
@@ -187,7 +219,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
-									setIsEditing(true);
+									setEditing(true);
 								}
 							}
 						}}
@@ -219,8 +251,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 							onClick={handleDateClick}
 						>
 							{showFullDate
-								? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
-								: moment(effectiveDate).fromNow()}
+								? formatDateTime(effectiveDate)
+								: formatFromNow(effectiveDate)}
 						</p>
 					</Tooltip>
 				)}

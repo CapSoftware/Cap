@@ -79,7 +79,7 @@ use_control() {
         --method org.gnome.Shell.Eval 'Main.overview.hide()' >/dev/null 2>&1
       sleep 1
       rect=$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
-        --method org.gnome.Shell.Eval "(() => { const w = global.display.list_all_windows().find(w => w.get_wm_class() === 'Cap' && w.showing_on_its_workspace() && w.get_frame_rect().width === 320 && w.get_frame_rect().height === 150); if (!w) return ''; const r = w.get_frame_rect(); return [r.x, r.y, r.width, r.height].join(' '); })()" \
+        --method org.gnome.Shell.Eval "(() => { const w = global.display.list_all_windows().find(w => /^(Cap|so\.cap\.Cap)$/.test(w.get_wm_class() || '') && w.showing_on_its_workspace() && w.get_frame_rect().width === 320 && w.get_frame_rect().height === 150); if (!w) return ''; const r = w.get_frame_rect(); return [r.x, r.y, r.width, r.height].join(' '); })()" \
         2>/dev/null | sed -n "s/^(true, '\\(.*\\)')$/\\1/p" | tr -d '"')
       echo "controls window: ${rect:-not shown}" >>"$out/actions.log"
       result visible_controls_shown "$([[ -n "$rect" ]] && echo yes || echo no)"

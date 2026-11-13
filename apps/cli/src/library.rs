@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     OutputFormat,
     agent_client::{self, SpaceRole},
-    caps::opaque_id,
+    caps::{AgentApiError, opaque_id},
     confirmation,
 };
 
@@ -401,14 +401,14 @@ async fn update_collection_public_page(
     kind: &str,
     args: CollectionPublicPageArgs,
     global_json: bool,
-) -> Result<(), String> {
+) -> Result<(), AgentApiError> {
     confirmation::require(args.yes, "Update the public collection page")?;
     if let Some(columns) = args.grid_columns
         && !matches!(columns, 2..=5)
     {
-        return Err("--grid-columns must be between 2 and 5".to_string());
+        return Err("--grid-columns must be between 2 and 5".to_string().into());
     }
-    let id = opaque_id(&args.collection, "Collection ID").map_err(|error| error.to_string())?;
+    let id = opaque_id(&args.collection, "Collection ID")?;
     let mut body = Map::new();
     add_optional(&mut body, "public", args.public.map(Value::Bool));
     add_optional(&mut body, "title", args.title.map(Value::String));
@@ -435,7 +435,7 @@ async fn update_collection_public_page(
     );
     add_optional(&mut body, "gridColumns", args.grid_columns.map(Value::from));
     if body.is_empty() {
-        return Err("Provide at least one public page update".to_string());
+        return Err("Provide at least one public page update".to_string().into());
     }
     agent_client::mutate_confirmed(
         Method::PATCH,
@@ -451,12 +451,11 @@ async fn update_collection_logo(
     kind: &str,
     args: CollectionLogoArgs,
     global_json: bool,
-) -> Result<(), String> {
+) -> Result<(), AgentApiError> {
     match args.command {
         CollectionLogoCommands::Set(args) => {
             confirmation::require(args.yes, "Update the public collection logo")?;
-            let id =
-                opaque_id(&args.collection, "Collection ID").map_err(|error| error.to_string())?;
+            let id = opaque_id(&args.collection, "Collection ID")?;
             let body = agent_client::image_payload(&args.image)?;
             agent_client::mutate_confirmed(
                 Method::PUT,
@@ -469,8 +468,7 @@ async fn update_collection_logo(
         }
         CollectionLogoCommands::Remove(args) => {
             confirmation::require(args.yes, "Remove the public collection logo")?;
-            let id =
-                opaque_id(&args.collection, "Collection ID").map_err(|error| error.to_string())?;
+            let id = opaque_id(&args.collection, "Collection ID")?;
             agent_client::mutate_confirmed(
                 Method::DELETE,
                 &format!("/{kind}/{id}/logo"),
@@ -484,7 +482,7 @@ async fn update_collection_logo(
 }
 
 impl LibraryArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
         match self.command {
             LibraryCommands::Folders(args) => run_folders(args, global_json).await,
             LibraryCommands::Spaces(args) => run_spaces(args, global_json).await,
@@ -492,11 +490,10 @@ impl LibraryArgs {
     }
 }
 
-async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String> {
+async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), AgentApiError> {
     match args.command {
         FolderCommands::List(args) => {
-            let organization = opaque_id(&args.organization, "Organization ID")
-                .map_err(|error| error.to_string())?;
+            let organization = opaque_id(&args.organization, "Organization ID")?;
             let parent = if args.root {
                 Some("root".to_string())
             } else {
@@ -511,8 +508,7 @@ async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String>
             .await
         }
         FolderCommands::Create(args) => {
-            let organization = opaque_id(&args.organization, "Organization ID")
-                .map_err(|error| error.to_string())?;
+            let organization = opaque_id(&args.organization, "Organization ID")?;
             confirmation::require(args.yes, "Create the folder")?;
             agent_client::mutate(
                 Method::POST,
@@ -530,7 +526,7 @@ async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String>
             .await
         }
         FolderCommands::Update(args) => {
-            let folder = opaque_id(&args.folder, "Folder ID").map_err(|error| error.to_string())?;
+            let folder = opaque_id(&args.folder, "Folder ID")?;
             let mut body = Map::new();
             add_optional(&mut body, "name", args.name.map(Value::String));
             add_optional(
@@ -549,12 +545,12 @@ async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String>
                 let value: Value = serde_json::from_str(&settings)
                     .map_err(|error| format!("Invalid --settings-json: {error}"))?;
                 if !value.is_object() {
-                    return Err("--settings-json must be a JSON object".to_string());
+                    return Err("--settings-json must be a JSON object".to_string().into());
                 }
                 body.insert("settings".to_string(), value);
             }
             if body.is_empty() {
-                return Err("Provide at least one folder update".to_string());
+                return Err("Provide at least one folder update".to_string().into());
             }
             confirmation::require(args.yes, "Update the folder")?;
             agent_client::mutate(
@@ -571,7 +567,7 @@ async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String>
         }
         FolderCommands::Logo(args) => update_collection_logo("folders", args, global_json).await,
         FolderCommands::Delete(args) => {
-            let folder = opaque_id(&args.folder, "Folder ID").map_err(|error| error.to_string())?;
+            let folder = opaque_id(&args.folder, "Folder ID")?;
             confirmation::require(
                 args.yes,
                 "Delete the folder and move its Caps to the parent",
@@ -588,11 +584,10 @@ async fn run_folders(args: FoldersArgs, global_json: bool) -> Result<(), String>
     }
 }
 
-async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
+async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), AgentApiError> {
     match args.command {
         SpaceCommands::List(args) => {
-            let organization = opaque_id(&args.organization, "Organization ID")
-                .map_err(|error| error.to_string())?;
+            let organization = opaque_id(&args.organization, "Organization ID")?;
             agent_client::read(
                 &format!("/organizations/{organization}/spaces"),
                 global_json,
@@ -601,8 +596,7 @@ async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
             .await
         }
         SpaceCommands::Create(args) => {
-            let organization = opaque_id(&args.organization, "Organization ID")
-                .map_err(|error| error.to_string())?;
+            let organization = opaque_id(&args.organization, "Organization ID")?;
             confirmation::require(args.yes, "Create the space")?;
             let mut body = Map::from_iter([
                 ("name".to_string(), Value::String(args.name)),
@@ -628,7 +622,7 @@ async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
             .await
         }
         SpaceCommands::Update(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
             let mut body = Map::new();
             add_optional(&mut body, "name", args.name.map(Value::String));
             if args.clear_description {
@@ -649,7 +643,7 @@ async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
             add_optional(&mut body, "public", args.public.map(Value::Bool));
             add_optional(&mut body, "settings", args.settings.value());
             if body.is_empty() {
-                return Err("Provide at least one space update".to_string());
+                return Err("Provide at least one space update".to_string().into());
             }
             confirmation::require(args.yes, "Update the space")?;
             agent_client::mutate(
@@ -666,7 +660,7 @@ async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
         }
         SpaceCommands::Logo(args) => update_collection_logo("spaces", args, global_json).await,
         SpaceCommands::Delete(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
             confirmation::require(args.yes, "Permanently delete the space")?;
             agent_client::mutate(
                 Method::DELETE,
@@ -681,10 +675,10 @@ async fn run_spaces(args: SpacesArgs, global_json: bool) -> Result<(), String> {
     }
 }
 
-async fn run_space_members(args: SpaceMembersArgs, global_json: bool) -> Result<(), String> {
+async fn run_space_members(args: SpaceMembersArgs, global_json: bool) -> Result<(), AgentApiError> {
     match args.command {
         SpaceMemberCommands::List(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
             agent_client::read(
                 &format!("/spaces/{space}/members"),
                 global_json,
@@ -693,8 +687,8 @@ async fn run_space_members(args: SpaceMembersArgs, global_json: bool) -> Result<
             .await
         }
         SpaceMemberCommands::Add(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
-            let user = opaque_id(&args.user, "User ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
+            let user = opaque_id(&args.user, "User ID")?;
             confirmation::require(args.yes, "Add the space member")?;
             agent_client::mutate(
                 Method::POST,
@@ -706,8 +700,8 @@ async fn run_space_members(args: SpaceMembersArgs, global_json: bool) -> Result<
             .await
         }
         SpaceMemberCommands::Update(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
-            let user = opaque_id(&args.user, "User ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
+            let user = opaque_id(&args.user, "User ID")?;
             confirmation::require(args.yes, "Change the space member role")?;
             agent_client::mutate(
                 Method::PATCH,
@@ -719,8 +713,8 @@ async fn run_space_members(args: SpaceMembersArgs, global_json: bool) -> Result<
             .await
         }
         SpaceMemberCommands::Remove(args) => {
-            let space = opaque_id(&args.space, "Space ID").map_err(|error| error.to_string())?;
-            let user = opaque_id(&args.user, "User ID").map_err(|error| error.to_string())?;
+            let space = opaque_id(&args.space, "Space ID")?;
+            let user = opaque_id(&args.user, "User ID")?;
             confirmation::require(args.yes, "Remove the space member")?;
             agent_client::mutate(
                 Method::DELETE,

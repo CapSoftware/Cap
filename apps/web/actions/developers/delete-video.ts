@@ -5,10 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
 
 export async function deleteDeveloperVideo(appId: string, videoId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const [app] = await db()
 		.select()
@@ -31,6 +32,6 @@ export async function deleteDeveloperVideo(appId: string, videoId: string) {
 			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
 		);
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

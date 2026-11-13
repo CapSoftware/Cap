@@ -95,25 +95,15 @@ describe("Early segment tracks", () => {
 	});
 });
 
-describe("Early instant playback flag", () => {
+describe("Early instant playback", () => {
 	afterEach(() => vi.unstubAllEnvs());
 
-	it("is off unless configured", () => {
+	it("is on unless explicitly disabled", () => {
 		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", "");
-		expect(isEarlyInstantPlaybackEnabled("owner")).toBe(false);
-		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", "true");
-		expect(isEarlyInstantPlaybackEnabled("owner")).toBe(false);
-	});
-
-	it("can be enabled for everyone", () => {
-		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", " enabled ");
-		expect(isEarlyInstantPlaybackEnabled("owner")).toBe(true);
-	});
-
-	it("can be rolled out to listed owners", () => {
-		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", "first, owner");
-		expect(isEarlyInstantPlaybackEnabled("owner")).toBe(true);
-		expect(isEarlyInstantPlaybackEnabled("other")).toBe(false);
-		expect(isEarlyInstantPlaybackEnabled("own")).toBe(false);
+		expect(isEarlyInstantPlaybackEnabled()).toBe(true);
+		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", "owner-id");
+		expect(isEarlyInstantPlaybackEnabled()).toBe(true);
+		vi.stubEnv("CAP_EARLY_INSTANT_PLAYBACK", " disabled ");
+		expect(isEarlyInstantPlaybackEnabled()).toBe(false);
 	});
 });

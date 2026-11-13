@@ -113,4 +113,50 @@ describe("signed upload metadata", () => {
 		expect(mocks.updateSet).toHaveBeenCalledTimes(1);
 		expect(mocks.updateWhere).toHaveBeenCalledTimes(1);
 	});
+
+	it.each([
+		"raw-upload.m3u8",
+		"result.mpd",
+		"source/original.txt",
+		"list.ffconcat",
+	])("refuses a %s source upload", async (subpath) => {
+		const response = await requestSignedUpload({ subpath });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: "This file type cannot be uploaded",
+		});
+	});
+
+	it.each(["output/video_recording_000.m3u8", "combined-source/stream.m3u8"])(
+		"keeps legacy segmented playlist %s uploadable",
+		async (subpath) => {
+			const response = await requestSignedUpload({ subpath });
+
+			expect(response.status).toBe(200);
+		},
+	);
+
+	it.each(["../other/raw-upload.mp4", "segments/../../x.mp4", "./result.mp4"])(
+		"refuses the path %s",
+		async (subpath) => {
+			const response = await requestSignedUpload({ subpath });
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "Invalid file path" });
+		},
+	);
+
+	it("refuses batches that include a playlist source", async () => {
+		const response = await app.request("https://cap.test/batch", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video-1",
+				subpaths: ["segments/video/init.mp4", "raw-upload.m3u8"],
+			}),
+		});
+
+		expect(response.status).toBe(400);
+	});
 });

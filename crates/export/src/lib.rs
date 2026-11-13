@@ -190,6 +190,7 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
+        let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
             cancellation.map(ExportAudioCancellation::new)
         } else {
@@ -254,10 +255,13 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
+            user_cancellation,
             sample_windows: None,
             sample_timing: None,
             #[cfg(feature = "test-hooks")]
             video_encoder_failure_at: None,
+            #[cfg(feature = "test-hooks")]
+            turbo_chunk_failure: None,
         })
     }
 }
@@ -309,6 +313,7 @@ pub fn synthesize_default_timeline(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -321,6 +326,7 @@ pub fn synthesize_default_timeline(
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -371,6 +377,7 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
     if let Some(timeline) = project_config.timeline.as_mut() {
         timeline.mask_segments.clear();
         timeline.image_segments.clear();
+        timeline.shape_segments.clear();
         for style in &mut timeline.style_segments {
             if let Some(background) = style.overrides.background.as_mut() {
                 clear_background_pixels(background);
@@ -449,6 +456,12 @@ impl Mp4ExporterBase {
     pub fn fail_video_encoder_at(&mut self, frames: u32) {
         self.0.fail_video_encoder_at(frames);
     }
+
+    /// Makes this turbo chunk's encoder fail after a few frames.
+    #[cfg(feature = "test-hooks")]
+    pub fn fail_turbo_chunk(&mut self, chunk: usize) {
+        self.0.turbo_chunk_failure = Some(chunk);
+    }
 }
 
 pub struct ExporterBase {
@@ -463,10 +476,13 @@ pub struct ExporterBase {
     streaming_audio: Option<ExportAudioRenderer>,
     streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
+    user_cancellation: Option<Arc<AtomicBool>>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
     #[cfg(feature = "test-hooks")]
     video_encoder_failure_at: Option<u32>,
+    #[cfg(feature = "test-hooks")]
+    turbo_chunk_failure: Option<usize>,
 }
 
 impl ExporterBase {

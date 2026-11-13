@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FfmpegExitError, ffmpegErrorLines } from "../../lib/ffmpeg-errors";
 import type { VideoMetadata } from "../../lib/job-manager";
@@ -12,7 +15,10 @@ import {
 	buildProcessVideoArgs,
 	type ProcessVideoArgsInput,
 	pickMobileSafeH264Level,
+	probeVideoSourceTraits,
 	processVideo,
+	requireVideoSourceTraits,
+	sourceHasAudio,
 } from "../../lib/media-video";
 import {
 	buildNvencEncodeArgs,
@@ -435,6 +441,128 @@ describe("process video args", () => {
 		]);
 	});
 
+	test("converts a 4K HDR source to standard range on the CPU at the size it is encoded at", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const sdrColor = [
+			"-color_primaries",
+			"bt709",
+			"-color_trc",
+			"bt709",
+			"-colorspace",
+			"bt709",
+			"-color_range",
+			"tv",
+		];
+		const toSdr =
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:min=bt2020nc:t=linear:npl=203," +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			"zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, {
+					inputPath: "in.mov",
+					hdr: "smpte2084",
+					nvenc: { options: defaults, gpuDecode: true },
+				}),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			...nvencVideoArgs,
+			"-vf",
+			`${toSdr},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-bsf:v",
+			"h264_metadata=level=4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, { inputPath: "in.mov", hdr: "arib-std-b67" }),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"medium",
+			"-crf",
+			"23",
+			"-vf",
+			`${toSdr.replace("smpte2084", "arib-std-b67")},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-level:v",
+			"4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+	});
+
+	test("converts an HDR source from the colours it declares", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const filter = (hdrColor: ProcessVideoArgsInput["hdrColor"]) => {
+			const args = buildProcessVideoArgs(
+				processArgs(source, { hdr: "arib-std-b67", hdrColor }),
+			);
+			return args[args.indexOf("-vf") + 1];
+		};
+		const toSdr = (primaries: string, matrix: string) =>
+			`zscale=w=1920:h=1080:tin=arib-std-b67:pin=${primaries}:min=${matrix}:t=linear:npl=203,` +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			`zscale=t=bt709:m=bt709:r=tv,format=yuv420p,${cpuScale}`;
+		expect(filter({ primaries: "bt709", matrix: "bt709" })).toBe(
+			toSdr("bt709", "bt709"),
+		);
+		expect(filter({ primaries: "smpte432", matrix: "bt2020nc" })).toBe(
+			toSdr("smpte432", "bt2020nc"),
+		);
+		expect(filter(undefined)).toBe(toSdr("bt2020", "bt2020nc"));
+		expect(filter({ primaries: "bt2020", matrix: "unknown" })).toBe(
+			toSdr("bt2020", "bt2020nc"),
+		);
+		for (const untagged of [
+			{ primaries: null, matrix: null },
+			{ primaries: "unknown", matrix: "unknown" },
+		]) {
+			expect(filter(untagged)).toBe(toSdr("bt2020:p=bt2020", "bt2020nc"));
+		}
+	});
+
+	test("encodes audio the probe cannot name instead of leaving it out", () => {
+		const source = metadata(1920, 1080, "h264");
+		const args = buildProcessVideoArgs(
+			processArgs(source, {
+				hasAudio: sourceHasAudio({ audioCodec: null, audioChannels: 2 }),
+				audioTranscode: true,
+			}),
+		);
+		expect(args).not.toContain("-an");
+		expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
+	});
+
+	test("decides whether a source has audio from its track", () => {
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: 6 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "aac", audioChannels: 2 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "opus", audioChannels: null })).toBe(
+			true,
+		);
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: null })).toBe(
+			false,
+		);
+	});
+
 	test("runs a 4K HEVC source fully on the GPU", () => {
 		const source = metadata(3840, 2160, "hevc");
 		expect(
@@ -537,8 +665,6 @@ describe("process video args", () => {
 			"4",
 			"-fflags",
 			"+genpts",
-			"-reinit_filter",
-			"0",
 			"-i",
 			"in.webm",
 			...nvencVideoArgs,
@@ -597,6 +723,73 @@ describe("process video args", () => {
 			"-an",
 			...outputTail.slice(2),
 		]);
+	});
+});
+
+describe("source traits", () => {
+	const fixture = (name: string) =>
+		join(import.meta.dir, "..", "fixtures", name);
+
+	test("reads HDR and rotation in one probe", async () => {
+		const hdrColor = { primaries: "bt2020", matrix: "bt2020nc" };
+		expect(await probeVideoSourceTraits(fixture("test-rotated.mp4"))).toEqual({
+			rotation: 90,
+			hdr: "smpte2084",
+			hdrColor,
+		});
+		expect(
+			await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual({ rotation: 0, hdr: "smpte2084", hdrColor });
+	});
+
+	test("plans an encode from the same traits", async () => {
+		expect(
+			await requireVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual(await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")));
+		expect(
+			await requireVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("refuses to plan an encode for a source that cannot be probed", async () => {
+		await expect(
+			requireVideoSourceTraits(fixture("missing.mp4")),
+		).rejects.toThrow(
+			"Could not read the colour information of the source video",
+		);
+	});
+
+	test("refuses Dolby Vision profile 5, which has no convertible base layer", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+		await expect(
+			requireVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).rejects.toThrow("Dolby Vision profile 5");
+	});
+
+	test("stops with the cancellation when the job is cancelled mid probe", async () => {
+		const cancelled = new AbortController();
+		cancelled.abort(new Error("cancelled by the caller"));
+		await expect(
+			requireVideoSourceTraits(
+				fixture("test-with-audio.mp4"),
+				cancelled.signal,
+			),
+		).rejects.toThrow("cancelled by the caller");
+	});
+
+	test("reports a standard range, unrotated source as neither", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("reports nothing known for a file that cannot be probed", async () => {
+		expect(await probeVideoSourceTraits(fixture("missing.mp4"))).toEqual({
+			rotation: null,
+			hdr: null,
+		});
 	});
 });
 
@@ -740,7 +933,7 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 					controller.signal,
 				),
 			),
-		).rejects.toThrow("Video processing was cancelled");
+		).rejects.toThrow(/aborted|cancelled/);
 		expect(getVideoEncoderStatus(enabled).nvenc?.attempts ?? 0).toBe(attempts);
 	});
 
@@ -787,4 +980,142 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 			await output.cleanup();
 		}
 	});
+});
+
+describe("nvenc jobs on hosts with an NVENC device", () => {
+	const hasNvenc =
+		spawnSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"testsrc2=s=256x144:d=0.2",
+			"-c:v",
+			"h264_nvenc",
+			"-f",
+			"null",
+			"-",
+		]).status === 0;
+	const sections = [
+		{ width: 320, height: 240 },
+		{ width: 320, height: 180 },
+		{ width: 352, height: 240 },
+	];
+	let directory: string;
+	let resizing: string;
+
+	beforeAll(() => {
+		directory = mkdtempSync(join(tmpdir(), "nvenc-resize-"));
+		resizing = join(directory, "resizing.webm");
+		if (!hasNvenc) return;
+		// One VP9 stream whose frame size changes twice, the way a browser capture does when its tab is resized.
+		const parts = sections.map(({ width, height }, index) => {
+			const part = join(directory, `part-${index}.webm`);
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				`testsrc2=s=${width}x${height}:r=30:d=1`,
+				"-c:v",
+				"libvpx-vp9",
+				"-deadline",
+				"realtime",
+				"-g",
+				"30",
+				"-y",
+				part,
+			]);
+			return part;
+		});
+		const list = join(directory, "parts.txt");
+		writeFileSync(list, parts.map((part) => `file '${part}'`).join("\n"));
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"concat",
+			"-safe",
+			"0",
+			"-i",
+			list,
+			"-c",
+			"copy",
+			"-y",
+			resizing,
+		]);
+	});
+
+	afterAll(() => rmSync(directory, { recursive: true, force: true }));
+
+	function sectionSsim(output: string, index: number) {
+		const { width, height } = sections[0] as { width: number; height: number };
+		const start = (index + 0.2).toString();
+		const stderr = spawnSync("ffmpeg", [
+			"-hide_banner",
+			"-ss",
+			start,
+			"-t",
+			"0.6",
+			"-i",
+			output,
+			"-ss",
+			start,
+			"-t",
+			"0.6",
+			"-i",
+			resizing,
+			"-filter_complex",
+			`[1:v]scale=${width}:${height},format=yuv420p[ref];[0:v]format=yuv420p[out];[out][ref]ssim`,
+			"-f",
+			"null",
+			"-",
+		]).stderr.toString();
+		return Number(stderr.match(/All:([0-9.]+)/)?.[1] ?? 0);
+	}
+
+	test.skipIf(!hasNvenc)(
+		"keeps NVENC and scales every frame to the first size when the capture resizes",
+		async () => {
+			const metadata = await probeVideo(`file://${resizing}`);
+			const before = getVideoEncoderStatus(enabled).nvenc;
+			const previous = process.env.CAP_MEDIA_VIDEO_ENCODER;
+			process.env.CAP_MEDIA_VIDEO_ENCODER = "nvenc";
+			let output: Awaited<ReturnType<typeof processVideo>> | undefined;
+			try {
+				output = await processVideo(resizing, metadata, {
+					maxWidth: 1920,
+					maxHeight: 1080,
+				});
+				const after = getVideoEncoderStatus(enabled).nvenc;
+				expect(after?.attempts).toBe((before?.attempts ?? 0) + 1);
+				expect(after?.fallbacks).toBe(before?.fallbacks ?? 0);
+				const frames = execFileSync("ffprobe", [
+					"-v",
+					"error",
+					"-select_streams",
+					"v:0",
+					"-show_entries",
+					"frame=width,height",
+					"-of",
+					"csv=p=0",
+					output.path,
+				])
+					.toString()
+					.trim()
+					.split("\n");
+				expect(frames).toHaveLength(90);
+				expect(new Set(frames)).toEqual(new Set(["320,240"]));
+				for (const index of sections.keys())
+					expect(sectionSsim(output.path, index)).toBeGreaterThan(0.9);
+			} finally {
+				await output?.cleanup();
+				if (previous === undefined) delete process.env.CAP_MEDIA_VIDEO_ENCODER;
+				else process.env.CAP_MEDIA_VIDEO_ENCODER = previous;
+			}
+		},
+		60_000,
+	);
 });

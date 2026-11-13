@@ -9,15 +9,16 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import type { Folder } from "@cap/web-domain";
-import { faFolder, faFolderPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { Folder, Space } from "@cap/web-domain";
+import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import type React from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { PublicCollectionField } from "../../../_components/PublicCollectionField";
 import { useDashboardContext } from "../../../Contexts";
@@ -26,6 +27,7 @@ interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	parentFolderId: Folder.FolderId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
 const FolderOptions = [
@@ -39,6 +41,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 	open,
 	onOpenChange,
 	parentFolderId,
+	spaceId,
 }) => {
 	const [selectedColor, setSelectedColor] = useState<
 		(typeof FolderOptions)[number]["value"] | null
@@ -69,7 +72,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 				name: data.name,
 				color: data.color,
 				public: data.public,
-				spaceId: Option.fromNullable(activeSpace?.id),
+				spaceId: Option.fromNullable(spaceId ?? activeSpace?.id),
 				parentId: Option.some(parentFolderId),
 			}),
 		onSuccess: () => {

@@ -42,19 +42,55 @@ export function getFfmpegPath(): string {
 	);
 }
 
+// Inputs may come from user storage, so FFmpeg only gets network access to them, only media container formats
+// (no playlists, manifests or concat lists that name further resources), and none of this process's secrets.
+const REMOTE_INPUT_FORMATS = [
+	"mov,mp4,m4a,3gp,3g2,mj2",
+	"matroska,webm",
+	"mpegts",
+	"avi",
+	"flv",
+	"ogg",
+	"wav",
+	"w64",
+	"mp3",
+	"aac",
+	"flac",
+	"caf",
+	"aiff",
+	"asf",
+	"mpeg",
+].join(",");
+
+export const REMOTE_INPUT_ARGS = [
+	"-protocol_whitelist",
+	"http,https,tcp,tls",
+	"-format_whitelist",
+	REMOTE_INPUT_FORMATS,
+];
+
+export function ffmpegChildEnv(): NodeJS.ProcessEnv {
+	return { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH ?? "" };
+}
+
 export interface AudioExtractionResult {
 	filePath: string;
 	mimeType: string;
 	cleanup: () => Promise<void>;
 }
 
-export async function extractAudioFromUrl(
-	videoUrl: string,
-): Promise<AudioExtractionResult> {
-	const ffmpeg = getFfmpegPath();
-	const outputPath = join(tmpdir(), `audio-${randomUUID()}.mp3`);
+export interface AudioExtractionLimits {
+	maxDurationSeconds?: number;
+	maxBytes?: number;
+}
 
-	const ffmpegArgs = [
+export function audioExtractionArgs(
+	videoUrl: string,
+	outputPath: string,
+	limits: AudioExtractionLimits = {},
+) {
+	return [
+		...REMOTE_INPUT_ARGS,
 		"-i",
 		videoUrl,
 		"-vn",
@@ -62,15 +98,57 @@ export async function extractAudioFromUrl(
 		"libmp3lame",
 		"-b:a",
 		"128k",
+		...(limits.maxDurationSeconds !== undefined
+			? ["-t", String(limits.maxDurationSeconds)]
+			: []),
+		...(limits.maxBytes !== undefined ? ["-fs", String(limits.maxBytes)] : []),
 		"-f",
 		"mp3",
 		"-y",
 		outputPath,
 	];
+}
+
+export function parseFfmpegDurationSeconds(stderr: string): number | null {
+	const match = stderr.match(/Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+	if (!match) return null;
+	const seconds =
+		Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+export async function probeMediaDurationSeconds(
+	videoUrl: string,
+): Promise<number | null> {
+	const ffmpeg = getFfmpegPath();
+	return new Promise((resolve) => {
+		const proc = spawn(
+			/*turbopackIgnore: true*/ ffmpeg,
+			[...REMOTE_INPUT_ARGS, "-i", videoUrl, "-hide_banner"],
+			{ stdio: ["pipe", "pipe", "pipe"], env: ffmpegChildEnv() },
+		);
+		let stderr = "";
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+		proc.on("error", () => resolve(null));
+		proc.on("close", () => resolve(parseFfmpegDurationSeconds(stderr)));
+	});
+}
+
+export async function extractAudioFromUrl(
+	videoUrl: string,
+	limits: AudioExtractionLimits = {},
+): Promise<AudioExtractionResult> {
+	const ffmpeg = getFfmpegPath();
+	const outputPath = join(tmpdir(), `audio-${randomUUID()}.mp3`);
+
+	const ffmpegArgs = audioExtractionArgs(videoUrl, outputPath, limits);
 
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
+			env: ffmpegChildEnv(),
 		});
 
 		let stderr = "";
@@ -108,6 +186,7 @@ export async function extractAudioFromUrl(
 export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 	const ffmpeg = getFfmpegPath();
 	const ffmpegArgs = [
+		...REMOTE_INPUT_ARGS,
 		"-i",
 		videoUrl,
 		"-vn",
@@ -123,6 +202,7 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
+			env: ffmpegChildEnv(),
 		});
 
 		const chunks: Buffer[] = [];
@@ -155,6 +235,8 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
 	const ffmpeg = getFfmpegPath();
 	const ffmpegArgs = [
+		"-protocol_whitelist",
+		"pipe",
 		"-i",
 		"pipe:0",
 		"-acodec",
@@ -169,6 +251,7 @@ export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
+			env: ffmpegChildEnv(),
 		});
 
 		const chunks: Buffer[] = [];
@@ -214,11 +297,12 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 		);
 		throw new Error("ffmpeg binary not available — cannot check audio track");
 	}
-	const ffmpegArgs = ["-i", videoUrl, "-hide_banner"];
+	const ffmpegArgs = [...REMOTE_INPUT_ARGS, "-i", videoUrl, "-hide_banner"];
 
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
+			env: ffmpegChildEnv(),
 		});
 
 		let stderr = "";

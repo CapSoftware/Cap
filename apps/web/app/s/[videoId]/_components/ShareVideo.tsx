@@ -20,7 +20,6 @@ import {
 } from "react";
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
-import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
@@ -85,6 +84,7 @@ export const ShareVideo = forwardRef<
 			hasActiveUpload?: boolean;
 		};
 		initialPlaybackUrl?: Promise<string | null>;
+		serverPlaybackUrl?: string | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -112,6 +112,7 @@ export const ShareVideo = forwardRef<
 		{
 			data,
 			initialPlaybackUrl,
+			serverPlaybackUrl = null,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -402,9 +403,7 @@ export const ShareVideo = forwardRef<
 			canFinalizeDesktopSegments &&
 			!userConfirmedStopped &&
 			segmentUploadProgress?.status === "error" &&
-			isRetryableDesktopSegmentsFinalizationError(
-				segmentUploadProgress.errorMessage,
-			);
+			segmentUploadProgress.errorKind === "retryable";
 		useEffect(() => {
 			if (
 				!shouldAutoFinalizeFailedSegments ||
@@ -564,6 +563,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							initialPlaybackUrl={initialPlaybackUrl}
+							serverPlaybackUrl={serverPlaybackUrl}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}

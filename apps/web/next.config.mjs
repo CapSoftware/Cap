@@ -78,12 +78,6 @@ const nextConfig = {
 		remotePatterns: [
 			{
 				protocol: "https",
-				hostname: "**",
-				port: "",
-				pathname: "**",
-			},
-			{
-				protocol: "https",
 				hostname: "l.cap.so",
 				port: "",
 				pathname: "**",
@@ -172,6 +166,15 @@ const nextConfig = {
 	},
 	env: {
 		appVersion: version,
+	},
+	compiler: {
+		// Sentry is used for errors only (every tracesSampleRate is 0). These
+		// are the SDK's build flags for that: with them the bundler can drop
+		// the tracing and debug-logging code instead of shipping it unused.
+		define: {
+			__SENTRY_DEBUG__: false,
+			__SENTRY_TRACING__: false,
+		},
 	},
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,

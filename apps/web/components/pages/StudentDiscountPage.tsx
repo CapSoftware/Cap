@@ -1,18 +1,16 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import {
-	faBookOpen,
-	faCopy,
-	faRocket,
-	faUsers,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { motion } from "framer-motion";
+import { faBookOpen } from "@fortawesome/free-solid-svg-icons/faBookOpen";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faRocket } from "@fortawesome/free-solid-svg-icons/faRocket";
+import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
+import { motion, type Variants } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
-const fadeIn = {
+const fadeIn: Variants = {
 	hidden: { opacity: 0, y: 20 },
 	visible: (custom: number = 0) => ({
 		opacity: 1,
