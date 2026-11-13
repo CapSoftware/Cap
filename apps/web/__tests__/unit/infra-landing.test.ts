@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const env = vi.hoisted(() => ({
@@ -8,6 +10,18 @@ const env = vi.hoisted(() => ({
 
 vi.mock("@cap/env", () => ({ buildEnv: env }));
 vi.mock("@cap/database", () => ({ db: () => ({}) }));
+vi.mock("next/font/google", () => {
+	const font = () => ({ className: "", variable: "" });
+	return { Geist: font, Geist_Mono: font };
+});
+vi.mock("@/app/utils/analytics", () => ({ trackEvent: vi.fn() }));
+vi.mock("@number-flow/react", async () => {
+	const { createElement } = await import("react");
+	return {
+		default: ({ value }: { value: number }) =>
+			createElement("span", null, String(value)),
+	};
+});
 vi.mock("@cap/database/helpers", () => ({
 	nanoId: () => "id",
 	nanoIdLength: 15,
@@ -36,6 +50,15 @@ const pageSources = () =>
 			file,
 			text: fs.readFileSync(path.join(PAGE_DIR, file), "utf8"),
 		}));
+
+const visibleText = (html: string) =>
+	html
+		.replace(/<[^>]+>/g, "")
+		.replace(/&#x27;/g, "'")
+		.replace(/&quot;/g, '"')
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&amp;/g, "&");
 
 const load = async (isCap: string | undefined) => {
 	env.NEXT_PUBLIC_IS_CAP = isCap;
@@ -177,6 +200,47 @@ describe("the Cap Infra landing page", () => {
 	});
 });
 
+describe("the rendered page", () => {
+	it("renders every section with headings in order and working anchors", async () => {
+		const content = await load("true");
+		const { InfraPage } = await import("@/components/pages/infra/InfraPage");
+		const html = renderToStaticMarkup(React.createElement(InfraPage));
+
+		const levels = [...html.matchAll(/<h([1-6])[\s>]/g)].map((match) =>
+			Number(match[1]),
+		);
+		expect(levels.filter((level) => level === 1)).toHaveLength(1);
+		expect(levels[0]).toBe(1);
+		for (const [index, level] of levels.entries()) {
+			expect(level - (levels[index - 1] ?? 1)).toBeLessThanOrEqual(1);
+		}
+
+		const ids = new Set(
+			[...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]),
+		);
+		const anchors = [...html.matchAll(/href="#([^"]+)"/g)].map(
+			(match) => match[1],
+		);
+		expect(anchors.length).toBeGreaterThan(0);
+		for (const anchor of anchors) expect(ids, anchor).toContain(anchor);
+		for (const anchor of Object.values(content.ANCHORS)) {
+			expect(ids, anchor).toContain(anchor);
+		}
+
+		const embed = content.PLAYER.find((entry) => entry.id === "embed")?.code;
+		expect(embed).toContain('loading="lazy"');
+		expect(visibleText(html)).toContain(embed);
+		expect(html).toContain("Request access");
+		expect(html).not.toContain("Start building");
+		expect(html).not.toMatch(/<img(?![^>]*\salt=)[^>]*>/);
+		for (const image of html.match(/<img[^>]*>/g) ?? []) {
+			if (!image.includes("fetchPriority") && !image.includes("plain-lit")) {
+				expect(image, image).toContain('loading="lazy"');
+			}
+		}
+	});
+});
+
 describe("the agent section", () => {
 	const CLI = /\bCLI\b|install-cli|\bcap (?:auth|developers|guide|version)\b/i;
 
@@ -194,6 +258,29 @@ describe("the agent section", () => {
 		for (const text of [content.AGENT_SUMMARY, content.AGENT_TOOLS]) {
 			expect(text).not.toMatch(/\binstalls?\b/i);
 		}
+	});
+
+	it("renders the whole prompt, with its first line as the opening", async () => {
+		await load("true");
+		const { Agent } = await import("@/components/pages/infra/Agent");
+		const { CAP_INFRA_AGENT_PROMPT: prompt, CAP_INFRA_POINTER_PROMPT } =
+			await import("@/data/infra-agent-prompt");
+		const html = renderToStaticMarkup(React.createElement(Agent));
+		const text = visibleText(html);
+		const [opening = "", ...rest] = prompt.split("\n");
+
+		expect(opening).toBe(
+			"Set up Cap Infra in this project so it can upload and play video.",
+		);
+		expect(html).toContain('id="agents"');
+		expect(text).toContain(opening);
+		expect(text).toContain(rest.join("\n").trim());
+		expect(text).toContain(CAP_INFRA_POINTER_PROMPT);
+		expect(text).toContain("Copy prompt");
+		expect(text).toContain("Cap Infra is in preview.");
+		expect(text).not.toMatch(CLI);
+		expect(html).toContain('href="/docs/api/rest-api"');
+		expect(html).not.toContain('href="/docs/agents"');
 	});
 
 	it("promises only what the prompt asks the agent to do", async () => {
