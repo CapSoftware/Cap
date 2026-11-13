@@ -1266,7 +1266,7 @@ describe("wrong method and unknown path", () => {
 	it.each([
 		[rest, "PATCH", "/api/developer/v1/videos/video-1", "csk", "GET, DELETE"],
 		[rest, "PUT", "/api/developer/v1/videos/video-1", "csk", "GET, DELETE"],
-		[rest, "POST", "/api/developer/v1/videos", "csk", "GET"],
+		[rest, "PUT", "/api/developer/v1/videos", "csk", "POST, GET"],
 		[rest, "DELETE", "/api/developer/v1/videos/video-1/status", "csk", "GET"],
 		[rest, "POST", "/api/developer/v1/usage", "csk", "GET"],
 		[rest, "DELETE", "/api/developer/v1/transcripts", "csk", "POST, GET"],

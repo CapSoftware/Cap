@@ -448,6 +448,30 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 				expect(startImport).toHaveBeenCalledTimes(1);
 
+				mocks.createInfraVideo.mockResolvedValueOnce({
+					status: 409,
+					body: { code: "upload_already_completed" },
+				});
+				const afterRecorded = await createInfraVideoImport(input, {
+					startImport,
+					guards: serving(mp4Bytes(64)),
+				});
+				expect(afterRecorded).toEqual({
+					status: 202,
+					videoId: input.videoId,
+					replayed: true,
+				});
+				mocks.createInfraVideo.mockResolvedValueOnce({
+					status: 409,
+					body: { code: "idempotency_conflict" },
+				});
+				const changedName = await createInfraVideoImport(
+					{ ...input, name: "Another name" },
+					{ startImport, guards: serving(mp4Bytes(64)) },
+				);
+				expect(changedName.status).toBe(409);
+				expect(startImport).toHaveBeenCalledTimes(1);
+
 				const other = await createInfraVideoImport(
 					{ ...input, url: "https://media.example.com/other.mp4" },
 					{ startImport, guards: serving(mp4Bytes(64)) },

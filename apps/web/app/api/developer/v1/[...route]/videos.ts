@@ -29,9 +29,9 @@ import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
 	createInfraVideoImport,
 	developerVideoImportView,
-	IMPORT_URL_MAX_LENGTH,
 	newImportVideoId,
 } from "@/lib/infra-video-import";
+import { IMPORT_URL_MAX_LENGTH } from "@/lib/infra-video-import-limits";
 import { developerZValidator } from "@/utils/zod-validator";
 import { importDeveloperVideoWorkflow } from "@/workflows/import-developer-video";
 import { withDeveloperSecretAuth } from "../../../utils";
@@ -48,6 +48,13 @@ async function withCaptions(appId: string, videos: DeveloperVideoRow[]) {
 		...video,
 		captions: links.get(video.id) ?? [],
 	}));
+}
+
+// Only a video created from a URL has an import, so every other video reads
+// exactly as before.
+async function withImport<T extends { id: string }>(video: T) {
+	const imported = await developerVideoImportView(video.id);
+	return imported ? { ...video, import: imported } : video;
 }
 
 const ownedBy = (userId: string | undefined) =>
@@ -145,25 +152,10 @@ app.post(
 		if (result.status !== 202) {
 			return c.json(result.body, result.status, result.headers);
 		}
-		const [video, imported] = await Promise.all([
-			findAppVideo(appId, result.videoId, undefined),
-			developerVideoImportView(result.videoId),
-		]);
+		const video = await findAppVideo(appId, result.videoId, undefined);
 		if (!video) return c.json(videoNotFound(undefined), 404);
 		const [data] = await withCaptions(appId, [video]);
-		return c.json(
-			{
-				data: {
-					...data,
-					import: imported && {
-						sourceUrl: imported.sourceUrl,
-						state: imported.state,
-						errorCode: imported.errorCode,
-					},
-				},
-			},
-			202,
-		);
+		return c.json({ data: await withImport(data) }, 200);
 	},
 );
 
@@ -217,7 +209,7 @@ app.get("/:id", async (c) => {
 	}
 
 	const [data] = await withCaptions(appId, [video]);
-	return c.json({ data });
+	return c.json({ data: await withImport(data) });
 });
 
 app.delete("/:id", async (c) => {
@@ -266,5 +258,7 @@ app.get("/:id/status", async (c) => {
 		return c.json(videoNotFound(scope.userId), 404);
 	}
 
-	return c.json({ data: serializeDeveloperVideoStatus(video) });
+	return c.json({
+		data: await withImport(serializeDeveloperVideoStatus(video)),
+	});
 });
