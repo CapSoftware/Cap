@@ -30,6 +30,8 @@ import type { LayersIconHandle } from "../AnimatedIcons/Layers";
 import { ConfirmationDialog } from "../ConfirmationDialog";
 import SpaceDialog from "./SpaceDialog";
 
+const SPACE_DROP_CONCURRENCY = 4;
+
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	const { spacesData, sidebarCollapsed } = useDashboardContext();
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
@@ -110,34 +112,54 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 
 		const spaceName = spacesData.find((s) => s.id === spaceId)?.name || "space";
 
+		const toastId =
+			payload.ids.length > 1
+				? toast.loading(`Sharing ${payload.ids.length} Caps to ${spaceName}...`)
+				: undefined;
+
 		try {
 			let shared = 0;
 			let failure: string | undefined;
-			for (const capId of payload.ids) {
-				// A drop adds the space. It must not replace the spaces and
-				// organizations the Cap is already shared with.
-				const result = await shareCap({
-					capId,
-					spaceIds: [spaceId],
-					keepExisting: true,
-				});
-				if (result.success) shared += 1;
-				else failure ??= result.error;
-			}
+			let next = 0;
+			const shareNext = async () => {
+				while (next < payload.ids.length) {
+					const capId = payload.ids[next++];
+					if (!capId) continue;
+					// A drop adds the space. It must not replace the spaces and
+					// organizations the Cap is already shared with.
+					const result = await shareCap({
+						capId,
+						spaceIds: [spaceId],
+						keepExisting: true,
+					}).catch(() => ({ success: false as const, error: undefined }));
+					if (result.success) shared += 1;
+					else failure ??= result.error;
+				}
+			};
+			await Promise.all(
+				Array.from(
+					{ length: Math.min(SPACE_DROP_CONCURRENCY, payload.ids.length) },
+					shareNext,
+				),
+			);
 
 			if (shared === payload.ids.length) {
-				toast.success(`Shared ${describeDraggedCaps(payload)} to ${spaceName}`);
+				toast.success(
+					`Shared ${describeDraggedCaps(payload)} to ${spaceName}`,
+					{ id: toastId },
+				);
 			} else if (shared > 0) {
 				toast.warning(
 					`Shared ${shared} of ${payload.ids.length} Caps to ${spaceName}`,
+					{ id: toastId },
 				);
 			} else {
-				toast.error(failure || "Failed to share cap");
+				toast.error(failure || "Failed to share cap", { id: toastId });
 			}
 			if (shared > 0) router.refresh();
 		} catch (error) {
 			console.error("Error sharing cap:", error);
-			toast.error("Failed to share cap");
+			toast.error("Failed to share cap", { id: toastId });
 		}
 	};
 
