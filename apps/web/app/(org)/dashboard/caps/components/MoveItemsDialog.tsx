@@ -470,22 +470,27 @@ export function MoveItemsDialog({
 											onClick={() => setSelectedFolderId(null)}
 											className={clsx(
 												"flex gap-3 items-center px-3 w-full h-11 text-left transition-colors",
-												rootSelectable
-													? "hover:bg-gray-3"
-													: "cursor-not-allowed opacity-50",
+												rootSelectable ? "hover:bg-gray-3" : "cursor-default",
 												rootSelected && "bg-gray-3",
 											)}
 										>
 											<FolderRoot className="shrink-0 size-4 text-gray-10" />
-											<span className="flex-1 min-w-0 text-sm truncate text-gray-12">
+											<span
+												className={clsx(
+													"flex-1 min-w-0 text-sm truncate",
+													rootSelectable ? "text-gray-12" : "text-gray-11",
+												)}
+											>
 												{selectedGroup?.name ?? rootLabel}
 											</span>
 											{rootSelected ? (
 												<CheckDoodle key="root" />
-											) : (
-												<span className="text-xs shrink-0 text-gray-9">
-													{rootSelectable ? "No folder" : "Current"}
+											) : rootSelectable ? (
+												<span className="text-xs shrink-0 text-gray-10">
+													No folder
 												</span>
+											) : (
+												<CurrentBadge />
 											)}
 										</button>
 									)}
@@ -506,9 +511,11 @@ export function MoveItemsDialog({
 												onClick={() => setSelectedFolderId(row.id)}
 												className={clsx(
 													"flex gap-3 items-center pr-3 w-full h-11 text-left transition-colors",
-													isDisabled
-														? "cursor-not-allowed opacity-50"
-														: "hover:bg-gray-3",
+													isCurrent
+														? "cursor-default"
+														: isDisabled
+															? "cursor-not-allowed opacity-50"
+															: "hover:bg-gray-3",
 													isSelected && "bg-gray-3",
 												)}
 												style={{
@@ -520,11 +527,16 @@ export function MoveItemsDialog({
 													fill={FOLDER_TINTS[row.color ?? "normal"]}
 												/>
 												<span className="flex-1 min-w-0">
-													<span className="block text-sm truncate text-gray-12">
+													<span
+														className={clsx(
+															"block text-sm truncate",
+															isCurrent ? "text-gray-11" : "text-gray-12",
+														)}
+													>
 														{row.name}
 													</span>
 													{normalizedSearch && row.path !== row.name && (
-														<span className="block text-xs truncate text-gray-9">
+														<span className="block text-xs truncate text-gray-10">
 															{row.path}
 														</span>
 													)}
@@ -532,11 +544,7 @@ export function MoveItemsDialog({
 												{isSelected ? (
 													<CheckDoodle key={row.id} />
 												) : (
-													isCurrent && (
-														<span className="text-xs shrink-0 text-gray-9">
-															Current
-														</span>
-													)
+													isCurrent && <CurrentBadge />
 												)}
 											</button>
 										);
@@ -656,5 +664,13 @@ export function MoveItemsDialog({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function CurrentBadge() {
+	return (
+		<span className="px-2 py-0.5 text-xs font-medium rounded-full shrink-0 bg-gray-3 text-gray-11">
+			Current
+		</span>
 	);
 }

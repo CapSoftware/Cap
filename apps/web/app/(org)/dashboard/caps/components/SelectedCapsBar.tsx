@@ -72,7 +72,7 @@ export const SelectedCapsBar = ({
 								selected
 							</div>
 							{moveLocation && moveRootLabel && (
-								<p className="hidden text-xs truncate sm:block text-gray-9">
+								<p className="hidden text-xs truncate sm:block text-gray-10">
 									Drag them onto a folder, or use Move
 								</p>
 							)}
