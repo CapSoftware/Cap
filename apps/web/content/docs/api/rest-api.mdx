@@ -1034,6 +1034,30 @@ Rows written in the same second have the same `createdAt`. Within a page they ar
 
 The console's Billing page shows the same rows and exports them all as CSV.
 
+### Webhooks
+
+Have Cap call your server when a video is ready or has failed, instead of polling for it. Register an https URL for the app and Cap sends it a signed `POST` request for each event. The [Webhooks](/docs/api/webhooks) guide covers the events, the request Cap sends, how to verify its signature, and retries.
+
+| Request | What it does |
+|---------|--------------|
+| `POST /api/developer/v1/webhooks` | Create an endpoint. The response carries its signing secret, once |
+| `GET /api/developer/v1/webhooks` | List the app's endpoints with `limit` and `offset` |
+| `GET /api/developer/v1/webhooks/:id` | Read one endpoint and how Cap's last call to it went |
+| `PATCH /api/developer/v1/webhooks/:id` | Change `url`, `events` or `enabled` |
+| `DELETE /api/developer/v1/webhooks/:id` | Delete an endpoint |
+| `POST /api/developer/v1/webhooks/:id/test` | Send a test event and report what the endpoint answered |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/webhooks/cap", "events": ["video.ready", "video.errored"]}'
+```
+
+The events are `video.ready` and `video.errored`, and each carries the video as [Get Video](/docs/api/rest-api#get-video) returns it. An app can have 5 endpoints.
+
 ---
 
 ## SDK API Endpoints

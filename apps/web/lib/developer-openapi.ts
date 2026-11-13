@@ -14,6 +14,13 @@ import {
 	transcriptFailureCodesText,
 	transcriptRequestErrorsText,
 } from "@/lib/developer-transcript-errors";
+import {
+	MAX_WEBHOOK_ENDPOINTS_PER_APP,
+	WEBHOOK_DISABLE_AFTER_FAILURES,
+	WEBHOOK_EVENT_TYPES,
+	WEBHOOK_MAX_ATTEMPTS,
+	WEBHOOK_TEST_EVENT_TYPE,
+} from "@/lib/developer-webhook-events";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -204,6 +211,86 @@ const transcriptSchema = {
 		completedAt: { type: ["string", "null"], format: "date-time" },
 	},
 };
+
+const webhookIdParam = {
+	name: "id",
+	in: "path",
+	required: true,
+	description: "Webhook endpoint ID returned by createWebhookEndpoint.",
+	schema: { type: "string" },
+};
+
+const WEBHOOK_URL_RULES =
+	"The URL must be https on the default port, at most 2,048 characters, with no username or password, and its host must resolve to a public address. Anything else returns 400 with code invalid_webhook_url.";
+
+const webhookEventsProperty = {
+	type: "array",
+	minItems: 1,
+	uniqueItems: true,
+	items: { type: "string", enum: [...WEBHOOK_EVENT_TYPES] },
+	description: "The event types sent to this endpoint.",
+};
+
+const webhookDelivery = (type: string, summary: string, data: object) => ({
+	post: {
+		operationId: `receive${type
+			.split(".")
+			.map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+			.join("")}`,
+		summary,
+		description: `Cap sends this request to every enabled endpoint subscribed to ${type}. Answer with any 2xx status within 10 seconds. Any other answer, a redirect or no answer is retried, up to ${WEBHOOK_MAX_ATTEMPTS} attempts over about a day. Verify Cap-Signature before trusting the body, and use the event id to ignore a delivery you have already handled.`,
+		tags: ["Webhooks"],
+		security: [],
+		parameters: [
+			{
+				name: "Cap-Signature",
+				in: "header",
+				required: true,
+				description:
+					't=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the endpoint\'s signing secret>. Reject a timestamp more than five minutes old.',
+				schema: { type: "string" },
+			},
+			{
+				name: "Cap-Event-Id",
+				in: "header",
+				required: true,
+				description: "The event's id, the same value as id in the body.",
+				schema: { type: "string" },
+			},
+			{
+				name: "Cap-Event-Type",
+				in: "header",
+				required: true,
+				description: "The event's type, the same value as type in the body.",
+				schema: { type: "string" },
+			},
+		],
+		requestBody: {
+			required: true,
+			content: {
+				"application/json": {
+					schema: {
+						type: "object",
+						required: ["id", "type", "createdAt", "data"],
+						properties: {
+							id: {
+								type: "string",
+								description:
+									"Identifies the event. A retry, and a delivery to another endpoint, carry the same id.",
+							},
+							type: { type: "string", const: type },
+							createdAt: { type: "string", format: "date-time" },
+							data,
+						},
+					},
+				},
+			},
+		},
+		responses: {
+			"2XX": { description: "The event was received." },
+		},
+	},
+});
 
 const secretAuth = [{ secretKey: [] }];
 const uploadTokenAuth = [{ uploadToken: [] }];
@@ -429,7 +516,33 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			name: "SDK",
 			description: "Upload a video's file from the browser (upload token).",
 		},
+		{
+			name: "Webhooks",
+			description:
+				"Have Cap call your server when a video is ready or has failed (secret key).",
+		},
 	],
+	webhooks: {
+		"video.ready": webhookDelivery(
+			"video.ready",
+			"A video is ready to play",
+			ref("DeveloperVideo"),
+		),
+		"video.errored": webhookDelivery(
+			"video.errored",
+			"A video could not be processed",
+			ref("DeveloperVideo"),
+		),
+		[WEBHOOK_TEST_EVENT_TYPE]: webhookDelivery(
+			WEBHOOK_TEST_EVENT_TYPE,
+			"A test event sent by sendWebhookTestEvent",
+			{
+				type: "object",
+				required: ["webhookId"],
+				properties: { webhookId: { type: "string" } },
+			},
+		),
+	},
 	paths: {
 		"/api/developer/v1/videos": {
 			get: {
@@ -770,6 +883,122 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"404": response("NotFound"),
 					"409": response("UploadCompleted"),
 					"415": response("UnsupportedMediaType"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/webhooks": {
+			get: {
+				operationId: "listWebhookEndpoints",
+				summary: "List webhook endpoints",
+				description:
+					"Lists the app's webhook endpoints, newest first. Signing secrets are never returned here. An unknown query parameter or an out-of-range limit or offset returns 400.",
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [
+					{
+						name: "limit",
+						in: "query",
+						required: false,
+						description: "Maximum endpoints to return.",
+						schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+					},
+					{
+						name: "offset",
+						in: "query",
+						required: false,
+						description: "Number of endpoints to skip.",
+						schema: { type: "integer", minimum: 0, default: 0 },
+					},
+				],
+				responses: {
+					"200": json(ref("WebhookEndpointList"), "The app's endpoints."),
+					"400": response("BadRequest"),
+					...restErrors,
+				},
+			},
+			post: {
+				operationId: "createWebhookEndpoint",
+				summary: "Create a webhook endpoint",
+				description: `Registers a URL that Cap calls when a video is ready or has failed. The response carries the endpoint's signing secret: store it, because it is never returned again. ${WEBHOOK_URL_RULES} An app can have ${MAX_WEBHOOK_ENDPOINTS_PER_APP} endpoints; one more returns 409 with code webhook_limit_reached. A field the request does not know returns 400 with code invalid_request.`,
+				tags: ["Webhooks"],
+				security: secretAuth,
+				requestBody: jsonBody("CreateWebhookEndpointRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("WebhookEndpointWithSecret")),
+						"The created endpoint and its signing secret.",
+					),
+					"400": response("BadRequest"),
+					"409": response("WebhookLimitReached"),
+					"415": response("UnsupportedMediaType"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/webhooks/{id}": {
+			get: {
+				operationId: "getWebhookEndpoint",
+				summary: "Get a webhook endpoint",
+				description:
+					"Returns one endpoint owned by the app, with the result of its last delivery.",
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [webhookIdParam],
+				responses: {
+					"200": json(dataEnvelope(ref("WebhookEndpoint")), "The endpoint."),
+					"404": response("WebhookNotFound"),
+					...restErrors,
+				},
+			},
+			patch: {
+				operationId: "updateWebhookEndpoint",
+				summary: "Update a webhook endpoint",
+				description: `Changes an endpoint's URL, its event types or whether it is enabled. Send at least one of them. Setting enabled to true turns an endpoint back on after Cap disabled it and clears its failure count. The signing secret does not change. ${WEBHOOK_URL_RULES}`,
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [webhookIdParam],
+				requestBody: jsonBody("UpdateWebhookEndpointRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("WebhookEndpoint")),
+						"The updated endpoint.",
+					),
+					"400": response("BadRequest"),
+					"404": response("WebhookNotFound"),
+					"415": response("UnsupportedMediaType"),
+					...restErrors,
+				},
+			},
+			delete: {
+				operationId: "deleteWebhookEndpoint",
+				summary: "Delete a webhook endpoint",
+				description:
+					"Deletes an endpoint. Deliveries still waiting to be retried are dropped. Deleting an endpoint this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404.",
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [webhookIdParam],
+				responses: {
+					"200": json(ref("Success"), "The endpoint was deleted."),
+					"404": response("WebhookNotFound"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/webhooks/{id}/test": {
+			post: {
+				operationId: "sendWebhookTestEvent",
+				summary: "Send a test event",
+				description: `Sends one signed ${WEBHOOK_TEST_EVENT_TYPE} event to the endpoint and waits up to 10 seconds for the answer. It is sent once and never retried, it works on a disabled endpoint, and a failure does not count towards disabling the endpoint. The response says whether the endpoint answered with a 2xx status. Nothing your endpoint returns in its body is read or stored.`,
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [webhookIdParam],
+				responses: {
+					"200": json(
+						dataEnvelope(ref("WebhookTestResult")),
+						"What the endpoint answered.",
+					),
+					"404": response("WebhookNotFound"),
 					...restErrors,
 				},
 			},
@@ -1673,6 +1902,167 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					uploadId: { type: "string" },
 				},
 			},
+			WebhookEndpoint: {
+				type: "object",
+				required: [
+					"id",
+					"url",
+					"events",
+					"enabled",
+					"disabledReason",
+					"secretPrefix",
+					"lastDeliveryAt",
+					"lastDeliveryStatus",
+					"lastResponseStatus",
+					"lastErrorCode",
+					"consecutiveFailures",
+					"createdAt",
+					"updatedAt",
+				],
+				properties: {
+					id: { type: "string" },
+					url: { type: "string", format: "uri" },
+					events: webhookEventsProperty,
+					enabled: {
+						type: "boolean",
+						description: "Events are only sent to an enabled endpoint.",
+					},
+					disabledReason: {
+						type: ["string", "null"],
+						enum: ["delivery_failures", null],
+						description: `delivery_failures when Cap disabled the endpoint after at least ${WEBHOOK_DISABLE_AFTER_FAILURES} failed attempts in a row over five days or more. null otherwise.`,
+					},
+					secretPrefix: {
+						type: "string",
+						description:
+							"The first characters of the signing secret, to tell endpoints apart. The secret itself is only returned when the endpoint is created.",
+					},
+					lastDeliveryAt: {
+						type: ["string", "null"],
+						format: "date-time",
+						description: "When Cap last called the endpoint.",
+					},
+					lastDeliveryStatus: {
+						type: ["string", "null"],
+						enum: ["succeeded", "failed", null],
+					},
+					lastResponseStatus: {
+						type: ["integer", "null"],
+						description:
+							"The HTTP status the endpoint last answered with, or null when it did not answer.",
+					},
+					lastErrorCode: {
+						type: ["string", "null"],
+						enum: [
+							"http_error",
+							"redirect",
+							"timeout",
+							"connection_failed",
+							"private_address",
+							"invalid_url",
+							"https_required",
+							"credentials_in_url",
+							"unsupported_port",
+							null,
+						],
+						description:
+							"Why the last delivery failed: http_error for a status outside 2xx, redirect for a 3xx (redirects are not followed), timeout for no answer in 10 seconds, connection_failed when the connection or TLS handshake failed, private_address when the host resolved to a private or reserved address. null after a success.",
+					},
+					consecutiveFailures: {
+						type: "integer",
+						description: "Failed attempts since the last success.",
+					},
+					createdAt: { type: "string", format: "date-time" },
+					updatedAt: {
+						type: "string",
+						format: "date-time",
+						description:
+							"When the endpoint's settings last changed. Deliveries do not move it.",
+					},
+				},
+			},
+			WebhookEndpointWithSecret: {
+				allOf: [
+					ref("WebhookEndpoint"),
+					{
+						type: "object",
+						required: ["secret"],
+						properties: {
+							secret: {
+								type: "string",
+								description:
+									"The signing secret, starting with cws_. Returned once, when the endpoint is created.",
+							},
+						},
+					},
+				],
+			},
+			WebhookEndpointList: {
+				type: "object",
+				required: ["data", "pagination"],
+				properties: {
+					data: { type: "array", items: ref("WebhookEndpoint") },
+					pagination: {
+						type: "object",
+						required: ["limit", "offset", "hasMore"],
+						properties: {
+							limit: { type: "integer" },
+							offset: { type: "integer" },
+							hasMore: { type: "boolean" },
+						},
+					},
+				},
+			},
+			CreateWebhookEndpointRequest: {
+				type: "object",
+				additionalProperties: false,
+				required: ["url"],
+				properties: {
+					url: { type: "string", format: "uri", maxLength: 2048 },
+					events: {
+						...webhookEventsProperty,
+						description:
+							"The event types to send. Leave it out to receive every type.",
+					},
+					enabled: { type: "boolean", default: true },
+				},
+			},
+			UpdateWebhookEndpointRequest: {
+				type: "object",
+				additionalProperties: false,
+				minProperties: 1,
+				properties: {
+					url: { type: "string", format: "uri", maxLength: 2048 },
+					events: webhookEventsProperty,
+					enabled: { type: "boolean" },
+				},
+			},
+			WebhookTestResult: {
+				type: "object",
+				required: [
+					"eventId",
+					"type",
+					"delivered",
+					"responseStatus",
+					"errorCode",
+					"durationMs",
+				],
+				properties: {
+					eventId: { type: "string" },
+					type: { type: "string", const: WEBHOOK_TEST_EVENT_TYPE },
+					delivered: {
+						type: "boolean",
+						description: "true when the endpoint answered with a 2xx status.",
+					},
+					responseStatus: { type: ["integer", "null"] },
+					errorCode: {
+						type: ["string", "null"],
+						description:
+							"Why the delivery failed, with the same values as lastErrorCode. null when delivered.",
+					},
+					durationMs: { type: "integer" },
+				},
+			},
 		},
 		responses: {
 			BadRequest: json(
@@ -1735,6 +2125,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			InternalError: json(
 				ref("Error"),
 				"Unexpected server error (code internal_error). Retry with backoff.",
+			),
+			WebhookNotFound: json(
+				ref("Error"),
+				"No webhook endpoint with this ID belongs to the app (code webhook_not_found).",
+			),
+			WebhookLimitReached: json(
+				ref("Error"),
+				`The app already has ${MAX_WEBHOOK_ENDPOINTS_PER_APP} webhook endpoints (code webhook_limit_reached). Delete one first.`,
 			),
 		},
 		headers: {
