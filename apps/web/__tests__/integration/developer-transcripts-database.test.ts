@@ -1750,4 +1750,48 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			expect(fixture.start).toHaveBeenCalledTimes(1);
 		}
 	});
+
+	it("admits a transcript while another request holds the credit account, and keeps the ceiling exact", async () => {
+		const appId = await makeApp(500_000);
+		for (let index = 0; index < 18; index++) await makeTranscript(appId);
+		if (!pool) throw new Error("No pool");
+		const holder = await pool.getConnection();
+		try {
+			await holder.query("START TRANSACTION");
+			await holder.query(
+				"SELECT id FROM developer_credit_accounts WHERE appId = ? FOR UPDATE",
+				[appId],
+			);
+			const started = Date.now();
+			const created = await createTranscriptFromUrl(
+				appId,
+				{ url: URL_A },
+				guards,
+			);
+			const waited = Date.now() - started;
+			expect(created.ok).toBe(true);
+			expect(waited).toBeLessThan(1_000);
+		} finally {
+			await holder.query("ROLLBACK");
+			holder.release();
+		}
+
+		const results = await Promise.all(
+			Array.from({ length: 12 }, (_, index) =>
+				createTranscriptFromUrl(
+					appId,
+					{ url: `https://media.example.com/race-${index}.mp3` },
+					guards,
+				),
+			),
+		);
+		expect(results.filter((result) => result.ok)).toHaveLength(1);
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(
+			rows.filter((row) => ["queued", "processing"].includes(row.status)),
+		).toHaveLength(20);
+	});
 });

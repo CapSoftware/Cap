@@ -184,6 +184,23 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		) {
 			return [];
 		}
+		if ("heldMicroCredits" in query.fields) {
+			const [dispute] = newestFirst(
+				ledger.rows.filter(
+					(row) =>
+						row.type === "adjustment" &&
+						["stripe_dispute", "manual"].includes(String(row.referenceType)),
+				),
+			);
+			return [
+				{
+					...account,
+					heldMicroCredits: ledger.heldMicroCredits,
+					disputeType: dispute?.referenceType ?? null,
+					disputeCreatedAt: dispute?.createdAt ?? null,
+				},
+			];
+		}
 		return [account];
 	}
 
