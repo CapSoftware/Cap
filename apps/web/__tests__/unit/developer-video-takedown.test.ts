@@ -9,7 +9,6 @@ import {
 const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	user: null as { id: string; email: string } | null,
-	failSelect: false,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -23,15 +22,7 @@ vi.mock("@cap/database", async () => {
 		mocks.store,
 		await createDeveloperVideoDatabase(mocks.store),
 	);
-	return {
-		db: () => ({
-			...database,
-			select: (...args: Parameters<typeof database.select>) => {
-				if (mocks.failSelect) throw new Error("database unavailable");
-				return database.select(...args);
-			},
-		}),
-	};
+	return { db: () => database };
 });
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => mocks.user,
@@ -78,7 +69,6 @@ beforeEach(() => {
 	mocks.store.updates = [];
 	mocks.store.appDeleted = false;
 	mocks.user = STAFF;
-	mocks.failSelect = false;
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 	vi.spyOn(console, "info").mockImplementation(() => undefined);
 });
@@ -361,66 +351,6 @@ describe("the staff script", () => {
 
 		expect(refused.code).toBe(1);
 		expect(refused.lines).toEqual(["error: 403: Not allowed."]);
-	});
-});
-
-describe("the hosted and embed pages for a taken down video", () => {
-	it.each([`/dev/${PLAYBACK_ID}`, `/dev/${PLAYBACK_ID}/embed`])(
-		"answer %s with a plain 410 page that is never cached",
-		async (path) => {
-			await store.setDeveloperVideoTakedown(PLAYBACK_ID, true, NOW);
-
-			const response = await store.developerVideoGonePage(path, "GET");
-
-			expect(response?.status).toBe(410);
-			expect(response?.headers.get("cache-control")).toBe("no-store");
-			expect(response?.headers.get("content-type")).toBe(
-				"text/html; charset=utf-8",
-			);
-			expect(response?.headers.get("x-robots-tag")).toBe("noindex");
-			const html = await response?.text();
-			expect(html).toContain("<h1>This video is not available.</h1>");
-			expect(html).not.toContain(PLAYBACK_ID);
-			expect(html).not.toContain("—");
-
-			const head = await store.developerVideoGonePage(path, "HEAD");
-			expect(head?.status).toBe(410);
-			expect(await head?.text()).toBe("");
-		},
-	);
-
-	it("leaves the page to render for a video that is not taken down, or once restored", async () => {
-		expect(
-			await store.developerVideoGonePage(`/dev/${PLAYBACK_ID}`, "GET"),
-		).toBeNull();
-		await store.setDeveloperVideoTakedown(PLAYBACK_ID, true, NOW);
-		await store.setDeveloperVideoTakedown(PLAYBACK_ID, false, NOW);
-		expect(
-			await store.developerVideoGonePage(`/dev/${PLAYBACK_ID}/embed`, "GET"),
-		).toBeNull();
-	});
-
-	it.each([
-		"/dev",
-		"/dev/short",
-		`/dev/${PLAYBACK_ID}/other`,
-		`/s/${PLAYBACK_ID}`,
-		`/embed/${PLAYBACK_ID}`,
-	])("does not look up %s", async (path) => {
-		mocks.failSelect = true;
-		await expect(store.developerVideoGonePage(path, "GET")).resolves.toBeNull();
-		expect(console.error).not.toHaveBeenCalled();
-	});
-
-	it("lets the page render when the check fails", async () => {
-		mocks.failSelect = true;
-
-		await expect(
-			store.developerVideoGonePage(`/dev/${PLAYBACK_ID}`, "GET"),
-		).resolves.toBeNull();
-		await expect(
-			store.developerVideoGonePage(`/dev/${PLAYBACK_ID}`, "POST"),
-		).resolves.toBeNull();
 	});
 });
 

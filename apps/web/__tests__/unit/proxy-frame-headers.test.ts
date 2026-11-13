@@ -10,10 +10,6 @@ vi.mock("@cap/database", () => ({
 
 vi.mock("@cap/database/schema", () => ({ organizations: {} }));
 
-vi.mock("@/lib/developer-video-takedown-store", () => ({
-	developerVideoGonePage: async () => null,
-}));
-
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
 	serverEnv: () => ({
