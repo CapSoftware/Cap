@@ -9,6 +9,8 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { StorageUsage } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import {
+	type InfraDbExecutor,
+	latchCoveredShortfall,
 	latestStorageCharge,
 	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
@@ -84,7 +86,8 @@ export async function recordStorageDayVisits({
 export async function chargeStorageDay({
 	appId,
 	accountId,
-	usage,
+	usage: measuredBefore,
+	measure,
 	dateKey,
 	now,
 	retryUnpaid = true,
@@ -92,6 +95,7 @@ export async function chargeStorageDay({
 	appId: string;
 	accountId: string;
 	usage: StorageUsage;
+	measure?: (tx: InfraDbExecutor) => Promise<StorageUsage>;
 	dateKey: string;
 	now: Date;
 	retryUnpaid?: boolean;
@@ -164,14 +168,27 @@ export async function chargeStorageDay({
 			return { state: "skipped" as const };
 		}
 
+		const usage = measure ? await measure(tx) : measuredBefore;
 		const lastCharge = await latestStorageCharge(tx, accountId);
+		const available = (await availableBalance(appId, tx)) ?? 0;
+		const latched = await latchCoveredShortfall(
+			tx,
+			lastCharge,
+			available,
+			now,
+			accountId,
+		);
 		const unresolvedShortSince =
+			!latched &&
 			lastCharge?.shortSince &&
 			!(await restoredSinceCharge(tx, accountId, lastCharge))
 				? lastCharge.shortSince
 				: null;
 
-		if (usage.dailyMicroCredits <= 0 && !unresolvedShortSince) {
+		if (
+			usage.dailyMicroCredits <= 0 &&
+			(!unresolvedShortSince || lastCharge?.firstMonth)
+		) {
 			return { state: "skipped" as const };
 		}
 
@@ -197,8 +214,6 @@ export async function chargeStorageDay({
 							},
 						})
 				: Promise.resolve();
-
-		const available = (await availableBalance(appId, tx)) ?? 0;
 
 		if (unresolvedShortSince && usage.dailyMicroCredits > 0 && available <= 0) {
 			await recordSnapshot(0);
@@ -236,6 +251,7 @@ export async function chargeStorageDay({
 				owedMicroCredits: settled.owedMicroCredits,
 				chargedMicroCredits: settled.chargedMicroCredits,
 				shortSince: settled.shortSince?.toISOString() ?? null,
+				fellShort: settled.fellShort,
 				totalDurationMinutes: usage.totalMinutes,
 				minutesByTier: usage.minutesByTier,
 				videoCount: usage.videoCount,

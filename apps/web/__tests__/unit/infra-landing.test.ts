@@ -41,6 +41,7 @@ import { getDocBySlug } from "@/utils/docs";
 
 const rest = getDocBySlug("api/rest-api")?.content ?? "";
 const billing = getDocBySlug("api/billing")?.content ?? "";
+const getStarted = getDocBySlug("api/get-started")?.content ?? "";
 
 const PAGE_DIR = path.join(process.cwd(), "components/pages/infra");
 
@@ -140,6 +141,23 @@ describe("the Cap Infra landing page", () => {
 
 		expect(text).not.toMatch(/\bdelivery\b|\bwatched\b|\bwebhooks?\b/i);
 		expect(text).not.toContain(String.fromCodePoint(0x2014));
+	});
+
+	it("states the first month of storage in the words the docs use", async () => {
+		const content = await load("true");
+
+		expect(billing).toContain(content.STORAGE_RULE);
+		expect(getStarted).toContain(content.STORAGE_RULE);
+		expect(
+			content.infraFaqs.find(
+				(faq) => faq.question === "What does Cap Infra charge for?",
+			)?.answer,
+		).toBe(
+			`Two things: stored video and speech to text. ${content.STORAGE_RULE}`,
+		);
+		expect(
+			pageSources().find((source) => source.file === "Pricing.tsx")?.text,
+		).toContain("{STORAGE_RULE}");
 	});
 
 	it("asks for access while Cap Infra is in preview", async () => {

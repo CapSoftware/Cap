@@ -24,9 +24,11 @@ vi.mock("@/lib/developer-credits-product", () => ({
 	developerCreditsProductId: () => "prod_test",
 }));
 
+import { developerOpenApiSpec } from "@/lib/developer-openapi";
 import {
 	dailyStorageMicroCredits,
 	emptyStorageMinutes,
+	firstMonthStorageMicroCredits,
 	MICRO_CREDITS_PER_DOLLAR,
 	monthlyStorageMicroCredits,
 	SPEECH_DOLLARS_PER_HOUR,
@@ -76,6 +78,7 @@ import { docsConfig } from "../../app/(docs)/docs/docs-config";
 
 const billing = getDocBySlug("api/billing")?.content ?? "";
 const rest = getDocBySlug("api/rest-api")?.content ?? "";
+const getStarted = getDocBySlug("api/get-started")?.content ?? "";
 
 const POLICY_SENTENCES = [
 	"Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account.",
@@ -163,7 +166,7 @@ describe("the Billing page", () => {
 		for (const tier of INFRA_RESOLUTION_TIERS) {
 			const price = `$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`;
 			expect(billing).toContain(
-				`| ${names[tier]} | ${price} per 1,000 minutes per month | Once a day |`,
+				`| ${names[tier]} | ${price} per 1,000 minutes per month | First month when the video is ready, then once a day after it |`,
 			);
 			expect(rest).toContain(`| ${price} |`);
 		}
@@ -215,6 +218,90 @@ describe("the Billing page", () => {
 			`covers ${UPLOAD_ADMISSION_DAYS} days of storage`,
 		);
 		expect(rest).toContain(`covers ${UPLOAD_ADMISSION_DAYS} days of storage`);
+	});
+
+	it("works every first month example out from the pricing functions", () => {
+		const tiers: Record<string, InfraResolutionTier> = {
+			"1080p": "1080p",
+			"1440p": "1440p",
+			"4K": "2160p",
+		};
+		const rows = tableRows(billing, "### The first month");
+		expect(rows).toHaveLength(3);
+		for (const [video, firstMonth, perDay] of rows) {
+			const match = /^([\d,]+) minutes at (\S+)$/.exec(video ?? "");
+			expect(match, video).not.toBeNull();
+			const tier = tiers[match?.[2] ?? ""];
+			expect(tier, video).toBeDefined();
+			if (!tier) continue;
+			const minutes = Number(match?.[1]?.replaceAll(",", ""));
+			expect(firstMonth).toBe(
+				formatCharge(
+					firstMonthStorageMicroCredits({
+						durationSeconds: minutes * 60,
+						tier,
+					}),
+				),
+			);
+			expect(perDay).toBe(
+				formatCharge(
+					dailyStorageMicroCredits({
+						...emptyStorageMinutes(),
+						[tier]: minutes,
+					}),
+				),
+			);
+		}
+		const twentyMinutes4K = firstMonthStorageMicroCredits({
+			durationSeconds: 1200,
+			tier: "2160p",
+		});
+		expect(billing).toContain(
+			`With ${formatNeed(uploadAdmissionMicroCredits(0, twentyMinutes4K))} of credit and nothing else in flight, one 20 minute video billed at 4K is accepted. Three of them in flight need ${formatNeed(uploadAdmissionMicroCredits(0, 3 * twentyMinutes4K))}.`,
+		);
+		expect(billing).toContain(
+			`The month is ${STORAGE_BILLING_DAYS_PER_MONTH} UTC days`,
+		);
+	});
+
+	it("states the first month rule and its example the same way in the billing and get started docs", () => {
+		const rule =
+			"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
+		const tenMinutes = { durationSeconds: 600, tier: "1080p" as const };
+		const example = `A 10 minute 1080p video costs ${formatCharge(firstMonthStorageMicroCredits(tenMinutes))} when it becomes ready, then ${formatCharge(dailyStorageMicroCredits({ ...emptyStorageMinutes(), "1080p": 10 }))} a day after its first month.`;
+
+		for (const doc of [billing, getStarted]) {
+			expect(doc).toContain(rule);
+			expect(doc).toContain(example);
+		}
+		expect(billing).toContain(
+			"Videos that were ready before November 13, 2026 are not charged a first month.",
+		);
+		expect(billing).not.toMatch(/\b(before|from) today\b/i);
+	});
+
+	it("says in the billing and REST docs that a video deleted while it is processed pays its first month", () => {
+		const deleted =
+			"A video deleted while it is being processed is charged its first month too";
+		expect(billing).toContain(deleted);
+		expect(rest).toContain(deleted);
+		expect(rest).not.toMatch(/\b(before|from) today\b/i);
+	});
+
+	it("says grace can follow any storage charge, first month or daily", () => {
+		const outOfCredit =
+			"| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage charge could not be paid. The message says how much to add |";
+		const graceStanding =
+			"grace: a storage charge was more than the balance, uploads are blocked";
+		const specText = JSON.stringify(developerOpenApiSpec("https://cap.so"));
+
+		expect(rest).toContain(outOfCredit);
+		expect(specText).toContain(graceStanding);
+		for (const text of [rest, billing, specText]) {
+			expect(text).not.toMatch(
+				/daily storage charge (could not be paid|was more than)/,
+			);
+		}
 	});
 
 	it("works every speech example out from the pricing functions", () => {
@@ -371,17 +458,17 @@ describe("examples in the REST API reference", () => {
 				balanceMicroCredits: body.balanceMicroCredits,
 				standing: { state: "active", pausesAt: null },
 				lastOwedMicroCredits: 0,
-				usage: {
-					monthlyMicroCredits:
-						(body.requiredMicroCredits * STORAGE_BILLING_DAYS_PER_MONTH) /
-						UPLOAD_ADMISSION_DAYS,
+				storage: {
+					dailyCharge: { monthlyMicroCredits: 0 },
+					firstMonthMicroCredits: body.requiredMicroCredits,
 				},
 			}),
 		);
 
 		expect(body).toEqual(refusal);
+		expect(body.message).toMatch(/^Not enough credit /);
 		expect(body.message).toContain(
-			`needs ${formatNeed(body.requiredMicroCredits)} of credit`,
+			`needs ${formatNeed(body.requiredMicroCredits)}, enough for the first month of storage`,
 		);
 		expect(body.message).toContain(
 			`The balance is ${formatCredits(body.balanceMicroCredits)}, so add at least ${formatNeed(body.shortfallMicroCredits)}.`,
@@ -393,13 +480,17 @@ describe("examples in the REST API reference", () => {
 
 	it("keeps the usage example consistent with the pricing functions", () => {
 		const { data } = jsonAfter(rest, "### Get Usage");
-		const monthly = monthlyStorageMicroCredits(data.storage.minutesByTier);
+		const daily = data.storage.dailyChargeMinutesByTier;
+		const monthly = monthlyStorageMicroCredits(daily);
 
 		expect(data.balanceDollars).toBe(creditDollars(data.balanceMicroCredits));
 		expect(data.storage.monthlyMicroCredits).toBe(Math.round(monthly));
 		expect(data.storage.dailyMicroCredits).toBe(
-			dailyStorageMicroCredits(data.storage.minutesByTier),
+			dailyStorageMicroCredits(daily),
 		);
+		for (const tier of INFRA_RESOLUTION_TIERS) {
+			expect(daily[tier]).toBeLessThanOrEqual(data.storage.minutesByTier[tier]);
+		}
 		expect(data.upload.requiredMicroCredits).toBe(
 			uploadAdmissionMicroCredits(monthly),
 		);

@@ -40,6 +40,8 @@ export type VideoGroup = {
 	count: number;
 	status?: string;
 	maxResolutionTier?: string | null;
+	dailySeconds?: number;
+	dailyCount?: number;
 };
 
 const freshAccount = () => ({
@@ -295,6 +297,28 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	}
 
 	if (query.table === developerCreditTransactions) {
+		if (keys === "createdAt") {
+			const type = rendered.params[1];
+			return latestWritten(
+				ledger.rows.filter((row) => row.type === type),
+			).slice(0, 1);
+		}
+		if (keys === "createdAt,id,metadata") {
+			if (
+				rendered.sql.includes(
+					"`developer_credit_transactions`.`referenceId` <= ?",
+				)
+			) {
+				return latestStorageDayRows().slice(0, 1);
+			}
+			const [, type, at] = rendered.params;
+			const ofType = latestWritten(
+				ledger.rows.filter((row) => row.type === type),
+			);
+			return at === undefined
+				? ofType.slice(0, 1)
+				: ofType.filter((row) => row.createdAt.getTime() === asTime(at));
+		}
 		if (keys === "createdAt,metadata") {
 			return rendered.sql.includes(
 				"`developer_credit_transactions`.`referenceId` <= ?",
@@ -304,6 +328,25 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		}
 		if (keys === "accountId,createdAt,id,metadata") {
 			return latestStorageDayRows();
+		}
+		if (keys === "owedMicroCredits") {
+			const shortSince = rendered.params.at(-1);
+			const owed = ledger.rows
+				.filter(
+					(row) =>
+						row.type === "video_create" &&
+						row.metadata?.shortSince === shortSince &&
+						row.metadata?.resolvedAt === undefined,
+				)
+				.map((row) => {
+					const owedMicroCredits = Number(row.metadata?.owedMicroCredits) || 0;
+					const charged = Number(row.metadata?.chargedMicroCredits) || 0;
+					return Math.max(
+						charged < owedMicroCredits ? owedMicroCredits : 0,
+						Number(row.metadata?.outstandingMicroCredits) || 0,
+					);
+				});
+			return [{ owedMicroCredits: owed.length ? Math.max(...owed) : null }];
 		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
@@ -446,11 +489,22 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	}
 
 	if (query.table === developerVideos) {
-		return rendered.sql.includes("<> ?")
+		const videos = rendered.sql.includes("<> ?")
 			? ledger.videos.filter(
 					(video) => !video.videoId || !rendered.params.includes(video.videoId),
 				)
 			: ledger.videos;
+		const firstMonth = (seconds: number, perMinute: number) =>
+			Math.max(1, Math.floor((seconds / 60) * perMinute));
+		return videos.map((video) => ({
+			...video,
+			status: video.status ?? "ready",
+			dailySeconds: video.dailySeconds ?? video.seconds,
+			dailyCount: video.dailyCount ?? video.count,
+			firstMonth1080p: firstMonth(video.seconds, 85),
+			firstMonth1440p: firstMonth(video.seconds, 145),
+			firstMonth2160p: firstMonth(video.seconds, 280),
+		}));
 	}
 
 	throw new Error(`Unexpected select: ${keys}`);
@@ -491,6 +545,31 @@ function update(table: unknown) {
 		set(values: Record<string, unknown>) {
 			return {
 				async where(condition?: SQL) {
+					if (table === developerCreditTransactions && values.metadata) {
+						const params = condition
+							? dialect.sqlToQuery(condition).params
+							: [];
+						const resolvedAt = dialect
+							.sqlToQuery(values.metadata as SQL)
+							.params.find((param) => typeof param === "string");
+						const [first, ...rest] = params;
+						const types = rest.slice(0, -1);
+						const shortSince = rest.at(-1);
+						const rows = ledger.rows.filter((entry) =>
+							types.includes("video_create")
+								? entry.accountId === first &&
+									types.includes(entry.type) &&
+									entry.metadata?.shortSince === shortSince
+								: entry.id === first,
+						);
+						let affectedRows = 0;
+						for (const row of rows) {
+							if (row.metadata?.resolvedAt !== undefined) continue;
+							row.metadata = { ...row.metadata, resolvedAt };
+							affectedRows++;
+						}
+						return [{ affectedRows }];
+					}
 					if (table === developerCreditTransactions && condition) {
 						const [accountId, referenceId, referenceType, rowId] =
 							dialect.sqlToQuery(condition).params;
