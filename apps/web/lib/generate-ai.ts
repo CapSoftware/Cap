@@ -26,6 +26,26 @@ export function isAiGenerationRerun(metadata: VideoMetadata) {
 	);
 }
 
+export function chargesProcessingRerun(input: {
+	target: "all" | "transcript" | "ai";
+	retry: boolean | undefined;
+	transcriptionStatus: string | null;
+	metadata: VideoMetadata;
+}) {
+	if (
+		input.target !== "ai" &&
+		input.retry === true &&
+		input.transcriptionStatus === "ERROR"
+	)
+		return true;
+	if (input.target === "transcript") return false;
+	if (input.target === "all" && input.transcriptionStatus !== "COMPLETE")
+		return false;
+	if (!isAiGenerationRerun(input.metadata)) return false;
+	const status = input.metadata.aiGenerationStatus;
+	return input.retry === true || (status !== "ERROR" && status !== "SKIPPED");
+}
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
