@@ -344,6 +344,41 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(cancelUrl.search).toBe("");
 	});
 
+	it("emails a paid invoice to the account email and collects tax details like Cap Pro", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			...mockUser,
+			stripeCustomerId: "cus_exist",
+		});
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_exist" },
+			]);
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+
+		await POST(makeRequest({ appId: "app-456", amountCents: 2500 }));
+
+		const [params] = mockStripe.checkout.sessions.create.mock.calls[0] ?? [];
+		expect(params).toMatchObject({
+			customer: "cus_exist",
+			mode: "payment",
+			invoice_creation: {
+				enabled: true,
+				invoice_data: { description: "Cap Infra credits" },
+			},
+			payment_intent_data: {
+				receipt_email: "test@example.com",
+				metadata: { type: "developer_credits", accountId: "account-001" },
+			},
+			tax_id_collection: { enabled: true },
+			billing_address_collection: "auto",
+			customer_update: { name: "auto", address: "auto" },
+		});
+		expect(params).not.toHaveProperty("automatic_tax");
+	});
+
 	it("returns checkout URL on success", async () => {
 		mockGetCurrentUser.mockResolvedValue({
 			...mockUser,

@@ -17,7 +17,6 @@ import {
 import type { VideoMetadata } from "./job-manager";
 import {
 	decodeThreadsFromEnv,
-	maxEncodeSeconds,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
@@ -143,15 +142,7 @@ export async function encodeHlsLadder(
 		? (range.durationSeconds ??
 			Math.max(0, metadata.duration - range.startSeconds))
 		: metadata.duration;
-	// Every frame is decoded once and scaled and encoded once per rendition.
-	const framePixels =
-		metadata.width * metadata.height +
-		rungs.reduce((sum, rung) => sum + rung.width * rung.height, 0);
-	const timeoutMs = getProcessTimeoutMs(sliceSeconds, PROCESS_TIMEOUT_MS, {
-		width: framePixels,
-		height: 1,
-	});
-	const maxOutputSeconds = maxEncodeSeconds(metadata.duration);
+	const timeoutMs = getProcessTimeoutMs(sliceSeconds, PROCESS_TIMEOUT_MS);
 	const totalDurationUs = sliceSeconds * 1_000_000;
 	const argsInput = {
 		inputPath,
@@ -163,7 +154,6 @@ export async function encodeHlsLadder(
 		range,
 		hdr,
 		hdrColor,
-		maxOutputSeconds,
 	};
 
 	const encodeVideo = async (): Promise<"nvenc" | "libx264"> => {
@@ -224,7 +214,7 @@ export async function encodeHlsLadder(
 		const separateAudio =
 			wantsAudio && range
 				? runTranscodeCommand(
-						buildHlsAudioArgs({ inputPath, outputDir: dir, maxOutputSeconds }),
+						buildHlsAudioArgs({ inputPath, outputDir: dir }),
 						join(dir, audioPlaylistName),
 						metadata.duration * 1_000_000,
 						getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),

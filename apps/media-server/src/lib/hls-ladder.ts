@@ -4,7 +4,6 @@ import {
 	hdrToSdrFilter,
 	SDR_COLOR_ARGS,
 } from "./hdr";
-import { outputLengthCapArgs } from "./media-common";
 import { NVENC_HWACCEL_INPUT_ARGS, type NvencOptions } from "./nvenc-encoder";
 
 export const HLS_LADDER_MASTER_PLAYLIST = "master.m3u8";
@@ -215,7 +214,6 @@ export interface HlsLadderArgsInput {
 	range?: HlsLadderRange | null;
 	hdr?: HdrTransfer | null;
 	hdrColor?: HdrColor | null;
-	maxOutputSeconds?: number | null;
 }
 
 // An HDR source is converted on the CPU, so it is never decoded on the GPU.
@@ -411,7 +409,6 @@ export function buildHlsLadderArgs(input: HlsLadderArgsInput): string[] {
 		: videoStreams;
 
 	args.push(
-		...outputLengthCapArgs(input.maxOutputSeconds),
 		...(input.range ? SLICE_OUTPUT_ARGS : []),
 		"-f",
 		"hls",
@@ -544,7 +541,6 @@ export function buildHlsAudioArgs(input: {
 	inputPath: string;
 	outputDir: string;
 	extraInputArgs?: string[];
-	maxOutputSeconds?: number | null;
 }): string[] {
 	return [
 		"ffmpeg",
@@ -561,7 +557,6 @@ export function buildHlsAudioArgs(input: {
 		`${HLS_LADDER_AUDIO_BITRATE_KBPS}k`,
 		"-ac",
 		"2",
-		...outputLengthCapArgs(input.maxOutputSeconds),
 		"-hls_segment_options",
 		"movflags=+frag_discont",
 		"-f",

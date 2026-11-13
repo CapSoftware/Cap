@@ -156,6 +156,9 @@ export interface Job {
 	webhookUrl?: string;
 	webhookSecret?: string;
 	abortController?: AbortController;
+	// A ladder for a Cap Infra video at the 1440p or 2160p tier, which keeps the
+	// GPU encoder busy on its own.
+	infraHeavyLadder?: boolean;
 }
 
 const jobs = new Map<string, Job>();
@@ -352,40 +355,65 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
-const DEFAULT_RESERVED_REGULAR_VIDEO_SLOTS = 1;
-
-// Slots that Cap Infra jobs leave free. Infra work arrives in batches of any
-// size from any customer, and a recording made in Cap must not wait behind
-// it. An instance with a single slot has nothing to hold back.
-export function getReservedRegularVideoSlots(
-	env: Record<string, string | undefined> = process.env,
-): number {
-	const configured = Number.parseInt(
-		env.MEDIA_SERVER_RESERVED_REGULAR_VIDEO_SLOTS ?? "",
+// Cap Infra jobs share the workers with Cap's own recordings. They may not take
+// the last free slots, and only one Infra ladder at 1440p or 2160p runs on a
+// worker at a time: one already fills the GPU encoder, and a second one slows
+// both of them and every recording that lands beside them.
+const INFRA_RESERVED_SLOTS = Math.max(
+	0,
+	Number.parseInt(process.env.MEDIA_SERVER_INFRA_RESERVED_SLOTS ?? "1", 10) ||
+		0,
+);
+const MAX_INFRA_HEAVY_LADDERS = Math.max(
+	1,
+	Number.parseInt(
+		process.env.MEDIA_SERVER_MAX_INFRA_HEAVY_LADDERS ?? "1",
 		10,
-	);
-	return Math.min(
-		Number.isInteger(configured) && configured >= 0
-			? configured
-			: DEFAULT_RESERVED_REGULAR_VIDEO_SLOTS,
-		Math.max(0, getMaxConcurrentVideoProcesses() - 1),
-	);
+	) || 1,
+);
+
+export function getActiveInfraHeavyLadderCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.infraHeavyLadder && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function infraCapacityAllows(input: {
+	effectiveMax: number;
+	active: number;
+	activeHeavyLadders: number;
+	heavyLadder: boolean;
+	reservedSlots?: number;
+	maxHeavyLadders?: number;
+}): boolean {
+	const reservedSlots = input.reservedSlots ?? INFRA_RESERVED_SLOTS;
+	const maxHeavyLadders = input.maxHeavyLadders ?? MAX_INFRA_HEAVY_LADDERS;
+	const reserved = Math.min(reservedSlots, Math.max(0, input.effectiveMax - 1));
+	if (input.active >= input.effectiveMax - reserved) return false;
+	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
+}
+
+export function canAcceptNewInfraVideoProcess(heavyLadder: boolean): boolean {
+	return infraCapacityAllows({
+		effectiveMax: getSystemResources().effectiveMax,
+		active: getActiveVideoProcessCount(),
+		activeHeavyLadders: getActiveInfraHeavyLadderCount(),
+		heavyLadder,
+	});
 }
 
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
-	options: { infra?: boolean } = {},
 ): boolean {
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
-	const limit =
-		priority === "recovery" && resources.effectiveMax > 1
-			? Math.max(1, Math.floor(resources.effectiveMax / 2))
-			: resources.effectiveMax;
-	if (!options.infra) return active < limit;
 	return (
 		active <
-		Math.min(limit, resources.effectiveMax - getReservedRegularVideoSlots())
+		(priority === "recovery" && resources.effectiveMax > 1
+			? Math.max(1, Math.floor(resources.effectiveMax / 2))
+			: resources.effectiveMax)
 	);
 }
 

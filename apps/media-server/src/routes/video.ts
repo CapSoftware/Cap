@@ -19,6 +19,7 @@ import type {
 import {
 	beginRecordingProcessing,
 	beginRecordingVerification,
+	canAcceptNewInfraVideoProcess,
 	canAcceptNewVideoProcess,
 	claimRecordingWorker,
 	createJob,
@@ -918,9 +919,8 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		capacity.activeVideoProcesses >= capacity.effectiveMaxVideoProcesses - 1;
 	if (
 		bulkCapacityReached ||
-		!(result.data.infra
-			? canAcceptNewVideoProcess("interactive", { infra: true })
-			: canAcceptNewVideoProcess())
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true && !canAcceptNewInfraVideoProcess(false))
 	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(capacity), 503);
@@ -1011,10 +1011,13 @@ video.post("/ladder", async (c) => {
 			503,
 		);
 	}
+	const infraHeavyLadder =
+		result.data.infra === true &&
+		(result.data.maxTier === "1440p" || result.data.maxTier === "2160p");
 	if (
-		!(result.data.infra
-			? canAcceptNewVideoProcess("interactive", { infra: true })
-			: canAcceptNewVideoProcess())
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true &&
+			!canAcceptNewInfraVideoProcess(infraHeavyLadder))
 	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
@@ -1023,6 +1026,7 @@ video.post("/ladder", async (c) => {
 	const { videoId, userId, webhookUrl, webhookSecret } = result.data;
 	const jobId = generateJobId();
 	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	if (infraHeavyLadder) job.infraHeavyLadder = true;
 
 	void trackBackgroundTask(
 		withMediaTransfers(32 * 1024 ** 3, () =>

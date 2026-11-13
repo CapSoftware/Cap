@@ -3,8 +3,12 @@ import {
 	autoTopUpFailureText,
 	getAutoTopUpFailure,
 } from "@/lib/infra-auto-top-up";
-import { LEDGER_PAGE_SIZE, ledgerPageWindow } from "@/lib/infra-ledger";
-import { countAppLedger, listAppLedger } from "@/lib/infra-ledger-store";
+import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
+import {
+	type LedgerPage,
+	listAppLedgerPage,
+	parseLedgerCursor,
+} from "@/lib/infra-ledger-store";
 import { getInfraBilling } from "@/lib/infra-standing";
 import { getInfraProCredit, requireInfraApp } from "../../infra-data";
 import { BillingView } from "./billing-view";
@@ -12,6 +16,11 @@ import { BillingView } from "./billing-view";
 export const metadata: Metadata = {
 	title: "Billing | Cap Infra",
 };
+
+const EMPTY_LEDGER: LedgerPage = { rows: [], newer: null, older: null };
+
+const first = (value: string | string[] | undefined) =>
+	Array.isArray(value) ? value[0] : value;
 
 const failureDay = new Intl.DateTimeFormat("en-US", {
 	month: "long",
@@ -24,30 +33,26 @@ export default async function InfraBillingPage({
 	searchParams,
 }: {
 	params: Promise<{ appId: string }>;
-	searchParams: Promise<{ page?: string | string[] }>;
+	searchParams: Promise<{
+		before?: string | string[];
+		after?: string | string[];
+	}>;
 }) {
 	const [{ appId }, query] = await Promise.all([params, searchParams]);
 	const { app } = await requireInfraApp(appId);
 	const account = app.creditAccount;
-	const [total, proCredit, billing, failure] = await Promise.all([
-		account ? countAppLedger(app.id) : Promise.resolve(0),
+	const [ledger, proCredit, billing, failure] = await Promise.all([
+		account
+			? listAppLedgerPage(app.id, {
+					limit: LEDGER_PAGE_SIZE,
+					before: parseLedgerCursor(first(query.before)),
+					after: parseLedgerCursor(first(query.after)),
+				})
+			: Promise.resolve(EMPTY_LEDGER),
 		getInfraProCredit(),
 		getInfraBilling(app.id),
 		account ? getAutoTopUpFailure(account.id) : Promise.resolve(null),
 	]);
-	const ledgerPage = ledgerPageWindow(
-		Array.isArray(query.page) ? query.page[0] : query.page,
-		total,
-	);
-	const transactions =
-		total > 0
-			? (
-					await listAppLedger(app.id, {
-						limit: LEDGER_PAGE_SIZE,
-						offset: ledgerPage.offset,
-					})
-				).rows
-			: [];
 
 	return (
 		<BillingView
@@ -75,9 +80,8 @@ export default async function InfraBillingPage({
 						}
 					: null
 			}
-			transactions={transactions}
-			totalTransactions={total}
-			ledgerPage={ledgerPage}
+			transactions={ledger.rows}
+			ledgerPage={{ newer: ledger.newer, older: ledger.older }}
 		/>
 	);
 }

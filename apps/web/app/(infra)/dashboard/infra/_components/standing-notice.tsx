@@ -23,6 +23,23 @@ export function StandingNotice({
 	if (standing.state === "active" || !standing.pausesAt) return null;
 	const paused = standing.state === "paused";
 	const day = dayFormat.format(standing.pausesAt);
+	if (standing.disputed) {
+		return (
+			<section
+				aria-label="Playback is paused"
+				className="border-t border-[rgba(242,161,153,0.24)] pt-5"
+			>
+				<h2 className="m-0 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#F2A199]">
+					Playback is paused
+				</h2>
+				<p className="m-0 mt-1.5 max-w-[620px] text-pretty text-[13.5px] leading-[1.55] text-[rgba(232,236,244,0.72)]">
+					A payment for this app was disputed on {day}, so playback is paused
+					and uploads and new transcripts are blocked. Your videos are still
+					stored. Contact us to restore it.
+				</p>
+			</section>
+		);
+	}
 	const needed =
 		shortfallMicroCredits > 0
 			? ` Add ${formatNeed(shortfallMicroCredits)} or more to bring it back.`

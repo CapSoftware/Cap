@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { file, type Subprocess } from "bun";
-import { outputLengthCapArgs } from "./media-common";
 import { spawn } from "./media-spawn";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
@@ -27,7 +26,6 @@ export interface CapcodecEncodeJob {
 	maxWidth: number;
 	maxHeight: number;
 	extraInputArgs: string[];
-	maxOutputSeconds?: number | null;
 	options: CapcodecOptions;
 	totalDurationUs: number;
 	onProgress?: (progress: number, message: string) => void;
@@ -178,10 +176,7 @@ function formatCrf(crf: number): string {
 }
 
 export function buildCapcodecDecodeArgs(
-	job: Pick<
-		CapcodecEncodeJob,
-		"inputPath" | "extraInputArgs" | "maxOutputSeconds"
-	>,
+	job: Pick<CapcodecEncodeJob, "inputPath" | "extraInputArgs">,
 	width: number,
 	height: number,
 	fps: string,
@@ -203,7 +198,6 @@ export function buildCapcodecDecodeArgs(
 		"cfr",
 		"-r",
 		fps,
-		...outputLengthCapArgs(job.maxOutputSeconds),
 		"-f",
 		"rawvideo",
 		"-pix_fmt",
