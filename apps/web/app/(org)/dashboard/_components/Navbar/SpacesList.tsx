@@ -18,6 +18,11 @@ import { deleteSpace } from "@/actions/organization/delete-space";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import {
+	CAP_DRAG_TYPE,
+	describeDraggedCaps,
+	parseCapDrag,
+} from "@/lib/move-items";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
 import { LayersIcon } from "../AnimatedIcons";
@@ -84,6 +89,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	if (!spacesData) return null;
 
 	const handleDragOver = (e: React.DragEvent, spaceId: string) => {
+		if (!e.dataTransfer.types.includes(CAP_DRAG_TYPE)) return;
 		e.preventDefault();
 		setActiveDropTarget(spaceId);
 	};
@@ -99,24 +105,36 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		e.preventDefault();
 		setActiveDropTarget(null);
 
+		const payload = parseCapDrag(e.dataTransfer.getData(CAP_DRAG_TYPE));
+		if (!payload) return;
+
+		const spaceName = spacesData.find((s) => s.id === spaceId)?.name || "space";
+
 		try {
-			const capData = e.dataTransfer.getData("application/cap");
-			if (!capData) return;
-
-			const cap = JSON.parse(capData);
-
-			const result = await shareCap({
-				capId: cap.id,
-				spaceIds: [spaceId],
-			});
-
-			if (result.success) {
-				const space = spacesData.find((s) => s.id === spaceId);
-				toast.success(`Shared "${cap.name}" to ${space?.name || "space"}`);
-				router.refresh();
-			} else {
-				toast.error(result.error || "Failed to share cap");
+			let shared = 0;
+			let failure: string | undefined;
+			for (const capId of payload.ids) {
+				// A drop adds the space. It must not replace the spaces and
+				// organizations the Cap is already shared with.
+				const result = await shareCap({
+					capId,
+					spaceIds: [spaceId],
+					keepExisting: true,
+				});
+				if (result.success) shared += 1;
+				else failure ??= result.error;
 			}
+
+			if (shared === payload.ids.length) {
+				toast.success(`Shared ${describeDraggedCaps(payload)} to ${spaceName}`);
+			} else if (shared > 0) {
+				toast.warning(
+					`Shared ${shared} of ${payload.ids.length} Caps to ${spaceName}`,
+				);
+			} else {
+				toast.error(failure || "Failed to share cap");
+			}
+			if (shared > 0) router.refresh();
 		} catch (error) {
 			console.error("Error sharing cap:", error);
 			toast.error("Failed to share cap");
