@@ -23,9 +23,12 @@ vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Layer } = await import("effect");
 	return {
-		apiToHandler: (api: Layer.Layer<never>) => {
+		apiToHandler: (api: unknown) => {
 			const { handler } = HttpApiBuilder.toWebHandler(
-				Layer.mergeAll(api as never, HttpServer.layerContext),
+				Layer.mergeAll(
+					api as Parameters<typeof HttpApiBuilder.toWebHandler>[0],
+					HttpServer.layerContext,
+				),
 			);
 			return (request: Request) => handler(request);
 		},
