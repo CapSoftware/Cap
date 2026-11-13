@@ -135,7 +135,7 @@ describe("processing retry limit", () => {
 		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
 	});
 
-	it("decides an agent rerun from the video's current state before any work starts", () => {
+	it("charges agent reruns from the video's current state, right before the work starts", () => {
 		const source = readFileSync(
 			join(process.cwd(), "app/api/v1/[...route]/route.ts"),
 			"utf8",
@@ -145,27 +145,27 @@ describe("processing retry limit", () => {
 			start,
 			source.indexOf('.handle("replaceTranscript"', start),
 		);
-		const limitCheck = handler.indexOf(
-			"processingRetryLimited(principal.id, headers)",
-		);
+		const at = (text: string) => {
+			const index = handler.indexOf(text);
+			expect(index, text).toBeGreaterThan(-1);
+			return index;
+		};
 
 		expect(handler).toMatch(
-			/const transcriptionRerun =\s*includesTranscript &&\s*payload\.retry === true &&\s*row\.transcriptionStatus === "ERROR";/,
+			/processingRetryLimited\(principal\.id, headers\),\s*\)\s*\)\s*\{\s*return yield\* rateLimited\(\s*requestId,\s*PROCESSING_RETRY_WINDOW_MS,\s*\);/,
 		);
 		expect(handler).toMatch(
-			/const aiRerun =\s*includesAi &&[\s\S]*?isAiGenerationRerun\(normalizeAgentMetadata\(row\.metadata\)\);/,
+			/includesTranscript &&\s*payload\.retry === true &&\s*row\.transcriptionStatus === "ERROR"\s*\)\s*\{\s*yield\* limitRerun;\s*\}\s*const state = yield\* runAgentMutation\(/,
 		);
-		expect(limitCheck).toBeGreaterThan(
-			handler.indexOf("if (transcriptionRerun || aiRerun)"),
+		expect(handler).toMatch(
+			/if \(isAiGenerationRerun\(normalizeAgentMetadata\(row\.metadata\)\)\) \{\s*yield\* limitRerun;\s*\}\s*const result = yield\* Effect\.tryPromise\(\(\) =>\s*startAiGeneration\(/,
 		);
-		expect(limitCheck).toBeGreaterThan(
-			handler.indexOf("isAiGenerationEnabled("),
+		expect(at("const limitRerun")).toBeGreaterThan(
+			at("isAiGenerationEnabled("),
 		);
-		expect(limitCheck).toBeLessThan(handler.indexOf("runAgentMutation("));
-		expect(limitCheck).toBeLessThan(handler.indexOf("transcribeVideo("));
-		expect(limitCheck).toBeLessThan(handler.indexOf("startAiGeneration("));
-		expect(handler.slice(limitCheck)).toMatch(
-			/^processingRetryLimited\(principal\.id, headers\),\s*\)\s*\)\s*\{\s*return yield\* rateLimited\(\s*requestId,\s*PROCESSING_RETRY_WINDOW_MS,\s*\);/,
+		expect(at("yield* limitRerun")).toBeLessThan(at("transcribeVideo("));
+		expect(at("runAgentMutation(")).toBeLessThan(
+			at("isAiGenerationRerun(normalizeAgentMetadata"),
 		);
 	});
 });
