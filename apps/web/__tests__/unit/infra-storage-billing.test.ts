@@ -566,6 +566,32 @@ describe("an unpaid first month is not masked by daily rows", () => {
 		expect((await standing()).state).not.toBe("active");
 	});
 
+	it("gives grace, not active, when a paid storage_day row lands in the same second as a short first month", async () => {
+		const shortSince = unpaidMonth();
+		ledger.account.balanceMicroCredits = 500;
+		ledger.rows.push({
+			id: "storage-day-paid",
+			accountId: "account-1",
+			type: "storage_daily",
+			amountMicroCredits: -28,
+			balanceAfterMicroCredits: 500,
+			referenceId: dateKey(),
+			referenceType: "storage_day",
+			metadata: {
+				snapshotDate: dateKey(),
+				owedMicroCredits: 28,
+				chargedMicroCredits: 28,
+				shortSince: null,
+			},
+			createdAt: new Date(ledger.now),
+		});
+
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
+	});
+
 	it("keeps the shortfall when a partly paid daily row is followed by a day with nothing charged daily", async () => {
 		ledger.videos = [
 			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
