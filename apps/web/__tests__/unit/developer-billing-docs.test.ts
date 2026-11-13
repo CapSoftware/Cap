@@ -48,6 +48,7 @@ import {
 	AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS,
 	AUTO_TOP_UP_MIN_AMOUNT_CENTS,
 	AUTO_TOP_UP_MIN_THRESHOLD_MICRO_CREDITS,
+	AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS,
 } from "@/lib/infra-auto-top-up";
 import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
 import {
@@ -281,7 +282,7 @@ describe("the Billing page", () => {
 			"- **When.** As soon as the available balance falls below your threshold.",
 		);
 		expect(billing).toContain(
-			`up to ${AUTO_TOP_UP_DAILY_LIMIT} top-ups in any 24 hours`,
+			`up to ${AUTO_TOP_UP_DAILY_LIMIT} top-ups in any 24 hours, and at most ${wholeDollars(AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS)} a day across all your apps.`,
 		);
 		expect(billing).toContain(`${LEDGER_PAGE_SIZE} to a page`);
 		expect(billing).toContain(

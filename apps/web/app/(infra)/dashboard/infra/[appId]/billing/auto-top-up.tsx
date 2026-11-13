@@ -145,9 +145,9 @@ export function AutoTopUp({
 					Saving a card charges nothing and leaves auto top-up off. Once you
 					switch it on, Cap adds ${initialAmount} from that card as soon as this
 					app's balance falls below ${initialThreshold}. You can change both
-					amounts, the card is charged at most ten times in any 24 hours, and
-					auto top-up switches itself off if a charge is declined. Remove the
-					card at any time.
+					amounts. The card is charged at most ten times in any 24 hours, and at
+					most $1,000 a day across all your apps. Auto top-up switches itself
+					off if a charge is declined. Remove the card at any time.
 				</p>
 			</div>
 		);
@@ -264,7 +264,8 @@ export function AutoTopUp({
 			</div>
 			<p className={NOTE}>
 				A card is saved for this app. It is charged at most ten times in any 24
-				hours, and auto top-up switches itself off if a charge is declined.
+				hours, and at most $1,000 a day across all your apps. Auto top-up
+				switches itself off if a charge is declined.
 			</p>
 		</form>
 	);
