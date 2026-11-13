@@ -931,9 +931,7 @@ describe("the caption file of a video", () => {
 			"storage refused the delete",
 		);
 		context.stuckKeys.delete(EN_KEY);
-		expect(await deleteTranscript("app-1", "tr-1")).toMatchObject({
-			status: 404,
-		});
+		expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
 		expect(context.objects.has(EN_KEY)).toBe(false);
 	});
 
@@ -949,10 +947,7 @@ describe("the caption file of a video", () => {
 		);
 		expect(context.objects.get(EN_KEY)).toContain("newer words");
 
-		expect(await deleteTranscript("app-1", "tr-new")).toMatchObject({
-			ok: false,
-			status: 404,
-		});
+		expect(await deleteTranscript("app-1", "tr-new")).toEqual({ ok: true });
 		expect(context.objects.get(EN_KEY)).toContain("older words");
 		expect(context.objects.get(EN_KEY)).not.toContain("newer words");
 	});

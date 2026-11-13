@@ -785,6 +785,20 @@ describe("developer video playback route", () => {
 			expect(mocks.readText).not.toHaveBeenCalled();
 		});
 
+		it("answers 410 for captions of a video that was taken down", async () => {
+			mocks.store.video = ready({
+				metadata: {
+					__capTakedown: { at: "2026-11-13T07:00:00.000Z", metadata: null },
+				},
+			});
+
+			const response = await play("captions-en.vtt");
+
+			expect(response.status).toBe(410);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
 		it("refuses captions of a paused app", async () => {
 			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
 

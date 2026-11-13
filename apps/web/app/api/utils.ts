@@ -231,16 +231,25 @@ export const corsMiddleware = cors({
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 
+export const developerResponseHeaders = createMiddleware(async (c, next) => {
+	await next();
+	c.header("Cache-Control", "private, no-store");
+	const requestId = c.req.header("x-vercel-id");
+	if (requestId) c.header("X-Request-Id", requestId);
+});
+
 export const developerSdkCors = cors({
 	origin: "*",
 	credentials: false,
 	allowMethods: ["GET", "POST", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization"],
+	maxAge: 7200,
 	exposeHeaders: [
 		"Retry-After",
 		"X-RateLimit-Limit",
 		"X-RateLimit-Remaining",
 		"X-RateLimit-Reset",
+		"X-Request-Id",
 	],
 });
 
@@ -357,7 +366,28 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		developerKeyType: "secret";
 	};
 }>(async (c, next) => {
-	const authHeader = c.req.header("authorization")?.split(" ")[1];
+	const authorization = c.req.header("authorization");
+	const authHeader = authorization?.split(" ")[1];
+	if (!authorization?.trim()) {
+		return c.json(
+			apiErrorBody(
+				"invalid_secret_key",
+				"Missing secret key",
+				"No Authorization header was sent. Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
+			),
+			401,
+		);
+	}
+	if (isDeveloperPublicKey(bearerCredential(c))) {
+		return c.json(
+			apiErrorBody(
+				"public_key_not_allowed",
+				"Public keys cannot call the REST API",
+				"A public key (cpk_) was sent. The REST API takes the app's secret key: send Authorization: Bearer csk_... from your server, with the secret key from https://cap.so/dashboard/infra.",
+			),
+			403,
+		);
+	}
 	if (!authHeader?.startsWith("csk_")) {
 		return c.json(
 			apiErrorBody(

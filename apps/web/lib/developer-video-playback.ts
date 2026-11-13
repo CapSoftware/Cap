@@ -19,6 +19,10 @@ import {
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
+import {
+	DEVELOPER_VIDEO_UNAVAILABLE,
+	developerVideoIsTakenDown,
+} from "./developer-video-takedown";
 import { getInfraAppStanding } from "./infra-standing";
 
 export const PLAYBACK_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -51,6 +55,18 @@ function notFound(): Response {
 	return new Response("Not found", {
 		status: 404,
 		headers: { ...PLAYBACK_CORS_HEADERS, "Cache-Control": "no-store" },
+	});
+}
+
+// Never cached, so restoring a video brings it back on the next request.
+function gone(): Response {
+	return new Response(DEVELOPER_VIDEO_UNAVAILABLE, {
+		status: 410,
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			"Cache-Control": "no-store",
+			"Content-Type": "text/plain; charset=utf-8",
+		},
 	});
 }
 
@@ -296,6 +312,7 @@ export async function developerPlaybackResponse(
 	if (!PLAYBACK_ID_PATTERN.test(playbackId)) return notFound();
 
 	const video = await findPlayableVideo(playbackId);
+	if (video && developerVideoIsTakenDown(video)) return gone();
 	if (!video?.processing) return notFound();
 	if ((await getInfraAppStanding(video.appId)).state === "paused") {
 		return paused();

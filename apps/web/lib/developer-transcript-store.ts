@@ -22,7 +22,10 @@ import {
 	sql,
 } from "drizzle-orm";
 import { start } from "workflow/api";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import {
+	developerIdFromKey,
+	isDeveloperIdempotencyKey,
+} from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -182,12 +185,7 @@ export function transcriptIdForIdempotencyKey(appId: string, key: string) {
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 128 &&
-		/^[A-Za-z0-9._-]+$/.test(value)
-	);
+	return isDeveloperIdempotencyKey(value);
 }
 
 export type TranscriptOptionsInput = {
@@ -1013,8 +1011,10 @@ export async function deleteTranscript(
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
 	if (!transcript) {
-		await syncDeletedTranscriptCaptions(appId, transcriptId);
-		return NOT_FOUND;
+		const deleted = await findTranscriptAnyState(appId, transcriptId);
+		if (!deleted?.deletedAt) return NOT_FOUND;
+		await deleteTranscriptObjects(appId, deleted.id);
+		return { ok: true };
 	}
 
 	await db()
@@ -1034,8 +1034,12 @@ export async function deleteTranscript(
 async function syncDeletedTranscriptCaptions(
 	appId: string,
 	transcriptId: string,
+	known?: TranscriptRow | null,
 ) {
-	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	const transcript =
+		known === undefined
+			? await findTranscriptAnyState(appId, transcriptId)
+			: known;
 	if (
 		!transcript?.deletedAt ||
 		!transcript.videoId ||
@@ -1055,9 +1059,12 @@ export async function deleteTranscriptObjects(
 	appId: string,
 	transcriptId: string,
 ) {
-	const keys = transcriptObjectKeys(appId, transcriptId);
-	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
-	await syncDeletedTranscriptCaptions(appId, transcriptId);
+	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	if (transcript?.status !== "processing") {
+		const keys = transcriptObjectKeys(appId, transcriptId);
+		await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	}
+	await syncDeletedTranscriptCaptions(appId, transcriptId, transcript);
 }
 
 const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;

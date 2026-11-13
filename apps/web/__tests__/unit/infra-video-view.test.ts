@@ -35,6 +35,7 @@ const row = (overrides: Parameters<typeof developerVideo>[0] = {}) => {
 	return {
 		...video,
 		legacy: video.playbackId === null && video.processing === null,
+		takenDown: false,
 	};
 };
 
