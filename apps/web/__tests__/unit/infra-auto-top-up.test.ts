@@ -571,6 +571,29 @@ describe("auto top-up charge", () => {
 			expect(mocks.retrievePaymentIntent).toHaveBeenCalledTimes(1);
 		});
 
+		it("is picked up by the storage sweep once it passes 72 hours, with no other trigger", async () => {
+			await leavePending();
+			later(71);
+			expect(await runDueAutoTopUps(now())).toEqual({
+				attempted: 0,
+				succeeded: 0,
+				failed: 0,
+			});
+			expect(mocks.retrievePaymentIntent).not.toHaveBeenCalled();
+
+			later(1.1);
+			mocks.retrievePaymentIntent.mockResolvedValue(
+				intent("pi_1", "succeeded"),
+			);
+			await runDueAutoTopUps(now());
+
+			expect(mocks.retrievePaymentIntent).toHaveBeenCalledTimes(1);
+			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+			expect(topUps()).toEqual([
+				expect.objectContaining({ referenceId: "pi_1" }),
+			]);
+		});
+
 		it("records a payment that failed and switches auto top-up off", async () => {
 			await leavePending();
 			later(72.1);

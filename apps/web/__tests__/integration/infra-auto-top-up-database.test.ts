@@ -22,6 +22,8 @@ const fixture = vi.hoisted(() => ({
 	created: [] as FakeIntent[],
 	createdKeys: [] as string[],
 	loseNextResponse: false,
+	stored: new Map<string, FakeIntent>(),
+	retrieved: [] as string[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -43,6 +45,12 @@ vi.mock("@/lib/infra-billing-emails", () => ({
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
 		paymentIntents: {
+			retrieve: async (id: string) => {
+				fixture.retrieved.push(id);
+				const intent = fixture.stored.get(id);
+				if (!intent) throw new Error(`No such payment_intent: ${id}`);
+				return intent;
+			},
 			create: async (
 				params: { amount: number; metadata: Record<string, string> },
 				options: { idempotencyKey: string },
@@ -240,6 +248,129 @@ describe.runIf(Boolean(databaseUrl))(
 				fixture.created.slice(before).map((intent) => intent.amount),
 			).toEqual([500, 2500]);
 			errors.mockRestore();
+		});
+
+		const addRow = (
+			accountId: string,
+			type: string,
+			referenceType: string,
+			referenceId: string,
+			hoursAgo: number,
+		) =>
+			pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata, createdAt)
+				 VALUES (?, ?, ?, 0, 30000, ?, ?, '{}', UTC_TIMESTAMP() - INTERVAL ? HOUR)`,
+				[id(), accountId, type, referenceId, referenceType, hoursAgo],
+			);
+
+		it("makes the locked check wait on the same rules the sweep reads", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const declined = await makeAccount(30_000);
+			await addRow(
+				declined.accountId,
+				"topup_failed",
+				"auto_top_up_failed",
+				`declined-${declined.accountId}`,
+				2,
+			);
+			const young = await makeAccount(30_000);
+			await addRow(
+				young.accountId,
+				"topup_pending",
+				"auto_top_up_pending",
+				`pi_young_${young.accountId}`,
+				25,
+			);
+			const old = await makeAccount(30_000);
+			const oldPayment = `pi_old_${old.accountId}`;
+			await addRow(
+				old.accountId,
+				"topup_pending",
+				"auto_top_up_pending",
+				oldPayment,
+				73,
+			);
+			fixture.stored.set(oldPayment, {
+				id: oldPayment,
+				status: "succeeded",
+				amount: 500,
+				amount_received: 500,
+				currency: "usd",
+				metadata: { type: "developer_auto_top_up", accountId: old.accountId },
+			});
+			const before = fixture.created.length;
+
+			expect(await runAutoTopUp(declined.accountId)).toEqual({
+				state: "skipped",
+				reason: "recent_decline",
+			});
+			expect(await runAutoTopUp(young.accountId)).toEqual({
+				state: "skipped",
+				reason: "awaiting_payment",
+			});
+			expect(await runAutoTopUp(old.accountId)).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+			expect(await topUpsOf(old.accountId)).toEqual([oldPayment]);
+			expect(fixture.created.length).toBe(before);
+		});
+
+		it("lets the sweep reconcile a payment pending for over 72 hours, and only that", async () => {
+			const { runDueAutoTopUps } = await import("@/lib/infra-auto-top-up");
+
+			const stale = await makeAccount(30_000);
+			const stalePayment = `pi_stale_${stale.accountId}`;
+			await addRow(
+				stale.accountId,
+				"topup_pending",
+				"auto_top_up_pending",
+				stalePayment,
+				73,
+			);
+			fixture.stored.set(stalePayment, {
+				id: stalePayment,
+				status: "succeeded",
+				amount: 500,
+				amount_received: 500,
+				currency: "usd",
+				metadata: { type: "developer_auto_top_up", accountId: stale.accountId },
+			});
+			const young = await makeAccount(30_000);
+			await addRow(
+				young.accountId,
+				"topup_pending",
+				"auto_top_up_pending",
+				`pi_young_${young.accountId}`,
+				25,
+			);
+			const declined = await makeAccount(30_000);
+			await addRow(
+				declined.accountId,
+				"topup_failed",
+				"auto_top_up_failed",
+				`declined-${declined.accountId}`,
+				2,
+			);
+			const free = await makeAccount(30_000);
+			const before = fixture.created.length;
+
+			await runDueAutoTopUps(new Date());
+
+			expect(fixture.retrieved).not.toContain(`pi_young_${young.accountId}`);
+			expect(fixture.retrieved.at(-1)).toBe(stalePayment);
+			expect(await topUpsOf(stale.accountId)).toEqual([stalePayment]);
+			expect(await topUpsOf(young.accountId)).toEqual([]);
+			expect(await topUpsOf(declined.accountId)).toEqual([]);
+			expect(await topUpsOf(free.accountId)).toHaveLength(1);
+			const charged = fixture.created
+				.slice(before)
+				.map((intent) => intent.metadata.accountId);
+			expect(charged).toContain(free.accountId);
+			expect(charged).not.toContain(stale.accountId);
+			expect(charged).not.toContain(young.accountId);
+			expect(charged).not.toContain(declined.accountId);
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {
