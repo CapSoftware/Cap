@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@cap/database", () => ({ db: () => null }));
-vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ CAP_INFRA_DELIVERY_BILLING_FROM: "2026-11-20" }),
-}));
+process.env.CAP_INFRA_DELIVERY_BILLING_FROM = "2026-11-20";
 
 const { deliveryBillingStart, deliveryDayIsFinal, deliverySettleDays } =
 	await import("@/lib/infra-delivery-billing");
@@ -13,15 +11,30 @@ const {
 	groupDeliveredDays,
 	isRollupNotReadyError,
 } = await import("@/lib/infra-delivery-rollup");
-const { INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES } = await import(
-	"@/lib/infra-pricing"
-);
+const { INFRA_DELIVERY_BILLED_FROM, INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES } =
+	await import("@/lib/infra-pricing");
+const { MICRO_CREDITS_PER_DOLLAR } = await import("@/lib/developer-pricing");
 const { describeLedgerRow, ledgerCsvLine } = await import("@/lib/infra-ledger");
 
 describe("delivery price", () => {
 	it("is one flat rate for every resolution", () => {
 		expect(INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES).toBe(0.95);
 		expect(DELIVERY_MICRO_CREDITS_PER_1000_MINUTES).toBe(95_000);
+	});
+
+	it("charges N/1000 of the price for N minutes, in micro-credits", () => {
+		for (const minutes of [1, 7, 60, 1000, 12_345, 1_000_000]) {
+			expect(deliveryMicroCredits(minutes * 60)).toBe(
+				Math.floor(
+					(minutes *
+						Math.round(
+							INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES *
+								MICRO_CREDITS_PER_DOLLAR,
+						)) /
+						1000,
+				),
+			);
+		}
 	});
 
 	it("charges whole micro-credits, floored once over the day's delivered seconds", () => {
@@ -118,6 +131,14 @@ describe("delivery rollup rows", () => {
 });
 
 describe("delivery billing flag", () => {
+	it("never starts before the day the pricing copy says delivery is billed from", () => {
+		expect(INFRA_DELIVERY_BILLED_FROM).toBe("2026-11-14");
+		expect(deliveryBillingStart("2026-11-01")).toBe("2026-11-14");
+		expect(deliveryBillingStart("2026-11-13")).toBe("2026-11-14");
+		expect(deliveryBillingStart("2026-11-14")).toBe("2026-11-14");
+		expect(deliveryBillingStart("2026-11-15")).toBe("2026-11-15");
+	});
+
 	it("reads the first billable day, and is off for anything that is not a real day", () => {
 		expect(deliveryBillingStart()).toBe("2026-11-20");
 		expect(deliveryBillingStart(" 2026-11-20 ")).toBe("2026-11-20");

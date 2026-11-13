@@ -41,12 +41,6 @@ function createServerEnv() {
 			CAP_INFRA_BILLING_EMAILS: boolString(false).describe(
 				"Sends the Cap Infra out of credit and failed auto top-up emails when set to 'true'",
 			),
-			CAP_INFRA_DELIVERY_BILLING_FROM: z
-				.string()
-				.optional()
-				.describe(
-					"First UTC day (YYYY-MM-DD) Cap Infra charges video delivery for. Delivery is not charged when unset",
-				),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be

@@ -5,9 +5,9 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { availableBalance } from "@/lib/infra-balance";
+import { deliveryBillingStart } from "@/lib/infra-delivery-flag";
 import {
 	DELIVERY_MICRO_CREDITS_PER_1000_MINUTES,
 	type DeliveredDay,
@@ -25,8 +25,9 @@ import {
 import { settleStorageDay } from "@/lib/infra-storage-billing";
 import { utcDateKey } from "@/lib/infra-usage";
 
+export { deliveryBillingStart };
+
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const BATCH_SIZE = 10;
 
 // The metering cron marks day D final in its first run at or after 02:00 UTC
@@ -65,28 +66,6 @@ export type DeliveryDayResult =
 			fellShort: boolean;
 			row: DeliveryLedgerRow;
 	  };
-
-export function deliveryBillingStart(
-	value: string | undefined = serverEnv().CAP_INFRA_DELIVERY_BILLING_FROM,
-) {
-	const day = value?.trim();
-	if (!day) return null;
-	const date = new Date(`${day}T00:00:00Z`);
-	if (
-		!DAY_PATTERN.test(day) ||
-		Number.isNaN(date.getTime()) ||
-		utcDateKey(date) !== day
-	) {
-		console.error(
-			"[infra-delivery] CAP_INFRA_DELIVERY_BILLING_FROM is not a day",
-			{
-				value: day,
-			},
-		);
-		return null;
-	}
-	return day;
-}
 
 export function deliverySettleDays(now: Date, startDay: string) {
 	const days: string[] = [];

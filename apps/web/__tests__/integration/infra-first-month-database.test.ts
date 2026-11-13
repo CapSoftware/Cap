@@ -21,6 +21,8 @@ import {
 	vi,
 } from "vitest";
 
+process.env.CAP_INFRA_DELIVERY_BILLING_FROM = "2000-01-01";
+
 const fixture = vi.hoisted(() => ({ database: undefined as unknown }));
 
 vi.mock("@cap/database", () => ({

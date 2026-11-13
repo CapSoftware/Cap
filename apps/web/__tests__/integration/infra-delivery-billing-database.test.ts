@@ -19,6 +19,8 @@ import {
 	vi,
 } from "vitest";
 
+process.env.CAP_INFRA_DELIVERY_BILLING_FROM = "2000-01-01";
+
 const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
 	scheduleAutoTopUp: vi.fn(async (_target: { accountId: string }) => {}),
@@ -59,7 +61,9 @@ vi.mock("@/lib/infra-auto-top-up", async (importOriginal) => ({
 
 const { addCreditsToAccount } = await import("@/lib/developer-credits");
 const { emptyStorageMinutes } = await import("@/lib/developer-pricing");
-const { getInfraBilling } = await import("@/lib/infra-standing");
+const { getInfraAppStanding, getInfraBilling } = await import(
+	"@/lib/infra-standing"
+);
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const { chargeDeliveryDay, deliveryBillingStart, settleDeliveryDays } =
 	await import("@/lib/infra-delivery-billing");
@@ -70,8 +74,12 @@ const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const id = () => randomUUID().replaceAll("-", "").slice(0, 15);
 const database = () => fixture.database as MySql2Database;
-const dayKey = (daysAgo: number, from = new Date()) =>
+// Delivery days here sit a year ahead, so this file's sweeps never reach the
+// real-time days the cron route test settles in parallel on the same database.
+const NOW = new Date(Date.now() + 400 * DAY_MS);
+const dayKey = (daysAgo: number, from = NOW) =>
 	new Date(from.getTime() - daysAgo * DAY_MS).toISOString().slice(0, 10);
+const storageDay = (daysAgo: number) => dayKey(daysAgo, new Date());
 
 // 3000 s at 1080p and 1234 s at 720p are 4234 delivered seconds, 70.57
 // minutes. At $0.95 per 1,000 minutes and 100,000 micro-credits per dollar
@@ -83,13 +91,18 @@ const FIXTURE_TIERS = [
 ];
 const FIXTURE_MICRO_CREDITS = 6703;
 
+const ROLLUP_TABLE =
+	"create table developer_delivery_daily (appId varchar(15) not null, day date not null, tier varchar(8) not null, seconds bigint not null default 0, bytes bigint not null default 0, requests int not null default 0, abandonedBytes bigint not null default 0, final boolean not null default false, finalizedAt timestamp null, updatedAt timestamp not null, primary key (appId, day, tier), index day_idx (day))";
+
 describe.runIf(Boolean(databaseUrl))(
 	"delivery debit against a real database",
 	() => {
 		let pool: Pool;
 
+		const fixtureApps: string[] = [];
 		const makeApp = async (balanceMicroCredits: number) => {
 			const appId = id();
+			fixtureApps.push(appId);
 			const accountId = id();
 			const ownerId = id() as never;
 			await database().insert(developerApps).values({
@@ -158,7 +171,7 @@ describe.runIf(Boolean(databaseUrl))(
 			return row?.balance;
 		};
 
-		const settle = (now = new Date(), startDay: string | null = "2000-01-01") =>
+		const settle = (now = NOW, startDay: string | null = "2000-01-01") =>
 			settleDeliveryDays({ now, startDay });
 
 		beforeAll(async () => {
@@ -175,18 +188,31 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 			pool = createPool({ uri: databaseUrl, connectionLimit: 8 });
 			fixture.database = drizzle(pool);
-			await pool.query(
-				"create table if not exists developer_delivery_daily (appId varchar(15) not null, day date not null, tier varchar(8) not null, seconds bigint not null default 0, bytes bigint not null default 0, requests int not null default 0, updatedAt timestamp not null, final boolean not null default false, finalizedAt timestamp null, primary key (appId, day, tier))",
+			const [existing] = await pool.query(
+				"select count(*) as count from information_schema.tables where table_schema = database() and table_name = 'developer_delivery_daily'",
 			);
+			if (Number((existing as { count: number }[])[0]?.count) === 0) {
+				await pool.query(ROLLUP_TABLE);
+			}
 		});
 
 		beforeEach(async () => {
-			await pool.query("delete from developer_delivery_daily");
 			fixture.scheduleAutoTopUp.mockClear();
+			if (fixtureApps.length > 0) {
+				await pool.query(
+					"delete from developer_delivery_daily where appId in (?)",
+					[fixtureApps],
+				);
+			}
 		});
 
 		afterAll(async () => {
-			await pool?.query("drop table if exists developer_delivery_daily");
+			if (fixtureApps.length > 0) {
+				await pool?.query(
+					"delete from developer_delivery_daily where appId in (?)",
+					[fixtureApps],
+				);
+			}
 			await pool?.end();
 		});
 
@@ -194,18 +220,16 @@ describe.runIf(Boolean(databaseUrl))(
 			const { appId, accountId } = await makeApp(1_000_000);
 			await writeDay(appId, dayKey(2), FIXTURE_TIERS);
 
-			for (const value of [
-				undefined,
-				"",
-				"  ",
-				"true",
-				"2026-13-01",
-				"2026-02-30",
-			]) {
-				const startDay = deliveryBillingStart(value);
-				expect(startDay).toBeNull();
-				const sweep = await settle(new Date(), startDay);
-				expect(sweep).toMatchObject({ enabled: false, billed: 0 });
+			for (const value of ["", "  ", "true", "2026-13-01", "2026-02-30"]) {
+				vi.stubEnv("CAP_INFRA_DELIVERY_BILLING_FROM", value);
+				try {
+					const startDay = deliveryBillingStart();
+					expect(startDay).toBeNull();
+					const sweep = await settle(NOW, startDay);
+					expect(sweep).toMatchObject({ enabled: false, billed: 0 });
+				} finally {
+					vi.unstubAllEnvs();
+				}
 			}
 
 			expect(await deliveryRows(accountId)).toEqual([]);
@@ -214,7 +238,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("writes one row per app per final day with the exact micro-credit amount and the per tier minutes", async () => {
-			const now = new Date();
+			const now = NOW;
 			const first = await makeApp(1_000_000);
 			const second = await makeApp(1_000_000);
 			for (const app of [first, second]) {
@@ -264,7 +288,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("never settles today, yesterday, a day older than the window or a day before the start day", async () => {
-			const now = new Date();
+			const now = NOW;
 			const { appId, accountId } = await makeApp(1_000_000);
 			for (const daysAgo of [0, 1, 4, 9]) {
 				await writeDay(appId, dayKey(daysAgo, now), FIXTURE_TIERS);
@@ -276,7 +300,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("charges a day once however many times the sweep runs, including runs at the same time", async () => {
-			const now = new Date();
+			const now = NOW;
 			const { appId, accountId } = await makeApp(1_000_000);
 			await writeDay(appId, dayKey(2, now), FIXTURE_TIERS);
 
@@ -292,7 +316,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("waits until every row of the day is final, charges the final total once, and ignores any later rewrite", async () => {
-			const now = new Date();
+			const now = NOW;
 			const day = dayKey(2, now);
 			const { appId, accountId } = await makeApp(1_000_000);
 			await writeDay(appId, day, [{ tier: "1080p", seconds: 600 }], false);
@@ -326,7 +350,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("returns the exact rows a real run writes from a dry run, twice the same, and writes nothing", async () => {
-			const now = new Date();
+			const now = NOW;
 			const rich = await makeApp(1_000_000);
 			const poor = await makeApp(9_000);
 			for (const app of [rich, poor]) {
@@ -389,8 +413,8 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(written).toHaveLength(planned.length);
 		});
 
-		it("puts the app in grace exactly as a storage day the balance cannot pay", async () => {
-			const now = new Date();
+		it("puts the app in grace, then pauses it and refuses uploads, exactly as a storage day the balance cannot pay", async () => {
+			const now = NOW;
 			const delivery = await makeApp(1_000);
 			const storage = await makeApp(1_000);
 			await writeDay(delivery.appId, dayKey(2, now), FIXTURE_TIERS);
@@ -413,7 +437,7 @@ describe.runIf(Boolean(databaseUrl))(
 					monthlyMicroCredits: FIXTURE_MICRO_CREDITS * 30,
 					dailyMicroCredits: FIXTURE_MICRO_CREDITS,
 				},
-				dateKey: dayKey(0, now),
+				dateKey: storageDay(0),
 				now,
 			});
 
@@ -448,6 +472,31 @@ describe.runIf(Boolean(databaseUrl))(
 				pausesAt: new Date(now.getTime() + 7 * DAY_MS),
 			});
 			expect(deliveryStanding).toEqual(storageStanding);
+			const pausesAt = new Date(now.getTime() + 7 * DAY_MS);
+			const deliveryPaused = await getInfraBilling(
+				delivery.appId,
+				null,
+				pausesAt,
+			);
+			const storagePaused = await getInfraBilling(
+				storage.appId,
+				null,
+				pausesAt,
+			);
+			expect(deliveryPaused.standing).toEqual({ state: "paused", pausesAt });
+			expect(await getInfraAppStanding(delivery.appId)).toEqual({
+				state: "grace",
+				pausesAt,
+			});
+			expect(deliveryPaused.admission).toMatchObject({
+				allowed: false,
+				reason: "out_of_credit",
+				balanceMicroCredits: 0,
+				requiredMicroCredits: FIXTURE_MICRO_CREDITS,
+				shortfallMicroCredits: FIXTURE_MICRO_CREDITS,
+			});
+			expect(deliveryPaused.standing).toEqual(storagePaused.standing);
+			expect(deliveryPaused.admission).toEqual(storagePaused.admission);
 			expect(describeLedgerRow(row as never).note).toBe(
 				"70.57 minutes delivered (1080p 50, 720p 20.57). The balance paid for part of this day. The rest is not charged later.",
 			);
@@ -467,7 +516,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("carries a storage shortfall's grace start through an unpaid delivery day, and latches it when the balance covers it", async () => {
-			const now = new Date();
+			const now = NOW;
 			const shortSince = new Date(now.getTime() - 3 * DAY_MS);
 			const { appId, accountId } = await makeApp(500);
 			await chargeStorageDay({
@@ -480,7 +529,7 @@ describe.runIf(Boolean(databaseUrl))(
 					monthlyMicroCredits: 30_000,
 					dailyMicroCredits: 1_000,
 				},
-				dateKey: dayKey(3, now),
+				dateKey: storageDay(3),
 				now: shortSince,
 			});
 			await writeDay(appId, dayKey(2, now), FIXTURE_TIERS);
@@ -523,7 +572,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("carries an open storage shortfall's start into a delivery day it can only part pay, without a second email", async () => {
-			const now = new Date();
+			const now = NOW;
 			const shortSince = new Date(now.getTime() - 2 * DAY_MS);
 			const { appId, accountId } = await makeApp(500);
 			await chargeStorageDay({
@@ -536,7 +585,7 @@ describe.runIf(Boolean(databaseUrl))(
 					monthlyMicroCredits: 30_000,
 					dailyMicroCredits: 1_000,
 				},
-				dateKey: dayKey(3, now),
+				dateKey: storageDay(3),
 				now: shortSince,
 			});
 			await database()
@@ -572,7 +621,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("resolves a delivery shortfall with the rest of its rows once a released hold covers it", async () => {
-			const now = new Date();
+			const now = NOW;
 			const { appId, accountId } = await makeApp(10_000);
 			const holdId = id();
 			await database().insert(developerTranscripts).values({
@@ -608,7 +657,7 @@ describe.runIf(Boolean(databaseUrl))(
 					monthlyMicroCredits: 3_000,
 					dailyMicroCredits: 100,
 				},
-				dateKey: dayKey(0, now),
+				dateKey: storageDay(0),
 				now: later,
 			});
 
@@ -626,9 +675,17 @@ describe.runIf(Boolean(databaseUrl))(
 		it("debits nothing and does not throw while the rollup table, or its final column, does not exist", async () => {
 			const { appId, accountId } = await makeApp(1_000_000);
 			await writeDay(appId, dayKey(2), FIXTURE_TIERS);
-			await pool.query(
-				"rename table developer_delivery_daily to developer_delivery_daily_parked",
-			);
+			const emptyName = `${new URL(databaseUrl as string).pathname.slice(1)}_norollup`;
+			await pool.query(`drop database if exists \`${emptyName}\``);
+			await pool.query(`create database \`${emptyName}\``);
+			const emptyUrl = new URL(databaseUrl as string);
+			emptyUrl.pathname = `/${emptyName}`;
+			const emptyPool = createPool({
+				uri: emptyUrl.toString(),
+				connectionLimit: 2,
+			});
+			const shared = fixture.database;
+			fixture.database = drizzle(emptyPool);
 			try {
 				expect(await settle()).toMatchObject({
 					enabled: true,
@@ -636,10 +693,10 @@ describe.runIf(Boolean(databaseUrl))(
 					billed: 0,
 					failed: 0,
 				});
-				await pool.query(
-					"create table developer_delivery_daily (appId varchar(15) not null, day date not null, tier varchar(8) not null, seconds bigint not null default 0, bytes bigint not null default 0, requests int not null default 0, updatedAt timestamp not null, primary key (appId, day, tier))",
+				await emptyPool.query(
+					"create table developer_delivery_daily (appId varchar(15) not null, day date not null, tier varchar(8) not null, seconds bigint not null default 0, updatedAt timestamp not null, primary key (appId, day, tier))",
 				);
-				await pool.query(
+				await emptyPool.query(
 					"insert into developer_delivery_daily (appId, day, tier, seconds, updatedAt) values (?, ?, '1080p', 3000, now())",
 					[appId, dayKey(2)],
 				);
@@ -650,17 +707,36 @@ describe.runIf(Boolean(databaseUrl))(
 					failed: 0,
 				});
 			} finally {
-				await pool.query("drop table if exists developer_delivery_daily");
-				await pool.query(
-					"rename table developer_delivery_daily_parked to developer_delivery_daily",
-				);
+				fixture.database = shared;
+				await emptyPool.end();
+				await pool.query(`drop database if exists \`${emptyName}\``);
 			}
 			expect(await deliveryRows(accountId)).toEqual([]);
 			expect(await balanceOf(accountId)).toBe(1_000_000);
 		});
 
+		it("never bills abandoned bytes: a final row with only abandoned bytes bills nothing, and they never change an amount", async () => {
+			const now = NOW;
+			const abandonedOnly = await makeApp(1_000_000);
+			const withAbandoned = await makeApp(1_000_000);
+			await writeDay(abandonedOnly.appId, dayKey(2, now), [
+				{ tier: "1080p", seconds: 0, bytes: 9_000_000 },
+			]);
+			await writeDay(withAbandoned.appId, dayKey(2, now), FIXTURE_TIERS);
+			await pool.query(
+				"update developer_delivery_daily set abandonedBytes = 7000000000 where appId in (?, ?)",
+				[abandonedOnly.appId, withAbandoned.appId],
+			);
+
+			await settle(now);
+
+			expect(await deliveryRows(abandonedOnly.accountId)).toEqual([]);
+			const [row] = await deliveryRows(withAbandoned.accountId);
+			expect(row?.amountMicroCredits).toBe(-FIXTURE_MICRO_CREDITS);
+		});
+
 		it("schedules one auto top-up after an account's charged days, and none when nothing was charged", async () => {
-			const now = new Date();
+			const now = NOW;
 			const paying = await makeApp(1_000_000);
 			const empty = await makeApp(0);
 			for (const app of [paying, empty]) {
@@ -678,7 +754,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("skips a deleted app and leaves a day with no video minutes alone", async () => {
-			const now = new Date();
+			const now = NOW;
 			const deleted = await makeApp(1_000_000);
 			const audioOnly = await makeApp(1_000_000);
 			await database()

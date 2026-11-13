@@ -11,6 +11,7 @@ import {
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import { heldTranscriptsQuery } from "@/lib/infra-balance";
+import { deliveryBillingStart } from "@/lib/infra-delivery-flag";
 import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
@@ -174,11 +175,12 @@ async function latestDeliveryCharge(
 // A delivery day is charged two days after it ends, once its CDN logs are
 // final, so it is ordered against storage days by when it was posted rather
 // than by its day key. The later posted daily charge carries the standing,
-// exactly as the latest storage day does on its own.
+// exactly as the latest storage day does on its own. While delivery billing
+// is off, no delivery row is read, so standing is exactly as before.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
 	const [storage, delivery] = await Promise.all([
 		latestStorageDayCharge(executor, accountId),
-		latestDeliveryCharge(executor, accountId),
+		deliveryBillingStart() ? latestDeliveryCharge(executor, accountId) : null,
 	]);
 	const latest =
 		delivery &&
