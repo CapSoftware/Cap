@@ -3,6 +3,11 @@ import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { developerVideoOutputs } from "./developer-video-api";
 import {
+	CAPTIONS_CONTENT_TYPE,
+	captionsFileLanguage,
+	videoCaptionsKey,
+} from "./developer-video-captions";
+import {
 	DEVELOPER_VIDEO_MASTER_PLAYLIST,
 	DEVELOPER_VIDEO_MP4_FILE,
 	DEVELOPER_VIDEO_POSTER_FILE,
@@ -248,6 +253,20 @@ function playlistResponse(playlist: string): Response {
 	});
 }
 
+// Captions are read here and sent as they are, like the playlists, rather than
+// redirected to a signed URL. A <track> loads in same-origin mode unless its
+// video sets crossorigin, so it cannot follow a redirect to storage on another
+// origin, and setting crossorigin would change how every media file loads.
+function captionsResponse(captions: string): Response {
+	return new Response(captions, {
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			...CACHEABLE,
+			"Content-Type": CAPTIONS_CONTENT_TYPE,
+		},
+	});
+}
+
 export async function findPlayableVideo(playbackId: string) {
 	const [row] = await db()
 		.select({ video: developerVideos })
@@ -280,6 +299,14 @@ export async function developerPlaybackResponse(
 	if (!video?.processing) return notFound();
 	if ((await getInfraAppStanding(video.appId)).state === "paused") {
 		return paused();
+	}
+
+	const captionsLanguage = captionsFileLanguage(file);
+	if (captionsLanguage) {
+		const captions = await readDeveloperVideoText(
+			videoCaptionsKey(video, captionsLanguage),
+		);
+		return captions === null ? notFound() : captionsResponse(captions);
 	}
 
 	const { processing } = video;

@@ -729,6 +729,85 @@ describe("developer video playback route", () => {
 		expect(response.headers.get("cache-control")).toBe("no-store");
 	});
 
+	describe("captions", () => {
+		const CAPTIONS_KEY = "developer/app-1/video-1/captions/en.vtt";
+		const vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello there\n";
+
+		beforeEach(() => {
+			mocks.readText.mockImplementation(async (key: string) =>
+				key === CAPTIONS_KEY ? vtt : null,
+			);
+		});
+
+		it("serves the WebVTT file from storage to any origin with the playlists' cache", async () => {
+			const response = await play("captions-en.vtt");
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(vtt);
+			expect(response.headers.get("content-type")).toBe(
+				"text/vtt; charset=utf-8",
+			);
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
+			expect(response.headers.get("location")).toBeNull();
+			expect(mocks.readText).toHaveBeenCalledWith(CAPTIONS_KEY);
+		});
+
+		it("signs no storage URL for captions", async () => {
+			await play("captions-en.vtt");
+
+			expect(mocks.sign).not.toHaveBeenCalled();
+		});
+
+		it("reads the file of a language with a region and of an unreported language", async () => {
+			await play("captions-pt-br.vtt");
+			await play("captions-und.vtt");
+
+			expect(mocks.readText.mock.calls.map(([key]) => key)).toEqual([
+				"developer/app-1/video-1/captions/pt-br.vtt",
+				"developer/app-1/video-1/captions/und.vtt",
+			]);
+		});
+
+		it("answers 404 without caching when the video has no captions in that language", async () => {
+			const response = await play("captions-fr.vtt");
+
+			expect(response.status).toBe(404);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+		});
+
+		it("answers 404 for captions of a deleted video", async () => {
+			mocks.store.video = null;
+
+			expect((await play("captions-en.vtt")).status).toBe(404);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
+		it("refuses captions of a paused app", async () => {
+			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+
+			expect((await play("captions-en.vtt")).status).toBe(402);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			"captions-EN.vtt",
+			"captions-.vtt",
+			"captions-en",
+			"captions-e.vtt",
+			"captions-en-.vtt",
+			"captions-en/../x.vtt",
+			"captions-en.vtt.bak",
+			"en.vtt",
+			"captions-english-language.vtt",
+		])("answers 404 for the captions file name %s", async (file) => {
+			expect((await play(file)).status).toBe(404);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+	});
+
 	it("answers preflight and HEAD requests", async () => {
 		const preflight = OPTIONS();
 
