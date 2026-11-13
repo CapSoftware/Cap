@@ -124,3 +124,16 @@ export function formatDuration(seconds: number | null | undefined) {
 		? `${hours}:${pad(mins)}:${pad(secs)}`
 		: `${mins}:${pad(secs)}`;
 }
+
+export function formatAudioLength(seconds: number) {
+	const total = Math.max(0, Number(seconds) || 0);
+	const plural = (value: number, unit: string) =>
+		`${value.toLocaleString("en-US", { maximumFractionDigits: value < 10 ? 2 : 0 })} audio ${unit}${value === 1 ? "" : "s"}`;
+	if (total === 0) return plural(0, "minute");
+	if (Math.round(total) < 60) return plural(Math.round(total), "second");
+	if (total < 3600) {
+		const minutes = Math.round((total / 60) * 10) / 10;
+		return plural(minutes, "minute");
+	}
+	return plural(total / 3600, "hour");
+}

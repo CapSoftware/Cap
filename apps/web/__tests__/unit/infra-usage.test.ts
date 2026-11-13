@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	formatAudioLength,
 	formatBytes,
 	formatCharge,
 	formatCredits,
@@ -102,5 +103,28 @@ describe("formatting", () => {
 		expect(formatDuration(null)).toBeNull();
 		expect(formatDuration(65.4)).toBe("1:05");
 		expect(formatDuration(3723)).toBe("1:02:03");
+	});
+});
+
+describe("formatAudioLength", () => {
+	it("shows seconds under a minute so a small charge never reads as 0 hours", () => {
+		expect(formatAudioLength(12)).toBe("12 audio seconds");
+		expect(formatAudioLength(1)).toBe("1 audio second");
+	});
+
+	it("shows minutes under an hour", () => {
+		expect(formatAudioLength(270)).toBe("4.5 audio minutes");
+		expect(formatAudioLength(60)).toBe("1 audio minute");
+		expect(formatAudioLength(2_400)).toBe("40 audio minutes");
+	});
+
+	it("shows hours from one hour up", () => {
+		expect(formatAudioLength(3_600)).toBe("1 audio hour");
+		expect(formatAudioLength(5_400)).toBe("1.5 audio hours");
+		expect(formatAudioLength(54_000)).toBe("15 audio hours");
+	});
+
+	it("reads zero as minutes", () => {
+		expect(formatAudioLength(0)).toBe("0 audio minutes");
 	});
 });

@@ -10,6 +10,7 @@ import {
 } from "@/lib/infra-pricing";
 import { getAppStorageUsage } from "@/lib/infra-storage";
 import {
+	formatAudioLength,
 	formatCharge,
 	formatMinutes,
 	INFRA_TIER_LABELS,
@@ -76,7 +77,6 @@ export default async function InfraUsagePage({
 			return null;
 		}),
 	]);
-	const audioHours = (transcription?.audioSeconds ?? 0) / 3600;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
 		(tier) => usage.minutesByTier[tier] > 0,
 	);
@@ -118,7 +118,7 @@ export default async function InfraUsagePage({
 				{transcription && (
 					<Figure
 						label={`Transcription in ${monthName}`}
-						hint={`${audioHours.toLocaleString("en-US", { maximumFractionDigits: audioHours < 10 ? 2 : 0 })} audio ${audioHours === 1 ? "hour" : "hours"}`}
+						hint={formatAudioLength(transcription.audioSeconds)}
 						value={formatCharge(transcription.chargedMicroCredits)}
 					/>
 				)}
