@@ -351,7 +351,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 
@@ -807,7 +807,7 @@ The same secret key turns an audio or video file into text. It is a separate cal
 
 1. Create the transcript with `POST /api/developer/v1/transcripts/uploads`, sending the file's exact size in bytes as `contentLength`. The response holds the transcript's `id` and a signed `upload.url`.
 2. `PUT` the file to `upload.url`.
-3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` until `status` is `complete` or `error`, leaving at least 3 seconds between checks. A complete transcript has its `text`.
+3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` every 5 seconds until `status` is `complete` or `error`. A complete transcript has its `text`.
 
 A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
 
