@@ -411,8 +411,15 @@
 		{
 			"idx": 58,
 			"version": "5",
-			"when": 1794548555003,
-			"tag": "0058_developer_video_first_month",
+			"when": 1794549219180,
+			"tag": "0058_developer_webhook_endpoints",
+			"breakpoints": true
+		},
+		{
+			"idx": 59,
+			"version": "5",
+			"when": 1794555548432,
+			"tag": "0059_developer_video_first_month",
 			"breakpoints": true
 		}
 	]

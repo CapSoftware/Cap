@@ -1120,6 +1120,7 @@ export const AgentDeveloperVideo = Schema.Struct({
 		}),
 	),
 	transcriptionStatus: Schema.NullOr(Schema.String),
+	takenDown: Schema.optional(Schema.Boolean),
 	hlsUrl: Schema.NullOr(Schema.String),
 	mp4Url: Schema.NullOr(Schema.String),
 	posterUrl: Schema.NullOr(Schema.String),

@@ -145,6 +145,7 @@ async function settleFirstMonth(
 			storagePaidUntil: developerVideos.storagePaidUntil,
 			deletedAt: developerVideos.deletedAt,
 			createdAt: developerVideos.createdAt,
+			updatedAt: developerVideos.updatedAt,
 		})
 		.from(developerVideos)
 		.where(eq(developerVideos.id, videoId))
@@ -178,7 +179,7 @@ async function settleFirstMonth(
 			.update(developerVideos)
 			.set({
 				storagePaidUntil: paidUntil,
-				updatedAt: sql`${developerVideos.updatedAt}`,
+				updatedAt: video.updatedAt,
 			})
 			.where(eq(developerVideos.id, videoId));
 

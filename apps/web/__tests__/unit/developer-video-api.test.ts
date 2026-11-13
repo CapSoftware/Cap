@@ -150,11 +150,162 @@ describe("developer video API", () => {
 			deletedAt: null,
 			createdAt: "2026-11-01T00:00:00.000Z",
 			updatedAt: "2026-11-01T00:00:00.000Z",
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 			shareUrl: PAGE,
 			embedUrl: `${PAGE}/embed`,
+		});
+	});
+
+	describe("output states", () => {
+		const outputsOf = async (path: string) =>
+			(await get(path)).body.data.outputs;
+		const withParts = (
+			status: "uploading" | "processing" | "ready" | "errored",
+			hls: Record<string, unknown>,
+			mp4: Record<string, unknown>,
+		) => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status,
+				processing: processingState({
+					...base.processing,
+					hls,
+					mp4,
+				} as never),
+			};
+		};
+
+		it("says an MP4 that failed for good will not come on a ready video", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "failed", reason: "encoder refused" },
+			);
+			for (const path of ["/video-1", "/video-1/status"]) {
+				const { body } = await get(path);
+				expect(body.data.hlsUrl).toBe(`${BASE}/master.m3u8`);
+				expect(body.data.mp4Url).toBeNull();
+				expect(body.data.outputs).toEqual({ hls: "ready", mp4: "failed" });
+			}
+		});
+
+		it("says an MP4 still encoding or waiting for a retry is still coming", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "running", token: "t", jobId: null, startedAt: 1 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "unavailable", reason: "busy", retryAt: 2 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+		});
+
+		it("never says ready while the URL is still null", async () => {
+			withParts(
+				"processing",
+				{ state: "complete", output: "hls-out" },
+				{ state: "pending" },
+			);
+			const { body } = await get("/video-1");
+			expect(body.data.hlsUrl).toBeNull();
+			expect(body.data.outputs).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("says nothing is coming for an errored video", async () => {
+			withParts("errored", { state: "pending" }, { state: "pending" });
+			expect(await outputsOf("/video-1/status")).toEqual({
+				hls: "failed",
+				mp4: "failed",
+			});
+		});
+
+		it("reads a video still uploading as processing", async () => {
+			mocks.store.video = { ...ready(), status: "uploading", processing: null };
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("reports no duration for a video that failed before it was measured", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				errorReason: "This file could not be read as a video.",
+				duration: 0.02,
+				processing: processingState({
+					...base.processing,
+					probe: null,
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when a length measured at upload was never confirmed by processing", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "errored",
+				errorReason: "Processing took too long. Upload the video again.",
+				duration: 60,
+				processing: null,
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when processing read the file but not its length", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				duration: 45,
+				processing: processingState({
+					...base.processing,
+					probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("keeps the measured duration of a video that failed after it was measured", async () => {
+			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBe(12);
+			}
+		});
+
+		it("says none for a video uploaded before encoding existed", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "ready",
+				playbackId: null,
+				processing: null,
+			};
+			expect(await outputsOf("/video-1")).toEqual({ hls: "none", mp4: "none" });
 		});
 	});
 
@@ -718,9 +869,11 @@ describe("developer video API", () => {
 			errorReason: null,
 			playbackId: "playback-id-0123456789ab",
 			renditions: ready().renditions,
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 		});
 	});
 

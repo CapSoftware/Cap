@@ -3,6 +3,7 @@ import {
 	getCurrentUser,
 	type userSelectProps,
 } from "@cap/database/auth/session";
+import { developerVideoTakenDownSql } from "@cap/database/developer-video-takedown";
 import {
 	developerApiKeys,
 	developerApps,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/developer-video-api";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
+import { developerVideoIsTakenDown } from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
 import { proCreditEligibility } from "@/lib/infra-pro-credit-eligibility";
@@ -150,6 +152,7 @@ export async function getDeveloperAppVideos(
 			legacy: sql<
 				number | string
 			>`(${developerVideos.playbackId} IS NULL AND ${developerVideos.processing} IS NULL)`,
+			takenDown: developerVideoTakenDownSql(),
 		})
 		.from(developerVideos)
 		.where(and(...conditions))
@@ -158,7 +161,10 @@ export async function getDeveloperAppVideos(
 		.offset(options?.offset ?? 0);
 
 	return rows.map((row) =>
-		toInfraVideoListItem({ ...row, legacy: Number(row.legacy) === 1 }),
+		toInfraVideoListItem({
+			...row,
+			legacy: Number(row.legacy) === 1,
+		}),
 	);
 }
 
@@ -179,6 +185,7 @@ async function findDeveloperAppVideo(appId: string, videoId: string) {
 			renditions: developerVideos.renditions,
 			playbackId: developerVideos.playbackId,
 			processing: developerVideos.processing,
+			metadata: developerVideos.metadata,
 		})
 		.from(developerVideos)
 		.where(
@@ -206,7 +213,11 @@ export const getDeveloperAppVideo = cache(
 			row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
 		}
 		return toInfraVideoDetail(
-			{ ...row, legacy: row.playbackId === null && row.processing === null },
+			{
+				...row,
+				legacy: row.playbackId === null && row.processing === null,
+				takenDown: developerVideoIsTakenDown(row),
+			},
 			developerVideoPlaybackUrls(row),
 			row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
 		);

@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "d2e3f1f8-cdb2-4290-9056-9b3ca23a2d0c",
+	"id": "c59a9144-1aee-456a-b1f5-babae94c9f0e",
 	"prevId": "85c09243-a7b6-4390-ad3c-4d54450a0a8d",
 	"tables": {
 		"accounts": {
@@ -1709,13 +1709,6 @@
 					"notNull": false,
 					"autoincrement": false
 				},
-				"storagePaidUntil": {
-					"name": "storagePaidUntil",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
 				"deletedAt": {
 					"name": "deletedAt",
 					"type": "timestamp",
@@ -1773,26 +1766,6 @@
 					"name": "files_pending_idx",
 					"columns": ["filesDeletedAt", "deletedAt"],
 					"isUnique": false
-				},
-				"app_storage_idx": {
-					"name": "app_storage_idx",
-					"columns": [
-						"appId",
-						"deletedAt",
-						"status",
-						"maxResolutionTier",
-						"width",
-						"height",
-						"storagePaidUntil",
-						"duration",
-						"createdAt"
-					],
-					"isUnique": false
-				},
-				"first_month_due_idx": {
-					"name": "first_month_due_idx",
-					"columns": ["storagePaidUntil", "status", "createdAt"],
-					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1809,6 +1782,161 @@
 			"compositePrimaryKeys": {
 				"developer_videos_id": {
 					"name": "developer_videos_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"developer_webhook_endpoints": {
+			"name": "developer_webhook_endpoints",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"appId": {
+					"name": "appId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"url": {
+					"name": "url",
+					"type": "varchar(2048)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"secretPrefix": {
+					"name": "secretPrefix",
+					"type": "varchar(12)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"encryptedSecret": {
+					"name": "encryptedSecret",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"events": {
+					"name": "events",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"enabled": {
+					"name": "enabled",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": true
+				},
+				"disabledReason": {
+					"name": "disabledReason",
+					"type": "varchar(32)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"lastDeliveryAt": {
+					"name": "lastDeliveryAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"lastDeliveryStatus": {
+					"name": "lastDeliveryStatus",
+					"type": "varchar(16)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"lastResponseStatus": {
+					"name": "lastResponseStatus",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"lastErrorCode": {
+					"name": "lastErrorCode",
+					"type": "varchar(32)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"consecutiveFailures": {
+					"name": "consecutiveFailures",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"failingSince": {
+					"name": "failingSince",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"deletedAt": {
+					"name": "deletedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				},
+				"updatedAt": {
+					"name": "updatedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"onUpdate": true,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"dev_webhooks_app_list_idx": {
+					"name": "dev_webhooks_app_list_idx",
+					"columns": ["appId", "deletedAt", "createdAt", "id"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {
+				"developer_webhook_endpoints_appId_developer_apps_id_fk": {
+					"name": "developer_webhook_endpoints_appId_developer_apps_id_fk",
+					"tableFrom": "developer_webhook_endpoints",
+					"tableTo": "developer_apps",
+					"columnsFrom": ["appId"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {
+				"developer_webhook_endpoints_id": {
+					"name": "developer_webhook_endpoints_id",
 					"columns": ["id"]
 				}
 			},

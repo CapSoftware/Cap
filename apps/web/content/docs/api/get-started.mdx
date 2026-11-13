@@ -820,3 +820,46 @@ Each video is charged one month of storage when it first becomes ready, then dai
 - The app's Billing page in the console shows the balance and every charge.
 - [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
 - [List Transactions](/docs/api/rest-api#list-transactions) returns every credit and charge.
+
+## 10. Use with agents (MCP)
+
+Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Codex can upload, check and transcribe video with the app's secret key.
+
+- URL: `https://cap.so/api/developer/mcp`
+- Header: `Authorization: Bearer` followed by the secret key
+
+Claude Code, with the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
+```
+
+Cursor, in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cap-infra": {
+      "url": "https://cap.so/api/developer/mcp",
+      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+    }
+  }
+}
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cap-infra]
+url = "https://cap.so/api/developer/mcp"
+bearer_token_env_var = "CAP_SECRET_KEY"
+```
+
+The tools:
+
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
+- `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
+- `account_usage` and `account_transactions`: the balance, prices and every charge.
+
+Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.

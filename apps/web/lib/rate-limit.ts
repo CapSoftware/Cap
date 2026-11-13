@@ -207,6 +207,10 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
 	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
+	/** Organizations created from the dashboard per user. Suggested: 20 / 1h per key (user). */
+	ORGANIZATION_CREATE: "rl_organization_create",
+	/** Spaces created from the dashboard per user. Suggested: 300 / 1h per key (user). */
+	SPACE_CREATE: "rl_space_create",
 	/** Video edit saves and restores per user: each one re-encodes the video and regenerates AI output. Suggested: 30 / 1h per key (user). */
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
@@ -269,6 +273,11 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 1,
 		windowMs: 60 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.ORGANIZATION_CREATE]: {
+		limit: 20,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.SPACE_CREATE]: { limit: 300, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },

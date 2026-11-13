@@ -1,3 +1,4 @@
+import { INFRA_SPEECH_DOLLARS_PER_HOUR } from "@/lib/infra-pricing";
 import { Calculator } from "./Calculator";
 import {
 	ANCHORS,
@@ -93,6 +94,17 @@ export const Pricing = () => (
 					Videos are encoded up to 1080p by default, and 1440p and 4K are set
 					per upload.
 				</p>
+				<dl className="m-0 mt-8 flex items-baseline justify-between gap-4 border-y border-[rgba(222,230,246,0.08)] py-3.5">
+					<dt className="text-[14.5px] leading-[1.4] text-[#E8ECF4]">
+						Speech to text
+					</dt>
+					<dd className="m-0 text-right text-[13.5px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
+						<span className={`${FIGURE} leading-[inherit]`}>
+							{usd(INFRA_SPEECH_DOLLARS_PER_HOUR)}
+						</span>{" "}
+						per audio hour
+					</dd>
+				</dl>
 			</div>
 		</div>
 		<div className="mt-14 lg:mt-20">

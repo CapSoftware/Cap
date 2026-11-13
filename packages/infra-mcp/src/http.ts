@@ -118,6 +118,8 @@ export class InfraClient {
 	constructor(
 		private readonly config: Pick<Config, "apiUrl" | "secretKey">,
 		private readonly tuning: ClientTuning = DEFAULT_CLIENT_TUNING,
+		private readonly transport: typeof fetch = (input, init) =>
+			fetch(input, init),
 	) {}
 
 	async call(name: RouteName, input: CallInput = {}): Promise<unknown> {
@@ -225,7 +227,7 @@ export class InfraClient {
 					429,
 					"rate_limited",
 					"Rate limit exceeded",
-					"Wait for retryAfterSeconds, then run the tool again. Each key allows 60 requests per minute.",
+					"Wait for retryAfterSeconds, then run the tool again.",
 					{},
 					Math.ceil(wait / 1000),
 				);
@@ -263,7 +265,7 @@ export class InfraClient {
 
 		const limit = timeLimit(budget, input.signal);
 		try {
-			const response = await fetch(url, {
+			const response = await this.transport(url, {
 				method: route.method,
 				headers: {
 					Accept: "application/json",

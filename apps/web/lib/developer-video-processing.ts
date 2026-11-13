@@ -58,6 +58,7 @@ import {
 	internalDeveloperVideoUrl,
 	readDeveloperVideoText,
 } from "./developer-video-storage";
+import { announceDeveloperVideoStatus } from "./developer-webhook-dispatch";
 import {
 	MEDIA_SERVER_SHUTDOWN_MESSAGE,
 	readMediaServerVideoJob,
@@ -126,6 +127,7 @@ async function mutateDeveloperVideo(
 			.update(developerVideos)
 			.set(updates)
 			.where(eq(developerVideos.id, videoId));
+		announceDeveloperVideoStatus(video, updates);
 		return { ...video, ...updates } as DeveloperVideoRow;
 	};
 	const updated = await (executor ? run(executor) : db().transaction(run));
