@@ -1,6 +1,7 @@
 import { serverEnv } from "@cap/env";
 import { API_DOCS_URL } from "@/lib/api-errors";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
+import { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 
 const webUrl = () => serverEnv().WEB_URL.replace(/\/$/, "");
 
@@ -14,6 +15,42 @@ const publicJson = (body: unknown, contentType = "application/json") =>
 	});
 
 export const openApiResponse = () => publicJson(developerOpenApiSpec(webUrl()));
+
+export const infraMcpServerCardResponse = (contentType?: string) => {
+	const base = webUrl();
+	return publicJson(
+		{
+			$schema:
+				"https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+			name: "so.cap/infra",
+			title: "Cap Infra",
+			description:
+				"Cap Infra video hosting and speech to text for an app: upload a video and get HLS, MP4, poster and player links, transcribe a URL or a stored video, and read usage. Takes the app's secret key as a bearer token, with no OAuth.",
+			version: "1.0.0",
+			websiteUrl: `${base}/docs/api/get-started#10-use-with-agents-mcp`,
+			repository: {
+				source: "github",
+				url: "https://github.com/CapSoftware/Cap",
+			},
+			remotes: [
+				{
+					type: "streamable-http",
+					url: `${base}${INFRA_MCP_PATH}`,
+					headers: [
+						{
+							name: "Authorization",
+							description:
+								"Bearer followed by the app's secret key (csk_), from the Cap Infra console.",
+							isRequired: true,
+							isSecret: true,
+						},
+					],
+				},
+			],
+		},
+		contentType,
+	);
+};
 
 export const apiCatalogResponse = () => {
 	const base = webUrl();
