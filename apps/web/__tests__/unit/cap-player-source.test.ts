@@ -1266,6 +1266,42 @@ describe("native HLS renditions", () => {
 		);
 	});
 
+	it("lists native renditions in the same order and labels as hls.js does", () => {
+		iphone(true);
+		const uneven = [
+			"#EXTM3U",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1900000,RESOLUTION=1280x720,AUDIO="aud"',
+			"720p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1920x1080,AUDIO="aud"',
+			"1080p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO="aud"',
+			"360p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=3840x2160,AUDIO="aud"',
+			"2160p.m3u8",
+		].join("\n");
+		const native = listLevels(parseMasterLevels(uneven));
+		const hlsJs = listLevels(
+			[...parseMasterLevels(uneven)]
+				.sort((a, b) => a.bitrate - b.bitrate)
+				.map(({ width, height, bitrate, uri }) => ({
+					width,
+					height,
+					bitrate,
+					name: uri.replace(".m3u8", ""),
+				})),
+		);
+
+		expect(native.map((level) => level.label)).toEqual([
+			"4K",
+			"1080p",
+			"720p",
+			"360p",
+		]);
+		expect(native.map((level) => level.label)).toEqual(
+			hlsJs.map((level) => level.label),
+		);
+	});
+
 	it("skips variants that are not Cap renditions", () => {
 		const odd = [
 			"#EXTM3U",
