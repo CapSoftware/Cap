@@ -44,6 +44,7 @@ export function Brand({
 		<Link
 			href={href}
 			onNavigate={onNavigate}
+			aria-label="Cap Infra"
 			className={clsx("flex shrink-0 items-center rounded-[6px]", FOCUS)}
 		>
 			<Lockup height={22} />
