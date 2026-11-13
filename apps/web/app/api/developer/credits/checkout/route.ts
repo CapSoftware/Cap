@@ -21,7 +21,11 @@ import {
 } from "@/lib/infra-credit-us-ein";
 import { saveCreditUsEin } from "@/lib/infra-credit-us-ein-save";
 import { infraAppPath } from "@/lib/infra-routes";
-import { TOP_UP_MAX_CENTS, TOP_UP_MIN_CENTS } from "@/lib/infra-top-up";
+import {
+	TOP_UP_MAX_CENTS,
+	TOP_UP_MIN_CENTS,
+	TOP_UP_OUT_OF_RANGE,
+} from "@/lib/infra-top-up";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
@@ -44,7 +48,7 @@ app.post(
 		"json",
 		z.object({
 			appId: z.string(),
-			amountCents: z.number().int().min(TOP_UP_MIN_CENTS).max(TOP_UP_MAX_CENTS),
+			amountCents: z.number().int(),
 			code: z.string().trim().min(1).max(CREDIT_CODE_MAX_LENGTH).optional(),
 			usEin: z.string().max(CREDIT_US_EIN_MAX_LENGTH).optional(),
 		}),
@@ -52,6 +56,10 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const { appId, amountCents, code, usEin } = c.req.valid("json");
+
+		if (amountCents < TOP_UP_MIN_CENTS || amountCents > TOP_UP_MAX_CENTS) {
+			return c.json({ error: TOP_UP_OUT_OF_RANGE }, 400);
+		}
 
 		if (!canUseInfra(user.email)) {
 			return c.json({ error: "Cap Infra credits are not available yet" }, 403);

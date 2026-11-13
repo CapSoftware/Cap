@@ -30,16 +30,46 @@ describe("lowBalanceText", () => {
 		).toBeNull();
 	});
 
-	it("stays quiet for an app that stores nothing", () => {
+	const storingNothing = {
+		...storing,
+		monthlyStorageMicroCredits: 0,
+		requiredMicroCredits: 1,
+		shortfallMicroCredits: 0,
+	};
+
+	it("warns an app that stores nothing when it has under $1", () => {
 		expect(
-			lowBalanceText({
-				...storing,
-				monthlyStorageMicroCredits: 0,
-				balanceMicroCredits: 967,
-				requiredMicroCredits: 1,
-				shortfallMicroCredits: 0,
-			}),
+			lowBalanceText({ ...storingNothing, balanceMicroCredits: 967 }),
+		).toBe("Credit is low. This app has $0.00967, under $1.00.");
+		expect(
+			lowBalanceText({ ...storingNothing, balanceMicroCredits: 99_999 }),
+		).toBe("Credit is low. This app has $0.99999, under $1.00.");
+	});
+
+	it("stays quiet for an app that stores nothing once it has $1 or more", () => {
+		expect(
+			lowBalanceText({ ...storingNothing, balanceMicroCredits: 100_000 }),
 		).toBeNull();
+		expect(
+			lowBalanceText({ ...storingNothing, balanceMicroCredits: 2_500_000 }),
+		).toBeNull();
+	});
+
+	it("leaves an unfunded app to the Add credits prompt instead of both", () => {
+		const unfunded = { ...storingNothing, balanceMicroCredits: 0 };
+		expect(lowBalanceText(unfunded)).toBeNull();
+		expect(
+			firstCreditOffersAddCredits({
+				balanceMicroCredits: 0,
+				proCreditStatus: "claimed",
+			}),
+		).toBe(true);
+	});
+
+	it("keeps the floor to active, funded apps", () => {
+		const low = { ...storingNothing, balanceMicroCredits: 967 };
+		expect(lowBalanceText({ ...low, standing: "grace" })).toBeNull();
+		expect(lowBalanceText({ ...low, hasAccount: false })).toBeNull();
 	});
 
 	it("leaves grace and paused apps to the out of credit notice", () => {
