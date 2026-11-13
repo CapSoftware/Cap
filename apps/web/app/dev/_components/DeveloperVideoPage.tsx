@@ -149,28 +149,42 @@ export function DeveloperVideoView({
 	variant: DeveloperVideoPageVariant;
 	playback?: DeveloperVideoPlayback;
 }) {
-	const takenDown = player.kind === "taken_down";
+	// A taken down video gets one plain sentence and nothing from the video:
+	// no player, poster, title or link. Every playback file answers 410.
+	if (player.kind === "taken_down") {
+		return (
+			<div
+				className={
+					variant === "embed"
+						? "fixed inset-0 grid place-items-center bg-black px-5 text-center"
+						: "grid min-h-dvh place-items-center px-5 text-center"
+				}
+			>
+				{variant === "embed" && <style>{"html,body{background:#000}"}</style>}
+				<h1 className="m-0 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
+					{DEVELOPER_VIDEO_UNAVAILABLE}
+				</h1>
+			</div>
+		);
+	}
+
 	const reportHref = developerVideoReportHref(playbackId);
 
 	if (variant === "embed") {
 		return (
 			<div className="group fixed inset-0 bg-black">
 				<style>{"html,body{background:#000}"}</style>
-				<h1 className="sr-only">
-					{takenDown ? DEVELOPER_VIDEO_UNAVAILABLE : player.name}
-				</h1>
+				<h1 className="sr-only">{player.name}</h1>
 				<Stage player={player} playback={playback} />
-				{!takenDown && (
-					<a
-						href={reportHref}
-						target="_blank"
-						rel="noopener noreferrer"
-						aria-label="Report this video"
-						className={EMBED_REPORT_CLASS}
-					>
-						Report
-					</a>
-				)}
+				<a
+					href={reportHref}
+					target="_blank"
+					rel="noopener noreferrer"
+					aria-label="Report this video"
+					className={EMBED_REPORT_CLASS}
+				>
+					Report
+				</a>
 			</div>
 		);
 	}
@@ -193,22 +207,18 @@ export function DeveloperVideoView({
 					>
 						<Stage player={player} playback={playback} />
 					</div>
-					{takenDown ? (
-						<h1 className="sr-only">{DEVELOPER_VIDEO_UNAVAILABLE}</h1>
-					) : (
-						<div className="mt-5 flex items-baseline justify-between gap-4">
-							<h1 className="m-0 min-w-0 text-[18px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4] [overflow-wrap:anywhere]">
-								{player.name}
-							</h1>
-							<a
-								href={reportHref}
-								aria-label="Report this video"
-								className="shrink-0 rounded-[4px] text-[13px] leading-[1.3] text-[rgba(232,236,244,0.42)] outline-none transition-colors hover:text-[rgba(232,236,244,0.8)] focus-visible:text-[#E8ECF4] focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)]"
-							>
-								Report
-							</a>
-						</div>
-					)}
+					<div className="mt-5 flex items-baseline justify-between gap-4">
+						<h1 className="m-0 min-w-0 text-[18px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4] [overflow-wrap:anywhere]">
+							{player.name}
+						</h1>
+						<a
+							href={reportHref}
+							aria-label="Report this video"
+							className="shrink-0 rounded-[4px] text-[13px] leading-[1.3] text-[rgba(232,236,244,0.42)] outline-none transition-colors hover:text-[rgba(232,236,244,0.8)] focus-visible:text-[#E8ECF4] focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)]"
+						>
+							Report
+						</a>
+					</div>
 				</div>
 			</div>
 		</div>

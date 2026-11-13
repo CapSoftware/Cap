@@ -213,33 +213,78 @@ describe("developer video report link", () => {
 });
 
 describe("a taken down video page", () => {
+	const takenDownFromLoader: DeveloperVideoPlayer = {
+		name: "",
+		width: 16,
+		height: 9,
+		kind: "taken_down",
+	};
+
 	it.each(["share", "embed"] as const)(
-		"shows only that the video is not available on the %s page",
-		(variant) => {
-			const html = render(takenDown, variant);
+		"shows one plain sentence on the %s page and nothing from the video",
+		async (variant) => {
+			mocks.load.mockResolvedValue(takenDownFromLoader);
+			const page = variant === "share" ? sharePage : embedPage;
+			const route = await page.default(params());
+			expect(route.props).toMatchObject({ playbackId: PLAYBACK_ID, variant });
+
+			const html = renderToStaticMarkup(
+				await DeveloperVideoPage({
+					playbackId: PLAYBACK_ID,
+					variant,
+					query: {},
+				}),
+			);
 			const text = html
 				.replace(/<style>.*?<\/style>/g, "")
-				.replace(/<[^>]+>/g, " ");
+				.replace(/<[^>]+>/g, " ")
+				.trim();
 
-			expect(text).toContain("This video is not available.");
-			expect(html).not.toContain("Launch demo");
-			expect(html).not.toContain("<video");
-			expect(html).not.toContain(BASE);
-			expect(html).not.toContain("mailto:");
-			expect(html).not.toContain('role="status"');
+			expect(text).toBe("This video is not available.");
+			expect(html).toContain("<h1");
+			for (const absent of [
+				"<video",
+				"<img",
+				"<a ",
+				"poster",
+				"m3u8",
+				"video.mp4",
+				"/api/developer/playback",
+				PLAYBACK_ID,
+				"Launch demo",
+				"aspect-ratio",
+				'role="status"',
+				'aria-label="Cap Infra"',
+			]) {
+				expect(html).not.toContain(absent);
+			}
 		},
 	);
 
-	it("previews as unavailable with no title or image from the video", async () => {
-		mocks.load.mockResolvedValue(takenDown);
+	it("never renders the video's own name or size even if the loader passed them", () => {
+		const html = render(takenDown, "share");
 
-		expect(await developerVideoMetadata(PLAYBACK_ID)).toMatchObject({
-			title: "Video not available",
-			robots: { index: false, follow: false },
-			openGraph: { title: "Video not available", images: [] },
-			twitter: { card: "summary", title: "Video not available", images: [] },
-		});
+		expect(html).not.toContain("Launch demo");
+		expect(html).not.toContain("1920");
+		expect(html).not.toContain("mailto:");
 	});
+
+	it.each([
+		["share", sharePage],
+		["embed", embedPage],
+	])(
+		"keeps the %s page out of search and previews with no title or image from the video",
+		async (_, page) => {
+			mocks.load.mockResolvedValue(takenDownFromLoader);
+
+			expect(await page.generateMetadata(params())).toMatchObject({
+				title: "Video not available",
+				robots: { index: false, follow: false },
+				openGraph: { title: "Video not available", images: [] },
+				twitter: { card: "summary", title: "Video not available", images: [] },
+			});
+		},
+	);
 });
 
 describe("developer video page parameters", () => {

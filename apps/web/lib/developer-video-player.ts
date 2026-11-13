@@ -57,8 +57,14 @@ export async function loadDeveloperVideoPlayer(
 
 	const found = await findPlayableVideo(playbackId);
 	if (!found) return null;
+	// Nothing about the video reaches a page that cannot play it.
 	if (developerVideoIsTakenDown(found)) {
-		return { ...frameOf(found), kind: "taken_down" };
+		return {
+			name: "",
+			width: DEFAULT_WIDTH,
+			height: DEFAULT_HEIGHT,
+			kind: "taken_down",
+		};
 	}
 
 	const standing = await getInfraAppStanding(found.appId);

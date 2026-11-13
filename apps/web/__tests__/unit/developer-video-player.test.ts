@@ -82,8 +82,11 @@ describe("developer video player data", () => {
 				},
 			};
 
-			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
 				kind: "taken_down",
+				name: "",
+				width: 16,
+				height: 9,
 			});
 			expect(mocks.standing).not.toHaveBeenCalled();
 			expect(mocks.redrive).not.toHaveBeenCalled();
