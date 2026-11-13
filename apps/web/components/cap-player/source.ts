@@ -339,8 +339,9 @@ export const attachSource = (
 	let listing: AbortController | null = null;
 	let resumeAfterSwitch: (() => void) | null = null;
 	// Until a switch's metadata arrives the element reads time zero, so a
-	// second pick in that window keeps the first one's place.
-	let switching: { resumeAt: number; wasPlaying: boolean } | null = null;
+	// second pick in that window keeps the first one's place. Whether it plays
+	// is read from the element each time: a pause in that window must hold.
+	let switchingFrom: number | null = null;
 
 	function onNativeError() {
 		playFile();
@@ -366,7 +367,7 @@ export const attachSource = (
 			video.removeEventListener("loadedmetadata", resumeAfterSwitch);
 		}
 		resumeAfterSwitch = null;
-		switching = null;
+		switchingFrom = null;
 	}
 
 	function pickNativeLevel(index: number) {
@@ -377,14 +378,15 @@ export const attachSource = (
 				? hls
 				: renditionSource(hls, nativeLevels[index]?.uri);
 		if (!next || next === nativeSrc) return;
-		const { resumeAt, wasPlaying } = switching ?? position();
+		const resumeAt = switchingFrom ?? video.currentTime;
+		const wasPlaying = !video.paused;
 		dropResume();
 		nativeSrc = next;
 		video.src = next;
-		switching = { resumeAt, wasPlaying };
+		switchingFrom = resumeAt;
 		const resume = () => {
 			resumeAfterSwitch = null;
-			switching = null;
+			switchingFrom = null;
 			if (resumeAt > 0) video.currentTime = resumeAt;
 		};
 		resumeAfterSwitch = resume;

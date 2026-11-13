@@ -1421,7 +1421,6 @@ describe("native HLS renditions", () => {
 
 		setLevel(index("360p"));
 		video.currentTime = 0;
-		video.paused = true;
 		setLevel(index("1080p"));
 
 		expect(video.src).toBe(`${HLS}?rendition=1080p`);
@@ -1434,6 +1433,23 @@ describe("native HLS renditions", () => {
 		video.currentTime = 0;
 		video.reach(30);
 		expect(video.currentTime).toBe(20);
+	});
+
+	it("keeps a pause made while a switch loads through the next pick", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("360p"));
+		expect(video.plays).toBe(2);
+		video.currentTime = 0;
+		video.paused = true;
+		setLevel(index("1080p"));
+
+		expect(video.plays).toBe(2);
+		video.reach(30);
+		expect(video.currentTime).toBe(12.5);
+		expect(video.paused).toBe(true);
 	});
 
 	it("ignores a pick it has no rendition for", async () => {
