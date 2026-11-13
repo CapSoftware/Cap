@@ -7,7 +7,7 @@ import {
 } from "@cap/ui";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
 import { faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons/faWandMagicSparkles";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext, useTheme } from "../../Contexts";
 

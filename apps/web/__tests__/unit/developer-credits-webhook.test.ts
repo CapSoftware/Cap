@@ -56,6 +56,14 @@ vi.mock("@/lib/developer-credits", () => ({
 	addCreditsToAccount: (...args: unknown[]) => mockAddCredits(...args),
 }));
 
+const mockSaveCard = vi.fn();
+const mockSettleAutoTopUp = vi.fn();
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	saveCardFromCheckout: (...args: unknown[]) => mockSaveCard(...args),
+	settleAutoTopUpPaymentIntent: (...args: unknown[]) =>
+		mockSettleAutoTopUp(...args),
+}));
+
 vi.mock("@cap/web-domain", () => ({
 	Organisation: { OrganisationId: { make: (v: string) => v } },
 	User: { UserId: { make: (v: string) => v } },
@@ -253,6 +261,145 @@ describe("Stripe webhook — developer credits", () => {
 		expect(mockAddCredits).not.toHaveBeenCalled();
 	});
 
+	it("grants credits when a code covers the whole purchase", async () => {
+		const session = makeCheckoutSession({
+			mode: "payment",
+			status: "complete",
+			payment_status: "paid",
+			payment_intent: null,
+			amount_total: 0,
+			amount_subtotal: 2500,
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([]);
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).toHaveBeenCalledTimes(1);
+		expect(mockAddCredits).toHaveBeenCalledWith({
+			accountId: "account-001",
+			amountCents: 2500,
+			referenceId: "cs_test_123",
+			referenceType: "stripe_checkout_session",
+			metadata: {
+				amountCents: 2500,
+				stripeSessionId: "cs_test_123",
+				paidCents: 0,
+			},
+		});
+	});
+
+	it("grants a fully covered purchase that reports no payment required", async () => {
+		const session = makeCheckoutSession({
+			mode: "payment",
+			status: "complete",
+			payment_status: "no_payment_required",
+			payment_intent: null,
+			amount_total: 0,
+			amount_subtotal: 2500,
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([]);
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).toHaveBeenCalledWith(
+			expect.objectContaining({
+				referenceId: "cs_test_123",
+				referenceType: "stripe_checkout_session",
+			}),
+		);
+	});
+
+	it("grants a fully covered purchase once across repeat deliveries", async () => {
+		const session = makeCheckoutSession({
+			mode: "payment",
+			status: "complete",
+			payment_status: "paid",
+			payment_intent: null,
+			amount_total: 0,
+			amount_subtotal: 2500,
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([{ id: "existing-txn-id" }]);
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["an amount is still due", { amount_total: 2500 }],
+		["the checkout is still open", { status: "open" }],
+		["the payment is unpaid", { payment_status: "unpaid" }],
+		["it is not a payment checkout", { mode: "setup" }],
+		["the total is unknown", { amount_total: null }],
+		[
+			"the price before the code is not the amount being granted",
+			{ amount_subtotal: 500 },
+		],
+		["the price before the code is unknown", { amount_subtotal: null }],
+	])("grants nothing without a payment when %s", async (_label, overrides) => {
+		const session = makeCheckoutSession({
+			mode: "payment",
+			status: "complete",
+			payment_status: "paid",
+			payment_intent: null,
+			amount_total: 0,
+			amount_subtotal: 2500,
+			...overrides,
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(400);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it("records what was paid when a code covers part of the purchase", async () => {
+		const session = makeCheckoutSession({
+			mode: "payment",
+			status: "complete",
+			amount_total: 500,
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([]);
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).toHaveBeenCalledWith({
+			accountId: "account-001",
+			amountCents: 2500,
+			referenceId: "pi_test_abc",
+			referenceType: "stripe_payment_intent",
+			metadata: {
+				amountCents: 2500,
+				stripeSessionId: "cs_test_123",
+				paidCents: 500,
+			},
+		});
+	});
+
 	it("returns 400 when accountId is missing from metadata", async () => {
 		const session = makeCheckoutSession({
 			metadata: {
@@ -300,5 +447,64 @@ describe("Stripe webhook — developer credits", () => {
 		await POST(makeWebhookRequest());
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("stores the card from a setup checkout and grants nothing", async () => {
+		const session = makeCheckoutSession({
+			mode: "setup",
+			payment_status: "no_payment_required",
+			payment_intent: null,
+			setup_intent: "seti_test",
+			metadata: { type: "developer_card", accountId: "account-001" },
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSaveCard).toHaveBeenCalledWith(session);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("settles an auto top-up payment that succeeded", async () => {
+		const paymentIntent = {
+			id: "pi_auto",
+			status: "succeeded",
+			metadata: { type: "developer_auto_top_up", accountId: "account-001" },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "payment_intent.succeeded",
+			data: { object: paymentIntent },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSettleAutoTopUp).toHaveBeenCalledWith(
+			paymentIntent,
+			"succeeded",
+		);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it("settles an auto top-up payment that failed", async () => {
+		const paymentIntent = {
+			id: "pi_auto",
+			status: "requires_payment_method",
+			metadata: { type: "developer_auto_top_up", accountId: "account-001" },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "payment_intent.payment_failed",
+			data: { object: paymentIntent },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSettleAutoTopUp).toHaveBeenCalledWith(paymentIntent, "failed");
 	});
 });

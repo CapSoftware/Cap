@@ -9,6 +9,7 @@ import type {
 	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
+	RecorderUpload,
 	RecordingResult,
 } from "./types";
 import { MultipartClient } from "./upload/multipart-client";
@@ -17,6 +18,7 @@ export type {
 	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
+	RecorderUpload,
 	RecordingResult,
 };
 
@@ -28,7 +30,7 @@ type EventHandler<K extends keyof RecorderEventMap> = (
 
 export class CapRecorder {
 	private options: Required<
-		Pick<RecorderOptions, "publicKey" | "apiBase" | "mode">
+		Pick<RecorderOptions, "createUpload" | "apiBase" | "mode">
 	> &
 		RecorderOptions;
 	private _phase: RecorderPhase = "idle";
@@ -45,7 +47,6 @@ export class CapRecorder {
 	private selectedMimeType = "";
 	private maxDurationMs: number;
 	private maxDurationTimeout: ReturnType<typeof setTimeout> | null = null;
-	private client: MultipartClient;
 	private listeners = new Map<
 		string,
 		Set<EventHandler<keyof RecorderEventMap>>
@@ -58,10 +59,6 @@ export class CapRecorder {
 			mode: options.mode ?? "fullscreen",
 		};
 		this.maxDurationMs = options.maxDurationMs ?? 4 * 60 * 60 * 1000;
-		this.client = new MultipartClient(
-			this.options.apiBase,
-			this.options.publicKey,
-		);
 	}
 
 	get phase(): RecorderPhase {
@@ -264,14 +261,20 @@ export class CapRecorder {
 				type: this.selectedMimeType || "video/webm",
 			});
 
-			const { videoId, shareUrl, embedUrl } = await this.client.createVideo({
-				userId: this.options.userId,
-			});
+			const { videoId, token, shareUrl, embedUrl } =
+				await this.options.createUpload();
+			if (!videoId || !token) {
+				throw new Error("createUpload must return a videoId and a token");
+			}
 
 			this.assertCurrentRecording(recorder);
 			this._videoId = videoId;
 
-			await this.client.uploadBlob(videoId, blob, { durationMs });
+			await new MultipartClient(this.options.apiBase, token).uploadBlob(
+				videoId,
+				blob,
+				{ durationMs },
+			);
 			this.assertCurrentRecording(recorder);
 
 			const result: RecordingResult = {

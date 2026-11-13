@@ -1051,7 +1051,7 @@ impl MainWindow {
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]
-            cx.defer(crate::menus::quit);
+            cx.defer(|cx| crate::menus::quit(crate::menus::QuitSource::MainWindowClose, cx));
             #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false
@@ -5246,6 +5246,14 @@ impl MainWindow {
             ) {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
             }) else {
@@ -5254,6 +5262,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
@@ -5268,7 +5277,8 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = app_windows::screenshot_editor_key(&bundle);
+        cx.spawn_in(window, async move |_this, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -5289,10 +5299,7 @@ impl MainWindow {
                 tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Screenshots, window, cx);
-            })
-            .ok();
+            app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }

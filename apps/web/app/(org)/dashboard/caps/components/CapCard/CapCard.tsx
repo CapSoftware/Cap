@@ -25,7 +25,6 @@ import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
 import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
@@ -37,6 +36,7 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
@@ -392,6 +392,7 @@ export const CapCard = ({
 				inheritedSpaceSettings={cap.inheritedSpaceSettings}
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
+				onSaved={() => router.refresh()}
 			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}

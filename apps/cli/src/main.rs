@@ -8,6 +8,7 @@ mod automation;
 mod caps;
 mod confirmation;
 mod credentials;
+mod developer_media;
 mod developers;
 mod doctor;
 mod export;
@@ -31,6 +32,7 @@ mod upload;
 use std::{
     io::{IsTerminal, Write, stderr, stdout},
     path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -40,6 +42,7 @@ use serde::Serialize;
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+static JSON_WRITTEN: AtomicBool = AtomicBool::new(false);
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_BOLD: &str = "\x1b[1m";
 const ANSI_BLUE: &str = "\x1b[38;2;71;133;255m";
@@ -120,9 +123,10 @@ const AGENT_HELP: &str = "\
 OUTPUT
   Pass --json (global) for machine-readable JSON on stdout; stderr stays human-readable.
   stdout is the authoritative result. On failure the process exits non-zero and, in --json
-  mode, prints a final object/event containing an \"error\" field. Streaming commands (record,
-  export) emit newline-delimited JSON (NDJSON) events. Run `cap guide --json` for the full
-  machine-readable capability + schema manifest.
+  mode, prints a final object/event containing an \"error\" field. Account and developer
+  commands add \"code\", \"message\", and when known \"hint\" and \"requestId\". Streaming
+  commands (record, export) emit newline-delimited JSON (NDJSON) events. Run `cap guide --json`
+  for the full machine-readable capability + schema manifest.
 
 AUTH
   `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
@@ -202,7 +206,8 @@ enum Commands {
     Screenshot(screenshot::Screenshot),
     /// List recordings discovered in the desktop library (or a custom directory)
     Recordings(RecordingsArgs),
-    /// Upload a recording or video file and get a shareable link
+    /// Upload a recording or video file to your personal Cap library and get a shareable link.
+    /// To upload to a Cap Infra developer app, use `cap developers videos upload`
     Upload(upload::UploadArgs),
     /// Update Cap Desktop and the bundled CLI
     Update(FormatArgs),
@@ -220,7 +225,7 @@ enum Commands {
     Notifications(notifications::NotificationsArgs),
     /// Read organization, space, or Cap analytics
     Analytics(analytics::AnalyticsArgs),
-    /// Inspect developer apps, domains, usage, and credits
+    /// Manage Cap Infra developer apps: videos, transcripts, domains, keys, usage and credits
     Developers(developers::DevelopersArgs),
     /// Inspect or wait for asynchronous Cap operations
     Jobs(jobs::JobsArgs),
@@ -463,7 +468,16 @@ fn main() {
         let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
     }
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.use_stderr() && args_request_json(std::env::args().skip(1)) {
+                let _ = write_json(&usage_error_json(&error.render().to_string()));
+            }
+            error.exit();
+        }
+    };
+    let json_mode = cli.json;
     let level_filter = cli.log_level.level_filter();
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
@@ -523,7 +537,7 @@ fn main() {
     let runtime_thread = std::thread::Builder::new()
         .name("cap-cli-runtime".to_string())
         .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
-        .spawn(move || -> Result<(), String> {
+        .spawn(move || -> Result<(), CliFailure> {
             // serve_main_thread blocks the main thread until this shutdown
             // runs; a drop guard keeps that true on every exit path, including
             // the runtime failing to build and panics unwinding out of run().
@@ -539,7 +553,7 @@ fn main() {
                 .enable_all()
                 .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
                 .build()
-                .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
+                .map_err(|e| CliFailure::from(format!("Failed to build Tokio runtime: {e}")))?;
 
             if _diagnostic_guard.is_some() {
                 drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
@@ -579,8 +593,11 @@ fn main() {
 
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(message)) => {
-            eprintln!("error: {message}");
+        Ok(Err(failure)) => {
+            if json_mode && !JSON_WRITTEN.load(Ordering::SeqCst) {
+                failure.emit_json();
+            }
+            eprintln!("error: {}", failure.describe());
             std::process::exit(1);
         }
         Err(_) => {
@@ -590,13 +607,46 @@ fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), String> {
+enum CliFailure {
+    Message(String),
+    Api(Box<caps::AgentApiError>),
+}
+
+impl From<String> for CliFailure {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<caps::AgentApiError> for CliFailure {
+    fn from(error: caps::AgentApiError) -> Self {
+        Self::Api(Box::new(error))
+    }
+}
+
+impl CliFailure {
+    fn describe(&self) -> String {
+        match self {
+            Self::Message(message) => message.clone(),
+            Self::Api(error) => error.describe(),
+        }
+    }
+
+    fn emit_json(&self) {
+        match self {
+            Self::Message(message) => caps::AgentApiError::from(message.clone()).emit_json(),
+            Self::Api(error) => error.emit_json(),
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), CliFailure> {
     let json = cli.json;
     let Some(command) = cli.command else {
-        return print_welcome(json);
+        return Ok(print_welcome(json)?);
     };
 
-    match command {
+    let result: Result<(), String> = match command {
         Commands::Export(e) => e.run(json).await,
         Commands::ExportPreview(e) => e.run().await,
         Commands::Selftest(args) => args.run(json).await,
@@ -643,13 +693,13 @@ async fn run(cli: Cli) -> Result<(), String> {
             AuthCommands::Logout(args) => args.run(json).await,
         },
         Commands::Caps(args) => args.run(json).await,
-        Commands::Account(args) => args.run(json).await,
-        Commands::Organizations(args) => args.run(json).await,
-        Commands::Library(args) => args.run(json).await,
-        Commands::Notifications(args) => args.run(json).await,
-        Commands::Analytics(args) => args.run(json).await,
+        Commands::Account(args) => return Ok(args.run(json).await?),
+        Commands::Organizations(args) => return Ok(args.run(json).await?),
+        Commands::Library(args) => return Ok(args.run(json).await?),
+        Commands::Notifications(args) => return Ok(args.run(json).await?),
+        Commands::Analytics(args) => return Ok(args.run(json).await?),
         Commands::Developers(args) => args.run(json).await,
-        Commands::Jobs(args) => args.run(json).await,
+        Commands::Jobs(args) => return Ok(args.run(json).await?),
         Commands::Mcp(args) => args.run().await,
         Commands::Agents(args) => args.run(json),
         Commands::Targets(args) => args.run(json),
@@ -673,7 +723,8 @@ async fn run(cli: Cli) -> Result<(), String> {
             args.run();
             Ok(())
         }
-    }
+    };
+    Ok(result?)
 }
 
 fn print_welcome(json: bool) -> Result<(), String> {
@@ -858,7 +909,57 @@ impl CompletionsArgs {
     }
 }
 
+pub fn mark_json_written() {
+    JSON_WRITTEN.store(true, Ordering::SeqCst);
+}
+
+fn args_request_json(args: impl Iterator<Item = String>) -> bool {
+    let mut format_value_next = false;
+    for arg in args {
+        if arg == "--" {
+            return false;
+        }
+        if arg == "--json" || arg == "--format=json" || (format_value_next && arg == "json") {
+            return true;
+        }
+        format_value_next = arg == "--format";
+    }
+    false
+}
+
+fn usage_error_json(rendered: &str) -> serde_json::Value {
+    let mut lines = rendered.lines();
+    let mut message = lines
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches("error: ")
+        .to_string();
+    if message.ends_with(':') {
+        let listed = lines
+            .by_ref()
+            .take_while(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
+        message = format!("{message} {listed}");
+    }
+    let rest = rendered.lines().map(str::trim);
+    let hint = rest
+        .clone()
+        .find_map(|line| line.strip_prefix("tip: "))
+        .or_else(|| rest.clone().find(|line| line.starts_with("Usage: ")))
+        .unwrap_or("Run the command with --help to see its arguments.");
+    serde_json::json!({
+        "error": message,
+        "code": "USAGE",
+        "message": message,
+        "hint": hint,
+        "retryable": false,
+    })
+}
+
 pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
+    mark_json_written();
     let mut stdout = stdout();
     serde_json::to_writer_pretty(&mut stdout, value).map_err(|e| e.to_string())?;
     writeln!(&mut stdout).map_err(|e| e.to_string())?;
@@ -866,8 +967,89 @@ pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
 }
 
 pub fn write_json_line<T: Serialize>(value: &T) -> Result<(), String> {
+    mark_json_written();
     let mut stdout = stdout();
     serde_json::to_writer(&mut stdout, value).map_err(|e| e.to_string())?;
     writeln!(&mut stdout).map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CliFailure, args_request_json, usage_error_json};
+
+    #[test]
+    fn json_is_detected_from_the_raw_arguments() {
+        let detect = |args: &[&str]| args_request_json(args.iter().map(|arg| arg.to_string()));
+        assert!(detect(&["developers", "list", "--json"]));
+        assert!(detect(&["--json", "developers", "list"]));
+        assert!(detect(&["developers", "list", "--format", "json"]));
+        assert!(detect(&["developers", "list", "--format=json"]));
+        assert!(!detect(&["developers", "list"]));
+        assert!(!detect(&["developers", "list", "--format", "text"]));
+        assert!(!detect(&["developers", "get", "json"]));
+        assert!(!detect(&["developers", "get", "--", "--json"]));
+    }
+
+    #[test]
+    fn usage_errors_keep_the_missing_arguments_and_the_tip() {
+        let missing = usage_error_json(
+            "error: the following required arguments were not provided:\n  <VIDEO>\n\nUsage: cap developers videos get --json <APP> <VIDEO>\n\nFor more information, try '--help'.\n",
+        );
+        assert_eq!(missing["code"], "USAGE");
+        assert_eq!(
+            missing["message"],
+            "the following required arguments were not provided: <VIDEO>"
+        );
+        assert_eq!(missing["error"], missing["message"]);
+        assert_eq!(
+            missing["hint"],
+            "Usage: cap developers videos get --json <APP> <VIDEO>"
+        );
+
+        let unknown = usage_error_json(
+            "error: unrecognized subcommand 'transcript'\n\n  tip: a similar subcommand exists: 'transcripts'\n\nUsage: cap developers [OPTIONS] <COMMAND>\n",
+        );
+        assert_eq!(unknown["message"], "unrecognized subcommand 'transcript'");
+        assert_eq!(
+            unknown["hint"],
+            "a similar subcommand exists: 'transcripts'"
+        );
+    }
+
+    #[test]
+    fn plain_failures_get_a_code_and_typed_failures_keep_their_fields() {
+        let json = |error: &crate::caps::AgentApiError| serde_json::to_value(error).unwrap();
+
+        let coded = crate::caps::AgentApiError::from(
+            "NOT_FOUND: Cap not found\nhint: check the id".to_string(),
+        );
+        assert_eq!(coded.code, "NOT_FOUND");
+        assert_eq!(coded.message, "Cap not found");
+
+        let plain = crate::caps::AgentApiError::from("Image must be a PNG or JPEG".to_string());
+        assert_eq!(plain.code, "COMMAND_FAILED");
+        assert_eq!(json(&plain)["retryable"], false);
+
+        let url = crate::caps::AgentApiError::from(
+            "Failed to open http://localhost: refused".to_string(),
+        );
+        assert_eq!(url.code, "COMMAND_FAILED");
+
+        let typed = crate::caps::AgentApiError {
+            code: "RATE_LIMITED".to_string(),
+            message: "Too many requests. Try again later".to_string(),
+            retryable: true,
+            retry_after_ms: Some(60_000),
+            request_id: Some("req_1".to_string()),
+            ..Default::default()
+        };
+        let CliFailure::Api(carried) = CliFailure::from(typed) else {
+            panic!("a typed error must stay typed");
+        };
+        let carried = json(&carried);
+        assert_eq!(carried["retryable"], true);
+        assert_eq!(carried["retryAfterMs"], 60_000);
+        assert_eq!(carried["requestId"], "req_1");
+    }
 }

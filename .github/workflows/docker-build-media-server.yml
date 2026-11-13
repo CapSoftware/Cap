@@ -133,6 +133,10 @@ jobs:
             src/__tests__/lib/video-input-validation.integration.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/loom-importer/
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/hls-ladder.test.ts \
+            src/__tests__/lib/hls-ladder-encode.integration.test.ts \
+            src/__tests__/lib/hls-ladder-route.integration.test.ts
 
       - name: Verify long recording performance in the production image
         env:

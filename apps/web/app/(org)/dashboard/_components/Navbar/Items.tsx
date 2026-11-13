@@ -22,7 +22,6 @@ import { classNames } from "@cap/utils";
 import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
 import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -37,10 +36,12 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
+import { canUseInfra } from "@/lib/infra-access";
 import {
 	loomImportDestinationFromPathname,
 	loomImportPageHref,
@@ -73,11 +74,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [open, setOpen] = useState(false);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
-	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
-
 	const showDeveloperDashboard =
-		buildEnv.NEXT_PUBLIC_IS_CAP &&
-		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" && canUseInfra(user.email);
 	const showMigrationQueue =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		user.email.toLowerCase() === MESSENGER_ADMIN_EMAIL;
@@ -121,8 +119,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		...(showDeveloperDashboard
 			? [
 					{
-						name: "Developers",
-						href: `/dashboard/developers`,
+						name: "Infra",
+						href: "/dashboard/infra",
 						ownerOnly: true,
 						matchChildren: true,
 						icon: <CodeIcon />,

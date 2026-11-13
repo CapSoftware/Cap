@@ -207,6 +207,43 @@ export const MobilePushTokenRemoveInput = Schema.Struct({
 	token: Schema.String.pipe(Schema.maxLength(200)),
 });
 
+export const mobileEventBatchLimit = 50;
+
+const MobileAppVersion = Schema.String.pipe(
+	Schema.pattern(/^\d{1,10}(\.\d{1,10}){0,3}$/),
+);
+
+export const MobileEventValue = Schema.Union(
+	Schema.String.pipe(Schema.maxLength(120)),
+	Schema.Number.pipe(Schema.finite()),
+	Schema.Boolean,
+);
+
+export const MobileEvent = Schema.Struct({
+	name: Schema.String.pipe(Schema.pattern(/^[a-z][a-z0-9_]{0,63}$/)),
+	timestamp: Schema.Number.pipe(Schema.finite()),
+	properties: Schema.optional(
+		Schema.Record({
+			key: Schema.String.pipe(Schema.maxLength(40)),
+			value: MobileEventValue,
+		}),
+	),
+});
+
+export const MobileEventsInput = Schema.Struct({
+	sentAt: Schema.Number.pipe(Schema.finite()),
+	app: Schema.Struct({
+		version: MobileAppVersion,
+		build: Schema.String.pipe(Schema.pattern(/^\d{1,20}$/)),
+		os: MobileAppVersion,
+		device: Schema.Literal("phone", "tablet"),
+	}),
+	events: Schema.Array(MobileEvent).pipe(
+		Schema.minItems(1),
+		Schema.maxItems(mobileEventBatchLimit),
+	),
+});
+
 export const MobileContentReportInput = Schema.Struct({
 	reason: Schema.Literal(
 		"harassment",
@@ -734,6 +771,15 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("trackEvents", "/events")
+			.setPayload(MobileEventsInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.InternalServerError)
+			.addError(HttpApiError.BadRequest)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.get("bootstrap", "/bootstrap")

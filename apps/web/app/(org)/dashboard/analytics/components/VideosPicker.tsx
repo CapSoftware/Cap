@@ -1,8 +1,8 @@
 "use client";
 
 import { faRightLeft } from "@fortawesome/free-solid-svg-icons/faRightLeft";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type React from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { VideoDroppable } from "./VideoComponents";
 
 interface VideosPickerProps {

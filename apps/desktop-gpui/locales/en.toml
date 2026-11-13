@@ -390,6 +390,8 @@ quarter = "Quarter"
 blocked_while_recording = "Shortcuts can't be changed while this recording holds its stop key. Stop recording first."
 cancelling_description = "For screenshots and recordings started from a shortcut or the tray."
 cancelling_title = "Cancelling"
+closing_editor_description = "For the screenshot editor and the video editor."
+closing_editor_title = "Closing the editor"
 needs_modifier_macos = "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
 needs_modifier_other = "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
 record_shortcut = "Record shortcut"
@@ -421,11 +423,19 @@ title = "After an Instant recording"
 hint = "Esc or closing the picker"
 title = "When you cancel"
 
+[settings.shortcuts.on_editor_close]
+hint = "After the last one closes"
+title = "When you close the editor"
+
 [settings.shortcuts.outcome]
 cancel_show_cap = "Show Cap"
 cancel_show_cap_hint = "Back to the recorder"
 cancel_stay_hidden = "Stay hidden"
 cancel_stay_hidden_hint = "Unless Cap was open"
+editor_close_show_cap = "Show Cap"
+editor_close_show_cap_hint = "Back to the recorder"
+editor_close_stay_hidden = "Stay hidden"
+editor_close_stay_hidden_hint = "Until you open Cap"
 instant_copy_link = "Copy link only"
 instant_copy_link_hint = "Nothing opens"
 instant_open_link = "Open link"
@@ -1419,6 +1429,7 @@ failed_title = "Could not delete recording"
 finishing_body = "Cap is waiting for recording cleanup to finish before completing this deletion."
 finishing_title = "Deletion is still finishing"
 in_use = { text = "This recording is still in use. Finish or cancel its upload and try again: {error}", context = "{error} is a technical error message, usually in English." }
+open_in_editor = "This recording is open in the editor. Close the editor and try again."
 outside_library = "This recording is outside the recordings library. Its files were not changed."
 recording_active = "Finish or cancel the recording before deleting this project."
 retained_title = "Recording retained"
@@ -2341,7 +2352,6 @@ text_item = "Text"
 [editor.clips]
 append_error = { text = "Failed to add clip: {message}", context = "{message} explains why." }
 append_error_title = "Recording Error"
-cap_filter = { text = "Cap Recording", context = "File type filter name for .cap recordings in the file picker." }
 clip = { text = "Clip {number}", context = "Default clip name; {number} starts at 1." }
 count = { one = "{count} clip", other = "{count} clips", context = "How many clips the Clips tab lists." }
 empty_description = "Record or import a clip and it will show up here."
@@ -2468,6 +2478,9 @@ upload_complete = "Upload complete"
 uploading = "Creating shareable link"
 
 [editor.export.quality]
+gif_high = { text = "High", context = "GIF export quality preset." }
+gif_low = { text = "Low", context = "GIF export quality preset." }
+gif_medium = { text = "Medium", context = "GIF export quality preset." }
 larger = "Larger file"
 maximum = { text = "Maximum", context = "Export quality preset." }
 potato = { text = "Potato", context = "Export quality preset: the lowest quality, said playfully." }
@@ -2530,6 +2543,38 @@ mono_left = "Mono L"
 mono_right = "Mono R"
 stereo = "Stereo"
 
+[editor.tabs.audio.voice_eq]
+apply_all = "Apply to all clips"
+band_high = "High"
+band_high_mid = "High-mid"
+band_low = "Low"
+band_low_cut = "Low cut"
+band_low_mid = "Low-mid"
+declick = "De-click"
+declick_description = "Repairs mouth clicks and crackle and leaves the rest of your voice untouched."
+declick_light = "Light"
+declick_off = "Off"
+declick_strong = "Strong"
+description = "Shape your microphone's tone. What you hear here is what exports."
+frequency = "Frequency"
+gain = "Gain"
+graph_hint = "Drag a point to shape the sound. Scroll over a point to widen or narrow it, and double-click to reset it."
+low_cut_description = "Removes rumble and handling noise below the cutoff."
+off = "Off"
+preset_bright = "Bright"
+preset_broadcast = "Broadcast"
+preset_clear = "Clear"
+preset_custom = "Custom"
+preset_natural = "Natural"
+preset_warm = "Warm"
+q = { text = "Q", context = "Bandwidth of an EQ band. Keep the letter Q, the standard audio term." }
+scope_all = "Editing all clips"
+scope_all_hint = "Select a clip in the timeline to tune it on its own."
+scope_mixed = "Clips have different settings. A change here applies to all of them."
+scope_selected = "Editing the selected clip"
+scope_selected_many = "Editing the selected clips"
+title = "Voice EQ"
+
 [editor.tabs.camera]
 advanced_shadow = "Advanced shadow settings"
 background = "Background"
@@ -2588,6 +2633,8 @@ keep_open = "Keep Cap open while the model downloads. Editor reloads will reconn
 language_label = "Language"
 model_downloaded = "{model} model downloaded"
 model_label = "Model"
+model_updated = "Recommended model updated"
+model_updated_description = "We recommend the new version. It is more accurate and catches short recordings the old one missed."
 position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
@@ -2846,6 +2893,7 @@ manual_zoom = "Manual Zoom"
 muted = "Muted"
 numbered_clip = { text = "Clip {number}", context = "{number} is the recording clip number, starting at 1." }
 sensitive = { text = "Sensitive", context = "Mask type that blurs a private area." }
+voice_eq = "Voice EQ"
 
 [editor.timeline.track]
 audio = "Audio"
@@ -2871,6 +2919,7 @@ empty_title = "No transcript yet"
 hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
 next_match = "Next match"
 no_audio = "This recording has no audio to transcribe."
+no_speech = "No speech found in this recording"
 previous_match = "Previous match"
 restore_blocked = "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back."
 restore_hint = { one = "Click to restore {count} word", other = "Click to restore {count} words" }
@@ -2984,6 +3033,7 @@ volume = "Volume"
 transition = { text = "TRANSITION", context = "Section heading in the clip menu, written in capitals." }
 transition_none = { text = "None", context = "Transition chip: no transition before this clip." }
 transition_seconds = { text = "{seconds}s", context = "Transition length chip; {seconds} is a number such as 0.5." }
+voice_eq = "Voice EQ"
 
 [editor.window.clip_menu.merge_blocker]
 edge = { text = "No clip on that side", context = "Grey hint next to a disabled Merge with next/previous clip row." }
