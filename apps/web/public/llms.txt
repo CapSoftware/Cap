@@ -12,13 +12,13 @@ For the expanded machine-readable reference, see https://cap.so/llms-full.txt.
 
 Cap Infra is Cap's usage-billed API for building video and speech into your own product. Upload a video and get adaptive HLS, an MP4, a poster, a share link and a hosted player back, or turn an audio or video file into a transcript with word timings. It is separate from the Cap screen recorder: it needs no Cap Desktop, no `cap` CLI and no user sign-in, only an app's secret key.
 
-- Overview and a copyable agent setup prompt: https://cap.so/infra
+- Overview and a copyable agent setup prompt: https://cap.so/infra (as Markdown: https://cap.so/infra.md)
 - Get started, from a new app to a playing video: https://cap.so/docs/api/get-started
 - REST reference: https://cap.so/docs/api/rest-api
 - OpenAPI 3.1 description (take every path and field name from it): https://cap.so/openapi.json
 - Billing: https://cap.so/docs/api/billing
 - Console, where an app and its keys are created: https://cap.so/dashboard/infra
-- Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp
+- Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp. Server card: https://cap.so/.well-known/mcp/infra/server-card.json. It has no OAuth.
 - **Auth.** Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code. For an upload from the browser, the server calls `POST /api/developer/v1/uploads` and gives the browser the short-lived upload token (`cut_`) it returns, which works for that one video. A public `cpk_` key cannot create or upload videos.
 - **Rate limits.** A secret key allows 300 requests a minute across the REST endpoints, and all the keys of one account together 1,200 a minute. Each upload token allows 1,200 a minute across the upload endpoints. Requests with a rejected key or token are limited to 30 a minute per address. On a `429`, wait for the `Retry-After` seconds, then retry.
 - **Polling.** A webhook (`video.ready`, `video.errored`) can tell your server when a video is done instead: https://cap.so/docs/api/webhooks. Without one, after an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. Transcripts have no webhook: poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`.
