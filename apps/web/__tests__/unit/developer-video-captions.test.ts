@@ -374,6 +374,39 @@ describe("creating a transcript from a stored video", () => {
 		).toMatchObject({ ok: false, status: 409, code: "video_not_ready" });
 	});
 
+	it("is refused at the ceiling of 20 running transcripts, and a repeat of an admitted one is not", async () => {
+		seedVideo();
+		for (let index = 0; index < 19; index++) {
+			fake().seed(developerTranscripts, {
+				id: `running-${index}`,
+				appId: "app-1",
+				status: "processing",
+				sourceType: "upload",
+			});
+		}
+
+		const admitted = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "video-key-01",
+		});
+		const refused = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+		});
+		const repeated = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "video-key-01",
+		});
+
+		expect(admitted.ok).toBe(true);
+		expect(refused).toMatchObject({
+			ok: false,
+			status: 429,
+			code: "too_many_transcripts",
+		});
+		expect(repeated.ok).toBe(true);
+		expect(context.start).toHaveBeenCalledTimes(1);
+	});
+
 	it("refuses an empty or oversized video id", async () => {
 		for (const videoId of ["", "   ", "v".repeat(65)]) {
 			expect(

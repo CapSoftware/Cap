@@ -7,6 +7,10 @@ import {
 	TRANSCRIPT_FAILURE_CODES,
 	TRANSCRIPT_REQUEST_ERRORS,
 } from "@/lib/developer-transcript-errors";
+import {
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
+	TRANSCRIPT_MAX_CONCURRENT,
+} from "@/lib/developer-transcripts";
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
@@ -185,6 +189,47 @@ describe("transcribing a stored video", () => {
 
 	it("leaves the captions file and the player to the playback docs", () => {
 		expect(transcriptDocs).not.toMatch(/\.vtt|WebVTT|captions\//i);
+	});
+});
+
+describe("limits and deletes that cost money", () => {
+	it("states the ceiling on running transcripts and how long to wait, from the code", () => {
+		expect(TRANSCRIPT_MAX_CONCURRENT).toBe(20);
+		expect(transcriptDocs).toContain(
+			`An app can have ${TRANSCRIPT_MAX_CONCURRENT} transcripts \`queued\` or \`processing\` at once.`,
+		);
+		expect(transcriptDocs).toContain(
+			`a \`Retry-After\` header of ${TRANSCRIPT_BUSY_RETRY_SECONDS} seconds`,
+		);
+		expect(transcriptDocs).toContain("| `429` | `too_many_transcripts` |");
+		for (const operation of ["createTranscript", "startTranscript"]) {
+			const described = Object.values(spec.paths)
+				.flatMap((path) => Object.values(path as Record<string, unknown>))
+				.find(
+					(entry) =>
+						(entry as { operationId?: string }).operationId === operation,
+				) as { description: string };
+			expect(described.description).toContain(
+				`${TRANSCRIPT_MAX_CONCURRENT} transcripts queued or processing at once`,
+			);
+		}
+	});
+
+	it("says a transcript deleted after its audio was sent is still charged", () => {
+		expect(transcriptDocs).not.toContain(
+			"A transcript deleted before it completes is not charged",
+		);
+		expect(specText).not.toContain(
+			"A transcript deleted before it completes is not charged",
+		);
+		for (const text of [transcriptDocs, specText]) {
+			expect(text).toContain(
+				"A transcript deleted before its audio is sent to speech recognition is not charged.",
+			);
+			expect(text).toContain(
+				"One deleted after that is still charged for the length of its audio when it finishes",
+			);
+		}
 	});
 });
 
