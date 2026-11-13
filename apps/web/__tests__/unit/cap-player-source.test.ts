@@ -1520,6 +1520,21 @@ describe("native HLS renditions", () => {
 		expect(seekDuringSwitch(5)).toBe(false);
 	});
 
+	it("keeps a switch's place, and a seek asked for during it, when it falls back to the MP4", async () => {
+		const { video, setLevel, index, seekDuringSwitch } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("360p"));
+		expect(seekDuringSwitch(18)).toBe(true);
+		video.currentTime = 0;
+		video.dispatchEvent(new Event("error"));
+
+		expect(video.src).toBe(MP4);
+		expect(video.currentTime).toBe(18);
+		expect(seekDuringSwitch(5)).toBe(false);
+	});
+
 	it("ignores a pick it has no rendition for", async () => {
 		const { video, setLevel } = await nativePlayer();
 

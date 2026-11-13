@@ -304,8 +304,13 @@ export const attachSource = (
 		height: video.clientHeight * window.devicePixelRatio,
 	});
 
+	// While a native quality switch loads, the element reads time zero, so the
+	// switch holds the real place for a second pick, a seek or a fallback to
+	// the MP4. Whether it plays is read from the element each time: a pause in
+	// that window must hold.
+	let switchingFrom: number | null = null;
 	const position = () => ({
-		resumeAt: video.currentTime,
+		resumeAt: switchingFrom ?? video.currentTime,
 		wasPlaying: !video.paused,
 	});
 
@@ -335,10 +340,6 @@ export const attachSource = (
 	let nativeSrc = "";
 	let listing: AbortController | null = null;
 	let resumeAfterSwitch: (() => void) | null = null;
-	// Until a switch's metadata arrives the element reads time zero, so a
-	// second pick in that window keeps the first one's place. Whether it plays
-	// is read from the element each time: a pause in that window must hold.
-	let switchingFrom: number | null = null;
 
 	function onNativeError() {
 		playFile();
