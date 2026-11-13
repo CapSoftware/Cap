@@ -157,37 +157,39 @@ export function WebhooksClient({
 				}
 			/>
 
-			<div>
-				{revealed && (
-					<Split
-						title={revealed.rotated ? "New signing secret" : "Signing secret"}
-						description="Copy it now. It is only shown once."
-					>
-						<SecretReveal
-							revealed={revealed}
-							onDone={() => setRevealed(null)}
-						/>
-					</Split>
-				)}
+			{(revealed || adding) && (
+				<div>
+					{revealed && (
+						<Split
+							title={revealed.rotated ? "New signing secret" : "Signing secret"}
+							description="Copy it now. It is only shown once."
+						>
+							<SecretReveal
+								revealed={revealed}
+								onDone={() => setRevealed(null)}
+							/>
+						</Split>
+					)}
 
-				{adding && (
-					<Split
-						title="Add endpoint"
-						description="A public https URL. Cap posts the events you choose to it."
-					>
-						<AddEndpointForm
-							appId={appId}
-							eventTypes={eventTypes}
-							onCancel={() => setAdding(false)}
-							onCreated={(url, secret) => {
-								setAdding(false);
-								setRevealed({ url, secret, rotated: false });
-								router.refresh();
-							}}
-						/>
-					</Split>
-				)}
-			</div>
+					{adding && (
+						<Split
+							title="Add endpoint"
+							description="A public https URL. Cap posts the events you choose to it."
+						>
+							<AddEndpointForm
+								appId={appId}
+								eventTypes={eventTypes}
+								onCancel={() => setAdding(false)}
+								onCreated={(url, secret) => {
+									setAdding(false);
+									setRevealed({ url, secret, rotated: false });
+									router.refresh();
+								}}
+							/>
+						</Split>
+					)}
+				</div>
+			)}
 
 			{endpoints.length === 0 ? (
 				!adding && (
@@ -496,12 +498,12 @@ function EndpointRow({
 				<p
 					className={clsx(
 						MONO,
-						"m-0 min-w-0 text-[13.5px] leading-[1.5] text-[#E8ECF4] [overflow-wrap:anywhere]",
+						"m-0 min-w-0 text-[13.5px] leading-[1.5] text-[#E8ECF4] break-all",
 					)}
 				>
 					{endpoint.url}
 				</p>
-				<span className="shrink-0 pt-[5px]">
+				<span className="flex h-[20px] shrink-0 items-center">
 					<EndpointState endpoint={endpoint} />
 				</span>
 			</div>
@@ -587,9 +589,7 @@ function EndpointRow({
 				description={
 					<>
 						Cap stops sending events to{" "}
-						<span className={clsx(MONO, "[overflow-wrap:anywhere]")}>
-							{endpoint.url}
-						</span>{" "}
+						<span className={clsx(MONO, "break-all")}>{endpoint.url}</span>{" "}
 						straight away. This cannot be undone.
 					</>
 				}
