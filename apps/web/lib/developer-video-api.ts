@@ -53,6 +53,56 @@ export function developerVideoOutputs(
 	};
 }
 
+export type DeveloperVideoOutputState =
+	| "processing"
+	| "ready"
+	| "failed"
+	| "none";
+
+export interface DeveloperVideoOutputStates {
+	hls: DeveloperVideoOutputState;
+	mp4: DeveloperVideoOutputState;
+}
+
+// A null hlsUrl or mp4Url alone cannot say whether that output is still being
+// encoded or will never exist. "ready" matches a non-null URL exactly. A part
+// waiting for a busy encoder to retry is still "processing". "none" is only
+// for videos uploaded before encoding existed, which never get these outputs.
+export function developerVideoOutputStates(
+	video: Pick<
+		DeveloperVideoRow,
+		"status" | "playbackId" | "processing" | "duration" | "width"
+	>,
+): DeveloperVideoOutputStates {
+	const outputs = developerVideoOutputs(video);
+	const processing = video.processing;
+	const state = (part: "hls" | "mp4"): DeveloperVideoOutputState => {
+		if (outputs[part]) return "ready";
+		if (video.status === "errored") return "failed";
+		if (!processing) {
+			return video.playbackId === null && developerVideoIsReady(video)
+				? "none"
+				: "processing";
+		}
+		return processing[part].state === "failed" ? "failed" : "processing";
+	};
+	return { hls: state("hls"), mp4: state("mp4") };
+}
+
+// A failed video reports only a length that processing measured. Before that,
+// the stored duration came from the upload: the length the client declared,
+// held to what the file's size allows, or a measurement taken at upload. A
+// video processing refused or never reached reports none, so a client never
+// reads a length for a file that may not be a video at all.
+export function developerVideoReportedDuration(
+	video: Pick<DeveloperVideoRow, "status" | "processing" | "duration">,
+): number | null {
+	if (video.status === "errored" && video.processing?.probe?.duration == null) {
+		return null;
+	}
+	return video.duration;
+}
+
 export function developerPlaybackBaseUrl(): string {
 	const configured = serverEnv().INFRA_PLAYBACK_URL;
 	const base = configured || `${serverEnv().WEB_URL}/api/developer/playback`;
@@ -112,7 +162,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		status,
 		errorReason: status === "errored" ? video.errorReason : null,
 		playbackId: video.playbackId,
-		durationSeconds: video.duration,
+		durationSeconds: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		fps: video.fps,
@@ -139,9 +189,11 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	return {
 		...fields,
 		metadata: developerVideoPublicMetadata(video.metadata),
+		duration: developerVideoReportedDuration(video),
 		renditions: video.renditions ?? [],
 		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
 			: { shareUrl: null, embedUrl: null }),
@@ -166,7 +218,7 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 	return {
 		id: video.id,
 		externalUserId: video.externalUserId,
-		duration: video.duration,
+		duration: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		transcriptionStatus: video.transcriptionStatus,
@@ -177,5 +229,6 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		renditions: video.renditions ?? [],
 		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 	};
 }
