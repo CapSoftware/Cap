@@ -177,14 +177,17 @@ describe("the captions button", () => {
 
 		expect(button()?.getAttribute("aria-pressed")).toBe("false");
 		expect(fetch).not.toHaveBeenCalled();
+		expect(container.querySelectorAll("track[src]")).toHaveLength(0);
 
 		await click(button());
 
 		expect(button()?.getAttribute("aria-pressed")).toBe("true");
 		expect(fetch).toHaveBeenCalledWith(english.url, { credentials: "omit" });
-		expect(container.querySelector("track")?.getAttribute("src")).toBe(
-			"blob:captions",
-		);
+		const track = container.querySelector<HTMLTrackElement>("track[src]");
+		expect(track?.getAttribute("src")).toBe("blob:captions");
+		expect(track?.kind).toBe("captions");
+		expect(track?.srclang).toBe("en");
+		expect(track?.label).toBe("English");
 
 		await click(button());
 

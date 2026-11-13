@@ -404,7 +404,12 @@ export const CapPlayer = ({
 
 	useEffect(() => {
 		const files = captionFiles.current;
-		return () => releaseCaptionsFiles(files);
+		const tracks = captionTracks.current;
+		return () => {
+			for (const element of tracks.values()) element.remove();
+			tracks.clear();
+			releaseCaptionsFiles(files);
+		};
 	}, []);
 
 	useEffect(() => {
@@ -416,8 +421,7 @@ export const CapPlayer = ({
 			}
 		}
 		setCue("");
-		const element = caption && captionTracks.current.get(caption.language);
-		if (!video || !caption || !element) return;
+		if (!video || !caption) return;
 
 		let cancelled = false;
 		let detach: () => void = () => undefined;
@@ -431,7 +435,23 @@ export const CapPlayer = ({
 		loadCaptionsFile(captionFiles.current, caption.url).then(
 			(src) => {
 				if (cancelled) return;
-				if (element.getAttribute("src") !== src) element.src = src;
+				// The track element is made only once its file is here. Chrome
+				// keeps a track that was ever shown without a source in its error
+				// state, even after a source is set.
+				const kept = captionTracks.current.get(caption.language);
+				const element =
+					kept?.getAttribute("src") === src
+						? kept
+						: document.createElement("track");
+				if (element !== kept) {
+					kept?.remove();
+					element.kind = "captions";
+					element.srclang = caption.language;
+					element.label = caption.label;
+					element.src = src;
+					video.append(element);
+					captionTracks.current.set(caption.language, element);
+				}
 				const track = element.track;
 				if (!track) return;
 				const paint = () =>
@@ -446,10 +466,14 @@ export const CapPlayer = ({
 					"webkitbeginfullscreen",
 					"webkitendfullscreen",
 				];
+				// A track that finishes loading while the video is paused has
+				// active cues but fires no cuechange until the time moves.
 				track.addEventListener("cuechange", paint);
+				element.addEventListener("load", paint);
 				for (const name of viewEvents) video.addEventListener(name, place);
 				detach = () => {
 					track.removeEventListener("cuechange", paint);
+					element.removeEventListener("load", paint);
 					for (const name of viewEvents) {
 						video.removeEventListener(name, place);
 					}
@@ -1012,18 +1036,6 @@ export const CapPlayer = ({
 		closeMenu("captions");
 	};
 
-	const captionTrack = (caption: CapPlayerCaption | undefined) =>
-		caption
-			? {
-					srcLang: caption.language,
-					label: caption.label,
-					ref: (element: HTMLTrackElement | null) => {
-						if (element) captionTracks.current.set(caption.language, element);
-						else captionTracks.current.delete(caption.language);
-					},
-				}
-			: {};
-
 	const captionsLabel =
 		offered.find((caption) => caption.language === captionsOn)?.label ?? "off";
 
@@ -1059,10 +1071,7 @@ export const CapPlayer = ({
 				data-action="surface"
 				aria-label={title}
 			>
-				<track kind="captions" {...captionTrack(captions[0])} />
-				{captions.slice(1).map((caption) => (
-					<track key={caption.url} kind="captions" {...captionTrack(caption)} />
-				))}
+				<track kind="captions" />
 			</video>
 			{cue ? (
 				<div className={styles.captions}>

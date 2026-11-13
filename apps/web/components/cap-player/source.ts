@@ -372,11 +372,14 @@ export const attachSource = (
 				startFragPrefetch: true,
 				backBufferLength: 30,
 				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
-				// Cap's streams carry no subtitle renditions. Left on, hls.js
-				// switches off every labelled caption track on the video when it
-				// detaches, so captions would go dark after a fallback to the MP4.
+				// Cap's streams carry no subtitle renditions and no captions inside
+				// the video. Left on, these hls.js parts clear the cues of every
+				// caption track on the video when a manifest loads and switch the
+				// tracks off when it detaches, which emptied the player's own
+				// captions in Chrome.
 				subtitleStreamController: undefined,
 				subtitleTrackController: undefined,
+				timelineController: undefined,
 			});
 			let playRequested = false;
 			let picked = AUTO_LEVEL;

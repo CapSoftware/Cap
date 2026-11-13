@@ -233,8 +233,6 @@ describe("developer video page parameters", () => {
 
 		expect(html).toContain('aria-pressed="false"');
 		expect(html).toContain('aria-label="Captions"');
-		expect(html).toContain('srcLang="en"');
-		expect(html).toContain('label="English"');
 	});
 
 	it("starts with captions on when the embed asks", () => {
