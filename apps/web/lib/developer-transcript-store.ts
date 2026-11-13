@@ -7,7 +7,19 @@ import {
 	users,
 } from "@cap/database/schema";
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
-import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	gt,
+	gte,
+	isNotNull,
+	isNull,
+	lt,
+	or,
+	sql,
+} from "drizzle-orm";
 import { start } from "workflow/api";
 import { developerIdFromKey } from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
@@ -901,7 +913,10 @@ export async function deleteTranscript(
 	transcriptId: string,
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
-	if (!transcript) return NOT_FOUND;
+	if (!transcript) {
+		await syncDeletedTranscriptCaptions(appId, transcriptId);
+		return NOT_FOUND;
+	}
 
 	await db()
 		.update(developerTranscripts)
@@ -914,18 +929,27 @@ export async function deleteTranscript(
 		);
 
 	await deleteTranscriptObjects(appId, transcript.id);
-	if (
-		transcript.videoId &&
-		transcript.status === "complete" &&
-		(transcript.wordCount ?? 0) > 0
-	) {
-		await syncVideoCaptions({
-			appId,
-			videoId: transcript.videoId,
-			language: transcript.language,
-		});
-	}
 	return { ok: true };
+}
+
+async function syncDeletedTranscriptCaptions(
+	appId: string,
+	transcriptId: string,
+) {
+	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	if (
+		!transcript?.deletedAt ||
+		!transcript.videoId ||
+		transcript.status !== "complete" ||
+		(transcript.wordCount ?? 0) === 0
+	) {
+		return;
+	}
+	await syncVideoCaptions({
+		appId,
+		videoId: transcript.videoId,
+		language: transcript.language,
+	});
 }
 
 export async function deleteTranscriptObjects(
@@ -934,6 +958,54 @@ export async function deleteTranscriptObjects(
 ) {
 	const keys = transcriptObjectKeys(appId, transcriptId);
 	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	await syncDeletedTranscriptCaptions(appId, transcriptId);
+}
+
+const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;
+const CAPTION_RECONCILE_LIMIT = 200;
+
+export async function reconcileDeletedVideoCaptions(now = new Date()) {
+	const rows = await db()
+		.selectDistinct({
+			appId: developerTranscripts.appId,
+			videoId: developerTranscripts.videoId,
+			language: developerTranscripts.language,
+		})
+		.from(developerTranscripts)
+		.where(
+			and(
+				eq(developerTranscripts.status, "complete"),
+				gte(
+					developerTranscripts.updatedAt,
+					new Date(now.getTime() - CAPTION_RECONCILE_WINDOW_MS),
+				),
+				isNotNull(developerTranscripts.deletedAt),
+				isNotNull(developerTranscripts.videoId),
+				gt(developerTranscripts.wordCount, 0),
+			),
+		)
+		.limit(CAPTION_RECONCILE_LIMIT);
+
+	let synced = 0;
+	let failed = 0;
+	for (const row of rows) {
+		if (!row.videoId) continue;
+		try {
+			await syncVideoCaptions({
+				appId: row.appId,
+				videoId: row.videoId,
+				language: row.language,
+			});
+			synced++;
+		} catch (error) {
+			failed++;
+			console.error("[developer-transcripts] Caption reconcile failed", {
+				videoId: row.videoId,
+				error,
+			});
+		}
+	}
+	return { synced, failed };
 }
 
 export async function expireStaleTranscripts(now = new Date()) {
