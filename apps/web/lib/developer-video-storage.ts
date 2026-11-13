@@ -1,3 +1,4 @@
+import { isCloudFrontSignedUrl } from "@cap/web-backend/src/S3Buckets/cloudfront-signed-url";
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets/index";
 import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import { Effect, ManagedRuntime, Option } from "effect";
@@ -61,6 +62,14 @@ export function signedDeveloperVideoUrl(
 			),
 		),
 	);
+}
+
+// A browser sends `Origin: null` with a request it was redirected to from
+// another origin. The CDN answers any origin. A bucket reached directly only
+// answers the origins on its CORS list, and `null` is never one of them, so a
+// player's request for media there must not arrive through a redirect.
+export function developerVideoUrlAnswersAnyOrigin(signedUrl: string): boolean {
+	return isCloudFrontSignedUrl(signedUrl);
 }
 
 export function internalDeveloperVideoUrl(

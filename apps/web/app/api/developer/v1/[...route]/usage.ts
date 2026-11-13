@@ -14,7 +14,6 @@ import {
 	infraBillingJson,
 	infraStorageJson,
 } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
 import { creditDollars } from "@/lib/infra-usage";
 import { withDeveloperSecretAuth } from "../../../utils";
 
@@ -28,7 +27,7 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[videoStats], billing, stored, credit] = await Promise.all([
+	const [[videoStats], billing, credit] = await Promise.all([
 		db()
 			.select({
 				createdVideos: count(),
@@ -42,9 +41,9 @@ app.get("/", async (c) => {
 				),
 			),
 		getInfraBilling(appId),
-		getAppStorageUsage(appId),
 		getSpeechUsage(appId),
 	]);
+	const { stored } = billing;
 
 	const { balanceMicroCredits, ...speech } = credit;
 	const { standing, upload } = infraBillingJson(billing);

@@ -26,6 +26,7 @@ interface ShareCapParams {
 	spaceIds: Space.SpaceIdOrOrganisationId[];
 	public?: boolean;
 	linkAccess?: LinkAccessChoice;
+	keepExisting?: boolean;
 }
 
 export async function shareCap({
@@ -33,6 +34,7 @@ export async function shareCap({
 	spaceIds,
 	public: isPublic,
 	linkAccess,
+	keepExisting = false,
 }: ShareCapParams) {
 	try {
 		const user = await getCurrentUser();
@@ -113,9 +115,11 @@ export async function shareCap({
 			.from(sharedVideos)
 			.where(eq(sharedVideos.videoId, capId));
 
-		const orgIdsToRemove = currentSharedOrganizations
-			.filter((s) => !organizationIds.includes(s.organizationId))
-			.map((s) => s.organizationId);
+		const orgIdsToRemove = keepExisting
+			? []
+			: currentSharedOrganizations
+					.filter((s) => !organizationIds.includes(s.organizationId))
+					.map((s) => s.organizationId);
 		if (orgIdsToRemove.length > 0) {
 			await db()
 				.delete(sharedVideos)
@@ -144,9 +148,11 @@ export async function shareCap({
 
 		const spacesIds = spacesData.map((space) => space.id);
 
-		const spaceIdsToRemove = currentSpaceVideos
-			.filter((s) => !spacesIds.includes(s.spaceId))
-			.map((s) => s.spaceId);
+		const spaceIdsToRemove = keepExisting
+			? []
+			: currentSpaceVideos
+					.filter((s) => !spacesIds.includes(s.spaceId))
+					.map((s) => s.spaceId);
 		if (spaceIdsToRemove.length > 0) {
 			await db()
 				.delete(spaceVideos)

@@ -1926,7 +1926,7 @@ export type DeveloperTranscriptStatus =
 	| "complete"
 	| "error";
 
-export type DeveloperTranscriptSourceType = "upload" | "url";
+export type DeveloperTranscriptSourceType = "upload" | "url" | "video";
 
 export const developerTranscripts = mysqlTable(
 	"developer_transcripts",
@@ -1945,11 +1945,13 @@ export const developerTranscripts = mysqlTable(
 			.$type<DeveloperTranscriptStatus>(),
 		sourceType: varchar("sourceType", {
 			length: 8,
-			enum: ["upload", "url"],
+			enum: ["upload", "url", "video"],
 		})
 			.notNull()
 			.$type<DeveloperTranscriptSourceType>(),
 		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		videoId: nanoIdNullable("videoId"),
+		requestedAt: timestamp("requestedAt", { fsp: 3 }),
 		s3Key: varchar("s3Key", { length: 512 }),
 		resultKey: varchar("resultKey", { length: 512 }),
 		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
@@ -2002,6 +2004,26 @@ export const developerTranscripts = mysqlTable(
 			table.status,
 			table.updatedAt,
 		),
+		index("dev_transcripts_app_completed_idx").on(
+			table.appId,
+			table.status,
+			table.completedAt,
+			table.durationSeconds,
+			table.billedMicroCredits,
+		),
+		index("dev_transcripts_app_status_held_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+			table.deletedAt,
+			table.reservedMicroCredits,
+		),
+		index("dev_transcripts_app_video_idx").on(
+			table.appId,
+			table.videoId,
+			table.requestedAt,
+			table.id,
+		),
 	],
 );
 
@@ -2035,6 +2057,7 @@ export const developerCreditAccounts = mysqlTable(
 	(table) => [
 		uniqueIndex("app_id_unique").on(table.appId),
 		index("owner_idx").on(table.ownerId),
+		index("auto_top_up_idx").on(table.autoTopUpEnabled),
 	],
 );
 
@@ -2129,6 +2152,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.referenceId,
 			table.referenceType,
 		),
+		index("reference_type_id_idx").on(table.referenceType, table.referenceId),
 	],
 );
 
