@@ -1,3 +1,4 @@
+import { firstCreditOffersAddCredits } from "@/lib/infra-credit-prompts";
 import {
 	infraVideoListLimit,
 	infraVideoListPage,
@@ -39,17 +40,26 @@ export default async function InfraVideosPage({
 	);
 
 	if (videos.length === 0 && !userId) {
+		const balanceMicroCredits = app.creditAccount?.balanceMicroCredits ?? 0;
+		const proCredit = await getInfraProCredit();
 		return (
 			<>
 				<PageHeader
 					title="Videos"
 					description="Drop in your first video. Once it has processed you can watch it here and copy the links that play it on your site."
 				/>
-				<UploadDrop />
+				<UploadDrop
+					creditsLink={
+						!firstCreditOffersAddCredits({
+							balanceMicroCredits,
+							proCreditStatus: proCredit.status,
+						})
+					}
+				/>
 				<FirstCredit
 					appId={app.id}
-					balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
-					proCredit={await getInfraProCredit()}
+					balanceMicroCredits={balanceMicroCredits}
+					proCredit={proCredit}
 				/>
 				<ApiGuide />
 			</>

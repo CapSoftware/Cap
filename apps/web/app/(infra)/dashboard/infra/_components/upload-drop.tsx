@@ -7,7 +7,7 @@ import { infraAppPath } from "@/lib/infra-routes";
 import { Button, LIT, MONO, TEXT_LINK } from "./ui";
 import { useUploads } from "./uploads";
 
-export function UploadDrop() {
+export function UploadDrop({ creditsLink = true }: { creditsLink?: boolean }) {
 	const { appId, active, waiting, failures, add, cancel } = useUploads();
 	const input = useRef<HTMLInputElement>(null);
 	const [over, setOver] = useState(false);
@@ -132,7 +132,7 @@ export function UploadDrop() {
 							{failure.message}
 							{failure.skipped > 0 &&
 								` ${failure.skipped} more ${failure.skipped === 1 ? "file was" : "files were"} not started.`}{" "}
-							{failure.needsCredits && (
+							{creditsLink && failure.needsCredits && (
 								<Link
 									href={infraAppPath(appId, "billing")}
 									className={clsx(TEXT_LINK, "text-[#E8ECF4]")}
