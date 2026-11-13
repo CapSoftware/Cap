@@ -30,6 +30,7 @@ import {
 	withoutReservedMetadata,
 } from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
 	getInfraUploadAdmission,
@@ -444,6 +445,7 @@ export async function createInfraVideo({
 > {
 	const admission = await getInfraUploadAdmission(appId);
 	if (!admission.allowed) {
+		await scheduleAutoTopUp({ appId });
 		return { status: 402, body: uploadAdmissionError(admission) };
 	}
 
@@ -766,6 +768,7 @@ export async function completeInfraUpload({
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
 			const admission = await admitDeveloperVideoUpload(upload);
 			if (!admission.allowed) {
+				await scheduleAutoTopUp({ appId });
 				return { status: 402, body: uploadAdmissionError(admission) };
 			}
 		}
@@ -831,6 +834,7 @@ export async function completeInfraUpload({
 			await removeStoredFile(s3Key);
 			await releaseDeveloperVideoUpload(videoId, claim);
 			claim = null;
+			await scheduleAutoTopUp({ appId });
 			const refusal = uploadAdmissionError(admission);
 			return {
 				status: 402,

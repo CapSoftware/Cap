@@ -1,4 +1,5 @@
 import {
+	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
@@ -52,6 +53,7 @@ const freshAccount = () => ({
 	autoTopUpThresholdMicroCredits: 0,
 	autoTopUpAmountCents: 0,
 	email: "richie@cap.so",
+	appDeletedAt: null as Date | null,
 });
 
 export const ledger = {
@@ -61,6 +63,7 @@ export const ledger = {
 	snapshots: [] as SnapshotRow[],
 	videos: [] as VideoGroup[],
 	heldMicroCredits: 0,
+	appDeletedBeforeLock: false,
 };
 
 export function resetLedger() {
@@ -68,6 +71,7 @@ export function resetLedger() {
 	ledger.account = freshAccount();
 	ledger.rows = [];
 	ledger.snapshots = [];
+	ledger.appDeletedBeforeLock = false;
 	ledger.videos = [];
 	ledger.heldMicroCredits = 0;
 }
@@ -121,6 +125,71 @@ const latestStorageDayRows = () => {
 	return days.filter((row) => row.referenceId === latestDay).sort(byId);
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+
+function autoTopUpWaits() {
+	const now = ledger.now.getTime();
+	const of = (type: string, referenceType: string) =>
+		ledger.rows.filter(
+			(row) => row.type === type && row.referenceType === referenceType,
+		);
+	const settledIds = new Set(
+		ledger.rows
+			.filter(
+				(row) =>
+					row.referenceType === "auto_top_up" ||
+					row.referenceType === "auto_top_up_failed",
+			)
+			.map((row) => row.referenceId),
+	);
+	const topUps = of("topup", "auto_top_up");
+	return {
+		pending: of("topup_pending", "auto_top_up_pending").some(
+			(row) =>
+				row.createdAt.getTime() > now - 72 * HOUR_MS &&
+				!String(row.referenceId).startsWith("infra-auto-top-up:") &&
+				!settledIds.has(row.referenceId),
+		),
+		decline: of("topup_failed", "auto_top_up_failed").some(
+			(row) =>
+				row.createdAt.getTime() > now - 24 * HOUR_MS &&
+				!topUps.some((topUp) => topUp.createdAt > row.createdAt),
+		),
+		limit:
+			topUps.filter((row) => row.createdAt.getTime() > now - 24 * HOUR_MS)
+				.length >= 10,
+		owner:
+			ledger.rows
+				.filter(
+					(row) =>
+						!String(row.referenceId).startsWith("infra-auto-top-up:") &&
+						((row.type === "topup" &&
+							row.referenceType === "auto_top_up" &&
+							row.createdAt.getTime() > now - 24 * HOUR_MS) ||
+							(row.type === "topup_pending" &&
+								row.referenceType === "auto_top_up_pending" &&
+								!settledIds.has(row.referenceId))),
+				)
+				.reduce(
+					(total, row) =>
+						total +
+						(row.type === "topup"
+							? row.amountMicroCredits
+							: Number(row.metadata?.amountCents ?? 0) * 1000),
+					0,
+				) +
+				Number(
+					ledger.rows.find(
+						(row) =>
+							row.type === "topup_pending" &&
+							String(row.referenceId).startsWith("infra-auto-top-up:"),
+					)?.metadata?.amountCents ?? ledger.account.autoTopUpAmountCents,
+				) *
+					1000 >
+			100_000_000,
+	};
+}
+
 function runSelect(query: Query): Record<string, unknown>[] {
 	const keys = Object.keys(query.fields).sort().join(",");
 	const rendered = query.where
@@ -130,12 +199,30 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditAccounts) {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
+		if (
+			keys ===
+			"amountCents,balanceMicroCredits,customerId,declineWait,enabled,id,limitWait,ownerWait,paymentMethodId,pendingWait,thresholdMicroCredits"
+		) {
+			if (rendered.params.at(-1) !== account.id) return [];
+			const waits = autoTopUpWaits();
+			return [
+				{
+					id: account.id,
+					enabled: account.autoTopUpEnabled,
+					thresholdMicroCredits: account.autoTopUpThresholdMicroCredits,
+					amountCents: account.autoTopUpAmountCents,
+					customerId: account.stripeCustomerId,
+					paymentMethodId: account.stripePaymentMethodId,
+					balanceMicroCredits: account.balanceMicroCredits,
+					pendingWait: Number(waits.pending),
+					declineWait: Number(waits.decline),
+					limitWait: Number(waits.limit),
+					ownerWait: Number(waits.owner),
+				},
+			];
+		}
 		if (keys === "attemptKey,id") {
-			const cutoff = rendered.params.find(
-				(param) =>
-					typeof param === "string" &&
-					/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(param),
-			);
+			const waits = autoTopUpWaits();
 			const attempts = ledger.rows
 				.filter((row) =>
 					["auto_top_up", "auto_top_up_failed", "auto_top_up_pending"].includes(
@@ -149,7 +236,10 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				account.stripePaymentMethodId &&
 				account.balanceMicroCredits <
 					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits &&
-				(lastAttempt === null || lastAttempt <= asTime(cutoff));
+				!waits.pending &&
+				!waits.decline &&
+				!waits.limit &&
+				!waits.owner;
 			return due
 				? [
 						{
@@ -257,6 +347,54 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				),
 			).slice(0, 1);
 		}
+		if (keys === "pendingId,pendingRow,pendingSince") {
+			return ledger.rows
+				.filter(
+					(row) =>
+						row.type === "topup_pending" &&
+						row.referenceType === "auto_top_up_pending",
+				)
+				.map((row) => ({
+					pendingRow: row.id,
+					pendingId: row.referenceId,
+					pendingSince: row.createdAt,
+				}));
+		}
+		if (keys === "reservation,reservedAt") {
+			const [accountId, referenceId] = rendered.params;
+			return ledger.rows
+				.filter(
+					(row) =>
+						row.accountId === accountId &&
+						row.referenceId === referenceId &&
+						row.referenceType === "auto_top_up_pending",
+				)
+				.map((row) => ({
+					reservation: row.metadata,
+					reservedAt: row.createdAt,
+				}));
+		}
+		if (keys === "settledId") {
+			const ids = rendered.params.slice(3);
+			return ledger.rows
+				.filter(
+					(row) =>
+						(row.referenceType === "auto_top_up" ||
+							row.referenceType === "auto_top_up_failed") &&
+						ids.includes(row.referenceId),
+				)
+				.map((row) => ({ settledId: row.referenceId }));
+		}
+		if (keys === "declines,topUps") {
+			const count = (type: string) =>
+				ledger.rows.filter((row) => row.referenceType === type).length;
+			return [
+				{
+					topUps: count("auto_top_up"),
+					declines: count("auto_top_up_failed"),
+				},
+			];
+		}
 		if (keys === "createdAt,metadata,type") {
 			const types = rendered.params.slice(1);
 			return newestFirst(
@@ -288,6 +426,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					row.referenceType === referenceType,
 			);
 		}
+	}
+
+	if (query.table === developerApps && keys === "appDeletedAt") {
+		const deletedAt = ledger.appDeletedBeforeLock
+			? ledger.now
+			: ledger.account.appDeletedAt;
+		return [{ appDeletedAt: deletedAt }];
 	}
 
 	if (query.table === developerTranscripts) {
@@ -345,7 +490,20 @@ function update(table: unknown) {
 	return {
 		set(values: Record<string, unknown>) {
 			return {
-				async where() {
+				async where(condition?: SQL) {
+					if (table === developerCreditTransactions && condition) {
+						const [accountId, referenceId, referenceType, rowId] =
+							dialect.sqlToQuery(condition).params;
+						const rows = ledger.rows.filter(
+							(row) =>
+								row.accountId === accountId &&
+								row.referenceId === referenceId &&
+								row.referenceType === referenceType &&
+								(rowId === undefined || row.id === rowId),
+						);
+						for (const row of rows) Object.assign(row, values);
+						return [{ affectedRows: rows.length }];
+					}
 					if (table !== developerCreditAccounts) return [{ affectedRows: 0 }];
 					const { balanceMicroCredits, ...rest } = values;
 					if (balanceMicroCredits !== undefined) {
@@ -396,10 +554,32 @@ function insert(table: unknown) {
 	};
 }
 
+function remove(table: unknown) {
+	return {
+		async where(condition: SQL) {
+			if (table !== developerCreditTransactions) return [{ affectedRows: 0 }];
+			const [accountId, referenceId, referenceType, rowId] =
+				dialect.sqlToQuery(condition).params;
+			const before = ledger.rows.length;
+			ledger.rows = ledger.rows.filter(
+				(row) =>
+					!(
+						row.accountId === accountId &&
+						row.referenceId === referenceId &&
+						row.referenceType === referenceType &&
+						(rowId === undefined || row.id === rowId)
+					),
+			);
+			return [{ affectedRows: before - ledger.rows.length }];
+		},
+	};
+}
+
 type FakeDb = {
 	select: typeof select;
 	update: typeof update;
 	insert: typeof insert;
+	delete: typeof remove;
 	transaction: <T>(run: (tx: FakeDb) => Promise<T>) => Promise<T>;
 };
 
@@ -407,5 +587,6 @@ export const fakeDb: FakeDb = {
 	select,
 	update,
 	insert,
+	delete: remove,
 	transaction: (run) => run(fakeDb),
 };
