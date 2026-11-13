@@ -63,12 +63,11 @@ export async function lookUpJobOnPeers(
 				// Only a peer that owns the job answers 200, or 400 for a finished job's cancel.
 				if (response.status !== 200 && response.status !== 400) {
 					await response.body?.cancel().catch(() => {});
-					// A 404 or a refused secret is an answer. Anything else
-					// (a peer that is starting, overloaded or failing) is not.
+					// Only a 404 says the job is not there. A peer that refuses
+					// the secret (as during a rotation), is starting, overloaded
+					// or failing may still own it.
 					throw new Error(
-						response.status === 404 ||
-							response.status === 401 ||
-							response.status === 403
+						response.status === 404
 							? NOT_ON_PEER
 							: `Peer answered ${response.status}`,
 					);

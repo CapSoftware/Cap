@@ -165,10 +165,13 @@ describe("peer job lookup", () => {
 		expect(peerRequests).toHaveLength(0);
 	});
 
-	test("ignores a peer that rejects the shared secret", async () => {
-		respond = () => new Response("Unauthorized", { status: 401 });
-		const response = await app.fetch(statusRequest("job-rejected"));
-		expect(response.status).toBe(404);
+	test("does not call a job missing when a peer rejects the shared secret", async () => {
+		for (const status of [401, 403]) {
+			respond = () => new Response("Unauthorized", { status });
+			const response = await app.fetch(statusRequest("job-rejected"));
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("5");
+		}
 	});
 
 	test("waits for an owner that delivers its webhook before confirming a cancel", async () => {
