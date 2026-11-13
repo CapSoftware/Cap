@@ -153,15 +153,20 @@ async fn post_probe(payload_bytes: usize, timeout: Duration) -> Result<Duration,
 }
 
 async fn run_health_check(status: &Entity<NetworkStatus>, cx: &mut AsyncApp) {
-    let outcome = match post_probe(64 * 1024, HEALTH_CHECK_TIMEOUT).await {
-        Ok(_) => HealthStatus::Ok,
-        Err(AuthApiError::InvalidAuthentication) => return,
-        Err(error) => {
+    let probe_task = gpui_tokio::Tokio::spawn(cx, post_probe(64 * 1024, HEALTH_CHECK_TIMEOUT));
+    let outcome = match probe_task.await {
+        Ok(Ok(_)) => HealthStatus::Ok,
+        Ok(Err(AuthApiError::InvalidAuthentication)) => return,
+        Ok(Err(error)) => {
             tracing::warn!(error = %error, "upload health check failed");
             HealthStatus::Failed
         }
+        Err(error) => {
+            tracing::warn!(error = %error, "upload health check task failed");
+            HealthStatus::Failed
+        }
     };
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         status.update(cx, |status, cx| {
             status.health = outcome;
             publish(status.snapshot_of());
@@ -171,19 +176,28 @@ async fn run_health_check(status: &Entity<NetworkStatus>, cx: &mut AsyncApp) {
 }
 
 async fn measure_upload_speed(status: &Entity<NetworkStatus>, cx: &mut AsyncApp) {
-    let outcome = match post_probe(SPEED_TEST_PAYLOAD_BYTES, SPEED_TEST_TIMEOUT).await {
-        Ok(elapsed) => {
-            Some(SPEED_TEST_PAYLOAD_BYTES as f64 * 8.0 / elapsed.as_secs_f64() / 1_000_000.0)
+    let probe_task = gpui_tokio::Tokio::spawn(cx, post_probe(SPEED_TEST_PAYLOAD_BYTES, SPEED_TEST_TIMEOUT));
+    let (outcome, recovered) = match probe_task.await {
+        Ok(Ok(elapsed)) => {
+            let mbps = SPEED_TEST_PAYLOAD_BYTES as f64 * 8.0 / elapsed.as_secs_f64() / 1_000_000.0;
+            (Some(mbps), true)
         }
-        Err(AuthApiError::InvalidAuthentication) => return,
-        Err(error) => {
+        Ok(Err(AuthApiError::InvalidAuthentication)) => return,
+        Ok(Err(error)) => {
             tracing::warn!(error = %error, "upload speed test failed");
-            None
+            (None, false)
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "upload speed test task failed");
+            (None, false)
         }
     };
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         status.update(cx, |status, cx| {
             status.upload_mbps = outcome;
+            if recovered {
+                status.health = HealthStatus::Ok;
+            }
             status.last_speed_test = Some(Instant::now());
             publish(status.snapshot_of());
             cx.notify();
@@ -193,7 +207,6 @@ async fn measure_upload_speed(status: &Entity<NetworkStatus>, cx: &mut AsyncApp)
 
 fn recording_active(cx: &mut AsyncApp) -> bool {
     cx.update(|cx| RecordingSession::global(cx).read(cx).phase != Phase::Idle)
-        .unwrap_or(false)
 }
 
 /// Runs the startup health check once, then measures upload speed on an
