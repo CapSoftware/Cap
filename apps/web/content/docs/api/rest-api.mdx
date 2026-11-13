@@ -1427,7 +1427,7 @@ The playback URLs need no API key and answer any origin, so there is no CORS set
 
 When a video has captions, `hlsUrl` lists them as WebVTT subtitle tracks, so hls.js, Safari and other HLS players can offer them with no extra setup.
 
-FFmpeg 9.x reads only the first segment of byte-range HLS playlists (a known FFmpeg issue). Use the MP4 URL, FFmpeg 8, or a tool with its own HLS downloader.
+FFmpeg 9.0.0 to 9.0.2 stop after the first segment of byte-range HLS. Use FFmpeg 8.x or a later 9.0 release, or the MP4 download.
 
 ### Play with hls.js
 
