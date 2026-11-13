@@ -64,6 +64,7 @@ import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
 } from "./recording-timing";
+import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import {
 	createTempFile,
@@ -1594,6 +1595,7 @@ async function probeVideoStreamEntries(
 	showEntries: string,
 	abortSignal?: AbortSignal,
 	keyed = false,
+	stream = "v:0",
 ): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
@@ -1602,7 +1604,7 @@ async function probeVideoStreamEntries(
 				"-v",
 				"error",
 				"-select_streams",
-				"v:0",
+				stream,
 				"-show_entries",
 				showEntries,
 				"-of",
@@ -1737,6 +1739,39 @@ async function readVideoSourceTraits(
 		// stream's colour tags say.
 		unconvertibleDolbyVision: value("dv_profile") === "5",
 	};
+}
+
+const HLS_COPY_AUDIO_SAMPLE_RATES = new Set(["44100", "48000"]);
+const HLS_COPY_AUDIO_MAX_BITRATE = HLS_LADDER_COPIED_AUDIO_MAX_KBPS * 1000;
+
+// Whether the source's first audio track can go into an HLS audio rendition as
+// it is. The playlists name that rendition AAC-LC with two channels, so only
+// stereo AAC-LC qualifies, at a common rate and no more than the bitrate the
+// playlists allow for. Anything else, or a probe that fails, is encoded.
+export async function sourceAudioCopiesToHls(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<boolean> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=codec_name,profile,channels,sample_rate,bit_rate",
+		abortSignal,
+		true,
+		"a:0",
+	);
+	if (stdout === null) return false;
+	const value = (key: string) =>
+		stdout.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? null;
+	const bitrate = Number(value("bit_rate"));
+	return (
+		value("codec_name") === "aac" &&
+		value("profile") === "LC" &&
+		value("channels") === "2" &&
+		HLS_COPY_AUDIO_SAMPLE_RATES.has(value("sample_rate") ?? "") &&
+		Number.isFinite(bitrate) &&
+		bitrate > 0 &&
+		bitrate <= HLS_COPY_AUDIO_MAX_BITRATE
+	);
 }
 
 // One ffprobe for the two things that decide how a source is decoded: a

@@ -598,7 +598,7 @@ describe("the last slice", () => {
 		expect(written["audio.m3u8"]).toContain(`audio-0-${tokens[0]}.m4s`);
 		expect(written["audio.m3u8"]?.match(/#EXTINF/g)).toHaveLength(75);
 		expect(written["master.m3u8"]).toContain(
-			'#EXT-X-STREAM-INF:BANDWIDTH=4128000,AVERAGE-BANDWIDTH=3128000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="aud"\n1080p.m3u8',
+			'#EXT-X-STREAM-INF:BANDWIDTH=4192000,AVERAGE-BANDWIDTH=3128000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="aud"\n1080p.m3u8',
 		);
 	});
 

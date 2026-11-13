@@ -28,7 +28,10 @@ import {
 } from "../../lib/media-operations";
 import * as mediaProbe from "../../lib/media-probe";
 import { probeVideoFile } from "../../lib/media-probe";
-import { generateThumbnail } from "../../lib/media-video";
+import {
+	generateThumbnail,
+	sourceAudioCopiesToHls,
+} from "../../lib/media-video";
 import { getActiveSubprocessCount } from "../../lib/subprocess";
 
 const SOURCE_SECONDS = 26;
@@ -415,6 +418,156 @@ describe("HLS ladder encode", () => {
 		expect(bounded[0]).toBeCloseTo(wholeBetween[0] ?? Number.NaN, 3);
 		expect(bounded.at(-1)).toBeCloseTo(wholeBetween.at(-1) ?? Number.NaN, 3);
 	}, 180_000);
+
+	function audioPackets(path: string) {
+		return execFileSync(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-allowed_extensions",
+				"ALL",
+				"-select_streams",
+				"a:0",
+				"-show_entries",
+				"packet=size",
+				"-of",
+				"csv=p=0",
+				path,
+			],
+			{ encoding: "utf8" },
+		)
+			.split("\n")
+			.map((line) => line.split(",")[0] ?? "")
+			.filter((line) => line.length > 0);
+	}
+
+	function audioChannels(path: string) {
+		return execFileSync(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-allowed_extensions",
+				"ALL",
+				"-select_streams",
+				"a:0",
+				"-show_entries",
+				"stream=channels",
+				"-of",
+				"csv=p=0",
+				path,
+			],
+			{ encoding: "utf8" },
+		)
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line.length > 0);
+	}
+
+	test("copies stereo AAC-LC into a slice's audio packet for packet", async () => {
+		const stereo = join(directory, "stereo.mp4");
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-i",
+			source,
+			"-f",
+			"lavfi",
+			"-i",
+			`sine=frequency=330:duration=${SOURCE_SECONDS}`,
+			"-filter_complex",
+			"[0:a][1:a]join=inputs=2:channel_layout=stereo[st]",
+			"-map",
+			"0:v",
+			"-map",
+			"[st]",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"aac",
+			"-b:a",
+			"160k",
+			"-y",
+			stereo,
+		]);
+		expect(await sourceAudioCopiesToHls(stereo)).toBe(true);
+
+		const first = await encode(
+			{ startSeconds: 0, durationSeconds: 16 },
+			true,
+			stereo,
+		);
+		const audio = fileNamed(first, "audio.m3u8").path;
+		expect(audioPackets(audio)).toEqual(audioPackets(stereo));
+		expect(audioChannels(audio)).toBe("2");
+
+		// The copied audio plays against the stitched video like encoded audio.
+		const second = await encode({ startSeconds: 16 }, false, stereo);
+		const output = stitch([first, second], "stitched-copied-audio");
+		const audioSeconds = streamSeconds(join(output, "master.m3u8"), "a:0");
+		const videoSeconds = streamSeconds(join(output, "master.m3u8"), "v:0");
+		expect(audioSeconds).toBeGreaterThan(SOURCE_SECONDS - 1);
+		expect(Math.abs(audioSeconds - videoSeconds)).toBeLessThan(0.5);
+	}, 180_000);
+
+	test("still encodes audio that is not stereo AAC-LC", async () => {
+		expect(await sourceAudioCopiesToHls(source)).toBe(false);
+		const slice = await encode({ startSeconds: 0, durationSeconds: 16 });
+		const audio = fileNamed(slice, "audio.m3u8").path;
+		expect(audioChannels(audio)).toBe("2");
+		expect(audioPackets(audio)).not.toEqual(audioPackets(source));
+	}, 120_000);
+
+	test("copies only stereo AAC-LC at a common rate and bitrate", async () => {
+		const make = (name: string, args: string[], extension = "mp4") => {
+			const path = join(directory, `${name}.${extension}`);
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=440:duration=2",
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=330:duration=2",
+				"-filter_complex",
+				"[0:a][1:a]join=inputs=2:channel_layout=stereo[st]",
+				"-map",
+				"[st]",
+				...args,
+				"-y",
+				path,
+			]);
+			return path;
+		};
+		expect(
+			await sourceAudioCopiesToHls(make("ok", ["-c:a", "aac", "-b:a", "128k"])),
+		).toBe(true);
+		expect(
+			await sourceAudioCopiesToHls(
+				make("loud", ["-c:a", "aac", "-b:a", "256k"]),
+			),
+		).toBe(false);
+		expect(
+			await sourceAudioCopiesToHls(
+				make("rate", ["-c:a", "aac", "-b:a", "96k", "-ar", "32000"]),
+			),
+		).toBe(false);
+		expect(
+			await sourceAudioCopiesToHls(
+				make("surround", ["-c:a", "aac", "-b:a", "128k", "-ac", "6"]),
+			),
+		).toBe(false);
+		expect(
+			await sourceAudioCopiesToHls(make("opus", ["-c:a", "libopus"], "webm")),
+		).toBe(false);
+		expect(await sourceAudioCopiesToHls(join(directory, "missing.mp4"))).toBe(
+			false,
+		);
+	}, 60_000);
 
 	test("keeps audio in a codec the probe cannot name", async () => {
 		const lossless = join(directory, "lossless.mov");

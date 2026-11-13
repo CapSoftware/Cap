@@ -5,6 +5,9 @@
 
 export const HLS_SEGMENT_SECONDS = 4;
 export const HLS_AUDIO_BITRATE = 128_000;
+// The media server copies stereo AAC-LC source audio of up to this bitrate
+// instead of encoding it at HLS_AUDIO_BITRATE, so a variant's peak allows for it.
+export const HLS_AUDIO_PEAK_BITRATE = 192_000;
 export const HLS_AUDIO_NAME = "audio";
 
 const AUDIO_GROUP = "aud";
@@ -173,6 +176,7 @@ export function buildSlicedHlsMaster(
 ): string {
 	if (variants.length === 0) throw new Error("HLS ladder has no renditions");
 	const audioBandwidth = options.hasAudio ? HLS_AUDIO_BITRATE : 0;
+	const audioPeak = options.hasAudio ? HLS_AUDIO_PEAK_BITRATE : 0;
 	const master = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
 	if (options.hasAudio) {
 		master.push(
@@ -182,7 +186,7 @@ export function buildSlicedHlsMaster(
 	for (const variant of variants) {
 		const codecs = hlsVariantCodecs(variant.codecs, options.hasAudio);
 		const attributes = [
-			`BANDWIDTH=${Math.round(variant.bandwidth) + audioBandwidth}`,
+			`BANDWIDTH=${Math.round(variant.bandwidth) + audioPeak}`,
 			`AVERAGE-BANDWIDTH=${Math.round(variant.averageBandwidth) + audioBandwidth}`,
 			`RESOLUTION=${variant.width}x${variant.height}`,
 			...(codecs ? [`CODECS="${codecs}"`] : []),
