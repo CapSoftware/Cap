@@ -35,9 +35,8 @@ export type DeveloperVideoPageVariant = "share" | "embed";
 
 const loadPlayer = cache(loadDeveloperVideoPlayer);
 
-// A link to the share page unfurls as the video: og:video points at the MP4,
-// and an oEmbed endpoint gives sites that read it the embed's iframe. Only
-// the share page carries them, so the embed's own document stays as light.
+// The embed document leaves out the video tags and the oEmbed link: it is
+// loaded on other sites' pages, where they would only add bytes.
 export async function developerVideoMetadata(
 	playbackId: string,
 	variant: DeveloperVideoPageVariant = "share",

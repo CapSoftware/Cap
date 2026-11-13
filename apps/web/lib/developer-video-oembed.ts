@@ -1,4 +1,9 @@
-import { PLAYBACK_ID_PATTERN } from "./developer-video-playback";
+import { developerVideoPageUrls } from "./developer-video-api";
+import {
+	findPlayableVideo,
+	PLAYBACK_ID_PATTERN,
+} from "./developer-video-playback";
+import { developerVideoIsTakenDown } from "./developer-video-takedown";
 
 export const DEVELOPER_VIDEO_OEMBED_PATH = "/api/developer/oembed";
 
@@ -9,11 +14,12 @@ export const DEVELOPER_VIDEO_OEMBED_CACHE_SECONDS = 60;
 
 const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_MAX_HEIGHT = 720;
+const UNMEASURED_WIDTH = 1280;
+const UNMEASURED_HEIGHT = 720;
 const PAGE_PATH = /^\/dev\/([^/]+)(?:\/embed)?\/?$/;
 
 const hostOf = (url: URL) => url.host.toLowerCase().replace(/^www\./, "");
 
-// Only the hosted pages of this site: /dev/<playbackId> and its /embed.
 export function developerVideoPlaybackIdFromUrl(
 	value: string,
 	webUrl: string,
@@ -97,9 +103,53 @@ export function developerVideoOEmbed({
 		provider_name: "Cap",
 		provider_url: webUrl.replace(/\/+$/, ""),
 		title: name,
-		html: `<iframe src="${escapeAttribute(embedUrl)}" width="${frameWidth}" height="${frameHeight}" title="${escapeAttribute(name)}" style="border: 0" allowfullscreen loading="lazy"></iframe>`,
+		html: `<iframe src="${escapeAttribute(embedUrl)}" width="${frameWidth}" height="${frameHeight}" title="${escapeAttribute(name)}" style="border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 		width: frameWidth,
 		height: frameHeight,
 		cache_age: DEVELOPER_VIDEO_OEMBED_CACHE_SECONDS,
+	};
+}
+
+export interface DeveloperVideoOEmbedQuery {
+	url?: string;
+	format?: string;
+	maxwidth?: string;
+	maxheight?: string;
+}
+
+export type DeveloperVideoOEmbedAnswer =
+	| { status: 200; body: DeveloperVideoOEmbed }
+	| { status: 404 | 501; body: { error: string } };
+
+export async function developerVideoOEmbedAnswer(
+	query: DeveloperVideoOEmbedQuery,
+	webUrl: string,
+): Promise<DeveloperVideoOEmbedAnswer> {
+	if (query.format !== undefined && query.format !== "json") {
+		return {
+			status: 501,
+			body: { error: "Only the json format is supported" },
+		};
+	}
+	const playbackId = developerVideoPlaybackIdFromUrl(query.url ?? "", webUrl);
+	if (!playbackId)
+		return { status: 404, body: { error: "Not a Cap video page" } };
+	const video = await findPlayableVideo(playbackId);
+	if (!video || developerVideoIsTakenDown(video)) {
+		return { status: 404, body: { error: "Video not found" } };
+	}
+	const { width, height } = video;
+	const measured = width !== null && height !== null && width > 0 && height > 0;
+	return {
+		status: 200,
+		body: developerVideoOEmbed({
+			name: video.name,
+			width: measured ? width : UNMEASURED_WIDTH,
+			height: measured ? height : UNMEASURED_HEIGHT,
+			embedUrl: developerVideoPageUrls(playbackId, webUrl).embedUrl,
+			webUrl,
+			maxWidth: query.maxwidth ?? null,
+			maxHeight: query.maxheight ?? null,
+		}),
 	};
 }

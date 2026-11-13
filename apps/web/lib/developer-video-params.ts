@@ -40,8 +40,6 @@ const flag = (value: string | string[] | undefined, fallback: boolean) => {
 	return fallback;
 };
 
-// Plain seconds, or a time written the way video links share one, such as
-// 1m30s, 90s or 1h2m3s.
 const seconds = (value: string | string[] | undefined) => {
 	const text = first(value);
 	if (!text) return 0;

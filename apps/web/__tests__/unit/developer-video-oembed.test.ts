@@ -1,5 +1,4 @@
 import { DEVELOPER_VIDEO_TAKEDOWN_KEY } from "@cap/database/types";
-import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type DeveloperVideoStore,
@@ -20,6 +19,18 @@ vi.mock("@cap/database", async () => {
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://web.example" }),
 }));
+vi.mock("@/lib/server", async () => {
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
+	return {
+		apiToHandler: (api: Layer.Layer<never>) => {
+			const { handler } = HttpApiBuilder.toWebHandler(
+				Layer.mergeAll(api as never, HttpServer.layerContext),
+			);
+			return (request: Request) => handler(request);
+		},
+	};
+});
 
 const { GET } = await import("@/app/api/developer/oembed/route");
 const { developerVideoOEmbed, developerVideoPlaybackIdFromUrl } = await import(
@@ -34,7 +45,7 @@ const request = (query: Record<string, string>) => {
 	for (const [key, value] of Object.entries(query)) {
 		url.searchParams.set(key, value);
 	}
-	return { nextUrl: url } as unknown as NextRequest;
+	return new Request(url);
 };
 
 beforeEach(() => {
@@ -96,7 +107,7 @@ describe("the developer oEmbed answer", () => {
 			provider_name: "Cap",
 			provider_url: "https://web.example",
 			title: "Demo",
-			html: `<iframe src="${SHARE}/embed" width="1280" height="720" title="Demo" style="border: 0" allowfullscreen loading="lazy"></iframe>`,
+			html: `<iframe src="${SHARE}/embed" width="1280" height="720" title="Demo" style="border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 			width: 1280,
 			height: 720,
 			cache_age: 60,
@@ -165,7 +176,7 @@ describe("GET /api/developer/oembed", () => {
 			height: 720,
 		});
 		expect(body.html).toBe(
-			`<iframe src="${SHARE}/embed" width="1280" height="720" title="Launch &quot;demo&quot; &lt;b&gt;" style="border: 0" allowfullscreen loading="lazy"></iframe>`,
+			`<iframe src="${SHARE}/embed" width="1280" height="720" title="Launch &quot;demo&quot; &lt;b&gt;" style="border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 		);
 		expect(JSON.stringify(body)).not.toMatch(/m3u8|mp4|playback\/|app-1/);
 	});
