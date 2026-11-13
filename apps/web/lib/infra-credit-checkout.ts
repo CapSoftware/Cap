@@ -7,6 +7,8 @@ export const STRIPE_DESCRIPTION_LIMIT = 1_000;
 
 export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card", "link"] as const;
 
+export const CREDIT_CHECKOUT_3DS_OVER_CENTS = 100_000;
+
 const CREDIT_PURCHASE_PREFIX = "Cap Infra credits for ";
 
 export function creditAppName(appName: string | null | undefined) {
@@ -32,12 +34,14 @@ export function creditCheckoutSessionParams({
 	appName,
 	amountCents,
 	receiptEmail,
+	firstLargePurchase,
 }: {
 	customerId: string;
 	accountId: string;
 	appName: string;
 	amountCents: number;
 	receiptEmail: string;
+	firstLargePurchase: boolean;
 }) {
 	const description = creditPurchaseDescription(appName);
 	return {
@@ -53,7 +57,16 @@ export function creditCheckoutSessionParams({
 			},
 		],
 		mode: "payment",
-		payment_method_types: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
+		payment_method_types: firstLargePurchase
+			? ["card"]
+			: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
+		...(firstLargePurchase
+			? {
+					payment_method_options: {
+						card: { request_three_d_secure: "any" as const },
+					},
+				}
+			: {}),
 		custom_text: {
 			submit: { message: creditCheckoutSubmitMessage(appName) },
 		},

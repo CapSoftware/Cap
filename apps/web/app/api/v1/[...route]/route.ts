@@ -168,6 +168,7 @@ import {
 	CREDIT_CHECKOUT_METADATA_TYPE,
 	creditCheckoutSessionParams,
 } from "@/lib/infra-credit-checkout";
+import { isFirstLargeCreditPurchase } from "@/lib/infra-credit-purchase-history";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import {
 	settleFirstMonthAtDelete,
@@ -4588,6 +4589,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											.limit(1),
 									);
 									if (!account) return yield* developerAppNotFound(requestId);
+									const firstLargePurchase = yield* database.use((db) =>
+										isFirstLargeCreditPurchase(
+											principal.id,
+											payload.amountCents,
+											db,
+										),
+									);
 									const customerId = yield* ensureAgentStripeCustomer(
 										principal,
 										providerIdempotencyKey,
@@ -4608,6 +4616,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													appName: account.appName,
 													amountCents: payload.amountCents,
 													receiptEmail: principal.email,
+													firstLargePurchase,
 												}),
 												success_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=success`,
 												cancel_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=cancelled`,
