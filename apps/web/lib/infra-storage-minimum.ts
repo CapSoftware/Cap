@@ -29,6 +29,7 @@ import {
 	type InfraResolutionTier,
 } from "@/lib/infra-pricing";
 import {
+	DELIVERY_DAY_TRANSACTION_TYPE,
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
 	firstMonthShortfallOwed,
@@ -482,6 +483,7 @@ export async function shortfallsAwaitingNotice(
 				inArray(developerCreditTransactions.type, [
 					"storage_daily",
 					FIRST_MONTH_TRANSACTION_TYPE,
+					DELIVERY_DAY_TRANSACTION_TYPE,
 				]),
 				gte(developerCreditTransactions.createdAt, since),
 			),

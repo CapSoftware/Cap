@@ -312,6 +312,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				return latestStorageDayRows().slice(0, 1);
 			}
 			const [, type, at] = rendered.params;
+			if (at === "delivery_day") {
+				return latestWritten(
+					ledger.rows.filter(
+						(row) => row.type === type && row.referenceType === at,
+					),
+				).slice(0, 1);
+			}
 			const ofType = latestWritten(
 				ledger.rows.filter((row) => row.type === type),
 			);

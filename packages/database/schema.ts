@@ -2082,6 +2082,7 @@ export type DeveloperCreditTransactionType =
 	| "topup"
 	| "video_create"
 	| "storage_daily"
+	| "delivery_daily"
 	| "transcription"
 	| "refund"
 	| "adjustment"
@@ -2097,6 +2098,7 @@ export type DeveloperCreditReferenceType =
 	| "manual"
 	| "pro_monthly_credit"
 	| "storage_day"
+	| "delivery_day"
 	| "auto_top_up"
 	| "auto_top_up_failed"
 	| "auto_top_up_pending"
@@ -2114,6 +2116,7 @@ export const developerCreditTransactions = mysqlTable(
 				"topup",
 				"video_create",
 				"storage_daily",
+				"delivery_daily",
 				"transcription",
 				"refund",
 				"adjustment",
@@ -2142,6 +2145,7 @@ export const developerCreditTransactions = mysqlTable(
 				"manual",
 				"pro_monthly_credit",
 				"storage_day",
+				"delivery_day",
 				"auto_top_up",
 				"auto_top_up_failed",
 				"auto_top_up_pending",

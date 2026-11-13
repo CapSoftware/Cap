@@ -17,14 +17,7 @@ export const INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH: Record<
 	"2160p": 2.8,
 };
 
-export const INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES: Record<
-	InfraResolutionTier,
-	number
-> = {
-	"1080p": 0.19,
-	"1440p": 0.3,
-	"2160p": 0.94,
-};
+export const INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES = 0.95;
 
 export const INFRA_SPEECH_DOLLARS_PER_HOUR = 0.1;
 

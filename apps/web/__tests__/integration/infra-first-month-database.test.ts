@@ -58,6 +58,8 @@ const { getAppStorage, getStorageUsageByApp } = await import(
 	"@/lib/infra-storage"
 );
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
+const { chargeDeliveryDay } = await import("@/lib/infra-delivery-billing");
+const { deliveryMicroCredits } = await import("@/lib/infra-delivery-rollup");
 const {
 	chargeDeveloperVideoFirstMonth,
 	chargeMissedFirstMonths,
@@ -961,7 +963,7 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 		});
 
-		it("keeps standing and resolved shortfalls consistent across 500 seeded charge, hold and top-up sequences", async () => {
+		it("keeps standing and resolved shortfalls consistent across 500 seeded charge, delivery, hold and top-up sequences", async () => {
 			let seed = 0x4145;
 			const random = () => {
 				seed = (seed + 0x6d2b79f5) | 0;
@@ -986,9 +988,14 @@ describe.runIf(Boolean(databaseUrl))(
 				"top_up",
 				"daily_part_in_month",
 				"daily_part_in_month",
+				"delivery_paid",
+				"delivery_short",
+				"delivery_paid",
+				"delivery_short",
 			] as const;
 			type Period = { since: string; monthMax: number };
 			const failures: string[] = [];
+			const delivered = { billed: 0, short: 0, carried: 0 };
 
 			for (let sequence = 0; sequence < 500; sequence++) {
 				const startBalance = pick([0, 500, 5_000, 20_000]);
@@ -1020,6 +1027,7 @@ describe.runIf(Boolean(databaseUrl))(
 				const steps = between(2, 6);
 				const log: string[] = [];
 				let dayIndex = 6;
+				let deliveryIndex = 40;
 
 				const latch = () => {
 					if (period && balance - held >= size()) close(true);
@@ -1083,7 +1091,54 @@ describe.runIf(Boolean(databaseUrl))(
 						if (available <= 0) continue;
 						stepKind = "daily_short";
 					}
-					if (stepKind === "daily_paid" || stepKind === "daily_short") {
+					if (stepKind === "delivery_paid" || stepKind === "delivery_short") {
+						const target =
+							stepKind === "delivery_paid"
+								? between(0, Math.max(0, available))
+								: Math.max(0, available) + between(1, 20_000);
+						const seconds =
+							stepKind === "delivery_paid"
+								? Math.floor((target * 60) / 95)
+								: Math.ceil((target * 60) / 95);
+						const owed = deliveryMicroCredits(seconds);
+						const dateKey = new Date(Date.now() - deliveryIndex * DAY_MS)
+							.toISOString()
+							.slice(0, 10);
+						latch();
+						const result = await chargeDeliveryDay({
+							appId,
+							accountId,
+							delivered: {
+								day: dateKey,
+								seconds,
+								secondsByTier: { "1080p": seconds },
+							},
+							now: new Date(),
+						});
+						deliveryIndex--;
+						await database()
+							.update(developerCreditTransactions)
+							.set({
+								createdAt: sql`${developerCreditTransactions.createdAt} - INTERVAL 1 SECOND`,
+							})
+							.where(eq(developerCreditTransactions.accountId, accountId));
+						log[log.length - 1] += ` delivery owed=${owed} -> ${result.state}`;
+						if (result.state !== "billed") continue;
+						delivered.billed++;
+						const charged = Math.min(balance - held, owed);
+						balance -= charged;
+						if (charged < owed) {
+							delivered.short++;
+							if (period) delivered.carried++;
+							const since: string =
+								(period as Period | null)?.since ?? (await rowSince(dateKey));
+							lastDaily = { since, owed };
+							period = period ?? { since, monthMax: 0 };
+						} else {
+							lastDaily = { since: null, owed: 0 };
+							if (period?.monthMax === 0) period = null;
+						}
+					} else if (stepKind === "daily_paid" || stepKind === "daily_short") {
 						if (dayIndex < 0) continue;
 						const owed =
 							stepKind === "daily_paid"
@@ -1273,6 +1328,10 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 
 			expect(failures).toEqual([]);
+			expect(delivered.billed).toBeGreaterThan(200);
+			expect(delivered.short).toBeGreaterThan(100);
+			expect(delivered.carried).toBeGreaterThan(0);
+			console.info("[seeded] delivery steps", delivered);
 		}, 600_000);
 
 		const chargeDay = (

@@ -16,6 +16,8 @@ import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
+export const DELIVERY_DAY_TRANSACTION_TYPE = "delivery_daily" as const;
+export const DELIVERY_DAY_REFERENCE_TYPE = "delivery_day" as const;
 export const FIRST_MONTH_TRANSACTION_TYPE = "video_create" as const;
 export const FIRST_MONTH_REFERENCE_TYPE = "developer_video" as const;
 export const STRIPE_DISPUTE_REFERENCE_TYPE = "stripe_dispute" as const;
@@ -137,7 +139,56 @@ const storageDayRows = () =>
 const latestStorageDay = (accountId: string, ceiling: string) =>
 	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
 
+async function latestDeliveryCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
+	const [row] = await executor
+		.select({
+			id: developerCreditTransactions.id,
+			createdAt: developerCreditTransactions.createdAt,
+			metadata: developerCreditTransactions.metadata,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, DELIVERY_DAY_TRANSACTION_TYPE),
+				eq(
+					developerCreditTransactions.referenceType,
+					DELIVERY_DAY_REFERENCE_TYPE,
+				),
+			),
+		)
+		.orderBy(
+			desc(developerCreditTransactions.createdAt),
+			desc(developerCreditTransactions.id),
+		)
+		.limit(1);
+	return row ?? null;
+}
+
+// A delivery day is charged two days after it ends, once its CDN logs are
+// final, so it is ordered against storage days by when it was posted rather
+// than by its day key. The later posted daily charge carries the standing,
+// exactly as the latest storage day does on its own.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
+	const storage = await latestStorageDayCharge(executor, accountId);
+	const delivery = await latestDeliveryCharge(executor, accountId);
+	const latest =
+		delivery &&
+		(!storage ||
+			new Date(delivery.createdAt).getTime() >=
+				new Date(storage.createdAt).getTime())
+			? delivery
+			: storage;
+	return latest ? parseStorageCharge(latest) : null;
+}
+
+async function latestStorageDayCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
 	const [row] = await executor
 		.select({
 			id: developerCreditTransactions.id,
@@ -157,7 +208,7 @@ async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
 			desc(developerCreditTransactions.id),
 		)
 		.limit(1);
-	return row ? parseStorageCharge(row) : null;
+	return row ?? null;
 }
 
 async function latestFirstMonthCharge(
@@ -213,6 +264,7 @@ const shortfallRows = (accountId: string, shortSince: Date) =>
 		inArray(developerCreditTransactions.type, [
 			FIRST_MONTH_TRANSACTION_TYPE,
 			"storage_daily",
+			DELIVERY_DAY_TRANSACTION_TYPE,
 		]),
 		openShortfall(shortSince),
 	);
