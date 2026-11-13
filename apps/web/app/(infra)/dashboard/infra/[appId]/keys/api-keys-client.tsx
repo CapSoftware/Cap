@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { regenerateDeveloperKeys } from "@/actions/developers/regenerate-keys";
+import { refusalMessage, settled } from "@/lib/infra-action-result";
 import { KeyRow } from "../../_components/copy";
 import { KeysReveal } from "../../_components/create-app";
 import { ConfirmDialog } from "../../_components/dialog";
@@ -22,14 +23,15 @@ export function ApiKeysClient({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
 	const regenerate = useMutation({
-		mutationFn: () => regenerateDeveloperKeys(appId),
+		mutationFn: () => settled(regenerateDeveloperKeys(appId)),
 		onSuccess: (result) => {
 			setNewSecretKey(result.secretKey);
 			setConfirmOpen(false);
 			toast.success("New secret key generated");
 			router.refresh();
 		},
-		onError: () => toast.error("Could not generate a new secret key"),
+		onError: (error) =>
+			toast.error(refusalMessage(error, "Could not generate a new secret key")),
 	});
 
 	return (

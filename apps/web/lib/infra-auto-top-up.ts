@@ -15,6 +15,7 @@ import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
 import { availableBalance } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
+import { disputedSince } from "@/lib/infra-standing";
 import { utcDateKey } from "@/lib/infra-usage";
 
 export const AUTO_TOP_UP_REFERENCE_TYPE = "auto_top_up" as const;
@@ -40,6 +41,7 @@ export type AutoTopUpResult =
 				| "no_card"
 				| "invalid_settings"
 				| "above_threshold"
+				| "disputed"
 				| "recent_attempt";
 	  }
 	| { state: "succeeded"; paymentIntentId: string; balanceMicroCredits: number }
@@ -356,6 +358,10 @@ export async function runAutoTopUp(
 		return { state: "skipped", reason: "above_threshold" };
 	}
 
+	if (await disputedSince(db(), accountId)) {
+		return { state: "skipped", reason: "disputed" };
+	}
+
 	const previous = await lastAttempt(accountId);
 	if (
 		previous &&
@@ -378,6 +384,7 @@ export async function runAutoTopUp(
 				off_session: true,
 				confirm: true,
 				description: "Cap Infra credits, auto top-up",
+				receipt_email: account.email,
 				metadata: {
 					type: AUTO_TOP_UP_METADATA_TYPE,
 					accountId,
