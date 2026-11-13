@@ -172,7 +172,7 @@ export async function latestStorageCharge(
 	const firstMonth = await latestFirstMonthCharge(executor, accountId);
 	if (
 		firstMonth?.shortSince &&
-		(!daily || firstMonth.createdAt.getTime() >= daily.createdAt.getTime())
+		!(await restoredSinceCharge(executor, accountId, firstMonth))
 	) {
 		return { ...firstMonth, firstMonth: true };
 	}

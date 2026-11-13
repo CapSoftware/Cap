@@ -422,6 +422,46 @@ describe("first months charged in the same second", () => {
 	});
 });
 
+describe("a first month the balance could not pay", () => {
+	it("stays in effect through later paid days until credit covers what it owed", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = new Date(ledger.now);
+		ledger.rows.push({
+			id: "first-month",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 16_800,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			},
+			createdAt: new Date(ledger.now),
+		});
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		advanceDays(1);
+		credit(1_000);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+		});
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
+		expect((await admission()).reason).toBe("out_of_credit");
+
+		credit(16_800);
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+	});
+});
+
 describe("standing through the ledger", () => {
 	it("goes active, grace, paused and back to active", async () => {
 		ledger.account.balanceMicroCredits = 200;
