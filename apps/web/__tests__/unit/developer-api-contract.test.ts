@@ -38,6 +38,7 @@ vi.mock("@cap/database", async () => {
 				Object.assign(Promise.resolve(rowsFor(table)), {
 					limit: async () => rowsFor(table),
 					groupBy: async () => rowsFor(table),
+					orderBy: () => ({ limit: async () => rowsFor(table) }),
 				});
 			const query = {
 				innerJoin: () => query,

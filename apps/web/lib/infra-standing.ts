@@ -11,13 +11,16 @@ import {
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import { heldTranscriptsQuery } from "@/lib/infra-balance";
+import {
+	FIRST_MONTH_REFERENCE_TYPE,
+	FIRST_MONTH_TRANSACTION_TYPE,
+} from "@/lib/infra-first-month-start";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
-export const FIRST_MONTH_TRANSACTION_TYPE = "video_create" as const;
-export const FIRST_MONTH_REFERENCE_TYPE = "developer_video" as const;
+export { FIRST_MONTH_REFERENCE_TYPE, FIRST_MONTH_TRANSACTION_TYPE };
 export const STRIPE_DISPUTE_REFERENCE_TYPE = "stripe_dispute" as const;
 export const DISPUTE_REVIEW_REFERENCE_TYPE = "manual" as const;
 export const DISPUTED_UPLOAD_MESSAGE =
