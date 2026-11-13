@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
+import { createDocsTool, fetchDocs } from "./docs";
 import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
 import { inspectFile, storageTimeoutMs } from "./files";
 import { createHostedUploadTools } from "./hosted-upload";
@@ -939,6 +940,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
 	// The npm package lists its tools in a README that changes only with a
