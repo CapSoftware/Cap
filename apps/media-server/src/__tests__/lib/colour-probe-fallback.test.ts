@@ -24,7 +24,22 @@ async function ffmpeg(args: string[]): Promise<void> {
 beforeAll(async () => {
 	dir = await mkdtemp(join(tmpdir(), "colour-probe-"));
 	const source = ["-f", "lavfi", "-i", "testsrc=d=0.5:s=128x96:r=10"];
-	await ffmpeg([...source, "-c:v", "libvpx-vp9", join(dir, "browser.webm")]);
+	await ffmpeg([
+		...source,
+		"-c:v",
+		"libvpx-vp9",
+		"-pix_fmt",
+		"yuv420p",
+		join(dir, "browser.webm"),
+	]);
+	await ffmpeg([
+		...source,
+		"-c:v",
+		"libvpx-vp9",
+		"-pix_fmt",
+		"yuv420p10le",
+		join(dir, "profile2.webm"),
+	]);
 	await ffmpeg([...source, "-c:v", "libx265", join(dir, "phone.mp4")]);
 	// An ffprobe that cannot answer the colour question and answers the rest.
 	const real = Bun.which("ffprobe");
@@ -45,11 +60,13 @@ afterAll(async () => {
 });
 
 describe("colour information that cannot be read", () => {
-	test("only VP8 and VP9 may go without it", () => {
-		expect(colourProbeIsOptional("vp8")).toBe(true);
-		expect(colourProbeIsOptional("vp9")).toBe(true);
+	test("only VP8 and 8-bit VP9 may go without it", () => {
+		expect(colourProbeIsOptional("vp8", null)).toBe(true);
+		expect(colourProbeIsOptional("vp9", "yuv420p")).toBe(true);
+		expect(colourProbeIsOptional("vp9", "yuv420p10le")).toBe(false);
+		expect(colourProbeIsOptional("vp9", null)).toBe(false);
 		for (const codec of ["hevc", "av1", "h264", "prores", "unknown"])
-			expect(colourProbeIsOptional(codec)).toBe(false);
+			expect(colourProbeIsOptional(codec, "yuv420p")).toBe(false);
 	});
 
 	test("a VP9 browser recording is encoded as standard range", async () => {
@@ -62,6 +79,15 @@ describe("colour information that cannot be read", () => {
 		} finally {
 			await output.cleanup();
 		}
+	}, 60_000);
+
+	test("a 10-bit VP9 source still fails rather than guess standard range", async () => {
+		const path = join(dir, "profile2.webm");
+		const metadata = await probeVideoFile(path);
+		expect(metadata.videoCodec).toBe("vp9");
+		expect(processVideo(path, metadata, {})).rejects.toThrow(
+			"Could not read the colour information",
+		);
 	}, 60_000);
 
 	test("an HEVC source still fails rather than guess standard range", async () => {

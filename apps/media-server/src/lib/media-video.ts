@@ -1774,11 +1774,58 @@ export async function requireVideoSourceTraits(
 	throw new Error("Could not read the colour information of the source video");
 }
 
-// VP8 and VP9 come from browser and extension recordings, which are never
-// HDR, so a source whose colour tags cannot be read is encoded as standard
-// range instead of failing.
-export function colourProbeIsOptional(videoCodec: string): boolean {
-	return videoCodec === "vp8" || videoCodec === "vp9";
+const EIGHT_BIT_PIXEL_FORMATS = new Set([
+	"yuv420p",
+	"yuvj420p",
+	"yuv422p",
+	"yuv444p",
+	"yuva420p",
+]);
+
+// VP8 is always 8-bit standard range, and 8-bit VP9 is what browser and
+// extension recordings are, so such a source whose colour tags cannot be
+// read is encoded as standard range instead of failing. VP9 at a higher bit
+// depth (profile 2) can carry HDR, so it keeps the requirement.
+export function colourProbeIsOptional(
+	videoCodec: string,
+	pixelFormat: string | null,
+): boolean {
+	if (videoCodec === "vp8") return true;
+	return (
+		videoCodec === "vp9" &&
+		pixelFormat !== null &&
+		EIGHT_BIT_PIXEL_FORMATS.has(pixelFormat)
+	);
+}
+
+async function videoSourceTraitsForEncode(
+	inputPath: string,
+	videoCodec: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	if (videoCodec === "vp8") {
+		return await probeVideoSourceTraits(inputPath, abortSignal);
+	}
+	try {
+		return await requireVideoSourceTraits(inputPath, abortSignal);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		if (
+			videoCodec !== "vp9" ||
+			!(error instanceof Error) ||
+			!error.message.startsWith("Could not read the colour information") ||
+			!colourProbeIsOptional(
+				videoCodec,
+				await probeH264PixelFormat(inputPath, abortSignal),
+			)
+		) {
+			throw error;
+		}
+		console.warn(
+			"[media-video] Could not read the colour information of an 8-bit VP9 source, encoding it as standard range",
+		);
+		return { rotation: null, hdr: null };
+	}
 }
 
 export async function processVideo(
@@ -1811,9 +1858,11 @@ export async function processVideo(
 	const traits =
 		remuxOnly || (metadata.videoCodec === "h264" && browserPixelFormat)
 			? null
-			: colourProbeIsOptional(metadata.videoCodec)
-				? await probeVideoSourceTraits(inputPath, abortSignal)
-				: await requireVideoSourceTraits(inputPath, abortSignal);
+			: await videoSourceTraitsForEncode(
+					inputPath,
+					metadata.videoCodec,
+					abortSignal,
+				);
 	abortSignal?.throwIfAborted();
 	const hdr = traits?.hdr ?? null;
 	// Created only once nothing above can throw, so a job cancelled while its
