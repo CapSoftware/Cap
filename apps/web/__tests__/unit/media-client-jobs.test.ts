@@ -250,12 +250,40 @@ describe("tryProbeVideoViaMediaServer", () => {
 			setup: () => mockFetch.mockRejectedValue(networkError("ECONNREFUSED")),
 		},
 		{ name: "a 503", setup: () => mockFetch.mockResolvedValue(json({}, 503)) },
-		{ name: "a 504", setup: () => mockFetch.mockResolvedValue(json({}, 504)) },
+		{
+			name: "a 504 from in front of the media server",
+			setup: () => mockFetch.mockResolvedValue(json({}, 504)),
+		},
+		{
+			name: "a 504 without a JSON body",
+			setup: () =>
+				mockFetch.mockResolvedValue(
+					new Response("Gateway Timeout", { status: 504 }),
+				),
+		},
 	])("reports $name as unreachable without retrying", async ({ setup }) => {
 		setup();
 
 		expect(await tryProbeVideoViaMediaServer("https://storage/video")).toEqual({
 			status: "unreachable",
+		});
+		expect(mockFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports the media server giving up on the file as timed out", async () => {
+		mockFetch.mockResolvedValue(
+			json(
+				{
+					error: "Request timed out",
+					code: "TIMEOUT",
+					details: "Operation timed out",
+				},
+				504,
+			),
+		);
+
+		expect(await tryProbeVideoViaMediaServer("https://storage/video")).toEqual({
+			status: "timed_out",
 		});
 		expect(mockFetch).toHaveBeenCalledTimes(1);
 	});
