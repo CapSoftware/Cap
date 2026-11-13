@@ -39,8 +39,7 @@ export function chargesProcessingRerun(input: {
 	)
 		return true;
 	if (input.target === "transcript") return false;
-	if (input.target === "all" && input.transcriptionStatus !== "COMPLETE")
-		return false;
+	if (input.transcriptionStatus !== "COMPLETE") return false;
 	if (!isAiGenerationRerun(input.metadata)) return false;
 	const status = input.metadata.aiGenerationStatus;
 	return input.retry === true || (status !== "ERROR" && status !== "SKIPPED");
