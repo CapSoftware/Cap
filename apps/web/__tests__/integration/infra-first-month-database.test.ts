@@ -41,6 +41,8 @@ vi.mock("next/headers", () => ({
 	headers: async () => ({ get: () => null }),
 }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn(), notFound: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
 vi.mock("@/workflows/process-developer-video", () => ({
 	processDeveloperVideoWorkflow: "workflow",
 }));
@@ -61,11 +63,15 @@ const {
 	chargeMissedFirstMonths,
 	settleFirstMonthAtDelete,
 	settleFirstMonthAtReady,
-	settleFirstMonthsForDeletedApp,
+	settleFirstMonthsForDeletedVideos,
+	firstMonthShortfallsSince,
+	markFirstMonthShortfallsNotified,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
 const { getInfraFirstMonthChargesSince, getInfraStorageChargesSince } =
 	await import("@/app/(infra)/dashboard/infra/infra-data");
+const { getCurrentUser } = await import("@cap/database/auth/session");
+const { deleteDeveloperApp } = await import("@/actions/developers/delete-app");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -674,6 +680,7 @@ describe.runIf(Boolean(databaseUrl))(
 			it("is charged its first month once, from its declared length at the tier it was created with, and never again", async () => {
 				const { appId, accountId } = await makeApp(1_000_000);
 				const videoId = await makeVideo(appId, {
+					createdAt: new Date(),
 					status: "processing",
 					duration: 3600,
 					width: null,
@@ -717,6 +724,7 @@ describe.runIf(Boolean(databaseUrl))(
 			it("caps the declared length at the 4 hour limit", async () => {
 				const { appId } = await makeApp(1_000_000);
 				const videoId = await makeVideo(appId, {
+					createdAt: new Date(),
 					status: "processing",
 					duration: 6 * 60 * 60,
 					processing: encoding(),
@@ -737,6 +745,7 @@ describe.runIf(Boolean(databaseUrl))(
 					playbackId: null,
 				});
 				const claimedNotSent = await makeVideo(appId, {
+					createdAt: new Date(),
 					status: "processing",
 					processing: {
 						...processing(),
@@ -776,18 +785,86 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await firstMonthRows(accountId)).toHaveLength(0);
 			});
 
-			it("is charged when the whole app is deleted mid-encode", async () => {
+			it("is charged when the whole app is deleted mid-encode, and leaves videos deleted long before alone", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const [owner] = await database()
+					.select({ ownerId: developerApps.ownerId })
+					.from(developerApps)
+					.where(eq(developerApps.id, appId));
+				vi.mocked(getCurrentUser).mockResolvedValue({
+					id: owner?.ownerId,
+					email: "owner@example.com",
+				} as never);
+				const encodingNow = await makeVideo(appId, {
+					createdAt: new Date(),
+					status: "processing",
+					duration: 600,
+					processing: encoding(),
+				});
+				const deletedLongAgo = await makeVideo(appId, {
+					createdAt: new Date("2026-10-01T00:00:00Z"),
+					deletedAt: new Date("2026-10-02T00:00:00Z"),
+					status: "processing",
+					duration: 600,
+					processing: encoding(),
+				});
+				const readyLongAgo = await makeVideo(appId, {
+					createdAt: new Date("2026-10-01T00:00:00Z"),
+					deletedAt: new Date("2026-10-02T00:00:00Z"),
+				});
+
+				await deleteDeveloperApp(appId);
+				await settleFirstMonthsForDeletedVideos([encodingNow]);
+
+				const rows = await firstMonthRows(accountId);
+				expect(rows.map((row) => row.referenceId)).toEqual([encodingNow]);
+				expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+				for (const videoId of [deletedLongAgo, readyLongAgo]) {
+					expect((await videoRow(videoId))?.storagePaidUntil).toBeNull();
+				}
+			});
+
+			it("charges nothing for a pre-feature ready video and marks it exempt", async () => {
 				const { appId, accountId } = await makeApp(1_000_000);
 				const videoId = await makeVideo(appId, {
+					createdAt: new Date("2026-10-01T00:00:00Z"),
+				});
+				await deleteNow(videoId);
+
+				expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+					state: "exempt",
+				});
+				expect((await videoRow(videoId))?.storagePaidUntil).not.toBeNull();
+				expect(await firstMonthRows(accountId)).toHaveLength(0);
+				expect(await balanceOf(accountId)).toBe(1_000_000);
+			});
+
+			it("charges nothing for a video mid-encode created before first month charging began", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					createdAt: new Date("2026-10-01T00:00:00Z"),
 					status: "processing",
 					duration: 600,
 					processing: encoding(),
 				});
 				await deleteNow(videoId);
 
-				await settleFirstMonthsForDeletedApp(appId);
-				await settleFirstMonthsForDeletedApp(appId);
+				expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+					state: "exempt",
+				});
+				expect(await firstMonthRows(accountId)).toHaveLength(0);
+			});
 
+			it("charges nothing more for a post-feature ready video that already paid its month", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, { createdAt: new Date() });
+				await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
+				await deleteNow(videoId);
+
+				expect(await settleFirstMonthAtDelete(videoId)).toEqual({
+					state: "skipped",
+					reason: "already_settled",
+				});
 				expect(await firstMonthRows(accountId)).toHaveLength(1);
 				expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
 			});
@@ -795,6 +872,7 @@ describe.runIf(Boolean(databaseUrl))(
 			it("records a month the balance cannot pay as owed and leaves the delete in place", async () => {
 				const { appId, accountId } = await makeApp(100);
 				const videoId = await makeVideo(appId, {
+					createdAt: new Date(),
 					status: "processing",
 					duration: 600,
 					processing: encoding(),
@@ -810,6 +888,46 @@ describe.runIf(Boolean(databaseUrl))(
 				expect((await videoRow(videoId))?.deletedAt).not.toBeNull();
 				expect((await getInfraBilling(appId)).standing.state).toBe("grace");
 			});
+		});
+
+		it("finds a new first month shortfall for its email once, and never one that only carried an earlier shortfall", async () => {
+			const { appId, accountId } = await makeApp(0);
+			const since = new Date(Date.now() - 60 * 60 * 1000);
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId),
+				deletedAt: null,
+			});
+
+			const found = await firstMonthShortfallsSince([accountId], since);
+			expect([...found.keys()]).toEqual([accountId]);
+			const [first] = await firstMonthRows(accountId);
+			expect(first?.metadata).toMatchObject({ fellShort: true });
+
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId),
+				deletedAt: null,
+			});
+			const rows = await firstMonthRows(accountId);
+			expect(rows).toHaveLength(2);
+			expect(
+				rows.map((row) => (row.metadata as { fellShort: boolean }).fellShort),
+			).toEqual(expect.arrayContaining([true, false]));
+			expect(
+				(await firstMonthShortfallsSince([accountId], since)).get(accountId)
+					?.ids,
+			).toEqual([first?.id]);
+
+			await markFirstMonthShortfallsNotified(
+				found.get(accountId)?.ids ?? [],
+				new Date(),
+			);
+			await markFirstMonthShortfallsNotified(
+				found.get(accountId)?.ids ?? [],
+				new Date(Date.now() + 60_000),
+			);
+			expect(await firstMonthShortfallsSince([accountId], since)).toEqual(
+				new Map(),
+			);
 		});
 
 		it("never throws from the ready path when the charge fails", async () => {

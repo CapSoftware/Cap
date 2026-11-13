@@ -6,12 +6,12 @@ vi.mock("@/lib/infra-access", () => ({
 
 const firstMonth = vi.hoisted(() => ({
 	atDelete: vi.fn(),
-	forDeletedApp: vi.fn(),
+	forDeletedVideos: vi.fn(),
 }));
 
 vi.mock("@/lib/infra-storage-minimum", () => ({
 	settleFirstMonthAtDelete: firstMonth.atDelete,
-	settleFirstMonthsForDeletedApp: firstMonth.forDeletedApp,
+	settleFirstMonthsForDeletedVideos: firstMonth.forDeletedVideos,
 }));
 
 vi.mock("@cap/database", () => {
@@ -266,6 +266,9 @@ describe("createDeveloperApp", () => {
 	});
 });
 
+const encodingVideos = (rows: { id: string }[]) =>
+	mockDb.where.mockReturnValueOnce(mockDb).mockResolvedValueOnce(rows as never);
+
 describe("deleteDeveloperApp", () => {
 	let deleteDeveloperApp: typeof import("@/actions/developers/delete-app").deleteDeveloperApp;
 
@@ -292,6 +295,7 @@ describe("deleteDeveloperApp", () => {
 	it("soft deletes by setting deletedAt", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		encodingVideos([]);
 		await deleteDeveloperApp("app-456");
 
 		expect(mockDb.update).toHaveBeenCalled();
@@ -303,15 +307,19 @@ describe("deleteDeveloperApp", () => {
 	it("returns success true", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		encodingVideos([]);
 		const result = await deleteDeveloperApp("app-456");
 		expect(result).toEqual({ success: true });
 	});
 
-	it("settles the first month of its videos that were mid-encode after the delete", async () => {
+	it("settles the first month of only the videos it deleted mid-encode, after the delete", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		encodingVideos([{ id: "video-encoding" }]);
 		await deleteDeveloperApp("app-456");
-		expect(firstMonth.forDeletedApp).toHaveBeenCalledWith("app-456");
+		expect(firstMonth.forDeletedVideos).toHaveBeenCalledWith([
+			"video-encoding",
+		]);
 	});
 });
 

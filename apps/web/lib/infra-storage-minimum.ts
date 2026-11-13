@@ -137,12 +137,14 @@ async function settleFirstMonth(
 			processing: developerVideos.processing,
 			storagePaidUntil: developerVideos.storagePaidUntil,
 			deletedAt: developerVideos.deletedAt,
+			createdAt: developerVideos.createdAt,
 		})
 		.from(developerVideos)
 		.where(eq(developerVideos.id, videoId))
 		.for("update");
 	if (!video) return skipped("missing");
 	if (video.storagePaidUntil !== null) return skipped("already_settled");
+	let exemptAtDelete = false;
 	if (options.atDelete) {
 		if (video.deletedAt === null) return skipped("not_deleted");
 		const encoding =
@@ -151,6 +153,11 @@ async function settleFirstMonth(
 			video.duration !== null &&
 			encodeDispatched(video.processing);
 		if (video.status !== "ready" && !encoding) return skipped("not_dispatched");
+		const began = encoding ? await firstMonthChargesBegan(tx) : null;
+		exemptAtDelete =
+			!encoding ||
+			!began ||
+			new Date(video.createdAt).getTime() < began.getTime();
 	} else if (video.status !== "ready") {
 		return skipped("not_ready");
 	}
@@ -170,6 +177,7 @@ async function settleFirstMonth(
 
 	if (
 		options.deletedBeforeReady ||
+		exemptAtDelete ||
 		(options.exemptIfDeleted && video.deletedAt !== null) ||
 		video.processing === null ||
 		!account
@@ -252,6 +260,7 @@ async function settleFirstMonth(
 			owedMicroCredits: settled.owedMicroCredits,
 			chargedMicroCredits: settled.chargedMicroCredits,
 			shortSince: settled.shortSince?.toISOString() ?? null,
+			fellShort: settled.fellShort,
 			durationSeconds,
 			tier,
 			paidUntil: paidUntil.toISOString(),
@@ -301,26 +310,10 @@ export async function settleFirstMonthAtDelete(
 	}
 }
 
-export async function settleFirstMonthsForDeletedApp(appId: string) {
-	try {
-		const videos = await db()
-			.select({ id: developerVideos.id })
-			.from(developerVideos)
-			.where(
-				and(
-					eq(developerVideos.appId, appId),
-					isNotNull(developerVideos.deletedAt),
-					inArray(developerVideos.status, ["processing", "ready"]),
-					isNull(developerVideos.storagePaidUntil),
-				),
-			);
-		for (const video of videos) await settleFirstMonthAtDelete(video.id);
-	} catch (error) {
-		console.error("[infra-storage] First month charges failed at app delete", {
-			appId,
-			error,
-		});
-	}
+export async function settleFirstMonthsForDeletedVideos(
+	videoIds: readonly string[],
+) {
+	for (const videoId of videoIds) await settleFirstMonthAtDelete(videoId);
 }
 
 export async function settleFirstMonthAtReady(
@@ -411,10 +404,11 @@ export async function firstMonthShortfallsSince(
 	since: Date,
 	executor: Pick<InfraDbExecutor, "select"> = db(),
 ) {
-	const shortfalls = new Map<string, Date>();
+	const shortfalls = new Map<string, { shortSince: Date; ids: string[] }>();
 	if (accountIds.length === 0) return shortfalls;
 	const rows = await executor
 		.select({
+			id: developerCreditTransactions.id,
 			accountId: developerCreditTransactions.accountId,
 			createdAt: developerCreditTransactions.createdAt,
 			metadata: developerCreditTransactions.metadata,
@@ -429,11 +423,38 @@ export async function firstMonthShortfallsSince(
 		);
 	for (const row of rows) {
 		const { shortSince } = parseStorageCharge(row);
-		if (shortSince && shortSince.getTime() >= since.getTime()) {
-			shortfalls.set(row.accountId, shortSince);
-		}
+		const fields =
+			typeof row.metadata === "object" && row.metadata !== null
+				? (row.metadata as Record<string, unknown>)
+				: {};
+		if (!shortSince || fields.fellShort !== true || fields.notifiedAt) continue;
+		const shortfall = shortfalls.get(row.accountId) ?? {
+			shortSince,
+			ids: [],
+		};
+		shortfall.ids.push(row.id);
+		shortfalls.set(row.accountId, shortfall);
 	}
 	return shortfalls;
+}
+
+export async function markFirstMonthShortfallsNotified(
+	ids: readonly string[],
+	now: Date,
+	executor: InfraDbExecutor = db(),
+) {
+	if (ids.length === 0) return;
+	await executor
+		.update(developerCreditTransactions)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${developerCreditTransactions.metadata}, JSON_OBJECT()), '$.notifiedAt', ${now.toISOString()})`,
+		})
+		.where(
+			and(
+				inArray(developerCreditTransactions.id, [...ids]),
+				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.notifiedAt') IS NULL`,
+			),
+		);
 }
 
 export async function openFirstMonthShortfalls(
