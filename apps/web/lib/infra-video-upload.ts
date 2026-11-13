@@ -24,7 +24,10 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
-import { withoutReservedMetadata } from "@/lib/developer-video-takedown";
+import {
+	developerVideoPublicMetadata,
+	withoutReservedMetadata,
+} from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
@@ -391,8 +394,9 @@ async function replayKeyedVideo(
 				? "userId"
 				: video.maxResolutionTier !== request.maxResolutionTier
 					? "maxResolutionTier"
-					: canonicalJson(storedJson(video.metadata)) !==
-							canonicalJson(request.metadata)
+					: canonicalJson(
+								developerVideoPublicMetadata(storedJson(video.metadata)),
+							) !== canonicalJson(request.metadata)
 						? "metadata"
 						: null;
 	if (differs) {

@@ -156,6 +156,22 @@ describe("create upload with an Idempotency-Key", () => {
 		expect(state.inserts).toBe(1);
 	});
 
+	it("replays an unchanged request for a video Cap took down", async () => {
+		const first = await createInfraVideo(request);
+		const id = developerVideoIdForIdempotencyKey("app-1", KEY);
+		const stored = state.videos.get(id);
+		if (!stored) throw new Error("missing video");
+		stored.metadata = {
+			__capTakedown: {
+				at: "2026-11-13T12:00:00.000Z",
+				metadata: stored.metadata,
+			},
+		};
+
+		expect(await createInfraVideo(request)).toEqual(first);
+		expect(state.inserts).toBe(1);
+	});
+
 	it("makes one video when the same request races itself", async () => {
 		const results = await Promise.all(
 			Array.from({ length: 5 }, () => createInfraVideo(request)),
