@@ -21,7 +21,7 @@ Cap Infra is Cap's usage-billed API for building video and speech into your own 
 - Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp
 - **Auth.** Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code. For an upload from the browser, the server calls `POST /api/developer/v1/uploads` and gives the browser the short-lived upload token (`cut_`) it returns, which works for that one video. A public `cpk_` key cannot create or upload videos.
 - **Rate limits.** A secret key allows 300 requests a minute across the REST endpoints, and all the keys of one account together 1,200 a minute. Each upload token allows 1,200 a minute across the upload endpoints. Requests with a rejected key or token are limited to 30 a minute per address. On a `429`, wait for the `Retry-After` seconds, then retry.
-- **Polling.** There is no public webhook API. After an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. Poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`.
+- **Polling.** A webhook (`video.ready`, `video.errored`) can tell your server when a video is done instead: https://cap.so/docs/api/webhooks. Without one, after an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. Transcripts have no webhook: poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`.
 - **Errors** are JSON with `error`, `code`, `message`, `hint` and `docs` fields.
 - **Docs as Markdown.** Every page under https://cap.so/docs is available as Markdown: add `.md` to its URL (for example https://cap.so/docs/api/get-started.md) or request it with `Accept: text/markdown`.
 
@@ -62,7 +62,7 @@ Cap does not assign global recording shortcuts by default. Users configure suppo
 - Organization roles, members, spaces, folders, branding, viewer settings, and aggregate analytics.
 - Cap-managed storage, Google Drive for new uploads, and S3-compatible storage. Provider changes do not automatically move existing files.
 - Single Loom imports, organization CSV imports up to 500 rows per self-serve batch, and a durable per-video agent import workflow.
-- A developer REST API for hosting video in your own product, with adaptive HLS and MP4 playback and a hosted player. There are no published SDK packages, and a public customer webhook subscription API is not currently documented.
+- A developer REST API for hosting video in your own product, with adaptive HLS and MP4 playback and a hosted player. There are no published SDK packages. Webhooks tell your server when a video is ready or has failed.
 
 Captions, transcripts, titles, summaries, and chapters depend on the recording, processing state, plan, and effective organization settings. Do not promise that every recording has every AI field immediately.
 
