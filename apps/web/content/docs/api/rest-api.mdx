@@ -1519,6 +1519,77 @@ Add these to `embedUrl` as query parameters, for example `https://cap.so/dev/Zk3
 
 A value the player does not understand is ignored, and so is a parameter it does not know. To let an embed autoplay with sound where the browser permits it, add `autoplay` to the iframe's `allow` list.
 
+### Embed Options
+
+These change how the embedded player looks and what it offers. They work only on `embedUrl`.
+
+| Parameter | What it does |
+|-----------|--------------|
+| `color=3b82f6` | Accent colour of the progress bar, the volume level and the ticks in the menus. Six or three hex digits, with or without `#` (write `#` as `%23` in a URL) |
+| `radius=12` | Rounds the player's corners by that many pixels, from `0` to `24`. A larger number is read as `24`. The page around the player is see-through, so the corners show your page |
+| `quality=720` | Never plays a rendition taller than this, in Auto or from the menu. `720p` works too. A video with nothing that small plays its smallest rendition |
+| `quality_menu=0` | Hides the quality menu. Auto keeps choosing the rendition |
+| `speed_menu=0` | Hides the playback speed menu |
+| `pip=0` | Hides the picture in picture button |
+| `fullscreen=0` | Hides the full screen button and turns off full screen from a double click or the `f` key |
+| `poster=0` | Shows no poster. The player stays black until it plays |
+| `keyboard=0` | Turns off the player's keyboard shortcuts, such as space, `k`, the arrows, `m`, `f` and `c`. Tab and Enter still reach every control |
+
+The player has no title of its own, so there is nothing to hide. The quality menu offers Auto and every rendition in every browser, including Safari on iPhone and iPad, where picking one keeps the time and whether the video was playing.
+
+```html
+<iframe
+  src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed?color=f97316&radius=12&quality=1080&speed_menu=0&pip=0"
+  title="Product Demo"
+  style="width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px"
+  allow="autoplay"
+  allowfullscreen
+  loading="lazy"
+></iframe>
+```
+
+### Player Events
+
+The embedded player tells the page it sits on what happens, and takes commands from it, with `postMessage`. Every message is an object with `type: "cap-player"`.
+
+Events arrive as `{ type: "cap-player", event, currentTime, duration, paused, muted }`, with times in seconds. `duration` is `0` until it is known. Events carry no links and nothing about the viewer, and are sent to any origin.
+
+| Event | When | Extra fields |
+|-------|------|--------------|
+| `ready` | The player has loaded and takes commands | |
+| `play` | Playback starts or resumes | |
+| `pause` | Playback pauses | |
+| `ended` | The video reaches its end | |
+| `timeupdate` | The time moves while playing, at most about four times a second | |
+| `qualitychange` | The rendition shown changes, or the viewer picks one | `quality` such as `"1080p"`, `auto` (true while Auto is on) |
+| `error` | The video stops being playable, the browser refused a `play` command, or the embed has nothing to play | `code`: `"media"` when playback fails, `"play_refused"`, `"unavailable"` for a video that is not available, or `"paused"` while the app's playback is paused. With `"unavailable"` or `"paused"`, no `ready` is sent and commands do nothing |
+
+Commands are sent to the iframe's `contentWindow` as `{ type: "cap-player", command }`. The player takes them only from the page that embeds it, and ignores anything else.
+
+| Command | Fields | What it does |
+|---------|--------|--------------|
+| `play` | | Plays. Browsers refuse to start a video with sound before the viewer has interacted with the page, so start it muted or after a click |
+| `pause` | | Pauses |
+| `seek` | `time`, seconds | Moves to that time. A time past the end moves to the end |
+| `mute` | | Turns the sound off |
+| `unmute` | | Turns the sound on |
+| `setQuality` | `quality` | `"auto"`, or a rendition such as `"720p"`, `720` or `"4k"`. A rendition the video does not have is ignored |
+
+```html
+<iframe id="demo" src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed" title="Product Demo" style="width: 100%; aspect-ratio: 16 / 9; border: 0" allow="autoplay" allowfullscreen></iframe>
+<script>
+  const player = document.getElementById("demo");
+  const send = (message) => player.contentWindow.postMessage({ type: "cap-player", ...message }, "https://cap.so");
+  window.addEventListener("message", ({ source, data }) => {
+    if (source !== player.contentWindow || data?.type !== "cap-player") return;
+    if (data.event === "ready") send({ command: "seek", time: 30 });
+    if (data.event === "ended") console.log("Reached the end");
+  });
+</script>
+```
+
+Check `source` against the iframe's `contentWindow` as above, so a message from another frame on your page is not taken for the player's.
+
 ### What the Player Loads
 
 Before the viewer presses play, the player loads the poster, the playlists and at most the first few seconds of video, so a page can hold several embeds without downloading them. It never holds back the load event of the page it sits on. `loading="lazy"` in the snippet goes further and leaves an embed below the fold unloaded until the viewer scrolls near it. An embed that is already in view loads at once.

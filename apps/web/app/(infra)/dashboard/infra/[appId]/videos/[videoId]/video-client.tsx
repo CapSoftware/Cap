@@ -33,6 +33,7 @@ import {
 } from "../../../_components/ui";
 import { useLocalUpload } from "../../../_components/uploads";
 import { VideoStatus } from "../../../_components/video-status";
+import { EmbedOptions } from "./embed-options";
 
 const createdFormat = new Intl.DateTimeFormat("en-US", {
 	month: "short",
@@ -381,7 +382,11 @@ export function VideoClient({
 					description="A hosted player for this video. Send the link to a viewer, or paste the embed code into a page."
 				>
 					<KeyRow label="Share link" value={video.shareUrl} />
-					<KeyRow label="Embed code" value={video.embedCode} />
+					<EmbedOptions
+						embedUrl={`${video.shareUrl}/embed`}
+						video={video}
+						hasCaptions={video.captions.length > 0}
+					/>
 				</Block>
 			)}
 
