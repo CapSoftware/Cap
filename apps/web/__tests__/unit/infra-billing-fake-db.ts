@@ -1,4 +1,5 @@
 import {
+	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
@@ -52,6 +53,7 @@ const freshAccount = () => ({
 	autoTopUpThresholdMicroCredits: 0,
 	autoTopUpAmountCents: 0,
 	email: "richie@cap.so",
+	appDeletedAt: null as Date | null,
 });
 
 export const ledger = {
@@ -61,6 +63,7 @@ export const ledger = {
 	snapshots: [] as SnapshotRow[],
 	videos: [] as VideoGroup[],
 	heldMicroCredits: 0,
+	appDeletedBeforeLock: false,
 };
 
 export function resetLedger() {
@@ -68,6 +71,7 @@ export function resetLedger() {
 	ledger.account = freshAccount();
 	ledger.rows = [];
 	ledger.snapshots = [];
+	ledger.appDeletedBeforeLock = false;
 	ledger.videos = [];
 	ledger.heldMicroCredits = 0;
 }
@@ -422,6 +426,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					row.referenceType === referenceType,
 			);
 		}
+	}
+
+	if (query.table === developerApps && keys === "appDeletedAt") {
+		const deletedAt = ledger.appDeletedBeforeLock
+			? ledger.now
+			: ledger.account.appDeletedAt;
+		return [{ appDeletedAt: deletedAt }];
 	}
 
 	if (query.table === developerTranscripts) {

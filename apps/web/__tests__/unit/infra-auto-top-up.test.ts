@@ -281,6 +281,25 @@ describe("auto top-up charge", () => {
 		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 	});
 
+	it("never charges the card of a deleted app", async () => {
+		arm();
+		ledger.account.appDeletedAt = new Date("2026-11-10T00:00:00Z");
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "app_deleted",
+		});
+
+		ledger.account.appDeletedAt = null;
+		ledger.appDeletedBeforeLock = true;
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "app_deleted",
+		});
+
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+		expect(ledger.rows).toHaveLength(0);
+	});
+
 	it("does not charge the card of an app whose payment was disputed", async () => {
 		arm();
 		ledger.rows.push({
@@ -742,6 +761,26 @@ describe("auto top-up charge", () => {
 			]);
 			expect(reservations()).toHaveLength(0);
 			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+		});
+
+		it("recovers a deleted app's lost attempt, then never charges it again", async () => {
+			await loseAnswer();
+			later(72.1);
+			ledger.account.appDeletedAt = now();
+
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+			expect(mocks.searchPaymentIntents).toHaveBeenCalledTimes(1);
+			expect(ledger.rows).toHaveLength(0);
+
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "app_deleted",
+			});
+			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+			expect(ledger.rows).toHaveLength(0);
 		});
 
 		it("after 72 hours, voids a reservation Stripe never charged", async () => {
