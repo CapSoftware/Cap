@@ -42,7 +42,7 @@ export const videoDetail = (video: Fields) => ({
 	userId: video.externalUserId ?? null,
 	...pick(video, ["maxResolutionTier", "metadata", "createdAt"]),
 	...videoLinks(video),
-	...pick(video, ["captions"]),
+	...pick(video, ["captions", "import"]),
 });
 
 export function transcriptView(
