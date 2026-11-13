@@ -35,6 +35,8 @@ const row = (
 	status: "complete",
 	sourceType: "upload",
 	sourceUrl: null,
+	videoId: null,
+	requestedAt: null,
 	s3Key: "developer/app-1/transcripts/tr-1/source",
 	resultKey: "developer/app-1/transcripts/tr-1/result.json",
 	sourceBytes: 1_000,
@@ -264,6 +266,7 @@ describe("transcript serialization", () => {
 			"text",
 			"updatedAt",
 			"userId",
+			"videoId",
 			"wordCount",
 		]);
 		expect(Object.keys(agent).sort()).toEqual([
@@ -282,6 +285,7 @@ describe("transcript serialization", () => {
 			"sourceUrl",
 			"status",
 			"updatedAt",
+			"videoId",
 			"wordCount",
 		]);
 		for (const serialized of [JSON.stringify(rest), JSON.stringify(agent)]) {
