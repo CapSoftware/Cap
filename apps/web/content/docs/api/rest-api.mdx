@@ -1560,7 +1560,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 
 The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
 
-- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link. Pasted into a chat or a page builder, it previews as the video: the page carries `og:video` tags for the MP4 and an oEmbed link to `https://cap.so/api/developer/oembed?url=SHARE_URL`, which answers with the embed's iframe.
+- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link. Pasted into a chat or a page builder, it previews as the video: the page carries `og:video` tags for the MP4 and an oEmbed link to `https://cap.so/api/developer/oembed?url=SHARE_URL`, which answers with the embed's iframe. A video in an app with [Allowed Sites](#allowed-sites) gets no iframe from it, since other sites could not show one.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe, unless you limit it to your own sites with [Allowed Sites](#allowed-sites):
 
 ```html

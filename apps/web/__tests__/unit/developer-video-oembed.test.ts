@@ -7,6 +7,11 @@ import {
 
 const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
+	origins: [] as string[],
+}));
+
+vi.mock("@/lib/developer-embed-origins", () => ({
+	findEmbedOrigins: async () => mocks.origins,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -59,6 +64,7 @@ beforeEach(() => {
 		height: 1080,
 	});
 	mocks.store.appDeleted = false;
+	mocks.origins = [];
 });
 
 describe("which links the developer oEmbed endpoint answers for", () => {
@@ -224,6 +230,13 @@ describe("GET /api/developer/oembed", () => {
 		expect(response.status).toBe(404);
 		expect(response.headers.get("Cache-Control")).toBe("no-store");
 		expect(await response.text()).not.toContain("Launch");
+	});
+
+	it("answers 404 for a video its owner limited to their own sites", async () => {
+		mocks.origins = ["https://myshop.com"];
+		const response = await GET(request({ url: SHARE }));
+		expect(response.status).toBe(404);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
 	});
 
 	it("answers 404 without a query for a link that is not a hosted video page", async () => {

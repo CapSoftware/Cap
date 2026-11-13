@@ -1,3 +1,4 @@
+import { findEmbedOrigins } from "./developer-embed-origins";
 import { developerVideoPageUrls } from "./developer-video-api";
 import {
 	findPlayableVideo,
@@ -136,6 +137,11 @@ export async function developerVideoOEmbedAnswer(
 		return { status: 404, body: { error: "Not a Cap video page" } };
 	const video = await findPlayableVideo(playbackId);
 	if (!video || developerVideoIsTakenDown(video)) {
+		return { status: 404, body: { error: "Video not found" } };
+	}
+	// A video limited to its owner's own sites would hand a page builder an
+	// iframe the browser refuses to show, so it unfurls from the page's tags.
+	if ((await findEmbedOrigins(playbackId)).length > 0) {
 		return { status: 404, body: { error: "Video not found" } };
 	}
 	const { width, height } = video;
