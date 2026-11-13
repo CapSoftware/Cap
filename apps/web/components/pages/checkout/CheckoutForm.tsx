@@ -628,6 +628,7 @@ function PaymentForm({
 	const einId = useId();
 	const [ein, setEin] = useState("");
 	const [appliedEin, setAppliedEin] = useState<string | null>(null);
+	const [einSaveUnconfirmed, setEinSaveUnconfirmed] = useState(false);
 	const [einError, setEinError] = useState<string | null>(null);
 	const [addressCountry, setAddressCountry] = useState(
 		checkout.billingAddress?.address.country ?? null,
@@ -672,7 +673,12 @@ function PaymentForm({
 	};
 
 	const applyUsEin = async () => {
-		const change = usEinChange({ ein, usCompany, appliedEin });
+		const change = usEinChange({
+			ein,
+			usCompany,
+			appliedEin,
+			saveUnconfirmed: einSaveUnconfirmed,
+		});
 		if (change.state === "invalid") {
 			setEinError("Enter your EIN as 9 digits, like 12-3456789.");
 			return false;
@@ -683,9 +689,11 @@ function PaymentForm({
 			ein: change.ein ?? "",
 		});
 		if (!result.ok) {
+			setEinSaveUnconfirmed(true);
 			setError("Couldn't save your EIN. Please try again.");
 			return false;
 		}
+		setEinSaveUnconfirmed(false);
 		setAppliedEin(change.ein);
 		return true;
 	};

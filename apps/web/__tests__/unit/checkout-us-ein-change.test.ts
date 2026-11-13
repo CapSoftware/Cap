@@ -52,6 +52,33 @@ describe("what a checkout submit does with the optional US EIN", () => {
 		).toEqual({ state: "changed", ein: null });
 	});
 
+	it("saves again after a save that was not confirmed, even when nothing looks changed", () => {
+		expect(
+			usEinChange({
+				ein: "",
+				usCompany: true,
+				appliedEin: null,
+				saveUnconfirmed: true,
+			}),
+		).toEqual({ state: "changed", ein: null });
+		expect(
+			usEinChange({
+				ein: "12-3456789",
+				usCompany: false,
+				appliedEin: null,
+				saveUnconfirmed: true,
+			}),
+		).toEqual({ state: "changed", ein: null });
+		expect(
+			usEinChange({
+				ein: "12-3456789",
+				usCompany: true,
+				appliedEin: "12-3456789",
+				saveUnconfirmed: true,
+			}),
+		).toEqual({ state: "changed", ein: "12-3456789" });
+	});
+
 	it("stops on an EIN that is not nine digits", () => {
 		for (const ein of ["12-345", "abcdefghi", "12-34567890"]) {
 			expect(usEinChange({ ein, usCompany: true, appliedEin: null })).toEqual({

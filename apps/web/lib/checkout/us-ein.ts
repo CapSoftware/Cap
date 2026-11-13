@@ -13,14 +13,18 @@ export const usEinChange = ({
 	ein,
 	usCompany,
 	appliedEin,
+	saveUnconfirmed = false,
 }: {
 	ein: string;
 	usCompany: boolean;
 	appliedEin: string | null;
+	saveUnconfirmed?: boolean;
 }): UsEinChange => {
 	const value = usCompany ? ein.trim() : "";
 	const formatted = value ? formatUsEin(value) : null;
 	if (value && !formatted) return { state: "invalid" };
-	if (formatted === appliedEin) return { state: "unchanged" };
+	if (!saveUnconfirmed && formatted === appliedEin) {
+		return { state: "unchanged" };
+	}
 	return { state: "changed", ein: formatted };
 };
