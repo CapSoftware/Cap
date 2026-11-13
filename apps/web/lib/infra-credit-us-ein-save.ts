@@ -8,5 +8,6 @@ export async function saveCreditUsEin(customerId: string, ein: string) {
 	const replaced =
 		data.find((taxId) => taxId.type === "us_ein" && taxId.value !== ein)
 			?.value ?? null;
-	await syncCustomerUsEin(customerId, ein, replaced);
+	await syncCustomerUsEin(customerId, ein, null);
+	if (replaced) await syncCustomerUsEin(customerId, ein, replaced);
 }

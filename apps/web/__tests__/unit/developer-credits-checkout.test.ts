@@ -851,6 +851,60 @@ describe("credit checkout for a named app and a US business", () => {
 		);
 	});
 
+	it("keeps the saved EIN when Stripe will not take its replacement", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+		mockCheckoutStripe.customers.listTaxIds.mockResolvedValue({
+			data: [{ id: "txi_old", type: "us_ein", value: "98-7654321" }],
+		});
+		mockCheckoutStripe.customers.createTaxId.mockRejectedValue(
+			new Error("tax id rejected"),
+		);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "12-3456789" }),
+		);
+
+		expect(res.status).toBe(500);
+		expect(mockCheckoutStripe.customers.deleteTaxId).not.toHaveBeenCalled();
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("adds the new EIN before removing the old one", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+		mockCheckoutStripe.customers.listTaxIds
+			.mockResolvedValueOnce({
+				data: [{ id: "txi_old", type: "us_ein", value: "98-7654321" }],
+			})
+			.mockResolvedValueOnce({
+				data: [{ id: "txi_old", type: "us_ein", value: "98-7654321" }],
+			})
+			.mockResolvedValue({
+				data: [
+					{ id: "txi_old", type: "us_ein", value: "98-7654321" },
+					{ id: "txi_new", type: "us_ein", value: "12-3456789" },
+				],
+			});
+
+		await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "12-3456789" }),
+		);
+
+		expect(
+			mockCheckoutStripe.customers.createTaxId.mock.invocationCallOrder[0],
+		).toBeLessThan(
+			mockCheckoutStripe.customers.deleteTaxId.mock.invocationCallOrder[0] ?? 0,
+		);
+		expect(mockCheckoutStripe.customers.deleteTaxId).toHaveBeenCalledWith(
+			"cus_exist",
+			"txi_old",
+		);
+		expect(mockCheckoutStripe.customers.createTaxId).toHaveBeenCalledTimes(1);
+	});
+
 	it("touches no tax IDs when the EIN is left blank", async () => {
 		mockDb.limit
 			.mockResolvedValueOnce([mockApp])
