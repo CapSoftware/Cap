@@ -25,6 +25,7 @@ export {
 	FRAME_TOO_LARGE_MESSAGE,
 	fastestFrameRate,
 	isUnreadableMediaInput,
+	MediaInputNotAccessibleError,
 	playlistReferences,
 	type TrackSpans,
 	UnreadableMediaInputError,
@@ -92,7 +93,8 @@ async function runFfprobe(
 
 // The parser names the codecs browsers play. A track in any other codec is
 // named by ffprobe, which is held to the decoders this server allows: a file
-// it may not open is refused here, with a reason, before any job is queued.
+// whose video codec is not on the list, or cannot be named at all, is
+// refused here with a reason, before any job is queued.
 async function assertSupportedCodecs(
 	path: string,
 	metadata: VideoMetadata,
@@ -110,9 +112,12 @@ async function assertSupportedCodecs(
 		"json",
 		path,
 	]);
-	if (result === null) return;
+	if (result === null) {
+		if (!unnamedVideo) return;
+		throw new Error("Could not read the video codec of the source in time");
+	}
 	if (result.exitCode !== 0) {
-		if (isDecoderRejectedMessage(result.stderr)) {
+		if (unnamedVideo || isDecoderRejectedMessage(result.stderr)) {
 			throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
 		}
 		return;
@@ -122,11 +127,9 @@ async function assertSupportedCodecs(
 	try {
 		streams =
 			(JSON.parse(result.stdout) as { streams?: typeof streams }).streams ?? [];
-	} catch {
-		return;
-	}
+	} catch {}
 	const video = streams.find((stream) => stream.codec_type === "video");
-	if (video && !isAllowedVideoCodec(video.codec_name ?? "")) {
+	if (!video || !isAllowedVideoCodec(video.codec_name ?? "")) {
 		throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
 	}
 }
@@ -141,19 +144,24 @@ export function durationTolerance(declared: number): number {
 	);
 }
 
-// Whether FFmpeg finds anything to decode past the declared end. An edit
-// list hides the part of a file that was trimmed away, and FFmpeg honours
-// it, so such a file really is as short as it declares. Null when unknown.
+const PACKETS_READ_PAST_DECLARED_END = 2000;
+
+// Whether FFmpeg finds video to decode past the declared end. An edit list
+// hides the part of a file that was trimmed away, and FFmpeg honours it, so
+// such a file really is as short as it declares. The read starts at the
+// keyframe before the declared end and stops after a bounded number of
+// packets. Null when unknown.
 async function hasPacketsBeyond(
 	path: string,
 	declaredEnd: number,
-	measuredEnd: number,
 ): Promise<boolean | null> {
 	const result = await runFfprobe([
 		"-v",
 		"error",
+		"-select_streams",
+		"v:0",
 		"-read_intervals",
-		`${Math.max(0, measuredEnd - 1)}%`,
+		`${declaredEnd}%+#${PACKETS_READ_PAST_DECLARED_END}`,
 		"-show_entries",
 		"packet=pts_time",
 		"-of",
@@ -182,7 +190,7 @@ async function withTrueDuration(
 	if (declaredDuration === null || measuredDuration === null) return metadata;
 	const declaredEnd = declaredDuration + durationTolerance(declaredDuration);
 	if (measuredDuration <= declaredEnd) return metadata;
-	if ((await hasPacketsBeyond(path, declaredEnd, measuredDuration)) === false) {
+	if ((await hasPacketsBeyond(path, declaredEnd)) === false) {
 		return metadata;
 	}
 	return {

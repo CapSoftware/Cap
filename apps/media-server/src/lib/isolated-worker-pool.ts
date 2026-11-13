@@ -31,6 +31,9 @@ export interface WorkerPoolOptions<Failure> {
 	faultError: () => unknown;
 	faultExitCode: number;
 	maxRequestsPerWorker?: number;
+	// Workers running at once. A request that finds every one busy waits for
+	// one to come free.
+	maxWorkers?: () => number;
 	idleWorkersKept?: number;
 	idleRetireMs?: number;
 	startTimeoutMs?: number;
@@ -74,6 +77,9 @@ interface PoolWorker {
 	busy: boolean;
 	served: number;
 	stopped: boolean;
+	// The id of the last request this worker answered, with a value or with
+	// a failure it reported itself.
+	answered: number;
 	pending?: Pending;
 	idleTimer?: ReturnType<typeof setTimeout>;
 	stopReason?: unknown;
@@ -94,6 +100,7 @@ export interface WorkerPool<Request> {
 		timeoutKills: number;
 		running: number;
 		idle: number;
+		waiting: number;
 	};
 }
 
@@ -105,7 +112,9 @@ export function createWorkerPool<Request extends object, Failure>(
 	const idleRetireMs = options.idleRetireMs ?? 30_000;
 	const startTimeoutMs = options.startTimeoutMs ?? 15_000;
 	const label = options.label ?? "worker";
+	const maxWorkers = () => Math.max(1, options.maxWorkers?.() ?? 4);
 	const workers = new Set<PoolWorker>();
+	const waiting: (() => void)[] = [];
 	const counters = {
 		started: 0,
 		recycled: 0,
@@ -146,6 +155,7 @@ export function createWorkerPool<Request extends object, Failure>(
 			busy: false,
 			served: 0,
 			stopped: false,
+			answered: 0,
 		};
 		worker.proc = bunSpawn({
 			cmd: [process.execPath, options.entry],
@@ -162,6 +172,7 @@ export function createWorkerPool<Request extends object, Failure>(
 				const pending = worker.pending;
 				if (!pending || pending.id !== message.id) return;
 				worker.pending = undefined;
+				worker.answered = message.id;
 				if (message.ok) pending.resolve(message.value);
 				else pending.reject(options.toError(message.error));
 			},
@@ -197,18 +208,24 @@ export function createWorkerPool<Request extends object, Failure>(
 		return worker;
 	}
 
+	function wakeWaiter(): void {
+		waiting.shift()?.();
+	}
+
 	function release(worker: PoolWorker, healthy: boolean): void {
 		worker.busy = false;
 		if (!healthy || worker.served >= maxRequestsPerWorker) {
 			counters.recycled++;
 			stopWorker(worker);
-			if (idleCount() === 0) {
+			if (idleCount() === 0 && workers.size < maxWorkers()) {
 				try {
 					startWorker();
 				} catch {}
 			}
+			wakeWaiter();
 			return;
 		}
+		wakeWaiter();
 		if (idleCount() > idleWorkersKept) {
 			worker.idleTimer = setTimeout(() => {
 				if (!worker.busy) stopWorker(worker);
@@ -217,16 +234,54 @@ export function createWorkerPool<Request extends object, Failure>(
 		}
 	}
 
-	function acquire(): PoolWorker {
+	function tryAcquire(): PoolWorker | null {
 		for (const worker of workers) {
 			if (worker.busy || worker.stopped) continue;
 			clearTimeout(worker.idleTimer);
 			worker.busy = true;
 			return worker;
 		}
+		if (workers.size >= maxWorkers()) return null;
 		const worker = startWorker();
 		worker.busy = true;
 		return worker;
+	}
+
+	async function acquire(
+		deadline: number,
+		signal?: AbortSignal,
+	): Promise<PoolWorker> {
+		while (true) {
+			const worker = tryAcquire();
+			if (worker) return worker;
+			await new Promise<void>((resolve, reject) => {
+				const wake = () => {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", onAbort);
+					resolve();
+				};
+				const leave = (reason: unknown) => {
+					const index = waiting.indexOf(wake);
+					if (index !== -1) waiting.splice(index, 1);
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", onAbort);
+					reject(reason);
+				};
+				const onAbort = () =>
+					leave(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+				const timer = setTimeout(
+					() =>
+						leave(
+							new Error(
+								`Operation timed out after waiting for a free ${label}`,
+							),
+						),
+					Math.max(0, deadline - performance.now()),
+				);
+				waiting.push(wake);
+				signal?.addEventListener("abort", onAbort, { once: true });
+			});
+		}
 	}
 
 	async function run(
@@ -235,12 +290,18 @@ export function createWorkerPool<Request extends object, Failure>(
 		signal?: AbortSignal,
 	): Promise<unknown> {
 		signal?.throwIfAborted();
+		const deadline = performance.now() + timeoutMs;
 		let worker: PoolWorker;
 		try {
-			worker = acquire();
+			worker = await acquire(deadline, signal);
 		} catch (error) {
+			if (error instanceof Error && error.message.includes("timed out"))
+				throw error;
+			if (signal?.aborted) throw error;
 			throw new WorkerStartError(String(error));
 		}
+		const requestId = nextRequestId++;
+		const remainingMs = Math.max(1, deadline - performance.now());
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let memoryWatch: ReturnType<typeof setInterval> | undefined;
 		let onAbort: (() => void) | undefined;
@@ -254,7 +315,7 @@ export function createWorkerPool<Request extends object, Failure>(
 				timer = setTimeout(() => {
 					counters.timeoutKills++;
 					stop(new Error(`Operation timed out after ${timeoutMs}ms`));
-				}, timeoutMs);
+				}, remainingMs);
 				onAbort = () =>
 					stop(signal?.reason ?? new DOMException("Aborted", "AbortError"));
 				signal?.addEventListener("abort", onAbort, { once: true });
@@ -271,18 +332,19 @@ export function createWorkerPool<Request extends object, Failure>(
 				worker.ready.then(
 					() => {
 						if (worker.stopped) return;
-						const id = nextRequestId++;
-						worker.pending = { id, resolve, reject };
-						worker.proc.send({ ...request, id });
+						worker.pending = { id: requestId, resolve, reject };
+						worker.proc.send({ ...request, id: requestId });
 					},
 					(error) => {
 						if (worker.stopReason === undefined) reject(error);
 					},
 				);
 			});
-			healthy = true;
 			return value;
 		} finally {
+			// A worker that answered, even with a failure it reported, is
+			// reused. One that was stopped, crashed or never answered is not.
+			healthy = !worker.stopped && worker.answered === requestId;
 			clearTimeout(timer);
 			clearInterval(memoryWatch);
 			if (onAbort) signal?.removeEventListener("abort", onAbort);
@@ -307,6 +369,11 @@ export function createWorkerPool<Request extends object, Failure>(
 				console.error(`[${label}] Could not start:`, error);
 			}
 		},
-		stats: () => ({ ...counters, running: workers.size, idle: idleCount() }),
+		stats: () => ({
+			...counters,
+			running: workers.size,
+			idle: idleCount(),
+			waiting: waiting.length,
+		}),
 	};
 }

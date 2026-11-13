@@ -7,6 +7,7 @@ import type {
 } from "./media-probe-pool";
 import {
 	computeTrackSpans,
+	MediaInputNotAccessibleError,
 	measureFastestFrameRate,
 	PARSER_FAULT_EXIT_CODE,
 	probeMedia,
@@ -18,6 +19,9 @@ function describe(error: unknown): ProbeWorkerFailure {
 	if (error instanceof MediaInputPolicyError)
 		return { kind: "policy", message };
 	if (error instanceof MediaAddressError) return { kind: "address", message };
+	if (error instanceof MediaInputNotAccessibleError) {
+		return { kind: "not-accessible", message, status: error.status };
+	}
 	if (error instanceof UnreadableMediaInputError) {
 		const cause = error.cause;
 		return {

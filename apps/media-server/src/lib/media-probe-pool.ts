@@ -7,8 +7,10 @@ import {
 import { MediaAddressError } from "./media-address-guard";
 import { withTimeout } from "./media-common";
 import { MediaInputPolicyError } from "./media-input-policy";
+import { getMaxConcurrentProbeOperations } from "./media-operations";
 import {
 	computeTrackSpans,
+	MediaInputNotAccessibleError,
 	measureFastestFrameRate,
 	PARSER_FAULT_EXIT_CODE,
 	type ProbedMedia,
@@ -34,9 +36,16 @@ export interface ProbeWorkerRequest {
 }
 
 export interface ProbeWorkerFailure {
-	kind: "policy" | "address" | "unreadable" | "unsupported-format" | "error";
+	kind:
+		| "policy"
+		| "address"
+		| "unreadable"
+		| "not-accessible"
+		| "unsupported-format"
+		| "error";
 	message: string;
 	cause?: string;
+	status?: number | null;
 }
 
 interface ProbeResults {
@@ -72,6 +81,9 @@ function failureToError(failure: ProbeWorkerFailure): Error {
 		return error;
 	}
 	if (failure.kind === "address") return new MediaAddressError(failure.message);
+	if (failure.kind === "not-accessible") {
+		return new MediaInputNotAccessibleError(failure.status ?? null);
+	}
 	if (failure.kind === "unreadable") {
 		return new UnreadableMediaInputError(
 			failure.message,
@@ -102,6 +114,7 @@ const pool = createWorkerPool<
 			cause: "the parser stopped on this file",
 		}),
 	faultExitCode: PARSER_FAULT_EXIT_CODE,
+	maxWorkers: () => getMaxConcurrentProbeOperations(),
 	label: "probe worker",
 });
 

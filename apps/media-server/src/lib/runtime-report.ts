@@ -3,7 +3,6 @@ import {
 	getAllJobs,
 	getJobTotals,
 	getMaxConcurrentVideoProcesses,
-	getReservedRegularVideoSlots,
 	getSystemResources,
 } from "./job-manager";
 import { getDrainBlockers, getShutdownGraceMs, isDraining } from "./lifecycle";
@@ -44,7 +43,6 @@ export async function getRuntimeReport() {
 				active: getActiveVideoProcessCount(),
 				max: getMaxConcurrentVideoProcesses(),
 				effectiveMax: getSystemResources().effectiveMax,
-				reservedForRegular: getReservedRegularVideoSlots(),
 			},
 			directVideo: {
 				active: getActiveDirectVideoProcessCount(),

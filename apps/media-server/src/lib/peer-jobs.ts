@@ -26,20 +26,29 @@ export function isPeerLookup(request: Request): boolean {
 	return request.headers.get(PEER_LOOKUP_HEADER) === "1";
 }
 
-export async function findJobOnPeer(
+// What the peers said about a job this instance does not hold. "missing"
+// means every peer answered and none has it. "unavailable" means at least
+// one peer could not be asked, so the job may still exist.
+export type PeerJobLookup =
+	| { found: Response }
+	| { found: null; outcome: "missing" | "unavailable" };
+
+const NOT_ON_PEER = "Job is not on this peer";
+
+export async function lookUpJobOnPeers(
 	path: string,
 	method: "GET" | "POST",
-): Promise<Response | null> {
+): Promise<PeerJobLookup> {
 	const secret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
 	const peers = mediaServerPeers();
-	if (!secret || peers.length === 0) return null;
+	if (!secret || peers.length === 0) return { found: null, outcome: "missing" };
 	const controller = new AbortController();
 	const timeout = setTimeout(
 		() => controller.abort(),
 		method === "POST" ? PEER_CANCEL_TIMEOUT_MS : PEER_STATUS_TIMEOUT_MS,
 	);
 	try {
-		return await Promise.any(
+		const found = await Promise.any(
 			peers.map(async (peer) => {
 				const response = await fetch(`${peer}${path}`, {
 					method,
@@ -54,7 +63,15 @@ export async function findJobOnPeer(
 				// Only a peer that owns the job answers 200, or 400 for a finished job's cancel.
 				if (response.status !== 200 && response.status !== 400) {
 					await response.body?.cancel().catch(() => {});
-					throw new Error("Job is not on this peer");
+					// A 404 or a refused secret is an answer. Anything else
+					// (a peer that is starting, overloaded or failing) is not.
+					throw new Error(
+						response.status === 404 ||
+							response.status === 401 ||
+							response.status === 403
+							? NOT_ON_PEER
+							: `Peer answered ${response.status}`,
+					);
 				}
 				const body = await response.text();
 				return new Response(body, {
@@ -66,10 +83,22 @@ export async function findJobOnPeer(
 				});
 			}),
 		);
-	} catch {
-		return null;
+		return { found };
+	} catch (error) {
+		const failures = error instanceof AggregateError ? error.errors : [error];
+		const allAnswered = failures.every(
+			(failure) => failure instanceof Error && failure.message === NOT_ON_PEER,
+		);
+		return { found: null, outcome: allAnswered ? "missing" : "unavailable" };
 	} finally {
 		clearTimeout(timeout);
 		controller.abort();
 	}
+}
+
+export async function findJobOnPeer(
+	path: string,
+	method: "GET" | "POST",
+): Promise<Response | null> {
+	return (await lookUpJobOnPeers(path, method)).found;
 }

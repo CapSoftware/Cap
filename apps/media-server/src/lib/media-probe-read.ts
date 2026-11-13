@@ -61,6 +61,16 @@ export class UnreadableMediaInputError extends Error {
 	override name = "UnreadableMediaInputError";
 }
 
+// The remote host did not hand over the file. status is the HTTP status it
+// answered with, or null when there was no answer.
+export class MediaInputNotAccessibleError extends Error {
+	override name = "MediaInputNotAccessibleError";
+
+	constructor(readonly status: number | null = null) {
+		super("Media input is not accessible");
+	}
+}
+
 // Not a policy violation: those count against the uploader, and a camera
 // original that is simply too big should not.
 export const FRAME_TOO_LARGE_MESSAGE =
@@ -121,7 +131,7 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 		}
 		if (!response.ok) {
 			await response.body?.cancel();
-			return null;
+			throw new MediaInputNotAccessibleError(response.status);
 		}
 		const reader = response.body?.getReader();
 		if (!reader) return new Uint8Array(0);
@@ -139,7 +149,8 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 	} catch (error) {
 		if (
 			error instanceof MediaInputPolicyError ||
-			error instanceof MediaAddressError
+			error instanceof MediaAddressError ||
+			error instanceof MediaInputNotAccessibleError
 		)
 			throw error;
 		return null;
@@ -249,7 +260,7 @@ export interface ProbedMedia {
 export async function probeMedia(path: string): Promise<ProbedMedia> {
 	if (isHttpUrl(path)) {
 		const head = await readHttpHead(path);
-		if (!head) throw new Error("Media input is not accessible");
+		if (!head) throw new MediaInputNotAccessibleError();
 		if (head.length === 0) {
 			throw new UnreadableMediaInputError("Media input is empty");
 		}

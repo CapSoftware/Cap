@@ -65,7 +65,6 @@ export const ALLOWED_DEMUXERS = [
 	"flac",
 	"caf",
 	"aiff",
-	"amr",
 	"asf",
 	"mpeg",
 	"h264",
@@ -131,26 +130,54 @@ export const ALLOWED_VIDEO_CODECS: readonly string[] = [
 	"vp9",
 	"av1",
 	"prores",
-	"mjpeg",
 	"mpeg4",
-	"mpeg2video",
-	"mpeg1video",
-	"h263",
-	"dnxhd",
-	"dvvideo",
-	"theora",
+	"mjpeg",
 ];
 
 export function isAllowedVideoCodec(codec: string): boolean {
 	return ALLOWED_VIDEO_CODECS.includes(codec.toLowerCase());
 }
 
-// Every decoder FFmpeg may open for an input: the accepted video codecs with
-// their library and GPU decoders, the audio a recording or an import carries,
-// subtitles (FFmpeg converts the first text one into an MP4 by default, and
-// ffprobe stops on any stream whose decoder it may not open) and the still
-// images found as cover art. FFmpeg has several hundred more, most of them
-// for formats nobody uploads, and none of those are reachable.
+const PCM_DECODERS = [
+	"pcm_alaw",
+	"pcm_bluray",
+	"pcm_dvd",
+	"pcm_f16le",
+	"pcm_f24le",
+	"pcm_f32be",
+	"pcm_f32le",
+	"pcm_f64be",
+	"pcm_f64le",
+	"pcm_mulaw",
+	"pcm_s16be",
+	"pcm_s16be_planar",
+	"pcm_s16le",
+	"pcm_s16le_planar",
+	"pcm_s24be",
+	"pcm_s24le",
+	"pcm_s24le_planar",
+	"pcm_s32be",
+	"pcm_s32le",
+	"pcm_s32le_planar",
+	"pcm_s64be",
+	"pcm_s64le",
+	"pcm_s8",
+	"pcm_s8_planar",
+	"pcm_u16be",
+	"pcm_u16le",
+	"pcm_u24be",
+	"pcm_u24le",
+	"pcm_u32be",
+	"pcm_u32le",
+	"pcm_u8",
+];
+
+// Every decoder FFmpeg may open for an input, by decoder name, which is what
+// FFmpeg matches. The accepted video codecs with the library and GPU
+// decoders that read them, the audio a recording or an import carries (DTS
+// included, so a file with it keeps its audio), and the subtitles and cover
+// art some uploads carry: FFmpeg copies a text subtitle into an MP4 by
+// default, and ffprobe stops on any stream whose decoder it may not open.
 export const ALLOWED_DECODERS: readonly string[] = [
 	...ALLOWED_VIDEO_CODECS,
 	"libdav1d",
@@ -164,16 +191,11 @@ export const ALLOWED_DECODERS: readonly string[] = [
 	"av1_cuvid",
 	"mjpeg_cuvid",
 	"mpeg4_cuvid",
-	"mpeg2_cuvid",
-	"mpeg1_cuvid",
 	"aac",
 	"aac_fixed",
 	"aac_latm",
-	"libfdk_aac",
 	"mp3",
 	"mp3float",
-	"mp2",
-	"mp2float",
 	"opus",
 	"libopus",
 	"vorbis",
@@ -184,35 +206,7 @@ export const ALLOWED_DECODERS: readonly string[] = [
 	"ac3_fixed",
 	"eac3",
 	"dca",
-	"truehd",
-	"mlp",
-	"amrnb",
-	"amrwb",
-	"libopencore_amrnb",
-	"libopencore_amrwb",
-	"wmav1",
-	"wmav2",
-	"wmapro",
-	"speex",
-	"adpcm_ms",
-	"adpcm_ima_wav",
-	"adpcm_ima_qt",
-	"pcm_s16le",
-	"pcm_s16be",
-	"pcm_s24le",
-	"pcm_s24be",
-	"pcm_s32le",
-	"pcm_s32be",
-	"pcm_f32le",
-	"pcm_f32be",
-	"pcm_f64le",
-	"pcm_f64be",
-	"pcm_u8",
-	"pcm_s8",
-	"pcm_alaw",
-	"pcm_mulaw",
-	"pcm_bluray",
-	"pcm_dvd",
+	...PCM_DECODERS,
 	"mov_text",
 	"subrip",
 	"srt",
@@ -220,21 +214,16 @@ export const ALLOWED_DECODERS: readonly string[] = [
 	"ssa",
 	"webvtt",
 	"text",
-	"cc_dec",
-	"pgssub",
-	"dvdsub",
-	"dvbsub",
-	"libzvbi_teletextdec",
 	"png",
-	"webp",
-	"gif",
 	"bmp",
+	"gif",
+	"webp",
 ];
 
 export const DECODER_WHITELIST = ALLOWED_DECODERS.join(",");
 
 export const UNSUPPORTED_FORMAT_MESSAGE =
-	"This video format is not supported. Upload H.264, HEVC, VP8, VP9, AV1, ProRes or Motion JPEG video.";
+	"This video format is not supported. Upload H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.";
 
 const MAX_TRUSTED_PLAYLISTS = 1000;
 const trustedPlaylists = new Set<string>();
