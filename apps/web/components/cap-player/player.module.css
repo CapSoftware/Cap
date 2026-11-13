@@ -185,7 +185,7 @@
 }
 
 .player[data-controls="true"][data-idle="false"] .captions {
-	bottom: 68px;
+	bottom: calc(var(--cap-player-control) + 34px);
 }
 
 .cue {
