@@ -27,4 +27,10 @@ EXPOSE 3456
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
+# The container starts as root only to hand its temp and GPU cache volumes
+# and the GPU devices to the bun user; the entrypoint then runs the server,
+# and every FFmpeg it starts, as that user. See docker-entrypoint.sh.
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod 755 ./docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]

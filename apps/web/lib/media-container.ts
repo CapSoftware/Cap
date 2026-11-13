@@ -120,11 +120,7 @@ const PLAYLIST_MARKERS = [
 const UTF8_BOM = [0xef, 0xbb, 0xbf];
 const PLAYLIST_MARKER_BYTES = 64;
 
-export function looksLikePlaylist(bytes: Uint8Array): boolean {
-	const tagsEnd = id3TagsEnd(bytes);
-	if (tagsEnd > 0) {
-		return tagsEnd < bytes.length && looksLikePlaylist(bytes.subarray(tagsEnd));
-	}
+function leadingText(bytes: Uint8Array) {
 	let start = startsWith(bytes, UTF8_BOM) ? UTF8_BOM.length : 0;
 	while (
 		start < bytes.length &&
@@ -140,8 +136,21 @@ export function looksLikePlaylist(bytes: Uint8Array): boolean {
 	for (let index = start; index < end; index++) {
 		text += String.fromCharCode(bytes[index] ?? 0);
 	}
-	const lowered = text.toLowerCase();
+	return text.toLowerCase();
+}
+
+export function looksLikePlaylist(bytes: Uint8Array): boolean {
+	const tagsEnd = id3TagsEnd(bytes);
+	if (tagsEnd > 0) {
+		return tagsEnd < bytes.length && looksLikePlaylist(bytes.subarray(tagsEnd));
+	}
+	const lowered = leadingText(bytes);
 	return PLAYLIST_MARKERS.some((marker) => lowered.startsWith(marker));
+}
+
+export function looksLikeHtml(bytes: Uint8Array): boolean {
+	const lowered = leadingText(bytes);
+	return lowered.startsWith("<!doctype html") || lowered.startsWith("<html");
 }
 
 export type MediaSniff = "media" | "playlist" | "unknown";

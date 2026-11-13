@@ -24,7 +24,9 @@ import {
 	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
+	encodeLengthLimit,
 	normalizeLocalPath,
+	outputLengthCapArgs,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
@@ -1772,6 +1774,60 @@ export async function requireVideoSourceTraits(
 	throw new Error("Could not read the colour information of the source video");
 }
 
+const EIGHT_BIT_PIXEL_FORMATS = new Set([
+	"yuv420p",
+	"yuvj420p",
+	"yuv422p",
+	"yuv444p",
+	"yuva420p",
+]);
+
+// VP8 is always 8-bit standard range, and 8-bit VP9 is what browser and
+// extension recordings are, so such a source whose colour tags cannot be
+// read is encoded as standard range instead of failing. VP9 at a higher bit
+// depth (profile 2) can carry HDR, so it keeps the requirement.
+export function colourProbeIsOptional(
+	videoCodec: string,
+	pixelFormat: string | null,
+): boolean {
+	if (videoCodec === "vp8") return true;
+	return (
+		videoCodec === "vp9" &&
+		pixelFormat !== null &&
+		EIGHT_BIT_PIXEL_FORMATS.has(pixelFormat)
+	);
+}
+
+async function videoSourceTraitsForEncode(
+	inputPath: string,
+	videoCodec: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	if (videoCodec === "vp8") {
+		return await probeVideoSourceTraits(inputPath, abortSignal);
+	}
+	try {
+		return await requireVideoSourceTraits(inputPath, abortSignal);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		if (
+			videoCodec !== "vp9" ||
+			!(error instanceof Error) ||
+			!error.message.startsWith("Could not read the colour information") ||
+			!colourProbeIsOptional(
+				videoCodec,
+				await probeH264PixelFormat(inputPath, abortSignal),
+			)
+		) {
+			throw error;
+		}
+		console.warn(
+			"[media-video] Could not read the colour information of an 8-bit VP9 source, encoding it as standard range",
+		);
+		return { rotation: null, hdr: null };
+	}
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -1802,7 +1858,11 @@ export async function processVideo(
 	const traits =
 		remuxOnly || (metadata.videoCodec === "h264" && browserPixelFormat)
 			? null
-			: await requireVideoSourceTraits(inputPath, abortSignal);
+			: await videoSourceTraitsForEncode(
+					inputPath,
+					metadata.videoCodec,
+					abortSignal,
+				);
 	abortSignal?.throwIfAborted();
 	const hdr = traits?.hdr ?? null;
 	// Created only once nothing above can throw, so a job cancelled while its
@@ -1838,6 +1898,9 @@ export async function processVideo(
 		opts.timeoutMs,
 		metadata,
 	);
+	// A damaged source is read with its timestamps rebuilt, which the probe
+	// did not see, so a recovery attempt is bounded by its deadline alone.
+	const maxOutputSeconds = resilientFlags ? null : encodeLengthLimit(metadata);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
 			? capcodecOptionsForJob(opts)
@@ -1854,6 +1917,7 @@ export async function processVideo(
 				extraInputArgs,
 				extraOutputArgs,
 				processTimeoutMs,
+				maxOutputSeconds,
 				onProgress,
 				abortSignal,
 			);
@@ -1881,6 +1945,7 @@ export async function processVideo(
 		sourceHeight: metadata.height,
 		hdr,
 		hdrColor: traits?.hdrColor,
+		maxOutputSeconds,
 		// NVENC leaves the CPU free, so decode (and scale) can use every core.
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
@@ -1971,6 +2036,7 @@ export interface ProcessVideoArgsInput {
 	hdr?: HdrTransfer | null;
 	hdrColor?: HdrColor | null;
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
+	maxOutputSeconds?: number | null;
 }
 
 export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
@@ -2078,6 +2144,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	}
 
 	ffmpegArgs.push(
+		...outputLengthCapArgs(input.maxOutputSeconds),
 		"-movflags",
 		"+faststart",
 		...input.extraOutputArgs,
@@ -2198,6 +2265,7 @@ async function processVideoWithCapcodec(
 	extraInputArgs: string[],
 	extraOutputArgs: string[],
 	processTimeoutMs: number,
+	maxOutputSeconds: number | null,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
@@ -2215,6 +2283,7 @@ async function processVideoWithCapcodec(
 		maxWidth: opts.maxWidth,
 		maxHeight: opts.maxHeight,
 		extraInputArgs,
+		maxOutputSeconds,
 		options: capcodec,
 		totalDurationUs: metadata.duration * 1_000_000,
 		onProgress,
@@ -2253,6 +2322,7 @@ async function processVideoWithCapcodec(
 			muxArgs.push("-map", "0:v:0", "-c:v", "copy", "-an");
 		}
 		muxArgs.push(
+			...outputLengthCapArgs(maxOutputSeconds),
 			"-movflags",
 			"+faststart",
 			...extraOutputArgs,
