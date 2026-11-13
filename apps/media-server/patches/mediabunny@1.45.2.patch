@@ -1,0 +1,80 @@
+diff --git a/dist/modules/src/isobmff/isobmff-demuxer.js b/dist/modules/src/isobmff/isobmff-demuxer.js
+index b5cce3d36e7385dc2c925ef0743383ca58150df6..41ee60d806f20b0629e54b0779b8614b340d68dd 100644
+--- a/dist/modules/src/isobmff/isobmff-demuxer.js
++++ b/dist/modules/src/isobmff/isobmff-demuxer.js
+@@ -18,6 +18,8 @@ import { DEFAULT_TRACK_DISPOSITION, RichImageData } from '../metadata.js';
+ import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc.js';
+ import { Bitstream } from '../../shared/bitstream.js';
+ import { Aes128CbcContext } from '../aes.js';
++// About 18 hours of 60 fps video. Building the presentation order costs memory per sample.
++const MAX_DECLARED_SAMPLES = 4_000_000;
+ export class IsobmffDemuxer extends Demuxer {
+     constructor(input) {
+         super(input);
+@@ -218,6 +220,41 @@ export class IsobmffDemuxer extends Demuxer {
+         this.currentTrack = internalTrack;
+         this.traverseBox(stblContainerSlice);
+         this.currentTrack = null;
++        // Counts in a sample table are declared by the file, not stored in it: a few bytes can claim
++        // billions of samples. A sample that exists has a size entry, or with one shared size takes up
++        // that many bytes of the file, so no count is honored past what the file can hold.
++        {
++            const sizes = sampleTable.sampleSizes;
++            const fileSize = this.reader.fileSize;
++            let maxSamples = 0;
++            if (sizes.length > 1) {
++                maxSamples = sizes.length;
++            }
++            else if (sizes.length === 1) {
++                maxSamples = sizes[0] > 0 && fileSize !== null
++                    ? Math.max(1, Math.floor(fileSize / sizes[0]))
++                    : MAX_DECLARED_SAMPLES;
++            }
++            let remaining = maxSamples;
++            for (const entry of sampleTable.sampleTimingEntries) {
++                if (entry.count > remaining) {
++                    entry.count = remaining;
++                }
++                remaining -= entry.count;
++            }
++            remaining = maxSamples;
++            for (const entry of sampleTable.sampleCompositionTimeOffsets) {
++                if (entry.count > remaining) {
++                    entry.count = remaining;
++                }
++                remaining -= entry.count;
++            }
++            for (const entry of sampleTable.sampleToChunk) {
++                if (entry.samplesPerChunk > maxSamples) {
++                    entry.samplesPerChunk = Math.max(1, maxSamples);
++                }
++            }
++        }
+         const isPcmCodec = internalTrack.info?.type === 'audio'
+             && internalTrack.info.codec
+             && PCM_AUDIO_CODECS.includes(internalTrack.info.codec);
+@@ -281,6 +318,13 @@ export class IsobmffDemuxer extends Demuxer {
+         if (sampleTable.sampleCompositionTimeOffsets.length > 0) {
+             // If composition time offsets are defined, we must build a list of all presentation timestamps and then
+             // sort them
++            let timedSamples = 0;
++            for (const entry of sampleTable.sampleTimingEntries) {
++                timedSamples += entry.count;
++            }
++            if (timedSamples > MAX_DECLARED_SAMPLES) {
++                throw new Error('Too many samples in track.');
++            }
+             sampleTable.presentationTimestamps = [];
+             for (const entry of sampleTable.sampleTimingEntries) {
+                 for (let i = 0; i < entry.count; i++) {
+@@ -1813,6 +1857,10 @@ export class IsobmffDemuxer extends Demuxer {
+                         };
+                         this.currentFragment.trackData.set(track.id, trackData);
+                     }
++                    if (trackData.samples.length + sampleCount > 2 ** 20) {
++                        // Safety measure, as in later versions of this library
++                        throw new Error('Too many (> 2^20) samples in fragment.');
++                    }
+                     if (sampleCount === 0) {
+                         // Don't associate the fragment with the track if it has no samples, this simplifies other code
+                         this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;

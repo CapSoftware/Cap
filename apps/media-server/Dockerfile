@@ -7,6 +7,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY apps/media-server/package.json apps/media-server/bun.lock ./
+COPY apps/media-server/patches ./patches
 RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/bunfig.toml ./bunfig.toml
@@ -18,7 +19,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/lib/audio-levels.integration.test.ts \
 	&& bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts src/__tests__/lib/parallel-download.test.ts \
 	&& bun test src/__tests__/lib/loom-import-limit.test.ts \
-	&& bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts \
+	&& bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts src/__tests__/lib/media-probe-sample-counts.test.ts \
 	&& bun test src/__tests__/lib/media-audio.integration.test.ts \
 	&& bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts src/__tests__/lib/recording-preverify.test.ts \
 	&& bun test src/__tests__/lib/media-transfer.test.ts src/__tests__/lib/capcodec-encoder.test.ts src/__tests__/lib/nvenc-encoder.test.ts \
