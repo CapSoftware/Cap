@@ -535,6 +535,10 @@ export async function prepareDeveloperVideoProcessing(
 			await releaseProbe(videoId, encodeId, token);
 			return "retry";
 		}
+		if (probed.status === "timed_out") {
+			await releaseProbe(videoId, encodeId, token);
+			return "unclear";
+		}
 		if (probed.status === "rejected") {
 			console.warn("[developer-video] Probe rejected the upload", {
 				videoId,
