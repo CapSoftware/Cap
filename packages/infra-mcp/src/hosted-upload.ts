@@ -1,6 +1,6 @@
 import { extname } from "node:path";
 import { z } from "zod";
-import { ApiError, LocalError, withContext } from "./errors";
+import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
 import { CONTENT_TYPES } from "./files";
 import { asRecord, confirmed, dataOf } from "./http";
 import { Disclosed } from "./redact";
@@ -222,10 +222,13 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 						linksExpireInSeconds: PART_LINK_SECONDS,
 						...videoLinks(pages),
 						steps: uploadSteps(plan.partBytes, plan.count),
-						next: "Upload the parts as the steps say, then call videos_complete_upload. If the links expire first, call videos_create_upload again with this videoId.",
+						next: "Upload the parts as the steps say, then call videos_complete_upload. If the links expire first, call videos_create_upload again with this videoId: it continues the same upload, so parts already stored keep their ETags.",
 					};
 				} catch (error) {
-					if (uploadId !== null) {
+					// A retry with videoId gets back the open upload and the parts
+					// already stored in it, so only an upload opened for a new video
+					// is safe to abort.
+					if (uploadId !== null && args.videoId === undefined) {
 						await client
 							.call("abortUpload", {
 								body: { videoId, uploadId },
@@ -302,19 +305,40 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 					}
 					throw error;
 				}
-				confirmed(
-					await client.call("completeUpload", {
-						body: {
-							videoId: args.videoId,
-							uploadId: args.uploadId,
-							// Complete measures every part from storage and ignores size.
-							parts: args.parts.map((part) => ({ ...part, size: 0 })),
-							durationInSecs: args.durationSeconds ?? 1,
-						},
-						token,
-						signal: call.signal,
-					}),
-				);
+				try {
+					confirmed(
+						await client.call("completeUpload", {
+							body: {
+								videoId: args.videoId,
+								uploadId: args.uploadId,
+								// Complete measures every part from storage and ignores size.
+								parts: args.parts.map((part) => ({ ...part, size: 0 })),
+								durationInSecs: args.durationSeconds ?? 1,
+							},
+							token,
+							signal: call.signal,
+						}),
+					);
+				} catch (error) {
+					const unclear =
+						isUnanswered(error) ||
+						(error instanceof ApiError &&
+							(error.status >= 500 || error.code === "completion_in_progress"));
+					throw withContext(
+						error,
+						unclear
+							? {
+									videoId: args.videoId,
+									videoStatus: "unknown",
+									next: "The upload may have completed. Check it with videos_get before uploading again, and call videos_complete_upload again with the same parts if it is still uploading.",
+								}
+							: {
+									videoId: args.videoId,
+									videoStatus: "uploading",
+									next: "The video still has no file and its stored parts are kept. Fix what the error says and call videos_complete_upload again, or call videos_create_upload with this videoId for new links.",
+								},
+					);
+				}
 				return {
 					videoId: args.videoId,
 					status: "processing",

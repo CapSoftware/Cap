@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
 	gatedApps: new Set<string>(),
 	rest: [] as Request[],
 	nextKey: 0,
+	presignFails: false,
+	completeStatus: 200,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -86,10 +88,28 @@ async function restAnswer(request: Request): Promise<Response> {
 		case "POST /api/developer/sdk/v1/upload/multipart/initiate":
 			return Response.json({ uploadId: "upload-1" });
 		case "POST /api/developer/sdk/v1/upload/multipart/presign-part":
+			if (state.presignFails) {
+				return Response.json(
+					{ code: "storage_unavailable", message: "Storage failed" },
+					{ status: 400 },
+				);
+			}
 			return Response.json({
 				parts: [{ partNumber: 1, presignedUrl: SIGNED_PART }],
 			});
 		case "POST /api/developer/sdk/v1/upload/multipart/complete":
+			if (state.completeStatus !== 200) {
+				return Response.json(
+					{ code: "internal_error", message: "Something went wrong" },
+					{ status: state.completeStatus },
+				);
+			}
+			return Response.json({ success: true });
+		case "GET /api/developer/v1/videos/video-1":
+			return Response.json({
+				data: { id: "video-1", status: "uploading", shareUrl: null },
+			});
+		case "POST /api/developer/sdk/v1/upload/multipart/abort":
 			return Response.json({ success: true });
 		case "POST /api/developer/v1/transcripts":
 			if (appId !== null && state.gatedApps.has(appId)) {
@@ -136,6 +156,8 @@ beforeAll(async () => {
 beforeEach(() => {
 	state.rest.length = 0;
 	state.gatedApps.clear();
+	state.presignFails = false;
+	state.completeStatus = 200;
 });
 
 const newKey = (appId = "app1", revoked = false) => {
@@ -409,6 +431,48 @@ describe("hosted Cap Infra MCP tools", () => {
 		expect(created.isError).toBe(false);
 		expect(state.rest).toHaveLength(1);
 		expect(await state.rest[0]?.json()).toEqual({ videoId: "video-1" });
+	});
+
+	it("aborts the upload it opened for a new video when signing fails", async () => {
+		state.presignFails = true;
+		const created = await callTool(newKey(), "videos_create_upload", {
+			contentLength: 1_000_000,
+		});
+		expect(created.isError).toBe(true);
+		expect(created.body).toMatchObject({
+			videoId: "video-1",
+			videoStatus: "uploading",
+		});
+		expect(
+			state.rest.some((request) => request.url.endsWith("/multipart/abort")),
+		).toBe(true);
+	});
+
+	it("keeps a reused upload and its stored parts when signing fails on retry", async () => {
+		state.presignFails = true;
+		const retried = await callTool(newKey(), "videos_create_upload", {
+			contentLength: 1_000_000,
+			videoId: "video-1",
+		});
+		expect(retried.isError).toBe(true);
+		expect(
+			state.rest.some((request) => request.url.endsWith("/multipart/abort")),
+		).toBe(false);
+	});
+
+	it("says the outcome is unknown when completing fails on the server", async () => {
+		state.completeStatus = 500;
+		const completed = await callTool(newKey(), "videos_complete_upload", {
+			videoId: "video-1",
+			uploadId: "upload-1",
+			parts: [{ partNumber: 1, etag: "etag-1" }],
+		});
+		expect(completed.isError).toBe(true);
+		expect(completed.body).toMatchObject({
+			videoId: "video-1",
+			videoStatus: "unknown",
+			next: expect.stringContaining("videos_get"),
+		});
 	});
 
 	it("refuses a local path for a transcript", async () => {
