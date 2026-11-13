@@ -136,10 +136,7 @@ export function WebhooksClient({
 	const [revealed, setRevealed] = useState<Revealed | null>(null);
 	const full = endpoints.length >= limit;
 
-	const startAdding = () => {
-		setRevealed(null);
-		setAdding(true);
-	};
+	const startAdding = () => setAdding(true);
 
 	return (
 		<>
@@ -156,7 +153,7 @@ export function WebhooksClient({
 					</>
 				}
 				action={
-					endpoints.length > 0 && !adding && !full ? (
+					endpoints.length > 0 && !adding && !revealed && !full ? (
 						<Button onClick={startAdding}>Add endpoint</Button>
 					) : undefined
 				}
@@ -197,7 +194,8 @@ export function WebhooksClient({
 			)}
 
 			{endpoints.length === 0 ? (
-				!adding && (
+				!adding &&
+				!revealed && (
 					<div
 						className={clsx(
 							PANEL,
@@ -222,6 +220,7 @@ export function WebhooksClient({
 									key={endpoint.id}
 									appId={appId}
 									endpoint={endpoint}
+									canRotate={!adding && !revealed}
 									onDeleted={() =>
 										setRevealed((current) =>
 											current?.endpointId === endpoint.id ? null : current,
@@ -439,11 +438,13 @@ function EndpointState({ endpoint }: { endpoint: InfraWebhookEndpoint }) {
 function EndpointRow({
 	appId,
 	endpoint,
+	canRotate,
 	onRotated,
 	onDeleted,
 }: {
 	appId: string;
 	endpoint: InfraWebhookEndpoint;
+	canRotate: boolean;
 	onRotated: (secret: string) => void;
 	onDeleted: () => void;
 }) {
@@ -575,7 +576,7 @@ function EndpointRow({
 				<Button
 					variant="ghost"
 					size="sm"
-					disabled={busy}
+					disabled={busy || !canRotate}
 					onClick={() => setConfirm("rotate")}
 				>
 					Rotate secret
