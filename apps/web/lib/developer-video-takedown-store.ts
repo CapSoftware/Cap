@@ -5,6 +5,7 @@ import {
 } from "@cap/database/developer-video-takedown";
 import { developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
+import { purgeDeveloperPlaybackCache } from "./developer-video-cache";
 import { markDeveloperVideoDeleted } from "./developer-video-delete";
 import { purgeDeletedDeveloperVideoNow } from "./developer-video-purge";
 import {
@@ -54,7 +55,7 @@ export async function setDeveloperVideoTakedown(
 ): Promise<DeveloperVideoTakedownResult | null> {
 	const reference = developerVideoReference(input);
 	if (!reference) return null;
-	return db().transaction(async (tx) => {
+	const result = await db().transaction(async (tx) => {
 		const video =
 			(await lockVideo(tx, "playbackId", reference)) ??
 			(await lockVideo(tx, "id", reference));
@@ -83,6 +84,10 @@ export async function setDeveloperVideoTakedown(
 			changed,
 		};
 	});
+	if (result?.changed) {
+		await purgeDeveloperPlaybackCache({ videoId: result.videoId });
+	}
+	return result;
 }
 
 export type DeveloperVideoStaffDeleteResult = {

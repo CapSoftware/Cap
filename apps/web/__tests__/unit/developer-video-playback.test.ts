@@ -228,6 +228,7 @@ describe("developer video playback route", () => {
 		expect(response.headers.get("content-type")).toBe(
 			"application/vnd.apple.mpegurl",
 		);
+		expect(response.headers.get("vary")).toBeNull();
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("cache-control")).toBe(
 			"public, max-age=60, s-maxage=60",
@@ -331,7 +332,7 @@ describe("developer video playback route", () => {
 		expect(await (await play("master.m3u8")).text()).toBe(stored);
 	});
 
-	it("sends a long playlist as plain text whatever the player accepts", async () => {
+	it("sends a rendition playlist uncompressed as text/plain whatever the player accepts, for the platform to compress", async () => {
 		const long = [
 			"#EXTM3U",
 			'#EXT-X-MAP:URI="1080p.m4s",BYTERANGE="800@0"',
@@ -354,8 +355,13 @@ describe("developer video playback route", () => {
 
 			expect(response.headers.get("content-encoding")).toBeNull();
 			expect(response.headers.get("content-type")).toBe(
-				"application/vnd.apple.mpegurl",
+				"text/plain; charset=utf-8",
 			);
+			expect(response.headers.get("vary")).toBe("Accept-Encoding");
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
 			expect(body.startsWith("#EXTM3U\n")).toBe(true);
 			expect(body.endsWith("#EXT-X-ENDLIST")).toBe(true);
 			expect(body.split("\n")).toHaveLength(long.split("\n").length);
@@ -928,6 +934,63 @@ describe("developer video playback route", () => {
 		])("answers 404 for the captions file name %s", async (file) => {
 			expect((await play(file)).status).toBe(404);
 			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("cache tags", () => {
+		const TAGS = "infra-video-video-1,infra-app-app-1";
+
+		it("tags every answer the CDN may keep with the video and its app", async () => {
+			mocks.captions.mockResolvedValue([
+				{ language: "en", label: "English", key: "k" },
+			]);
+			mocks.readText.mockImplementation(async (key: string) =>
+				key === `${HLS_PREFIX}master.m3u8`
+					? master
+					: key === `${HLS_PREFIX}1080p.m3u8`
+						? rendition
+						: key.endsWith("/captions/en.vtt")
+							? "WEBVTT\n"
+							: null,
+			);
+
+			for (const file of [
+				"master.m3u8",
+				"1080p.m3u8",
+				"1080p.m4s",
+				"video.mp4",
+				"poster.jpg",
+				"captions-en.vtt",
+				"captions-en.m3u8",
+			]) {
+				const response = await play(file);
+				expect([200, 302]).toContain(response.status);
+				expect(response.headers.get("cache-control")).toBe(
+					"public, max-age=60, s-maxage=60",
+				);
+				expect(response.headers.get("vercel-cache-tag")).toBe(TAGS);
+			}
+
+			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+			const paused = await play("master.m3u8");
+			expect(paused.status).toBe(402);
+			expect(paused.headers.get("vercel-cache-tag")).toBe(TAGS);
+		});
+
+		it("tags nothing the CDN does not keep", async () => {
+			mocks.readText.mockResolvedValue(null);
+			const missing = await play("720p.m3u8");
+			expect(missing.status).toBe(404);
+			expect(missing.headers.get("vercel-cache-tag")).toBeNull();
+
+			mocks.store.video = ready({
+				metadata: {
+					__capTakedown: { at: "2026-11-13T07:00:00.000Z", metadata: null },
+				},
+			});
+			const gone = await play("master.m3u8");
+			expect(gone.status).toBe(410);
+			expect(gone.headers.get("vercel-cache-tag")).toBeNull();
 		});
 	});
 

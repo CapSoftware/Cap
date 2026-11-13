@@ -3,6 +3,10 @@ import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { developerVideoOutputs } from "./developer-video-api";
 import {
+	CACHE_TAG_HEADER,
+	developerPlaybackCacheTags,
+} from "./developer-video-cache";
+import {
 	CAPTIONS_CONTENT_TYPE,
 	CAPTIONS_UNKNOWN_LANGUAGE,
 	captionsFileLanguage,
@@ -453,15 +457,33 @@ async function subtitleTracks(video: PlayableVideo): Promise<SubtitleTrack[]> {
 	}
 }
 
-// Sent as it is. The platform does not compress this content type, and a body
-// compressed here reaches the viewer without its Content-Encoding header, so a
-// player cannot read it.
+// Never compressed here: a body compressed in this handler reached viewers
+// without its Content-Encoding header. The platform compresses text/plain
+// itself and not the HLS type, so a rendition playlist, which signs a URL per
+// segment and runs to tens of KB, is sent as text/plain. Players read it by
+// its .m3u8 path, which the HLS spec allows in place of the HLS type, and
+// shared caches keep one copy per encoding. The master and subtitle
+// playlists are a few hundred bytes and keep the HLS type, which a player
+// may check before it treats a URL as HLS.
+const MEDIA_PLAYLIST_CONTENT_TYPE = "text/plain; charset=utf-8";
+
 function playlistResponse(playlist: string): Response {
 	return new Response(playlist, {
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
 			...CACHEABLE,
 			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
+		},
+	});
+}
+
+function mediaPlaylistResponse(playlist: string): Response {
+	return new Response(playlist, {
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			...CACHEABLE,
+			"Content-Type": MEDIA_PLAYLIST_CONTENT_TYPE,
+			Vary: "Accept-Encoding",
 		},
 	});
 }
@@ -511,6 +533,24 @@ export async function developerPlaybackResponse(
 	const video = await findPlayableVideo(playbackId);
 	if (video && developerVideoIsTakenDown(video)) return gone();
 	if (!video?.processing) return notFound();
+	const response = await playableVideoResponse(
+		{ ...video, processing: video.processing },
+		file,
+		request,
+	);
+	if (response.headers.get("Cache-Control")?.startsWith("public")) {
+		response.headers.set(CACHE_TAG_HEADER, developerPlaybackCacheTags(video));
+	}
+	return response;
+}
+
+async function playableVideoResponse(
+	video: PlayableVideo & {
+		processing: NonNullable<PlayableVideo["processing"]>;
+	},
+	file: string,
+	request: Request,
+): Promise<Response> {
 	if ((await getInfraAppStanding(video.appId)).state === "paused") {
 		return paused();
 	}
@@ -578,7 +618,7 @@ export async function developerPlaybackResponse(
 			),
 		);
 	}
-	return playlistResponse(
+	return mediaPlaylistResponse(
 		await signMediaPlaylist(
 			playlist,
 			(name) =>
