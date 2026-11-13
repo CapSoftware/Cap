@@ -421,6 +421,35 @@ describe("developer routes of the agent API", () => {
 		expect(options.idempotencyKey).toMatch(/:checkout$/);
 	});
 
+	it("opens a $10,000 credit checkout and refuses one cent more", async () => {
+		state.apps = [{ id: "account-1" }];
+		state.users = [{ stripeCustomerId: "cus_agent" }];
+		state.createCheckoutSession.mockResolvedValue({
+			url: "https://checkout.stripe.com/agent",
+		});
+
+		const refused = await call(
+			"POST",
+			`/developer/apps/${APP}/credits/checkout`,
+			{ amountCents: 1_000_001 },
+		);
+		expect(refused.status).toBe(400);
+		expect(refused.body.message).toBe(
+			"Developer credit purchase must be from $5 to $10,000",
+		);
+		expect(state.createCheckoutSession).not.toHaveBeenCalled();
+
+		const opened = await call(
+			"POST",
+			`/developer/apps/${APP}/credits/checkout`,
+			{ amountCents: 1_000_000 },
+		);
+		expect(opened.status).toBe(200);
+		const [params] = state.createCheckoutSession.mock.calls[0] ?? [];
+		expect(params.metadata.amountCents).toBe("1000000");
+		expect(params.line_items[0].price_data.unit_amount).toBe(1_000_000);
+	});
+
 	it("says what to do when the developer scope is missing", async () => {
 		state.scopes = ["caps:read"];
 		for (const [method, path, scope] of [
