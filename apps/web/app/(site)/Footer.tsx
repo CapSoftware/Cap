@@ -23,6 +23,7 @@ const footerLinks = {
 		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
 		{ label: "Cap for Agents", href: "/agents" },
+		{ label: "Cap Infra", href: "/infra" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
 		{

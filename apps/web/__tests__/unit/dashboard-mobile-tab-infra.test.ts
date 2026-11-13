@@ -69,14 +69,14 @@ describe("dashboard mobile tabs", () => {
 		).toBe("Infra");
 	});
 
-	it("does not show Infra to someone who cannot use Infra", () => {
+	it("shows Infra to any org owner, not only a preview list", () => {
 		context.user = { id: "owner", email: "someone@example.com" };
 
-		expect(hrefs()).not.toContain("/dashboard/infra");
 		expect(hrefs()).toEqual([
 			"/dashboard/spaces/browse",
 			"/dashboard/caps",
 			"/dashboard/settings/organization",
+			"/dashboard/infra",
 		]);
 	});
 

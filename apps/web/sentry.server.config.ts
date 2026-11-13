@@ -7,6 +7,9 @@ if (dsn) {
 		dsn,
 		sendDefaultPii: false,
 		tracesSampleRate: 0,
+		// Tracing is off, so the trace headers serve nothing on outgoing
+		// requests, and some of those go to customers' own servers.
+		tracePropagationTargets: [],
 		maxBreadcrumbs: 30,
 	});
 }

@@ -245,13 +245,15 @@ describe("the console loads only what a page shows", () => {
 		expect(page.props).toEqual({ appId: "app-1", secretKeyPrefix: null });
 	});
 
-	it("counts videos only on the settings page, and only for that app", async () => {
+	it("counts videos and lists allowed sites only on the settings page, and only for that app", async () => {
 		const page = (await InfraSettingsPage(params)) as Element;
 
-		expect(state.queries).toHaveLength(3);
+		expect(state.queries).toHaveLength(4);
 		const [count] = reads("developer_videos");
 		expect(count).toContain("count(*)");
 		expect(count).toContain("`appId` = ?");
+		const [domains] = reads("developer_app_domains");
+		expect(domains).toContain("`appId` = ?");
 		expect(page.props).toMatchObject({
 			appId: "app-1",
 			name: "First app",
