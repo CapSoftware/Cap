@@ -31,8 +31,15 @@ const failureBody = (failure: WebhookFailure) =>
 const endpointFields = {
 	url: z.string().min(1).max(2048),
 	events: z
-		.array(z.enum(WEBHOOK_EVENT_TYPES))
-		.min(1)
+		.array(
+			z.enum(WEBHOOK_EVENT_TYPES, {
+				error: (issue) =>
+					`Unknown event ${JSON.stringify(String(issue.input).slice(0, 100))}. Use ${WEBHOOK_EVENT_TYPES.join(" or ")}.`,
+			}),
+		)
+		.min(1, {
+			error: `events must list at least one of: ${WEBHOOK_EVENT_TYPES.join(", ")}`,
+		})
 		.refine((types) => new Set(types).size === types.length, {
 			message: "Each event type can be listed once",
 		}),
