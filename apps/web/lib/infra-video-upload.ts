@@ -1072,11 +1072,8 @@ export async function abortInfraUpload({
 
 		return ok({ success: true });
 	} catch (error) {
-		if (storageErrorCode(error) === "NoSuchUpload") {
-			return uploadNotFound(
-				"Nothing was aborted. The upload was already aborted or completed, or the uploadId is wrong.",
-			);
-		}
+		if (storageErrorCode(error) === "NoSuchUpload")
+			return ok({ success: true });
 		console.error("Error aborting multipart upload:", error);
 		return storageFailure("Failed to abort upload");
 	}

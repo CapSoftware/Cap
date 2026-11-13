@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Row = { id: string; createdAt: Date; amountMicroCredits: number };
+type Row = {
+	id: string;
+	createdAt: Date;
+	amountMicroCredits: number;
+	balanceAfterMicroCredits?: number;
+};
 
 const state = vi.hoisted(() => ({
 	rows: [] as Row[],
@@ -26,7 +31,18 @@ vi.mock("@cap/database", async () => {
 		if (!ascending) sorted.reverse();
 		let rest = params.slice(1);
 		let matching = sorted;
-		if (sql.includes("`createdAt` < ?") || sql.includes("`createdAt` > ?")) {
+		if (sql.includes("`createdAt` >= ?")) {
+			const from = toDate(rest[0]).getTime();
+			const to = toDate(rest[1]).getTime();
+			matching = sorted.filter(
+				(row) =>
+					row.createdAt.getTime() >= from && row.createdAt.getTime() <= to,
+			);
+			rest = [matching.length];
+		} else if (
+			sql.includes("`createdAt` < ?") ||
+			sql.includes("`createdAt` > ?")
+		) {
 			const at = toDate(rest[0]).getTime();
 			const id = String(rest[2]);
 			rest = rest.slice(3);
@@ -36,6 +52,10 @@ vi.mock("@cap/database", async () => {
 					? time > at || (time === at && row.id > id)
 					: time < at || (time === at && row.id < id);
 			});
+		} else if (sql.includes("`createdAt` = ?")) {
+			const at = toDate(rest[0]).getTime();
+			matching = sorted.filter((row) => row.createdAt.getTime() === at);
+			rest = [matching.length];
 		}
 		const limit = Number(rest[0]);
 		const offset = sql.includes("offset ?") ? Number(rest[1]) : 0;
@@ -46,7 +66,7 @@ vi.mock("@cap/database", async () => {
 					row.id,
 					"transcription",
 					row.amountMicroCredits,
-					0,
+					row.balanceAfterMicroCredits ?? 0,
 					null,
 					null,
 					null,
@@ -57,12 +77,13 @@ vi.mock("@cap/database", async () => {
 	return { db: () => client };
 });
 
-import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
+import { LEDGER_PAGE_SIZE, type LedgerRow } from "@/lib/infra-ledger";
 import {
 	formatLedgerCursor,
 	listAppLedger,
 	listAppLedgerPage,
 	parseLedgerCursor,
+	readAppLedger,
 } from "@/lib/infra-ledger-store";
 
 const START = Date.parse("2026-11-01T00:00:00Z");
@@ -190,7 +211,7 @@ describe("ledger pages by cursor", () => {
 });
 
 describe("the transactions API keeps limit and offset", () => {
-	it("lists with limit and offset in one query and never counts", async () => {
+	it("lists with limit and offset and never counts", async () => {
 		const result = await listAppLedger("app-1", { limit: 50, offset: 100 });
 
 		expect(result.rows).toHaveLength(20);
@@ -198,8 +219,84 @@ describe("the transactions API keeps limit and offset", () => {
 		expect(
 			(await listAppLedger("app-1", { limit: 50, offset: 0 })).hasMore,
 		).toBe(true);
-		expect(state.queries).toHaveLength(2);
+		expect(state.queries).toHaveLength(4);
 		expect(state.queries[0]).toContain("limit ? offset ?");
 		expect(state.queries.join("\n")).not.toMatch(/count\(/i);
+	});
+});
+
+describe("rows written in the same second across a page edge", () => {
+	const SECOND = (offset: number) => new Date(START + offset * 1000);
+	const seedChain = () => {
+		const groups = [
+			{ at: SECOND(0), ids: ["q1", "c7"] },
+			{ at: SECOND(1), ids: ["m4", "z9", "a2", "t6", "f3"] },
+			{ at: SECOND(2), ids: ["k8", "b5"] },
+		];
+		let balance = 1_000_000;
+		let amount = 11;
+		state.rows = groups.flatMap(({ at, ids }) =>
+			ids.map((id) => {
+				amount += 7;
+				balance -= amount;
+				return {
+					id,
+					createdAt: at,
+					amountMicroCredits: -amount,
+					balanceAfterMicroCredits: balance,
+				};
+			}),
+		);
+	};
+	const chainBreaks = (
+		rows: { amountMicroCredits: number; balanceAfterMicroCredits: number }[],
+	) =>
+		rows.slice(0, -1).filter((row, index) => {
+			const older = rows[index + 1];
+			return (
+				!older ||
+				row.balanceAfterMicroCredits - row.amountMicroCredits !==
+					older.balanceAfterMicroCredits
+			);
+		}).length;
+	const walk = async (limit: number) => {
+		const rows: LedgerRow[] = [];
+		for (let offset = 0; ; offset += limit) {
+			const page = await listAppLedger("app-1", { limit, offset });
+			rows.push(...page.rows);
+			if (!page.hasMore) return rows;
+		}
+	};
+
+	beforeEach(seedChain);
+
+	it("gives the same chain whatever the page size", async () => {
+		const whole = (await listAppLedger("app-1", { limit: 100, offset: 0 }))
+			.rows;
+
+		expect(whole).toHaveLength(9);
+		expect(chainBreaks(whole)).toBe(0);
+		for (const limit of [1, 2, 3, 4, 5, 8]) {
+			const paged = await walk(limit);
+			expect(
+				paged.map((row) => row.id),
+				`limit ${limit}`,
+			).toEqual(whole.map((row) => row.id));
+		}
+	});
+
+	it("gives the same chain in an export read in small batches", async () => {
+		const whole = (await listAppLedger("app-1", { limit: 100, offset: 0 }))
+			.rows;
+		for (const batchSize of [2, 3, 4]) {
+			const exported: LedgerRow[] = [];
+			for await (const batch of readAppLedger("app-1", batchSize)) {
+				exported.push(...batch);
+			}
+			expect(
+				exported.map((row) => row.id),
+				`batch ${batchSize}`,
+			).toEqual(whole.map((row) => row.id));
+		}
 	});
 });
