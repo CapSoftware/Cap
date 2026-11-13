@@ -9,6 +9,7 @@ import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { infraAppPath } from "@/lib/infra-routes";
 import {
 	resolveTopUpAmount,
+	TOP_UP_AMOUNT_PLACEHOLDER,
 	TOP_UP_DEFAULT_CENTS,
 	TOP_UP_PRESETS_CENTS,
 	topUpButtonLabel,
@@ -124,7 +125,7 @@ export function TopUp({
 						aria-invalid={amount.error ? true : undefined}
 						aria-describedby={amount.error ? amountErrorId : undefined}
 						onChange={(e) => setCustom(e.target.value)}
-						placeholder="Other, 5 to 1,000"
+						placeholder={TOP_UP_AMOUNT_PLACEHOLDER}
 						className="h-[38px] w-[176px] pl-6"
 					/>
 				</div>

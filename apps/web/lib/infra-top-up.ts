@@ -1,5 +1,5 @@
 export const TOP_UP_MIN_CENTS = 500;
-export const TOP_UP_MAX_CENTS = 100_000;
+export const TOP_UP_MAX_CENTS = 1_000_000;
 export const TOP_UP_PRESETS_CENTS = [1_000, 2_500, 5_000, 10_000] as const;
 export const TOP_UP_DEFAULT_CENTS = 2_500;
 
@@ -16,7 +16,9 @@ const dollarsLabel = (cents: number) =>
 	})}`;
 
 const NOT_AN_AMOUNT = "Enter an amount in dollars, for example 25 or 12.50.";
-const OUT_OF_RANGE = `Enter an amount from ${dollarsLabel(TOP_UP_MIN_CENTS)} to ${dollarsLabel(TOP_UP_MAX_CENTS)}.`;
+export const TOP_UP_RANGE_TEXT = `${dollarsLabel(TOP_UP_MIN_CENTS)} to ${dollarsLabel(TOP_UP_MAX_CENTS)}`;
+export const TOP_UP_AMOUNT_PLACEHOLDER = `Other, ${TOP_UP_RANGE_TEXT.replaceAll("$", "")}`;
+const OUT_OF_RANGE = `Enter an amount from ${TOP_UP_RANGE_TEXT}.`;
 
 export function resolveTopUpAmount(
 	typed: string,
