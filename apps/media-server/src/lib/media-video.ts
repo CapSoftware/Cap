@@ -24,7 +24,7 @@ import {
 	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
-	maxEncodeSeconds,
+	encodeLengthLimit,
 	normalizeLocalPath,
 	outputLengthCapArgs,
 	PROCESS_TIMEOUT_MS,
@@ -1900,9 +1900,7 @@ export async function processVideo(
 	);
 	// A damaged source is read with its timestamps rebuilt, which the probe
 	// did not see, so a recovery attempt is bounded by its deadline alone.
-	const maxOutputSeconds = resilientFlags
-		? null
-		: maxEncodeSeconds(metadata.duration);
+	const maxOutputSeconds = resilientFlags ? null : encodeLengthLimit(metadata);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
 			? capcodecOptionsForJob(opts)

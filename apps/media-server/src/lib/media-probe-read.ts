@@ -399,6 +399,7 @@ async function readMediaMetadata(
 		sampleRate: audioTrack ? await audioTrack.getSampleRate() : null,
 		bitrate: Math.round(videoBitrate + audioBitrate) || bitrateFromSize,
 		fileSize,
+		timestampSpan: declaredDuration === null ? duration : measuredDuration,
 	};
 	const refusal = mediaInputRefusal(input);
 	if (refusal) throw new MediaInputPolicyError(refusal);

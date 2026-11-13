@@ -55,6 +55,24 @@ export function maxEncodeSeconds(probedSeconds: number): number | null {
 	return Math.ceil((probedSeconds + margin) * 1000) / 1000;
 }
 
+// The output limit for an encode of a probed file: its longest measured
+// length with the margin. Null, so nothing is cut, when the probe could not
+// measure how long the timestamps run: a header alone can say too little,
+// as a browser recording often does.
+export function encodeLengthLimit(metadata: {
+	duration: number;
+	timestampSpan?: number | null;
+}): number | null {
+	const span = metadata.timestampSpan;
+	if (typeof span !== "number" || !Number.isFinite(span) || span <= 0)
+		return null;
+	return maxEncodeSeconds(
+		Number.isFinite(metadata.duration)
+			? Math.max(span, metadata.duration)
+			: span,
+	);
+}
+
 export function outputLengthCapArgs(
 	maxOutputSeconds: number | null | undefined,
 ): string[] {

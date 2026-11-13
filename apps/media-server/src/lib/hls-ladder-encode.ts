@@ -17,7 +17,7 @@ import {
 import type { VideoMetadata } from "./job-manager";
 import {
 	decodeThreadsFromEnv,
-	maxEncodeSeconds,
+	encodeLengthLimit,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
@@ -144,7 +144,7 @@ export async function encodeHlsLadder(
 			Math.max(0, metadata.duration - range.startSeconds))
 		: metadata.duration;
 	const timeoutMs = getProcessTimeoutMs(sliceSeconds, PROCESS_TIMEOUT_MS);
-	const maxOutputSeconds = maxEncodeSeconds(metadata.duration);
+	const maxOutputSeconds = encodeLengthLimit(metadata);
 	const totalDurationUs = sliceSeconds * 1_000_000;
 	const argsInput = {
 		inputPath,
