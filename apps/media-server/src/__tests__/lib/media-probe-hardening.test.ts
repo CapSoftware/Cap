@@ -6,12 +6,15 @@ import { maxEncodeSeconds } from "../../lib/media-common";
 import { UNSUPPORTED_FORMAT_MESSAGE } from "../../lib/media-input-policy";
 import {
 	isUnreadableMediaInput,
+	probeVideo,
 	probeVideoFile,
 	UnreadableMediaInputError,
 } from "../../lib/media-probe";
 import { stopProbeWorkers } from "../../lib/media-probe-pool";
 
 let dir = "";
+let server: ReturnType<typeof Bun.serve>;
+let origin = "";
 
 async function ffmpeg(args: string[]): Promise<void> {
 	const proc = Bun.spawn(["ffmpeg", "-v", "error", "-y", ...args], {
@@ -78,6 +81,55 @@ beforeAll(async () => {
 	]);
 	await ffmpeg(["-f", "lavfi", "-i", "sine=d=1", join(dir, "audio-only.m4a")]);
 	await ffmpeg([...source, "-c:v", "prores_ks", join(dir, "prores.mov")]);
+	// A one-frame recording written as a live stream: no Duration, and its
+	// only block is at timestamp zero.
+	await ffmpeg([
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc=s=128x96:r=10",
+		"-frames:v",
+		"1",
+		"-c:v",
+		"libvpx",
+		"-f",
+		"webm",
+		"-live",
+		"1",
+		join(dir, "single-frame.webm"),
+	]);
+	server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			const name = new URL(request.url).pathname.slice(1);
+			// FFmpeg's own requests to the "flaky" name fail upstream.
+			if (
+				name.startsWith("flaky-") &&
+				request.headers.get("user-agent")?.startsWith("Lavf")
+			)
+				return new Response("Unavailable", { status: 503 });
+			const file = Bun.file(join(dir, name.replace(/^flaky-/, "")));
+			const size = file.size;
+			const range = request.headers.get("range")?.match(/^bytes=(\d+)-(\d*)$/);
+			const start = range ? Number(range[1]) : 0;
+			const end = range?.[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+			if (start >= size)
+				return new Response(null, {
+					status: 416,
+					headers: { "Content-Range": `bytes */${size}` },
+				});
+			return new Response(file.slice(start, end + 1), {
+				status: range ? 206 : 200,
+				headers: {
+					"Accept-Ranges": "bytes",
+					"Content-Length": String(end - start + 1),
+					"Content-Range": `bytes ${start}-${end}/${size}`,
+				},
+			});
+		},
+	});
+	origin = `http://127.0.0.1:${server.port}`;
 	// Three frames an hour apart.
 	await ffmpeg([
 		"-f",
@@ -104,6 +156,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	stopProbeWorkers();
+	await server.stop(true);
 	await rm(dir, { recursive: true, force: true });
 });
 
@@ -145,6 +198,20 @@ describe("probe input checks", () => {
 });
 
 describe("a codec check that cannot run", () => {
+	test("an allowed codec the parser does not name probes over HTTP too", async () => {
+		const metadata = await probeVideo(`${origin}/prores.mov`);
+		expect(metadata.width).toBe(128);
+	}, 30_000);
+
+	test("a source that fails FFmpeg's reads leaves the probe retryable", async () => {
+		const error = await probeVideo(`${origin}/flaky-prores.mov`).then(
+			() => null,
+			(caught: unknown) => caught,
+		);
+		expect(error).toBeInstanceOf(Error);
+		expect(isUnreadableMediaInput(error)).toBe(false);
+	}, 30_000);
+
 	test("leaves an allowed codec retryable instead of refusing it", async () => {
 		const savedPath = process.env.PATH;
 		const real = Bun.which("ffprobe");
@@ -168,6 +235,12 @@ describe("a codec check that cannot run", () => {
 });
 
 describe("probed duration", () => {
+	test("a one-frame recording with no Duration is measured, not refused", async () => {
+		const metadata = await probeVideoFile(join(dir, "single-frame.webm"));
+		expect(metadata.duration).toBeGreaterThan(0);
+		expect(metadata.duration).toBeLessThan(1);
+	}, 30_000);
+
 	test("a header that declares less than the timestamps span reports the span", async () => {
 		const honest = await probeVideoFile(join(dir, "spread.mp4"));
 		const lying = await probeVideoFile(join(dir, "declared-short.mp4"));
