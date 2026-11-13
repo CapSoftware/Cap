@@ -7,7 +7,10 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --production
+# The build stops here if the parser limits in patches/ were not applied.
+RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
 
 COPY bunfig.toml ./bunfig.toml
 COPY src ./src
