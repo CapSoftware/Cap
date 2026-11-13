@@ -119,6 +119,7 @@
 		"lucide-react": "^0.525.0",
 		"media-chrome": "^4.12.0",
 		"mediabunny": "^1.45.2",
+		"mmdb-lib": "3.0.3",
 		"moment": "^2.31.0",
 		"motion": "^12.18.1",
 		"next": "16.4.5",

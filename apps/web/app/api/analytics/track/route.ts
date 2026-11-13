@@ -14,8 +14,9 @@ import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
+import { geoIpLocation } from "@/lib/visitor-location";
 
 const trackPayloadSchema = z.object({
 	videoId: z.string().min(1).max(64),
@@ -86,14 +87,18 @@ export async function POST(request: NextRequest) {
 
 	const timestamp = viewTimestamp(body.occurredAt, Date.now());
 
-	const country =
+	let country =
 		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
-	const region =
+	let region =
 		sanitizeString(request.headers.get("x-vercel-ip-country-region")) || "";
-	const city =
+	let city =
 		sanitizeString(
 			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
 		) || "";
+	if (!country) {
+		const location = geoIpLocation(clientAddress(request.headers));
+		if (location) ({ country, region, city } = location);
+	}
 
 	await runPromise(
 		Effect.gen(function* () {

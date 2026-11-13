@@ -107,6 +107,7 @@ import {
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { geoIpLocation } from "@/lib/visitor-location";
 
 export const dynamic = "force-dynamic";
 
@@ -2965,6 +2966,19 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 		return { success: true as const };
 	}
 
+	const vercelCountry = readHeader(request, "x-vercel-ip-country");
+	const location = vercelCountry
+		? {
+				country: vercelCountry,
+				region: readHeader(request, "x-vercel-ip-country-region"),
+				city: readHeader(request, "x-vercel-ip-city"),
+			}
+		: (geoIpLocation(clientAddress(toHeaders(request.headers))) ?? {
+				country: "",
+				region: "",
+				city: "",
+			});
+
 	const tinybird = yield* Tinybird;
 	yield* tinybird
 		.appendEvents([
@@ -2976,9 +2990,9 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 				tenant_id: video.orgId || video.ownerId,
 				video_id: videoId,
 				pathname: `/s/${videoId}`,
-				country: readHeader(request, "x-vercel-ip-country"),
-				region: readHeader(request, "x-vercel-ip-country-region"),
-				city: readHeader(request, "x-vercel-ip-city"),
+				country: location.country,
+				region: location.region,
+				city: location.city,
 				browser: "Cap for iOS",
 				device: "mobile",
 				os: "iOS",
