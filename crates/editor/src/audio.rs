@@ -4684,8 +4684,12 @@ mod tests {
         let system_path = dir.path().join("system.wav");
         write_step_wav(&mic_path, &[12000]);
         write_step_wav(&system_path, &[4000]);
-        let mic = Arc::new(AudioData::from_file(&mic_path).unwrap());
-        let system = Arc::new(AudioData::from_file(&system_path).unwrap());
+        let mic = Arc::new(DecodedAudio::from(Arc::new(
+            AudioData::from_file(&mic_path).unwrap(),
+        )));
+        let system = Arc::new(DecodedAudio::from(Arc::new(
+            AudioData::from_file(&system_path).unwrap(),
+        )));
         let segment_audio = crate::segments::audio_segment_from_decoded(
             Some(mic),
             Some(system),
