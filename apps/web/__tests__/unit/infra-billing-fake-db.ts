@@ -313,7 +313,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				),
 			).slice(0, 1);
 		}
-		if (keys === "pendingId,pendingSince") {
+		if (keys === "pendingId,pendingRow,pendingSince") {
 			return ledger.rows
 				.filter(
 					(row) =>
@@ -321,6 +321,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 						row.referenceType === "auto_top_up_pending",
 				)
 				.map((row) => ({
+					pendingRow: row.id,
 					pendingId: row.referenceId,
 					pendingSince: row.createdAt,
 				}));
@@ -450,13 +451,14 @@ function update(table: unknown) {
 			return {
 				async where(condition?: SQL) {
 					if (table === developerCreditTransactions && condition) {
-						const [accountId, referenceId, referenceType] =
+						const [accountId, referenceId, referenceType, rowId] =
 							dialect.sqlToQuery(condition).params;
 						const rows = ledger.rows.filter(
 							(row) =>
 								row.accountId === accountId &&
 								row.referenceId === referenceId &&
-								row.referenceType === referenceType,
+								row.referenceType === referenceType &&
+								(rowId === undefined || row.id === rowId),
 						);
 						for (const row of rows) Object.assign(row, values);
 						return [{ affectedRows: rows.length }];
@@ -515,7 +517,7 @@ function remove(table: unknown) {
 	return {
 		async where(condition: SQL) {
 			if (table !== developerCreditTransactions) return [{ affectedRows: 0 }];
-			const [accountId, referenceId, referenceType] =
+			const [accountId, referenceId, referenceType, rowId] =
 				dialect.sqlToQuery(condition).params;
 			const before = ledger.rows.length;
 			ledger.rows = ledger.rows.filter(
@@ -523,7 +525,8 @@ function remove(table: unknown) {
 					!(
 						row.accountId === accountId &&
 						row.referenceId === referenceId &&
-						row.referenceType === referenceType
+						row.referenceType === referenceType &&
+						(rowId === undefined || row.id === rowId)
 					),
 			);
 			return [{ affectedRows: before - ledger.rows.length }];

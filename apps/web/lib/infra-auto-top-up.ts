@@ -141,7 +141,7 @@ function reservationKeyOf(paymentIntent: Stripe.PaymentIntent) {
 	});
 }
 
-const reservationOf = (accountId: string, key: string) =>
+const reservationOf = (accountId: string, key: string, rowId?: string) =>
 	and(
 		eq(developerCreditTransactions.accountId, accountId),
 		eq(developerCreditTransactions.referenceId, key),
@@ -149,28 +149,31 @@ const reservationOf = (accountId: string, key: string) =>
 			developerCreditTransactions.referenceType,
 			AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
 		),
+		rowId ? eq(developerCreditTransactions.id, rowId) : undefined,
 	);
 
 async function dropReservation(
 	executor: AutoTopUpTransaction | ReturnType<typeof db>,
 	accountId: string,
 	key: string | null,
+	rowId?: string,
 ) {
 	if (!key) return;
 	await executor
 		.delete(developerCreditTransactions)
-		.where(reservationOf(accountId, key));
+		.where(reservationOf(accountId, key, rowId));
 }
 
 async function linkReservation(
 	accountId: string,
 	key: string,
 	paymentIntentId: string,
+	rowId?: string,
 ) {
 	await db()
 		.update(developerCreditTransactions)
 		.set({ referenceId: paymentIntentId })
-		.where(reservationOf(accountId, key));
+		.where(reservationOf(accountId, key, rowId));
 }
 
 export function autoTopUpFailureText(reason: string | null | undefined) {
@@ -396,6 +399,7 @@ async function attemptHistory(executor: InfraDbExecutor, accountId: string) {
 async function unresolvedPayments(accountId: string) {
 	const pending = await db()
 		.select({
+			pendingRow: developerCreditTransactions.id,
 			pendingId: developerCreditTransactions.referenceId,
 			pendingSince: developerCreditTransactions.createdAt,
 		})
@@ -431,12 +435,22 @@ async function unresolvedPayments(accountId: string) {
 	const resolvedIds = new Set(resolved.map((row) => row.settledId));
 	return pending.flatMap((row) =>
 		row.pendingId && !resolvedIds.has(row.pendingId)
-			? [{ referenceId: row.pendingId, since: new Date(row.pendingSince) }]
+			? [
+					{
+						rowId: row.pendingRow,
+						referenceId: row.pendingId,
+						since: new Date(row.pendingSince),
+					},
+				]
 			: [],
 	);
 }
 
-async function reconcileReservation(accountId: string, key: string) {
+async function reconcileReservation(
+	accountId: string,
+	key: string,
+	rowId: string,
+) {
 	const attempt = key.slice(`${RESERVATION_PREFIX}${accountId}:`.length);
 	const found = await stripe().paymentIntents.search(
 		{
@@ -447,11 +461,11 @@ async function reconcileReservation(accountId: string, key: string) {
 	);
 	const [paymentIntent] = found.data;
 	if (!paymentIntent) {
-		await dropReservation(db(), accountId, key);
+		await dropReservation(db(), accountId, key, rowId);
 		return;
 	}
 	if (paymentIntent.status === "processing") {
-		await linkReservation(accountId, key, paymentIntent.id);
+		await linkReservation(accountId, key, paymentIntent.id, rowId);
 		return;
 	}
 	await settleAutoTopUpPaymentIntent(
@@ -468,7 +482,7 @@ async function reconcileStalePayments(accountId: string, now: Date) {
 	);
 	for (const payment of stale) {
 		if (payment.referenceId.startsWith(RESERVATION_PREFIX)) {
-			await reconcileReservation(accountId, payment.referenceId);
+			await reconcileReservation(accountId, payment.referenceId, payment.rowId);
 		} else {
 			await reconcilePendingAutoTopUp(accountId, payment.referenceId);
 		}
