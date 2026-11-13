@@ -21,7 +21,8 @@
 	"scripts": {
 		"build": "tsup",
 		"test": "tsup && vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"pack:npm": "tsup && node scripts/npm-package.mjs"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.32.2",
