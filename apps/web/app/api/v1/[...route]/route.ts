@@ -73,7 +73,6 @@ import {
 	decodeAgentCursor,
 	encodeAgentCursor,
 	escapeAgentLikePattern,
-	isAgentHttpUrl,
 	normalizeAgentMetadata,
 	parseAgentDate,
 	parseAgentLimit,
@@ -125,6 +124,14 @@ import {
 	logCustomStorageAttempt,
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
+import {
+	DEVELOPER_APP_LIMIT_MESSAGE,
+	developerAppCreationLimited,
+	developerAppLogoUrl,
+	developerAppName,
+	developerKeyRotationLimited,
+	reserveDeveloperAppSlot,
+} from "@/lib/developer-app-limits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
@@ -1231,6 +1238,15 @@ const capabilityFailure = (
 			return forbidden(requestId);
 	}
 };
+
+const requestHeaders = Effect.gen(function* () {
+	const request = yield* HttpServerRequest.HttpServerRequest;
+	const headers = new Headers();
+	for (const [name, value] of Object.entries(request.headers)) {
+		headers.set(name, value);
+	}
+	return headers;
+});
 
 const requestIdempotencyKey = Effect.gen(function* () {
 	const request = yield* HttpServerRequest.HttpServerRequest;
@@ -3876,12 +3892,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "developer:secrets", requestId);
-						const name = payload.name.trim();
-						if (name.length === 0 || name.length > 255) {
-							return yield* badRequest(
-								requestId,
-								"Developer app name is invalid",
-							);
+						const named = developerAppName(payload.name);
+						if (!named.ok) return yield* badRequest(requestId, named.message);
+						const name = named.name;
+						const headers = yield* requestHeaders;
+						if (
+							yield* Effect.promise(() =>
+								developerAppCreationLimited(principal.id, headers),
+							)
+						) {
+							return yield* rateLimited(requestId);
 						}
 						const result = yield* runAgentMutation({
 							principal,
@@ -3893,6 +3913,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								DeveloperKeyOperationResult,
 							),
 							execute: async (tx) => {
+								if (!(await reserveDeveloperAppSlot(tx, principal.id))) {
+									return {
+										state: "conflict",
+										message: DEVELOPER_APP_LIMIT_MESSAGE,
+									};
+								}
 								const appId = nanoId();
 								const publicKeyId = nanoId();
 								const secretKeyId = nanoId();
@@ -3966,21 +3992,22 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"At least one developer app field is required",
 							);
 						}
-						const name = payload.name?.trim();
-						const logoUrl =
-							payload.logoUrl === null ? null : payload.logoUrl?.trim();
-						if (
-							(name !== undefined &&
-								(name.length === 0 || name.length > 255)) ||
-							(logoUrl !== undefined &&
-								logoUrl !== null &&
-								(logoUrl.length > 1024 || !isAgentHttpUrl(logoUrl)))
-						) {
-							return yield* badRequest(
-								requestId,
-								"Developer app fields are invalid",
-							);
+						const named =
+							payload.name === undefined
+								? undefined
+								: developerAppName(payload.name);
+						if (named && !named.ok) {
+							return yield* badRequest(requestId, named.message);
 						}
+						const name = named?.name;
+						const logo =
+							payload.logoUrl === undefined
+								? undefined
+								: developerAppLogoUrl(payload.logoUrl);
+						if (logo && !logo.ok) {
+							return yield* badRequest(requestId, logo.message);
+						}
+						const logoUrl = logo?.logoUrl;
 						return yield* runAgentMutation({
 							principal,
 							operation: "update_developer_app",
@@ -4205,6 +4232,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:secrets", requestId);
+						const headers = yield* requestHeaders;
+						if (
+							yield* Effect.promise(() =>
+								developerKeyRotationLimited(principal.id, headers),
+							)
+						) {
+							return yield* rateLimited(requestId);
+						}
 						const result = yield* runAgentMutation({
 							principal,
 							operation: "rotate_developer_keys",

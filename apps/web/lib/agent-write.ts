@@ -23,7 +23,7 @@ export type AgentMutationOutcome<A> =
 	| { state: "success"; response: A }
 	| { state: "not_found" }
 	| { state: "forbidden" }
-	| { state: "conflict" };
+	| { state: "conflict"; message?: string };
 
 type IdempotencyInput = {
 	userId: Agent.AgentPrincipal["Type"]["id"];
@@ -254,7 +254,7 @@ export const runAgentMutation = <A>(input: {
 			return yield* new Agent.AgentConflictError({
 				...commonError(
 					input.requestId,
-					"The resource changed; refresh and retry",
+					result.message ?? "The resource changed; refresh and retry",
 				),
 				code: "CONFLICT",
 			});
