@@ -154,6 +154,7 @@ import {
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
@@ -4116,7 +4117,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
-						return yield* runAgentMutation({
+						let deletedAt: Date | null = null;
+						const response = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_app",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4138,7 +4140,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!app) return { state: "not_found" };
-								const now = new Date();
+								const now = new Date(Math.floor(Date.now() / 1000) * 1000);
 								await tx
 									.update(Db.developerApiKeys)
 									.set({ revokedAt: now })
@@ -4152,6 +4154,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.update(Db.developerApps)
 									.set({ deletedAt: now, updatedAt: now })
 									.where(eq(Db.developerApps.id, path.appId));
+								await tx
+									.update(Db.developerVideos)
+									.set({ deletedAt: now, updatedAt: now })
+									.where(
+										and(
+											eq(Db.developerVideos.appId, path.appId),
+											isNull(Db.developerVideos.deletedAt),
+										),
+									);
+								deletedAt = now;
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -4164,6 +4176,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (deletedAt) {
+							const appDeletedAt = deletedAt;
+							yield* Effect.promise(() =>
+								cancelDeveloperVideoEncodes({
+									appId: path.appId,
+									deletedAt: appDeletedAt,
+								}),
+							);
+						}
+						return response;
 					}),
 					requestId,
 				);
@@ -4619,7 +4641,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
-						return yield* runAgentMutation({
+						let deleted = false;
+						const response = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_video",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4652,6 +4675,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.update(Db.developerVideos)
 									.set({ deletedAt: now, updatedAt: now })
 									.where(eq(Db.developerVideos.id, path.videoId));
+								deleted = true;
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -4664,6 +4688,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (deleted) {
+							yield* Effect.promise(() =>
+								cancelDeveloperVideoEncodes({
+									appId: path.appId,
+									videoId: path.videoId,
+								}),
+							);
+						}
+						return response;
 					}),
 					requestId,
 				);

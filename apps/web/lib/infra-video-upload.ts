@@ -10,6 +10,7 @@ import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
 import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
@@ -35,18 +36,19 @@ import {
 	getInfraUploadAdmission,
 	uploadAdmissionError,
 } from "@/lib/infra-standing";
-import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
+import {
+	COMPLETION_IN_PROGRESS,
+	fileTooLargeMessage,
+	MAX_UPLOAD_BYTES,
+	MAX_UPLOAD_DURATION_SECS,
+	STALE_UPLOAD_CLAIM_MS,
+	STORED_BYTES_PER_SECOND,
+} from "@/lib/infra-upload";
 import { runPromise } from "@/lib/server";
 
-export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
+export { MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_SECS };
 export const MAX_PRESIGN_BATCH = 50;
-const STORED_BYTES_PER_SECOND = 2_500_000;
 const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
-// A file is billed for at least its size at STORED_BYTES_PER_SECOND, and for
-// at most MAX_UPLOAD_DURATION_SECS. Past this size the two meet, so every
-// further byte would be stored without being billed.
-export const MAX_UPLOAD_BYTES =
-	MAX_UPLOAD_DURATION_SECS * STORED_BYTES_PER_SECOND;
 
 const ALLOWED_CONTENT_TYPES = [
 	"video/mp4",
@@ -123,9 +125,7 @@ const fileTooLarge = (limit: number = MAX_UPLOAD_BYTES, discarded = true) =>
 	fail(
 		400,
 		"file_too_large",
-		limit < MAX_UPLOAD_BYTES
-			? `The file is larger than the ${limit} byte limit set for this upload`
-			: `The file is larger than the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit`,
+		fileTooLargeMessage(limit),
 		[
 			discarded
 				? "The upload was discarded and the video can take a new one."
@@ -764,8 +764,11 @@ export async function completeInfraUpload({
 		};
 
 		if (!measured.assembled) {
-			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			const admission = await admitDeveloperVideoUpload(upload);
+			const [recorded, admission] = await Promise.all([
+				videoIsRecorded(db(), videoId),
+				admitDeveloperVideoUpload(upload),
+			]);
+			if (recorded) return ok({ success: true });
 			if (!admission.allowed) {
 				await scheduleAutoTopUp({ appId });
 				return { status: 402, body: uploadAdmissionError(admission) };
@@ -935,7 +938,8 @@ async function retireUnrecordedVideo(
 	now: Date,
 	missingKey?: string,
 ) {
-	return db().transaction(async (tx) => {
+	let deleted = false;
+	const retired = await db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
 
 		const read = tx
@@ -975,8 +979,11 @@ async function retireUnrecordedVideo(
 			.where(
 				and(eq(developerVideos.id, videoId), isNull(developerVideos.duration)),
 			);
+		deleted = true;
 		return true;
 	});
+	if (deleted) await cancelDeveloperVideoEncodes({ appId, videoId });
+	return retired;
 }
 
 async function unrecordedVideosPage(
@@ -1059,7 +1066,6 @@ export async function removeUnrecordedInfraFiles(
 	return removed;
 }
 
-const STALE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
 export const COMPLETION_RETRY_AFTER_SECONDS = 5;
 
 async function releaseStaleUploadClaim(videoId: string, now: number) {
@@ -1121,7 +1127,7 @@ export async function abortInfraUpload({
 	if (video.status === "processing" && video.duration === null) {
 		return completionInProgress(
 			"Another request is completing this upload, so it cannot be aborted.",
-			"Wait for that request to finish. The upload is then complete, so delete the video if it is not wanted.",
+			"Do not repeat the abort. Wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 		);
 	}
 	const s3Key = video.s3Key;
