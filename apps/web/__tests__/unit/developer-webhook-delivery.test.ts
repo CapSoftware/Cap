@@ -129,6 +129,7 @@ describe("a customer endpoint over real HTTP", () => {
 		method?: string;
 	}[] = [];
 	const held: IncomingMessage[] = [];
+	const closed: string[] = [];
 
 	beforeAll(async () => {
 		server = createServer((req, res) => {
@@ -148,6 +149,21 @@ describe("a customer endpoint over real HTTP", () => {
 					res.writeHead(200);
 					res.write("x".repeat(64 * 1024));
 					held.push(req);
+					return;
+				}
+				if (req.url === "/reset-content-flood") {
+					res.writeHead(205, { "transfer-encoding": "chunked" });
+					const flood = setInterval(() => res.write("x".repeat(1024)), 5);
+					req.socket.once("close", () => {
+						clearInterval(flood);
+						closed.push(req.url ?? "");
+					});
+					return;
+				}
+				if (req.url === "/reset-content-stall") {
+					res.writeHead(205, { "transfer-encoding": "chunked" });
+					res.flushHeaders();
+					req.socket.once("close", () => closed.push(req.url ?? ""));
 					return;
 				}
 				if (req.url === "/moved") {
@@ -297,6 +313,19 @@ describe("a customer endpoint over real HTTP", () => {
 			expect(Date.now() - started).toBeLessThan(2_000);
 		});
 
+		it.each(["/reset-content-flood", "/reset-content-stall"])(
+			"closes the connection after a no-content answer from %s",
+			async (path) => {
+				expect(await sendPinned(path, 5_000)).toMatchObject({
+					ok: true,
+					responseStatus: 205,
+				});
+				await vi.waitFor(() => expect(closed).toContain(path), {
+					timeout: 2_000,
+				});
+			},
+		);
+
 		it("does not wait for or read a response body that never ends", async () => {
 			const started = Date.now();
 			expect(await sendPinned("/big", 5_000)).toMatchObject({
@@ -316,6 +345,57 @@ describe("a customer endpoint over real HTTP", () => {
 			ok: false,
 			errorCode: "connection_failed",
 		});
+	});
+});
+
+describe("the delivery deadline and the signature time", () => {
+	const event = {
+		url: "https://hooks.example.com/cap",
+		secret: SECRET,
+		eventId: job.eventId,
+		eventType: job.eventType,
+		body: job.body,
+	};
+
+	it("counts a host lookup that never finishes against the deadline", async () => {
+		const request = vi.fn();
+		const started = Date.now();
+		const result = await sendDeveloperWebhook(event, {
+			allowPrivate: false,
+			isBlocked: () => new Promise<boolean>(() => {}),
+			request,
+			timeoutMs: 100,
+		});
+		expect(result).toMatchObject({ ok: false, errorCode: "timeout" });
+		expect(Date.now() - started).toBeLessThan(1_500);
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	it("signs with the time the request is sent, not the time the lookup began", async () => {
+		let clock = 1_794_500_000_000;
+		const seen: RequestInit[] = [];
+		await sendDeveloperWebhook(event, {
+			allowPrivate: false,
+			now: () => clock,
+			isBlocked: async () => {
+				clock += 7_000;
+				return false;
+			},
+			request: async (_url, init) => {
+				seen.push(init);
+				return new Response(null, { status: 204 });
+			},
+		});
+		const header = new Headers(seen[0]?.headers).get("cap-signature");
+		expect(header).toMatch(/^t=1794500007,/);
+		expect(
+			verifyWebhookSignature({
+				secret: SECRET,
+				body: job.body,
+				header,
+				now: clock,
+			}),
+		).toBe(true);
 	});
 });
 
@@ -438,6 +518,62 @@ describe("disabling an endpoint that keeps failing", () => {
 			now,
 		});
 		expect(endpoint()).toMatchObject({ enabled: true, consecutiveFailures: 4 });
+	});
+
+	it("keeps the count and the streak start together when a success and a failure land at once", async () => {
+		const succeeded = { ok: true as const, responseStatus: 200, durationMs: 5 };
+		for (let round = 0; round < 20; round++) {
+			fake().reset();
+			seedEndpoint({ consecutiveFailures: 3, failingSince: longAgo });
+			const pair = [
+				recordWebhookDelivery("wh-1", failed, {
+					countsTowardStreak: true,
+					now,
+				}),
+				recordWebhookDelivery("wh-1", succeeded, {
+					countsTowardStreak: true,
+					now,
+				}),
+			];
+			await Promise.all(round % 2 === 0 ? pair : pair.reverse());
+			const row = endpoint();
+			expect(row.consecutiveFailures === 0).toBe(row.failingSince === null);
+			if (row.failingSince !== null) {
+				expect([now, longAgo]).toContain(row.failingSince);
+				expect(row.consecutiveFailures).toBeGreaterThan(0);
+			}
+			expect(row.enabled).toBe(true);
+		}
+	});
+
+	it("starts a new streak from the failure that began it", async () => {
+		seedEndpoint();
+		const first = new Date(now.getTime() - WEBHOOK_DISABLE_AFTER_MS - 60_000);
+		await recordWebhookDelivery("wh-1", failed, {
+			countsTowardStreak: true,
+			now: first,
+		});
+		await recordWebhookDelivery(
+			"wh-1",
+			{ ok: true, responseStatus: 200, durationMs: 5 },
+			{ countsTowardStreak: true, now: first },
+		);
+		for (
+			let attempt = 0;
+			attempt < WEBHOOK_DISABLE_AFTER_FAILURES + 5;
+			attempt++
+		) {
+			await recordWebhookDelivery("wh-1", failed, {
+				countsTowardStreak: true,
+				now,
+			});
+		}
+		expect(endpoint()).toMatchObject({
+			enabled: true,
+			disabledReason: null,
+			failingSince: now,
+			consecutiveFailures: WEBHOOK_DISABLE_AFTER_FAILURES + 5,
+		});
 	});
 
 	it("never counts a test event towards the streak", async () => {

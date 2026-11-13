@@ -87,7 +87,13 @@ export function requestPublicOnly(
 						else if (value !== undefined) headers.set(name, value);
 					}
 					const hasBody = method !== "HEAD" && !BODYLESS_STATUSES.has(status);
-					if (!hasBody) response.resume();
+					if (!hasBody) {
+						// These answers carry no content. A server that sends some
+						// anyway loses the connection instead of having it read
+						// without end.
+						response.on("error", () => {});
+						response.on("data", () => response.destroy());
+					}
 					resolve(
 						new Response(
 							hasBody

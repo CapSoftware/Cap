@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { decrypt } from "@cap/database/crypto";
 import { developerApps, developerWebhookEndpoints } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
-import { and, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
 	WEBHOOK_DISABLE_AFTER_FAILURES,
 	WEBHOOK_DISABLE_AFTER_MS,
@@ -65,6 +65,10 @@ const URL_PROBLEM_MESSAGES: Record<WebhookUrlProblem, string> = {
 	private_address: "The URL must point to a public address",
 };
 
+// The stored URL is the parsed one, which is longer than what was sent when
+// it holds characters that need encoding.
+export const WEBHOOK_URL_MAX_LENGTH = 2_048;
+
 export const webhookUrlProblemMessage = (problem: WebhookUrlProblem) =>
 	URL_PROBLEM_MESSAGES[problem];
 
@@ -77,8 +81,10 @@ export function webhookUrlProblem(
 	if (problem === "invalid_url" || problem === "credentials_in_url") {
 		return problem;
 	}
+	const url = new URL(value);
+	if (url.href.length > WEBHOOK_URL_MAX_LENGTH) return "invalid_url";
 	if (allowPrivate) return null;
-	if (new URL(value).protocol !== "https:") return "https_required";
+	if (url.protocol !== "https:") return "https_required";
 	return problem;
 }
 
@@ -123,12 +129,6 @@ export async function sendDeveloperWebhook(
 	});
 
 	const allowPrivate = guards.allowPrivate ?? allowsPrivateWebhookTargets();
-	const problem = await checkWebhookUrl(input.url, {
-		allowPrivate,
-		isBlocked: guards.isBlocked,
-	});
-	if (problem) return failed(problem);
-
 	const request =
 		guards.request ?? (allowPrivate ? requestAnyAddress : requestPublicOnly);
 	const abort = new AbortController();
@@ -137,8 +137,26 @@ export async function sendDeveloperWebhook(
 		timedOut = true;
 		abort.abort();
 	}, guards.timeoutMs ?? WEBHOOK_TIMEOUT_MS);
+	const deadline = new Promise<never>((_, reject) => {
+		abort.signal.addEventListener(
+			"abort",
+			() => reject(new Error("Webhook delivery timed out")),
+			{ once: true },
+		);
+	});
+	deadline.catch(() => {});
 
 	try {
+		// Resolving the host is part of the delivery, so it runs inside the
+		// same deadline as the request.
+		const check = checkWebhookUrl(input.url, {
+			allowPrivate,
+			isBlocked: guards.isBlocked,
+		});
+		check.catch(() => {});
+		const problem = await Promise.race([check, deadline]);
+		if (problem) return failed(problem);
+
 		const response = await request(input.url, {
 			method: "POST",
 			headers: {
@@ -147,7 +165,7 @@ export async function sendDeveloperWebhook(
 				[WEBHOOK_SIGNATURE_HEADER]: signWebhookBody(
 					input.secret,
 					input.body,
-					Math.floor(started / 1000),
+					Math.floor(now() / 1000),
 				),
 				[WEBHOOK_EVENT_ID_HEADER]: input.eventId,
 				[WEBHOOK_EVENT_TYPE_HEADER]: input.eventType,
@@ -171,71 +189,63 @@ export async function sendDeveloperWebhook(
 		);
 	} finally {
 		clearTimeout(timer);
+		// Only the status is wanted. Closing the connection here means an
+		// endpoint that keeps sending, or never finishes, holds nothing open.
+		abort.abort();
 	}
 }
 
-const keepUpdatedAt = {
-	updatedAt: sql`${developerWebhookEndpoints.updatedAt}`,
-};
-
+// The count, the start of the streak and the decision to disable are read and
+// written under the endpoint's row lock, so a success and a failure recorded
+// at the same moment cannot leave a streak start behind without its count.
 export async function recordWebhookDelivery(
 	endpointId: string,
 	result: WebhookSendResult,
 	options: { countsTowardStreak: boolean; now?: Date },
 ): Promise<void> {
 	const now = options.now ?? new Date();
-	const last = {
-		lastDeliveryAt: now,
-		lastDeliveryStatus: result.ok
-			? ("succeeded" as const)
-			: ("failed" as const),
-		lastResponseStatus: result.responseStatus,
-		lastErrorCode: result.ok ? null : result.errorCode,
-		...keepUpdatedAt,
-	};
-	const streak = !options.countsTowardStreak
-		? {}
-		: result.ok
-			? { consecutiveFailures: 0, failingSince: null }
-			: {
-					consecutiveFailures: sql`${developerWebhookEndpoints.consecutiveFailures} + ${1}`,
-				};
-	await db()
-		.update(developerWebhookEndpoints)
-		.set({ ...last, ...streak })
-		.where(eq(developerWebhookEndpoints.id, endpointId));
+	await db().transaction(async (tx) => {
+		const [endpoint] = await tx
+			.select({
+				enabled: developerWebhookEndpoints.enabled,
+				consecutiveFailures: developerWebhookEndpoints.consecutiveFailures,
+				failingSince: developerWebhookEndpoints.failingSince,
+			})
+			.from(developerWebhookEndpoints)
+			.where(eq(developerWebhookEndpoints.id, endpointId))
+			.for("update");
+		if (!endpoint) return;
 
-	if (result.ok || !options.countsTowardStreak) return;
-	await db()
-		.update(developerWebhookEndpoints)
-		.set({ failingSince: now, ...keepUpdatedAt })
-		.where(
-			and(
-				eq(developerWebhookEndpoints.id, endpointId),
-				isNull(developerWebhookEndpoints.failingSince),
-			),
-		);
-	await db()
-		.update(developerWebhookEndpoints)
-		.set({
-			enabled: false,
-			disabledReason: WEBHOOK_DISABLED_BY_FAILURES,
-			...keepUpdatedAt,
-		})
-		.where(
-			and(
-				eq(developerWebhookEndpoints.id, endpointId),
-				eq(developerWebhookEndpoints.enabled, true),
-				gte(
-					developerWebhookEndpoints.consecutiveFailures,
-					WEBHOOK_DISABLE_AFTER_FAILURES,
-				),
-				lte(
-					developerWebhookEndpoints.failingSince,
-					new Date(now.getTime() - WEBHOOK_DISABLE_AFTER_MS),
-				),
-			),
-		);
+		const failures = endpoint.consecutiveFailures + 1;
+		const failingSince = endpoint.failingSince ?? now;
+		const disable =
+			endpoint.enabled &&
+			failures >= WEBHOOK_DISABLE_AFTER_FAILURES &&
+			now.getTime() - failingSince.getTime() >= WEBHOOK_DISABLE_AFTER_MS;
+		const streak = !options.countsTowardStreak
+			? {}
+			: result.ok
+				? { consecutiveFailures: 0, failingSince: null }
+				: {
+						consecutiveFailures: failures,
+						failingSince,
+						...(disable
+							? { enabled: false, disabledReason: WEBHOOK_DISABLED_BY_FAILURES }
+							: {}),
+					};
+
+		await tx
+			.update(developerWebhookEndpoints)
+			.set({
+				lastDeliveryAt: now,
+				lastDeliveryStatus: result.ok ? "succeeded" : "failed",
+				lastResponseStatus: result.responseStatus,
+				lastErrorCode: result.ok ? null : result.errorCode,
+				updatedAt: sql`${developerWebhookEndpoints.updatedAt}`,
+				...streak,
+			})
+			.where(eq(developerWebhookEndpoints.id, endpointId));
+	});
 }
 
 async function findDeliverableEndpoint(endpointId: string) {

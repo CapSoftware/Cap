@@ -98,6 +98,17 @@ describe("webhook URL policy in a production build", () => {
 		expect(webhookUrlProblem(url)).toBe(problem);
 	});
 
+	it("measures the URL as it is stored, after encoding", () => {
+		const accented = `https://hooks.example.com/${"é".repeat(400)}`;
+		expect(accented.length).toBeLessThan(2_048);
+		expect(new URL(accented).href.length).toBeGreaterThan(2_048);
+		expect(webhookUrlProblem(accented)).toBe("invalid_url");
+		expect(webhookUrlProblem(accented, true)).toBe("invalid_url");
+		expect(
+			webhookUrlProblem(`https://hooks.example.com/${"é".repeat(300)}`),
+		).toBeNull();
+	});
+
 	it("refuses a name that resolves to a private address", async () => {
 		for (const address of ["10.0.0.5", "127.0.0.1", "::1", "::ffff:10.0.0.5"]) {
 			expect(

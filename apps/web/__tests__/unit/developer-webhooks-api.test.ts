@@ -189,6 +189,19 @@ describe("creating a webhook endpoint", () => {
 		expect(rows()).toHaveLength(0);
 	});
 
+	it("refuses a URL that is too long once encoded, on create and on update", async () => {
+		const accented = `https://hooks.example.com/${"é".repeat(400)}`;
+		const created = await create(A, { url: accented });
+		expect(created.status).toBe(400);
+		expect(created.body.code).toBe("invalid_webhook_url");
+		expect(rows()).toHaveLength(0);
+
+		const { id } = (await create(A)).body.data;
+		const updated = await send("PATCH", `/${id}`, A, { url: accented });
+		expect(updated.status).toBe(400);
+		expect(rows()[0]?.url).toBe("https://hooks.example.com/cap");
+	});
+
 	it("refuses a name that resolves to a private address", async () => {
 		context.resolved = ["192.168.1.20"];
 		const created = await create();
