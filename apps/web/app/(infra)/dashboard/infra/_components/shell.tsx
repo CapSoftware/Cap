@@ -13,6 +13,7 @@ import {
 	type LucideIcon,
 	Plus,
 	Settings2,
+	Webhook,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -64,10 +65,16 @@ const SECTION_ICONS: Record<InfraSection, LucideIcon> = {
 	usage: ChartNoAxesColumn,
 	billing: CreditCard,
 	keys: KeyRound,
+	webhooks: Webhook,
 	settings: Settings2,
 };
 
-const ACCOUNT_SECTIONS = new Set<InfraSection>(["billing", "keys", "settings"]);
+const ACCOUNT_SECTIONS = new Set<InfraSection>([
+	"billing",
+	"keys",
+	"webhooks",
+	"settings",
+]);
 
 export function Shell({
 	apps,

@@ -42,6 +42,7 @@ vi.mock("@cap/database", async () => {
 				const result = Object.assign(rows, {
 					limit: () => result,
 					groupBy: () => result,
+					orderBy: () => result,
 				});
 				return result;
 			};
