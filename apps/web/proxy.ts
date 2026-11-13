@@ -16,6 +16,7 @@ import {
 	DOCS_MARKDOWN_ROUTE,
 	docsMarkdownSlug,
 } from "@/lib/agent-markdown";
+import { restrictEmbedFraming } from "@/lib/developer-embed-origins";
 import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
@@ -150,7 +151,9 @@ export async function proxy(request: NextRequest) {
 	}
 
 	const response = await route(request);
-	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
+	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) {
+		return restrictEmbedFraming(path, response);
+	}
 	return rememberReferralClick(
 		request,
 		isFrameProtectedPath(path) ? setFrameHeaders(response) : response,
