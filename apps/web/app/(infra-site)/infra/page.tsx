@@ -17,6 +17,10 @@ export const metadata: Metadata = {
 		ogDescription: infraSeo.ogDescription,
 		ogTag: "Infra",
 	}),
+	alternates: {
+		canonical: infraSeo.path,
+		types: { "text/markdown": "/infra.md" },
+	},
 	keywords: [...infraSeo.keywords],
 	robots: {
 		index: true,
