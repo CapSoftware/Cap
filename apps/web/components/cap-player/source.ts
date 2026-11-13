@@ -597,12 +597,15 @@ export const attachSource = (
 			// when playback starts, and after hls.js's own seek to a start time.
 			let sharper = AUTO_LEVEL;
 			let swappedTo = AUTO_LEVEL;
-			// Without a connection hint every line starts low. Safari draws its
-			// first frame about 300 ms after play, and a switch made at play
-			// flushed the held segment first, so the first frame waited for the
-			// sharper one (about 200 ms later on a fast line). There the switch
-			// waits until a frame is on screen.
-			let framed = connectionHint() !== undefined;
+			// Without a connection hint every line starts low, and the step up is
+			// made at the next segment boundary once a frame is on screen. A
+			// switch at play flushed the held segment: Safari's first frame then
+			// waited for the sharper one (about 200 ms on a fast line), and the
+			// flush paused playback once in Safari and Firefox, which start on
+			// the fitting rendition on main.
+			const hinted = connectionHint() !== undefined;
+			let framed = hinted;
+			let steppedTo = AUTO_LEVEL;
 			let watchingFrame = false;
 			let destroyed = false;
 			const onFirstFrame = () => {
@@ -629,8 +632,13 @@ export const attachSource = (
 				const level = sharper;
 				sharper = AUTO_LEVEL;
 				if (picked !== AUTO_LEVEL) return;
-				swappedTo = level;
-				hls.currentLevel = level;
+				if (hinted) {
+					swappedTo = level;
+					hls.currentLevel = level;
+				} else {
+					steppedTo = level;
+					hls.nextLevel = level;
+				}
 			};
 			const bufferFreely = () => {
 				playRequested = true;
@@ -676,6 +684,13 @@ export const attachSource = (
 			let measured = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
+				if (data.frag.level === steppedTo) {
+					steppedTo = AUTO_LEVEL;
+					if (playRequested && picked === AUTO_LEVEL) {
+						hls.loadLevel = AUTO_LEVEL;
+					}
+					return;
+				}
 				if (data.frag.level === swappedTo) {
 					swappedTo = AUTO_LEVEL;
 					// Chrome keeps showing frames it decoded from the old segment

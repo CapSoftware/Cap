@@ -924,9 +924,17 @@ describe("attachSource with hls.js", () => {
 		expect(hls.startLoads).toEqual([-1]);
 	});
 
-	it("starts low when the browser gives no connection estimate, then steps up on a fast line at play", async () => {
+	it("starts low when the browser gives no connection estimate, then steps up at the next segment without a flush", async () => {
 		macSafari();
 		const video = new FakeVideo(true);
+		let seekCount = 0;
+		Object.defineProperty(video, "currentTime", {
+			get: () => 0,
+			set: () => {
+				seekCount++;
+			},
+		});
+		const seeks = () => seekCount;
 
 		attach(video, { hls: HLS });
 		const hls = await hlsFor();
@@ -940,9 +948,17 @@ describe("attachSource with hls.js", () => {
 		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
 		expect(hls.currentLevel).toBe(-1);
 		void video.play();
-		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
 		video.dispatchEvent(new Event("timeupdate"));
-		expect(hls.currentLevel).toBe(1);
+		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(1);
+		const before = seeks();
+
+		hls.emit("fragBuffered", { frag: { type: "main", level: 1, duration: 4 } });
+		expect(hls.loadLevel).toBe(AUTO_LEVEL);
+		expect(seeks()).toBe(before);
 	});
 
 	it("steps up only once a frame is on screen where the browser can say so", async () => {
@@ -964,9 +980,12 @@ describe("attachSource with hls.js", () => {
 		void video.play();
 		video.dispatchEvent(new Event("timeupdate"));
 
-		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
 		(frame as (() => void) | null)?.();
-		expect(hls.currentLevel).toBe(1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(1);
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("does not step up after it has stopped", async () => {
@@ -983,6 +1002,9 @@ describe("attachSource with hls.js", () => {
 		video.dispatchEvent(new Event("timeupdate"));
 
 		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
 	});
 
 	it("stays low at play when the first segment shows a slow line", async () => {
