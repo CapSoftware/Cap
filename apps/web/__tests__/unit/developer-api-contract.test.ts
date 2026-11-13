@@ -117,6 +117,7 @@ import {
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import {
+	DEVELOPER_AUTH_FAILURES_PER_MINUTE as FAILURES,
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
 	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
@@ -718,20 +719,20 @@ describe("credentials that are not accepted", () => {
 		},
 	);
 
-	it("answers an unknown key 401 on any path, and stops looking keys up for an address after 30 of them in a minute", async () => {
+	it("answers an unknown key 401 on any path, and stops looking keys up for an address after many different ones in a minute", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
 		mocks.keyRows = [];
 		const address = from("203.0.113.9");
 
-		for (let attempt = 1; attempt <= 30; attempt++) {
+		for (let attempt = 1; attempt <= FAILURES; attempt++) {
 			const refused = await call(rest, "GET", "/api/developer/v1/nope", {
 				key: freshKey("csk"),
 				headers: address,
 			});
 			expect(refused.status).toBe(401);
 		}
-		expect(mocks.hashKey).toHaveBeenCalledTimes(30);
+		expect(mocks.hashKey).toHaveBeenCalledTimes(FAILURES);
 
 		const limited = await getUsage(freshKey("csk"), address);
 		expect(limited.status).toBe(429);
@@ -740,7 +741,7 @@ describe("credentials that are not accepted", () => {
 			code: "rate_limited",
 			error: "Too many requests with a key or token that was not accepted",
 		});
-		expect(mocks.hashKey).toHaveBeenCalledTimes(31);
+		expect(mocks.hashKey).toHaveBeenCalledTimes(FAILURES + 1);
 
 		mocks.hashKey.mockClear();
 		mocks.selected = [];
@@ -766,7 +767,7 @@ describe("credentials that are not accepted", () => {
 		expect((await getUsage(customer, address)).status).toBe(200);
 
 		mocks.keyRows = [];
-		for (let attempt = 1; attempt <= 31; attempt++) {
+		for (let attempt = 1; attempt <= FAILURES + 1; attempt++) {
 			await getUsage(freshKey("csk"), address);
 		}
 		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
@@ -786,7 +787,7 @@ describe("credentials that are not accepted", () => {
 		expect((await getUsage(customer, address)).status).toBe(200);
 
 		mocks.keyRows = [];
-		for (let attempt = 1; attempt <= 31; attempt++) {
+		for (let attempt = 1; attempt <= FAILURES + 1; attempt++) {
 			await getUsage(freshKey("csk"), address);
 		}
 		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
@@ -797,11 +798,67 @@ describe("credentials that are not accepted", () => {
 
 		vi.advanceTimersByTime(61_000);
 		mocks.keyRows = [];
-		for (let attempt = 1; attempt <= 31; attempt++) {
+		for (let attempt = 1; attempt <= FAILURES + 1; attempt++) {
 			await getUsage(freshKey("csk"), address);
 		}
 		mocks.keyRows = accepted;
 		expect((await getUsage(customer, address)).status).toBe(429);
+	});
+
+	it("keeps a valid key working from an address that sent refused keys, on an instance that never saw it before", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T13:00:00Z"));
+		const address = from("203.0.113.90");
+		const accepted = mocks.keyRows;
+		mocks.keyRows = [];
+		for (let attempt = 1; attempt <= 30; attempt++) {
+			expect((await getUsage(freshKey("csk"), address)).status).toBe(401);
+		}
+
+		mocks.keyRows = accepted;
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(200);
+	});
+
+	it("refuses a key it already refused at once, without a lookup or a count, so a stale worker cannot block its address", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T13:10:00Z"));
+		const address = { "x-real-ip": "203.0.113.91" };
+		const accepted = mocks.keyRows;
+		mocks.keyRows = [];
+		const rotated = freshKey("csk");
+
+		for (let attempt = 1; attempt <= FAILURES * 2; attempt++) {
+			expect((await getUsage(rotated, address)).status).toBe(401);
+		}
+		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+		expect(
+			mocks.firewall.mock.calls.filter(
+				([ruleId]) => ruleId === "rl_developer_auth_failure",
+			),
+		).toHaveLength(1);
+
+		mocks.keyRows = accepted;
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(200);
+
+		mocks.keyRows = [];
+		vi.advanceTimersByTime(60_001);
+		mocks.hashKey.mockClear();
+		expect((await getUsage(rotated, address)).status).toBe(401);
+		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+	});
+
+	it("bounds the lookups an address sending different refused keys can cause to the per-address ceiling", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T13:20:00Z"));
+		mocks.keyRows = [];
+		const address = from("203.0.113.92");
+
+		for (let attempt = 1; attempt <= FAILURES * 3; attempt++) {
+			await getUsage(freshKey("csk"), address);
+		}
+
+		expect(mocks.hashKey).toHaveBeenCalledTimes(FAILURES + 1);
 	});
 
 	it("counts by the address the platform reports, not one the caller writes", async () => {
@@ -811,7 +868,7 @@ describe("credentials that are not accepted", () => {
 		mocks.keyRows = [];
 		const statuses: number[] = [];
 
-		for (let attempt = 1; attempt <= 32; attempt++) {
+		for (let attempt = 1; attempt <= FAILURES + 2; attempt++) {
 			const response = await getUsage(freshKey("csk"), {
 				"x-real-ip": "203.0.113.200",
 				"x-forwarded-for": `10.0.0.${attempt}, 203.0.113.200`,
@@ -820,8 +877,8 @@ describe("credentials that are not accepted", () => {
 			statuses.push(response.status);
 		}
 
-		expect(statuses.slice(0, 30)).toEqual(Array(30).fill(401));
-		expect(statuses.slice(30)).toEqual([429, 429]);
+		expect(statuses.slice(0, FAILURES)).toEqual(Array(FAILURES).fill(401));
+		expect(statuses.slice(FAILURES)).toEqual([429, 429]);
 	});
 
 	it("asks the shared rule about the address, sending it no credential", async () => {
@@ -903,7 +960,7 @@ describe("credentials that are not accepted", () => {
 		const first = await forged();
 		expect(first.status).toBe(401);
 		expect(await first.json()).toMatchObject({ code: "invalid_upload_token" });
-		for (let attempt = 2; attempt <= 30; attempt++) await forged();
+		for (let attempt = 2; attempt <= FAILURES; attempt++) await forged();
 
 		const limited = await forged();
 		expect(limited.status).toBe(429);
