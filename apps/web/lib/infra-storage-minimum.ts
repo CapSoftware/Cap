@@ -105,23 +105,17 @@ async function dayAlreadyBilled(
 async function settleFirstMonth(
 	tx: InfraDbExecutor,
 	videoId: string,
+	appId: string,
 	options: FirstMonthOptions,
 ): Promise<FirstMonthCharge> {
 	const now = options.now ?? new Date();
-	const [found] = await tx
-		.select({ appId: developerVideos.appId })
-		.from(developerVideos)
-		.where(eq(developerVideos.id, videoId))
-		.limit(1);
-	if (!found) return skipped("missing");
-
 	const [account] = await tx
 		.select({
 			id: developerCreditAccounts.id,
 			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 		})
 		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, found.appId))
+		.where(eq(developerCreditAccounts.appId, appId))
 		.for("update");
 
 	const [video] = await tx
@@ -195,7 +189,7 @@ async function settleFirstMonth(
 	const settled = settleStorageDay({
 		balanceMicroCredits: account.balanceMicroCredits,
 		availableMicroCredits:
-			(await availableBalance(found.appId, tx)) ?? account.balanceMicroCredits,
+			(await availableBalance(appId, tx)) ?? account.balanceMicroCredits,
 		owedMicroCredits: firstMonthStorageMicroCredits({ durationSeconds, tier }),
 		unresolvedShortSince,
 		now,
@@ -238,12 +232,19 @@ async function settleFirstMonth(
 	};
 }
 
-export function chargeDeveloperVideoFirstMonth(
+export async function chargeDeveloperVideoFirstMonth(
 	videoId: string,
 	options: FirstMonthOptions = {},
 ): Promise<FirstMonthCharge> {
-	return (options.executor ?? db()).transaction((tx) =>
-		settleFirstMonth(tx, videoId, options),
+	const executor = options.executor ?? db();
+	const [found] = await executor
+		.select({ appId: developerVideos.appId })
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId))
+		.limit(1);
+	if (!found) return skipped("missing");
+	return executor.transaction((tx) =>
+		settleFirstMonth(tx, videoId, found.appId, options),
 	);
 }
 

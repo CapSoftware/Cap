@@ -1,0 +1,638 @@
+import { randomUUID } from "node:crypto";
+import {
+	developerApps,
+	developerCreditAccounts,
+	developerCreditTransactions,
+	developerVideos,
+} from "@cap/database/schema";
+import type { DeveloperVideoProcessingState } from "@cap/database/types";
+import { and, eq } from "drizzle-orm";
+import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import { Effect } from "effect";
+import { createPool, type Pool } from "mysql2/promise";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+const fixture = vi.hoisted(() => ({ database: undefined as unknown }));
+
+vi.mock("@cap/database", () => ({
+	db: () => {
+		if (!fixture.database) throw new Error("Test database is not connected.");
+		return fixture.database;
+	},
+}));
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true", NEXT_PUBLIC_WEB_URL: "https://web" },
+	serverEnv: () => ({ WEB_URL: "https://web" }),
+}));
+vi.mock("@cap/web-backend", () => ({
+	provideOptionalAuth: <T>(effect: T) => effect,
+	S3Buckets: {},
+}));
+vi.mock("@/lib/server", () => ({
+	runPromise: (effect: Effect.Effect<unknown, unknown>) =>
+		Effect.runPromise(effect),
+}));
+vi.mock("workflow/api", () => ({ start: vi.fn() }));
+vi.mock("@/workflows/process-developer-video", () => ({
+	processDeveloperVideoWorkflow: "workflow",
+}));
+
+const { addCreditsToAccount } = await import("@/lib/developer-credits");
+const { firstMonthStorageMicroCredits } = await import(
+	"@/lib/developer-pricing"
+);
+const { getInfraBilling, getInfraUploadAdmission } = await import(
+	"@/lib/infra-standing"
+);
+const { getAppStorage, getStorageUsageByApp } = await import(
+	"@/lib/infra-storage"
+);
+const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
+const {
+	chargeDeveloperVideoFirstMonth,
+	chargeMissedFirstMonths,
+	settleFirstMonthAtReady,
+} = await import("@/lib/infra-storage-minimum");
+const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
+
+const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const id = () => randomUUID().replaceAll("-", "").slice(0, 15);
+const database = () => fixture.database as MySql2Database;
+const day = (key: string, time = "00:41:00") => new Date(`${key}T${time}.000Z`);
+
+const processing = (): DeveloperVideoProcessingState => ({
+	encodeId: "encode-1",
+	startedAt: Date.parse("2026-11-12T00:00:00Z"),
+	probe: { duration: 600, width: 1920, height: 1080, fps: 30 },
+	hls: { state: "pending" },
+	mp4: { state: "complete", output: "out" },
+	attempts: { hls: 0, mp4: 1 },
+	unavailableChecks: 0,
+	poster: null,
+	bytes: { source: 1, hls: 0, mp4: 1, poster: 0 },
+});
+
+describe.runIf(Boolean(databaseUrl))(
+	"first month of storage against a real database",
+	() => {
+		let pool: Pool;
+
+		const makeApp = async (balanceMicroCredits: number) => {
+			const appId = id();
+			const accountId = id();
+			const ownerId = id() as never;
+			await database().insert(developerApps).values({
+				id: appId,
+				ownerId,
+				name: "First month fixture",
+				environment: "development",
+			});
+			await database().insert(developerCreditAccounts).values({
+				id: accountId,
+				appId,
+				ownerId,
+				balanceMicroCredits,
+			});
+			return { appId, accountId };
+		};
+
+		const makeVideo = async (
+			appId: string,
+			overrides: Partial<typeof developerVideos.$inferInsert> = {},
+		) => {
+			const videoId = id();
+			await database()
+				.insert(developerVideos)
+				.values({
+					id: videoId,
+					appId,
+					name: "Fixture",
+					status: "ready",
+					duration: 600,
+					width: 1920,
+					height: 1080,
+					maxResolutionTier: "1080p",
+					processing: processing(),
+					createdAt: new Date("2026-11-12T00:00:00Z"),
+					updatedAt: new Date("2026-11-12T00:05:00Z"),
+					...overrides,
+				});
+			return videoId;
+		};
+
+		const balanceOf = async (accountId: string) => {
+			const [row] = await database()
+				.select({ balance: developerCreditAccounts.balanceMicroCredits })
+				.from(developerCreditAccounts)
+				.where(eq(developerCreditAccounts.id, accountId));
+			return row?.balance;
+		};
+
+		const firstMonthRows = (accountId: string) =>
+			database()
+				.select()
+				.from(developerCreditTransactions)
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						eq(developerCreditTransactions.type, "video_create"),
+					),
+				);
+
+		const videoRow = async (videoId: string) => {
+			const [row] = await database()
+				.select()
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId));
+			return row;
+		};
+
+		const billDay = (accountId: string, dateKey: string) =>
+			database()
+				.insert(developerCreditTransactions)
+				.values({
+					id: id(),
+					accountId,
+					type: "storage_daily",
+					amountMicroCredits: 0,
+					balanceAfterMicroCredits: 0,
+					referenceId: dateKey,
+					referenceType: "storage_day",
+					metadata: { snapshotDate: dateKey, owedMicroCredits: 0 },
+				});
+
+		const dailyMinutes = async (appId: string, at: Date) =>
+			(
+				await getStorageUsageByApp([appId], undefined, undefined, {
+					dailyChargeAt: at,
+				})
+			).get(appId)?.totalMinutes ?? 0;
+
+		beforeAll(async () => {
+			if (!databaseUrl) throw new Error("Missing isolated test database URL.");
+			const url = new URL(databaseUrl);
+			if (
+				url.protocol !== "mysql:" ||
+				!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+				!/^\/cap_(infra|speech)_[a-z0-9_]+$/.test(url.pathname)
+			) {
+				throw new Error(
+					"First month tests require a session-scoped local database.",
+				);
+			}
+			pool = createPool({ uri: databaseUrl, connectionLimit: 12 });
+			fixture.database = drizzle(pool);
+			await database().select().from(developerVideos).limit(1);
+		});
+
+		afterAll(async () => {
+			await pool?.end();
+		});
+
+		it("debits one month at the video's tier and measured length, once, and marks it paid", async () => {
+			const cases = [
+				{ seconds: 600, width: 1920, height: 1080, tier: "1080p", owed: 850 },
+				{
+					seconds: 3600,
+					width: 3840,
+					height: 2160,
+					tier: "2160p",
+					owed: 16_800,
+				},
+				{
+					seconds: 3600,
+					width: 3840,
+					height: 2160,
+					tier: "1080p",
+					owed: 5_100,
+				},
+				{ seconds: 600, width: 2560, height: 1440, tier: "1440p", owed: 1_450 },
+				{ seconds: 1, width: 640, height: 360, tier: "1080p", owed: 1 },
+			] as const;
+			for (const video of cases) {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					duration: video.seconds,
+					width: video.width,
+					height: video.height,
+					maxResolutionTier: video.tier,
+				});
+				const before = await videoRow(videoId);
+
+				const result = await chargeDeveloperVideoFirstMonth(videoId, {
+					now: new Date("2026-11-12T10:00:00Z"),
+				});
+
+				expect(result).toMatchObject({
+					state: "charged",
+					owedMicroCredits: video.owed,
+					chargedMicroCredits: video.owed,
+					shortSince: null,
+				});
+				expect(video.owed).toBe(
+					firstMonthStorageMicroCredits({
+						durationSeconds: video.seconds,
+						tier: result.state === "charged" ? result.tier : "1080p",
+					}),
+				);
+				expect(await balanceOf(accountId)).toBe(1_000_000 - video.owed);
+				const rows = await firstMonthRows(accountId);
+				expect(rows).toHaveLength(1);
+				expect(rows[0]).toMatchObject({
+					amountMicroCredits: -video.owed,
+					balanceAfterMicroCredits: 1_000_000 - video.owed,
+					referenceId: videoId,
+					referenceType: "developer_video",
+				});
+				const after = await videoRow(videoId);
+				expect(after?.storagePaidUntil).toEqual(
+					new Date("2026-12-12T00:00:00Z"),
+				);
+				expect(after?.updatedAt).toEqual(before?.updatedAt);
+				expect(after?.status).toBe("ready");
+
+				expect(
+					await chargeDeveloperVideoFirstMonth(videoId, {
+						now: new Date("2026-11-12T11:00:00Z"),
+					}),
+				).toEqual({ state: "skipped", reason: "already_settled" });
+				expect(await firstMonthRows(accountId)).toHaveLength(1);
+				expect(await balanceOf(accountId)).toBe(1_000_000 - video.owed);
+			}
+		});
+
+		it("charges once when the ready transition and the backstop race for the same video", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const videoId = await makeVideo(appId);
+
+			const results = await Promise.all(
+				Array.from({ length: 8 }, () =>
+					chargeDeveloperVideoFirstMonth(videoId, {
+						now: new Date("2026-11-12T10:00:00Z"),
+					}),
+				),
+			);
+
+			expect(results.filter((r) => r.state === "charged")).toHaveLength(1);
+			expect(
+				results.filter(
+					(r) => r.state === "skipped" && r.reason === "already_settled",
+				),
+			).toHaveLength(7);
+			expect(await firstMonthRows(accountId)).toHaveLength(1);
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+		});
+
+		it("leaves the video out of the daily charge for exactly 30 billed days, then charges it daily with no gap", async () => {
+			const keys = (from: string, count: number) =>
+				Array.from({ length: count }, (_, n) =>
+					new Date(Date.parse(`${from}T00:00:00Z`) + n * DAY_MS)
+						.toISOString()
+						.slice(0, 10),
+				);
+
+			const afterTodaysCharge = await makeApp(1_000_000);
+			await billDay(afterTodaysCharge.accountId, "2026-11-12");
+			const lateVideo = await makeVideo(afterTodaysCharge.appId);
+			await chargeDeveloperVideoFirstMonth(lateVideo, {
+				now: new Date("2026-11-12T10:00:00Z"),
+			});
+			const late = await Promise.all(
+				keys("2026-11-13", 31).map((key) =>
+					dailyMinutes(afterTodaysCharge.appId, day(key)),
+				),
+			);
+			expect(late.slice(0, 30)).toEqual(Array(30).fill(0));
+			expect(late[30]).toBe(10);
+			expect((await videoRow(lateVideo))?.storagePaidUntil).toEqual(
+				new Date("2026-12-13T00:00:00Z"),
+			);
+
+			const beforeTodaysCharge = await makeApp(1_000_000);
+			const earlyVideo = await makeVideo(beforeTodaysCharge.appId);
+			await chargeDeveloperVideoFirstMonth(earlyVideo, {
+				now: new Date("2026-11-12T00:10:00Z"),
+			});
+			const early = await Promise.all(
+				keys("2026-11-12", 31).map((key) =>
+					dailyMinutes(beforeTodaysCharge.appId, day(key, "06:41:00")),
+				),
+			);
+			expect(early.slice(0, 30)).toEqual(Array(30).fill(0));
+			expect(early[30]).toBe(10);
+
+			const charge = async (key: string) =>
+				chargeStorageDay({
+					appId: beforeTodaysCharge.appId,
+					accountId: beforeTodaysCharge.accountId,
+					usage:
+						(
+							await getStorageUsageByApp(
+								[beforeTodaysCharge.appId],
+								undefined,
+								undefined,
+								{ dailyChargeAt: day(key) },
+							)
+						).get(beforeTodaysCharge.appId) ??
+						(() => {
+							throw new Error("no usage");
+						})(),
+					dateKey: key,
+					now: day(key),
+				});
+			expect(await charge("2026-12-11")).toEqual({ state: "skipped" });
+			expect(await charge("2026-12-12")).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: Math.floor(850 / 30),
+			});
+		});
+
+		it("keeps the month paid for a video deleted an hour after it became ready", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const videoId = await makeVideo(appId);
+			await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
+			await database()
+				.update(developerVideos)
+				.set({ deletedAt: new Date(Date.now() + 60 * 60 * 1000) })
+				.where(eq(developerVideos.id, videoId));
+
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+			expect(await firstMonthRows(accountId)).toHaveLength(1);
+			expect(await chargeMissedFirstMonths(new Date())).toMatchObject({
+				failed: 0,
+			});
+			expect(await firstMonthRows(accountId)).toHaveLength(1);
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+		});
+
+		it("charges nothing for a video that errored or was deleted before it became ready", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const errored = await makeVideo(appId, { status: "errored" });
+			const encoding = await makeVideo(appId, { status: "processing" });
+			const deletedFirst = await makeVideo(appId, {
+				deletedAt: new Date("2026-11-12T09:00:00Z"),
+			});
+
+			expect(await chargeDeveloperVideoFirstMonth(errored)).toEqual({
+				state: "skipped",
+				reason: "not_ready",
+			});
+			expect(await chargeDeveloperVideoFirstMonth(encoding)).toEqual({
+				state: "skipped",
+				reason: "not_ready",
+			});
+			await settleFirstMonthAtReady({
+				id: deletedFirst,
+				deletedAt: new Date("2026-11-12T09:00:00Z"),
+			});
+
+			const exempt = await videoRow(deletedFirst);
+			expect(exempt?.storagePaidUntil).not.toBeNull();
+			expect(await firstMonthRows(accountId)).toHaveLength(0);
+			expect(await balanceOf(accountId)).toBe(1_000_000);
+
+			await chargeMissedFirstMonths(new Date());
+			expect(await firstMonthRows(accountId)).toHaveLength(0);
+			expect(await balanceOf(accountId)).toBe(1_000_000);
+		});
+
+		it("never charges the minimum for a video that was ready before the feature, or one uploaded before encoding existed", async () => {
+			await makeVideo((await makeApp(1_000_000)).appId, {
+				createdAt: new Date("2026-11-12T00:00:00Z"),
+				storagePaidUntil: new Date("2026-12-12T00:00:00Z"),
+			});
+			const { appId, accountId } = await makeApp(1_000_000);
+			const old = await makeVideo(appId, {
+				createdAt: new Date("2026-10-01T00:00:00Z"),
+			});
+			const legacy = await makeVideo(appId, {
+				status: "uploading",
+				processing: null,
+				playbackId: null,
+				createdAt: new Date("2026-11-20T00:00:00Z"),
+			});
+
+			await chargeMissedFirstMonths(new Date("2026-11-21T00:41:00Z"));
+			await chargeMissedFirstMonths(new Date("2026-11-21T06:41:00Z"));
+
+			expect(await firstMonthRows(accountId)).toHaveLength(0);
+			expect(await balanceOf(accountId)).toBe(1_000_000);
+			expect((await videoRow(old))?.storagePaidUntil).toBeNull();
+			expect((await videoRow(legacy))?.storagePaidUntil).toBeNull();
+			expect(await dailyMinutes(appId, day("2026-11-21"))).toBe(10);
+		});
+
+		it("lets the cron charge a ready video the transition missed, deleted or not, exactly once", async () => {
+			await makeVideo((await makeApp(1_000_000)).appId, {
+				storagePaidUntil: new Date("2026-12-12T00:00:00Z"),
+			});
+			const { appId, accountId } = await makeApp(1_000_000);
+			const missed = await makeVideo(appId, {
+				createdAt: new Date("2026-11-20T00:00:00Z"),
+			});
+			const missedThenDeleted = await makeVideo(appId, {
+				createdAt: new Date("2026-11-20T01:00:00Z"),
+				deletedAt: new Date("2026-11-20T02:00:00Z"),
+			});
+
+			await chargeMissedFirstMonths(new Date("2026-11-20T06:41:00Z"));
+			await chargeMissedFirstMonths(new Date("2026-11-20T12:41:00Z"));
+
+			const rows = await firstMonthRows(accountId);
+			expect(rows.map((row) => row.referenceId).sort()).toEqual(
+				[missed, missedThenDeleted].sort(),
+			);
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 2 * 850);
+		});
+
+		it("takes what the balance holds when it cannot pay the month, leaves the video ready and the account out of credit until topped up", async () => {
+			const part = await makeApp(300);
+			const partVideo = await makeVideo(part.appId);
+			await settleFirstMonthAtReady({ id: partVideo, deletedAt: null });
+
+			expect(await balanceOf(part.accountId)).toBe(0);
+			const [partRow] = await firstMonthRows(part.accountId);
+			expect(partRow).toMatchObject({
+				amountMicroCredits: -300,
+				balanceAfterMicroCredits: 0,
+			});
+			expect(partRow?.metadata).toMatchObject({
+				owedMicroCredits: 850,
+				chargedMicroCredits: 300,
+			});
+			expect(
+				(partRow?.metadata as { shortSince: string | null }).shortSince,
+			).not.toBeNull();
+			const partVideoRow = await videoRow(partVideo);
+			expect(partVideoRow?.status).toBe("ready");
+			expect(partVideoRow?.storagePaidUntil).not.toBeNull();
+
+			const short = await getInfraBilling(part.appId);
+			expect(short.standing.state).toBe("grace");
+			expect(short.admission).toMatchObject({
+				allowed: false,
+				reason: "out_of_credit",
+			});
+
+			const unpaid = await makeApp(0);
+			await settleFirstMonthAtReady({
+				id: await makeVideo(unpaid.appId),
+				deletedAt: null,
+			});
+			const [unpaidRow] = await firstMonthRows(unpaid.accountId);
+			expect(unpaidRow).toMatchObject({
+				amountMicroCredits: 0,
+				balanceAfterMicroCredits: 0,
+			});
+			expect((await getInfraBilling(unpaid.appId)).standing.state).toBe(
+				"grace",
+			);
+
+			await addCreditsToAccount({
+				accountId: part.accountId,
+				amountCents: 1,
+				referenceId: id(),
+				referenceType: "stripe_payment_intent",
+			});
+			expect(await balanceOf(part.accountId)).toBe(1_000);
+			expect((await getInfraBilling(part.appId)).standing.state).toBe("active");
+		});
+
+		it("never throws from the ready path when the charge fails", async () => {
+			const broken = {
+				transaction: async () => {
+					throw new Error("connection lost");
+				},
+			} as never;
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await expect(
+				settleFirstMonthAtReady({ id: id(), deletedAt: null }, broken),
+			).resolves.toBeUndefined();
+			expect(errors).toHaveBeenCalled();
+			errors.mockRestore();
+		});
+
+		it("admits one upload on a balance that covers one first month, and refuses the others completing at the same time", async () => {
+			const { appId } = await makeApp(5_600);
+			const videos = await Promise.all(
+				Array.from({ length: 4 }, () =>
+					makeVideo(appId, {
+						status: "processing",
+						duration: null,
+						width: null,
+						height: null,
+						maxResolutionTier: "2160p",
+					}),
+				),
+			);
+
+			const results = await Promise.all(
+				videos.map((videoId) =>
+					recordAdmittedInfraUpload(
+						{
+							appId,
+							videoId,
+							durationSeconds: 1200,
+							width: 3840,
+							height: 2160,
+							maxResolutionTier: "2160p",
+						},
+						{ duration: 1200, width: 3840, height: 2160 },
+					),
+				),
+			);
+
+			const admitted = results.filter(
+				(result) => "allowed" in result && result.allowed,
+			);
+			const refused = results.filter(
+				(result) => "allowed" in result && !result.allowed,
+			);
+			expect(admitted).toHaveLength(1);
+			expect(refused).toHaveLength(3);
+			for (const refusal of refused) {
+				expect("message" in refusal && refusal.message).toMatch(
+					/^Not enough credit /,
+				);
+				expect(refusal).toMatchObject({
+					reason: "insufficient_credits",
+					requiredMicroCredits: 11_200,
+					shortfallMicroCredits: 5_600,
+				});
+			}
+			const recorded = await Promise.all(videos.map(videoRow));
+			expect(recorded.filter((video) => video?.duration === 1200)).toHaveLength(
+				1,
+			);
+		});
+
+		it("needs the first month of the upload and of every upload in flight", async () => {
+			const { appId } = await makeApp(0);
+			const upload = {
+				durationSeconds: 1200,
+				width: 3840,
+				height: 2160,
+				tier: "2160p" as const,
+			};
+
+			expect(
+				(await getInfraUploadAdmission(appId, upload)).requiredMicroCredits,
+			).toBe(5_600);
+
+			for (let n = 0; n < 2; n++) {
+				await makeVideo(appId, {
+					status: "processing",
+					duration: 1200,
+					width: 3840,
+					height: 2160,
+					maxResolutionTier: "2160p",
+				});
+			}
+			expect(
+				(await getInfraUploadAdmission(appId, upload)).requiredMicroCredits,
+			).toBe(16_800);
+		});
+
+		it("reports what is stored apart from what the daily charge covers", async () => {
+			const { appId } = await makeApp(1_000_000);
+			await makeVideo(appId, {
+				storagePaidUntil: new Date(Date.now() + 10 * DAY_MS),
+			});
+			await makeVideo(appId, {
+				storagePaidUntil: new Date(Date.now() - DAY_MS),
+				duration: 1200,
+			});
+			await makeVideo(appId, { createdAt: new Date("2026-10-01T00:00:00Z") });
+			await makeVideo(appId, { status: "processing", duration: 300 });
+			await makeVideo(appId, { status: "uploading", duration: null });
+			await makeVideo(appId, { status: "errored" });
+
+			const storage = await getAppStorage(appId);
+
+			expect(storage.stored).toMatchObject({
+				videoCount: 3,
+				totalMinutes: 40,
+				dailyMicroCredits: Math.floor((40 * 85) / 30),
+			});
+			expect(storage.dailyCharge).toMatchObject({
+				videoCount: 2,
+				totalMinutes: 30,
+				monthlyMicroCredits: 30 * 85,
+				dailyMicroCredits: Math.floor((30 * 85) / 30),
+			});
+			expect(storage.firstMonthDue).toMatchObject({
+				videoCount: 1,
+				monthlyMicroCredits: 5 * 85,
+			});
+			expect(storage.uploadingVideos).toBe(1);
+
+			const billing = await getInfraBilling(appId);
+			expect(billing.stored).toEqual(storage.stored);
+			expect(billing.admission.requiredMicroCredits).toBe(
+				Math.ceil(5 * 85 + (30 * 85 * 7) / 30),
+			);
+		});
+	},
+);
