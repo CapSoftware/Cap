@@ -255,7 +255,7 @@ export const PLAYER: readonly CodeSample[] = [
   src="${SAMPLE_PLAYBACK.embed}"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
   allowfullscreen
   loading="lazy"
 ></iframe>`,

@@ -126,7 +126,7 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 | `500` | Internal server error (`internal_error`). Retry with backoff |
 | `503` | Transcription is temporarily unavailable. Retry later |
 
-A `4xx` response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: `429`, and `409` with the code `completion_in_progress`.
+A `4xx` response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: `429`, and `409` with the code `completion_in_progress` from complete. The same `409` from abort is different: do not repeat the abort (see [Abort Upload](/docs/api/rest-api#abort-upload)).
 
 ## Rate Limits
 
@@ -765,6 +765,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 - `name`, `language`, `userId`, `metadata` and the `Idempotency-Key` header work as they do for a URL. The name defaults to the video's name.
 - The transcript carries the video's ID as `videoId`, and `source.type` is `video`. `videoId` is `null` on every other transcript.
 - When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.
+- The hosted player and the embed then show a captions button, and the `c` key turns captions on and off. Add `captions=1` to `embedUrl` to start with them on. See [Embed Parameters](/docs/api/rest-api#embed-parameters).
 - The transcript is its own object. The video's `transcriptionStatus` does not change, and deleting the video leaves the transcript and its text. A transcript whose video is deleted before it runs ends with `source_missing` and is not charged.
 - Sending the video's `mp4Url` as `url` still works as a URL transcript. It is not linked to the video: its `videoId` is `null`.
 
@@ -1079,7 +1080,6 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 | `topup` | Code redeemed | `stripe_checkout_session` | The checkout a code covered in full |
 | `topup` | Auto top-up | `auto_top_up` | The payment |
 | `topup_failed` | Auto top-up declined | `auto_top_up_failed` | The payment, or `declined-` and the UTC day when there was none |
-| `topup_pending` | Auto top-up pending | `auto_top_up_pending` | The payment |
 | `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
 | `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
 | `transcription` | Transcription | `developer_transcript` | The transcript ID |
@@ -1299,11 +1299,13 @@ Complete can itself return `409` with a `code`:
 | `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait for the seconds in the `Retry-After` header, then send the same complete request again, and repeat for as long as it answers this way. If the earlier request was cut off, that can last up to 15 minutes. Do not abort the upload or delete the video. |
 | `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new upload and send the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header: wait for the completion to finish. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header. See [Abort Upload](/docs/api/rest-api#abort-upload) for what to do. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
 
 #### Abort Upload
 
 Cancel an in-progress multipart upload and discard its parts. Abort is safe to repeat: when no open upload matches the `uploadId`, for example because it was already aborted, it answers `200` with `{ "success": true }` again.
+
+If abort returns `409` with the code `completion_in_progress`, the upload is being completed and can no longer be aborted. Do not repeat the abort. From your server, wait until [`GET /api/developer/v1/videos/:id`](/docs/api/rest-api#get-video) no longer shows the video as `processing`, then [delete the video](/docs/api/rest-api#delete-video) if you do not want it.
 
 ```
 POST /api/developer/sdk/v1/upload/multipart/abort
@@ -1492,7 +1494,7 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
   src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
   allowfullscreen
   loading="lazy"
 ></iframe>
@@ -1511,6 +1513,7 @@ Add these to `embedUrl` as query parameters, for example `https://cap.so/dev/Zk3
 | `loop=1` | Starts again from the beginning when the video ends |
 | `t=90` | Starts at that many seconds. Decimals work, such as `t=12.5`. A time past the end is ignored. `shareUrl` takes this parameter too |
 | `controls=0` | Hides the control bar. A play button stays on a paused video and the keyboard keeps working |
+| `captions=1` | Starts with captions on, for a video that has them. The viewer can turn them off |
 
 A value the player does not understand is ignored, and so is a parameter it does not know. To let an embed autoplay with sound where the browser permits it, add `autoplay` to the iframe's `allow` list.
 

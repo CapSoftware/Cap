@@ -164,6 +164,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 <script>
   const UPLOAD_API = "https://cap.so/api/developer/sdk/v1/upload/multipart";
   const PART_SIZE = 8 * 1024 * 1024;
+  const PARTS_AT_ONCE = 6;
   const SIGN_AT_ONCE = 10;
 
   async function uploadStep(upload, step, body) {
@@ -212,9 +213,11 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
     });
   }
 
-  function putPart(url, blob, onSent) {
+  function putPart(url, blob, onSent, inFlight) {
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      inFlight.add(request);
+      request.onloadend = () => inFlight.delete(request);
       request.open("PUT", url);
       request.upload.onprogress = (event) => onSent(event.loaded);
       request.onload = () =>
@@ -222,6 +225,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
           ? resolve(request.getResponseHeader("ETag"))
           : reject(new Error(`part upload failed with ${request.status}`));
       request.onerror = () => reject(new Error("part upload failed"));
+      request.onabort = () => reject(new Error("part upload stopped"));
       request.send(blob);
     });
   }
@@ -247,26 +251,61 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
         urls.set(part.partNumber, part.presignedUrl);
       }
     };
-    const parts = [];
-    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+    let signing = null;
+    const urlFor = async (partNumber) => {
+      while (signing) await signing;
+      if (!urls.has(partNumber)) {
+        const last = Math.min(partNumber + SIGN_AT_ONCE - 1, partCount);
+        signing = sign(partNumber, last).finally(() => (signing = null));
+        await signing;
+      }
+      return urls.get(partNumber);
+    };
+    const sentBytes = new Array(partCount).fill(0);
+    const inFlight = new Set();
+    let failure = null;
+    const sendPart = async (partNumber) => {
       const start = (partNumber - 1) * PART_SIZE;
       const blob = file.slice(start, start + PART_SIZE);
-      if (!urls.has(partNumber)) {
-        await sign(
-          partNumber,
-          Math.min(partNumber + SIGN_AT_ONCE - 1, partCount),
+      const put = async (url) => {
+        if (failure) throw failure;
+        return putPart(
+          url,
+          blob,
+          (sent) => {
+            if (failure) return;
+            sentBytes[partNumber - 1] = sent;
+            onProgress(sentBytes.reduce((a, b) => a + b, 0) / file.size);
+          },
+          inFlight,
         );
-      }
-      const sendPart = () =>
-        putPart(urls.get(partNumber), blob, (sent) =>
-          onProgress((start + sent) / file.size),
-        );
-      const etag = await sendPart().catch(async () => {
+      };
+      const etag = await put(await urlFor(partNumber)).catch(async (error) => {
+        if (failure) throw error;
         await sign(partNumber, partNumber);
-        return sendPart();
+        return put(urls.get(partNumber));
       });
-      parts.push({ partNumber, etag, size: blob.size });
-    }
+      return { partNumber, etag, size: blob.size };
+    };
+    const parts = [];
+    let nextPart = 1;
+    const sendParts = async () => {
+      try {
+        while (!failure && nextPart <= partCount) {
+          parts.push(await sendPart(nextPart++));
+        }
+      } catch (error) {
+        if (!failure) {
+          failure = error;
+          for (const request of inFlight) request.abort();
+        }
+      }
+    };
+    await Promise.allSettled(
+      Array.from({ length: Math.min(PARTS_AT_ONCE, partCount) }, sendParts),
+    );
+    if (failure) throw failure;
+    parts.sort((a, b) => a.partNumber - b.partNumber);
     await uploadStep(upload, "complete", { uploadId, parts, ...info });
   }
 
@@ -303,12 +342,13 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 `waitForVideo` and `playVideo` are added in the next two steps.
 
 - **Parts.** Every part except the last must be at least 5 MB. Number the parts from 1 with no gaps: a token signs part numbers up to the last one its size limit allows, which is 6,867 for the 36 GB limit. A file smaller than one part is sent as a single part.
-- **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made.
+- **Parts at once.** The page sends six parts at a time, and starts the next part as soon as one finishes. On a distant or lossy connection this is much faster than one part at a time; on a fast, clean one it makes little difference. Complete takes the parts in part-number order.
+- **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made. Only one signing request runs at a time; the other parts wait for it.
 - **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
 - **File size.** Initiate takes the file's size as `contentLength`, so a file over the token's `maxBytes` is refused with the code `file_too_large` before any of it is sent.
-- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
-- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload.
+- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The page adds up the bytes sent for every part, and the bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
+- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload: the parts still sending are stopped, no new parts start, the bar stops moving, and the first error is shown once every part has stopped.
 - **An expired token.** A call that answers `upload_token_expired` gets a new token from your server and is sent again. Nothing already uploaded is lost.
 - **Resuming.** Calling initiate again returns the same `uploadId` when the upload was opened in the last 6 hours, with the same token or a renewed one. Keep each finished part's `partNumber`, `etag` and `size`, upload only the parts that are missing, then list every part in complete.
 
@@ -442,7 +482,8 @@ Every upload also returns `shareUrl` and `embedUrl`. They are Cap's hosted playe
   src="EMBED_URL"
   title="Product demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
+  allowfullscreen
   loading="lazy"
 ></iframe>
 ```
