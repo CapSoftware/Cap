@@ -2,7 +2,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import type { LedgerRow } from "@/lib/infra-ledger";
 import {
-	INFRA_DELIVERY_BILLED_FROM_TEXT,
+	deliveryBilledFromText,
 	INFRA_DELIVERY_PRICE,
 	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
@@ -76,6 +76,7 @@ export function BillingView({
 	autoTopUpFailure,
 	transactions,
 	ledgerPage,
+	deliveryBilledFrom = null,
 }: {
 	app: { id: string; name: string };
 	account: BillingAccount | null;
@@ -85,6 +86,7 @@ export function BillingView({
 	autoTopUpFailure: { day: string; reason: string } | null;
 	transactions: LedgerRow[];
 	ledgerPage: { newer: string | null; older: string | null };
+	deliveryBilledFrom?: string | null;
 }) {
 	const billingPath = infraAppPath(app.id, "billing");
 	const ledgerHref = (direction: "before" | "after", cursor: string) =>
@@ -190,7 +192,10 @@ export function BillingView({
 						Each video is charged one month of storage when it becomes ready,
 						then once a day at its resolution. Uploading needs a balance that
 						covers that first month. Delivered video is charged once a day, when
-						the day's figures become final. {INFRA_DELIVERY_BILLED_FROM_TEXT}{" "}
+						the day's figures become final.{" "}
+						{deliveryBilledFrom
+							? `${deliveryBilledFromText(deliveryBilledFrom)} `
+							: null}
 						<Link
 							href="/docs/api/billing"
 							className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}

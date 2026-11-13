@@ -3,6 +3,7 @@ import {
 	autoTopUpFailureText,
 	getAutoTopUpFailure,
 } from "@/lib/infra-auto-top-up";
+import { deliveryBillingStart } from "@/lib/infra-delivery-flag";
 import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
 import {
 	type LedgerPage,
@@ -56,6 +57,7 @@ export default async function InfraBillingPage({
 
 	return (
 		<BillingView
+			deliveryBilledFrom={deliveryBillingStart()}
 			app={{ id: app.id, name: app.name }}
 			account={
 				account

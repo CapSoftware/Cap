@@ -362,7 +362,10 @@ describe("delivery pricing", () => {
 		const landing =
 			parse(renderToStaticMarkup(React.createElement(InfraPage))).body
 				.textContent ?? "";
-		const consoleText = (account: BillingAccount | null) =>
+		const consoleText = (
+			account: BillingAccount | null,
+			deliveryBilledFrom: string | null = null,
+		) =>
 			parse(
 				renderToStaticMarkup(
 					React.createElement(BillingView, {
@@ -377,6 +380,7 @@ describe("delivery pricing", () => {
 						autoTopUpFailure: null,
 						transactions: [],
 						ledgerPage: { newer: null, older: null },
+						deliveryBilledFrom,
 					}),
 				),
 			).body.textContent ?? "";
@@ -423,9 +427,17 @@ describe("delivery pricing", () => {
 		expect(INFRA_DELIVERY_BILLED_FROM_TEXT).toBe(
 			"Delivery is billed from 14 November 2026. Earlier days are not charged.",
 		);
+		expect(occurrences(landing, INFRA_DELIVERY_BILLED_FROM_TEXT)).toBe(1);
 		expect(
-			occurrences(consoleText(null), INFRA_DELIVERY_BILLED_FROM_TEXT),
+			occurrences(
+				consoleText(null, "2026-11-14"),
+				INFRA_DELIVERY_BILLED_FROM_TEXT,
+			),
 		).toBe(1);
+		expect(consoleText(null, "2026-11-20")).toContain(
+			"Delivery is billed from 20 November 2026. Earlier days are not charged.",
+		);
+		expect(consoleText(null, null)).not.toContain("Delivery is billed from");
 
 		for (const source of sourceSurfaces()) {
 			if (source.file.endsWith(".css")) continue;

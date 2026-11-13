@@ -1,4 +1,7 @@
-import { INFRA_SPEECH_DOLLARS_PER_HOUR } from "@/lib/infra-pricing";
+import {
+	INFRA_DELIVERY_BILLED_FROM_TEXT,
+	INFRA_SPEECH_DOLLARS_PER_HOUR,
+} from "@/lib/infra-pricing";
 import { Calculator } from "./Calculator";
 import {
 	ANCHORS,
@@ -97,7 +100,7 @@ export const Pricing = () => (
 					per upload.
 				</p>
 				<p className="m-0 mt-3 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
-					{DELIVERED_MINUTE} {DELIVERY_RULE}
+					{DELIVERED_MINUTE} {DELIVERY_RULE} {INFRA_DELIVERY_BILLED_FROM_TEXT}
 				</p>
 				<dl className="m-0 mt-8 flex items-baseline justify-between gap-4 border-y border-[rgba(222,230,246,0.08)] py-3.5">
 					<dt className="text-[14.5px] leading-[1.4] text-[#E8ECF4]">

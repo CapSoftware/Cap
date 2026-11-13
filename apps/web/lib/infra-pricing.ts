@@ -30,9 +30,14 @@ const billedFromDay = new Intl.DateTimeFormat("en-GB", {
 	month: "long",
 	year: "numeric",
 	timeZone: "UTC",
-}).format(new Date(`${INFRA_DELIVERY_BILLED_FROM}T00:00:00Z`));
+});
 
-export const INFRA_DELIVERY_BILLED_FROM_TEXT = `Delivery is billed from ${billedFromDay}. Earlier days are not charged.`;
+export const deliveryBilledFromText = (day: string) =>
+	`Delivery is billed from ${billedFromDay.format(new Date(`${day}T00:00:00Z`))}. Earlier days are not charged.`;
+
+export const INFRA_DELIVERY_BILLED_FROM_TEXT = deliveryBilledFromText(
+	INFRA_DELIVERY_BILLED_FROM,
+);
 
 export const INFRA_DELIVERY_PRICE_TEXT = `${INFRA_DELIVERY_PRICE} ${INFRA_DELIVERY_PRICE_UNIT}`;
 
