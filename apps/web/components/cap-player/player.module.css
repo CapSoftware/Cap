@@ -93,6 +93,7 @@
 	height: 64px;
 	margin: -32px 0 0 -32px;
 	padding: 0;
+	z-index: 1;
 	border: 0;
 	border-radius: 50%;
 	background: rgba(12, 13, 15, 0.62);
@@ -118,7 +119,8 @@
 	pointer-events: none;
 }
 
-.player[data-waiting="true"] .start {
+.player[data-waiting="true"] .start,
+.player[data-menu] .start {
 	visibility: hidden;
 }
 
