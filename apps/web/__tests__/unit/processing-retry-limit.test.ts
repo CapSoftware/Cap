@@ -135,7 +135,7 @@ describe("processing retry limit", () => {
 		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
 	});
 
-	it("charges agent reruns from the video's current state, right before the work starts", () => {
+	it("charges new agent reruns before the mutation and never reruns on a replay", () => {
 		const source = readFileSync(
 			join(process.cwd(), "app/api/v1/[...route]/route.ts"),
 			"utf8",
@@ -152,20 +152,17 @@ describe("processing retry limit", () => {
 		};
 
 		expect(handler).toMatch(
-			/processingRetryLimited\(principal\.id, headers\),\s*\)\s*\)\s*\{\s*return yield\* rateLimited\(\s*requestId,\s*PROCESSING_RETRY_WINDOW_MS,\s*\);/,
+			/const chargesRerun = chargesProcessingRerun\(\{\s*target: payload\.target,\s*retry: payload\.retry,\s*transcriptionStatus: row\.transcriptionStatus,\s*metadata,\s*\}\);/,
 		);
 		expect(handler).toMatch(
-			/includesTranscript &&\s*payload\.retry === true &&\s*row\.transcriptionStatus === "ERROR"\s*\)\s*\{\s*yield\* limitRerun;\s*\}\s*const state = yield\* runAgentMutation\(/,
+			/runAgentMutation\(\{\s*admit: Effect\.gen\(function\* \(\) \{\s*newRequest = true;\s*if \(\s*chargesRerun &&\s*\(yield\* Effect\.promise\(\(\) =>\s*processingRetryLimited\(principal\.id, headers\),\s*\)\)\s*\)\s*\{\s*return yield\* rateLimited\(\s*requestId,\s*PROCESSING_RETRY_WINDOW_MS,\s*\);/,
 		);
 		expect(handler).toMatch(
-			/if \(isAiGenerationRerun\(normalizeAgentMetadata\(row\.metadata\)\)\) \{\s*yield\* limitRerun;\s*\}\s*const result = yield\* Effect\.tryPromise\(\(\) =>\s*startAiGeneration\(/,
+			/state\.target !== "transcript" &&\s*\(newRequest \|\| !isAiGenerationRerun\(metadata\)\)\s*\)\s*\{\s*const result = yield\* Effect\.tryPromise\(\(\) =>\s*startAiGeneration\(/,
 		);
-		expect(at("const limitRerun")).toBeGreaterThan(
+		expect(at("const chargesRerun")).toBeGreaterThan(
 			at("isAiGenerationEnabled("),
 		);
-		expect(at("yield* limitRerun")).toBeLessThan(at("transcribeVideo("));
-		expect(at("runAgentMutation(")).toBeLessThan(
-			at("isAiGenerationRerun(normalizeAgentMetadata"),
-		);
+		expect(at("admit:")).toBeLessThan(at("transcribeVideo("));
 	});
 });
