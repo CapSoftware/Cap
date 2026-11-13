@@ -5,6 +5,13 @@ const mocks = vi.hoisted(() => ({
 	page: [] as Record<string, unknown>[],
 	accountsTable: { id: "id", appId: "appId" },
 	appsTable: { id: "id", deletedAt: "deletedAt" },
+	ledgerTable: {
+		accountId: "accountId",
+		referenceId: "referenceId",
+		referenceType: "referenceType",
+	},
+	snapshotsTable: { appId: "appId", snapshotDate: "snapshotDate" },
+	yesterdayBilled: null as Record<string, unknown>[] | null,
 	getStorageUsageByApp: vi.fn(),
 	chargeStorageDay: vi.fn(),
 	latestStorageCharges: vi.fn(),
@@ -15,13 +22,30 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@cap/database", () => ({
 	db: () => {
 		let table: unknown;
-		const read = () => {
+		const dateOf = (condition: unknown) => {
+			const match = JSON.stringify(condition).match(
+				/\{"eq":\["referenceId","(\d{4}-\d{2}-\d{2})"\]\}/,
+			);
+			return match?.[1] ?? null;
+		};
+		const read = (condition: unknown) => {
 			if (table === mocks.appsTable) {
 				return mocks.page.map((account) => ({ id: account.appId }));
 			}
-			const rows = mocks.selects.shift() ?? [];
-			if (table === mocks.accountsTable) mocks.page = rows;
-			return rows;
+			if (table === mocks.accountsTable) {
+				mocks.page = mocks.selects[0] ?? [];
+				return mocks.page;
+			}
+			if (table === mocks.ledgerTable) {
+				if (dateOf(condition) === new Date().toISOString().slice(0, 10)) {
+					return mocks.selects[1] ?? [];
+				}
+				return (
+					mocks.yesterdayBilled ??
+					mocks.page.map((account) => ({ accountId: account.id }))
+				);
+			}
+			return [];
 		};
 		const chain = {
 			select: () => chain,
@@ -29,8 +53,8 @@ vi.mock("@cap/database", () => ({
 				table = next;
 				return chain;
 			},
-			where: () => {
-				const rows = Promise.resolve(read());
+			where: (condition: unknown) => {
+				const rows = Promise.resolve(read(condition));
 				return Object.assign(rows, {
 					orderBy: () => ({ limit: () => rows }),
 				});
@@ -42,11 +66,8 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/schema", () => ({
 	developerApps: mocks.appsTable,
 	developerCreditAccounts: mocks.accountsTable,
-	developerCreditTransactions: {
-		accountId: "accountId",
-		referenceId: "referenceId",
-		referenceType: "referenceType",
-	},
+	developerCreditTransactions: mocks.ledgerTable,
+	developerDailyStorageSnapshots: mocks.snapshotsTable,
 }));
 vi.mock("drizzle-orm", () => ({
 	and: (...args: unknown[]) => args,
@@ -55,6 +76,7 @@ vi.mock("drizzle-orm", () => ({
 	eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
 	inArray: (a: unknown, b: unknown) => ({ inArray: [a, b] }),
 	isNull: (a: unknown) => ({ isNull: a }),
+	isNotNull: (a: unknown) => ({ isNotNull: a }),
 }));
 vi.mock("@/lib/infra-storage", () => ({
 	getStorageUsageByApp: mocks.getStorageUsageByApp,
@@ -112,6 +134,7 @@ beforeEach(() => {
 	process.env.CRON_SECRET = CRON_SECRET;
 	mocks.selects = [];
 	mocks.page = [];
+	mocks.yesterdayBilled = null;
 	for (const mock of [
 		mocks.getStorageUsageByApp,
 		mocks.chargeStorageDay,

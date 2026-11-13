@@ -1,19 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type ChargeCall = {
+	accountId: string;
+	dateKey: string;
+	retryUnpaid: boolean | undefined;
+};
+
 const state = vi.hoisted(() => ({
 	accounts: [] as { id: string; appId: string }[],
 	deletedApps: new Set<string>(),
 	unpaid: new Set<string>(),
+	short: new Set<string>(),
+	everShort: new Set<string>(),
 	charged: new Map<string, number>(),
-	chargeCalls: [] as { accountId: string; dateKey: string }[],
+	snapshotWrites: new Map<string, number>(),
+	chargeCalls: [] as ChargeCall[],
 	accountReads: [] as { cursor: string | null; limit: number | null }[],
 	accountSql: [] as string[],
 	longestIdList: 0,
 	secondsPerCharge: 0,
 	topUps: vi.fn(),
+	emails: vi.fn(),
 	afters: [] as Promise<unknown>[],
 	continuations: [] as { url: string; authorization: string | null }[],
-	continuationStatus: 200,
+	continuationStatus: 200 as number | "network",
 }));
 
 vi.mock("next/server", async (original) => ({
@@ -57,6 +67,15 @@ vi.mock("@cap/database", async () => {
 					.map((id) => [id]),
 			};
 		}
+		if (sql.includes("from `developer_daily_storage_snapshots`")) {
+			const appIds = params.slice(0, -1).map(String);
+			const date = String(params.at(-1));
+			return {
+				rows: appIds
+					.filter((appId) => state.snapshotWrites.has(`${appId}|${date}`))
+					.map((appId) => [appId]),
+			};
+		}
 		throw new Error(`Unexpected query: ${sql}`);
 	});
 	return { db: () => client };
@@ -78,27 +97,45 @@ vi.mock("@/lib/infra-storage", () => ({
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
 	chargeStorageDay: async ({
+		appId,
 		accountId,
 		dateKey,
+		retryUnpaid,
 	}: {
+		appId: string;
 		accountId: string;
 		dateKey: string;
+		retryUnpaid?: boolean;
 	}) => {
-		state.chargeCalls.push({ accountId, dateKey });
+		state.chargeCalls.push({ accountId, dateKey, retryUnpaid });
 		vi.setSystemTime(Date.now() + state.secondsPerCharge * 1000);
+		const key = `${accountId}|${dateKey}`;
+		const snapshot = `${appId}|${dateKey}`;
+		if (state.charged.has(key)) return { state: "skipped" };
+		const writeSnapshot = () =>
+			state.snapshotWrites.set(
+				snapshot,
+				(state.snapshotWrites.get(snapshot) ?? 0) + 1,
+			);
 		if (state.unpaid.has(accountId)) {
+			if (retryUnpaid === false && state.snapshotWrites.has(snapshot)) {
+				return { state: "skipped" };
+			}
+			writeSnapshot();
 			return { state: "unpaid", shortSince: new Date("2026-11-01T00:00:00Z") };
 		}
-		const key = `${accountId}|${dateKey}`;
-		if (state.charged.has(key)) return { state: "skipped" };
 		state.charged.set(key, 1);
+		writeSnapshot();
+		const short = state.short.has(accountId);
+		const fellShort = short && !state.everShort.has(accountId);
+		if (short) state.everShort.add(accountId);
 		return {
 			state: "billed",
 			owedMicroCredits: 28,
-			chargedMicroCredits: 28,
-			balanceMicroCredits: 972,
-			shortSince: null,
-			fellShort: false,
+			chargedMicroCredits: short ? 0 : 28,
+			balanceMicroCredits: short ? 0 : 972,
+			shortSince: short ? new Date("2026-11-12T00:00:00Z") : null,
+			fellShort,
 		};
 	},
 }));
@@ -109,7 +146,7 @@ vi.mock("@/lib/infra-standing", () => ({
 }));
 vi.mock("@/lib/infra-auto-top-up", () => ({ runDueAutoTopUps: state.topUps }));
 vi.mock("@/lib/infra-billing-emails", () => ({
-	sendInfraOutOfCreditEmail: vi.fn(),
+	sendInfraOutOfCreditEmail: state.emails,
 }));
 
 import {
@@ -173,7 +210,14 @@ const chargedFor = (date: string) =>
 		.map((key) => key.split("|")[0])
 		.sort();
 
+const callsFor = (date: string) =>
+	state.chargeCalls.filter((call) => call.dateKey === date);
+
 const allIds = () => state.accounts.map((account) => account.id);
+
+const settle = (date: string) => {
+	for (const id of allIds()) state.charged.set(`${id}|${date}`, 1);
+};
 
 beforeEach(() => {
 	process.env.CRON_SECRET = "cron-secret";
@@ -185,7 +229,11 @@ beforeEach(() => {
 	});
 	state.deletedApps = new Set();
 	state.unpaid = new Set();
+	state.short = new Set();
+	state.everShort = new Set();
 	state.charged = new Map();
+	state.snapshotWrites = new Map();
+	settle("2026-11-11");
 	state.chargeCalls = [];
 	state.accountReads = [];
 	state.accountSql = [];
@@ -194,6 +242,7 @@ beforeEach(() => {
 	state.afters = [];
 	state.continuations = [];
 	state.continuationStatus = 200;
+	state.emails.mockReset();
 	state.topUps.mockReset();
 	state.topUps.mockResolvedValue({ attempted: 0, succeeded: 0, failed: 0 });
 	vi.stubGlobal(
@@ -203,6 +252,9 @@ beforeEach(() => {
 				url: String(url),
 				authorization: new Headers(init?.headers).get("authorization"),
 			});
+			if (state.continuationStatus === "network") {
+				throw new TypeError("fetch failed");
+			}
 			return new Response(null, { status: state.continuationStatus });
 		}),
 	);
@@ -215,21 +267,24 @@ afterEach(() => {
 });
 
 describe("storage cron paging", () => {
-	it("reads accounts a page at a time, by id, and never sends every id at once", async () => {
+	it("reads accounts a page at a time, by id, for yesterday and then today, and never sends every id at once", async () => {
 		const body = await run();
 
 		expect(body).toMatchObject({
+			date: "2026-11-12",
 			complete: true,
 			continued: false,
 			appsProcessed: ACCOUNTS,
 		});
-		expect(state.accountReads).toEqual([
+		const pages = [
 			{ cursor: null, limit: 200 },
 			{ cursor: "account-0199", limit: 200 },
 			{ cursor: "account-0399", limit: 200 },
-		]);
+		];
+		expect(state.accountReads).toEqual([...pages, ...pages]);
 		expect(state.longestIdList).toBe(200);
 		expect(state.continuations).toEqual([]);
+		expect(callsFor("2026-11-11")).toEqual([]);
 	});
 
 	it("pages on the account id alone and leaves out accounts of deleted apps", async () => {
@@ -300,25 +355,19 @@ describe("a cut-off sweep continues itself", () => {
 
 	it("never charges again an account an earlier hop charged", async () => {
 		state.secondsPerCharge = 1.6;
-		const hops: string[][] = [];
-		let seen = 0;
-		const bodies = await followChain(await run(), () => {
-			hops.push(state.chargeCalls.slice(seen).map((call) => call.accountId));
-			seen = state.chargeCalls.length;
-		});
-		hops.push(state.chargeCalls.slice(seen).map((call) => call.accountId));
+		const bodies = await followChain(await run());
 
 		expect(bodies.length).toBeGreaterThan(2);
 		expect(bodies.at(-1)).toMatchObject({ complete: true, continued: false });
-		const everyCall = hops.flat();
-		expect(new Set(everyCall).size).toBe(everyCall.length);
+		const attempted = callsFor("2026-11-12").map((call) => call.accountId);
+		expect(new Set(attempted).size).toBe(attempted.length);
 		expect(chargedFor("2026-11-12")).toEqual(allIds());
 		expect(bodies.reduce((total, body) => total + body.appsProcessed, 0)).toBe(
 			ACCOUNTS,
 		);
 	});
 
-	it("still charges every account for the day when the last run of that day is cut off", async () => {
+	it("finishes the day a continuation started even after midnight, then sweeps the new day", async () => {
 		vi.setSystemTime(new Date("2026-11-12T23:56:00Z"));
 		state.secondsPerCharge = 1.6;
 
@@ -329,12 +378,14 @@ describe("a cut-off sweep continues itself", () => {
 
 		const bodies = await followChain(first);
 
-		expect(bodies.every((body) => body.date === "2026-11-12")).toBe(true);
+		expect(bodies.at(-1)).toMatchObject({
+			date: "2026-11-13",
+			complete: true,
+		});
 		expect(chargedFor("2026-11-12")).toEqual(allIds());
-		expect(chargedFor("2026-11-13")).toEqual([]);
-		expect(
-			state.chargeCalls.every((call) => call.dateKey === "2026-11-12"),
-		).toBe(true);
+		expect(chargedFor("2026-11-13")).toEqual(allIds());
+		expect(callsFor("2026-11-12")).toHaveLength(ACCOUNTS);
+		expect(callsFor("2026-11-13")).toHaveLength(ACCOUNTS);
 	});
 
 	it("reaches funded accounts behind a run of unpaid accounts longer than one run's budget", async () => {
@@ -346,11 +397,127 @@ describe("a cut-off sweep continues itself", () => {
 		const funded = allIds().slice(300);
 		expect(chargedFor("2026-11-12")).toEqual(funded);
 		expect(bodies.at(-1)).toMatchObject({ complete: true });
-		const unpaidCalls = state.chargeCalls.filter((call) =>
+		const unpaidCalls = callsFor("2026-11-12").filter((call) =>
 			state.unpaid.has(call.accountId),
 		);
 		expect(unpaidCalls).toHaveLength(300);
 		expect(new Set(unpaidCalls.map((call) => call.accountId)).size).toBe(300);
+	});
+});
+
+describe("a broken chain is finished by the next day's first run", () => {
+	const breakOnLastTickOfTheDay = async () => {
+		vi.setSystemTime(new Date("2026-11-12T18:41:00Z"));
+		state.secondsPerCharge = 1.6;
+		state.continuationStatus = "network";
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const lastTick = await run();
+		await Promise.all(state.afters);
+		expect(lastTick).toMatchObject({
+			date: "2026-11-12",
+			complete: false,
+			continued: true,
+		});
+		expect(console.error).toHaveBeenCalledWith(
+			"[developer-storage] Continuation not started",
+			expect.objectContaining({ date: "2026-11-12", after: "account-0129" }),
+		);
+		const firstDayCalls = callsFor("2026-11-12").map((call) => call.accountId);
+		vi.setSystemTime(new Date("2026-11-13T00:41:00Z"));
+		state.secondsPerCharge = 0;
+		state.continuationStatus = 200;
+		state.chargeCalls = [];
+		return firstDayCalls;
+	};
+
+	it("charges the accounts after the cursor for that day, each once, then sweeps today", async () => {
+		const chargedBeforeTheBreak = await breakOnLastTickOfTheDay();
+
+		const nextDay = await run();
+
+		expect(nextDay).toMatchObject({
+			date: "2026-11-13",
+			complete: true,
+			continued: false,
+			hop: 0,
+			appsProcessed: ACCOUNTS - 130 + ACCOUNTS,
+		});
+		expect(chargedFor("2026-11-12")).toEqual(allIds());
+		expect(chargedFor("2026-11-13")).toEqual(allIds());
+		const finished = callsFor("2026-11-12").map((call) => call.accountId);
+		expect(finished).toEqual(allIds().slice(130));
+		expect(finished.some((id) => chargedBeforeTheBreak.includes(id))).toBe(
+			false,
+		);
+		expect(
+			callsFor("2026-11-12").every((call) => call.retryUnpaid === false),
+		).toBe(true);
+		expect(
+			callsFor("2026-11-13").every((call) => call.retryUnpaid === true),
+		).toBe(true);
+	});
+
+	it("does not charge or email again an account that fell short before the break", async () => {
+		state.short = new Set(["account-0005", "account-0006", "account-0200"]);
+		await breakOnLastTickOfTheDay();
+		expect(state.emails).toHaveBeenCalledTimes(2);
+
+		await run();
+
+		expect(state.emails).toHaveBeenCalledTimes(3);
+		const emailed = state.emails.mock.calls.map(
+			([notice]) => (notice as { accountId: string }).accountId,
+		);
+		expect(emailed.sort()).toEqual([
+			"account-0005",
+			"account-0006",
+			"account-0200",
+		]);
+		expect(callsFor("2026-11-12").map((call) => call.accountId)).not.toContain(
+			"account-0005",
+		);
+	});
+
+	it("writes no second snapshot for an account that was unpaid before the break", async () => {
+		state.unpaid = new Set([
+			"account-0010",
+			"account-0011",
+			"account-0300",
+			"account-0301",
+		]);
+		await breakOnLastTickOfTheDay();
+		expect(state.snapshotWrites.get("app-0010|2026-11-12")).toBe(1);
+		expect(state.snapshotWrites.has("app-0300|2026-11-12")).toBe(false);
+
+		await run();
+
+		const finished = callsFor("2026-11-12").map((call) => call.accountId);
+		expect(finished).not.toContain("account-0010");
+		expect(finished).not.toContain("account-0011");
+		expect(finished).toContain("account-0300");
+		for (const app of ["app-0010", "app-0011", "app-0300", "app-0301"]) {
+			expect(state.snapshotWrites.get(`${app}|2026-11-12`)).toBe(1);
+		}
+		expect(state.snapshotWrites.get("app-0010|2026-11-13")).toBe(1);
+	});
+
+	it("costs a settled yesterday one read per table per page and no charge", async () => {
+		settle("2026-11-12");
+		vi.setSystemTime(new Date("2026-11-13T00:41:00Z"));
+		state.unpaid = new Set(allIds().slice(0, 50));
+		for (const id of allIds().slice(0, 50)) {
+			state.charged.delete(`${id}|2026-11-12`);
+			state.snapshotWrites.set(`${id.replace("account", "app")}|2026-11-12`, 1);
+		}
+
+		await run();
+
+		expect(callsFor("2026-11-12")).toEqual([]);
+		for (const id of allIds().slice(0, 50)) {
+			expect(
+				state.snapshotWrites.get(`${id.replace("account", "app")}|2026-11-12`),
+			).toBe(1);
+		}
 	});
 });
 
@@ -388,6 +555,27 @@ describe("the chain is bounded", () => {
 			"[developer-storage] Continuation refused",
 			expect.objectContaining({ status: 500, hop: 1 }),
 		);
+	});
+
+	it("logs a handoff that is still running, with the next cursor, as information", async () => {
+		state.secondsPerCharge = 1.6;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new DOMException("The operation timed out.", "TimeoutError");
+			}),
+		);
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await run();
+		await Promise.all(state.afters);
+
+		expect(info).toHaveBeenCalledWith(
+			"[developer-storage] Continuation still running at handoff",
+			{ date: "2026-11-12", after: "account-0129", hop: 1 },
+		);
+		expect(errors).not.toHaveBeenCalled();
 	});
 
 	it("refuses a date other than today or yesterday and any malformed continuation", async () => {

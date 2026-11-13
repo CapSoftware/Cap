@@ -4,15 +4,18 @@ import {
 	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
+	developerDailyStorageSnapshots,
 } from "@cap/database/schema";
-import { and, asc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
 import { after, NextResponse } from "next/server";
+import type { StorageUsage } from "@/lib/developer-pricing";
 import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
 import { sendInfraOutOfCreditEmail } from "@/lib/infra-billing-emails";
 import {
 	INFRA_GRACE_DAYS,
 	latestStorageCharges,
 	STORAGE_DAY_REFERENCE_TYPE,
+	type StorageCharge,
 } from "@/lib/infra-standing";
 import { getStorageUsageByApp } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
@@ -38,19 +41,17 @@ export const maxDuration = 300;
 
 type Sweep = { date: string; after: string | null; hop: number };
 
-function readSweep(url: URL, now: Date): Sweep | null {
+function readSweep(url: URL, today: string, yesterday: string): Sweep | null {
 	const date = url.searchParams.get("date");
 	const afterId = url.searchParams.get("after");
 	const hop = url.searchParams.get("hop");
 	if (date === null && afterId === null && hop === null) {
-		return { date: utcDateKey(now), after: null, hop: 0 };
+		return { date: yesterday, after: null, hop: 0 };
 	}
 	if (date === null || hop === null || !HOP_PATTERN.test(hop)) return null;
 	const hopNumber = Number(hop);
 	if (hopNumber < 1 || hopNumber > MAX_STORAGE_HOPS) return null;
 	if (afterId !== null && !ACCOUNT_ID_PATTERN.test(afterId)) return null;
-	const today = utcDateKey(now);
-	const yesterday = utcDateKey(new Date(now.getTime() - DAY_MS));
 	if (!DATE_PATTERN.test(date) || (date !== today && date !== yesterday)) {
 		return null;
 	}
@@ -77,7 +78,13 @@ function continueSweep(request: Request, authorization: string, next: Sweep) {
 				}
 			})
 			.catch((error: unknown) => {
-				if (error instanceof Error && error.name === "TimeoutError") return;
+				if (error instanceof Error && error.name === "TimeoutError") {
+					console.info(
+						"[developer-storage] Continuation still running at handoff",
+						next,
+					);
+					return;
+				}
 				console.error("[developer-storage] Continuation not started", {
 					error,
 					...next,
@@ -86,50 +93,31 @@ function continueSweep(request: Request, authorization: string, next: Sweep) {
 	);
 }
 
-export async function GET(request: Request) {
-	const cronSecret = process.env.CRON_SECRET;
-	if (!cronSecret) {
-		return NextResponse.json(
-			{ error: "Server misconfiguration" },
-			{ status: 500 },
-		);
-	}
+type DateSweep = {
+	complete: boolean;
+	cursor: string | null;
+	processed: number;
+	short: number;
+};
 
-	const authHeader = request.headers.get("authorization");
-	const expected = `Bearer ${cronSecret}`;
-	if (
-		!authHeader ||
-		authHeader.length !== expected.length ||
-		!timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))
-	) {
-		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-	}
-
-	const startedAt = Date.now();
-	const now = new Date(startedAt);
-	const sweep = readSweep(new URL(request.url), now);
-	if (!sweep) {
-		return NextResponse.json(
-			{ error: "Invalid continuation" },
-			{ status: 400 },
-		);
-	}
-	const { date, hop } = sweep;
-	const outOfTime = (untilMs: number) => Date.now() - startedAt >= untilMs;
-
-	const topUpsBefore =
-		hop === 0
-			? await runDueAutoTopUps(now, {
-					until: startedAt + TOP_UPS_BEFORE_UNTIL_MS,
-				})
-			: null;
-
+async function sweepDate({
+	date,
+	from,
+	finishing,
+	now,
+	outOfTime,
+}: {
+	date: string;
+	from: string | null;
+	finishing: boolean;
+	now: Date;
+	outOfTime: () => boolean;
+}): Promise<DateSweep> {
 	let processed = 0;
 	let short = 0;
-	let complete = false;
-	let cursor = sweep.after;
+	let cursor = from;
 
-	while (!complete && !outOfTime(STORAGE_UNTIL_MS)) {
+	while (!outOfTime()) {
 		const page: { id: string; appId: string }[] = await db()
 			.select({
 				id: developerCreditAccounts.id,
@@ -140,10 +128,7 @@ export async function GET(request: Request) {
 			.orderBy(asc(developerCreditAccounts.id))
 			.limit(PAGE_SIZE);
 		const lastAccount = page.at(-1);
-		if (!lastAccount) {
-			complete = true;
-			break;
-		}
+		if (!lastAccount) return { complete: true, cursor, processed, short };
 		const liveApps = await db()
 			.select({ id: developerApps.id })
 			.from(developerApps)
@@ -179,27 +164,54 @@ export async function GET(request: Request) {
 						)
 				: [];
 		const billedAccounts = new Set(billedToday.map((row) => row.accountId));
-		const pending = accounts.filter(
+		const unbilled = accounts.filter(
 			(account) => !billedAccounts.has(account.id),
 		);
-		const usageByApp = await getStorageUsageByApp(
-			pending.map((account) => account.appId),
+		const settledApps =
+			finishing && unbilled.length > 0
+				? await db()
+						.select({ appId: developerDailyStorageSnapshots.appId })
+						.from(developerDailyStorageSnapshots)
+						.where(
+							and(
+								inArray(
+									developerDailyStorageSnapshots.appId,
+									unbilled.map((account) => account.appId),
+								),
+								eq(developerDailyStorageSnapshots.snapshotDate, date),
+								isNotNull(developerDailyStorageSnapshots.processedAt),
+							),
+						)
+				: [];
+		const settledAppIds = new Set(settledApps.map((row) => row.appId));
+		const pending = unbilled.filter(
+			(account) => !settledAppIds.has(account.appId),
 		);
-		const lastCharges = await latestStorageCharges(
-			db(),
-			pending
-				.filter(
-					(account) =>
-						(usageByApp.get(account.appId)?.dailyMicroCredits ?? 1) <= 0,
-				)
-				.map((account) => account.id),
-		);
+		const usageByApp =
+			pending.length > 0
+				? await getStorageUsageByApp(pending.map((account) => account.appId))
+				: new Map<string, StorageUsage>();
+		const idleAccountIds = pending
+			.filter(
+				(account) =>
+					(usageByApp.get(account.appId)?.dailyMicroCredits ?? 1) <= 0,
+			)
+			.map((account) => account.id);
+		const lastCharges =
+			idleAccountIds.length > 0
+				? await latestStorageCharges(db(), idleAccountIds)
+				: new Map<string, StorageCharge>();
 
-		let resumeAt: number | null = null;
 		for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-			if (outOfTime(STORAGE_UNTIL_MS)) {
-				resumeAt = i;
-				break;
+			if (outOfTime()) {
+				const firstUnattempted = pending[i];
+				const position = firstUnattempted ? page.indexOf(firstUnattempted) : -1;
+				return {
+					complete: false,
+					cursor: position > 0 ? (page[position - 1]?.id ?? cursor) : cursor,
+					processed,
+					short,
+				};
 			}
 			const results = await Promise.allSettled(
 				pending.slice(i, i + BATCH_SIZE).map(async (account) => {
@@ -217,6 +229,7 @@ export async function GET(request: Request) {
 						usage,
 						dateKey: date,
 						now,
+						retryUnpaid: !finishing,
 					});
 					if (
 						result.state === "billed" &&
@@ -245,15 +258,74 @@ export async function GET(request: Request) {
 			}
 		}
 
-		if (resumeAt !== null) {
-			const firstUnattempted = pending[resumeAt];
-			const position = firstUnattempted ? page.indexOf(firstUnattempted) : -1;
-			cursor = position > 0 ? (page[position - 1]?.id ?? cursor) : cursor;
-			break;
-		}
-
-		complete = page.length < PAGE_SIZE;
 		cursor = lastAccount.id;
+		if (page.length < PAGE_SIZE) {
+			return { complete: true, cursor, processed, short };
+		}
+	}
+	return { complete: false, cursor, processed, short };
+}
+
+export async function GET(request: Request) {
+	const cronSecret = process.env.CRON_SECRET;
+	if (!cronSecret) {
+		return NextResponse.json(
+			{ error: "Server misconfiguration" },
+			{ status: 500 },
+		);
+	}
+
+	const authHeader = request.headers.get("authorization");
+	const expected = `Bearer ${cronSecret}`;
+	if (
+		!authHeader ||
+		authHeader.length !== expected.length ||
+		!timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))
+	) {
+		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+	}
+
+	const startedAt = Date.now();
+	const now = new Date(startedAt);
+	const today = utcDateKey(now);
+	const yesterday = utcDateKey(new Date(startedAt - DAY_MS));
+	const sweep = readSweep(new URL(request.url), today, yesterday);
+	if (!sweep) {
+		return NextResponse.json(
+			{ error: "Invalid continuation" },
+			{ status: 400 },
+		);
+	}
+	const { hop } = sweep;
+	const outOfTime = () => Date.now() - startedAt >= STORAGE_UNTIL_MS;
+
+	const topUpsBefore =
+		hop === 0
+			? await runDueAutoTopUps(now, {
+					until: startedAt + TOP_UPS_BEFORE_UNTIL_MS,
+				})
+			: null;
+
+	const dates = sweep.date === today ? [today] : [sweep.date, today];
+	let date = sweep.date;
+	let cursor = sweep.after;
+	let complete = false;
+	let processed = 0;
+	let short = 0;
+	for (const [index, sweepingDate] of dates.entries()) {
+		date = sweepingDate;
+		const result = await sweepDate({
+			date,
+			from: index === 0 ? sweep.after : null,
+			finishing: date !== today,
+			now,
+			outOfTime,
+		});
+		processed += result.processed;
+		short += result.short;
+		cursor = result.cursor;
+		complete = result.complete;
+		if (!complete) break;
 	}
 
 	let continued = false;
