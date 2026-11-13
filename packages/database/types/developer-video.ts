@@ -66,3 +66,7 @@ export interface DeveloperVideoProcessingState {
 		poster: number;
 	};
 }
+
+// A video Cap staff took down keeps its own metadata under this key. See
+// developer-video-takedown.ts for why the flag lives in metadata.
+export const DEVELOPER_VIDEO_TAKEDOWN_KEY = "__capTakedown";
