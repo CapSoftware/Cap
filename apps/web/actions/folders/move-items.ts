@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaces,
@@ -133,8 +134,20 @@ export async function getOwnedVideoMoveDestinations(
 	const organizationId = requestedOrganizationId ?? user?.activeOrganizationId;
 	if (!user || !organizationId) throw new Error("Unauthorized");
 	const access = await requireOrganizationAccess(user.id, organizationId);
+	const canManageOrganization = canManageOrganizationSettings(access.role);
+	const organizationName = db()
+		.select({ name: organizations.name })
+		.from(organizations)
+		.where(eq(organizations.id, organizationId))
+		.limit(1)
+		.then((rows) => rows);
 	const availableSpaces = await db()
-		.select({ id: spaces.id, name: spaces.name })
+		.select({
+			id: spaces.id,
+			name: spaces.name,
+			createdById: spaces.createdById,
+			memberRole: spaceMembers.role,
+		})
 		.from(spaces)
 		.leftJoin(
 			spaceMembers,
@@ -146,7 +159,7 @@ export async function getOwnedVideoMoveDestinations(
 		.where(
 			and(
 				eq(spaces.organizationId, organizationId),
-				canManageOrganizationSettings(access.role)
+				canManageOrganization
 					? undefined
 					: or(
 							eq(spaces.createdById, user.id),
@@ -176,26 +189,42 @@ export async function getOwnedVideoMoveDestinations(
 			),
 		)
 		.orderBy(asc(folders.name));
+	const [organization] = await organizationName;
+	// New folders always land in the active organization, so the dialog only
+	// offers to create one when that is the organization being browsed.
+	const creatable = organizationId === user.activeOrganizationId;
+	const pick = (
+		spaceId: (typeof organizationFolders)[number]["spaceId"],
+	): MoveFolderDestination[] =>
+		organizationFolders
+			.filter((folder) => folder.spaceId === spaceId)
+			.map(({ id, name, parentId }) => ({ id, name, parentId }));
 	return [
 		{
 			location: { type: "personal" },
 			name: "My Caps",
-			folders: organizationFolders.filter((folder) => folder.spaceId === null),
+			folders: pick(null),
+			canCreateFolder: creatable,
 		},
 		{
 			location: { type: "organization" },
-			name: "All team members",
-			folders: organizationFolders.filter(
-				(folder) => folder.spaceId === organizationId,
-			),
+			name: organization?.name?.trim() || "Everyone in the organization",
+			folders: pick(organizationId),
+			canCreateFolder: creatable && canManageOrganization,
 		},
 		...availableSpaces.map(
 			(space): MoveDestinationGroup => ({
 				location: { type: "space", spaceId: space.id },
 				name: space.name,
-				folders: organizationFolders.filter(
-					(folder) => folder.spaceId === space.id,
-				),
+				folders: pick(space.id),
+				canCreateFolder:
+					creatable &&
+					(canManageOrganization ||
+						getEffectiveSpaceRole({
+							userId: user.id,
+							createdById: space.createdById,
+							memberRole: space.memberRole,
+						}) === "admin"),
 			}),
 		),
 	];
