@@ -427,6 +427,7 @@ export async function createInfraVideo({
 	metadata,
 	maxResolutionTier,
 	idempotencyKey,
+	videoId: reservedVideoId,
 }: {
 	appId: string;
 	name?: string;
@@ -434,6 +435,7 @@ export async function createInfraVideo({
 	metadata?: Record<string, unknown>;
 	maxResolutionTier?: DeveloperVideoResolutionTier;
 	idempotencyKey?: string;
+	videoId?: string;
 }): Promise<
 	UploadResult<{
 		videoId: string;
@@ -457,7 +459,7 @@ export async function createInfraVideo({
 	};
 	const videoId = idempotencyKey
 		? developerVideoIdForIdempotencyKey(appId, idempotencyKey)
-		: nanoId();
+		: (reservedVideoId ?? nanoId());
 
 	if (idempotencyKey) {
 		const replayed = await replayKeyedVideo(appId, videoId, request);
