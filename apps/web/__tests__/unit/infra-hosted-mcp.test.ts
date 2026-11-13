@@ -406,6 +406,7 @@ describe("hosted Cap Infra MCP tools", () => {
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"account_transactions",
 			"account_usage",
+			"docs_read",
 			"transcripts_create",
 			"transcripts_delete",
 			"transcripts_get",
@@ -796,6 +797,84 @@ describe("hosted Cap Infra MCP tools", () => {
 			videoId: "video-1",
 			uploadId: "upload-1",
 		});
+	});
+});
+
+describe("hosted Cap Infra MCP docs_read", () => {
+	const mainHeadings = (markdown: string) => {
+		const headings: string[] = [];
+		let fenced = false;
+		for (const line of markdown.split("\n")) {
+			if (/^\s*(`{3,}|~{3,})/.test(line)) fenced = !fenced;
+			else if (!fenced && line.startsWith("## ")) headings.push(line.slice(3));
+		}
+		return headings;
+	};
+
+	it("reads the docs in process, as the .md route serves them, with no REST or HTTP call", async () => {
+		const { infraDocsSource } = await import("@/lib/infra-mcp-server");
+		const { GET } = await import("@/app/docs-markdown/[...slug]/route");
+		const key = newKey();
+		const network = vi.spyOn(globalThis, "fetch");
+		for (const page of ["get-started", "rest-api", "webhooks", "billing"]) {
+			const served = await (
+				await GET(new Request(`${ORIGIN}/docs/api/${page}.md`), {
+					params: Promise.resolve({ slug: ["api", page] }),
+				})
+			).text();
+			expect(
+				await infraDocsSource(page as "billing", new AbortController().signal),
+			).toBe(served);
+			const outline = await callTool(key, "docs_read", { page });
+			expect(outline.isError).toBe(false);
+			expect(outline.body.pageUrl).toBe(`${ORIGIN}/docs/api/${page}`);
+			for (const heading of mainHeadings(served)) {
+				const section = await callTool(key, "docs_read", {
+					page,
+					section: heading,
+				});
+				expect(section.body.section, heading).toBe(heading);
+			}
+		}
+		expect(network).not.toHaveBeenCalled();
+		network.mockRestore();
+		expect(state.rest).toHaveLength(0);
+	});
+
+	it("returns the embed options and the webhook signature check", async () => {
+		const key = newKey();
+		const embed = await callTool(key, "docs_read", {
+			page: "rest-api",
+			section: "Embed Options",
+		});
+		expect(embed.body.url).toBe(`${ORIGIN}/docs/api/rest-api#embed-options`);
+		expect(embed.body.markdown).toMatch(/^### Embed Options/);
+		const signature = await callTool(key, "docs_read", {
+			page: "webhooks",
+			query: "verify the signature",
+		});
+		expect(signature.body.section).toBe("Verify the signature");
+		expect(signature.body.url).toBe(
+			`${ORIGIN}/docs/api/webhooks#verify-the-signature`,
+		);
+	});
+
+	it("refuses unknown keys and needs a valid secret key", async () => {
+		const refused = await callTool(newKey(), "docs_read", {
+			page: "billing",
+			sectionName: "Credits",
+		});
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.body)).toContain(
+			'Unrecognized key: \\"sectionName\\"',
+		);
+		const anonymous = await mcp(null, {
+			jsonrpc: "2.0",
+			id: 1,
+			method: "tools/call",
+			params: { name: "docs_read", arguments: { page: "billing" } },
+		});
+		expect(anonymous.status).toBe(401);
 	});
 });
 

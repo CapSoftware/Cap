@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { creditLinkFor } from "./credit-link";
+import { createDocsTool, fetchDocs } from "./docs";
 import {
 	ApiError,
 	isCreditCode,
@@ -962,6 +963,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
 	// The npm package lists its tools in a README that changes only with a
