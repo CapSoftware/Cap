@@ -18,8 +18,8 @@ import {
 	CREDIT_US_EIN_INVALID,
 	CREDIT_US_EIN_MAX_LENGTH,
 	parseCreditUsEin,
-	saveCreditUsEin,
 } from "@/lib/infra-credit-us-ein";
+import { saveCreditUsEin } from "@/lib/infra-credit-us-ein-save";
 import { infraAppPath } from "@/lib/infra-routes";
 import { TOP_UP_MAX_CENTS, TOP_UP_MIN_CENTS } from "@/lib/infra-top-up";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
