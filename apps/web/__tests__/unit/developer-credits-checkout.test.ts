@@ -152,6 +152,43 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(400);
 	});
 
+	it("refuses a purchase over $10,000", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1_000_001 }),
+		);
+		expect(res.status).toBe(400);
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("opens a $10,000 purchase", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_acct" },
+			]);
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1_000_000 }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				line_items: [
+					expect.objectContaining({
+						price_data: expect.objectContaining({ unit_amount: 1_000_000 }),
+					}),
+				],
+				metadata: expect.objectContaining({ amountCents: "1000000" }),
+			}),
+		);
+	});
+
 	it("returns 400 when amountCents is not an integer", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		const res = await POST(
