@@ -2231,6 +2231,33 @@ export const developerWebhookEndpoints = mysqlTable(
 	],
 );
 
+export const developerVideoImports = mysqlTable(
+	"developer_video_imports",
+	{
+		videoId: nanoId("videoId").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		keyId: nanoId("keyId").notNull(),
+		sourceUrl: varchar("sourceUrl", { length: 2048 }).notNull(),
+		state: varchar("state", {
+			length: 16,
+			enum: ["downloading", "complete", "failed"],
+		})
+			.notNull()
+			.default("downloading"),
+		bytes: bigint("bytes", { mode: "number", unsigned: true }),
+		errorCode: varchar("errorCode", { length: 32 }),
+		startedAt: timestamp("startedAt").notNull().defaultNow(),
+		finishedAt: timestamp("finishedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		index("dev_imports_app_state_idx").on(table.appId, table.state),
+		index("dev_imports_key_created_idx").on(table.keyId, table.createdAt),
+	],
+);
+
 export const developerAppsRelations = relations(
 	developerApps,
 	({ one, many }) => ({
