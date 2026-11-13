@@ -12,6 +12,7 @@ import { billableVideo } from "@/lib/developer-pricing";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
+import { VIDEO_TOO_LONG_MESSAGE } from "@/lib/infra-upload";
 import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
@@ -349,9 +350,7 @@ export async function chargeForProbedDuration(
 ): Promise<void> {
 	if (probedDuration === null) return;
 	if (probedDuration > DEVELOPER_VIDEO_MAX_DURATION_SECONDS) {
-		throw new DeveloperVideoChargeRefused(
-			"Video is longer than the 4 hour limit",
-		);
+		throw new DeveloperVideoChargeRefused(VIDEO_TOO_LONG_MESSAGE);
 	}
 	const billed = video.duration ?? 0;
 	const size = probedSize ?? {
