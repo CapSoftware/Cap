@@ -64,6 +64,13 @@ vi.mock("@/lib/infra-auto-top-up", () => ({
 		mockSettleAutoTopUp(...args),
 }));
 
+const mockReverseRefund = vi.fn();
+const mockReverseDispute = vi.fn();
+vi.mock("@/lib/infra-credit-reversal", () => ({
+	reverseRefundedCharge: (...args: unknown[]) => mockReverseRefund(...args),
+	reverseDisputedPayment: (...args: unknown[]) => mockReverseDispute(...args),
+}));
+
 vi.mock("@cap/web-domain", () => ({
 	Organisation: { OrganisationId: { make: (v: string) => v } },
 	User: { UserId: { make: (v: string) => v } },
@@ -489,6 +496,69 @@ describe("Stripe webhook — developer credits", () => {
 			"succeeded",
 		);
 		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it("takes credit back when a charge is refunded", async () => {
+		const charge = { id: "ch_1", payment_intent: "pi_test_abc", amount: 2500 };
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "charge.refunded",
+			data: { object: charge },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockReverseRefund).toHaveBeenCalledTimes(1);
+		expect(mockReverseRefund).toHaveBeenCalledWith(charge);
+		expect(mockReverseDispute).not.toHaveBeenCalled();
+		expect(mockAddCredits).not.toHaveBeenCalled();
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("takes credit back when a payment is disputed", async () => {
+		const dispute = { id: "dp_1", payment_intent: "pi_test_abc", amount: 2500 };
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "charge.dispute.created",
+			data: { object: dispute },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockReverseDispute).toHaveBeenCalledTimes(1);
+		expect(mockReverseDispute).toHaveBeenCalledWith(dispute);
+		expect(mockReverseRefund).not.toHaveBeenCalled();
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["charge.refunded", mockReverseRefund],
+		["charge.dispute.created", mockReverseDispute],
+	])(
+		"asks Stripe to retry %s when the ledger write fails",
+		async (type, reverse) => {
+			reverse.mockRejectedValueOnce(new Error("database unavailable"));
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type,
+				data: { object: { id: "obj_1", payment_intent: "pi_test_abc" } },
+			});
+
+			const res = await POST(makeWebhookRequest());
+
+			expect(res.status).toBe(400);
+		},
+	);
+
+	it("leaves other dispute and refund events to no handler", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "charge.dispute.closed",
+			data: { object: { id: "dp_1" } },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(400);
+		expect(mockReverseDispute).not.toHaveBeenCalled();
 	});
 
 	it("settles an auto top-up payment that failed", async () => {
