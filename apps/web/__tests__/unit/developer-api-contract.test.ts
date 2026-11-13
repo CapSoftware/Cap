@@ -119,7 +119,6 @@ import { getAppStorage } from "@/lib/infra-storage";
 
 const KEY_LIMIT = DEVELOPER_KEY_REQUESTS_PER_MINUTE;
 const OWNER_LIMIT = DEVELOPER_OWNER_REQUESTS_PER_MINUTE;
-// What X-RateLimit-Remaining reads after this many requests on one key.
 const keyLeft = (sent: number) => String(KEY_LIMIT - sent);
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
