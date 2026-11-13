@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import {
 	copyDeveloperObject,
 	deleteDeveloperObjects,
@@ -104,9 +104,7 @@ export function developerVideoUploadKey(appId: string, videoId: string) {
 	return `${DEVELOPER_UPLOAD_PREFIX}${appId}/v-${videoId}`;
 }
 
-export function developerVideoIdForIdempotencyKey(appId: string, key: string) {
-	return developerIdFromKey("developer-video", appId, key);
-}
+export { developerVideoIdForIdempotencyKey };
 
 export function developerVideoRecordedSeconds(input: {
 	measuredSeconds: number | null;
