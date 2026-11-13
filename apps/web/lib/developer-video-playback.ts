@@ -461,10 +461,11 @@ async function subtitleTracks(video: PlayableVideo): Promise<SubtitleTrack[]> {
 // without its Content-Encoding header. The platform compresses text/plain
 // itself and not the HLS type, so a rendition playlist, which signs a URL per
 // segment and runs to tens of KB, is sent as text/plain. Players read it by
-// its .m3u8 path, which the HLS spec allows in place of the HLS type, and
-// shared caches keep one copy per encoding. The master and subtitle
-// playlists are a few hundred bytes and keep the HLS type, which a player
-// may check before it treats a URL as HLS.
+// its .m3u8 path, which the HLS spec allows in place of the HLS type. No Vary
+// is set: the platform keeps one cached copy and encodes it per request,
+// while a Vary from here split its cache by every distinct Accept-Encoding
+// value. The master and subtitle playlists are a few hundred bytes and keep
+// the HLS type, which a player may check before it treats a URL as HLS.
 const MEDIA_PLAYLIST_CONTENT_TYPE = "text/plain; charset=utf-8";
 
 function playlistResponse(playlist: string): Response {
@@ -483,7 +484,6 @@ function mediaPlaylistResponse(playlist: string): Response {
 			...PLAYBACK_CORS_HEADERS,
 			...CACHEABLE,
 			"Content-Type": MEDIA_PLAYLIST_CONTENT_TYPE,
-			Vary: "Accept-Encoding",
 		},
 	});
 }

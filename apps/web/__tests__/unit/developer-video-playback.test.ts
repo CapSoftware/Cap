@@ -357,7 +357,7 @@ describe("developer video playback route", () => {
 			expect(response.headers.get("content-type")).toBe(
 				"text/plain; charset=utf-8",
 			);
-			expect(response.headers.get("vary")).toBe("Accept-Encoding");
+			expect(response.headers.get("vary")).toBeNull();
 			expect(response.headers.get("cache-control")).toBe(
 				"public, max-age=60, s-maxage=60",
 			);
