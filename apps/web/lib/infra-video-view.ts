@@ -154,6 +154,7 @@ type ListRow = StateInput & {
 	name: string;
 	externalUserId: string | null;
 	createdAt: Date;
+	reportedDuration?: number | null;
 };
 
 export function toInfraVideoListItem(row: ListRow): InfraVideoListItem {
@@ -161,7 +162,8 @@ export function toInfraVideoListItem(row: ListRow): InfraVideoListItem {
 		id: row.id,
 		name: row.name,
 		externalUserId: row.externalUserId,
-		duration: row.duration,
+		duration:
+			row.reportedDuration === undefined ? row.duration : row.reportedDuration,
 		createdAt: row.createdAt,
 		state: infraVideoState(row),
 	};

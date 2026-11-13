@@ -1,10 +1,10 @@
 ---
 title: "Billing"
-summary: "What the Cap Developer API charges for, how credits work and what happens when they run out"
+summary: "What the Cap Infra API charges for, how credits work and what happens when they run out"
 tags: "API, Billing, Pricing"
 ---
 
-The Cap Developer API is prepaid. Each app has its own credit balance, you add credit to it, and usage is drawn from it. Nothing is charged to a card unless you buy credit or switch on auto top-up.
+The Cap Infra API is prepaid. Each app has its own credit balance, you add credit to it, and usage is drawn from it. Nothing is charged to a card unless you buy credit or switch on auto top-up.
 
 This page covers what is charged, when, and how to check it. The endpoints are in the [REST API](/docs/api/rest-api) reference.
 
@@ -159,6 +159,8 @@ Auto top-up adds credit from a saved card when an app's balance runs low. It is 
 Once the available balance covers the charge that fell short, one day of storage or the video's first month, the app returns to `active` at once, whether credit was added or a transcript's hold was released. From the next storage charge that shortfall stays settled even if the balance drops again, and only a new charge falling short starts a new grace period. What it could not pay is not charged afterwards.
 
 An app that stores nothing owes nothing, so it stays `active` with a zero balance. It cannot upload or start a transcript until it has credit.
+
+The app's owner is emailed once when a storage charge first falls short, with the day playback will pause, and again whenever an auto top-up is declined.
 
 ## Checking what you were charged
 

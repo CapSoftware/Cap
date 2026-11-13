@@ -515,7 +515,7 @@ describe("CSV export", () => {
 			"2026-11-12T14:20:00Z",
 			"Transcription",
 			"",
-			"developer_transcript",
+			"Transcript",
 			"8kq2m4x7n1p3v5w",
 			"-0.00033",
 			"-33",
@@ -588,6 +588,34 @@ describe("CSV export", () => {
 			expect(records[0]?.cell("reference_id")).toBe(`'${value}`);
 		},
 	);
+
+	it("labels references the way the console does", () => {
+		const adjustment = row({
+			type: "adjustment",
+			referenceType: "manual",
+			referenceId: "test-grant-1",
+		});
+		const { records } = csvTable(ledgerCsv([adjustment]));
+		const { note, reference } = describeLedgerRow(adjustment);
+
+		expect(records[0]?.cell("note")).toBe(note);
+		expect(records[0]?.cell("reference_type")).toBe("Note");
+		expect(records[0]?.cell("reference_id")).toBe("test-grant-1");
+		expect(reference).toEqual({ kind: "Note", value: "test-grant-1" });
+	});
+
+	it("shows a declined day the way the console does", () => {
+		const declined = row({
+			type: "topup_failed",
+			amountMicroCredits: 0,
+			referenceType: "auto_top_up_failed",
+			referenceId: "declined-2026-11-12",
+		});
+		const { records } = csvTable(ledgerCsv([declined]));
+
+		expect(records[0]?.cell("reference_type")).toBe("Day");
+		expect(records[0]?.cell("reference_id")).toBe("2026-11-12");
+	});
 
 	it("leaves negative amounts as numbers", () => {
 		const { records } = csvTable(ledgerCsv([row()]));

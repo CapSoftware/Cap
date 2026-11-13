@@ -12,7 +12,7 @@ import { CapPlayer } from "@/components/cap-player/CapPlayer";
 import { DEVELOPER_VIDEO_REPORT_EMAIL } from "@/lib/developer-video-takedown";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
-import { formatBytes, formatDuration } from "@/lib/infra-usage";
+import { formatBytes, formatDurationOrDash } from "@/lib/infra-usage";
 import {
 	type InfraVideoDetail,
 	infraVideoDisplayState,
@@ -188,7 +188,7 @@ export function VideoClient({
 		</Button>
 	);
 	const playable = video.hlsUrl !== null || video.mp4Url !== null;
-	const duration = formatDuration(video.duration);
+	const duration = formatDurationOrDash(video.duration);
 	const size = formatBytes(video.storedBytes);
 	const links = [
 		{ label: "HLS", value: video.hlsUrl },
@@ -341,11 +341,11 @@ export function VideoClient({
 				</div>
 
 				<dl className={clsx("m-0 border-t", RULE)}>
-					{duration && <Fact label="Duration">{duration}</Fact>}
+					<Fact label="Duration">{duration}</Fact>
 					{size && (
 						<Fact
 							label="Stored size"
-							note="The original file plus every encoded size. Storage is billed by the minute, not by size."
+							note="Includes the original and every rendition. Storage is billed by minutes, not bytes."
 						>
 							{size}
 						</Fact>

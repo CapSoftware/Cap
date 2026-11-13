@@ -150,6 +150,8 @@ createServer((request, response) => {
 
 The browser sends the file in parts with the upload token: initiate, get signed URLs for the parts, `PUT` each part's bytes to its URL, then complete. [Multipart Upload](/docs/api/rest-api#multipart-upload) is the reference for the calls.
 
+Cap Infra accepts MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.
+
 Save this as `index.html` beside `server.mjs`. It uses no library.
 
 ```html

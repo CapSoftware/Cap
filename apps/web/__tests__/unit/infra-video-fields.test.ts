@@ -65,6 +65,7 @@ import {
 	getInfraApps,
 	requireInfraApp,
 } from "@/app/(infra)/dashboard/infra/infra-data";
+import { developerVideoReportedDuration } from "@/lib/developer-video-api";
 
 const dialect = new MySqlDialect();
 const query = (condition: unknown) => dialect.sqlToQuery(condition as SQL);
@@ -88,7 +89,7 @@ beforeEach(() => {
 });
 
 describe("console video list", () => {
-	it("reads named columns and never the stored key or processing state", async () => {
+	it("reads named columns and never the stored key", async () => {
 		await getDeveloperAppVideos("app-1");
 
 		const [selection] = mocks.selections;
@@ -99,6 +100,7 @@ describe("console video list", () => {
 			"id",
 			"legacy",
 			"name",
+			"processing",
 			"status",
 			"takenDown",
 			"width",
@@ -160,6 +162,56 @@ describe("console video list", () => {
 			/CAST\(.*`externalUserId` AS BINARY\) = CAST\(\? AS BINARY\)/,
 		);
 		expect(params).toEqual(["app-1", "user_123", "user_123"]);
+	});
+});
+
+describe("console video duration", () => {
+	const declaredOnly = () =>
+		developerVideo({
+			status: "errored",
+			duration: 120,
+			processing: processingState({
+				probe: null,
+				hls: { state: "failed", reason: "unreadable" },
+				mp4: { state: "failed", reason: "unreadable" },
+			}),
+		});
+
+	it("leaves out a declared length the API also leaves out, in the list", async () => {
+		const measured = developerVideo({
+			id: "video-2",
+			status: "errored",
+			duration: 60,
+			processing: processingState({
+				hls: { state: "failed", reason: "unreadable" },
+				mp4: { state: "failed", reason: "unreadable" },
+			}),
+		});
+		mocks.rows = [
+			[
+				{ ...declaredOnly(), legacy: 0 },
+				{ ...measured, legacy: 0 },
+			],
+		];
+
+		const [failed, probed] = await getDeveloperAppVideos("app-1");
+
+		expect(failed?.state).toBe("failed");
+		expect(failed?.duration).toBeNull();
+		expect(probed?.duration).toBe(60);
+	});
+
+	it("leaves it out on the video page too", async () => {
+		mocks.rows = [[declaredOnly()]];
+
+		const video = await getDeveloperAppVideo("app-1", "video-1");
+
+		expect(video?.state).toBe("failed");
+		expect(video?.duration).toBeNull();
+	});
+
+	it("matches what the API returns for the same video", () => {
+		expect(developerVideoReportedDuration(declaredOnly())).toBeNull();
 	});
 });
 

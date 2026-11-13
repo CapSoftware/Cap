@@ -32,6 +32,7 @@ import { exactUserIdMatch } from "@/lib/developer-user-scope";
 import {
 	developerVideoPageUrls,
 	developerVideoPlaybackUrls,
+	developerVideoReportedDuration,
 } from "@/lib/developer-video-api";
 import { developerVideoCaptionTracks } from "@/lib/developer-video-captions";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
@@ -150,6 +151,7 @@ export async function getDeveloperAppVideos(
 			width: developerVideos.width,
 			createdAt: developerVideos.createdAt,
 			status: developerVideos.status,
+			processing: developerVideos.processing,
 			legacy: sql<
 				number | string
 			>`(${developerVideos.playbackId} IS NULL AND ${developerVideos.processing} IS NULL)`,
@@ -164,6 +166,7 @@ export async function getDeveloperAppVideos(
 	return rows.map((row) =>
 		toInfraVideoListItem({
 			...row,
+			reportedDuration: developerVideoReportedDuration(row),
 			legacy: Number(row.legacy) === 1,
 		}),
 	);
@@ -216,6 +219,7 @@ export const getDeveloperAppVideo = cache(
 		const detail = toInfraVideoDetail(
 			{
 				...row,
+				reportedDuration: developerVideoReportedDuration(row),
 				legacy: row.playbackId === null && row.processing === null,
 				takenDown: developerVideoIsTakenDown(row),
 			},

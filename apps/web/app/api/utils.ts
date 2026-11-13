@@ -330,7 +330,7 @@ const unknownSecretKey = () =>
 	apiErrorBody(
 		"invalid_secret_key",
 		"Invalid or revoked secret key",
-		"Copy the current secret key for your app from https://cap.so/dashboard/infra. Regenerating keys revokes the previous pair.",
+		"Copy the current secret key for your app from https://cap.so/dashboard/infra. Generating a new key replaces the previous one.",
 	);
 
 type DeveloperSecretVariables = {

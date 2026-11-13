@@ -535,7 +535,7 @@ const developerVideoSchema = {
 export const developerOpenApiSpec = (baseUrl: string) => ({
 	openapi: "3.1.0",
 	info: {
-		title: "Cap Developer API",
+		title: "Cap Infra API",
 		version: "1.0.0",
 		summary: "Host video in your product and turn audio or video into text.",
 		description: [
@@ -1895,7 +1895,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"video/webm",
 							"video/quicktime",
 							"video/x-matroska",
-							"video/avi",
 							"application/octet-stream",
 						],
 						default: "video/mp4",

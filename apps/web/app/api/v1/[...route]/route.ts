@@ -4568,6 +4568,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										db
 											.select({
 												id: Db.developerCreditAccounts.id,
+												appName: Db.developerApps.name,
 											})
 											.from(Db.developerApps)
 											.innerJoin(
@@ -4604,6 +4605,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												...creditCheckoutSessionParams({
 													customerId,
 													accountId: account.id,
+													appName: account.appName,
 													amountCents: payload.amountCents,
 													receiptEmail: principal.email,
 												}),

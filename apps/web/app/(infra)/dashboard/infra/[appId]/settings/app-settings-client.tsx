@@ -138,7 +138,7 @@ export function AppSettingsClient({
 						) : (
 							"This app has no credit left to lose."
 						)}{" "}
-						This cannot be undone here.
+						This cannot be undone.
 					</>
 				}
 				confirmLabel="Delete app"

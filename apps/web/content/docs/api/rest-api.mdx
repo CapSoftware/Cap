@@ -4,7 +4,7 @@ summary: "Programmatic access to Cap via the REST API"
 tags: "API, Integration"
 ---
 
-The Cap Developer API does two things for your product. It hosts video: you upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player. It turns speech into text: you send an audio or video file to [Transcripts](/docs/api/rest-api#transcripts) and get the text back, with timings.
+The Cap Infra API does two things for your product. It hosts video: you upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player. It turns speech into text: you send an audio or video file to [Transcripts](/docs/api/rest-api#transcripts) and get the text back, with timings.
 
 New to the API? [Get Started](/docs/api/get-started) goes from a new app to a video playing on your page, with examples for the browser, Node and Python. This page is the reference.
 
@@ -33,7 +33,7 @@ API keys are managed in Cap Infra, not the general Settings page.
 3. Two keys are generated for each app:
    - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API, including to create uploads.
    - **Public key** (`cpk_...`) -- Cannot create or upload videos. Browsers upload with an upload token instead.
-4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair and the upload tokens the previous secret key created.
+4. Store both keys securely. Generating new keys on the API keys page replaces the previous keys and revokes the upload tokens the previous secret key created.
 
 ### Using Your Keys
 
@@ -188,6 +188,8 @@ POST /api/developer/v1/uploads
 | `maxBytes` | integer | No | Largest file the token may upload, in bytes, from `1` to `36000000000`. Leave it out for no cap beyond the 36 GB limit |
 
 The body is optional. A request with no body creates an upload with the defaults.
+
+**Supported formats.** Cap Infra accepts MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video. A video in another format may fail to process, and its `errorReason` then says why.
 
 Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
@@ -1157,7 +1159,7 @@ POST /api/developer/sdk/v1/upload/multipart/initiate
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `videoId` | string | No | The token's video ID |
-| `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska`, `video/avi` or `application/octet-stream`. Any other value is stored as `video/mp4` |
+| `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska` or `application/octet-stream`. `video/avi` and `video/x-msvideo` are refused with `400` and the code `unsupported_content_type`, before anything is uploaded. Any other value is stored as `video/mp4` |
 | `contentLength` | integer | No | Size of the whole file in bytes. A file over the token's `maxBytes` or over 36 GB is refused here with `400` and the code `file_too_large`, before anything is uploaded |
 
 **Example request:**

@@ -271,14 +271,14 @@ const csvText = (value: string | null) => {
 };
 
 export function ledgerCsvLine(row: LedgerRow) {
-	const { label, note } = describeLedgerRow(row);
+	const { label, note, reference } = describeLedgerRow(row);
 	return `${[
 		csvText(row.id),
 		new Date(row.createdAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
 		csvText(label),
 		csvText(note),
-		csvText(row.referenceType),
-		csvText(row.referenceId),
+		csvText(reference?.kind ?? null),
+		csvText(reference?.value ?? null),
 		signedCreditDollars(row.amountMicroCredits),
 		String(row.amountMicroCredits),
 		creditDollars(row.balanceAfterMicroCredits),

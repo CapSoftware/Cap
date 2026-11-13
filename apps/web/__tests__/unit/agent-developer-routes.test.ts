@@ -14,7 +14,7 @@ vi.mock("@/lib/rate-limit", () => ({
 
 const state = vi.hoisted(() => ({
 	scopes: [] as string[],
-	apps: [] as { id: string }[],
+	apps: [] as { id: string; appName?: string }[],
 	videos: [] as Record<string, unknown>[],
 	transactions: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
@@ -368,7 +368,7 @@ describe("developer routes of the agent API", () => {
 	});
 
 	it("opens a credit checkout with the console's receipt, tax and payment tag", async () => {
-		state.apps = [{ id: "account-1" }];
+		state.apps = [{ id: "account-1", appName: "Course site" }];
 		state.users = [{ stripeCustomerId: "cus_agent" }];
 		state.createCheckoutSession.mockResolvedValue({
 			url: "https://checkout.stripe.com/agent",
@@ -390,6 +390,7 @@ describe("developer routes of the agent API", () => {
 			...creditCheckoutSessionParams({
 				customerId: "cus_agent",
 				accountId: "account-1",
+				appName: "Course site",
 				amountCents: 2500,
 				receiptEmail: "owner@example.com",
 			}),
@@ -407,9 +408,11 @@ describe("developer routes of the agent API", () => {
 			mode: "payment",
 			invoice_creation: {
 				enabled: true,
-				invoice_data: { description: "Cap Infra credits" },
+				invoice_data: { description: "Cap Infra credits for Course site" },
 			},
+			payment_method_types: ["card", "link"],
 			payment_intent_data: {
+				description: "Cap Infra credits for Course site",
 				receipt_email: "owner@example.com",
 				metadata: { type: "developer_credits", accountId: "account-1" },
 			},

@@ -1,3 +1,9 @@
+import { STORAGE_BILLING_DAYS_PER_MONTH } from "@/lib/developer-pricing";
+import {
+	INFRA_SPEECH_DOLLARS_PER_HOUR,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
+
 export const TOP_UP_MIN_CENTS = 500;
 export const TOP_UP_MAX_CENTS = 1_000_000;
 export const TOP_UP_PRESETS_CENTS = [1_000, 2_500, 5_000, 10_000] as const;
@@ -49,4 +55,28 @@ export function topUpButtonLabel(amount: TopUpAmount) {
 	return amount.amountCents === null
 		? "Add credits"
 		: `Add ${dollarsLabel(amount.amountCents)}`;
+}
+
+export const TOP_UP_COVERS_TIER = "1080p" as const;
+
+const roundedDown = (value: number, step: number) =>
+	Math.floor(value / step) * step;
+
+export function topUpCovers(dollars: number) {
+	return {
+		storedMinutes: roundedDown(
+			(dollars /
+				INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[TOP_UP_COVERS_TIER]) *
+				1000,
+			100,
+		),
+		transcribedHours: roundedDown(dollars / INFRA_SPEECH_DOLLARS_PER_HOUR, 1),
+	};
+}
+
+export function topUpCoversText() {
+	const small = topUpCovers(TOP_UP_MIN_CENTS / 100);
+	const preset = topUpCovers(TOP_UP_DEFAULT_CENTS / 100);
+	const count = (value: number) => value.toLocaleString("en-US");
+	return `At ${TOP_UP_COVERS_TIER}, ${dollarsLabel(TOP_UP_MIN_CENTS)} stores ${count(small.storedMinutes)} minutes for ${STORAGE_BILLING_DAYS_PER_MONTH} days or transcribes ${count(small.transcribedHours)} hours. ${dollarsLabel(TOP_UP_DEFAULT_CENTS)} stores ${count(preset.storedMinutes)} minutes or transcribes ${count(preset.transcribedHours)} hours.`;
 }

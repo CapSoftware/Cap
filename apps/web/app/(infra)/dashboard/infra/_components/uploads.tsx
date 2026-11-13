@@ -27,6 +27,7 @@ import {
 	startsLikeAnImageOrDocument,
 	VIDEO_TOO_LONG_MESSAGE,
 } from "@/lib/infra-upload";
+import { INFRA_SUPPORTED_VIDEO_FORMATS } from "@/lib/infra-video-formats";
 import type { InfraLocalUpload } from "@/lib/infra-video-view";
 
 const PART_ATTEMPTS = 3;
@@ -47,7 +48,7 @@ class UploadError extends Error {
 }
 
 const CANCELLED = "Upload cancelled";
-const NOT_A_VIDEO = "That is not a video. MP4, MOV and WebM work best.";
+const NOT_A_VIDEO = `That is not a video. Upload ${INFRA_SUPPORTED_VIDEO_FORMATS}.`;
 
 export type ActiveUpload = {
 	name: string;
@@ -249,7 +250,7 @@ function readVideo(file: File) {
 							new UploadError(
 								notVideo
 									? NOT_A_VIDEO
-									: "This browser cannot open that file. MP4, MOV and WebM work best, or upload it through the API.",
+									: `This browser cannot open that file. Cap Infra accepts ${INFRA_SUPPORTED_VIDEO_FORMATS}. If it is one of those, upload it through the API.`,
 							),
 						),
 					);
