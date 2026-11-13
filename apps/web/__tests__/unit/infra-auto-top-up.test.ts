@@ -192,12 +192,14 @@ describe("auto top-up settings", () => {
 		).toBe(null);
 	});
 
-	it("keys each charge by account and attempt, whatever the settings", () => {
-		expect(autoTopUpIdempotencyKey("account-1", 3)).toBe(
-			"infra-auto-top-up:account-1:3",
-		);
-		expect(autoTopUpIdempotencyKey("account-1", 4)).not.toBe(
-			autoTopUpIdempotencyKey("account-1", 3),
+	it("keys each charge by the account's recorded top-ups and declines, whatever the settings", () => {
+		expect(
+			autoTopUpIdempotencyKey("account-1", { topUps: 3, declines: 1 }),
+		).toBe("infra-auto-top-up:account-1:3:1");
+		expect(
+			autoTopUpIdempotencyKey("account-1", { topUps: 3, declines: 2 }),
+		).not.toBe(
+			autoTopUpIdempotencyKey("account-1", { topUps: 3, declines: 1 }),
 		);
 	});
 
@@ -295,11 +297,14 @@ describe("auto top-up charge", () => {
 			metadata: {
 				type: "developer_auto_top_up",
 				accountId: "account-1",
-				sequence: "0",
+				attempt: "0:0",
 			},
 		});
 		expect(options).toEqual({
-			idempotencyKey: autoTopUpIdempotencyKey("account-1", 0),
+			idempotencyKey: autoTopUpIdempotencyKey("account-1", {
+				topUps: 0,
+				declines: 0,
+			}),
 			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
@@ -354,7 +359,7 @@ describe("auto top-up charge", () => {
 		});
 
 		const [first, second] = mocks.createPaymentIntent.mock.calls;
-		expect(second?.[0].metadata.sequence).toBe("1");
+		expect(second?.[0].metadata.attempt).toBe("1:0");
 		expect(second?.[1].idempotencyKey).not.toBe(first?.[1].idempotencyKey);
 		expect(topUps()).toHaveLength(2);
 		expect(now().toISOString().slice(0, 10)).toBe("2026-11-11");
@@ -549,6 +554,13 @@ describe("auto top-up charge", () => {
 			]);
 			expect(ledger.account.balanceMicroCredits).toBe(530_000);
 			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+
+			await settleAutoTopUpPaymentIntent(
+				intent("pi_1", "succeeded"),
+				"succeeded",
+			);
+			expect(topUps()).toHaveLength(1);
+			expect(ledger.account.balanceMicroCredits).toBe(530_000);
 
 			ledger.account.balanceMicroCredits = 10;
 			mocks.createPaymentIntent.mockResolvedValue(intent("pi_2", "succeeded"));
@@ -757,7 +769,10 @@ describe("auto top-up charge", () => {
 			paymentIntentId: "pi_2",
 		});
 		const [declined, next] = mocks.createPaymentIntent.mock.calls;
-		expect(next?.[1].idempotencyKey).not.toBe(declined?.[1].idempotencyKey);
+		expect(declined?.[1].idempotencyKey).toBe(
+			"infra-auto-top-up:account-1:0:0",
+		);
+		expect(next?.[1].idempotencyKey).toBe("infra-auto-top-up:account-1:0:1");
 	});
 
 	it("treats a charge that needs the customer as a failure", async () => {

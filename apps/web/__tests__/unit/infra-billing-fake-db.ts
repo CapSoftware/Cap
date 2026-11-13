@@ -198,13 +198,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				)
 				.map((row) => ({ settledId: row.referenceId }));
 		}
-		if (keys === "settledAttempts") {
-			const types = rendered.params.slice(1);
+		if (keys === "declines,topUps") {
+			const count = (type: string) =>
+				ledger.rows.filter((row) => row.referenceType === type).length;
 			return [
 				{
-					settledAttempts: ledger.rows.filter((row) =>
-						types.includes(row.referenceType),
-					).length,
+					topUps: count("auto_top_up"),
+					declines: count("auto_top_up_failed"),
 				},
 			];
 		}

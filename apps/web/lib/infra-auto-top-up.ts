@@ -96,8 +96,13 @@ export function autoTopUpSettingsError({
 	return null;
 }
 
-export function autoTopUpIdempotencyKey(accountId: string, sequence: number) {
-	return `infra-auto-top-up:${accountId}:${sequence}`;
+export type AutoTopUpAttempt = { topUps: number; declines: number };
+
+export function autoTopUpIdempotencyKey(
+	accountId: string,
+	{ topUps, declines }: AutoTopUpAttempt,
+) {
+	return `infra-auto-top-up:${accountId}:${topUps}:${declines}`;
 }
 
 export function autoTopUpFailureText(reason: string | null | undefined) {
@@ -211,7 +216,14 @@ async function attemptHistory(
 			),
 		);
 	const [settled] = await executor
-		.select({ settledAttempts: sql<number | string>`COUNT(*)` })
+		.select({
+			topUps: sql<
+				number | string | null
+			>`SUM(${developerCreditTransactions.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE})`,
+			declines: sql<
+				number | string | null
+			>`SUM(${developerCreditTransactions.referenceType} = ${AUTO_TOP_UP_FAILED_REFERENCE_TYPE})`,
+		})
 		.from(developerCreditTransactions)
 		.where(
 			and(
@@ -267,7 +279,10 @@ async function attemptHistory(
 		);
 	const lastDecline = latest("topup_failed");
 	return {
-		sequence: Number(settled?.settledAttempts ?? 0),
+		attempt: {
+			topUps: Number(settled?.topUps ?? 0),
+			declines: Number(settled?.declines ?? 0),
+		},
 		unresolved: pending.flatMap((row) =>
 			row.pendingId && !resolvedIds.has(row.pendingId)
 				? [
@@ -566,14 +581,14 @@ export async function runAutoTopUp(
 			accountId,
 			appId: account.appId,
 			amountCents: String(amountCents),
-			sequence: String(snapshot.sequence),
+			attempt: `${snapshot.attempt.topUps}:${snapshot.attempt.declines}`,
 			...(productId ? { productId } : {}),
 		},
 	} satisfies Stripe.PaymentIntentCreateParams;
 	let paymentIntent: Stripe.PaymentIntent;
 	try {
 		paymentIntent = await stripe().paymentIntents.create(request, {
-			idempotencyKey: autoTopUpIdempotencyKey(accountId, snapshot.sequence),
+			idempotencyKey: autoTopUpIdempotencyKey(accountId, snapshot.attempt),
 			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 	} catch (error) {
