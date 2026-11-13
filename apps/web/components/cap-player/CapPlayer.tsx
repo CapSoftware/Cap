@@ -137,6 +137,13 @@ const PlayIcon = () => (
 	</Icon>
 );
 
+const ReplayIcon = () => (
+	<Icon>
+		<path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.7" {...STROKE} strokeWidth={1.6} />
+		<path d="M4.4 1.6v2.8h2.8" {...STROKE} strokeWidth={1.6} />
+	</Icon>
+);
+
 const PauseIcon = () => (
 	<Icon>
 		<rect x="3.5" y="2.5" width="3.2" height="11" rx="0.8" />
@@ -340,6 +347,7 @@ export const CapPlayer = ({
 	const playRef = useRef<HTMLButtonElement>(null);
 	const coverRef = useRef<HTMLButtonElement>(null);
 	const startRef = useRef<HTMLButtonElement>(null);
+	const replayRef = useRef<HTMLButtonElement>(null);
 	const volumeRef = useRef<HTMLDivElement>(null);
 	const volumeFillRef = useRef<HTMLDivElement>(null);
 	const attachmentRef = useRef<Attachment | null>(null);
@@ -391,6 +399,7 @@ export const CapPlayer = ({
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
+	const [ended, setEnded] = useState(false);
 	const [sound, setSound] = useState<"muted" | "low" | "high">(
 		startMuted ? "muted" : "high",
 	);
@@ -717,6 +726,7 @@ export const CapPlayer = ({
 
 		const onPlay = () => {
 			setPlaying(true);
+			setEnded(false);
 			startLoop();
 			wake();
 			if (!hasStarted) {
@@ -732,6 +742,7 @@ export const CapPlayer = ({
 		};
 		const onEnded = () => {
 			root.dataset.idle = "false";
+			setEnded(true);
 			live.current.onEnded?.();
 		};
 		const onVolume = () => {
@@ -756,6 +767,7 @@ export const CapPlayer = ({
 				)?.label ?? resolutionLabel(video.videoWidth, video.videoHeight),
 			);
 		const onRate = () => setSpeed(video.playbackRate);
+		const onLeaveEnd = () => setEnded(false);
 		const onWaiting = () => setWaiting(true);
 		const onReady = () => setWaiting(false);
 		const onFullscreen = () =>
@@ -920,11 +932,16 @@ export const CapPlayer = ({
 		};
 
 		// The keys are heard on the root. A click on the picture or the big
-		// play button leaves focus on the page body in Chrome and WebKit (the
-		// big button unmounts once playing), so the root takes it instead.
+		// play or replay button leaves focus on the page body in Chrome and
+		// WebKit (both unmount once playing), so the root takes it instead.
 		const keepKeys = () => {
 			const active = document.activeElement;
-			if (active && root.contains(active) && active !== startRef.current) {
+			if (
+				active &&
+				root.contains(active) &&
+				active !== startRef.current &&
+				active !== replayRef.current
+			) {
 				return;
 			}
 			root.focus({ preventScroll: true });
@@ -954,6 +971,8 @@ export const CapPlayer = ({
 			["pause", onPause],
 			["emptied", onPause],
 			["ended", onEnded],
+			["seeking", onLeaveEnd],
+			["emptied", onLeaveEnd],
 			["volumechange", onVolume],
 			["ratechange", onRate],
 			["resize", onResize],
@@ -1241,6 +1260,17 @@ export const CapPlayer = ({
 					<PlayIcon />
 				</button>
 			)}
+			{controls && started && ended && !failed ? (
+				<button
+					ref={replayRef}
+					type="button"
+					className={`${styles.start} ${styles.replay}`}
+					data-action="toggle"
+					aria-label="Replay"
+				>
+					<ReplayIcon />
+				</button>
+			) : null}
 			<div className={styles.chrome}>
 				<div
 					ref={trackRef}
