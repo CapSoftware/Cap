@@ -22,7 +22,10 @@ const hlsMock = vi.hoisted(() => {
 		static ErrorTypes = { MEDIA_ERROR: "mediaError" };
 		static DefaultConfig = { maxMaxBufferLength: 600 };
 
-		config: { maxMaxBufferLength: number };
+		config: {
+			maxMaxBufferLength: number;
+			abrEwmaDefaultEstimate?: number;
+		};
 		startLevel = -1;
 		loadLevel = -1;
 		startLoads: number[] = [];
@@ -30,7 +33,10 @@ const hlsMock = vi.hoisted(() => {
 		destroyed = false;
 		private listeners = new Map<string, Listener[]>();
 
-		constructor(config: { maxMaxBufferLength: number }) {
+		constructor(config: {
+			maxMaxBufferLength: number;
+			abrEwmaDefaultEstimate?: number;
+		}) {
 			this.config = { ...config };
 			FakeHls.instances.push(this);
 		}
@@ -90,9 +96,20 @@ const video = (nativeHls: boolean) =>
 		canPlayType: () => (nativeHls ? "maybe" : ""),
 	}) as unknown as HTMLVideoElement;
 
-const browser = (options: { vendor: string; mediaSource: boolean }) => {
-	vi.stubGlobal("navigator", { vendor: options.vendor });
-	vi.stubGlobal("window", options.mediaSource ? { MediaSource: class {} } : {});
+const browser = (options: {
+	vendor: string;
+	mediaSource: boolean;
+	managedOnly?: boolean;
+	touchPoints?: number;
+}) => {
+	vi.stubGlobal("navigator", {
+		vendor: options.vendor,
+		maxTouchPoints: options.touchPoints ?? 0,
+	});
+	vi.stubGlobal("window", {
+		...(options.mediaSource ? { MediaSource: class {} } : {}),
+		...(options.managedOnly ? { ManagedMediaSource: class {} } : {}),
+	});
 };
 
 afterEach(() => {
@@ -124,8 +141,27 @@ describe("pickStartingLevel", () => {
 describe("pickPlaybackMode", () => {
 	const both = { hls: "/film/master.m3u8", mp4: "/film/video.mp4" };
 
-	it("plays HLS natively on Apple browsers", () => {
+	it("runs hls.js in Safari on a Mac", () => {
 		browser({ vendor: "Apple Computer, Inc.", mediaSource: true });
+		expect(pickPlaybackMode(video(true), both)).toBe("mse");
+	});
+
+	it("plays HLS natively on an iPhone, which has only a managed media source", () => {
+		browser({
+			vendor: "Apple Computer, Inc.",
+			mediaSource: false,
+			managedOnly: true,
+			touchPoints: 5,
+		});
+		expect(pickPlaybackMode(video(true), both)).toBe("native");
+	});
+
+	it("plays HLS natively on an iPad, which has a media source and touch", () => {
+		browser({
+			vendor: "Apple Computer, Inc.",
+			mediaSource: true,
+			touchPoints: 5,
+		});
 		expect(pickPlaybackMode(video(true), both)).toBe("native");
 	});
 
@@ -201,12 +237,18 @@ const page = (options: {
 	vendor: string;
 	mediaSource: boolean;
 	loaded: boolean;
+	touchPoints?: number;
+	megabits?: number;
 }) => {
 	const view = new EventTarget();
 	Object.assign(view, { devicePixelRatio: 1 });
 	if (options.mediaSource) Object.assign(view, { MediaSource: class {} });
 	vi.stubGlobal("window", view);
-	vi.stubGlobal("navigator", { vendor: options.vendor });
+	vi.stubGlobal("navigator", {
+		vendor: options.vendor,
+		maxTouchPoints: options.touchPoints ?? 0,
+		...(options.megabits ? { connection: { downlink: options.megabits } } : {}),
+	});
 	const doc = { readyState: options.loaded ? "complete" : "loading" };
 	vi.stubGlobal("document", doc);
 	return {
@@ -217,10 +259,17 @@ const page = (options: {
 	};
 };
 
-const safari = (loaded = false) =>
+const iphone = (loaded = false) =>
+	page({
+		vendor: "Apple Computer, Inc.",
+		mediaSource: false,
+		loaded,
+		touchPoints: 5,
+	});
+const macSafari = (loaded = false) =>
 	page({ vendor: "Apple Computer, Inc.", mediaSource: true, loaded });
 const chrome = (loaded = false) =>
-	page({ vendor: "Google Inc.", mediaSource: true, loaded });
+	page({ vendor: "Google Inc.", mediaSource: true, loaded, megabits: 10 });
 
 const attach = (
 	video: FakeVideo,
@@ -313,8 +362,8 @@ describe("playAllowingMuted", () => {
 });
 
 describe("attachSource before play", () => {
-	it("loads nothing in Safari until the document has loaded, then only metadata", () => {
-		const { finishLoading } = safari();
+	it("loads nothing on an iPhone until the document has loaded, then only metadata", () => {
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS, mp4: MP4 });
@@ -329,11 +378,21 @@ describe("attachSource before play", () => {
 	});
 
 	it("reads metadata at once when the document has already loaded", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS });
 
+		expect(video.preload).toBe("metadata");
+	});
+
+	it("uses the browser's own HLS where there is no media source at all", () => {
+		page({ vendor: "", mediaSource: false, loaded: true });
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS, mp4: MP4 });
+
+		expect(video.src).toBe(HLS);
 		expect(video.preload).toBe("metadata");
 	});
 
@@ -356,7 +415,7 @@ describe("attachSource before play", () => {
 	});
 
 	it("holds autoplay until the document has loaded", () => {
-		const { finishLoading } = safari();
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS }, { autoPlay: true });
@@ -369,7 +428,7 @@ describe("attachSource before play", () => {
 	});
 
 	it("leaves a video the viewer already started alone", () => {
-		const { finishLoading } = safari();
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS });
@@ -381,7 +440,7 @@ describe("attachSource before play", () => {
 	});
 
 	it("stops waiting for the document when it is detached", () => {
-		const { finishLoading } = safari();
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		const { stop } = attach(video, { hls: HLS }, { autoPlay: true });
@@ -394,7 +453,7 @@ describe("attachSource before play", () => {
 	});
 
 	it("falls back to the MP4, still without preloading, when native HLS fails", () => {
-		const { finishLoading } = safari();
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		const { onFatal } = attach(video, { hls: HLS, mp4: MP4 });
@@ -425,8 +484,8 @@ describe("attachSource before play", () => {
 });
 
 describe("attachSource warm-up on intent", () => {
-	it("lets Safari load ahead once the document has loaded", () => {
-		const { finishLoading } = safari();
+	it("lets an iPhone load ahead once the document has loaded", () => {
+		const { finishLoading } = iphone();
 		const video = new FakeVideo(true);
 
 		const { warm } = attach(video, { hls: HLS, mp4: MP4 });
@@ -441,7 +500,7 @@ describe("attachSource warm-up on intent", () => {
 	});
 
 	it("leaves a playing video alone", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		const { warm } = attach(video, { hls: HLS });
@@ -452,7 +511,7 @@ describe("attachSource warm-up on intent", () => {
 	});
 
 	it("never lifts the MP4 above metadata", () => {
-		safari(true);
+		iphone(true);
 		const fallback = new FakeVideo(true);
 		const file = new FakeVideo(false);
 		page({ vendor: "", mediaSource: false, loaded: true });
@@ -462,7 +521,7 @@ describe("attachSource warm-up on intent", () => {
 
 		expect(file.preload).toBe("metadata");
 
-		safari(true);
+		iphone(true);
 		const native = attach(fallback, { hls: HLS, mp4: MP4 });
 		fallback.dispatchEvent(new Event("error"));
 		native.warm();
@@ -485,7 +544,7 @@ describe("attachSource warm-up on intent", () => {
 	});
 
 	it("does nothing once detached", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		const { stop, warm } = attach(video, { hls: HLS });
@@ -499,7 +558,7 @@ describe("attachSource warm-up on intent", () => {
 
 describe("attachSource start time", () => {
 	it("seeks to the start time once the duration is known", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS }, { startAt: 30 });
@@ -509,7 +568,7 @@ describe("attachSource start time", () => {
 	});
 
 	it("ignores a start time past the end", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS }, { startAt: 300 });
@@ -519,7 +578,7 @@ describe("attachSource start time", () => {
 	});
 
 	it("seeks only once, so a later reload keeps the viewer's place", () => {
-		safari(true);
+		iphone(true);
 		const video = new FakeVideo(true);
 
 		attach(video, { hls: HLS }, { startAt: 30 });
@@ -705,6 +764,119 @@ describe("attachSource with hls.js", () => {
 		video.reach(120);
 
 		expect(video.currentTime).toBe(0);
+	});
+
+	it("holds Safari on a Mac to one segment like any other hls.js browser", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS, mp4: MP4 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+
+		expect(video.src).toBe("");
+		expect(hls.source).toBe(HLS);
+		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
+		expect(hls.loadLevel).toBe(hls.startLevel);
+		expect(hls.startLoads).toEqual([-1]);
+	});
+
+	it("starts on a low rendition when the browser gives no connection estimate", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+
+		expect(hls.startLevel).toBe(0);
+		expect(hls.config.abrEwmaDefaultEstimate).toBe(1_500_000);
+	});
+
+	it("hands a fatal hls.js error in Safari to its own HLS player, then to the MP4", async () => {
+		macSafari(true);
+		const video = new FakeVideo(true);
+
+		const { onFatal, warm } = attach(video, { hls: HLS, mp4: MP4 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.emit("error", { fatal: true, type: "networkError" });
+
+		expect(hls.destroyed).toBe(true);
+		expect(video.src).toBe(HLS);
+		expect(video.preload).toBe("metadata");
+		expect(video.plays).toBe(0);
+
+		warm();
+
+		expect(video.preload).toBe("auto");
+
+		video.dispatchEvent(new Event("error"));
+
+		expect(video.src).toBe(MP4);
+		expect(onFatal).not.toHaveBeenCalled();
+
+		video.dispatchEvent(new Event("error"));
+
+		expect(onFatal).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the viewer's place and keeps playing when Safari's own player takes over", async () => {
+		macSafari(true);
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS, mp4: MP4 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		void video.play();
+		video.currentTime = 30;
+		hls.emit("error", { fatal: true, type: "networkError" });
+
+		expect(video.src).toBe(HLS);
+		expect(video.currentTime).toBe(30);
+		expect(video.plays).toBe(2);
+	});
+
+	it("carries the start time into Safari's own player when hls.js fails before reaching it", async () => {
+		macSafari(true);
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS, mp4: MP4 }, { startAt: 45 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.emit("levelLoaded", { details: { totalduration: 120 } });
+		hls.emit("error", { fatal: true, type: "networkError" });
+		video.reach(120);
+
+		expect(video.src).toBe(HLS);
+		expect(video.currentTime).toBe(45);
+	});
+
+	it("starts Safari's own player when hls.js cannot run", async () => {
+		macSafari(true);
+		const video = new FakeVideo(true);
+		const supported = hlsMock.FakeHls.isSupported;
+		hlsMock.FakeHls.isSupported = () => false;
+		const before = hlsMock.FakeHls.instances.length;
+
+		attach(video, { hls: HLS, mp4: MP4 });
+		await vi.dynamicImportSettled();
+		hlsMock.FakeHls.isSupported = supported;
+
+		expect(hlsMock.FakeHls.instances).toHaveLength(before);
+		expect(video.src).toBe(HLS);
+		expect(video.preload).toBe("metadata");
+	});
+
+	it("sends a browser that only claims HLS straight to the MP4", async () => {
+		chrome(true);
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS, mp4: MP4 });
+		const hls = await hlsFor();
+		hls.emit("error", { fatal: true, type: "networkError" });
+
+		expect(video.src).toBe(MP4);
 	});
 
 	it("releases hls.js when it is detached", async () => {

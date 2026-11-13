@@ -17,7 +17,10 @@ export interface AttachOptions {
 }
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
-const DEFAULT_BITS_PER_SECOND = 5_000_000;
+// Safari and Firefox give no connection estimate. Assuming a slow line costs
+// a fast one its first segment at a lower rendition. Assuming a fast line
+// costs a slow one several seconds before the first frame.
+const DEFAULT_BITS_PER_SECOND = 1_500_000;
 
 // Seconds hls.js may buffer ahead of the playhead before anyone presses play.
 // Any value below one segment loads exactly the segment under the playhead.
@@ -25,15 +28,24 @@ export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 
 type ConnectionHint = { downlink?: number };
 
+const isApple = () => navigator.vendor.includes("Apple");
+
+const playsHlsItself = (video: HTMLVideoElement) =>
+	video.canPlayType(HLS_MIME) !== "";
+
 export const pickPlaybackMode = (
 	video: HTMLVideoElement,
 	source: CapPlayerSource,
 ): PlaybackMode => {
 	if (source.hls) {
-		const native = video.canPlayType(HLS_MIME) !== "";
-		const mse = "ManagedMediaSource" in window || "MediaSource" in window;
-		const apple = navigator.vendor.includes("Apple");
-		if (native && (apple || !mse)) return "native";
+		const native = playsHlsItself(video);
+		const classic = "MediaSource" in window;
+		const mse = classic || "ManagedMediaSource" in window;
+		// Safari on a Mac runs hls.js, which can hold one segment before play.
+		// iPhone and iPad keep their own HLS player.
+		const hlsJs = isApple() ? classic && !navigator.maxTouchPoints : mse;
+		if (hlsJs) return "mse";
+		if (native) return "native";
 		if (mse) return "mse";
 	}
 	return source.mp4 ? "file" : "none";
@@ -156,9 +168,32 @@ export const attachSource = (
 	};
 
 	let fileAttached = false;
+	let nativeAttached = false;
 
 	function onNativeError() {
 		playFile();
+	}
+
+	// When hls.js fails, the browser's own HLS is tried before the MP4. Only
+	// on Apple browsers: others that claim HLS go straight to the file.
+	function playNative({ resumeAt, wasPlaying } = position()) {
+		if (cancelled) return;
+		const able = playsHlsItself(video) && (mode === "native" || isApple());
+		if (!source.hls || nativeAttached || !able) {
+			playFile({ resumeAt, wasPlaying });
+			return;
+		}
+		nativeAttached = true;
+		detach = () => release(video);
+		video.addEventListener("error", onNativeError);
+		video.preload = "none";
+		video.src = source.hls;
+		if (resumeAt > 0) {
+			startPending = false;
+			video.currentTime = resumeAt;
+		}
+		if (wasPlaying) void video.play().catch(() => undefined);
+		else warmAfterLoad(resumeAt === 0);
 	}
 
 	function playFile({ resumeAt, wasPlaying } = position()) {
@@ -192,11 +227,11 @@ export const attachSource = (
 		detach();
 	};
 
-	// Safari plays HLS itself and cannot preload a single segment: at
+	// A browser playing HLS itself cannot preload a single segment: at
 	// preload="auto" it keeps downloading and cannot be stopped again. So it
 	// holds only the playlists until the viewer is about to press play.
 	const warm = () => {
-		if (mode !== "native" || fileAttached || cancelled) return;
+		if (!nativeAttached || fileAttached || cancelled) return;
 		if (video.paused && document.readyState === "complete") {
 			video.preload = "auto";
 		}
@@ -216,11 +251,8 @@ export const attachSource = (
 		return attachment;
 	}
 
-	if (mode === "native" && source.hls) {
-		video.preload = "none";
-		video.src = source.hls;
-		video.addEventListener("error", onNativeError);
-		warmAfterLoad(true);
+	if (mode === "native") {
+		playNative({ resumeAt: 0, wasPlaying: false });
 		return attachment;
 	}
 
@@ -228,7 +260,7 @@ export const attachSource = (
 		.then(({ default: Hls }) => {
 			if (cancelled || !source.hls) return;
 			if (!Hls.isSupported()) {
-				playFile();
+				playNative();
 				return;
 			}
 			const estimate = startingEstimate();
@@ -293,7 +325,7 @@ export const attachSource = (
 				}
 				const reached = position();
 				destroy();
-				playFile(reached);
+				playNative(reached);
 			});
 			video.preload = "auto";
 			hls.loadSource(source.hls);
@@ -301,7 +333,7 @@ export const attachSource = (
 			detach = destroy;
 			start();
 		})
-		.catch(() => playFile());
+		.catch(() => playNative());
 
 	return attachment;
 };
