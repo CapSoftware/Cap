@@ -785,6 +785,7 @@ const SpaceRow = ({
 	<button
 		type="button"
 		aria-pressed={selected}
+		title={space.name}
 		onClick={onToggle}
 		className="flex gap-3 items-center px-3 w-full h-11 text-left transition-colors hover:bg-gray-3"
 	>

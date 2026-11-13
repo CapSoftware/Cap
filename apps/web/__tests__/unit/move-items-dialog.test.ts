@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { Folder, Organisation, Video } from "@cap/web-domain";
+import { Folder, Organisation, Space, Video } from "@cap/web-domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Option } from "effect";
 import React, { act } from "react";
@@ -295,5 +295,40 @@ describe("creating a folder while moving", () => {
 				(element) => element.textContent?.trim() === "New folder",
 			),
 		).toBe(false);
+	});
+});
+
+describe("choosing between many places", () => {
+	it("filters places by name once there are more than six", async () => {
+		const spaces = Array.from({ length: 8 }, (_, index) => ({
+			name: index === 5 ? "Customer support" : `Team ${index + 1}`,
+			location: {
+				type: "space" as const,
+				spaceId: Space.SpaceId.make(`space-${index}`),
+			},
+			folders: [],
+		}));
+		mocks.destinations.mockResolvedValue([
+			{ name: "My Caps", location: { type: "personal" }, folders: [] },
+			...spaces,
+		]);
+		await render();
+		const input = document.querySelector<HTMLInputElement>(
+			'input[aria-label="Search places"]',
+		);
+		if (!input) throw new Error("Place search missing");
+		expect(document.activeElement).not.toBe(input);
+		await type(input, "support");
+		const visible = [...document.querySelectorAll("button[aria-pressed]")].map(
+			(element) => element.getAttribute("title"),
+		);
+		expect(visible).toEqual(["Customer support"]);
+	});
+
+	it("leaves place search out for small workspaces", async () => {
+		await render();
+		expect(
+			document.querySelector('input[aria-label="Search places"]'),
+		).toBeNull();
 	});
 });

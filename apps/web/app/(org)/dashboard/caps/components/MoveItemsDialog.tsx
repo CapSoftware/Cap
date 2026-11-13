@@ -20,7 +20,7 @@ import clsx from "clsx";
 import { Option } from "effect";
 import { Folder, FolderPlus, FolderRoot, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	getMoveFolderDestinations,
@@ -74,6 +74,7 @@ interface MoveItemsDialogProps {
 }
 
 const SEARCH_THRESHOLD = 6;
+const LOCATION_SEARCH_THRESHOLD = 6;
 
 const LOCATIONS = {
 	personal: { Doodle: PersonDoodle, hint: "Only you" },
@@ -104,6 +105,8 @@ export function MoveItemsDialog({
 		useState(sourceLocationKey);
 	const ownedVideos = item.type === "videos" && location.type === "personal";
 	const [search, setSearch] = useState("");
+	const [locationSearch, setLocationSearch] = useState("");
+	const contentRef = useRef<HTMLDivElement>(null);
 	const [newFolderName, setNewFolderName] = useState<string | null>(null);
 	const browsedOrganizationId =
 		organizationId ?? activeOrganization?.organization.id;
@@ -113,6 +116,7 @@ export function MoveItemsDialog({
 		setSelectedFolderId(currentDestinationId);
 		setSelectedLocationKey(sourceLocationKey);
 		setSearch("");
+		setLocationSearch("");
 		setNewFolderName(null);
 	}, [currentDestinationId, open, sourceLocationKey]);
 
@@ -145,6 +149,15 @@ export function MoveItemsDialog({
 		(group) => moveLocationKey(group.location) === selectedLocationKey,
 	);
 	const sameLocation = selectedLocationKey === sourceLocationKey;
+	const manyLocations =
+		(destinations.data?.length ?? 0) > LOCATION_SEARCH_THRESHOLD;
+	const normalizedLocationSearch = locationSearch.trim().toLocaleLowerCase();
+	const visibleGroups =
+		destinations.data?.filter(
+			(group) =>
+				!normalizedLocationSearch ||
+				group.name.toLocaleLowerCase().includes(normalizedLocationSearch),
+		) ?? [];
 	const rows = useMemo(
 		() =>
 			buildMoveFolderDestinationRows(
@@ -292,7 +305,16 @@ export function MoveItemsDialog({
 				if (!busy) onOpenChange(nextOpen);
 			}}
 		>
-			<DialogContent className="flex flex-col p-0 w-[calc(100%-20px)] max-w-lg max-h-[min(640px,calc(100vh-40px))] rounded-xl border bg-gray-2 border-gray-4">
+			<DialogContent
+				ref={contentRef}
+				onOpenAutoFocus={(event) => {
+					// The first field is a search box; focusing it would open the
+					// on-screen keyboard on phones every time the dialog opens.
+					event.preventDefault();
+					contentRef.current?.focus();
+				}}
+				className="flex flex-col p-0 w-[calc(100%-20px)] max-w-lg max-h-[min(640px,calc(100vh-40px))] rounded-xl border bg-gray-2 border-gray-4"
+			>
 				<DialogHeader
 					className={clsx(libraryDoodleHost, "shrink-0")}
 					icon={<MoveDoodle size={24} />}
@@ -313,8 +335,32 @@ export function MoveItemsDialog({
 							<legend className="mb-2 text-sm font-medium text-gray-12">
 								Where to
 							</legend>
-							<div className="grid overflow-y-auto grid-cols-2 gap-2 p-0.5 -m-0.5 max-h-[156px] sm:grid-cols-3 custom-scroll">
-								{destinations.data.map((group) => {
+							{manyLocations && (
+								<div className="relative mb-2">
+									<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 pointer-events-none text-gray-9" />
+									<Input
+										value={locationSearch}
+										onChange={(event) => setLocationSearch(event.target.value)}
+										placeholder={`Search ${destinations.data.length} places`}
+										aria-label="Search places"
+										className="pl-9 h-9"
+									/>
+								</div>
+							)}
+							<div
+								className={clsx(
+									"grid overflow-y-auto grid-cols-2 gap-2 p-0.5 sm:grid-cols-3 custom-scroll",
+									manyLocations
+										? "max-h-[176px] [mask-image:linear-gradient(to_bottom,black_calc(100%-24px),transparent)] pb-4"
+										: "max-h-[236px]",
+								)}
+							>
+								{visibleGroups.length === 0 && (
+									<p className="col-span-full py-4 text-sm text-center text-gray-10">
+										Nothing matches "{locationSearch.trim()}"
+									</p>
+								)}
+								{visibleGroups.map((group) => {
 									const key = moveLocationKey(group.location);
 									const { Doodle, hint } = LOCATIONS[group.location.type];
 									const active = key === selectedLocationKey;
@@ -322,6 +368,7 @@ export function MoveItemsDialog({
 										<button
 											type="button"
 											key={key}
+											title={group.name}
 											aria-pressed={active}
 											disabled={busy}
 											onClick={() => {
@@ -382,7 +429,7 @@ export function MoveItemsDialog({
 						</div>
 					)}
 
-					<div className="flex overflow-hidden flex-col flex-1 min-h-52 rounded-lg border shrink-0 bg-gray-1 border-gray-4 sm:shrink">
+					<div className="flex overflow-hidden flex-col flex-1 min-h-52 rounded-lg border transition-colors shrink-0 bg-gray-1 border-gray-4 focus-within:border-gray-7 sm:shrink">
 						{rows.length > SEARCH_THRESHOLD && (
 							<div className="relative border-b shrink-0 border-gray-4">
 								<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 pointer-events-none text-gray-9" />
@@ -391,7 +438,7 @@ export function MoveItemsDialog({
 									onChange={(event) => setSearch(event.target.value)}
 									placeholder="Search folders"
 									aria-label="Search folders"
-									className="pl-9 bg-transparent rounded-none border-0 ring-0 focus:ring-0 focus:border-0"
+									className="pl-9 bg-transparent rounded-none border-0 ring-0 hover:bg-transparent focus:bg-transparent focus:ring-0 focus:ring-offset-0 focus:border-0 focus:outline-none"
 								/>
 							</div>
 						)}
@@ -419,6 +466,7 @@ export function MoveItemsDialog({
 										<button
 											type="button"
 											disabled={busy || !rootSelectable}
+											title={selectedGroup?.name ?? rootLabel}
 											onClick={() => setSelectedFolderId(null)}
 											className={clsx(
 												"flex gap-3 items-center px-3 w-full h-11 text-left transition-colors",
@@ -453,6 +501,7 @@ export function MoveItemsDialog({
 											<button
 												type="button"
 												key={row.id}
+												title={row.path}
 												disabled={isDisabled}
 												onClick={() => setSelectedFolderId(row.id)}
 												className={clsx(
@@ -585,6 +634,7 @@ export function MoveItemsDialog({
 						variant="dark"
 						size="sm"
 						spinner={moveMutation.isPending}
+						title={sharing ? `Add to ${selectedGroup?.name}` : undefined}
 						className="w-full min-w-0 sm:w-auto sm:max-w-[60%]"
 						disabled={
 							!destinationChanged ||
