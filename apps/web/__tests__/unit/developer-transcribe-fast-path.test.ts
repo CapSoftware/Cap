@@ -105,6 +105,7 @@ import {
 import { transcriptionMicroCredits } from "@/lib/developer-pricing";
 import {
 	developerTranscribeWorkflow,
+	FAST_PATH_BUDGET_MS,
 	FAST_PATH_MAX_AUDIO_SECONDS,
 	runTranscriptFastPath,
 } from "@/workflows/developer-transcribe";
@@ -392,6 +393,41 @@ describe("the fast path", () => {
 			),
 		});
 		expect(ledger()).toHaveLength(1);
+	});
+
+	it("hands extraction to its own step when getting the file took most of the budget", async () => {
+		thirtySeconds();
+		let calls = 0;
+		const clock = vi
+			.spyOn(performance, "now")
+			.mockImplementation(() => (calls++ === 0 ? 0 : FAST_PATH_BUDGET_MS + 1));
+
+		const result = await fast();
+		clock.mockRestore();
+
+		expect(result).toEqual({ resume: "extract", audio: null });
+		expect(media.convertCalls).toBe(0);
+		expect(Number(transcript()?.reservedMicroCredits)).toBeGreaterThan(0);
+
+		expect((await run()).success).toBe(true);
+		expect(media.convertCalls).toBe(1);
+		expect(context.transcribe).toHaveBeenCalledTimes(1);
+		expect(ledger()).toHaveLength(1);
+	});
+
+	it("hands transcription to its own step when extraction took most of the budget", async () => {
+		thirtySeconds();
+		let calls = 0;
+		const clock = vi
+			.spyOn(performance, "now")
+			.mockImplementation(() => (calls++ < 2 ? 0 : FAST_PATH_BUDGET_MS + 1));
+
+		const result = await fast();
+		clock.mockRestore();
+
+		expect(result).toEqual({ resume: "transcribe" });
+		expect(media.convertCalls).toBe(1);
+		expect(context.transcribe).not.toHaveBeenCalled();
 	});
 
 	it("hands over at the hold when another transcript holds the credit", async () => {

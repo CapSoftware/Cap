@@ -326,7 +326,7 @@ async function loadTranscriptRow(transcriptId: string) {
 }
 
 export const FAST_PATH_MAX_AUDIO_SECONDS = 30 * 60;
-export const FAST_PATH_TRANSCRIBE_BEFORE_MS = 2 * 60 * 1000;
+export const FAST_PATH_BUDGET_MS = 2 * 60 * 1000;
 
 type FastPath =
 	| { resume: "unclaimed" }
@@ -354,7 +354,8 @@ export async function runTranscriptFastPath(
 ): Promise<FastPath> {
 	"use step";
 
-	const startedAt = Date.now();
+	const startedAt = performance.now();
+	const overBudget = () => performance.now() - startedAt > FAST_PATH_BUDGET_MS;
 	try {
 		if (!(await claimTranscriptRun(transcriptId, runId))) {
 			return { resume: "unclaimed" };
@@ -372,6 +373,8 @@ export async function runTranscriptFastPath(
 		return { resume: "prepare", source: null };
 	}
 
+	if (overBudget()) return { resume: "extract", audio: null };
+
 	let extracted: ExtractedAudio;
 	try {
 		const audio = await extractAudio(transcriptId);
@@ -382,10 +385,7 @@ export async function runTranscriptFastPath(
 		return { resume: "extract", audio: null };
 	}
 
-	if (
-		extracted.durationSeconds > FAST_PATH_MAX_AUDIO_SECONDS ||
-		Date.now() - startedAt > FAST_PATH_TRANSCRIBE_BEFORE_MS
-	) {
+	if (extracted.durationSeconds > FAST_PATH_MAX_AUDIO_SECONDS || overBudget()) {
 		return { resume: "transcribe" };
 	}
 
