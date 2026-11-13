@@ -68,6 +68,7 @@ export const docsConfig = {
 		{
 			title: "API & Developers",
 			items: [
+				{ title: "Get Started", slug: "api/get-started" },
 				{ title: "REST API", slug: "api/rest-api" },
 				{ title: "Billing", slug: "api/billing" },
 				{ title: "Webhooks", slug: "api/webhooks" },
