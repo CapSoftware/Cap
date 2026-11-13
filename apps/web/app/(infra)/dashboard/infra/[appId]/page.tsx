@@ -78,7 +78,7 @@ export default async function InfraOverviewPage({
 	const lowBalance = lowBalanceText({
 		hasAccount: !!app.creditAccount,
 		standing: billing.standing.state,
-		monthlyStorageMicroCredits: billing.usage.monthlyMicroCredits,
+		monthlyStorageMicroCredits: billing.stored.monthlyMicroCredits,
 		balanceMicroCredits: billing.admission.balanceMicroCredits,
 		requiredMicroCredits: billing.admission.requiredMicroCredits,
 		shortfallMicroCredits: billing.admission.shortfallMicroCredits,
