@@ -230,7 +230,7 @@ export const SharedCaps = ({
 		/>
 	) : null;
 
-	if (data.length === 0 && folders?.length === 0) {
+	if (count === 0 && folders?.length === 0) {
 		return (
 			<div className="flex relative flex-col w-full h-full">
 				{spaceSettingsDialog}
@@ -477,18 +477,18 @@ export const SharedCaps = ({
 							})}
 						</div>
 					</SeededThumbnailsProvider>
-					{(data.length > limit || data.length === limit || page !== 1) && (
-						<div className="mt-4">
-							<CapPagination
-								currentPage={page}
-								totalPages={totalPages}
-								hrefForPage={(targetPage) =>
-									targetPage <= 1 ? pathname : `${pathname}?page=${targetPage}`
-								}
-							/>
-						</div>
-					)}
 				</>
+			)}
+			{(data.length > limit || data.length === limit || page !== 1) && (
+				<div className="mt-4">
+					<CapPagination
+						currentPage={page}
+						totalPages={totalPages}
+						hrefForPage={(targetPage) =>
+							targetPage <= 1 ? pathname : `${pathname}?page=${targetPage}`
+						}
+					/>
+				</div>
 			)}
 			{canManageCurrentSharedCollection && (
 				<SelectedCapsBar
