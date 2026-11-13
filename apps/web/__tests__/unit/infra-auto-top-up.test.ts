@@ -50,6 +50,7 @@ vi.mock("@/lib/developer-credits-product", () => ({
 import type Stripe from "stripe";
 import {
 	AUTO_TOP_UP_DAILY_LIMIT,
+	AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 	autoTopUpFailureText,
 	autoTopUpIdempotencyKey,
 	autoTopUpSettingsError,
@@ -297,6 +298,7 @@ describe("auto top-up charge", () => {
 		});
 		expect(options).toEqual({
 			idempotencyKey: autoTopUpIdempotencyKey("account-1", 0, params),
+			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
 		expect(topUps()).toEqual([
@@ -368,6 +370,33 @@ describe("auto top-up charge", () => {
 		const [first, retry] = mocks.createPaymentIntent.mock.calls;
 		expect(retry?.[1].idempotencyKey).toBe(first?.[1].idempotencyKey);
 		expect(topUps()).toHaveLength(1);
+	});
+
+	it("gives up on a payment request that times out, writes nothing and retries with the same key", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.createPaymentIntent.mockRejectedValueOnce(
+			Object.assign(
+				new Error("Request aborted due to timeout being reached (20000ms)"),
+				{ type: "StripeConnectionError" },
+			),
+		);
+
+		expect(await runAutoTopUp("account-1", now())).toEqual({ state: "error" });
+		expect(errors).toHaveBeenCalledWith(
+			"[infra-billing] Auto top-up could not be attempted",
+			expect.objectContaining({ accountId: "account-1" }),
+		);
+		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.account.autoTopUpEnabled).toBe(true);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			state: "succeeded",
+		});
+		const [timedOut, retry] = mocks.createPaymentIntent.mock.calls;
+		expect(timedOut?.[1].timeout).toBe(20_000);
+		expect(retry?.[1].idempotencyKey).toBe(timedOut?.[1].idempotencyKey);
+		errors.mockRestore();
 	});
 
 	it("treats a payment already being made under the same key as in progress", async () => {

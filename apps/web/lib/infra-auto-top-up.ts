@@ -41,6 +41,7 @@ export const AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS =
 	1_000 * MICRO_CREDITS_PER_DOLLAR;
 
 export const AUTO_TOP_UP_DAILY_LIMIT = 10;
+export const AUTO_TOP_UP_STRIPE_TIMEOUT_MS = 20_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type AutoTopUpResult =
@@ -505,6 +506,7 @@ export async function runAutoTopUp(
 				snapshot.sequence,
 				request,
 			),
+			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 	} catch (error) {
 		if (isKeyInUse(error)) return { state: "skipped", reason: "in_progress" };
