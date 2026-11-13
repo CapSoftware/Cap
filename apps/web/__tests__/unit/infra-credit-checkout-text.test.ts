@@ -40,6 +40,7 @@ describe("credit purchase text", () => {
 			appName: "Course site",
 			amountCents: 1000,
 			receiptEmail: "owner@example.com",
+			firstLargePurchase: false,
 		});
 		expect(params.line_items[0]?.price_data.product).toBe("prod_credits");
 		expect(params.payment_method_types).toEqual(["card", "link"]);
