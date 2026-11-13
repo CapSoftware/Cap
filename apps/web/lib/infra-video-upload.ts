@@ -889,16 +889,54 @@ const UNRECORDED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const UNRECORDED_PAGE = 200;
 const UNRECORDED_ROWS_PER_RUN = 1_000;
 
+type StoredUpload = "stale" | "fresh" | "uploading" | "missing" | "unknown";
+
+function storedUpload(s3Key: string, now: Date): Promise<StoredUpload> {
+	return Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const head = yield* Effect.either(bucket.headObject(s3Key));
+		if (head._tag === "Right") {
+			const modified = head.right.LastModified?.getTime() ?? 0;
+			return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS
+				? ("stale" as const)
+				: ("fresh" as const);
+		}
+		if (!storedObjectIsMissing(head.left)) return "unknown" as const;
+		const open = yield* bucket.multipart.listUploads({ prefix: s3Key });
+		if (
+			open.IsTruncated ||
+			(open.Uploads ?? []).some((upload) => upload.Key === s3Key)
+		) {
+			return "uploading" as const;
+		}
+		// An upload assembled between the two reads above shows in neither, so
+		// the file is looked for once more now that no upload is open.
+		const again = yield* Effect.either(bucket.headObject(s3Key));
+		if (again._tag === "Right") return "fresh" as const;
+		return storedObjectIsMissing(again.left)
+			? ("missing" as const)
+			: ("unknown" as const);
+	})
+		.pipe(provideOptionalAuth, runPromise)
+		.catch(() => "unknown" as const);
+}
+
+// A video with no file is retired only after storage is asked again under its
+// row lock, and never while a completion's claim is recent. Initiate opens an
+// upload under the same lock, and completion can assemble a file only from an
+// upload that is still open. A claim left by a completion that died before
+// assembling keeps the video only until that claim would be released anyway.
 async function retireUnrecordedVideo(
 	appId: string,
 	videoId: string,
 	now: Date,
+	missingKey?: string,
 ) {
 	let deleted = false;
 	const retired = await db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
 
-		const [current] = await tx
+		const read = tx
 			.select({
 				duration: developerVideos.duration,
 				deletedAt: developerVideos.deletedAt,
@@ -906,8 +944,28 @@ async function retireUnrecordedVideo(
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
+		const [current] = await (missingKey === undefined
+			? read
+			: read.for("update"));
 		if (!current || current.duration !== null) return false;
 		if (current.deletedAt) return true;
+		if (missingKey !== undefined) {
+			const [claim] = await tx
+				.select({
+					status: developerVideos.status,
+					updatedAt: developerVideos.updatedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.limit(1);
+			if (
+				claim?.status === "processing" &&
+				now.getTime() - claim.updatedAt.getTime() < STALE_UPLOAD_CLAIM_MS
+			) {
+				return false;
+			}
+			if ((await storedUpload(missingKey, now)) !== "missing") return false;
+		}
 
 		await tx
 			.update(developerVideos)
@@ -951,27 +1009,27 @@ async function unrecordedVideosPage(
 		.limit(UNRECORDED_PAGE);
 }
 
+// A video that never received a file is retired too, or abandoned uploads
+// would stay listed for good. It is left alone while an upload for it is
+// still open, and whenever storage cannot say for certain what is there.
 async function removeUnrecordedFile(
 	row: { id: string; appId: string; s3Key: string | null },
 	now: Date,
 ) {
 	const s3Key = row.s3Key;
 	if (!s3Key) return false;
-	const stale = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-		const object = yield* bucket.headObject(s3Key);
-		const modified = object.LastModified?.getTime() ?? 0;
-		return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
-	})
-		.pipe(provideOptionalAuth, runPromise)
-		.catch(() => false);
-	if (!stale) return false;
-	const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
-		(error) => {
-			console.error("Error retiring an unrecorded upload:", row.id, error);
-			return false;
-		},
-	);
+	const file = await storedUpload(s3Key, now);
+	if (file !== "stale" && file !== "missing") return false;
+	const retired = await retireUnrecordedVideo(
+		row.appId,
+		row.id,
+		now,
+		file === "missing" ? s3Key : undefined,
+	).catch((error) => {
+		console.error("Error retiring an unrecorded upload:", row.id, error);
+		return false;
+	});
+	if (file === "missing") return retired;
 	return retired && (await removeStoredFile(s3Key));
 }
 
