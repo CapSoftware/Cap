@@ -10,6 +10,7 @@ import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
 import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
@@ -935,7 +936,8 @@ async function retireUnrecordedVideo(
 	now: Date,
 	missingKey?: string,
 ) {
-	return db().transaction(async (tx) => {
+	let deleted = false;
+	const retired = await db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
 
 		const read = tx
@@ -975,8 +977,11 @@ async function retireUnrecordedVideo(
 			.where(
 				and(eq(developerVideos.id, videoId), isNull(developerVideos.duration)),
 			);
+		deleted = true;
 		return true;
 	});
+	if (deleted) await cancelDeveloperVideoEncodes({ appId, videoId });
+	return retired;
 }
 
 async function unrecordedVideosPage(
