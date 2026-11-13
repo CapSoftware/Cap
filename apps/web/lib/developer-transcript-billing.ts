@@ -14,11 +14,11 @@ import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
 } from "@/lib/developer-transcripts";
+import type { AutoTopUpTarget } from "@/lib/infra-auto-top-up";
 import {
 	availableBalance,
 	heldTranscriptMicroCredits,
 } from "@/lib/infra-balance";
-import type { AutoTopUpTarget } from "@/lib/infra-auto-top-up";
 import { accountStanding, readStandingAccount } from "@/lib/infra-standing";
 
 // Loaded on first use: the auto top-up module pulls in Stripe and the email
