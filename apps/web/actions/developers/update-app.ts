@@ -5,6 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	developerAppEnvironment,
+	developerAppLogoUrl,
+	developerAppName,
+} from "@/lib/developer-app-limits";
 import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
 
@@ -33,12 +38,20 @@ export async function updateDeveloperApp(data: {
 
 	const updates: Partial<typeof developerApps.$inferInsert> = {};
 	if (data.name !== undefined) {
-		const trimmed = data.name.trim();
-		if (!trimmed) return actionFailure("Give the app a name.");
-		updates.name = trimmed;
+		const named = developerAppName(data.name);
+		if (!named.ok) return actionFailure(named.message);
+		updates.name = named.name;
 	}
-	if (data.environment !== undefined) updates.environment = data.environment;
-	if (data.logoUrl !== undefined) updates.logoUrl = data.logoUrl;
+	if (data.environment !== undefined) {
+		const chosen = developerAppEnvironment(data.environment);
+		if (!chosen.ok) return actionFailure(chosen.message);
+		updates.environment = chosen.environment;
+	}
+	if (data.logoUrl !== undefined) {
+		const logo = developerAppLogoUrl(data.logoUrl);
+		if (!logo.ok) return actionFailure(logo.message);
+		updates.logoUrl = logo.logoUrl;
+	}
 
 	if (Object.keys(updates).length > 0) {
 		await db()
