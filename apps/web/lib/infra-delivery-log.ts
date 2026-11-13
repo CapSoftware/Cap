@@ -23,6 +23,7 @@ export interface DeliveryRequest {
 	rangeStart: number;
 	bytes: number;
 	bodyBytes: number;
+	abandoned: boolean;
 }
 
 export type DeliveryPart = [
@@ -33,6 +34,7 @@ export type DeliveryPart = [
 	requests: number,
 	bytes: number,
 	milliseconds: number,
+	abandonedBytes: number,
 ];
 
 const ID = "[A-Za-z0-9_-]{1,64}";
@@ -61,7 +63,6 @@ export function parseDeliveryRecord(
 	const status = field(record, "sc-status");
 	if (!status || !DELIVERED_STATUSES.has(status)) return null;
 	if (field(record, "cs-method") !== "GET") return null;
-	if (field(record, "x-edge-result-type") === "Error") return null;
 	const day = field(record, "date");
 	if (!day || !DAY.test(day)) return null;
 	const path = field(record, "cs-uri-stem");
@@ -86,6 +87,7 @@ export function parseDeliveryRecord(
 		key,
 		rangeStart: rangeStart ?? 0,
 		bytes,
+		abandoned: field(record, "x-edge-result-type") === "Error",
 		bodyBytes: Math.min(
 			bytes,
 			contentLength ?? Number.POSITIVE_INFINITY,
@@ -298,6 +300,14 @@ async function ownedVideo(
 	return video && video.appId === request.appId ? video : null;
 }
 
+/**
+ * Measurement only. HLS seconds are exact: a byte range maps to the playlist's
+ * segments, and a range that covers part of a segment counts it pro rata by
+ * bytes. Without a playlist (the video was purged), and for MP4 downloads,
+ * seconds are estimated from the file's average bytes per second on the video
+ * row. Audio has no seconds. Transfers the viewer abandons part-way aren't
+ * counted: they are recorded as abandonedBytes only.
+ */
 export async function deliveredSeconds(
 	request: DeliveryRequest,
 	resolver: DeliveryResolver,
@@ -338,6 +348,15 @@ export async function deliveredSeconds(
 		: { tier: request.kind, seconds: 0, method: "no-rate" };
 }
 
+async function abandonedTier(
+	request: DeliveryRequest,
+	resolver: DeliveryResolver,
+): Promise<DeliveryTier | null> {
+	if (request.kind !== "mp4") return request.kind;
+	const video = await ownedVideo(request, resolver);
+	return video ? deliveryMp4Tier(video) : null;
+}
+
 export interface DeliveryMethodTotals {
 	seconds: Record<DeliveryMethod, number>;
 	requests: Record<DeliveryMethod, number>;
@@ -369,24 +388,25 @@ export function addMethodTotals(
 export class DeliveryTally {
 	private readonly parts = new Map<string, DeliveryPart>();
 
-	add(request: DeliveryRequest, delivered: DeliveredSeconds) {
-		const key = `${request.day}\0${request.appId}\0${request.videoId}\0${delivered.tier}`;
-		const part = this.parts.get(key);
-		if (part) {
-			part[4] += 1;
-			part[5] += request.bytes;
-			part[6] += delivered.seconds * 1000;
-			return;
+	private part(request: DeliveryRequest, tier: DeliveryTier) {
+		const key = `${request.day}\0${request.appId}\0${request.videoId}\0${tier}`;
+		let part = this.parts.get(key);
+		if (!part) {
+			part = [request.day, request.appId, request.videoId, tier, 0, 0, 0, 0];
+			this.parts.set(key, part);
 		}
-		this.parts.set(key, [
-			request.day,
-			request.appId,
-			request.videoId,
-			delivered.tier,
-			1,
-			request.bytes,
-			delivered.seconds * 1000,
-		]);
+		return part;
+	}
+
+	add(request: DeliveryRequest, delivered: DeliveredSeconds) {
+		const part = this.part(request, delivered.tier);
+		part[4] += 1;
+		part[5] += request.bytes;
+		part[6] += delivered.seconds * 1000;
+	}
+
+	abandon(request: DeliveryRequest, tier: DeliveryTier) {
+		this.part(request, tier)[7] += request.bytes;
 	}
 
 	toParts(): DeliveryPart[] {
@@ -418,6 +438,12 @@ export async function meterDeliveryLog(
 		lines += 1;
 		const request = parseDeliveryLine(line);
 		if (!request) return;
+		if (request.abandoned) {
+			const tier = await abandonedTier(request, resolver);
+			if (tier) tally.abandon(request, tier);
+			else methods.unlabelled += 1;
+			return;
+		}
 		const seconds = await deliveredSeconds(request, resolver);
 		if (!seconds) {
 			methods.unlabelled += 1;
@@ -458,7 +484,7 @@ export function readDeliveryParts(value: unknown): DeliveryPart[] {
 	return value.filter(
 		(part): part is DeliveryPart =>
 			Array.isArray(part) &&
-			part.length === 7 &&
+			part.length === 8 &&
 			typeof part[0] === "string" &&
 			DAY.test(part[0]) &&
 			typeof part[1] === "string" &&
@@ -467,6 +493,7 @@ export function readDeliveryParts(value: unknown): DeliveryPart[] {
 			PART_TIERS.has(part[3]) &&
 			isCount(part[4]) &&
 			isCount(part[5]) &&
-			isCount(part[6]),
+			isCount(part[6]) &&
+			isCount(part[7]),
 	);
 }

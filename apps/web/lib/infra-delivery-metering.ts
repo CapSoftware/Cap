@@ -16,6 +16,7 @@ export interface DeliveryRow {
 	seconds: number;
 	bytes: number;
 	requests: number;
+	abandonedBytes: number;
 }
 
 export interface DeliveryLogFile {
@@ -98,7 +99,16 @@ export function rollupDeliveryDay(
 	parts: DeliveryPart[],
 ): DeliveryRow[] {
 	const totals = new Map<string, DeliveryRow & { milliseconds: number }>();
-	for (const [partDay, appId, , tier, requests, bytes, milliseconds] of parts) {
+	for (const [
+		partDay,
+		appId,
+		,
+		tier,
+		requests,
+		bytes,
+		milliseconds,
+		abandonedBytes,
+	] of parts) {
 		if (partDay !== day) continue;
 		const key = `${appId}\0${tier}`;
 		const row = totals.get(key) ?? {
@@ -107,9 +117,11 @@ export function rollupDeliveryDay(
 			seconds: 0,
 			bytes: 0,
 			requests: 0,
+			abandonedBytes: 0,
 			milliseconds: 0,
 		};
 		row.milliseconds += milliseconds;
+		row.abandonedBytes += abandonedBytes;
 		row.bytes += bytes;
 		row.requests += requests;
 		totals.set(key, row);

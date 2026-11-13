@@ -2221,6 +2221,9 @@ export const developerDeliveryDaily = mysqlTable(
 		seconds: bigint("seconds", { mode: "number" }).notNull().default(0),
 		bytes: bigint("bytes", { mode: "number" }).notNull().default(0),
 		requests: int("requests").notNull().default(0),
+		abandonedBytes: bigint("abandonedBytes", { mode: "number" })
+			.notNull()
+			.default(0),
 		final: boolean("final").notNull().default(false),
 		finalizedAt: timestamp("finalizedAt"),
 		updatedAt: timestamp("updatedAt").notNull(),

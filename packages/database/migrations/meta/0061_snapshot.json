@@ -1,8 +1,8 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "c0d91feb-c9e8-45ba-9a6d-8b67f89a56b0",
-	"prevId": "bcc94f5d-5c15-40d1-9c28-45f1f70a0933",
+	"id": "45632039-82de-46d3-b9b4-96c0a5a6b756",
+	"prevId": "df0a954a-d0a7-4570-86be-220f77c283a5",
 	"tables": {
 		"accounts": {
 			"name": "accounts",
@@ -1343,6 +1343,14 @@
 					"autoincrement": false,
 					"default": 0
 				},
+				"abandonedBytes": {
+					"name": "abandonedBytes",
+					"type": "bigint",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
 				"final": {
 					"name": "final",
 					"type": "boolean",
@@ -1726,6 +1734,115 @@
 				"developer_transcripts_id": {
 					"name": "developer_transcripts_id",
 					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"developer_video_imports": {
+			"name": "developer_video_imports",
+			"columns": {
+				"videoId": {
+					"name": "videoId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"appId": {
+					"name": "appId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"keyId": {
+					"name": "keyId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"sourceUrl": {
+					"name": "sourceUrl",
+					"type": "varchar(2048)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"state": {
+					"name": "state",
+					"type": "varchar(16)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'downloading'"
+				},
+				"bytes": {
+					"name": "bytes",
+					"type": "bigint unsigned",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"errorCode": {
+					"name": "errorCode",
+					"type": "varchar(32)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"startedAt": {
+					"name": "startedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				},
+				"finishedAt": {
+					"name": "finishedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"dev_imports_app_state_idx": {
+					"name": "dev_imports_app_state_idx",
+					"columns": ["appId", "state"],
+					"isUnique": false
+				},
+				"dev_imports_key_created_idx": {
+					"name": "dev_imports_key_created_idx",
+					"columns": ["keyId", "createdAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {
+				"developer_video_imports_appId_developer_apps_id_fk": {
+					"name": "developer_video_imports_appId_developer_apps_id_fk",
+					"tableFrom": "developer_video_imports",
+					"tableTo": "developer_apps",
+					"columnsFrom": ["appId"],
+					"columnsTo": ["id"],
+					"onDelete": "no action",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {
+				"developer_video_imports_videoId": {
+					"name": "developer_video_imports_videoId",
+					"columns": ["videoId"]
 				}
 			},
 			"uniqueConstraints": {},

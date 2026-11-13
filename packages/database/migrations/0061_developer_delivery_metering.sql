@@ -5,6 +5,7 @@ CREATE TABLE `developer_delivery_daily` (
 	`seconds` bigint NOT NULL DEFAULT 0,
 	`bytes` bigint NOT NULL DEFAULT 0,
 	`requests` int NOT NULL DEFAULT 0,
+	`abandonedBytes` bigint NOT NULL DEFAULT 0,
 	`final` boolean NOT NULL DEFAULT false,
 	`finalizedAt` timestamp,
 	`updatedAt` timestamp NOT NULL,

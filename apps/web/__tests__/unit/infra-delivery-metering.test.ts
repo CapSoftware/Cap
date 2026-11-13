@@ -116,6 +116,7 @@ describe("parseDeliveryLine", () => {
 				rangeStart: 1000,
 				bytes: 100400,
 				bodyBytes: 100000,
+				abandoned: false,
 			});
 		},
 	);
@@ -160,10 +161,10 @@ describe("parseDeliveryLine", () => {
 		expect(parseDeliveryLine(line({ "cs-method": method }))).toBeNull();
 	});
 
-	it("ignores edge errors and empty responses", () => {
+	it("marks an edge Error transfer as abandoned and ignores empty responses", () => {
 		expect(
 			parseDeliveryLine(line({ "x-edge-result-type": "Error" })),
-		).toBeNull();
+		).toMatchObject({ abandoned: true, bytes: 100400 });
 		expect(parseDeliveryLine(line({ "sc-bytes": "0" }))).toBeNull();
 	});
 
@@ -422,18 +423,30 @@ describe("meterDeliveryLog", () => {
 				line({ date: "2026-11-13" }),
 				line({ "sc-status": "403" }),
 				line({ "cs-uri-stem": "/3gwrf77snqt5em1/x/result.mp4" }),
+				line({ "x-edge-result-type": "Error", "sc-bytes": "70000" }),
+				line({
+					"x-edge-result-type": "Error",
+					"cs-uri-stem": `${base}/hls/1080p.m4s`,
+					"sc-bytes": "9000",
+				}),
+				line({
+					"x-edge-result-type": "Error",
+					"sc-status": "403",
+					"sc-bytes": "5",
+				}),
 				"",
 			]),
 			new FakeResolver(),
 		);
-		expect(result.lines).toBe(6);
+		expect(result.lines).toBe(9);
 		expect(result.delivered).toBe(4);
 		expect(result.methods.seconds.playlist).toBe(12);
 		expect(result.methods.requests).toMatchObject({ playlist: 3, audio: 1 });
 		expect(result.parts).toEqual([
-			["2026-11-12", APP, VIDEO, "720p", 2, 300800, 8000],
-			["2026-11-12", APP, VIDEO, "audio", 1, 50, 0],
-			["2026-11-13", APP, VIDEO, "720p", 1, 100400, 4000],
+			["2026-11-12", APP, VIDEO, "720p", 2, 300800, 8000, 70000],
+			["2026-11-12", APP, VIDEO, "audio", 1, 50, 0, 0],
+			["2026-11-13", APP, VIDEO, "720p", 1, 100400, 4000, 0],
+			["2026-11-12", APP, VIDEO, "1080p", 0, 0, 0, 9000],
 		]);
 	});
 
@@ -490,13 +503,14 @@ describe("meterDeliveryLog", () => {
 
 describe("readDeliveryParts", () => {
 	it("drops malformed stored parts", () => {
-		const good: DeliveryPart = ["2026-11-12", APP, VIDEO, "720p", 1, 2, 3];
+		const good: DeliveryPart = ["2026-11-12", APP, VIDEO, "720p", 1, 2, 3, 4];
 		expect(
 			readDeliveryParts([
 				good,
-				["2026-11-12", APP, VIDEO, "mp4", 1, 2, 3],
-				["2026-11-12", APP, VIDEO, "720p", -1, 2, 3],
-				["bad", APP, VIDEO, "720p", 1, 2, 3],
+				["2026-11-12", APP, VIDEO, "mp4", 1, 2, 3, 4],
+				["2026-11-12", APP, VIDEO, "720p", -1, 2, 3, 4],
+				["2026-11-12", APP, VIDEO, "720p", 1, 2, 3],
+				["bad", APP, VIDEO, "720p", 1, 2, 3, 4],
 				"x",
 			]),
 		).toEqual([good]);
@@ -508,16 +522,37 @@ describe("rollupDeliveryDay", () => {
 	it("sums one day's parts per app and tier", () => {
 		expect(
 			rollupDeliveryDay("2026-11-12", [
-				["2026-11-12", APP, VIDEO, "720p", 10, 1000, 30_400],
-				["2026-11-12", APP, "vidbbbbbbbbbbb2", "720p", 2, 200, 10_200],
-				["2026-11-12", APP, VIDEO, "audio", 20, 900, 0],
-				["2026-11-12", OTHER_APP, VIDEO, "1080p", 1, 5, 4_000],
-				["2026-11-13", APP, VIDEO, "720p", 99, 99, 99_000],
+				["2026-11-12", APP, VIDEO, "720p", 10, 1000, 30_400, 7],
+				["2026-11-12", APP, "vidbbbbbbbbbbb2", "720p", 2, 200, 10_200, 3],
+				["2026-11-12", APP, VIDEO, "audio", 20, 900, 0, 0],
+				["2026-11-12", OTHER_APP, VIDEO, "1080p", 1, 5, 4_000, 0],
+				["2026-11-13", APP, VIDEO, "720p", 99, 99, 99_000, 99],
 			]),
 		).toEqual([
-			{ appId: APP, tier: "720p", seconds: 41, bytes: 1200, requests: 12 },
-			{ appId: APP, tier: "audio", seconds: 0, bytes: 900, requests: 20 },
-			{ appId: OTHER_APP, tier: "1080p", seconds: 4, bytes: 5, requests: 1 },
+			{
+				appId: APP,
+				tier: "720p",
+				seconds: 41,
+				bytes: 1200,
+				requests: 12,
+				abandonedBytes: 10,
+			},
+			{
+				appId: APP,
+				tier: "audio",
+				seconds: 0,
+				bytes: 900,
+				requests: 20,
+				abandonedBytes: 0,
+			},
+			{
+				appId: OTHER_APP,
+				tier: "1080p",
+				seconds: 4,
+				bytes: 5,
+				requests: 1,
+				abandonedBytes: 0,
+			},
 		]);
 	});
 });
@@ -763,7 +798,16 @@ describe("runDeliveryMetering", () => {
 		const store = new MemoryStore();
 		await store.replaceDay(
 			"2026-11-13",
-			[{ appId: OTHER_APP, tier: "360p", seconds: 1, bytes: 1, requests: 1 }],
+			[
+				{
+					appId: OTHER_APP,
+					tier: "360p",
+					seconds: 1,
+					bytes: 1,
+					requests: 1,
+					abandonedBytes: 0,
+				},
+			],
 			at("2026-11-13T01:00:00Z"),
 			false,
 		);
