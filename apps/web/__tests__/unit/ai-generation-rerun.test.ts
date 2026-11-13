@@ -140,13 +140,23 @@ describe("agent processing rerun charge", () => {
 	});
 
 	it("does not charge AI work that waits on transcription", () => {
-		expect(
-			chargesProcessingRerun({
-				target: "all",
-				retry: true,
-				transcriptionStatus: "PROCESSING",
-				metadata: { aiGenerationStatus: "ERROR" },
-			}),
-		).toBe(false);
+		for (const target of ["all", "ai"] as const) {
+			for (const transcriptionStatus of [
+				null,
+				"PROCESSING",
+				"ERROR",
+				"SKIPPED",
+				"NO_AUDIO",
+			]) {
+				expect(
+					chargesProcessingRerun({
+						target,
+						retry: target === "ai" ? true : undefined,
+						transcriptionStatus,
+						metadata: { aiGenerationStatus: "ERROR" },
+					}),
+				).toBe(false);
+			}
+		}
 	});
 });
