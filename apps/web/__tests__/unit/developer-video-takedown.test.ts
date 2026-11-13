@@ -354,6 +354,30 @@ describe("the staff script", () => {
 	});
 });
 
+describe("the takedown docs", () => {
+	it("promise 410 only for playback files, not for the page or embed", async () => {
+		const { readFileSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+		const docs = readFileSync(
+			join(process.cwd(), "content/docs/api/rest-api.mdx"),
+			"utf8",
+		);
+		const described = [
+			...docs.split("\n").filter((line) => line.includes("`takenDown`")),
+			String(
+				developerOpenApiSpec("https://cap.so").components.schemas.DeveloperVideo
+					.properties.takenDown.description,
+			),
+		];
+
+		expect(described.length).toBeGreaterThan(2);
+		for (const text of described) {
+			expect(text).not.toMatch(/page[^.]*410|embed[^.]*410/i);
+		}
+	});
+});
+
 describe("the developer API", () => {
 	const withEnv = () => ready({ metadata: { orderId: 7 } });
 
