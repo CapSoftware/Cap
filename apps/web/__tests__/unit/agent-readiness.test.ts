@@ -383,8 +383,10 @@ describe("developer OpenAPI spec", () => {
 			.split("\n")
 			.find((line) => line.includes("will not succeed"));
 
-		expect(advice).toContain("408, 429 and 409");
+		expect(advice).toContain("two exceptions");
+		expect(advice).toContain("429, and 409");
 		expect(advice).toContain("completion_in_progress");
+		expect(advice).not.toContain("408");
 	});
 
 	it("documents exactly the routes the developer API handlers serve", () => {
