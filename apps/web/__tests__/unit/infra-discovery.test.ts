@@ -126,6 +126,7 @@ describe("/infra as Markdown", () => {
 			"https://cap.so/docs/api/get-started#10-use-with-agents-mcp",
 			"https://cap.so/.well-known/mcp/infra/server-card.json",
 			"https://cap.so/llms.txt",
+			"npx -y @cap.so/infra-mcp",
 		]) {
 			expect(markdown).toContain(link);
 		}

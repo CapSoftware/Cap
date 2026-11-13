@@ -27,6 +27,7 @@ export const infraMarkdown = (origin: string) =>
 		`- Billing: ${origin}/docs/api/billing`,
 		`- Hosted MCP server: ${CAP_INFRA_MCP_URL}, with the secret key as Authorization: Bearer. Setup: ${origin}/docs/api/get-started#10-use-with-agents-mcp`,
 		`- MCP server card: ${origin}/.well-known/mcp/infra/server-card.json`,
+		"- Local MCP server, which uploads a file from disk in one call: npx -y @cap.so/infra-mcp with the key in CAP_SECRET_KEY. Setup: https://www.npmjs.com/package/@cap.so/infra-mcp",
 		`- Console, where an app and its keys are created: ${origin}/dashboard/infra`,
 		`- Everything about Cap for agents: ${origin}/llms.txt`,
 		"",
