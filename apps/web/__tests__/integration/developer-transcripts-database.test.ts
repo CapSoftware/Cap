@@ -106,7 +106,7 @@ const { disputedSince, readStandingAccount } = await import(
 const { getInfraAppStanding, getInfraUploadAdmission } = await import(
 	"@/lib/infra-standing"
 );
-const { getAppStorageUsage } = await import("@/lib/infra-storage");
+const { getAppStorage } = await import("@/lib/infra-storage");
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const { developerVideoCaptions, syncVideoCaptions, videoCaptionsKey } =
 	await import("@/lib/developer-video-captions");
@@ -242,7 +242,7 @@ const chargeStorage = async (appId: string, day: string) =>
 	chargeStorageDay({
 		appId,
 		accountId: await accountOf(appId),
-		usage: await getAppStorageUsage(appId),
+		usage: (await getAppStorage(appId)).dailyCharge,
 		dateKey: day,
 		now: new Date(),
 	});
@@ -254,6 +254,7 @@ const videoStarts = () =>
 
 const STORAGE_DAY_OF_TWO_HOURS = 340;
 const ADMISSION_FOR_TWO_HOURS = 2_380;
+const FIRST_MONTH_FOR_TWO_HOURS = 10_200;
 
 const settle = (transcriptId: string, durationSeconds: number) =>
 	settleTranscript({
@@ -909,7 +910,7 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 	});
 
 	it("creates an agent video with a playback id and admits it without charging", async () => {
-		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS);
+		const appId = await makeApp(FIRST_MONTH_FOR_TWO_HOURS);
 		const created = await createDeveloperVideoUpload(appId, {
 			fileName: "demo.mp4",
 			contentLength: 5_000_000,
@@ -944,12 +945,12 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(stored?.s3Key).toBe(fixture.copies[0]);
 		expect(stored?.processing?.encodeId).toBeTruthy();
 		expect(videoStarts()).toHaveLength(1);
-		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+		expect(await balanceOf(appId)).toBe(FIRST_MONTH_FOR_TWO_HOURS);
 		expect(await ledgerOf(appId)).toHaveLength(0);
 	});
 
 	it("admits a 4K agent upload at the capped price and refuses one the balance cannot store", async () => {
-		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS - 1);
+		const appId = await makeApp(FIRST_MONTH_FOR_TWO_HOURS - 1);
 		const created = await createDeveloperVideoUpload(appId, {
 			fileName: "demo.mp4",
 			contentLength: 20_000_000,
@@ -976,13 +977,13 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		});
 		expect(videoStarts()).toHaveLength(0);
 
-		await setBalance(appId, ADMISSION_FOR_TWO_HOURS);
+		await setBalance(appId, FIRST_MONTH_FOR_TWO_HOURS);
 		expect(await complete()).toMatchObject({
 			ok: true,
 			video: { status: "processing", durationSeconds: 7200 },
 		});
 		expect(videoStarts()).toHaveLength(1);
-		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+		expect(await balanceOf(appId)).toBe(FIRST_MONTH_FOR_TWO_HOURS);
 	});
 
 	it("records an agent upload once and starts it once when completions race", async () => {

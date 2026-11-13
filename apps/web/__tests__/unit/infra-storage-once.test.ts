@@ -12,7 +12,10 @@ import { fakeDb, ledger, resetLedger } from "./infra-billing-fake-db";
 
 holder.db = fakeDb;
 
-import { billableVideo } from "@/lib/developer-pricing";
+import {
+	billableVideo,
+	firstMonthStorageMicroCredits,
+} from "@/lib/developer-pricing";
 import { getInfraBilling, infraBillingJson } from "@/lib/infra-standing";
 import { getAppStorage, getAppStorageUsage } from "@/lib/infra-storage";
 
@@ -77,7 +80,7 @@ beforeEach(() => {
 });
 
 describe("one read of stored video serves both totals", () => {
-	it("gives the same stored and counted totals as two separate reads", async () => {
+	it("gives the same stored, daily and first month totals as separate reads", async () => {
 		for (const [video, options] of [
 			[undefined, {}],
 			[newVideo, {}],
@@ -87,23 +90,26 @@ describe("one read of stored video serves both totals", () => {
 			const storage = await getAppStorage("app-1", video, undefined, options);
 
 			expect(storage.stored).toEqual(
-				await getAppStorageUsage("app-1", video, undefined, options),
+				await getAppStorageUsage("app-1", undefined, undefined, options),
 			);
-			expect(storage.counted).toEqual(
-				await getAppStorageUsage("app-1", video, undefined, {
+			expect(storage.dailyCharge).toEqual(
+				await getAppStorageUsage("app-1", undefined, undefined, {
 					...options,
-					includeProcessing: true,
+					dailyChargeAt: new Date(ledger.now),
 				}),
+			);
+			expect(storage.firstMonthMicroCredits).toBe(
+				(options.excludeVideoId === "v4" ? 0 : 425) +
+					(video ? firstMonthStorageMicroCredits(video) : 0),
 			);
 		}
 	});
 
 	it("keeps processing video out of what is shown as stored and in what admission counts", async () => {
-		const { stored, counted } = await getAppStorage("app-1");
+		const { stored, firstMonthMicroCredits } = await getAppStorage("app-1");
 
 		expect(stored.videoCount).toBe(6);
-		expect(counted.videoCount).toBe(10);
-		expect(counted.totalMinutes - stored.totalMinutes).toBeCloseTo(5, 10);
+		expect(firstMonthMicroCredits).toBe(5 * 85);
 	});
 
 	it("reads video once for billing and returns what the pages show", async () => {
@@ -118,13 +124,13 @@ describe("one read of stored video serves both totals", () => {
 		expect(videoReads(select)).toBeGreaterThan(1);
 		select.mockRestore();
 		expect(billing.stored).toEqual(await getAppStorageUsage("app-1"));
-		expect(billing.usage).toEqual(
+		expect(billing.storage.dailyCharge).toEqual(
 			await getAppStorageUsage("app-1", undefined, undefined, {
-				includeProcessing: true,
+				dailyChargeAt: now,
 			}),
 		);
 		expect(infraBillingJson(billing).storage.minutesByTier).toEqual(
-			billing.usage.minutesByTier,
+			billing.stored.minutesByTier,
 		);
 	});
 });

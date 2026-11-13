@@ -14,6 +14,12 @@ import {
 } from "@/lib/infra-credit-checkout";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { findCreditCode } from "@/lib/infra-credit-code-lookup";
+import {
+	CREDIT_US_EIN_INVALID,
+	CREDIT_US_EIN_MAX_LENGTH,
+	parseCreditUsEin,
+} from "@/lib/infra-credit-us-ein";
+import { saveCreditUsEin } from "@/lib/infra-credit-us-ein-save";
 import { infraAppPath } from "@/lib/infra-routes";
 import { TOP_UP_MAX_CENTS, TOP_UP_MIN_CENTS } from "@/lib/infra-top-up";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
@@ -40,14 +46,20 @@ app.post(
 			appId: z.string(),
 			amountCents: z.number().int().min(TOP_UP_MIN_CENTS).max(TOP_UP_MAX_CENTS),
 			code: z.string().trim().min(1).max(CREDIT_CODE_MAX_LENGTH).optional(),
+			usEin: z.string().max(CREDIT_US_EIN_MAX_LENGTH).optional(),
 		}),
 	),
 	async (c) => {
 		const user = c.get("user");
-		const { appId, amountCents, code } = c.req.valid("json");
+		const { appId, amountCents, code, usEin } = c.req.valid("json");
 
 		if (!canUseInfra(user.email)) {
 			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
+		}
+
+		const ein = parseCreditUsEin(usEin);
+		if (ein.state === "invalid") {
+			return c.json({ error: CREDIT_US_EIN_INVALID }, 400);
 		}
 
 		if (
@@ -117,10 +129,23 @@ app.post(
 				account,
 			});
 
+			if (ein.state === "valid") {
+				try {
+					await saveCreditUsEin(customerId, ein.ein);
+				} catch (error) {
+					console.error("Error saving a US EIN for developer credits:", error);
+					return c.json(
+						{ error: "Could not save the EIN. Try again or leave it blank" },
+						500,
+					);
+				}
+			}
+
 			const checkoutSession = await stripe().checkout.sessions.create({
 				...creditCheckoutSessionParams({
 					customerId,
 					accountId: account.id,
+					appName: app.name,
 					amountCents,
 					receiptEmail: user.email,
 				}),

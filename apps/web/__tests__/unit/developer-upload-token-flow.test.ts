@@ -409,6 +409,26 @@ describe("uploading with the token", () => {
 		expect(inserts()).toHaveLength(1);
 	});
 
+	it.each(["video/avi", "video/x-msvideo", "Video/AVI; codecs=xvid"])(
+		"refuses %s at initiate and names what is supported",
+		async (contentType) => {
+			const { token } = await created();
+
+			const response = await upload("initiate", token, { contentType });
+
+			expect(response.status).toBe(400);
+			const body = await response.json();
+			expect(body).toMatchObject({ code: "unsupported_content_type" });
+			expect(body.hint).toContain(
+				"MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video",
+			);
+			expect(body.hint).toContain(
+				"video/mp4, video/webm, video/quicktime, video/x-matroska, application/octet-stream",
+			);
+			expect(state.create).not.toHaveBeenCalled();
+		},
+	);
+
 	it("accepts the token's own videoId in the body", async () => {
 		const { token, videoId } = await created();
 

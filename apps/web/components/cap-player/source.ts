@@ -17,6 +17,7 @@ export interface Attachment {
 	stop: () => void;
 	warm: () => void;
 	setLevel: (index: number) => void;
+	seekDuringSwitch: (time: number) => boolean;
 }
 
 export interface AttachOptions {
@@ -85,6 +86,48 @@ export const listLevels = (
 		}
 	});
 	return [...best.values()].sort(sharperFirst);
+};
+
+const RENDITION_URI = /^(\d{3,4}p)\.m3u8(?:$|\?)/;
+
+export interface MasterLevel {
+	width: number;
+	height: number;
+	bitrate: number;
+	uri: string;
+}
+
+export const parseMasterLevels = (master: string): MasterLevel[] => {
+	const lines = master.split(/\r?\n/).map((line) => line.trim());
+	const levels: MasterLevel[] = [];
+	lines.forEach((line, index) => {
+		if (!line.startsWith("#EXT-X-STREAM-INF:")) return;
+		const uri = lines[index + 1];
+		if (!uri || !RENDITION_URI.test(uri)) return;
+		const resolution = /[:,]RESOLUTION=(\d+)x(\d+)/.exec(line);
+		levels.push({
+			width: Number(resolution?.[1] ?? 0),
+			height: Number(resolution?.[2] ?? 0),
+			bitrate: Number(/[:,]BANDWIDTH=(\d+)/.exec(line)?.[1] ?? 0),
+			uri,
+		});
+	});
+	return levels;
+};
+
+// Safari's own HLS player picks renditions by itself and lets no page pick
+// one. Picking means loading a master playlist that lists only that
+// rendition, with its audio, so the time and play state carry over.
+export const renditionSource = (hls: string, uri: string | undefined) => {
+	const name = RENDITION_URI.exec(uri ?? "")?.[1];
+	if (!name) return null;
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("rendition", name);
+		return url.toString();
+	} catch {
+		return null;
+	}
 };
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
@@ -261,8 +304,13 @@ export const attachSource = (
 		height: video.clientHeight * window.devicePixelRatio,
 	});
 
+	// While a native quality switch loads, the element reads time zero, so the
+	// switch holds the real place for a second pick, a seek or a fallback to
+	// the MP4. Whether it plays is read from the element each time: a pause in
+	// that window must hold.
+	let switchingFrom: number | null = null;
 	const position = () => ({
-		resumeAt: video.currentTime,
+		resumeAt: switchingFrom ?? video.currentTime,
 		wasPlaying: !video.paused,
 	});
 
@@ -288,9 +336,64 @@ export const attachSource = (
 
 	let fileAttached = false;
 	let nativeAttached = false;
+	let nativeLevels: MasterLevel[] = [];
+	let nativeSrc = "";
+	let listing: AbortController | null = null;
+	let resumeAfterSwitch: (() => void) | null = null;
 
 	function onNativeError() {
 		playFile();
+	}
+
+	function listNativeLevels() {
+		video.removeEventListener("loadedmetadata", listNativeLevels);
+		const hls = source.hls;
+		if (!hls || listing || cancelled || fileAttached) return;
+		listing = new AbortController();
+		fetch(hls, { signal: listing.signal })
+			.then((response) => (response.ok ? response.text() : ""))
+			.then((master) => {
+				if (cancelled || fileAttached) return;
+				nativeLevels = parseMasterLevels(master);
+				onLevels?.(listLevels(nativeLevels));
+			})
+			.catch(() => undefined);
+	}
+
+	function dropResume() {
+		if (resumeAfterSwitch) {
+			video.removeEventListener("loadedmetadata", resumeAfterSwitch);
+		}
+		resumeAfterSwitch = null;
+		switchingFrom = null;
+	}
+
+	function pickNativeLevel(index: number) {
+		const hls = source.hls;
+		if (!hls || fileAttached) return;
+		const next =
+			index === AUTO_LEVEL
+				? hls
+				: renditionSource(hls, nativeLevels[index]?.uri);
+		if (!next || next === nativeSrc) return;
+		const resumeAt = switchingFrom ?? video.currentTime;
+		const wasPlaying = !video.paused;
+		const speed = video.playbackRate;
+		dropResume();
+		nativeSrc = next;
+		video.src = next;
+		video.playbackRate = speed;
+		switchingFrom = resumeAt;
+		const resume = () => {
+			const at = switchingFrom ?? resumeAt;
+			resumeAfterSwitch = null;
+			switchingFrom = null;
+			video.playbackRate = speed;
+			if (at > 0) video.currentTime = at;
+		};
+		resumeAfterSwitch = resume;
+		video.addEventListener("loadedmetadata", resume, { once: true });
+		if (wasPlaying) void video.play().catch(() => undefined);
 	}
 
 	// When hls.js fails, the browser's own HLS is tried before the MP4. Only
@@ -303,11 +406,13 @@ export const attachSource = (
 			return;
 		}
 		nativeAttached = true;
-		setLevel = () => undefined;
+		setLevel = pickNativeLevel;
 		onLevels?.([]);
 		detach = () => release(video);
 		video.addEventListener("error", onNativeError);
+		video.addEventListener("loadedmetadata", listNativeLevels);
 		video.preload = "none";
+		nativeSrc = source.hls;
 		video.src = source.hls;
 		if (resumeAt > 0) {
 			startPending = false;
@@ -324,6 +429,7 @@ export const attachSource = (
 			return;
 		}
 		fileAttached = true;
+		dropResume();
 		setLevel = () => undefined;
 		onLevels?.([]);
 		video.removeEventListener("error", onNativeError);
@@ -345,7 +451,10 @@ export const attachSource = (
 	const stop = () => {
 		cancelled = true;
 		cancelWarm();
+		listing?.abort();
+		dropResume();
 		video.removeEventListener("error", onNativeError);
+		video.removeEventListener("loadedmetadata", listNativeLevels);
 		video.removeEventListener("loadedmetadata", seekToStart);
 		detach();
 	};
@@ -360,10 +469,19 @@ export const attachSource = (
 		}
 	};
 
+	// A seek asked for while a quality switch loads becomes the place the
+	// switch resumes at, instead of being overwritten by the old one.
+	const seekDuringSwitch = (time: number) => {
+		if (resumeAfterSwitch === null) return false;
+		switchingFrom = time;
+		return true;
+	};
+
 	const attachment: Attachment = {
 		stop,
 		warm,
 		setLevel: (index) => setLevel(index),
+		seekDuringSwitch,
 	};
 
 	if (mode === "none") {
@@ -372,6 +490,7 @@ export const attachSource = (
 			stop: () => undefined,
 			warm: () => undefined,
 			setLevel: () => undefined,
+			seekDuringSwitch: () => false,
 		};
 	}
 

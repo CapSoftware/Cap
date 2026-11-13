@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
+
+import { PRO_CREDIT_COVERS } from "@/components/pages/infra/content";
 import {
 	resolveTopUpAmount,
 	TOP_UP_AMOUNT_PLACEHOLDER,
@@ -6,6 +10,8 @@ import {
 	TOP_UP_MIN_CENTS,
 	TOP_UP_RANGE_TEXT,
 	topUpButtonLabel,
+	topUpCovers,
+	topUpCoversText,
 } from "@/lib/infra-top-up";
 
 const NOT_AN_AMOUNT = "Enter an amount in dollars, for example 25 or 12.50.";
@@ -104,5 +110,27 @@ describe("the amount a top-up will charge", () => {
 		expect(TOP_UP_MAX_CENTS).toBe(1_000_000);
 		expect(TOP_UP_RANGE_TEXT).toBe("$5 to $10,000");
 		expect(TOP_UP_AMOUNT_PLACEHOLDER).toBe("Other, 5 to 10,000");
+	});
+});
+
+describe("what a top-up buys", () => {
+	it("works $5 out the same way as the landing page", () => {
+		const covers = topUpCovers(5);
+		expect([covers.storedMinutes, covers.transcribedHours]).toEqual(
+			PRO_CREDIT_COVERS.map((cover) => cover.amount),
+		);
+	});
+
+	it("rounds $25 down like the landing page", () => {
+		expect(topUpCovers(25)).toEqual({
+			storedMinutes: 29_400,
+			transcribedHours: 250,
+		});
+	});
+
+	it("says what $5 and $25 buy in one line", () => {
+		expect(topUpCoversText()).toBe(
+			"At 1080p, $5 stores 5,800 minutes for 30 days or transcribes 50 hours. $25 stores 29,400 minutes or transcribes 250 hours.",
+		);
 	});
 });

@@ -26,7 +26,7 @@ export type LedgerDescription = {
 
 const TYPE_LABELS: Record<string, string> = {
 	topup: "Top-up",
-	video_create: "Video upload",
+	video_create: "Storage, first month",
 	storage_daily: "Storage",
 	transcription: "Transcription",
 	refund: "Refund",
@@ -72,6 +72,12 @@ const NOTES: Record<string, string> = {
 		"The balance could not pay for this day. It is not charged later.",
 	"Storage, part paid":
 		"The balance paid for part of this day. The rest is not charged later.",
+	"Storage, first month":
+		"One month of storage for this video, charged when it became ready. It is charged daily after that.",
+	"Storage, first month, unpaid":
+		"The balance could not pay for this video's first month. It is not charged later.",
+	"Storage, first month, part paid":
+		"The balance paid for part of this video's first month. The rest is not charged later.",
 };
 
 const DECLINED_WITHOUT_PAYMENT = /^declined-(\d{4}-\d{2}-\d{2})$/;
@@ -86,7 +92,17 @@ function ledgerLabel(row: LedgerRow) {
 			? "Storage, unpaid"
 			: "Storage, part paid";
 	}
+	if (row.type === "video_create" && firstMonthFellShort(row)) {
+		return row.amountMicroCredits === 0
+			? "Storage, first month, unpaid"
+			: "Storage, first month, part paid";
+	}
 	return TYPE_LABELS[row.type] ?? row.type;
+}
+
+function firstMonthFellShort(row: LedgerRow) {
+	const owed = metadataAmount(row.metadata, "owedMicroCredits") ?? 0;
+	return owed > Math.abs(row.amountMicroCredits);
 }
 
 function ledgerReference(row: LedgerRow) {
@@ -255,14 +271,14 @@ const csvText = (value: string | null) => {
 };
 
 export function ledgerCsvLine(row: LedgerRow) {
-	const { label, note } = describeLedgerRow(row);
+	const { label, note, reference } = describeLedgerRow(row);
 	return `${[
 		csvText(row.id),
 		new Date(row.createdAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
 		csvText(label),
 		csvText(note),
-		csvText(row.referenceType),
-		csvText(row.referenceId),
+		csvText(reference?.kind ?? null),
+		csvText(reference?.value ?? null),
 		signedCreditDollars(row.amountMicroCredits),
 		String(row.amountMicroCredits),
 		creditDollars(row.balanceAfterMicroCredits),

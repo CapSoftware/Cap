@@ -43,6 +43,7 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { rejectOnFailure } from "@/lib/effect-react-query";
 import {
 	CAP_DRAG_TYPE,
 	type MoveLocation,
@@ -296,12 +297,19 @@ export const CapCard = ({
 		setIsDragging(false);
 	};
 
-	const handleCopy = (text: string) => {
-		copyRichVideoLink({
-			url: text,
-			title: cap.name || "Cap Recording",
-			previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
-		});
+	const handleCopy = async (text: string) => {
+		try {
+			await copyRichVideoLink({
+				url: text,
+				title: cap.name || "Cap Recording",
+				previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+			});
+		} catch (error) {
+			console.error("Failed to copy link:", error);
+			toast.error("Couldn't copy the link. Please try again.");
+			return;
+		}
+		toast.success("Link copied to clipboard");
 		setCopyPressed(true);
 		setTimeout(() => {
 			setCopyPressed(false);
@@ -311,7 +319,7 @@ export const CapCard = ({
 	const handleDownload = async () => {
 		if (downloadMutation.isPending) return;
 
-		toast.promise(downloadMutation.mutateAsync(), {
+		toast.promise(downloadMutation.mutateAsync().then(rejectOnFailure), {
 			loading: "Preparing download...",
 			success: "Download started successfully",
 			error: (error) => {
@@ -332,7 +340,9 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(videoShareUrl(webUrl, cap.id, activeOrganization?.organization));
+		void handleCopy(
+			videoShareUrl(webUrl, cap.id, activeOrganization?.organization),
+		);
 	};
 	const canEditVideo =
 		isOwner &&
@@ -438,7 +448,6 @@ export const CapCard = ({
 						onClick={(e) => {
 							e.stopPropagation();
 							copyLinkHandler();
-							toast.success("Link copied to clipboard");
 						}}
 						className="delay-0"
 						icon={
@@ -531,7 +540,6 @@ export const CapCard = ({
 								onClick={(e) => {
 									e.stopPropagation();
 									copyLinkHandler();
-									toast.success("Link copied to clipboard");
 								}}
 								className="flex gap-2 items-center rounded-lg"
 							>
@@ -554,11 +562,14 @@ export const CapCard = ({
 								<>
 									<DropdownMenuItem
 										onClick={() => {
-											toast.promise(duplicateMutation.mutateAsync(), {
-												loading: "Duplicating cap...",
-												success: "Cap duplicated successfully",
-												error: "Failed to duplicate cap",
-											});
+											toast.promise(
+												duplicateMutation.mutateAsync().then(rejectOnFailure),
+												{
+													loading: "Duplicating cap...",
+													success: "Cap duplicated successfully",
+													error: "Failed to duplicate cap",
+												},
+											);
 										}}
 										disabled={
 											duplicateMutation.isPending || cap.hasActiveUpload

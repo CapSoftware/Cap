@@ -129,7 +129,7 @@ describe("storage totals are computed once per request", () => {
 		await InfraOverviewPage(params);
 
 		expect(storageAggregates()).toHaveLength(1);
-		expect(state.queries).toHaveLength(8);
+		expect(state.queries).toHaveLength(10);
 	});
 
 	it("on the console usage page", async () => {
@@ -159,7 +159,7 @@ describe("storage totals are computed once per request", () => {
 			"app-1",
 			undefined,
 			undefined,
-			{ storage: { stored: billing.stored, counted: billing.usage } },
+			{ storage: billing.storage },
 		);
 
 		expect(storageAggregates()).toHaveLength(0);

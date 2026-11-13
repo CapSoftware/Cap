@@ -135,12 +135,39 @@ export function storageUsage(
 	};
 }
 
-export function uploadAdmissionMicroCredits(monthlyMicroCredits: number) {
+export function firstMonthStorageMicroCredits(
+	video: Pick<BillableVideo, "durationSeconds" | "tier">,
+) {
+	return Math.max(
+		1,
+		Math.floor(
+			(positive(video.durationSeconds) / 60) *
+				storageMicroCreditsPerMinutePerMonth(video.tier),
+		),
+	);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function firstMonthStoragePaidUntil(
+	chargedAt: Date,
+	todayAlreadyBilled: boolean,
+) {
+	const firstPaidDay =
+		Math.floor(chargedAt.getTime() / DAY_MS) + (todayAlreadyBilled ? 1 : 0);
+	return new Date((firstPaidDay + STORAGE_BILLING_DAYS_PER_MONTH) * DAY_MS);
+}
+
+export function uploadAdmissionMicroCredits(
+	dailyChargeMonthlyMicroCredits: number,
+	firstMonthMicroCredits = 0,
+) {
 	return Math.max(
 		1,
 		Math.ceil(
-			(positive(monthlyMicroCredits) * UPLOAD_ADMISSION_DAYS) /
-				STORAGE_BILLING_DAYS_PER_MONTH,
+			positive(firstMonthMicroCredits) +
+				(positive(dailyChargeMonthlyMicroCredits) * UPLOAD_ADMISSION_DAYS) /
+					STORAGE_BILLING_DAYS_PER_MONTH,
 		),
 	);
 }

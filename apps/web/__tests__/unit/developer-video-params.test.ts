@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { developerVideoPlayback } from "@/lib/developer-video-params";
+import {
+	cappedPlaylistUrl,
+	developerVideoPlayback,
+} from "@/lib/developer-video-params";
 
 const DEFAULTS = {
 	autoPlay: false,
@@ -8,6 +11,16 @@ const DEFAULTS = {
 	controls: true,
 	captions: false,
 	startAt: 0,
+	accentColor: null,
+	radius: 0,
+	maxQuality: null,
+	poster: true,
+	keyboard: true,
+	events: true,
+	qualityMenu: true,
+	speedMenu: true,
+	pip: true,
+	fullscreen: true,
 };
 
 describe("developerVideoPlayback", () => {
@@ -29,6 +42,7 @@ describe("developerVideoPlayback", () => {
 				"embed",
 			),
 		).toEqual({
+			...DEFAULTS,
 			autoPlay: true,
 			muted: true,
 			loop: true,
@@ -144,6 +158,142 @@ describe("developerVideoPlayback", () => {
 				},
 				"share",
 			),
-		).toEqual({ ...DEFAULTS, startAt: 42 });
+		).toEqual({ ...DEFAULTS, startAt: 42, events: false });
+	});
+
+	it("reads every look and feel parameter", () => {
+		expect(
+			developerVideoPlayback(
+				{
+					color: "3B82F6",
+					radius: "12",
+					quality: "720",
+					poster: "0",
+					keyboard: "0",
+					quality_menu: "0",
+					speed_menu: "0",
+					pip: "0",
+					fullscreen: "0",
+				},
+				"embed",
+			),
+		).toEqual({
+			...DEFAULTS,
+			accentColor: "#3b82f6",
+			radius: 12,
+			maxQuality: 720,
+			poster: false,
+			keyboard: false,
+			qualityMenu: false,
+			speedMenu: false,
+			pip: false,
+			fullscreen: false,
+		});
+	});
+
+	it.each([
+		["3b82f6", "#3b82f6"],
+		["#3b82f6", "#3b82f6"],
+		["F80", "#ff8800"],
+		["#abc", "#aabbcc"],
+	])("takes the accent colour %j", (color, accentColor) => {
+		expect(developerVideoPlayback({ color }, "embed").accentColor).toBe(
+			accentColor,
+		);
+	});
+
+	it.each([
+		"red",
+		"#12345",
+		"1234567",
+		"#3b82f6;background:url(x)",
+		"3b82f6</style><script>alert(1)</script>",
+		"var(--x)",
+		"#3b82f6 ",
+		"%233b82f6",
+		"",
+		"#",
+		"rgb(0,0,0)",
+		"expression(alert(1))",
+	])("ignores the hostile or malformed colour %j", (color) => {
+		expect(developerVideoPlayback({ color }, "embed").accentColor).toBeNull();
+	});
+
+	it.each([
+		["0", 0],
+		["8", 8],
+		["24", 24],
+		["99", 24],
+		["-4", 0],
+		["12px", 0],
+		["1.5", 0],
+		["100", 0],
+		["", 0],
+		["12;}", 0],
+	])("reads the corner radius %j as %d px", (radius, expected) => {
+		expect(developerVideoPlayback({ radius }, "embed").radius).toBe(expected);
+	});
+
+	it.each([
+		["720", 720],
+		["720p", 720],
+		["1080P", 1080],
+		["2160", 2160],
+		["360", 360],
+		["99", null],
+		["9999", null],
+		["720px", null],
+		["auto", null],
+		["-720", null],
+		["720&max=1", null],
+		["", null],
+	])("reads the quality cap %j as %s", (quality, expected) => {
+		expect(developerVideoPlayback({ quality }, "embed").maxQuality).toBe(
+			expected,
+		);
+	});
+
+	it("hides only the menus and buttons that are switched off", () => {
+		expect(
+			developerVideoPlayback(
+				{ quality_menu: "0", speed_menu: "1", pip: "yes", fullscreen: "false" },
+				"embed",
+			),
+		).toMatchObject({
+			qualityMenu: false,
+			speedMenu: true,
+			pip: true,
+			fullscreen: false,
+		});
+	});
+
+	it("keeps the look and feel parameters to the embed", () => {
+		expect(
+			developerVideoPlayback(
+				{ color: "f00", radius: "8", quality: "720", poster: "0", pip: "0" },
+				"share",
+			),
+		).toMatchObject({
+			accentColor: null,
+			radius: 0,
+			maxQuality: null,
+			poster: true,
+			pip: true,
+		});
+	});
+});
+
+describe("cappedPlaylistUrl", () => {
+	const MASTER = "https://web.example/api/developer/playback/abc/master.m3u8";
+
+	it("leaves the playlist alone without a cap", () => {
+		expect(cappedPlaylistUrl(MASTER, null)).toBe(MASTER);
+	});
+
+	it("asks the playback route for renditions up to the cap", () => {
+		expect(cappedPlaylistUrl(MASTER, 720)).toBe(`${MASTER}?max=720`);
+		expect(cappedPlaylistUrl(`${MASTER}?max=1080`, 720)).toBe(
+			`${MASTER}?max=720`,
+		);
 	});
 });

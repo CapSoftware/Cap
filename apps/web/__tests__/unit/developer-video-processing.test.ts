@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	readJob: vi.fn(),
 	cancelJob: vi.fn(),
 	charge: vi.fn(),
+	firstMonth: vi.fn(),
 	deleteObjects: vi.fn(),
 	sniff: vi.fn(),
 }));
@@ -40,6 +41,9 @@ vi.mock("@/lib/developer-video-storage", () => ({
 	internalDeveloperVideoUrl: async (key: string) => `https://storage/${key}`,
 	developerVideoUploadUrl: async (key: string, contentType: string) =>
 		`https://storage/put/${key}?type=${contentType}`,
+}));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtReady: mocks.firstMonth,
 }));
 vi.mock("@/lib/developer-video-charge", () => ({
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS: 4 * 60 * 60,
@@ -199,6 +203,64 @@ describe("developer video webhook", () => {
 		expect(video().processing?.poster).toEqual({ output: "t-mp4" });
 		expect(mocks.head).toHaveBeenCalledWith(`${ENCODE}/t-mp4/video.mp4`);
 		expect(video().storedBytes).toBe(1_000 + 2_000 + 50);
+	});
+
+	it("charges the first month once, after the video turns ready, and not when its second part lands", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: runningPart("t-mp4"),
+			}),
+		});
+		mocks.firstMonth.mockImplementation(async () => {
+			expect(video().status).toBe("ready");
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete" },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(mocks.firstMonth).toHaveBeenCalledTimes(1);
+		expect(mocks.firstMonth.mock.calls[0]?.[0]).toMatchObject({
+			id: "video-1",
+			status: "ready",
+			deletedAt: null,
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", ladder },
+			"hls",
+			"t-hls",
+		);
+
+		expect(video().processing?.hls.state).toBe("complete");
+		expect(mocks.firstMonth).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not charge the first month for a part that leaves the video encoding or failed", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: runningPart("t-mp4"),
+				attempts: { hls: 2, mp4: 2 },
+			}),
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "error", error: "boom" },
+			"mp4",
+			"t-mp4",
+		);
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "error", error: "boom" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(video().status).toBe("errored");
+		expect(mocks.firstMonth).not.toHaveBeenCalled();
 	});
 
 	it("marks the video ready with its renditions once both parts are stored", async () => {
@@ -1465,7 +1527,7 @@ describe("developer video dispatch", () => {
 
 		await expect(refusal).rejects.toBeInstanceOf(DeveloperVideoRejected);
 		await expect(refusal).rejects.toThrow(
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		);
 		expect(video().processing?.probing).toBeUndefined();
 	});
@@ -1479,11 +1541,11 @@ describe("developer video dispatch", () => {
 		["Media input is empty", "The uploaded file is empty. Upload it again."],
 		[
 			"Media input could not be read",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Input has an unsupported or unrecognizable format.",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Video frame is larger than 8K, the largest size this server accepts",
@@ -1567,7 +1629,7 @@ describe("developer video dispatch", () => {
 		[
 			"a file that is not media",
 			"unknown",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 	])(
 		"refuses %s without asking the media server",

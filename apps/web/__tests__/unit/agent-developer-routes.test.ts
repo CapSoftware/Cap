@@ -14,7 +14,7 @@ vi.mock("@/lib/rate-limit", () => ({
 
 const state = vi.hoisted(() => ({
 	scopes: [] as string[],
-	apps: [] as { id: string }[],
+	apps: [] as { id: string; appName?: string }[],
 	videos: [] as Record<string, unknown>[],
 	transactions: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
@@ -23,12 +23,20 @@ const state = vi.hoisted(() => ({
 	users: [] as Record<string, unknown>[],
 	createCheckoutSession: vi.fn(),
 	cancelEncodes: vi.fn(async () => undefined),
+	settleAtDelete: vi.fn(async () => null),
+	settleDeletedApp: vi.fn(async () => undefined),
 	videoUpdates: [] as Record<string, unknown>[],
 	appStamps: [] as unknown[],
 }));
 
 vi.mock("@/lib/developer-video-cancel", () => ({
 	cancelDeveloperVideoEncodes: state.cancelEncodes,
+}));
+
+vi.mock("@/lib/infra-storage-minimum", async (original) => ({
+	...(await original<typeof import("@/lib/infra-storage-minimum")>()),
+	settleFirstMonthAtDelete: state.settleAtDelete,
+	settleFirstMonthsForDeletedApp: state.settleDeletedApp,
 }));
 
 vi.mock("@cap/utils", async (original) => ({
@@ -186,6 +194,8 @@ describe("developer routes of the agent API", () => {
 		state.users = [];
 		state.createCheckoutSession.mockReset();
 		state.cancelEncodes.mockClear();
+		state.settleAtDelete.mockClear();
+		state.settleDeletedApp.mockClear();
 		state.videoUpdates = [];
 		state.appStamps = [];
 	});
@@ -320,8 +330,45 @@ describe("developer routes of the agent API", () => {
 		});
 	});
 
+	it("settles the first month of the videos an app delete stamped, once, after the delete and before the cancel", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(200);
+		const deletedAt = state.videoUpdates[0]?.deletedAt;
+		expect(state.settleDeletedApp).toHaveBeenCalledExactlyOnceWith(
+			APP,
+			deletedAt,
+		);
+		const [settled] = state.settleDeletedApp.mock.invocationCallOrder;
+		const [cancelled] = state.cancelEncodes.mock.invocationCallOrder;
+		expect(settled).toBeLessThan(cancelled ?? 0);
+	});
+
+	it("settles nothing for an app it could not find", async () => {
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(404);
+		expect(state.settleDeletedApp).not.toHaveBeenCalled();
+	});
+
+	it("settles a deleted video's first month before cancelling its encode", async () => {
+		state.apps = [{ id: APP }];
+		state.videos = [{ id: "video0000000001" }];
+
+		await call("DELETE", `/developer/apps/${APP}/videos/video0000000001`);
+
+		expect(state.settleAtDelete).toHaveBeenCalledExactlyOnceWith(
+			"video0000000001",
+		);
+		const [settled] = state.settleAtDelete.mock.invocationCallOrder;
+		const [cancelled] = state.cancelEncodes.mock.invocationCallOrder;
+		expect(settled).toBeLessThan(cancelled ?? 0);
+	});
+
 	it("opens a credit checkout with the console's receipt, tax and payment tag", async () => {
-		state.apps = [{ id: "account-1" }];
+		state.apps = [{ id: "account-1", appName: "Course site" }];
 		state.users = [{ stripeCustomerId: "cus_agent" }];
 		state.createCheckoutSession.mockResolvedValue({
 			url: "https://checkout.stripe.com/agent",
@@ -343,6 +390,7 @@ describe("developer routes of the agent API", () => {
 			...creditCheckoutSessionParams({
 				customerId: "cus_agent",
 				accountId: "account-1",
+				appName: "Course site",
 				amountCents: 2500,
 				receiptEmail: "owner@example.com",
 			}),
@@ -360,9 +408,11 @@ describe("developer routes of the agent API", () => {
 			mode: "payment",
 			invoice_creation: {
 				enabled: true,
-				invoice_data: { description: "Cap Infra credits" },
+				invoice_data: { description: "Cap Infra credits for Course site" },
 			},
+			payment_method_types: ["card", "link"],
 			payment_intent_data: {
+				description: "Cap Infra credits for Course site",
 				receipt_email: "owner@example.com",
 				metadata: { type: "developer_credits", accountId: "account-1" },
 			},

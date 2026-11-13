@@ -11,6 +11,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { canUseInfra } from "@/lib/infra-access";
+import { settleFirstMonthsForDeletedApp } from "@/lib/infra-storage-minimum";
 
 export async function deleteDeveloperApp(appId: string) {
 	const user = await getCurrentUser();
@@ -30,11 +31,11 @@ export async function deleteDeveloperApp(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
-	const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+	const deletedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		await tx
 			.update(developerApiKeys)
-			.set({ revokedAt: now })
+			.set({ revokedAt: deletedAt })
 			.where(
 				and(
 					eq(developerApiKeys.appId, appId),
@@ -44,12 +45,12 @@ export async function deleteDeveloperApp(appId: string) {
 
 		await tx
 			.update(developerApps)
-			.set({ deletedAt: now })
+			.set({ deletedAt })
 			.where(eq(developerApps.id, appId));
 
 		await tx
 			.update(developerVideos)
-			.set({ deletedAt: now })
+			.set({ deletedAt })
 			.where(
 				and(
 					eq(developerVideos.appId, appId),
@@ -57,7 +58,8 @@ export async function deleteDeveloperApp(appId: string) {
 				),
 			);
 	});
-	await cancelDeveloperVideoEncodes({ appId, deletedAt: now });
+	await settleFirstMonthsForDeletedApp(appId, deletedAt);
+	await cancelDeveloperVideoEncodes({ appId, deletedAt });
 
 	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
