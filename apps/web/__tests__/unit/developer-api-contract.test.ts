@@ -762,6 +762,35 @@ describe("credentials that are not accepted", () => {
 		expect((await getUsage(customer, address)).status).toBe(200);
 	});
 
+	it("counts that minute from the key's last accepted request, not from when its count began", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T11:30:00Z"));
+		const address = from("203.0.113.78");
+		const accepted = mocks.keyRows;
+		const customer = freshKey("csk");
+		expect((await getUsage(customer, address)).status).toBe(200);
+		vi.advanceTimersByTime(59_000);
+		expect((await getUsage(customer, address)).status).toBe(200);
+
+		mocks.keyRows = [];
+		for (let attempt = 1; attempt <= 31; attempt++) {
+			await getUsage(freshKey("csk"), address);
+		}
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(429);
+
+		mocks.keyRows = accepted;
+		vi.advanceTimersByTime(2_000);
+		expect((await getUsage(customer, address)).status).toBe(200);
+
+		vi.advanceTimersByTime(61_000);
+		mocks.keyRows = [];
+		for (let attempt = 1; attempt <= 31; attempt++) {
+			await getUsage(freshKey("csk"), address);
+		}
+		mocks.keyRows = accepted;
+		expect((await getUsage(customer, address)).status).toBe(429);
+	});
+
 	it("counts by the address the platform reports, not one the caller writes", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-11-12T12:00:00Z"));

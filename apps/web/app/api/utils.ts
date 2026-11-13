@@ -186,10 +186,25 @@ const UPLOAD_TOKEN_RATE_LIMIT: DeveloperRateLimit = {
 // accepted within the last minute is still let through, so a customer who
 // shares an address with such a caller keeps working.
 const blockedAddresses = new Map<string, number>();
+const acceptedAt = new Map<string, number>();
 
 function recentlyAccepted(credential: string): boolean {
-	const window = requestCounts.get(`${KEY_RATE_LIMIT.ruleId}|${credential}`);
-	return window !== undefined && window.resetAt >= Date.now();
+	const at = acceptedAt.get(credential);
+	return at !== undefined && Date.now() - at < RATE_LIMIT_WINDOW_MS;
+}
+
+function rememberAccepted(credential: string) {
+	const now = Date.now();
+	if (
+		!acceptedAt.has(credential) &&
+		acceptedAt.size >= RATE_LIMIT_MAX_ENTRIES
+	) {
+		for (const [key, at] of acceptedAt) {
+			if (now - at >= RATE_LIMIT_WINDOW_MS) acceptedAt.delete(key);
+		}
+		if (acceptedAt.size >= RATE_LIMIT_MAX_ENTRIES) acceptedAt.clear();
+	}
+	acceptedAt.set(credential, now);
 }
 
 function authFailuresBlocked(c: Context): boolean {
@@ -321,6 +336,7 @@ export const developerRateLimiter = createMiddleware<{
 		return c.json(unknownSecretKey(), 401);
 	}
 	setDeveloperSecretKey(c, key);
+	rememberAccepted(credential);
 
 	const [byKey, byOwner] = await Promise.all([
 		credentialDigest(credential).then((digest) =>
