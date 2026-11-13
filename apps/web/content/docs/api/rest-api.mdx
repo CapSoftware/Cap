@@ -49,7 +49,7 @@ The SDK API takes an upload token instead. Your server gets one from [Create Upl
 Authorization: Bearer cut_your_upload_token_here
 ```
 
-An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload: the SDK API answers `403` with code `public_key_not_allowed`.
+An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload or call the REST API: both answer `403` with code `public_key_not_allowed`. A REST request with no `Authorization` header answers `401` with code `invalid_secret_key` and the message `Missing secret key`.
 
 Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly. The REST API sends no CORS headers, so a page cannot call it. Call it from your server, and give the page an upload token for the SDK API.
 
@@ -117,7 +117,7 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 | `400` | Bad request. The `code` says what was wrong, for example `invalid_request`, `invalid_json`, `invalid_limit` or `unknown_parameter` |
 | `401` | Unauthorized. The API key or upload token is missing, invalid, revoked or expired |
 | `402` | Payment required. The app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
-| `403` | Forbidden. On the SDK API, a public key was sent (`public_key_not_allowed`), the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
+| `403` | Forbidden. A public key was sent where a secret key or upload token is required (`public_key_not_allowed`). On the SDK API, the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
 | `404` | Not found. The video, transcript or multipart upload does not exist (`video_not_found`, `transcript_not_found`, `upload_not_found` for an `uploadId`), or no route matches the path (`not_found`) |
 | `405` | Method not allowed. The path exists but not with this method (`method_not_allowed`). The `Allow` header lists the methods it takes |
 | `409` | Conflict with the current state, for example an upload that already completed, or a transcript started before its file was uploaded (`upload_not_found`). The `code` says which |
@@ -1172,7 +1172,7 @@ curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
 }
 ```
 
-A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`.
+A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`. Signing does not contact storage, so an `uploadId` that is wrong or was aborted is not refused here: the `PUT` to its URL fails, and Complete Upload answers `404` with the code `upload_not_found`.
 
 A token signs part numbers up to the last one its size limit allows: `maxBytes` divided by 5,242,880 and rounded up, or 6,867 for a token with no `maxBytes`. A higher part number returns `400` with the code `part_number_too_large`, and no part in that request is signed.
 
@@ -1258,7 +1258,7 @@ Abort also returns `409` with `completion_in_progress` while a completion holds 
 
 #### Abort Upload
 
-Cancel an in-progress multipart upload and discard its parts. If no open upload matches the `uploadId`, abort returns `404` with the code `upload_not_found`, which means there is nothing left to abort.
+Cancel an in-progress multipart upload and discard its parts. Abort is safe to repeat: when no open upload matches the `uploadId`, for example because it was already aborted, it answers `200` with `{ "success": true }` again.
 
 ```
 POST /api/developer/sdk/v1/upload/multipart/abort

@@ -807,7 +807,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "presignSdkUploadPart",
 				summary: "Presign upload parts",
 				description:
-					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count. A part number above the last one the upload's size limit allows (maxBytes divided by 5,242,880 and rounded up, or 6,867 with no maxBytes) returns 400 with code part_number_too_large and signs nothing, so number the parts from 1 with no gaps.",
+					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count. A part number above the last one the upload's size limit allows (maxBytes divided by 5,242,880 and rounded up, or 6,867 with no maxBytes) returns 400 with code part_number_too_large and signs nothing, so number the parts from 1 with no gaps. Signing does not contact storage, so an uploadId that is wrong or was aborted is not refused here: the PUT to its URL fails, and completeSdkUpload answers 404 with code upload_not_found.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("PresignPartRequest"),
@@ -843,7 +843,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "abortSdkUpload",
 				summary: "Abort a multipart upload",
 				description:
-					"Cancels an unfinished upload and discards its parts. Returns 404 with code upload_not_found when no open upload matches the uploadId, which means there is nothing left to abort.",
+					"Cancels an unfinished upload and discards its parts. Abort is safe to repeat: when no open upload matches the uploadId, for example because it was already aborted, it answers 200 with success true again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("AbortUploadRequest"),
