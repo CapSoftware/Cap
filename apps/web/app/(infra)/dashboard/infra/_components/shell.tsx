@@ -45,10 +45,12 @@ const QUIET_LINK = clsx(
 export function Shell({
 	apps,
 	appId,
+	balanceMicroCredits,
 	children,
 }: {
 	apps: InfraAppSummary[];
 	appId: string;
+	balanceMicroCredits: number;
 	children: React.ReactNode;
 }) {
 	const pathname = usePathname();
@@ -159,7 +161,7 @@ export function Shell({
 									"m-0 mt-2 text-[20px] leading-none tracking-[-0.04em] tabular-nums text-white",
 								)}
 							>
-								{formatCredits(current.balanceMicroCredits)}
+								{formatCredits(balanceMicroCredits)}
 							</p>
 							<Link
 								href={infraAppPath(appId, "billing")}

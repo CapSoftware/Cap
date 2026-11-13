@@ -123,3 +123,34 @@ export async function getAppStorageUsage(
 	);
 	return usageByApp.get(appId) ?? storageUsage([]);
 }
+
+export type AppStorage = { stored: StorageUsage; counted: StorageUsage };
+
+export async function getAppStorage(
+	appId: string,
+	newVideo?: BillableVideo | null,
+	executor: InfraDbExecutor = db(),
+	options: Pick<StorageUsageOptions, "excludeVideoId"> = {},
+): Promise<AppStorage> {
+	const groups = await storedVideoGroups(
+		[appId],
+		executor,
+		options.excludeVideoId,
+	);
+	const usage = (includeProcessing: boolean) =>
+		storageUsage([
+			...groups.map((group) => ({
+				video: billableVideo({
+					duration: Number(group.seconds),
+					width: group.width,
+					height: group.height,
+					status: group.status,
+					maxResolutionTier: group.maxResolutionTier,
+					includeProcessing,
+				}),
+				count: Number(group.count) || 0,
+			})),
+			...(newVideo ? [{ video: newVideo, count: 1 }] : []),
+		]);
+	return { stored: usage(false), counted: usage(true) };
+}
