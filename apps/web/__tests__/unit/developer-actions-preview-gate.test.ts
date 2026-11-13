@@ -101,6 +101,47 @@ const actions: [string, () => Promise<unknown>][] = [
 				"video-1",
 			),
 	],
+	[
+		"add a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).createInfraWebhook(
+				"app-1",
+				{ url: "https://example.com/hook", events: ["video.ready"] },
+			),
+	],
+	[
+		"turn a webhook endpoint off",
+		async () =>
+			(await import("@/actions/developers/webhooks")).setInfraWebhookEnabled(
+				"app-1",
+				"hook-1",
+				false,
+			),
+	],
+	[
+		"rotate a webhook secret",
+		async () =>
+			(await import("@/actions/developers/webhooks")).rotateInfraWebhookSecret(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"send a webhook test",
+		async () =>
+			(await import("@/actions/developers/webhooks")).sendInfraWebhookTest(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"delete a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).deleteInfraWebhook(
+				"app-1",
+				"hook-1",
+			),
+	],
 ];
 
 describe("Cap Infra console actions and sign-in", () => {
