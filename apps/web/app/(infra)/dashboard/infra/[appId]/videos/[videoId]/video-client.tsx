@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { renameDeveloperVideo } from "@/actions/developers/rename-video";
 import { CapPlayer } from "@/components/cap-player/CapPlayer";
+import { DEVELOPER_VIDEO_REPORT_EMAIL } from "@/lib/developer-video-takedown";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
 import { formatBytes, formatDurationOrDash } from "@/lib/infra-usage";
@@ -286,7 +287,14 @@ export function VideoClient({
 
 			<div className="grid items-start gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
 				<div className="min-w-0">
-					{video.state === "ready" && playable && playbackPaused ? (
+					{video.state === "taken_down" ? (
+						<Notice title="Taken down">
+							Cap took this video down after a report, so it does not play here,
+							on its page or anywhere it is embedded. It is still stored and
+							billed like your other videos. If you think this is a mistake,
+							email {DEVELOPER_VIDEO_REPORT_EMAIL}.
+						</Notice>
+					) : video.state === "ready" && playable && playbackPaused ? (
 						<Notice
 							title="Playback is paused"
 							action={

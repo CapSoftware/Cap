@@ -1,10 +1,16 @@
-export type InfraVideoState = "uploading" | "processing" | "ready" | "failed";
+export type InfraVideoState =
+	| "uploading"
+	| "processing"
+	| "ready"
+	| "failed"
+	| "taken_down";
 
 export const INFRA_VIDEO_STATE_LABELS: Record<InfraVideoState, string> = {
 	uploading: "Uploading",
 	processing: "Processing",
 	ready: "Ready",
 	failed: "Failed",
+	taken_down: "Taken down",
 };
 
 export type InfraLocalUpload = "sending" | "sent" | null;
@@ -93,6 +99,7 @@ export type InfraVideoDetail = InfraVideoListItem & {
 type StateInput = {
 	status: string;
 	legacy: boolean;
+	takenDown: boolean;
 	duration: number | null;
 	width: number | null;
 };
@@ -100,6 +107,7 @@ type StateInput = {
 // Mirrors developerVideoIsReady: a video uploaded before encoding existed has
 // no playback id and no processing state, and is ready once it was measured.
 export function infraVideoState(video: StateInput): InfraVideoState {
+	if (video.takenDown) return "taken_down";
 	if (video.status === "ready") return "ready";
 	if (video.legacy && video.duration !== null && video.width !== null) {
 		return "ready";
@@ -196,7 +204,8 @@ export function toInfraVideoDetail(
 	page: { shareUrl: string; embedUrl: string } | null = null,
 ): InfraVideoDetail {
 	const item = toInfraVideoListItem(row);
-	const shared = page !== null && item.state !== "failed";
+	const shared =
+		page !== null && item.state !== "failed" && item.state !== "taken_down";
 	return {
 		...item,
 		width: row.width,

@@ -42,6 +42,11 @@ const processing: DeveloperVideoPlayer = {
 };
 const failed: DeveloperVideoPlayer = { ...frame, kind: "failed" };
 const paused: DeveloperVideoPlayer = { ...frame, kind: "paused" };
+const takenDown: DeveloperVideoPlayer = { ...frame, kind: "taken_down" };
+const REPORT_HREF = `mailto:hello@cap.so?subject=Report%20video%20${PLAYBACK_ID}`;
+
+const links = (html: string) =>
+	[...html.matchAll(/<a [^>]*>[^<]*<\/a>/g)].map((match) => match[0]);
 
 const render = (
 	player: DeveloperVideoPlayer,
@@ -49,7 +54,12 @@ const render = (
 	playback?: DeveloperVideoPlayback,
 ) =>
 	renderToStaticMarkup(
-		createElement(DeveloperVideoView, { player, variant, playback }),
+		createElement(DeveloperVideoView, {
+			playbackId: PLAYBACK_ID,
+			player,
+			variant,
+			playback,
+		}),
 	);
 
 const params = (query: DeveloperVideoQuery = {}, playbackId = PLAYBACK_ID) => ({
@@ -150,7 +160,8 @@ describe("developer video page states", () => {
 			expect(embed).not.toContain("Cap Infra");
 			expect(embed).not.toContain("<header");
 			expect(embed).toContain('<h1 class="sr-only">Launch demo</h1>');
-			expect(embed).not.toContain("<a ");
+			expect(embed.match(/<a /g)).toHaveLength(1);
+			expect(embed).toContain(`href="${REPORT_HREF}"`);
 		},
 	);
 
@@ -161,6 +172,119 @@ describe("developer video page states", () => {
 		expect(html).toContain("--cap-player-ratio:auto");
 		expect(html).toContain("<video");
 	});
+});
+
+describe("developer video report link", () => {
+	it.each([
+		["playing", playing],
+		["processing", processing],
+		["failed", failed],
+		["paused", paused],
+	])(
+		"offers a quiet Report link under the %s video that emails the support address with the playback id",
+		(_, player) => {
+			const [report, ...others] = links(render(player));
+
+			expect(others).toEqual([]);
+			expect(report).toContain(`href="${REPORT_HREF}"`);
+			expect(report).toContain('aria-label="Report this video"');
+			expect(report).toContain(">Report</a>");
+			expect(report).not.toContain("target=");
+			expect(report).not.toMatch(/uppercase|tracking-\[0\.|font-semibold/);
+		},
+	);
+
+	it("tucks the embed link into the top corner, hidden until the pointer is over a player with its controls showing", () => {
+		const html = render(playing, "embed");
+		const [report] = links(html);
+
+		expect(html).toContain('class="group fixed inset-0 bg-black"');
+		expect(report).toContain(`href="${REPORT_HREF}"`);
+		expect(report).toContain('target="_blank"');
+		expect(report).toContain('rel="noopener noreferrer"');
+		expect(report).toContain("absolute right-2 top-2");
+		expect(report).toContain("opacity-0");
+		expect(report).toContain("pointer-events-none");
+		expect(report).toContain(
+			"[.group:hover:not(:has([data-idle=true]))_&amp;]:opacity-100",
+		);
+		expect(report).toContain("focus-visible:opacity-100");
+	});
+});
+
+describe("a taken down video page", () => {
+	const takenDownFromLoader: DeveloperVideoPlayer = {
+		name: "",
+		width: 16,
+		height: 9,
+		kind: "taken_down",
+	};
+
+	it.each(["share", "embed"] as const)(
+		"shows one plain sentence on the %s page and nothing from the video",
+		async (variant) => {
+			mocks.load.mockResolvedValue(takenDownFromLoader);
+			const page = variant === "share" ? sharePage : embedPage;
+			const route = await page.default(params());
+			expect(route.props).toMatchObject({ playbackId: PLAYBACK_ID, variant });
+
+			const html = renderToStaticMarkup(
+				await DeveloperVideoPage({
+					playbackId: PLAYBACK_ID,
+					variant,
+					query: {},
+				}),
+			);
+			const text = html
+				.replace(/<style>.*?<\/style>/g, "")
+				.replace(/<[^>]+>/g, " ")
+				.trim();
+
+			expect(text).toBe("This video is not available.");
+			expect(html).toContain("<h1");
+			for (const absent of [
+				"<video",
+				"<img",
+				"<a ",
+				"poster",
+				"m3u8",
+				"video.mp4",
+				"/api/developer/playback",
+				PLAYBACK_ID,
+				"Launch demo",
+				"aspect-ratio",
+				'role="status"',
+				'aria-label="Cap Infra"',
+			]) {
+				expect(html).not.toContain(absent);
+			}
+		},
+	);
+
+	it("never renders the video's own name or size even if the loader passed them", () => {
+		const html = render(takenDown, "share");
+
+		expect(html).not.toContain("Launch demo");
+		expect(html).not.toContain("1920");
+		expect(html).not.toContain("mailto:");
+	});
+
+	it.each([
+		["share", sharePage],
+		["embed", embedPage],
+	])(
+		"keeps the %s page out of search and previews with no title or image from the video",
+		async (_, page) => {
+			mocks.load.mockResolvedValue(takenDownFromLoader);
+
+			expect(await page.generateMetadata(params())).toMatchObject({
+				title: "Video not available",
+				robots: { index: false, follow: false },
+				openGraph: { title: "Video not available", images: [] },
+				twitter: { card: "summary", title: "Video not available", images: [] },
+			});
+		},
+	);
 });
 
 describe("developer video page parameters", () => {

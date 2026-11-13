@@ -349,6 +349,7 @@ describe("developer routes of the agent API", () => {
 			},
 		],
 		transcriptionStatus: null,
+		takenDown: false,
 		processing: {
 			hls: { state: "complete" },
 			mp4: { state: "complete" },
@@ -383,6 +384,7 @@ describe("developer routes of the agent API", () => {
 			maxResolutionTier: "1080p",
 			renditions: videoRow().renditions,
 			transcriptionStatus: null,
+			takenDown: false,
 			hlsUrl:
 				"http://localhost/api/developer/playback/playback-id-000000000001/master.m3u8",
 			mp4Url:
