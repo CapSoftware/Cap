@@ -351,7 +351,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 300 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 
@@ -800,3 +800,46 @@ Uploading and encoding are free. Stored video and transcription are paid for fro
 - The app's Billing page in the console shows the balance and every charge.
 - [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
 - [List Transactions](/docs/api/rest-api#list-transactions) returns every credit and charge.
+
+## 10. Use with agents (MCP)
+
+Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Codex can upload, check and transcribe video with the app's secret key.
+
+- URL: `https://cap.so/api/developer/mcp`
+- Header: `Authorization: Bearer` followed by the secret key
+
+Claude Code, with the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
+```
+
+Cursor, in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cap-infra": {
+      "url": "https://cap.so/api/developer/mcp",
+      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+    }
+  }
+}
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cap-infra]
+url = "https://cap.so/api/developer/mcp"
+bearer_token_env_var = "CAP_SECRET_KEY"
+```
+
+The tools:
+
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
+- `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
+- `account_usage` and `account_transactions`: the balance, prices and every charge.
+
+Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.

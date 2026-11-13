@@ -47,6 +47,7 @@ const nextConfig = {
 		"@cap/web-api-contract",
 		"@cap/web-domain",
 		"@cap/env",
+		"@cap/infra-mcp",
 		"@cap/database",
 		"@cap/recorder-core",
 		"next-mdx-remote",

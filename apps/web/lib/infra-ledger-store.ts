@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt, lte, or } from "drizzle-orm";
 import { type LedgerRow, orderLedgerRows } from "@/lib/infra-ledger";
 
 const EXPORT_BATCH_SIZE = 1_000;
@@ -85,9 +85,30 @@ export async function listAppLedger(
 		.orderBy(...newestFirst)
 		.limit(limit + 1)
 		.offset(offset);
+	const hasMore = rows.length > limit;
+	const page = rows.slice(0, limit);
+	const newest = page[0];
+	const oldest = page.at(-1);
+	if (!newest || !oldest || (offset === 0 && !hasMore)) {
+		return { rows: orderLedgerRows(page), hasMore };
+	}
+
+	const seconds: LedgerRow[] = await appLedger()
+		.where(
+			and(
+				ofApp(appId),
+				gte(developerCreditTransactions.createdAt, oldest.createdAt),
+				lte(developerCreditTransactions.createdAt, newest.createdAt),
+			),
+		)
+		.orderBy(...newestFirst);
+	const skipped = Math.max(
+		0,
+		seconds.findIndex((row) => row.id === newest.id),
+	);
 	return {
-		rows: orderLedgerRows(rows.slice(0, limit)),
-		hasMore: rows.length > limit,
+		rows: orderLedgerRows(seconds).slice(skipped, skipped + limit),
+		hasMore,
 	};
 }
 
@@ -153,8 +174,23 @@ export async function* readAppLedger(
 			.limit(batchSize);
 		const last = rows.at(-1);
 		if (!last) return;
-		yield orderLedgerRows(rows);
-		if (rows.length < batchSize) return;
-		cursor = { createdAt: last.createdAt, id: last.id };
+		if (rows.length < batchSize) {
+			yield orderLedgerRows(rows);
+			return;
+		}
+		const lastSecond = new Date(last.createdAt).getTime();
+		const restOfSecond: LedgerRow[] = await appLedger()
+			.where(
+				and(
+					ofApp(appId),
+					eq(developerCreditTransactions.createdAt, last.createdAt),
+				),
+			)
+			.orderBy(...newestFirst);
+		yield orderLedgerRows([
+			...rows.filter((row) => new Date(row.createdAt).getTime() !== lastSecond),
+			...restOfSecond,
+		]);
+		cursor = { createdAt: last.createdAt, id: "" };
 	}
 }

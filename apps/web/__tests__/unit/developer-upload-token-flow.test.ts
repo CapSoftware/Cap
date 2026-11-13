@@ -42,6 +42,9 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 
 const sdk = await import("@/app/api/developer/sdk/v1/[...route]/route");
 const rest = await import("@/app/api/developer/v1/[...route]/route");
+const { DEVELOPER_KEY_REQUESTS_PER_MINUTE: KEY_LIMIT } = await import(
+	"@/lib/developer-rate-limits"
+);
 const { createDeveloperUploadToken } = await import(
 	"@/lib/developer-upload-token"
 );
@@ -274,21 +277,24 @@ describe("creating an upload with the secret key", () => {
 	});
 
 	it.each([
-		["a public key", "cpk_app1_page"],
-		["an upload token", "cut_abc.def"],
-		["no key", null],
-	])("refuses %s and inserts nothing", async (_label, credential) => {
-		const response = await post(
-			rest,
-			"/api/developer/v1/uploads",
-			credential,
-			{},
-		);
+		["a public key", "cpk_app1_page", 403, "public_key_not_allowed"],
+		["an upload token", "cut_abc.def", 401, "invalid_secret_key"],
+		["no key", null, 401, "invalid_secret_key"],
+	])(
+		"refuses %s and inserts nothing",
+		async (_label, credential, status, code) => {
+			const response = await post(
+				rest,
+				"/api/developer/v1/uploads",
+				credential,
+				{},
+			);
 
-		expect(response.status).toBe(401);
-		expect(await response.json()).toMatchObject({ code: "invalid_secret_key" });
-		expect(inserts()).toHaveLength(0);
-	});
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code });
+			expect(inserts()).toHaveLength(0);
+		},
+	);
 
 	it.each([
 		[60, 60],
@@ -351,14 +357,16 @@ describe("creating an upload with the secret key", () => {
 		const send = () => post(rest, "/api/developer/v1/uploads", key, {});
 
 		const first = await send();
-		expect(first.headers.get("X-RateLimit-Limit")).toBe("60");
-		expect(first.headers.get("X-RateLimit-Remaining")).toBe("59");
-		for (let request = 2; request <= 60; request++) await send();
+		expect(first.headers.get("X-RateLimit-Limit")).toBe(String(KEY_LIMIT));
+		expect(first.headers.get("X-RateLimit-Remaining")).toBe(
+			String(KEY_LIMIT - 1),
+		);
+		for (let request = 2; request <= KEY_LIMIT; request++) await send();
 		const limited = await send();
 
 		expect(limited.status).toBe(429);
 		expect(await limited.json()).toMatchObject({ code: "rate_limited" });
-		expect(inserts()).toHaveLength(60);
+		expect(inserts()).toHaveLength(KEY_LIMIT);
 	});
 });
 
@@ -794,15 +802,15 @@ describe("renewing the token of an open upload", () => {
 	});
 
 	it.each([
-		["a public key", "cpk_app1_page"],
-		["no key", null],
-	])("refuses %s", async (_label, credential) => {
+		["a public key", "cpk_app1_page", 403, "public_key_not_allowed"],
+		["no key", null, 401, "invalid_secret_key"],
+	])("refuses %s", async (_label, credential, status, code) => {
 		const first = await created();
 
 		const response = await renew(first.videoId, {}, credential);
 
-		expect(response.status).toBe(401);
-		expect(await response.json()).toMatchObject({ code: "invalid_secret_key" });
+		expect(response.status).toBe(status);
+		expect(await response.json()).toMatchObject({ code });
 	});
 
 	it("cannot be renewed with the upload token itself", async () => {

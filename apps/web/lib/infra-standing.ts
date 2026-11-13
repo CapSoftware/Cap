@@ -11,7 +11,7 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
-import { availableBalance } from "@/lib/infra-balance";
+import { heldTranscriptsQuery } from "@/lib/infra-balance";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
@@ -203,6 +203,30 @@ export async function restoredSinceCharge(
 	return !!credit;
 }
 
+const disputeRows = (accountId: string | typeof developerCreditAccounts.id) =>
+	and(
+		eq(developerCreditTransactions.accountId, accountId),
+		eq(developerCreditTransactions.type, "adjustment"),
+		inArray(developerCreditTransactions.referenceType, [
+			STRIPE_DISPUTE_REFERENCE_TYPE,
+			DISPUTE_REVIEW_REFERENCE_TYPE,
+		]),
+	);
+
+const latestDisputeOrder = () =>
+	[
+		desc(developerCreditTransactions.createdAt),
+		desc(developerCreditTransactions.id),
+	] as const;
+
+const disputeAt = (
+	referenceType: string | null | undefined,
+	createdAt: Date | string | null | undefined,
+) =>
+	referenceType === STRIPE_DISPUTE_REFERENCE_TYPE && createdAt
+		? new Date(createdAt)
+		: null;
+
 export async function disputedSince(
 	executor: InfraDbExecutor,
 	accountId: string,
@@ -213,31 +237,74 @@ export async function disputedSince(
 			createdAt: developerCreditTransactions.createdAt,
 		})
 		.from(developerCreditTransactions)
-		.where(
-			and(
-				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "adjustment"),
-				inArray(developerCreditTransactions.referenceType, [
-					STRIPE_DISPUTE_REFERENCE_TYPE,
-					DISPUTE_REVIEW_REFERENCE_TYPE,
-				]),
-			),
-		)
-		.orderBy(desc(developerCreditTransactions.createdAt))
+		.where(disputeRows(accountId))
+		.orderBy(...latestDisputeOrder())
 		.limit(1);
-	return latest?.referenceType === STRIPE_DISPUTE_REFERENCE_TYPE
-		? new Date(latest.createdAt)
-		: null;
+	return disputeAt(latest?.referenceType, latest?.createdAt);
+}
+
+export type StandingAccount = {
+	id: string;
+	balanceMicroCredits: number;
+	heldMicroCredits: number;
+	disputedAt: Date | null;
+};
+
+export async function readStandingAccount(
+	appId: string,
+	executor: InfraDbExecutor = db(),
+): Promise<StandingAccount | null> {
+	const latestDispute = <T>(
+		column:
+			| typeof developerCreditTransactions.referenceType
+			| typeof developerCreditTransactions.createdAt,
+	) =>
+		sql<T>`(${executor
+			.select({ value: column })
+			.from(developerCreditTransactions)
+			.where(disputeRows(developerCreditAccounts.id))
+			.orderBy(...latestDisputeOrder())
+			.limit(1)})`;
+	const [row] = await executor
+		.select({
+			id: developerCreditAccounts.id,
+			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			heldMicroCredits: sql<
+				string | number | null
+			>`(${heldTranscriptsQuery(executor, appId, null)})`,
+			disputeType: latestDispute<string | null>(
+				developerCreditTransactions.referenceType,
+			),
+			disputeCreatedAt: latestDispute<Date | null>(
+				developerCreditTransactions.createdAt,
+			).mapWith(developerCreditTransactions.createdAt),
+		})
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, appId))
+		.limit(1);
+	if (!row) return null;
+	return {
+		id: row.id,
+		balanceMicroCredits: row.balanceMicroCredits,
+		heldMicroCredits: Number(row.heldMicroCredits ?? 0) || 0,
+		disputedAt: disputeAt(row.disputeType, row.disputeCreatedAt),
+	};
 }
 
 export async function accountStanding(
 	executor: InfraDbExecutor,
-	account: { id: string; balanceMicroCredits: number },
+	account: {
+		id: string;
+		balanceMicroCredits: number;
+		disputedAt?: Date | null;
+	},
 	now: Date,
 ) {
 	const [lastCharge, disputedAt] = await Promise.all([
 		latestStorageCharge(executor, account.id),
-		disputedSince(executor, account.id),
+		account.disputedAt === undefined
+			? disputedSince(executor, account.id)
+			: account.disputedAt,
 	]);
 	if (disputedAt) {
 		const standing: InfraAppStanding = {
@@ -270,22 +337,19 @@ async function appStanding(
 	now: Date,
 	executor: InfraDbExecutor = db(),
 ) {
-	const [account] = await executor
-		.select({
-			id: developerCreditAccounts.id,
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-		})
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
+	const account = await readStandingAccount(appId, executor);
 	if (!account) return { account: null, lastCharge: null, standing: ACTIVE };
 	const funded = {
 		id: account.id,
-		balanceMicroCredits: (await availableBalance(appId, executor)) ?? 0,
+		balanceMicroCredits: account.balanceMicroCredits - account.heldMicroCredits,
 	};
 	return {
 		account: funded,
-		...(await accountStanding(executor, funded, now)),
+		...(await accountStanding(
+			executor,
+			{ ...funded, disputedAt: account.disputedAt },
+			now,
+		)),
 	};
 }
 

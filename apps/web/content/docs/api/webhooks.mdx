@@ -1,22 +1,297 @@
 ---
 title: "Webhooks"
-summary: "Current webhook availability for public Cap integrations"
+summary: "Have Cap call your server when a video is ready or has failed"
 tags: "API, Integration"
 ---
 
-Cap does not currently expose a documented public webhook subscription API for customer applications.
+A webhook tells your server the moment a video finishes processing, so you do not have to poll for it. You register an https URL for your app, and Cap sends it a signed `POST` request when a video becomes ready or fails.
 
-The repository contains internal webhook endpoints for services such as Stripe and the media-processing pipeline. Those are implementation endpoints, not a stable customer webhook product, and integrations should not call them.
+Webhooks belong to an app in [Cap Infra](/dashboard/infra) and are managed with the [REST API](/docs/api/rest-api#webhooks) and the app's secret key (`csk_`).
 
-## Poll supported API state
+## Events
 
-Use the [REST API](/docs/api/rest-api) to read the supported developer state. For an uploaded video, poll [Get Video Status](/docs/api/rest-api#get-video-status) every 3 seconds until `status` is `ready` or `errored`. For a transcript, poll [Get Transcript](/docs/api/rest-api#get-transcript) every 5 seconds until `status` is `complete` or `error`. Present it as processed when it is `ready`.
+| Type | Sent when |
+|------|-----------|
+| `video.ready` | A video has finished processing and can be played |
+| `video.errored` | A video could not be processed. `errorReason` says why |
+| `webhook.test` | You asked for a [test event](#send-a-test-event) |
 
-Keep polling bounded:
+A video sends `video.ready` or `video.errored` once. Handlers should ignore a type they do not know, so a new event type never breaks them.
 
-- Use backoff instead of a tight loop.
-- Stop on terminal success or error.
-- Store the last observed state locally.
-- Respect HTTP errors and any retry guidance returned by the API.
+On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. No second event is sent when it arrives. Read it with [Get Video](/docs/api/rest-api#get-video).
 
-Do not build against an undocumented route or assume that an internal webhook payload will remain stable.
+## Create an endpoint
+
+```
+POST /api/developer/v1/webhooks
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | Where Cap sends events. See the rules below |
+| `events` | string[] | No | The event types to send: `video.ready`, `video.errored` or both. Defaults to both |
+| `enabled` | boolean | No | Defaults to `true` |
+
+A field the request does not know returns `400` with code `invalid_request`.
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/webhooks/cap"}'
+```
+
+**Example response:**
+
+```json
+{
+  "data": {
+    "id": "7k2m9x4q1p3v5wd",
+    "url": "https://example.com/webhooks/cap",
+    "events": ["video.ready", "video.errored"],
+    "enabled": true,
+    "disabledReason": null,
+    "secretPrefix": "cws_7m2k9x4q",
+    "lastDeliveryAt": null,
+    "lastDeliveryStatus": null,
+    "lastResponseStatus": null,
+    "lastErrorCode": null,
+    "consecutiveFailures": 0,
+    "createdAt": "2026-11-13T00:19:06.000Z",
+    "updatedAt": "2026-11-13T00:19:06.000Z",
+    "secret": "cws_your_signing_secret_here"
+  }
+}
+```
+
+`secret` is the endpoint's signing secret. It is returned once, in this response, and never again. Store it with your other secrets. If you lose it or it leaks, [rotate it](#rotate-the-signing-secret).
+
+The URL must:
+
+- use `https` on the default port
+- be at most 2,048 characters
+- carry no username or password
+- name a host that resolves to a public internet address. Private, loopback, link-local and reserved addresses are refused
+
+Anything else returns `400` with code `invalid_webhook_url`. An app can have 5 endpoints. One more returns `409` with code `webhook_limit_reached`.
+
+## Manage endpoints
+
+| Request | What it does |
+|---------|--------------|
+| `GET /api/developer/v1/webhooks` | List the app's endpoints, newest first, with `limit` and `offset` |
+| `GET /api/developer/v1/webhooks/:id` | Read one endpoint and the result of its last delivery |
+| `PATCH /api/developer/v1/webhooks/:id` | Change `url`, `events` or `enabled`. Send at least one |
+| `DELETE /api/developer/v1/webhooks/:id` | Delete the endpoint. Deliveries waiting to be retried are dropped |
+| `POST /api/developer/v1/webhooks/:id/rotate-secret` | [Rotate the signing secret](#rotate-the-signing-secret) |
+| `POST /api/developer/v1/webhooks/:id/test` | [Send a test event](#send-a-test-event) |
+
+An ID that does not belong to the app returns `404` with code `webhook_not_found`.
+
+Every endpoint is returned with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | The endpoint ID |
+| `url` | string | Where events are sent |
+| `events` | string[] | The event types sent to it |
+| `enabled` | boolean | Events are only sent to an enabled endpoint |
+| `disabledReason` | string \| null | `delivery_failures` when Cap disabled the endpoint, otherwise `null` |
+| `secretPrefix` | string | The first characters of the signing secret, to tell endpoints apart |
+| `lastDeliveryAt` | string \| null | When Cap last called the endpoint |
+| `lastDeliveryStatus` | string \| null | `succeeded` or `failed` |
+| `lastResponseStatus` | number \| null | The HTTP status your endpoint last answered with, or `null` when it did not answer |
+| `lastErrorCode` | string \| null | Why the last delivery failed: `http_error`, `redirect`, `timeout`, `connection_failed` or `private_address` |
+| `consecutiveFailures` | number | Failed attempts since the last success |
+| `createdAt` | string | Creation timestamp (ISO 8601) |
+| `updatedAt` | string | When the endpoint's settings last changed |
+
+## Rotate the signing secret
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks/7k2m9x4q1p3v5wd/rotate-secret \
+  -H "Authorization: Bearer csk_your_secret_key"
+```
+
+The response is the endpoint with a new `secret`, returned once, like the one from create. The old secret stops working at once: every request from then on, including a retry of an earlier event, is signed with the new one. To rotate without dropping an event, have your receiver accept a signature from either secret, rotate, store the new secret, then remove the old one.
+
+## The request Cap sends
+
+```
+POST https://example.com/webhooks/cap
+Content-Type: application/json
+Cap-Signature: t=1794529214,v1=5f2b6c0e...
+Cap-Event-Id: evt_2ef4c0e7d14b85e004ad32a8
+Cap-Event-Type: video.ready
+```
+
+```json
+{
+  "id": "evt_2ef4c0e7d14b85e004ad32a8",
+  "type": "video.ready",
+  "createdAt": "2026-11-13T00:20:14.211Z",
+  "data": {
+    "id": "abc123def456",
+    "appId": "app_789",
+    "externalUserId": "user_42",
+    "name": "Product Demo",
+    "status": "ready",
+    "errorReason": null,
+    "duration": 124.5,
+    "width": 1920,
+    "height": 1080,
+    "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "hlsUrl": null,
+    "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Identifies the event. Every retry, and the delivery to each of your endpoints, carries the same `id` |
+| `type` | The event type |
+| `createdAt` | When the event happened (ISO 8601) |
+| `data` | For video events, the video exactly as [Get Video](/docs/api/rest-api#get-video) returns it. See the [Video Object Reference](/docs/api/rest-api#video-object-reference). The example above is shortened |
+
+`externalUserId` is the `userId` the video was created with, so the event tells you whose video it is.
+
+## Verify the signature
+
+Anyone who learns your URL can post to it, so check that each request came from Cap before you trust it.
+
+`Cap-Signature` holds a timestamp and a signature: `t=<unix seconds>,v1=<signature>`. The signature is the hex HMAC-SHA256 of the timestamp, a dot, and the raw request body, keyed with the endpoint's signing secret (the whole `cws_...` string).
+
+1. Read `t` and `v1` from the header.
+2. Compute HMAC-SHA256 of `<t>.<raw body>` with your signing secret.
+3. Compare it with `v1` using a constant-time comparison.
+4. Reject the request if `t` is more than five minutes from your clock, so a captured request cannot be replayed later.
+
+Sign the body exactly as it arrived, byte for byte. Parsing the JSON and serialising it again changes the bytes and the signature will not match.
+
+**Node.js:**
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verifyCapWebhook(rawBody, signatureHeader, secret) {
+	const parts = Object.fromEntries(
+		String(signatureHeader ?? "")
+			.split(",")
+			.map((part) => part.split("=")),
+	);
+	const timestamp = Number(parts.t);
+	if (!Number.isInteger(timestamp) || !parts.v1) return false;
+	if (Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
+	const expected = createHmac("sha256", secret)
+		.update(`${parts.t}.${rawBody}`)
+		.digest();
+	const received = Buffer.from(parts.v1, "hex");
+	return (
+		received.length === expected.length && timingSafeEqual(received, expected)
+	);
+}
+```
+
+Call it with the raw body string, the `Cap-Signature` header and your signing secret, and answer `400` when it returns `false`.
+
+**Python:**
+
+```python
+import hashlib
+import hmac
+import time
+
+
+def verify_cap_webhook(raw_body: bytes, signature_header: str, secret: str) -> bool:
+    parts = dict(
+        part.split("=", 1) for part in signature_header.split(",") if "=" in part
+    )
+    try:
+        timestamp = int(parts["t"])
+        received = parts["v1"]
+    except (KeyError, ValueError):
+        return False
+    if abs(time.time() - timestamp) > 300:
+        return False
+    expected = hmac.new(
+        secret.encode(), f"{timestamp}.".encode() + raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, received)
+```
+
+## Respond
+
+Answer with any `2xx` status within 10 seconds. Do the slow work after you have answered: store the event or put it on a queue, respond, then process it.
+
+Any other status, a redirect, or no answer within 10 seconds counts as a failed delivery. Redirects are never followed, so register the final URL. Cap does not read or store your response body.
+
+## Retries
+
+A failed delivery is tried again with growing gaps:
+
+| Attempt | Sent |
+|---------|------|
+| 1 | Straight away |
+| 2 | 1 minute after attempt 1 failed |
+| 3 | 5 minutes later |
+| 4 | 30 minutes later |
+| 5 | 2 hours later |
+| 6 | 5 hours later |
+| 7 | 8 hours later |
+| 8 | 8 hours later |
+
+That is 8 attempts over about a day. After the last one the event is dropped.
+
+Every attempt carries the same event `id` and the same body, with a fresh timestamp and signature. An event can reach you more than once, for example when your answer was lost on the way back, so remember the ids you have handled and skip one you have seen. Events for different videos can arrive in any order.
+
+An endpoint that fails 20 attempts in a row over five days or more is disabled, and its `disabledReason` becomes `delivery_failures`. Once it is fixed, turn it back on:
+
+```bash
+curl -X PATCH https://cap.so/api/developer/v1/webhooks/7k2m9x4q1p3v5wd \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+Events that happened while an endpoint was disabled or deleted are not sent afterwards. Use [Get Video Status](/docs/api/rest-api#get-video-status) to catch up on a video you are waiting for.
+
+## Send a test event
+
+Check an endpoint before you rely on it:
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks/7k2m9x4q1p3v5wd/test \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+Cap sends one signed `webhook.test` event and waits up to 10 seconds for your answer:
+
+```json
+{
+  "data": {
+    "eventId": "evt_test_8bs22qpm4mbqh8p",
+    "type": "webhook.test",
+    "delivered": true,
+    "responseStatus": 200,
+    "errorCode": null,
+    "durationMs": 42
+  }
+}
+```
+
+`delivered` is `true` when your endpoint answered with a `2xx` status. Otherwise `errorCode` says what went wrong. A test event is sent once and never retried, it works on a disabled endpoint, and a failed test does not count towards disabling the endpoint.
+
+The test event's body looks like any other event, with `data` holding the endpoint ID:
+
+```json
+{
+  "id": "evt_test_8bs22qpm4mbqh8p",
+  "type": "webhook.test",
+  "createdAt": "2026-11-13T00:19:06.412Z",
+  "data": { "webhookId": "7k2m9x4q1p3v5wd" }
+}
+```

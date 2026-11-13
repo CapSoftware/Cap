@@ -49,7 +49,7 @@ The SDK API takes an upload token instead. Your server gets one from [Create Upl
 Authorization: Bearer cut_your_upload_token_here
 ```
 
-An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload: the SDK API answers `403` with code `public_key_not_allowed`.
+An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload or call the REST API: both answer `403` with code `public_key_not_allowed`. A REST request with no `Authorization` header answers `401` with code `invalid_secret_key` and the message `Missing secret key`.
 
 Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly. The REST API sends no CORS headers, so a page cannot call it. Call it from your server, and give the page an upload token for the SDK API.
 
@@ -117,7 +117,7 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 | `400` | Bad request. The `code` says what was wrong, for example `invalid_request`, `invalid_json`, `invalid_limit` or `unknown_parameter` |
 | `401` | Unauthorized. The API key or upload token is missing, invalid, revoked or expired |
 | `402` | Payment required. The app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
-| `403` | Forbidden. On the SDK API, a public key was sent (`public_key_not_allowed`), the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
+| `403` | Forbidden. A public key was sent where a secret key or upload token is required (`public_key_not_allowed`). On the SDK API, the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
 | `404` | Not found. The video, transcript or multipart upload does not exist (`video_not_found`, `transcript_not_found`, `upload_not_found` for an `uploadId`), or no route matches the path (`not_found`) |
 | `405` | Method not allowed. The path exists but not with this method (`method_not_allowed`). The `Allow` header lists the methods it takes |
 | `409` | Conflict with the current state, for example an upload that already completed, or a transcript started before its file was uploaded (`upload_not_found`). The `code` says which |
@@ -130,9 +130,9 @@ A `4xx` response will not succeed if the same request is sent again, with two ex
 
 ## Rate Limits
 
-A secret key allows 60 requests per minute, counted across every REST endpoint. An upload token allows 1,200 requests per minute, counted across the SDK endpoints. Playback URLs need no key and are not counted.
+A secret key allows 300 requests per minute, counted across every REST endpoint. All the keys of one account together allow 1,200 requests per minute, so an account with several apps shares that total between them. An upload token allows 1,200 requests per minute, counted across the SDK endpoints. Playback URLs need no key and are not counted.
 
-Every response carries three headers:
+Every response to an accepted key or upload token carries three headers:
 
 | Header | Meaning |
 |--------|---------|
@@ -143,6 +143,8 @@ Every response carries three headers:
 Past the limit the API answers `429` with the code `rate_limited` and a `Retry-After` header in seconds, never more than 60. A `429` is authoritative: wait for `Retry-After` seconds, then send the request again.
 
 `X-RateLimit-Remaining` and `X-RateLimit-Reset` are a guide. Requests can be answered by more than one server and each reports what it has counted itself, so `X-RateLimit-Remaining` can read higher than what is left and can differ from one response to the next. Use it to slow down early, not to decide that the next request will succeed.
+
+A request whose key or upload token is not accepted is answered `401` and spends none of a key's budget. Too many of those from one address in a minute are answered `429` until the minute is over.
 
 Each upload token has its own count, separate from your secret key's and from every other upload. Each uploaded part spends one presign request from it, so one upload can sign twenty parts a second.
 
@@ -564,7 +566,7 @@ The `status` field moves from `uploading` to `processing` when the upload comple
 
 A failed video is not billed. It stays in the list with its `errorReason`, and its uploaded file is removed 24 hours after processing started, after which `storedBytes` is `0`. It cannot be processed again, so create a new video and upload the file to that one.
 
-Poll this endpoint every 3 seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 60 requests per minute.
+Poll this endpoint every 3 seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 300 requests per minute.
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
@@ -622,7 +624,7 @@ curl -X DELETE https://cap.so/api/developer/v1/videos/abc123def456 \
 
 Send an audio or video file and get text back. Transcription costs $0.10 per audio hour, billed by the second from the app's credit balance.
 
-A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every 5 seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
+A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every 5 seconds until the status is `complete` or `error`. Each key allows 300 requests per minute.
 
 To wait on several transcripts, poll them as a batch with one [List Transcripts](/docs/api/rest-api#list-transcripts) call per status instead of one Get Transcript each: `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`. Ask for `queued` first: a transcript only moves from `queued` to `processing` to a final status, so one missing from both lists has finished. Read it with Get Transcript for its text, and keep it in the batch if the status it returns is not yet `complete` or `error`. An app has at most 20 transcripts in flight, and getting each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
 
@@ -876,7 +878,7 @@ A failed transcript has the status `error` and an `error` object with one of the
 | `source_too_large` | The file is larger than 2 GB |
 | `source_missing` | The uploaded file was not found |
 | `no_audio_track` | The file has no audio |
-| `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted |
+| `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted. When a URL returns a web page, the message says so |
 | `no_speech` | No longer returned. Audio with no speech now completes with empty text. Transcripts that failed this way before the change keep the code |
 | `duration_too_long` | The audio is longer than 4 hours |
 | `upload_expired` | The file was not uploaded within 24 hours |
@@ -981,7 +983,7 @@ curl https://cap.so/api/developer/v1/usage \
 
 Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
 
-**Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
+**Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Each transcript is charged on its length rounded to a whole second and then down to a whole micro-credit, so `seconds` times the rate can differ slightly from `microCredits`: for the exact charge use `microCredits`, or each transcript's `costMicroCredits`. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
 
 **Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 
@@ -1087,9 +1089,34 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 
 A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
 
-Rows written in the same second have the same `createdAt`. Within a page they are ordered so each balance follows from the row beneath it.
+Rows written in the same second have the same `createdAt`. They are ordered so each balance follows from the row beneath it, within a page and across page edges, so walking the list with any `limit` returns the same order.
 
 The console's Billing page shows the same rows and exports them all as CSV.
+
+### Webhooks
+
+Have Cap call your server when a video is ready or has failed, instead of polling for it. Register an https URL for the app and Cap sends it a signed `POST` request for each event. The [Webhooks](/docs/api/webhooks) guide covers the events, the request Cap sends, how to verify its signature, and retries.
+
+| Request | What it does |
+|---------|--------------|
+| `POST /api/developer/v1/webhooks` | Create an endpoint. The response carries its signing secret, once |
+| `GET /api/developer/v1/webhooks` | List the app's endpoints with `limit` and `offset` |
+| `GET /api/developer/v1/webhooks/:id` | Read one endpoint and how Cap's last call to it went |
+| `PATCH /api/developer/v1/webhooks/:id` | Change `url`, `events` or `enabled` |
+| `DELETE /api/developer/v1/webhooks/:id` | Delete an endpoint |
+| `POST /api/developer/v1/webhooks/:id/rotate-secret` | Replace the signing secret. The new one is returned once |
+| `POST /api/developer/v1/webhooks/:id/test` | Send a test event and report what the endpoint answered |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/webhooks/cap", "events": ["video.ready", "video.errored"]}'
+```
+
+The events are `video.ready` and `video.errored`, and each carries the video as [Get Video](/docs/api/rest-api#get-video) returns it. An app can have 5 endpoints.
 
 ---
 
@@ -1190,7 +1217,7 @@ curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
 }
 ```
 
-A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`.
+A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`. Signing does not contact storage, so an `uploadId` that is wrong or was aborted is not refused here: the `PUT` to its URL fails, and Complete Upload answers `404` with the code `upload_not_found`.
 
 A token signs part numbers up to the last one its size limit allows: `maxBytes` divided by 5,242,880 and rounded up, or 6,867 for a token with no `maxBytes`. A higher part number returns `400` with the code `part_number_too_large`, and no part in that request is signed.
 
@@ -1276,7 +1303,7 @@ Abort also returns `409` with `completion_in_progress` while a completion holds 
 
 #### Abort Upload
 
-Cancel an in-progress multipart upload and discard its parts. If no open upload matches the `uploadId`, abort returns `404` with the code `upload_not_found`, which means there is nothing left to abort.
+Cancel an in-progress multipart upload and discard its parts. Abort is safe to repeat: when no open upload matches the `uploadId`, for example because it was already aborted, it answers `200` with `{ "success": true }` again.
 
 ```
 POST /api/developer/sdk/v1/upload/multipart/abort
@@ -1529,7 +1556,7 @@ The full video object returned by list and get endpoints:
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Create each upload on your server and send only its `cut_` upload token to the browser.
 - **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every 3 seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. Keep polling until `hlsUrl` is set if the player should use HLS. See [Play a Video](/docs/api/rest-api#play-a-video).
 - **Switch on `code`.** Every error carries a stable `code`. The `error` text can change.
-- **Watch the rate limit headers.** A secret key allows 60 requests per minute and an upload token 1,200. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
+- **Watch the rate limit headers.** A secret key allows 300 requests per minute and an upload token 1,200. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
 - **Store your keys securely.** Use environment variables or a secrets manager.
 - **Check who is uploading before you create an upload.** Your server decides who gets a token, so authenticate the user first and set `userId` to tie the video to them.
 - **Scope every read to the signed-in user.** Pass your session's user as `userId` when you list, get, check or delete a video on a user's behalf. Refuse the request on your side when there is no signed-in user, rather than sending an empty `userId`.
