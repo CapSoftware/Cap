@@ -1,4 +1,3 @@
-import { UPLOAD_ADMISSION_DAYS } from "@/lib/developer-pricing";
 import type { InfraStandingState } from "@/lib/infra-standing";
 import { formatCredits, formatNeed } from "@/lib/infra-usage";
 
@@ -21,7 +20,7 @@ export function lowBalanceText({
 	if (monthlyStorageMicroCredits <= 0 || shortfallMicroCredits <= 0) {
 		return null;
 	}
-	return `Credit is low. Uploading needs ${formatNeed(requiredMicroCredits)}, enough for ${UPLOAD_ADMISSION_DAYS} days of storage, and this app has ${formatCredits(balanceMicroCredits)}.`;
+	return `Credit is low. Uploading needs at least ${formatNeed(requiredMicroCredits)} and this app has ${formatCredits(balanceMicroCredits)}.`;
 }
 
 export function firstCreditOffersAddCredits({

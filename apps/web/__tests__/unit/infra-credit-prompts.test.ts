@@ -16,7 +16,7 @@ const storing = {
 describe("lowBalanceText", () => {
 	it("warns when the balance no longer covers the next upload", () => {
 		expect(lowBalanceText(storing)).toBe(
-			"Credit is low. Uploading needs $0.70, enough for 7 days of storage, and this app has $0.40.",
+			"Credit is low. Uploading needs at least $0.70 and this app has $0.40.",
 		);
 	});
 
