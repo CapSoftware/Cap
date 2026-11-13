@@ -1887,7 +1887,8 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 
 			const expected = disputed ? second.toISOString() : null;
 			expect(
-				(await disputedSince(database() as never, accountId))?.toISOString() ?? null,
+				(await disputedSince(database() as never, accountId))?.toISOString() ??
+					null,
 			).toBe(expected);
 			expect(
 				(await readStandingAccount(appId))?.disputedAt?.toISOString() ?? null,
