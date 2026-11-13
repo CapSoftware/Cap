@@ -618,6 +618,7 @@ A transcript request can be refused. The response carries a `code` and a `messag
 |--------|------|---------|
 | `400` | `invalid_url` | The URL is missing, longer than 2,048 characters, not http or https, on a port other than the default, or carries a username or password |
 | `400` | `url_not_public` | The URL points to a private or local address |
+| `400` | `invalid_video_id` | `videoId` is empty or longer than 64 characters |
 | `400` | `invalid_name` | The name is longer than 255 characters |
 | `400` | `invalid_language` | The language is not `auto` or one of the supported codes. The hint lists them |
 | `400` | `invalid_user_id` | The user ID is longer than 255 characters |
@@ -632,6 +633,8 @@ A transcript request can be refused. The response carries a `code` and a `messag
 | `402` | `insufficient_credits` | The available balance is under $0.01. The message says how much to add |
 | `403` | `infra_not_available` | Cap Infra is not enabled for this account |
 | `404` | `transcript_not_found` | No transcript with this ID belongs to the app |
+| `404` | `video_not_found` | No video with this ID belongs to the app, or it was deleted |
+| `409` | `video_not_ready` | The video is not ready yet, or it failed to process and has no file to transcribe. The message says which |
 | `409` | `idempotency_conflict` | The `Idempotency-Key` was already used with a different request, or for a transcript that was deleted. The message names the field that differs |
 | `409` | `upload_not_found` | The file has not been uploaded yet. If the upload URL expired, repeat the create request with the same `Idempotency-Key` to get a new one |
 | `429` | `too_many_transcripts` | The app already has 20 transcripts queued or processing. Wait for one to finish, then send the request again |
@@ -645,13 +648,14 @@ POST /api/developer/v1/transcripts
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string | Yes | Public `http` or `https` URL of an audio or video file |
-| `name` | string | No | Display name (defaults to the file name) |
+| `url` | string | One of `url` or `videoId` | Public `http` or `https` URL of an audio or video file |
+| `videoId` | string | One of `url` or `videoId` | ID of a ready video of this app. See [Transcribe a video you already uploaded](/docs/api/rest-api#transcribe-a-video-you-already-uploaded) |
+| `name` | string | No | Display name (defaults to the file name, or to the video's name) |
 | `language` | string | No | The language of the audio if you know it, or `auto` (default). See [Languages](/docs/api/rest-api#languages) |
 | `userId` | string | No | Your own user identifier, used to filter lists |
 | `metadata` | object | No | Your own JSON object, under 8KB |
 
-Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
+Send exactly one of `url` or `videoId`. Both, or neither, returns `400` with the code `invalid_request`. Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
 
 The URL must use the default port, must not contain credentials and must resolve to a public address. Redirects are followed up to five times and each hop is checked the same way. Files can be up to 2 GB, or 400 MB when the server does not send a `Content-Length`. Audio can be up to 4 hours long.
 
@@ -674,6 +678,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
     "status": "queued",
     "name": "standup",
     "source": { "type": "url", "url": "https://example.com/standup.mp3" },
+    "videoId": null,
     "durationSeconds": null,
     "language": null,
     "wordCount": null,
@@ -691,7 +696,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 
 Send an `Idempotency-Key` header so a retried request returns the same transcript instead of creating and billing a second one. The key is 8 to 128 characters from letters, digits, dot, dash and underscore. Any other character, such as a colon, slash or space, is refused with `400 invalid_idempotency_key`.
 
-A repeat must send the same body. The same key with a different `url`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
+A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
 
 #### Languages
 
@@ -703,25 +708,47 @@ Supported codes: `en` English, `es` Spanish, `fr` French, `de` German, `pt` Port
 
 #### Transcribe a video you already uploaded
 
-A video is not transcribed when it is uploaded, and it does not have to be uploaded again to get text. Once its `status` is `ready`, send its `mp4Url` as the `url`:
+A video is not transcribed when it is uploaded, and it does not have to be uploaded again to get text. Once its `status` is `ready`, send its ID as `videoId` instead of a `url`:
 
 ```bash
-MP4_URL=$(curl -s https://cap.so/api/developer/v1/videos/abc123def456 \
-  -H "Authorization: Bearer csk_your_secret_key_here" | jq -r .data.mp4Url)
-
 curl -X POST https://cap.so/api/developer/v1/transcripts \
   -H "Authorization: Bearer csk_your_secret_key_here" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: transcript-abc123def456" \
-  -d "{\"url\": \"$MP4_URL\", \"userId\": \"user_42\", \"metadata\": {\"videoId\": \"abc123def456\"}}"
+  -d '{"videoId": "abc123def456", "userId": "user_42"}'
 ```
 
-- `mp4Url` is a stable link that needs no key. Cap follows its redirect to the file when the transcript runs, so the link does not expire between your request and the download.
-- It costs the same as any other transcript, $0.10 per audio hour. Reading the stored video is not charged.
-- `mp4Url` is `null` until the video is `ready`, and the MP4 must be within the 2 GB limit for URL transcripts. A larger MP4 ends with the error `source_too_large`.
-- The transcript is its own object. It is not linked to the video, the video's `transcriptionStatus` does not change, and deleting the video leaves the transcript. Keep the video ID in `metadata`, as above, and delete the transcript yourself when you delete the video.
-- Delete the video first and a transcript that has not started downloading ends with `source_unreachable`.
-- On a self-hosted Cap, the storage the link redirects to must be on a public address and the default port, like any other URL. Otherwise the transcript ends with `source_blocked`.
+```json
+{
+  "data": {
+    "id": "8kq2m4x7n1p3v5w",
+    "status": "queued",
+    "name": "Product walkthrough",
+    "source": { "type": "video", "url": null },
+    "videoId": "abc123def456",
+    "durationSeconds": null,
+    "language": null,
+    "wordCount": null,
+    "costMicroCredits": 0,
+    "costDollars": 0,
+    "error": null,
+    "userId": "user_42",
+    "metadata": null,
+    "createdAt": "2026-11-11T10:30:00.000Z",
+    "updatedAt": "2026-11-11T10:30:00.000Z",
+    "completedAt": null
+  }
+}
+```
+
+- The video must belong to the app that owns the key, not be deleted and be `ready`. An unknown or deleted video returns `404 video_not_found`. A video that is still `uploading` or `processing` returns `409 video_not_ready`: wait for `ready` and send the request again. A video that failed to process has no file to transcribe and returns the same code.
+- Cap reads the video's stored MP4 directly. Nothing is downloaded, so the 2 GB limit and the 15 minute download limit for URL transcripts do not apply. Audio can still be up to 4 hours long.
+- It costs the transcript price only, $0.10 per audio hour. Reading the stored video is not charged, and the video's storage charge does not change.
+- `name`, `language`, `userId`, `metadata` and the `Idempotency-Key` header work as they do for a URL. The name defaults to the video's name.
+- The transcript carries the video's ID as `videoId`, and `source.type` is `video`. `videoId` is `null` on every other transcript.
+- When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.
+- The transcript is its own object. The video's `transcriptionStatus` does not change, and deleting the video leaves the transcript and its text. A transcript whose video is deleted before it runs ends with `source_missing` and is not charged.
+- Sending the video's `mp4Url` as `url` still works as a URL transcript. It is not linked to the video: its `videoId` is `null`.
 
 #### Transcribe a file
 
@@ -777,6 +804,7 @@ Returns the transcript. Once the status is `complete` the response includes `tex
     "status": "complete",
     "name": "standup",
     "source": { "type": "upload", "url": null },
+    "videoId": null,
     "durationSeconds": 754.2,
     "language": "en",
     "wordCount": 1893,
@@ -872,10 +900,10 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 - Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
 - Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before its audio is sent to speech recognition.
 - A transcript deleted while its audio is being transcribed is charged for the length of its audio, like one that completes. The credit held for it stays held until then.
-- Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. The available balance is your balance minus those holds.
+- Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. A stored video is held for its known length instead, so a 10 minute video holds under $0.02. The available balance is your balance minus those holds.
 - If the available balance cannot cover the hold, the transcript ends with `insufficient_credits` before the file is downloaded or processed, and the error message says how much was needed. When other running transcripts hold the credit, it waits for them for up to 15 minutes first, so a batch started together runs through as holds are released.
 - Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
-- Cap deletes the source file once the transcript finishes. The text and timings are kept until you delete the transcript.
+- Cap deletes the source file once the transcript finishes. A stored video's own file is never touched. The text and timings are kept until you delete the transcript.
 
 ### Get Usage
 

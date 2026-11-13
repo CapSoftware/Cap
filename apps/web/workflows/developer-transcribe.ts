@@ -58,6 +58,10 @@ import {
 	transcriptWordCount,
 } from "@/lib/developer-transcripts";
 import {
+	findVideoForTranscript,
+	syncVideoCaptions,
+} from "@/lib/developer-video-captions";
+import {
 	MEDIA_CONTAINER_SNIFF_BYTES,
 	sniffMedia,
 	urlIsSelfContainedMedia,
@@ -168,6 +172,7 @@ const asFailure = (result: StepFailure | HoldWait | HoldRaise): StepFailure => {
 
 const FAILURE_MESSAGES = {
 	source_missing: "The source file was not found",
+	video_missing: "The video was deleted before it could be transcribed",
 	deleted: "The transcript was deleted before its audio was transcribed",
 	source_too_large: "The source file is larger than the 2 GB limit",
 	source_unreachable: "The file at the URL could not be downloaded",
@@ -253,6 +258,7 @@ export async function developerTranscribeWorkflow(
 
 		const settlement = await settleTranscriptStep(transcriptId, transcription);
 		await cleanupTranscriptObjects(transcriptId, settlement !== "complete");
+		if (settlement === "complete") await writeVideoCaptions(transcriptId);
 		return {
 			success: settlement === "complete",
 			message:
@@ -284,6 +290,8 @@ async function loadTranscriptRow(transcriptId: string) {
 			status: developerTranscripts.status,
 			sourceType: developerTranscripts.sourceType,
 			sourceUrl: developerTranscripts.sourceUrl,
+			videoId: developerTranscripts.videoId,
+			s3Key: developerTranscripts.s3Key,
 			requestedLanguage: developerTranscripts.requestedLanguage,
 			durationSeconds: developerTranscripts.durationSeconds,
 			reservedMicroCredits: developerTranscripts.reservedMicroCredits,
@@ -373,6 +381,36 @@ async function holdForSource(
 	return hold.state === "held" ? null : notHeld(hold, known);
 }
 
+async function prepareVideoSource(transcript: {
+	id: string;
+	appId: string;
+	videoId: string | null;
+}): Promise<{ ok: true } | StepFailure | HoldWait> {
+	const video = transcript.videoId
+		? await findVideoForTranscript(transcript.appId, transcript.videoId)
+		: null;
+	if (video?.state !== "ok") {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const bytes = await developerObjectSize(video.sourceKey);
+	if (bytes === null || bytes === 0) {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const hold = await holdTranscriptCredits({
+		transcriptId: transcript.id,
+		microCredits:
+			video.durationSeconds === null
+				? transcriptHoldForSourceBytes(bytes)
+				: transcriptHoldForAudioSeconds(video.durationSeconds),
+	});
+	if (hold.state !== "held") return notHeld(hold, null);
+	await db()
+		.update(developerTranscripts)
+		.set({ sourceBytes: bytes, s3Key: video.sourceKey })
+		.where(eq(developerTranscripts.id, transcript.id));
+	return { ok: true };
+}
+
 async function prepareTranscriptSource(
 	transcriptId: string,
 	known: KnownSource | null,
@@ -383,6 +421,7 @@ async function prepareTranscriptSource(
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
+	if (transcript.sourceType === "video") return prepareVideoSource(transcript);
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
 	const existingSize = await developerObjectSize(keys.source);
 
@@ -568,7 +607,14 @@ async function extractTranscriptAudio(
 	) {
 		return { ok: true };
 	}
-	const sourceUrl = await developerObjectUrl(keys.source);
+	if (transcript.sourceType === "video" && !transcript.s3Key) {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const sourceUrl = await developerObjectUrl(
+		transcript.sourceType === "video" && transcript.s3Key
+			? transcript.s3Key
+			: keys.source,
+	);
 	if (!(await urlIsSelfContainedMedia(sourceUrl))) {
 		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
 	}
@@ -728,6 +774,34 @@ async function settleTranscriptStep(
 		resultKey: keys.result,
 	});
 	return settlement.state;
+}
+
+async function writeVideoCaptions(transcriptId: string): Promise<void> {
+	"use step";
+
+	const [row] = await db()
+		.select({
+			appId: developerTranscripts.appId,
+			videoId: developerTranscripts.videoId,
+			status: developerTranscripts.status,
+			language: developerTranscripts.language,
+			wordCount: developerTranscripts.wordCount,
+		})
+		.from(developerTranscripts)
+		.where(eq(developerTranscripts.id, transcriptId))
+		.limit(1);
+	if (
+		!row?.videoId ||
+		row.status !== "complete" ||
+		(row.wordCount ?? 0) === 0
+	) {
+		return;
+	}
+	await syncVideoCaptions({
+		appId: row.appId,
+		videoId: row.videoId,
+		language: row.language,
+	});
 }
 
 async function transcriptStorage(transcriptId: string) {
