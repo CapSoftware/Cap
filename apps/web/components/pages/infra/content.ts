@@ -284,7 +284,7 @@ export const PRO_CREDIT_COVERS = [
 				1000,
 			100,
 		),
-		unit: "minutes stored for a month",
+		unit: "minutes stored for 30 days",
 	},
 	{
 		amount: roundedDown(PRICES.proMonthlyCredit / PRICES.speechPerHour, 1),
@@ -347,7 +347,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "Do I have to use the Cap player?",
 		answer:
-			"No. Every ready video has HLS and MP4 URLs that need no API key and work in any player. The hosted player is there when you want a link or an iframe embed with nothing to build.",
+			"No. A ready video has an HLS URL and an MP4 URL that need no API key and work in any player. One can still be encoding when the video becomes ready, so play whichever is present. The hosted player is there when you want a link or an iframe embed with nothing to build.",
 	},
 	{
 		question: "Can I use the speech API without hosting my video on Cap?",
@@ -356,7 +356,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "How do I know when a video is ready?",
 		answer:
-			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played.",
+			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
 	},
 	{
 		question: "How do API keys work?",

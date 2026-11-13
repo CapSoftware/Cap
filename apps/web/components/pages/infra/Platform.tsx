@@ -63,9 +63,10 @@ export const Platform = () => (
 			group="player"
 		>
 			<p>
-				Every ready video has HLS and MP4 URLs and a poster that work in any
-				player. Or use the hosted player link or the iframe embed and build
-				nothing.
+				A ready video has an HLS URL, an MP4 URL and a poster that work in any
+				player. One of the two can still be encoding when the video becomes
+				ready, so play whichever is present. Or use the hosted player link or
+				the iframe embed and build nothing.
 			</p>
 			<p className="pt-3">
 				The embed takes autoplay, muted, loop, start time and controls as query
