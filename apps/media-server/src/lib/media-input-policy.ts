@@ -122,6 +122,44 @@ export function getSafeDemuxerWhitelist(): string {
 	return safeDemuxerWhitelist;
 }
 
+// Older video formats a regular Cap import can still carry: DVD and broadcast
+// MPEG, Windows Media, Flash, early MPEG-4 and Ogg video. FFmpeg's decoders
+// for them are mature. Named as ffprobe names the codec.
+const LEGACY_VIDEO_CODECS = [
+	"mpeg1video",
+	"mpeg2video",
+	"wmv1",
+	"wmv2",
+	"wmv3",
+	"vc1",
+	"msmpeg4v1",
+	"msmpeg4v2",
+	"msmpeg4v3",
+	"flv1",
+	"h263",
+	"h263i",
+	"h263p",
+	"theora",
+];
+
+// Decoders for those formats whose name differs from the codec name.
+const LEGACY_VIDEO_DECODERS = ["msmpeg4", "flv"];
+
+// Audio in those older files: MPEG audio layer 2, Windows Media audio, AMR
+// from phones, and ADPCM in AVI and WAV.
+const LEGACY_AUDIO_DECODERS = [
+	"mp2",
+	"mp2float",
+	"wmav1",
+	"wmav2",
+	"amrnb",
+	"amrwb",
+	"libopencore_amrnb",
+	"libopencore_amrwb",
+	"adpcm_ima_wav",
+	"adpcm_ms",
+];
+
 // Video codecs this server accepts in an upload, as ffprobe names them.
 export const ALLOWED_VIDEO_CODECS: readonly string[] = [
 	"h264",
@@ -132,6 +170,7 @@ export const ALLOWED_VIDEO_CODECS: readonly string[] = [
 	"prores",
 	"mpeg4",
 	"mjpeg",
+	...LEGACY_VIDEO_CODECS,
 ];
 
 export function isAllowedVideoCodec(codec: string): boolean {
@@ -206,6 +245,8 @@ export const ALLOWED_DECODERS: readonly string[] = [
 	"ac3_fixed",
 	"eac3",
 	"dca",
+	...LEGACY_VIDEO_DECODERS,
+	...LEGACY_AUDIO_DECODERS,
 	...PCM_DECODERS,
 	"mov_text",
 	"subrip",
