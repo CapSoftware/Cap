@@ -253,6 +253,11 @@ export async function reserveTranscriptCredits(input: {
 	return outcome;
 }
 
+const measurableSeconds = (seconds: number | null | undefined) =>
+	typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+		? seconds
+		: null;
+
 export async function settleTranscript(input: {
 	transcriptId: string;
 	durationSeconds: number;
@@ -263,7 +268,6 @@ export async function settleTranscript(input: {
 }): Promise<TranscriptSettlement> {
 	const appId = await findTranscriptApp(input.transcriptId);
 	if (!appId) return { state: "skipped", reason: "missing" };
-	const cost = transcriptionMicroCredits(input.durationSeconds);
 
 	const settled = await db().transaction<TranscriptSettlement>(async (tx) => {
 		await tx
@@ -278,6 +282,7 @@ export async function settleTranscript(input: {
 				id: developerTranscripts.id,
 				status: developerTranscripts.status,
 				deletedAt: developerTranscripts.deletedAt,
+				durationSeconds: developerTranscripts.durationSeconds,
 				reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 			})
 			.from(developerTranscripts)
@@ -286,7 +291,7 @@ export async function settleTranscript(input: {
 			.for("update");
 
 		if (!transcript) return { state: "skipped", reason: "missing" };
-		if (transcript.deletedAt) return { state: "skipped", reason: "deleted" };
+		const deleted = Boolean(transcript.deletedAt);
 		if (transcript.status === "complete") {
 			return {
 				state: "complete",
@@ -295,10 +300,21 @@ export async function settleTranscript(input: {
 			};
 		}
 		if (transcript.status !== "processing") {
-			return { state: "skipped", reason: "not_processing" };
+			return {
+				state: "skipped",
+				reason: deleted ? "deleted" : "not_processing",
+			};
 		}
 
 		const held = Number(transcript.reservedMicroCredits) || 0;
+		const durationSeconds = deleted
+			? (measurableSeconds(input.durationSeconds) ??
+				measurableSeconds(transcript.durationSeconds))
+			: input.durationSeconds;
+		const cost =
+			durationSeconds === null
+				? held
+				: transcriptionMicroCredits(durationSeconds);
 		const charge = held > 0 ? Math.min(cost, held) : cost;
 
 		const debit =
@@ -310,10 +326,13 @@ export async function settleTranscript(input: {
 						referenceId: transcript.id,
 						referenceType: "developer_transcript",
 						settlesTranscriptId: transcript.id,
-						metadata: {
-							durationSeconds: input.durationSeconds,
-							billedSeconds: transcriptionBilledSeconds(input.durationSeconds),
-						},
+						metadata:
+							durationSeconds === null
+								? { heldMicroCredits: held }
+								: {
+										durationSeconds,
+										billedSeconds: transcriptionBilledSeconds(durationSeconds),
+									},
 					})
 				: ({ state: "already_paid" } as const);
 
@@ -324,7 +343,7 @@ export async function settleTranscript(input: {
 					status: "error",
 					errorCode: "insufficient_credits" satisfies TranscriptErrorCode,
 					errorMessage: INSUFFICIENT_CREDITS_MESSAGE,
-					durationSeconds: input.durationSeconds,
+					durationSeconds,
 					reservedMicroCredits: 0,
 					text: null,
 					resultKey: null,
@@ -338,11 +357,11 @@ export async function settleTranscript(input: {
 			.update(developerTranscripts)
 			.set({
 				status: "complete",
-				durationSeconds: input.durationSeconds,
-				language: input.language,
-				text: input.text,
-				wordCount: input.wordCount,
-				resultKey: input.resultKey,
+				durationSeconds,
+				language: deleted ? null : input.language,
+				text: deleted ? null : input.text,
+				wordCount: deleted ? null : input.wordCount,
+				resultKey: deleted ? null : input.resultKey,
 				reservedMicroCredits: 0,
 				billedMicroCredits: charge,
 				errorCode: null,

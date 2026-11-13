@@ -87,6 +87,7 @@ vi.mock("@/lib/infra-standing", async (original) => ({
 
 import { app } from "@/app/api/developer/v1/[...route]/usage";
 import { storageUsage } from "@/lib/developer-pricing";
+import { getAppStorage } from "@/lib/infra-storage";
 
 const usage = async () => {
 	const response = await app.request("/", {
@@ -99,9 +100,10 @@ const usage = async () => {
 beforeEach(() => {
 	mocks.balanceMicroCredits = 2_999_901;
 	mocks.videos = [];
-	mocks.billing.mockResolvedValue({
+	mocks.billing.mockImplementation(async (appId: string) => ({
 		standing: { state: "active", pausesAt: null },
 		usage: storageUsage([]),
+		stored: (await getAppStorage(appId)).stored,
 		admission: {
 			allowed: true,
 			reason: null,
@@ -109,7 +111,7 @@ beforeEach(() => {
 			shortfallMicroCredits: 0,
 			message: null,
 		},
-	});
+	}));
 });
 
 describe("GET /usage totals", () => {

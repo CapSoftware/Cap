@@ -607,6 +607,8 @@ Send an audio or video file and get text back. Transcription costs $0.10 per aud
 
 A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every few seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
 
+An app can have 20 transcripts `queued` or `processing` at once. Starting another answers `429` with the code `too_many_transcripts` and a `Retry-After` header of 15 seconds. Wait for one to finish, then send the request again. Transcripts in `uploading` do not count until they are started.
+
 A transcript request can be refused. The response carries a `code` and a `message`, and these are all the codes the transcript routes return besides the ones every route shares (see [Error Handling](/docs/api/rest-api#error-handling)):
 
 | Status | Code | Meaning |
@@ -629,6 +631,7 @@ A transcript request can be refused. The response carries a `code` and a `messag
 | `404` | `transcript_not_found` | No transcript with this ID belongs to the app |
 | `409` | `idempotency_conflict` | The `Idempotency-Key` was already used with a different request, or for a transcript that was deleted. The message names the field that differs |
 | `409` | `upload_not_found` | The file has not been uploaded yet. If the upload URL expired, repeat the create request with the same `Idempotency-Key` to get a new one |
+| `429` | `too_many_transcripts` | The app already has 20 transcripts queued or processing. Wait for one to finish, then send the request again |
 | `503` | `speech_unavailable` | Transcription is temporarily unavailable. Retry later |
 
 #### Transcribe a URL
@@ -856,7 +859,7 @@ The `userId` filter matches the exact value: `alice`, `Alice` and `àlice` are t
 DELETE /api/developer/v1/transcripts/:id
 ```
 
-Deletes the transcript, its text and its stored files. A transcript deleted before it completes is not charged.
+Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed. It stays deleted: it is not listed and its text is not kept.
 
 #### Transcript billing
 
@@ -864,7 +867,8 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 - Creating or starting a transcript needs an app in good standing and an available balance of at least 1,000 micro-credits ($0.01). Otherwise the API answers `402`, with `code` set to `out_of_credit` when the app is in `grace` or `paused` and `insufficient_credits` when the balance is under the minimum. The `message` says how much to add.
 - Credits are taken once, when the transcript completes. A transcript that is retried internally is never charged twice.
 - Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
-- Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before it completes.
+- Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before its audio is sent to speech recognition.
+- A transcript deleted while its audio is being transcribed is charged for the length of its audio, like one that completes. The credit held for it stays held until then.
 - Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. The available balance is your balance minus those holds.
 - If the available balance cannot cover the hold, the transcript ends with `insufficient_credits` before the file is downloaded or processed, and the error message says how much was needed. When other running transcripts hold the credit, it waits for them for up to 15 minutes first, so a batch started together runs through as holds are released.
 - Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
@@ -1339,6 +1343,22 @@ function reloadPlaylist() {
 ```
 
 Call it when a viewer comes back to a player that loaded its playlist more than 12 hours ago, then call `video.play()`. It does nothing once the page has switched to the MP4. In Safari, set `video.src` to the `hlsUrl` again and then set `video.currentTime`.
+
+### Shorter Playlists for Long Videos
+
+A playlist lists one signed URL for every few seconds of video, so it grows with the video. For a 21 minute video the video and audio playlists are about 250 KB each, and a player loads both before it can start. On a slow connection that delays the first frame.
+
+A player built on hls.js can ask for a shorter form by adding `?segments=short` to `hlsUrl`:
+
+```js
+hls.loadSource(`${hlsUrl}?segments=short`);
+```
+
+- A playlist with more than 15 segments, about a minute of video, then signs only its first segment. It lists the rest by file name next to the playlist, and each of those answers with a `302` redirect to the signed URL, as `mp4Url` does. Shorter playlists are the same in both forms.
+- The master playlist passes the choice on to the playlists it lists, so the parameter on `hlsUrl` is all you add.
+- In our test with a 21 minute video the playlists loaded before playback went from about 500 KB to about 40 KB, and the first frame on a 400 kbps connection came about 8 seconds sooner. On a fast connection the first frame and seeking were unchanged.
+- Use it with hls.js. Leave it off for native HLS in Safari and for AVPlayer: those players ask for the redirect again on every segment, which made seeking slower in the same test.
+- Any other value of `segments` is ignored and you get the usual playlists.
 
 ### Content Security Policy
 

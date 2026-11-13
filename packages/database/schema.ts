@@ -2002,6 +2002,20 @@ export const developerTranscripts = mysqlTable(
 			table.status,
 			table.updatedAt,
 		),
+		index("dev_transcripts_app_completed_idx").on(
+			table.appId,
+			table.status,
+			table.completedAt,
+			table.durationSeconds,
+			table.billedMicroCredits,
+		),
+		index("dev_transcripts_app_status_held_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+			table.deletedAt,
+			table.reservedMicroCredits,
+		),
 	],
 );
 
@@ -2035,6 +2049,7 @@ export const developerCreditAccounts = mysqlTable(
 	(table) => [
 		uniqueIndex("app_id_unique").on(table.appId),
 		index("owner_idx").on(table.ownerId),
+		index("auto_top_up_idx").on(table.autoTopUpEnabled),
 	],
 );
 
@@ -2129,6 +2144,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.referenceId,
 			table.referenceType,
 		),
+		index("reference_type_id_idx").on(table.referenceType, table.referenceId),
 	],
 );
 

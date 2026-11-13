@@ -1029,6 +1029,46 @@ describe("auto top-up sweep", () => {
 			failed: 1,
 		});
 	});
+
+	it("does not read an account that is not due", async () => {
+		ledger.account.balanceMicroCredits =
+			ledger.account.autoTopUpThresholdMicroCredits;
+		const select = vi.spyOn(fakeDb, "select");
+
+		expect(await runDueAutoTopUps(now())).toEqual({
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+		});
+
+		expect(
+			select.mock.calls.filter(([fields]) => "autoTopUpAmountCents" in fields),
+		).toHaveLength(0);
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+		select.mockRestore();
+	});
+
+	it("still tops up an account that only held credit puts under its threshold", async () => {
+		ledger.account.balanceMicroCredits =
+			ledger.account.autoTopUpThresholdMicroCredits + 10;
+		ledger.heldMicroCredits = 11;
+
+		expect(await runDueAutoTopUps(now())).toEqual({
+			attempted: 1,
+			succeeded: 1,
+			failed: 0,
+		});
+	});
+
+	it("starts no top-up once its time is up", async () => {
+		expect(await runDueAutoTopUps(now(), { until: Date.now() - 1 })).toEqual({
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+		});
+
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+	});
 });
 
 describe("billing emails", () => {

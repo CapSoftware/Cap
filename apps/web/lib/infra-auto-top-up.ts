@@ -9,9 +9,10 @@ import {
 import { stripe } from "@cap/utils";
 import {
 	and,
+	asc,
 	desc,
 	eq,
-	gte,
+	getTableName,
 	inArray,
 	isNotNull,
 	isNull,
@@ -23,7 +24,7 @@ import { addCreditsToAccount } from "@/lib/developer-credits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
-import { availableBalance } from "@/lib/infra-balance";
+import { availableBalance, heldTranscriptsByApp } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
 import { disputedSince, type InfraDbExecutor } from "@/lib/infra-standing";
 import { utcDateKey } from "@/lib/infra-usage";
@@ -43,6 +44,7 @@ export const AUTO_TOP_UP_DAILY_LIMIT = 10;
 export const AUTO_TOP_UP_STRIPE_TIMEOUT_MS = 20_000;
 export const AUTO_TOP_UP_PENDING_RECONCILE_MS = 72 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DUE_PAGE_SIZE = 200;
 
 export type AutoTopUpResult =
 	| {
@@ -168,6 +170,69 @@ const SETTLED_REFERENCE_TYPES = [
 	AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
 ];
 
+const ATTEMPT_LEDGER_TYPES = {
+	[AUTO_TOP_UP_REFERENCE_TYPE]: "topup",
+	[AUTO_TOP_UP_FAILED_REFERENCE_TYPE]: "topup_failed",
+	[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]: "topup_pending",
+} as const;
+
+const NEVER_ATTEMPTED = "1970-01-01 00:00:00";
+
+const sqlTime = (date: Date) =>
+	date.toISOString().slice(0, 23).replace("T", " ");
+
+function ledgerAlias(name: string) {
+	const column = (field: { name: string }) =>
+		sql`${sql.identifier(name)}.${sql.identifier(field.name)}`;
+	return {
+		from: sql`${sql.identifier(getTableName(developerCreditTransactions))} ${sql.identifier(name)}`,
+		accountId: column(developerCreditTransactions.accountId),
+		type: column(developerCreditTransactions.type),
+		referenceId: column(developerCreditTransactions.referenceId),
+		referenceType: column(developerCreditTransactions.referenceType),
+		createdAt: column(developerCreditTransactions.createdAt),
+	};
+}
+
+const inList = (values: readonly string[]) =>
+	sql.join(
+		values.map((value) => sql`${value}`),
+		sql`, `,
+	);
+
+export function autoTopUpWaits(now: Date) {
+	const accountRow = sql`${sql.identifier(getTableName(developerCreditAccounts))}.${sql.identifier(developerCreditAccounts.id.name)}`;
+	const pendingAttempt = ledgerAlias("pending_attempt");
+	const settledAttempt = ledgerAlias("settled_attempt");
+	const declinedAttempt = ledgerAlias("declined_attempt");
+	const laterTopUp = ledgerAlias("later_top_up");
+	const recentTopUp = ledgerAlias("recent_top_up");
+	const dayAgo = sqlTime(new Date(now.getTime() - DAY_MS));
+	const reconcileFrom = sqlTime(
+		new Date(now.getTime() - AUTO_TOP_UP_PENDING_RECONCILE_MS),
+	);
+	return {
+		pending: sql<number>`exists (select 1 from ${pendingAttempt.from} where ${pendingAttempt.accountId} = ${accountRow} and ${pendingAttempt.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]} and ${pendingAttempt.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and ${pendingAttempt.createdAt} > ${reconcileFrom} and not exists (select 1 from ${settledAttempt.from} where ${settledAttempt.accountId} = ${pendingAttempt.accountId} and ${settledAttempt.referenceId} = ${pendingAttempt.referenceId} and ${settledAttempt.referenceType} in (${inList(SETTLED_REFERENCE_TYPES)})))`,
+		decline: sql<number>`exists (select 1 from ${declinedAttempt.from} where ${declinedAttempt.accountId} = ${accountRow} and ${declinedAttempt.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_FAILED_REFERENCE_TYPE]} and ${declinedAttempt.referenceType} = ${AUTO_TOP_UP_FAILED_REFERENCE_TYPE} and ${declinedAttempt.createdAt} > ${dayAgo} and not exists (select 1 from ${laterTopUp.from} where ${laterTopUp.accountId} = ${declinedAttempt.accountId} and ${laterTopUp.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} and ${laterTopUp.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} and ${laterTopUp.createdAt} > ${declinedAttempt.createdAt}))`,
+		limit: sql<number>`(select count(*) from ${recentTopUp.from} where ${recentTopUp.accountId} = ${accountRow} and ${recentTopUp.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} and ${recentTopUp.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} and ${recentTopUp.createdAt} > ${dayAgo}) >= ${AUTO_TOP_UP_DAILY_LIMIT}`,
+	};
+}
+
+export function autoTopUpReleased(now: Date) {
+	const waits = autoTopUpWaits(now);
+	return sql`not (${waits.pending} or ${waits.decline} or ${waits.limit})`;
+}
+
+export function autoTopUpLastAttemptAt() {
+	return sql`(select max(${developerCreditTransactions.createdAt}) from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${developerCreditAccounts.id} and ${inArray(
+		developerCreditTransactions.type,
+		ATTEMPT_REFERENCE_TYPES.map((type) => ATTEMPT_LEDGER_TYPES[type]),
+	)} and ${inArray(
+		developerCreditTransactions.referenceType,
+		ATTEMPT_REFERENCE_TYPES,
+	)})`;
+}
+
 async function lastAttempt(
 	accountId: string,
 	referenceTypes: typeof ATTEMPT_REFERENCE_TYPES = ATTEMPT_REFERENCE_TYPES,
@@ -182,6 +247,10 @@ async function lastAttempt(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
+				inArray(
+					developerCreditTransactions.type,
+					referenceTypes.map((type) => ATTEMPT_LEDGER_TYPES[type]),
+				),
 				inArray(developerCreditTransactions.referenceType, referenceTypes),
 			),
 		)
@@ -190,31 +259,7 @@ async function lastAttempt(
 	return row ?? null;
 }
 
-async function attemptHistory(
-	executor: InfraDbExecutor,
-	accountId: string,
-	now: Date,
-) {
-	const recent = await executor
-		.select({
-			type: developerCreditTransactions.type,
-			referenceId: developerCreditTransactions.referenceId,
-			createdAt: developerCreditTransactions.createdAt,
-		})
-		.from(developerCreditTransactions)
-		.where(
-			and(
-				eq(developerCreditTransactions.accountId, accountId),
-				inArray(
-					developerCreditTransactions.referenceType,
-					SETTLED_REFERENCE_TYPES,
-				),
-				gte(
-					developerCreditTransactions.createdAt,
-					new Date(now.getTime() - DAY_MS),
-				),
-			),
-		);
+async function attemptHistory(executor: InfraDbExecutor, accountId: string) {
 	const [settled] = await executor
 		.select({
 			topUps: sql<
@@ -235,10 +280,7 @@ async function attemptHistory(
 			),
 		);
 	const pending = await executor
-		.select({
-			pendingId: developerCreditTransactions.referenceId,
-			pendingSince: developerCreditTransactions.createdAt,
-		})
+		.select({ pendingId: developerCreditTransactions.referenceId })
 		.from(developerCreditTransactions)
 		.where(
 			and(
@@ -269,32 +311,12 @@ async function attemptHistory(
 				)
 		: [];
 	const resolvedIds = new Set(resolved.map((row) => row.settledId));
-
-	const latest = (type: string) =>
-		Math.max(
-			0,
-			...recent
-				.filter((row) => row.type === type)
-				.map((row) => new Date(row.createdAt).getTime()),
-		);
-	const lastDecline = latest("topup_failed");
 	return {
 		attempt: {
 			topUps: Number(settled?.topUps ?? 0),
 			declines: Number(settled?.declines ?? 0),
 		},
-		unresolved: pending.flatMap((row) =>
-			row.pendingId && !resolvedIds.has(row.pendingId)
-				? [
-						{
-							paymentIntentId: row.pendingId,
-							since: new Date(row.pendingSince),
-						},
-					]
-				: [],
-		),
-		declinedRecently: lastDecline > 0 && lastDecline >= latest("topup"),
-		recentTopUps: recent.filter((row) => row.type === "topup").length,
+		unresolved: pendingIds.filter((id) => !resolvedIds.has(id)),
 	};
 }
 
@@ -521,8 +543,14 @@ export async function runAutoTopUp(
 		return { state: "skipped", reason: "invalid_settings" };
 	}
 	const snapshot = await db().transaction(async (tx) => {
+		const waits = autoTopUpWaits(now);
 		const [locked] = await tx
-			.select({ id: developerCreditAccounts.id })
+			.select({
+				id: developerCreditAccounts.id,
+				pendingWait: waits.pending,
+				declineWait: waits.decline,
+				limitWait: waits.limit,
+			})
 			.from(developerCreditAccounts)
 			.where(eq(developerCreditAccounts.id, accountId))
 			.limit(1)
@@ -531,7 +559,12 @@ export async function runAutoTopUp(
 		return {
 			available: (await availableBalance(account.appId, tx)) ?? 0,
 			disputed: Boolean(await disputedSince(tx, accountId)),
-			...(await attemptHistory(tx, accountId, now)),
+			waits: {
+				pending: Boolean(Number(locked.pendingWait)),
+				decline: Boolean(Number(locked.declineWait)),
+				limit: Boolean(Number(locked.limitWait)),
+			},
+			...(await attemptHistory(tx, accountId)),
 		};
 	});
 	if (!snapshot) return { state: "skipped", reason: "not_found" };
@@ -539,29 +572,24 @@ export async function runAutoTopUp(
 		return { state: "skipped", reason: "above_threshold" };
 	}
 	if (snapshot.disputed) return { state: "skipped", reason: "disputed" };
-	if (snapshot.unresolved.length > 0) {
-		const stale = snapshot.unresolved.filter(
-			(payment) =>
-				now.getTime() - payment.since.getTime() >=
-				AUTO_TOP_UP_PENDING_RECONCILE_MS,
-		);
-		if (stale.length === 0) {
-			return { state: "skipped", reason: "awaiting_payment" };
-		}
-		for (const payment of stale) {
-			await reconcilePendingAutoTopUp(accountId, payment.paymentIntentId);
-		}
-		return { state: "skipped", reason: "reconciled" };
+	if (snapshot.waits.pending) {
+		return { state: "skipped", reason: "awaiting_payment" };
 	}
-	if (snapshot.declinedRecently) {
+	if (snapshot.waits.decline) {
 		return { state: "skipped", reason: "recent_decline" };
 	}
-	if (snapshot.recentTopUps >= AUTO_TOP_UP_DAILY_LIMIT) {
+	if (snapshot.waits.limit) {
 		console.warn(
 			"[infra-billing] Auto top-up waits: the daily limit of automatic top-ups is reached",
 			{ accountId, limit: AUTO_TOP_UP_DAILY_LIMIT },
 		);
 		return { state: "skipped", reason: "daily_limit" };
+	}
+	if (snapshot.unresolved.length > 0) {
+		for (const payment of snapshot.unresolved) {
+			await reconcilePendingAutoTopUp(accountId, payment);
+		}
+		return { state: "skipped", reason: "reconciled" };
 	}
 
 	const period = utcDateKey(now);
@@ -641,38 +669,65 @@ export async function runAutoTopUp(
 	return { state: "failed", reason: paymentIntent.status };
 }
 
-export async function runDueAutoTopUps(now: Date = new Date()) {
-	const due = await db()
-		.select({ id: developerCreditAccounts.id })
+type DueCursor = { attemptKey: string; id: string };
+
+function dueAutoTopUpsAfter(now: Date, cursor: DueCursor | null) {
+	const attemptKey = sql`cast(coalesce(${autoTopUpLastAttemptAt()}, ${NEVER_ATTEMPTED}) as char)`;
+	const held = heldTranscriptsByApp(db());
+	return db()
+		.select({
+			id: developerCreditAccounts.id,
+			attemptKey: sql<string>`${attemptKey}`.as("attemptKey"),
+		})
 		.from(developerCreditAccounts)
 		.innerJoin(
 			developerApps,
 			eq(developerCreditAccounts.appId, developerApps.id),
 		)
+		.leftJoin(held, eq(held.appId, developerCreditAccounts.appId))
 		.where(
 			and(
 				eq(developerCreditAccounts.autoTopUpEnabled, true),
 				isNotNull(developerCreditAccounts.stripePaymentMethodId),
 				isNull(developerApps.deletedAt),
+				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + coalesce(${held.heldMicroCredits}, 0)`,
+				autoTopUpReleased(now),
+				cursor
+					? sql`(${attemptKey} > ${cursor.attemptKey} or (${attemptKey} = ${cursor.attemptKey} and ${developerCreditAccounts.id} > ${cursor.id}))`
+					: undefined,
 			),
-		);
+		)
+		.orderBy(sql`attemptKey`, asc(developerCreditAccounts.id))
+		.limit(DUE_PAGE_SIZE);
+}
 
+export async function runDueAutoTopUps(
+	now: Date = new Date(),
+	{ until = Number.POSITIVE_INFINITY }: { until?: number } = {},
+) {
 	const summary = { attempted: 0, succeeded: 0, failed: 0 };
-	for (const account of due) {
-		try {
-			const result = await runAutoTopUp(account.id, now);
-			if (result.state === "skipped") continue;
-			summary.attempted += 1;
-			if (result.state === "succeeded") summary.succeeded += 1;
-			if (result.state === "failed") summary.failed += 1;
-		} catch (error) {
-			console.error("[infra-billing] Auto top-up failed", {
-				accountId: account.id,
-				error,
-			});
+	let cursor: DueCursor | null = null;
+	for (;;) {
+		const due: DueCursor[] = await dueAutoTopUpsAfter(now, cursor);
+		for (const account of due) {
+			if (Date.now() >= until) return summary;
+			try {
+				const result = await runAutoTopUp(account.id, now);
+				if (result.state === "skipped") continue;
+				summary.attempted += 1;
+				if (result.state === "succeeded") summary.succeeded += 1;
+				if (result.state === "failed") summary.failed += 1;
+			} catch (error) {
+				console.error("[infra-billing] Auto top-up failed", {
+					accountId: account.id,
+					error,
+				});
+			}
 		}
+		const last = due.at(-1);
+		if (!last || due.length < DUE_PAGE_SIZE) return summary;
+		cursor = last;
 	}
-	return summary;
 }
 
 async function creditAccountOf(target: AutoTopUpTarget) {
