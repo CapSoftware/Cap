@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	chargeMissedFirstMonths: vi.fn(),
 	firstMonthShortfallsSince: vi.fn(),
 	openFirstMonthShortfalls: vi.fn(),
+	markFirstMonthShortfallsNotified: vi.fn(),
 	chargeStorageDay: vi.fn(),
 	latestStorageCharge: vi.fn(),
 	latestStorageCharges: vi.fn(),
@@ -91,6 +92,7 @@ vi.mock("@/lib/infra-storage-minimum", () => ({
 	chargeMissedFirstMonths: mocks.chargeMissedFirstMonths,
 	firstMonthShortfallsSince: mocks.firstMonthShortfallsSince,
 	openFirstMonthShortfalls: mocks.openFirstMonthShortfalls,
+	markFirstMonthShortfallsNotified: mocks.markFirstMonthShortfallsNotified,
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
 	chargeStorageDay: mocks.chargeStorageDay,
@@ -166,6 +168,7 @@ beforeEach(() => {
 	mocks.chargeMissedFirstMonths.mockResolvedValue(NO_FIRST_MONTHS);
 	mocks.firstMonthShortfallsSince.mockReset();
 	mocks.firstMonthShortfallsSince.mockResolvedValue(new Map());
+	mocks.markFirstMonthShortfallsNotified.mockReset();
 	mocks.openFirstMonthShortfalls.mockReset();
 	mocks.openFirstMonthShortfalls.mockResolvedValue(new Set());
 	mocks.restoredSinceCharge.mockReset();
@@ -471,9 +474,9 @@ describe("developer-storage cron job", () => {
 		});
 	});
 
-	it("emails an account whose first month fell short in the last day and is still short, with the pause date seven days on", async () => {
-		const shortSince = new Date(Date.now() - 20 * 60 * 60 * 1000);
-		mocks.selects = [
+	it("emails a new first month shortfall once, like a daily one, with the pause date seven days after it began", async () => {
+		const shortSince = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+		const accounts = () => [
 			[
 				{ id: "account-1", appId: "app-1" },
 				{ id: "account-2", appId: "app-2" },
@@ -481,6 +484,7 @@ describe("developer-storage cron job", () => {
 			],
 			[],
 		];
+		mocks.selects = accounts();
 		mocks.getStorageUsageByApp.mockResolvedValue(
 			new Map([
 				["app-1", usage(0)],
@@ -488,10 +492,10 @@ describe("developer-storage cron job", () => {
 				["app-3", usage(0)],
 			]),
 		);
-		mocks.firstMonthShortfallsSince.mockResolvedValue(
+		mocks.firstMonthShortfallsSince.mockResolvedValueOnce(
 			new Map([
-				["account-2", shortSince],
-				["account-3", shortSince],
+				["account-2", { shortSince, ids: ["row-2"] }],
+				["account-3", { shortSince, ids: ["row-3"] }],
 			]),
 		);
 		const short = {
@@ -507,6 +511,7 @@ describe("developer-storage cron job", () => {
 		mocks.restoredSinceCharge.mockImplementation(
 			async (_db: unknown, accountId: string) => accountId === "account-3",
 		);
+		mocks.sendInfraOutOfCreditEmail.mockResolvedValue(true);
 
 		const before = Date.now();
 		await authorized();
@@ -515,7 +520,7 @@ describe("developer-storage cron job", () => {
 			mocks.firstMonthShortfallsSince.mock.calls[0] ?? [];
 		expect(accountIds).toEqual(["account-1", "account-2", "account-3"]);
 		expect(before - (since as Date).getTime()).toBeGreaterThanOrEqual(
-			24 * 60 * 60 * 1000 - 1000,
+			7 * 24 * 60 * 60 * 1000 - 1000,
 		);
 		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
 		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledWith({
@@ -523,6 +528,37 @@ describe("developer-storage cron job", () => {
 			shortSince,
 			pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
 		});
+		expect(
+			mocks.markFirstMonthShortfallsNotified.mock.calls.map(([ids]) => ids),
+		).toEqual([["row-2"], ["row-3"]]);
+
+		mocks.selects = accounts();
+		await authorized();
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a first month shortfall to email again when the email could not be sent", async () => {
+		const shortSince = new Date();
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
+		mocks.firstMonthShortfallsSince.mockResolvedValueOnce(
+			new Map([["account-1", { shortSince, ids: ["row-1"] }]]),
+		);
+		mocks.latestStorageCharge.mockResolvedValue({
+			createdAt: shortSince,
+			owedMicroCredits: 850,
+			shortSince,
+			firstMonth: true,
+		});
+		mocks.restoredSinceCharge.mockResolvedValue(false);
+		mocks.sendInfraOutOfCreditEmail.mockResolvedValue(false);
+
+		await authorized();
+
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.markFirstMonthShortfallsNotified).not.toHaveBeenCalled();
 	});
 
 	it("answers with zero apps when there are none", async () => {

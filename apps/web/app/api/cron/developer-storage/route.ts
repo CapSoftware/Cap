@@ -27,6 +27,7 @@ import {
 import {
 	chargeMissedFirstMonths,
 	firstMonthShortfallsSince,
+	markFirstMonthShortfallsNotified,
 	openFirstMonthShortfalls,
 } from "@/lib/infra-storage-minimum";
 import { utcDateKey } from "@/lib/infra-usage";
@@ -35,7 +36,7 @@ const BATCH_SIZE = 10;
 const PAGE_SIZE = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GRACE_MS = INFRA_GRACE_DAYS * DAY_MS;
-const FIRST_MONTH_NOTICE_LOOKBACK_MS = DAY_MS;
+const FIRST_MONTH_NOTICE_LOOKBACK_MS = GRACE_MS;
 
 const TOP_UPS_BEFORE_UNTIL_MS = 60_000;
 const STORAGE_UNTIL_MS = 200_000;
@@ -112,19 +113,21 @@ async function sendFirstMonthNotices(
 		accounts.map((account) => account.id),
 		new Date(now.getTime() - FIRST_MONTH_NOTICE_LOOKBACK_MS),
 	);
-	for (const accountId of shortfalls.keys()) {
+	for (const [accountId, { ids }] of shortfalls) {
 		const charge = await latestStorageCharge(db(), accountId);
 		if (
 			!charge?.shortSince ||
 			(await restoredSinceCharge(db(), accountId, charge))
 		) {
+			await markFirstMonthShortfallsNotified(ids, now);
 			continue;
 		}
-		await sendInfraOutOfCreditEmail({
+		const sent = await sendInfraOutOfCreditEmail({
 			accountId,
 			shortSince: charge.shortSince,
 			pausesAt: new Date(charge.shortSince.getTime() + GRACE_MS),
 		});
+		if (sent) await markFirstMonthShortfallsNotified(ids, now);
 	}
 }
 
