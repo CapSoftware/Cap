@@ -107,7 +107,7 @@ A request body that fails validation returns `400` with the code `invalid_reques
 }
 ```
 
-A `402` from Create Upload or Complete Upload is the one exception to the shape: it has `error`, `code` and `message`, and carries the balance fields shown under [Create Upload](/docs/api/rest-api#create-upload) in place of `hint` and `docs`.
+A `402` from Create Upload, Complete Upload or Create Transcript has a `hint` that links the app's own Billing page, where credit is added. The upload `402` also carries the balance fields shown under [Create Upload](/docs/api/rest-api#create-upload).
 
 Send request bodies as JSON with the header `Content-Type: application/json`. Malformed JSON returns `400` with the code `invalid_json`, and a body sent with any other content type returns `415` with the code `unsupported_media_type`.
 
@@ -259,6 +259,8 @@ Creating an upload is free. It returns `402` if the app is out of credit, or if 
   "error": "Insufficient credits",
   "code": "insufficient_credits",
   "message": "Not enough credit to upload. Uploading needs $0.16800, enough for the first month of storage for each video being uploaded or encoded. The balance is $0.05, so add at least $0.11800.",
+  "hint": "Add credits to this app at https://cap.so/dashboard/infra/app_789/billing, then retry.",
+  "docs": "https://cap.so/docs/api/rest-api",
   "standing": "active",
   "pausesAt": null,
   "balanceMicroCredits": 5000,
@@ -1022,6 +1024,7 @@ curl https://cap.so/api/developer/v1/usage \
 ```json
 {
   "data": {
+    "appId": "app_789",
     "balanceMicroCredits": 500000,
     "balanceDollars": "5.00",
     "availableMicroCredits": 460000,
@@ -1061,6 +1064,8 @@ curl https://cap.so/api/developer/v1/usage \
 ```
 
 Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
+
+`appId` is the app the secret key belongs to. Credit is added on that app's Billing page, `https://cap.so/dashboard/infra/{appId}/billing`.
 
 **Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Each transcript is charged on its length rounded to a whole second and then down to a whole micro-credit, so `seconds` times the rate can differ slightly from `microCredits`: for the exact charge use `microCredits`, or each transcript's `costMicroCredits`. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
 

@@ -349,10 +349,13 @@ describe("upload admission", () => {
 				lastOwedMicroCredits: 144,
 				storage: pastFirstMonth(4335),
 			}),
+			"app-1",
 		);
 		expect(body).toMatchObject({
 			error: "Insufficient credits",
 			code: "out_of_credit",
+			hint: "Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
+			docs: "https://cap.so/docs/api/rest-api",
 			standing: "grace",
 			pausesAt: pausesAt.toISOString(),
 			balanceMicroCredits: 0,
