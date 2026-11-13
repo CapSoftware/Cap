@@ -46,17 +46,20 @@ export function AppSwitcher({
 				<Menu.Trigger
 					aria-label={`App: ${current.name}. Switch app`}
 					className={clsx(
-						"flex min-w-0 items-center justify-between gap-3 rounded-[9px] text-left shadow-[inset_0_0_0_1px_rgba(222,230,246,0.1)] transition-[background-color,box-shadow] duration-200 hover:bg-[rgba(222,230,246,0.04)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.2)] data-[state=open]:bg-[rgba(222,230,246,0.04)]",
-						compact ? "h-9 max-w-[58vw] px-3" : "w-full px-3 py-2.5",
+						"flex min-w-0 items-center gap-3 rounded-[10px] text-left transition-[background-color,box-shadow] duration-200 hover:bg-[rgba(222,230,246,0.05)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.16)] data-[state=open]:bg-[rgba(222,230,246,0.05)]",
+						compact
+							? "h-9 max-w-[58vw] px-3 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12)]"
+							: "w-full bg-[rgba(222,230,246,0.03)] p-2 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.09)]",
 						FOCUS,
 					)}
 				>
-					<span className="min-w-0">
+					{!compact && <AppMark name={current.name} />}
+					<span className="min-w-0 flex-1">
 						<span className="block truncate text-[14px] leading-[1.3] text-[#E8ECF4]">
 							{current.name}
 						</span>
 						{!compact && (
-							<EnvTag environment={current.environment} className="mt-1.5" />
+							<EnvTag environment={current.environment} className="mt-1" />
 						)}
 					</span>
 					<ChevronsUpDown
@@ -68,7 +71,7 @@ export function AppSwitcher({
 					<Menu.Content
 						align={compact ? "end" : "start"}
 						sideOffset={6}
-						className={`${infraSans.variable} ${infraMono.variable} z-[500] flex max-h-[min(60vh,var(--radix-dropdown-menu-content-available-height))] w-[260px] flex-col rounded-[11px] bg-[#0B0C0E] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
+						className={`${infraSans.variable} ${infraMono.variable} z-[500] flex max-h-[min(60vh,var(--radix-dropdown-menu-content-available-height))] w-[260px] flex-col rounded-[12px] bg-[#121317] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
 					>
 						<div className="min-h-0 overflow-y-auto">
 							{apps.map((app) => (
@@ -77,6 +80,7 @@ export function AppSwitcher({
 									className={ITEM}
 									onSelect={() => selectApp(app.id)}
 								>
+									<AppMark name={app.name} small />
 									<span className="min-w-0 flex-1">
 										<span className="block truncate text-[#E8ECF4]">
 											{app.name}
@@ -102,5 +106,21 @@ export function AppSwitcher({
 			</Menu.Root>
 			<NewAppModal open={createOpen} onOpenChange={setCreateOpen} />
 		</>
+	);
+}
+
+// A quiet monogram so apps can be told apart at a glance in the switcher.
+function AppMark({ name, small = false }: { name: string; small?: boolean }) {
+	const letter = Array.from(name.trim())[0]?.toUpperCase() ?? "A";
+	return (
+		<span
+			aria-hidden="true"
+			className={clsx(
+				"grid shrink-0 place-items-center rounded-[8px] bg-[linear-gradient(160deg,rgba(232,236,244,0.2),rgba(232,236,244,0.05))] font-medium text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.14),inset_0_1px_0_rgba(255,255,255,0.12)]",
+				small ? "size-7 text-[12px]" : "size-9 text-[14px]",
+			)}
+		>
+			{letter}
+		</span>
 	);
 }
