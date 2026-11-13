@@ -947,7 +947,7 @@ describe("a token after its secret key is rotated", () => {
 		await refusedEverywhere(token, 404, "video_not_found");
 	});
 
-	it("still accepts a token made before tokens named their key, until it expires", async () => {
+	it("asks for a renewed token instead of accepting one made before tokens named their key", async () => {
 		const key = secretKey("app1");
 		const { videoId } = await createdWith(key);
 		expect(videoId).toBe("video-1");
@@ -955,6 +955,7 @@ describe("a token after its secret key is rotated", () => {
 			"cut_eyJ2IjoxLCJhcHAiOiJhcHAxIiwidmlkZW8iOiJ2aWRlby0xIiwiZXhwIjoxNzk0NDgxMjAwMDAwLCJvcmlnaW4iOm51bGx9.fMI6nUNp1BF0VWSS3A5xA1jeK3ghEPavCqVE4uW0xNI";
 		expect(payloadOf(issuedBeforeKeyIds)).not.toHaveProperty("key");
 		revokeKey(key);
+		const storageBefore = storageCalls();
 
 		const initiated = await upload("initiate", issuedBeforeKeyIds);
 		const completed = await upload(
@@ -963,11 +964,22 @@ describe("a token after its secret key is rotated", () => {
 			completeBody,
 		);
 
-		expect(initiated.status).toBe(200);
-		expect(completed.status).toBe(200);
-		expect(durationWrites()).toHaveLength(1);
-		vi.setSystemTime(Date.parse("2026-11-12T11:00:00Z"));
-		expect((await upload("initiate", issuedBeforeKeyIds)).status).toBe(401);
+		expect(initiated.status).toBe(401);
+		expect(await initiated.json()).toMatchObject({
+			code: "upload_token_expired",
+			hint: expect.stringContaining("POST /api/developer/v1/uploads/{videoId}/token"),
+		});
+		expect(completed.status).toBe(401);
+		expect(storageCalls()).toBe(storageBefore);
+		expect(durationWrites()).toHaveLength(0);
+	});
+
+	it("asks for a renewed token made before tokens named their key even while the key is live", async () => {
+		await createdWith(secretKey("app1"));
+		const issuedBeforeKeyIds =
+			"cut_eyJ2IjoxLCJhcHAiOiJhcHAxIiwidmlkZW8iOiJ2aWRlby0xIiwiZXhwIjoxNzk0NDgxMjAwMDAwLCJvcmlnaW4iOm51bGx9.fMI6nUNp1BF0VWSS3A5xA1jeK3ghEPavCqVE4uW0xNI";
+
+		await refusedEverywhere(issuedBeforeKeyIds, 401, "upload_token_expired");
 	});
 
 	it("gives a renewed token the key that renewed it", async () => {
@@ -1335,26 +1347,6 @@ describe("a size cap on an upload token", () => {
 			error: "The file is larger than the 36 GB upload limit",
 		});
 		expect(storageCalls()).toBe(0);
-	});
-
-	it("still accepts a token issued before the cap existed", async () => {
-		const { videoId } = await created();
-		expect(videoId).toBe("video-1");
-		const issuedBeforeTheCap =
-			"cut_eyJ2IjoxLCJhcHAiOiJhcHAxIiwidmlkZW8iOiJ2aWRlby0xIiwiZXhwIjoxNzk0NDgxMjAwMDAwLCJvcmlnaW4iOm51bGx9.fMI6nUNp1BF0VWSS3A5xA1jeK3ghEPavCqVE4uW0xNI";
-
-		const initiated = await upload("initiate", issuedBeforeTheCap);
-		const completed = await upload(
-			"complete",
-			issuedBeforeTheCap,
-			completeBody,
-		);
-
-		expect(initiated.status).toBe(200);
-		expect(completed.status).toBe(200);
-		expect(durationWrites()).toHaveLength(1);
-		vi.setSystemTime(Date.parse("2026-11-12T11:00:00Z"));
-		expect((await upload("initiate", issuedBeforeTheCap)).status).toBe(401);
 	});
 
 	it("does not cap a token made without maxBytes", async () => {

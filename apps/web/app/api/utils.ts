@@ -322,7 +322,11 @@ export const withDeveloperUploadToken = createMiddleware<{
 		);
 	}
 
-	if (keyId !== undefined && (video.keyId === null || video.keyRevokedAt)) {
+	if (keyId === undefined) {
+		return c.json(uploadTokenRefusal("expired"), 401);
+	}
+
+	if (video.keyId === null || video.keyRevokedAt) {
 		return c.json(uploadTokenRefusal("rotated"), 401);
 	}
 
