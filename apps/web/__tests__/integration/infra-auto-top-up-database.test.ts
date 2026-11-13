@@ -24,6 +24,7 @@ const fixture = vi.hoisted(() => ({
 	sent: [] as Record<string, unknown>[],
 	duringCreate: null as null | (() => Promise<void>),
 	loseNextResponse: false,
+	failNextCall: false,
 	delayMs: 40,
 	calledAt: [] as number[],
 	stored: new Map<string, FakeIntent>(),
@@ -60,6 +61,12 @@ vi.mock("@cap/utils", () => ({
 				options: { idempotencyKey: string },
 			) => {
 				const key = options.idempotencyKey;
+				if (fixture.failNextCall) {
+					fixture.failNextCall = false;
+					throw Object.assign(new Error("socket hang up"), {
+						type: "StripeConnectionError",
+					});
+				}
 				const entry = fixture.keys.get(key);
 				const sent = JSON.stringify(params);
 				if (entry && entry.params !== sent) {
@@ -598,6 +605,60 @@ describe.runIf(Boolean(databaseUrl))(
 			)) as unknown as [[{ micro: number }]];
 			expect(Number(total.micro)).toBe(50_500_000);
 			warn.mockRestore();
+		});
+
+		it("retries a $600 attempt whose Stripe call failed, once, while it still holds back the owner's other app", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const first = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const second = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const before = fixture.created.length;
+
+			fixture.failNextCall = true;
+			expect(await runAutoTopUp(first.accountId)).toEqual({ state: "error" });
+			expect(await runAutoTopUp(second.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+
+			expect(await runAutoTopUp(first.accountId)).toMatchObject({
+				state: "succeeded",
+			});
+			expect(fixture.created.length - before).toBe(1);
+			expect(fixture.created.at(-1)?.amount).toBe(60_000);
+			expect(await topUpsOf(first.accountId)).toHaveLength(1);
+			expect(await runAutoTopUp(second.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+			errors.mockRestore();
+			warn.mockRestore();
+		});
+
+		it("lets the sweep retry a $600 reservation whose only blocker is itself", async () => {
+			const { runAutoTopUp, runDueAutoTopUps } = await import(
+				"@/lib/infra-auto-top-up"
+			);
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { accountId } = await makeAccount(30_000, { amountCents: 60_000 });
+			const before = fixture.created.length;
+
+			fixture.failNextCall = true;
+			expect(await runAutoTopUp(accountId)).toEqual({ state: "error" });
+			await runDueAutoTopUps(new Date());
+
+			expect(await topUpsOf(accountId)).toHaveLength(1);
+			expect(
+				fixture.created
+					.slice(before)
+					.filter((intent) => intent.metadata.accountId === accountId),
+			).toHaveLength(1);
+			errors.mockRestore();
 		});
 
 		it("keeps counting a charge whose answer was lost against the owner's ceiling", async () => {
