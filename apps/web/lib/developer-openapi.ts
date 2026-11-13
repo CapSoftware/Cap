@@ -467,6 +467,23 @@ const developerVideoSchema = {
 	type: "object",
 	required: ["id", "appId", "name", "createdAt", "updatedAt"],
 	properties: {
+		captions: {
+			type: "array",
+			description:
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. Returned by Get Video and List Videos, not in webhook payloads.",
+			items: {
+				type: "object",
+				required: ["language", "url"],
+				properties: {
+					language: {
+						type: "string",
+						description:
+							"Language code of the captions, or und when it is not known.",
+					},
+					url: { type: "string", description: "The WebVTT file." },
+				},
+			},
+		},
 		id: { type: "string", description: "Developer video ID." },
 		appId: { type: "string", description: "Developer app that owns it." },
 		externalUserId: {

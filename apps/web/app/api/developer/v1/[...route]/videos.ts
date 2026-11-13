@@ -15,10 +15,25 @@ import {
 	serializeDeveloperVideoStatus,
 } from "@/lib/developer-video-api";
 import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
+import { developerVideosCaptionLinks } from "@/lib/developer-video-captions";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { settleFirstMonthAtDelete } from "@/lib/infra-storage-minimum";
 import { withDeveloperSecretAuth } from "../../../utils";
+
+type DeveloperVideoRow = typeof developerVideos.$inferSelect;
+
+async function withCaptions(appId: string, videos: DeveloperVideoRow[]) {
+	const served = videos.map(serializeDeveloperVideo);
+	const links = await developerVideosCaptionLinks(
+		appId,
+		served.filter((video) => !video.takenDown),
+	);
+	return served.map((video) => ({
+		...video,
+		captions: links.get(video.id) ?? [],
+	}));
+}
 
 const ownedBy = (userId: string | undefined) =>
 	userId === undefined
@@ -100,7 +115,7 @@ app.get("/", async (c) => {
 		.offset(offset);
 
 	return c.json({
-		data: videos.slice(0, limit).map(serializeDeveloperVideo),
+		data: await withCaptions(appId, videos.slice(0, limit)),
 		pagination: { limit, offset, hasMore: videos.length > limit },
 	});
 });
@@ -110,8 +125,9 @@ app.get("/:id", async (c) => {
 	if (!scope.ok) {
 		return c.json(apiErrorBody(scope.code, scope.message, scope.hint), 400);
 	}
+	const appId = c.get("developerAppId");
 	const video = await findAppVideoAndRedrive(
-		c.get("developerAppId"),
+		appId,
 		c.req.param("id"),
 		scope.userId,
 	);
@@ -120,7 +136,8 @@ app.get("/:id", async (c) => {
 		return c.json(videoNotFound(scope.userId), 404);
 	}
 
-	return c.json({ data: serializeDeveloperVideo(video) });
+	const [data] = await withCaptions(appId, [video]);
+	return c.json({ data });
 });
 
 app.delete("/:id", async (c) => {
