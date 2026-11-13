@@ -16,6 +16,14 @@ const mocks = vi.hoisted(() => ({
 	redrive: vi.fn(),
 	settleAtDelete: vi.fn(),
 	cancelJob: vi.fn(),
+	createImport: vi.fn(),
+	importView: vi.fn(),
+	startWorkflow: vi.fn(),
+	purge: vi.fn(),
+}));
+
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: mocks.purge,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -38,6 +46,16 @@ vi.mock("@/lib/infra-storage-minimum", () => ({
 	settleFirstMonthAtDelete: mocks.settleAtDelete,
 }));
 
+vi.mock("@/lib/infra-video-import", () => ({
+	createInfraVideoImport: mocks.createImport,
+	developerVideoImportView: mocks.importView,
+	newImportVideoId: () => "new-video-1",
+}));
+vi.mock("@/workflows/import-developer-video", () => ({
+	importDeveloperVideoWorkflow: "import-workflow",
+}));
+vi.mock("workflow/api", () => ({ start: mocks.startWorkflow }));
+
 vi.mock("@/lib/media-client", () => ({
 	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
@@ -46,6 +64,7 @@ vi.mock("@/app/api/utils", async () => {
 	return {
 		withDeveloperSecretAuth: createMiddleware(async (c, next) => {
 			c.set("developerAppId", mocks.appId);
+			c.set("developerKeyId", "key-1");
 			c.set("developerKeyType", "secret");
 			await next();
 		}),
@@ -138,6 +157,7 @@ describe("developer video API", () => {
 			externalUserId: null,
 			name: "Untitled",
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			fps: 30,
@@ -373,17 +393,66 @@ describe("developer video API", () => {
 		}
 	});
 
+	it.each([
+		["a measured video", { duration: 95.25 }],
+		["a video with no length yet", { duration: null }],
+	])(
+		"gives durationSeconds the value of duration for %s, on get, list and status",
+		async (_name, row) => {
+			mocks.store.video = { ...ready(), ...row };
+
+			const got = (await get("/video-1")).body.data;
+			const listed = (await get("/")).body.data[0];
+			const status = (await get("/video-1/status")).body.data;
+			for (const video of [got, listed, status]) {
+				expect(video.durationSeconds).toBe(row.duration);
+				expect(video.duration).toBe(row.duration);
+			}
+		},
+	);
+
+	it("marks duration deprecated in favour of durationSeconds in the OpenAPI description only", async () => {
+		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
+
+		for (const schema of [schemas.DeveloperVideo, schemas.VideoStatus]) {
+			expect(schema.properties.duration.description).toMatch(
+				/^Deprecated: use durationSeconds/,
+			);
+			expect(schema.properties.duration).not.toHaveProperty("deprecated");
+			expect(schema.properties.durationSeconds.type).toEqual([
+				"number",
+				"null",
+			]);
+		}
+	});
+
 	it("returns exactly the fields the OpenAPI description lists", async () => {
 		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
 		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
 
+		const always = (properties: object) =>
+			Object.keys(properties)
+				.filter((name) => name !== "import")
+				.sort();
+
 		const video = await get("/video-1");
 		expect(Object.keys(video.body.data).sort()).toEqual(
-			Object.keys(schemas.DeveloperVideo.properties).sort(),
+			always(schemas.DeveloperVideo.properties),
 		);
 		const status = await get("/video-1/status");
 		expect(Object.keys(status.body.data).sort()).toEqual(
-			Object.keys(schemas.VideoStatus.properties).sort(),
+			always(schemas.VideoStatus.properties),
+		);
+
+		mocks.importView.mockResolvedValueOnce({
+			sourceUrl: "https://media.example.com/a.mp4",
+			state: "complete",
+			errorCode: null,
+		});
+		const imported = await get("/video-1");
+		expect(Object.keys(imported.body.data).sort()).toEqual(
+			Object.keys(schemas.DeveloperVideo.properties).sort(),
 		);
 	});
 
@@ -392,7 +461,9 @@ describe("developer video API", () => {
 		const status = Object.keys((await get("/video-1/status")).body.data).sort();
 		const reference = [
 			...docsSection("## Video Object Reference").matchAll(/^\| `(\w+)` \|/gm),
-		].map((row) => row[1]);
+		]
+			.map((row) => row[1])
+			.filter((name) => name !== "import");
 
 		expect(reference.sort()).toEqual(video);
 		expect(Object.keys(docsExampleResponse("### Get Video")).sort()).toEqual(
@@ -829,6 +900,29 @@ describe("developer video API", () => {
 			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
 		});
 
+		it("drops the video's cached playback once it is marked deleted", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			});
+
+			expect((await remove()).status).toBe(200);
+			expect(mocks.purge.mock.calls).toEqual([["infra-video-video-1"]]);
+		});
+
+		it("still deletes the video when the cache purge fails", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockRejectedValue(new Error("429"));
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+			mocks.purge.mockReset();
+		});
+
 		it("cancels the encode jobs of a video deleted mid-encode", async () => {
 			mocks.store.video = developerVideo({
 				processing: processingState({
@@ -1032,6 +1126,7 @@ describe("developer video API", () => {
 			id: "video-1",
 			externalUserId: null,
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			transcriptionStatus: null,
@@ -1194,5 +1289,167 @@ describe("developer video API", () => {
 
 		expect((await get("/video-1")).status).toBe(404);
 		expect((await get("/video-1/status")).status).toBe(404);
+	});
+});
+
+describe("import from a URL", () => {
+	const post = (body: unknown, headers: Record<string, string> = {}) =>
+		app.request("/", {
+			method: "POST",
+			headers: { "content-type": "application/json", ...headers },
+			body: JSON.stringify(body),
+		});
+
+	beforeEach(() => {
+		mocks.store.video = developerVideo({ status: "uploading" });
+		mocks.createImport.mockResolvedValue({
+			status: 202,
+			videoId: "video-1",
+			replayed: false,
+		});
+		mocks.importView.mockResolvedValue({
+			sourceUrl: "https://media.example.com/a.mp4",
+			state: "downloading",
+			errorCode: null,
+		});
+	});
+
+	it("starts an import with the key, a new video id and the fields sent", async () => {
+		const response = await post({
+			url: "https://media.example.com/a.mp4",
+			name: "Launch film",
+			userId: "user-7",
+			maxResolutionTier: "1440p",
+			metadata: { campaign: "spring" },
+		});
+		expect(response.status).toBe(200);
+		const [input, deps] = mocks.createImport.mock.calls[0] ?? [];
+		expect(input).toEqual({
+			url: "https://media.example.com/a.mp4",
+			name: "Launch film",
+			userId: "user-7",
+			maxResolutionTier: "1440p",
+			metadata: { campaign: "spring" },
+			appId: "app-1",
+			keyId: "key-1",
+			idempotencyKey: undefined,
+			videoId: "new-video-1",
+		});
+		const body = await response.json();
+		expect(body.data).toMatchObject({
+			id: "video-1",
+			status: "uploading",
+			import: {
+				sourceUrl: "https://media.example.com/a.mp4",
+				state: "downloading",
+				errorCode: null,
+			},
+		});
+
+		await deps.startImport("video-1");
+		expect(mocks.startWorkflow).toHaveBeenCalledWith("import-workflow", [
+			{ videoId: "video-1" },
+		]);
+	});
+
+	it("derives the video id from an Idempotency-Key", async () => {
+		const { developerVideoIdForIdempotencyKey } = await import(
+			"@/lib/developer-ids"
+		);
+		await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "import-key-1" },
+		);
+		expect(mocks.createImport.mock.calls[0]?.[0]).toMatchObject({
+			idempotencyKey: "import-key-1",
+			videoId: developerVideoIdForIdempotencyKey("app-1", "import-key-1"),
+		});
+	});
+
+	it("keeps the id of a video imported under the key before keyed ids changed", async () => {
+		const { legacyDeveloperVideoIdForIdempotencyKey } = await import(
+			"@/lib/developer-ids"
+		);
+		const legacy = legacyDeveloperVideoIdForIdempotencyKey(
+			"app-1",
+			"import-key-1",
+		);
+		mocks.store.video = { ...ready(), id: legacy };
+
+		await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "import-key-1" },
+		);
+		expect(mocks.createImport.mock.calls[0]?.[0]).toMatchObject({
+			idempotencyKey: "import-key-1",
+			videoId: legacy,
+		});
+	});
+
+	it.each([
+		["no url", {}],
+		["an empty url", { url: "" }],
+		["an unknown field", { url: "https://media.example.com/a.mp4", file: "x" }],
+		[
+			"a misspelt field",
+			{ url: "https://media.example.com/a.mp4", userid: "u" },
+		],
+		["a url that is not a string", { url: 42 }],
+		[
+			"a url over the length limit",
+			{ url: `https://a.example/${"a".repeat(2_050)}` },
+		],
+		[
+			"upload-only options",
+			{
+				url: "https://media.example.com/a.mp4",
+				corsOrigin: "https://a.example",
+			},
+		],
+	])("refuses %s with 400 before doing anything", async (_label, body) => {
+		const response = await post(body);
+		expect(response.status).toBe(400);
+		expect((await response.json()).code).toBe("invalid_request");
+		expect(mocks.createImport).not.toHaveBeenCalled();
+	});
+
+	it("refuses a malformed Idempotency-Key", async () => {
+		const response = await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "no spaces allowed" },
+		);
+		expect(response.status).toBe(400);
+		expect(mocks.createImport).not.toHaveBeenCalled();
+	});
+
+	it("shows the import on Get Video and Get Video Status, and nothing on other videos", async () => {
+		for (const path of ["/video-1", "/video-1/status"]) {
+			const imported = await get(path);
+			expect(imported.body.data.import).toEqual({
+				sourceUrl: "https://media.example.com/a.mp4",
+				state: "downloading",
+				errorCode: null,
+			});
+		}
+		expect(mocks.importView).toHaveBeenCalledWith("video-1");
+
+		mocks.importView.mockResolvedValue(null);
+		for (const path of ["/video-1", "/video-1/status"]) {
+			expect(Object.keys((await get(path)).body.data)).not.toContain("import");
+		}
+		const listed = await get("/");
+		expect(Object.keys(listed.body.data[0])).not.toContain("import");
+	});
+
+	it("passes refusals through with their status and Retry-After", async () => {
+		mocks.createImport.mockResolvedValueOnce({
+			status: 429,
+			body: { code: "too_many_imports", error: "busy" },
+			headers: { "Retry-After": "15" },
+		});
+		const response = await post({ url: "https://media.example.com/a.mp4" });
+		expect(response.status).toBe(429);
+		expect(response.headers.get("Retry-After")).toBe("15");
+		expect((await response.json()).code).toBe("too_many_imports");
 	});
 });

@@ -38,6 +38,7 @@ vi.mock("@cap/database", async () => {
 				Object.assign(Promise.resolve(rowsFor(table)), {
 					limit: async () => rowsFor(table),
 					groupBy: async () => rowsFor(table),
+					orderBy: () => ({ limit: async () => rowsFor(table) }),
 				});
 			const query = {
 				innerJoin: () => query,
@@ -103,7 +104,10 @@ vi.mock("@/lib/infra-video-upload", () => ({
 import { Hono } from "hono";
 import * as sdk from "@/app/api/developer/sdk/v1/[...route]/route";
 import * as rest from "@/app/api/developer/v1/[...route]/route";
-import { withDeveloperSecretAuth } from "@/app/api/utils";
+import {
+	developerOwnerRequestLimited,
+	withDeveloperSecretAuth,
+} from "@/app/api/utils";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -622,6 +626,49 @@ describe("one account's keys share a budget", () => {
 			retryAfter: "60",
 		});
 		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+});
+
+describe("the console's webhook actions share the account budget", () => {
+	it("counts console requests and REST requests in one account budget", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+		mocks.keyRows = [{ appId: "app-1", ownerId: "owner-console" }];
+		const fromConsole = (owner = "owner-console") =>
+			developerOwnerRequestLimited(owner, new Headers());
+
+		for (let request = 1; request < OWNER_LIMIT; request++) {
+			expect(await fromConsole()).toBe(false);
+		}
+		expect((await getUsage(freshKey("csk"))).status).toBe(200);
+		expect(await fromConsole()).toBe(true);
+		expect((await getUsage(freshKey("csk"))).status).toBe(429);
+		expect(await fromConsole("owner-other")).toBe(false);
+
+		vi.advanceTimersByTime(60_001);
+		expect(await fromConsole()).toBe(false);
+	});
+
+	it("asks the shared rule about the account by its id", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+
+		await developerOwnerRequestLimited("owner-console-asked", new Headers());
+
+		expect(
+			mocks.firewall.mock.calls.map(([ruleId, options]) => [
+				ruleId,
+				options.rateLimitKey,
+			]),
+		).toEqual([["rl_developer_api_owner", "owner-console-asked"]]);
+	});
+
+	it("is refused when the shared rule for the account says so", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.firewall.mockResolvedValue({ rateLimited: true });
+
+		expect(
+			await developerOwnerRequestLimited("owner-console-shared", new Headers()),
+		).toBe(true);
 	});
 });
 
@@ -1266,7 +1313,7 @@ describe("wrong method and unknown path", () => {
 	it.each([
 		[rest, "PATCH", "/api/developer/v1/videos/video-1", "csk", "GET, DELETE"],
 		[rest, "PUT", "/api/developer/v1/videos/video-1", "csk", "GET, DELETE"],
-		[rest, "POST", "/api/developer/v1/videos", "csk", "GET"],
+		[rest, "PUT", "/api/developer/v1/videos", "csk", "POST, GET"],
 		[rest, "DELETE", "/api/developer/v1/videos/video-1/status", "csk", "GET"],
 		[rest, "POST", "/api/developer/v1/usage", "csk", "GET"],
 		[rest, "DELETE", "/api/developer/v1/transcripts", "csk", "POST, GET"],
@@ -1294,6 +1341,47 @@ describe("wrong method and unknown path", () => {
 			});
 		},
 	);
+
+	it("lists the 405 on every operation of a path that answers it, with the methods the path takes", async () => {
+		const spec = developerOpenApiSpec("https://cap.so") as unknown as {
+			paths: Record<
+				string,
+				Record<string, { responses?: Record<string, unknown> }>
+			>;
+		};
+		const methods = ["PUT", "PATCH", "DELETE", "POST", "GET"] as const;
+		const paths = Object.entries(spec.paths).filter(([path]) =>
+			path.startsWith("/api/developer/"),
+		);
+		expect(paths.length).toBeGreaterThan(15);
+
+		for (const [path, item] of paths) {
+			const listed = Object.keys(item).map((method) => method.toUpperCase());
+			for (const method of listed) {
+				expect(
+					item[method.toLowerCase()]?.responses?.["405"],
+					`${method} ${path}`,
+				).toEqual({ $ref: "#/components/responses/MethodNotAllowed" });
+			}
+
+			const sdkPath = path.startsWith("/api/developer/sdk/");
+			const concrete = path.replace("{id}", "video-1");
+			const unlisted = methods.find((method) => !listed.includes(method));
+			if (!unlisted) throw new Error(`${path} takes every method`);
+			const response = await call(sdkPath ? sdk : rest, unlisted, concrete, {
+				key: freshKey(sdkPath ? "cut" : "csk"),
+			});
+
+			expect(response.status, `${unlisted} ${path}`).toBe(405);
+			expect(
+				response.headers.get("Allow")?.split(", "),
+				`${unlisted} ${path}`,
+			).toEqual(expect.arrayContaining(listed));
+			expect(await response.json()).toMatchObject({
+				code: "method_not_allowed",
+			});
+		}
+	});
 
 	it.each([
 		[rest, "GET", "/api/developer/v1/nope", "csk"],

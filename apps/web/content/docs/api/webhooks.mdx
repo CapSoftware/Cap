@@ -6,7 +6,7 @@ tags: "API, Integration"
 
 A webhook tells your server the moment a video finishes processing, so you do not have to poll for it. You register an https URL for your app, and Cap sends it a signed `POST` request when a video becomes ready or fails.
 
-Webhooks belong to an app in [Cap Infra](/dashboard/infra) and are managed with the [REST API](/docs/api/rest-api#webhooks) and the app's secret key (`csk_`).
+Webhooks belong to an app in [Cap Infra](/dashboard/infra). Manage them on the app's Webhooks page in the console, or with the [REST API](/docs/api/rest-api#webhooks) and the app's secret key (`csk_`).
 
 ## Events
 
@@ -140,6 +140,7 @@ Cap-Event-Type: video.ready
     "status": "ready",
     "errorReason": null,
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",

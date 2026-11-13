@@ -27,6 +27,15 @@ import {
 } from "@/lib/developer-webhook-events";
 import { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
+import {
+	IMPORT_MAX_BYTES,
+	IMPORT_MAX_IN_FLIGHT_PER_APP,
+	IMPORT_MAX_PER_KEY_PER_HOUR,
+	IMPORT_MAX_REDIRECTS,
+	IMPORT_STALL_TIMEOUT_MS,
+	IMPORT_TOTAL_TIMEOUT_MS,
+	IMPORT_URL_MAX_LENGTH,
+} from "@/lib/infra-video-import-limits";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const response = (name: string) => ({ $ref: `#/components/responses/${name}` });
@@ -91,6 +100,20 @@ const transcriptIdParam = {
 	required: true,
 	description: "Transcript ID returned when the transcript was created.",
 	schema: { type: "string" },
+};
+
+const importIdempotencyKeyParam = {
+	name: "Idempotency-Key",
+	in: "header",
+	required: false,
+	description:
+		"8 to 128 characters from letters, digits, dot, dash and underscore. Repeating the request with the same key and the same url, name, userId, maxResolutionTier and metadata returns the same video as it is now, without downloading the file again. A different url or field is refused with 409 idempotency_conflict.",
+	schema: {
+		type: "string",
+		minLength: 8,
+		maxLength: 128,
+		pattern: "^[A-Za-z0-9._-]+$",
+	},
 };
 
 const uploadIdempotencyKeyParam = {
@@ -338,6 +361,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 const restErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
+	"405": response("MethodNotAllowed"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -347,6 +371,7 @@ const sdkErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
 	"404": response("NotFound"),
+	"405": response("MethodNotAllowed"),
 	"415": response("UnsupportedMediaType"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
@@ -464,6 +489,27 @@ const playbackProperties = {
 	},
 };
 
+const videoImportSchema = {
+	type: "object",
+	required: ["sourceUrl", "state", "errorCode"],
+	description:
+		"Present only on a video created by importDeveloperVideo. Returned by importDeveloperVideo, Get Video and Get Video Status, not by List Videos or in webhook payloads. While state is downloading the video stays uploading.",
+	properties: {
+		sourceUrl: { type: "string", description: "The URL it was imported from." },
+		state: {
+			type: "string",
+			enum: ["downloading", "complete", "failed"],
+			description:
+				"downloading while Cap fetches the file, complete once the file is stored and handed to encoding (the video's own status then says how encoding goes), failed if the download did not finish.",
+		},
+		errorCode: {
+			type: ["string", "null"],
+			description:
+				"Why the download failed: url_not_allowed, url_unreachable, unsupported_format, too_large, timeout, insufficient_credits, storage_failed or cancelled (the video was deleted). Null otherwise. errorReason on the video says it in words.",
+		},
+	},
+};
+
 const developerVideoSchema = {
 	type: "object",
 	required: ["id", "appId", "name", "createdAt", "updatedAt"],
@@ -471,7 +517,7 @@ const developerVideoSchema = {
 		captions: {
 			type: "array",
 			description:
-				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its url can briefly answer 404. Returned by Get Video and List Videos, not in webhook payloads.",
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its url answers as soon as it appears. Returned by Get Video and List Videos, not in webhook payloads.",
 			items: {
 				type: "object",
 				required: ["language", "url"],
@@ -485,6 +531,7 @@ const developerVideoSchema = {
 				},
 			},
 		},
+		import: videoImportSchema,
 		id: { type: "string", description: "Developer video ID." },
 		appId: { type: "string", description: "Developer app that owns it." },
 		externalUserId: {
@@ -492,10 +539,15 @@ const developerVideoSchema = {
 			description: "Your user ID, as passed to createUpload.",
 		},
 		name: { type: "string", description: "Video name." },
+		durationSeconds: {
+			type: ["number", "null"],
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed. The same name transcripts use.",
+		},
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
+				"Deprecated: use durationSeconds, which always holds the same value. duration keeps working.",
 		},
 		width: {
 			type: ["integer", "null"],
@@ -682,6 +734,30 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"200": json(ref("DeveloperVideoList"), "The app's videos."),
 					"400": response("BadRequest"),
 					...restErrors,
+				},
+			},
+			post: {
+				operationId: "importDeveloperVideo",
+				summary: "Import a video from a URL",
+				description: `Creates a video from a file at a public https URL. Cap downloads the file itself, so nothing is uploaded from your side, then encodes it exactly like an upload: poll getDeveloperVideo every ${DEVELOPER_VIDEO_STATUS_POLL_SECONDS} seconds, or wait for the video.ready webhook. Before answering, Cap opens the URL and reads the first bytes, so the usual mistakes come back on this request: a URL that is not public https (400 url_not_allowed), a dead link (422 url_unreachable), a web page, playlist, image or document instead of a video (422 unsupported_format), a file over the ${IMPORT_MAX_BYTES / 1e9} GB limit (413 too_large) and a host that does not answer (422 timeout). The URL must use https on the default port with no username or password, and must point to a public address: private, loopback, link-local and cloud metadata addresses are refused, including when a name resolves to one or redirects to one. Up to ${IMPORT_MAX_REDIRECTS} redirects are followed and each is checked the same way. The download must finish within ${IMPORT_TOTAL_TIMEOUT_MS / 60_000} minutes, and stops if the host sends nothing for ${IMPORT_STALL_TIMEOUT_MS / 1000} seconds. If it fails after this request answered, the video moves to errored with an errorReason that starts "Import failed:". An app can have ${IMPORT_MAX_IN_FLIGHT_PER_APP} imports downloading at once (429 too_many_imports) and one key can start ${IMPORT_MAX_PER_KEY_PER_HOUR} an hour (429 import_rate_limited), both with Retry-After. Billing is the same as an upload: the app's balance must cover the file at its declared size (402), and the video is admitted again on its measured length before it is encoded. For files on your own machine, or larger or slower than this allows, use createUpload. Send an Idempotency-Key so a retried request returns the same video instead of downloading the file twice.`,
+				tags: ["Videos"],
+				security: secretAuth,
+				parameters: [importIdempotencyKeyParam],
+				requestBody: jsonBody("ImportVideoRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("DeveloperVideo")),
+						"The video, in status uploading while the file downloads.",
+					),
+					"400": response("BadRequest"),
+					"402": response("UploadPaymentRequired"),
+					"409": response("Conflict"),
+					"413": response("ImportTooLarge"),
+					"415": response("UnsupportedMediaType"),
+					"422": response("ImportFailed"),
+					...restErrors,
+					"429": response("ImportRateLimited"),
+					"503": response("ImportUnavailable"),
 				},
 			},
 		},
@@ -1413,6 +1489,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"ID of a ready video of this app. Cap transcribes its stored MP4 directly. Leave it out when you send url.",
 					},
 					...transcriptOptionProperties,
+					userId: {
+						...transcriptOptionProperties.userId,
+						description:
+							"Your own identifier for the end user, used to filter lists. With videoId, leaving it out uses the video's userId, and a repeat with the same Idempotency-Key may leave it out too.",
+					},
 				},
 			},
 			CreateTranscriptUploadRequest: {
@@ -1436,7 +1517,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: {
 					id: { type: "string" },
 					externalUserId: developerVideoSchema.properties.externalUserId,
-					duration: { type: ["number", "null"] },
+					durationSeconds: developerVideoSchema.properties.durationSeconds,
+					duration: developerVideoSchema.properties.duration,
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
 					transcriptionStatus:
@@ -1446,6 +1528,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						description: "True once status is ready.",
 					},
 					...playbackProperties,
+					import: videoImportSchema,
 				},
 			},
 			Transaction: {
@@ -1712,6 +1795,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "integer",
 								description: "The same over a 30 day month.",
 							},
+							storedMonthlyMicroCredits: {
+								type: "integer",
+								description:
+									"What a 30 day month of storage costs for every video in minutesByTier, those in their first month included, at the current rates. Answers how much the stored videos cost a month, where monthlyMicroCredits leaves out the first months already charged.",
+							},
 						},
 					},
 					rates: {
@@ -1790,6 +1878,37 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"How long the upload token works. The upload must complete within this time, or the token must be renewed with renewUploadToken.",
 					},
 					maxBytes: uploadMaxBytes,
+				},
+			},
+			ImportVideoRequest: {
+				type: "object",
+				additionalProperties: false,
+				required: ["url"],
+				properties: {
+					url: {
+						type: "string",
+						format: "uri",
+						maxLength: IMPORT_URL_MAX_LENGTH,
+						description:
+							"Public https URL of the video file itself, such as an .mp4 on a CDN or storage bucket. A page that plays the video is not the file.",
+					},
+					name: { type: "string", maxLength: 255 },
+					userId: {
+						type: "string",
+						maxLength: 255,
+						description: "Your own user ID, for filtering listDeveloperVideos.",
+					},
+					maxResolutionTier: {
+						type: "string",
+						enum: ["1080p", "1440p", "2160p"],
+						default: "1080p",
+						description: "Highest resolution to encode this video at.",
+					},
+					metadata: {
+						type: "object",
+						additionalProperties: true,
+						description: "Arbitrary JSON under 8 KB.",
+					},
 				},
 			},
 			RenewUploadTokenRequest: {
@@ -2254,6 +2373,45 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 				},
 			},
+			MethodNotAllowed: {
+				...json(
+					ref("Error"),
+					"The path exists but does not take the method that was sent, for example PATCH on a video (code method_not_allowed). The Allow header lists the methods it takes.",
+				),
+				headers: {
+					...rateLimitHeaders,
+					Allow: {
+						description:
+							"The methods this path takes, separated by a comma and a space.",
+						schema: { type: "string" },
+					},
+				},
+			},
+			ImportTooLarge: json(
+				ref("Error"),
+				`The file at the URL declares a size over the ${IMPORT_MAX_BYTES / 1e9} GB limit (code too_large). Upload it with createUpload after exporting it smaller.`,
+			),
+			ImportFailed: json(
+				ref("Error"),
+				"Cap could not import the URL. The code is url_unreachable (an error status, no content, too many redirects or a refused connection), unsupported_format (a web page, playlist, image, document or audio file instead of a video) or timeout (the host did not answer in time). The message says which.",
+			),
+			ImportRateLimited: {
+				...json(
+					ref("Error"),
+					`Too many requests (code rate_limited, as for every operation), too many imports downloading for this app at once (code too_many_imports, at most ${IMPORT_MAX_IN_FLIGHT_PER_APP}), or too many imports started by this key in the last hour (code import_rate_limited, at most ${IMPORT_MAX_PER_KEY_PER_HOUR}).`,
+				),
+				headers: {
+					...rateLimitHeaders,
+					"Retry-After": {
+						description: "Seconds to wait before retrying.",
+						schema: { type: "integer" },
+					},
+				},
+			},
+			ImportUnavailable: json(
+				ref("Error"),
+				"Importing from a URL is not available yet on this server (code import_unavailable). Use createUpload instead.",
+			),
 			InternalError: json(
 				ref("Error"),
 				"Unexpected server error (code internal_error). Retry with backoff.",

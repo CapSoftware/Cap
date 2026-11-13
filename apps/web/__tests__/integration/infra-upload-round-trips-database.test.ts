@@ -9,7 +9,15 @@ import { eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool, type PoolConnection } from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 // Counts the database statements and storage calls one upload completion and
 // one kick start make, against a real MySQL. Storage, the media server and the
@@ -216,6 +224,13 @@ describe.runIf(Boolean(databaseUrl))(
 					ownerId,
 					balanceMicroCredits: 1_000_000_000,
 				});
+		});
+
+		afterEach(async () => {
+			const { clearFirstMonthChargesBeganCache } = await import(
+				"@/lib/infra-first-month-start"
+			);
+			clearFirstMonthChargesBeganCache();
 		});
 
 		afterAll(async () => {

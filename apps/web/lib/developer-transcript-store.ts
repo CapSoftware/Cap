@@ -4,6 +4,7 @@ import {
 	type DeveloperTranscriptStatus,
 	developerApps,
 	developerTranscripts,
+	developerVideos,
 	users,
 } from "@cap/database/schema";
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
@@ -39,6 +40,7 @@ import {
 } from "@/lib/developer-transcript-storage";
 import {
 	publicTranscriptWords,
+	TRANSCRIPT_CAPTIONS_WRITTEN_KEY,
 	TRANSCRIPT_MAX_CONCURRENT,
 	TRANSCRIPT_MAX_METADATA_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
@@ -47,6 +49,7 @@ import {
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptPublicMetadata,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import {
@@ -136,7 +139,8 @@ function replayedWithDifferent(
 		return "userId";
 	}
 	if (
-		canonicalJson(existing.metadata ?? null) !== canonicalJson(request.metadata)
+		canonicalJson(transcriptPublicMetadata(existing.metadata)) !==
+		canonicalJson(request.metadata)
 	) {
 		return "metadata";
 	}
@@ -245,7 +249,9 @@ export function validateTranscriptOptions(input: TranscriptOptionsInput):
 				"Send a JSON object smaller than 8KB.",
 			);
 		}
-		metadata = input.metadata as Record<string, unknown>;
+		const { [TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: _reserved, ...client } =
+			input.metadata as Record<string, unknown>;
+		metadata = client;
 	}
 	return {
 		ok: true,
@@ -570,6 +576,17 @@ const VIDEO_NOT_FOUND = fail(
 
 const TRANSCRIPT_MAX_VIDEO_ID_LENGTH = 64;
 
+async function findVideoUserId(appId: string, videoId: string) {
+	const [video] = await db()
+		.select({ externalUserId: developerVideos.externalUserId })
+		.from(developerVideos)
+		.where(
+			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
+		)
+		.limit(1);
+	return video?.externalUserId ?? null;
+}
+
 export async function createTranscriptFromVideo(
 	appId: string,
 	input: TranscriptOptionsInput & { videoId: string; idempotencyKey?: string },
@@ -591,12 +608,24 @@ export async function createTranscriptFromVideo(
 		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
 		: nanoId();
 
-	const differsFromRequest = (existing: TranscriptRow) => {
+	// A request without userId takes the video's. Transcripts made before that
+	// stored none, so a repeat without userId matches either.
+	const differsFromRequest = (
+		existing: TranscriptRow,
+		videoUserId: string | null,
+	) => {
 		if (existing.sourceType !== "video") return IDEMPOTENCY_CONFLICT;
 		if (existing.videoId !== videoId) return idempotencyMismatch("videoId");
+		const omittedUserIdMatches =
+			options.externalUserId === null &&
+			(existing.externalUserId === null ||
+				existing.externalUserId === videoUserId);
 		const different = replayedWithDifferent(existing, {
 			...options,
 			name: options.name ?? existing.name,
+			externalUserId: omittedUserIdMatches
+				? (existing.externalUserId ?? null)
+				: options.externalUserId,
 		});
 		if (different) return idempotencyMismatch(different);
 		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
@@ -605,7 +634,13 @@ export async function createTranscriptFromVideo(
 	if (input.idempotencyKey) {
 		const existing = await findTranscriptAnyState(appId, id);
 		if (existing) {
-			const conflict = differsFromRequest(existing);
+			const videoUserId =
+				options.externalUserId === null &&
+				existing.externalUserId !== null &&
+				existing.videoId === videoId
+					? await findVideoUserId(appId, videoId)
+					: null;
+			const conflict = differsFromRequest(existing, videoUserId);
 			if (conflict) return conflict;
 			if (existing.status === "queued") {
 				await dispatchTranscript(id, "queued");
@@ -650,7 +685,7 @@ export async function createTranscriptFromVideo(
 				.values({
 					id,
 					appId,
-					externalUserId: options.externalUserId,
+					externalUserId: options.externalUserId ?? video.externalUserId,
 					name: options.name ?? video.name,
 					status: "queued",
 					queuedAt: new Date(),
@@ -667,7 +702,7 @@ export async function createTranscriptFromVideo(
 
 	const stored = await findTranscriptAnyState(appId, id);
 	if (!stored) return NOT_FOUND;
-	const conflict = differsFromRequest(stored);
+	const conflict = differsFromRequest(stored, video.externalUserId);
 	if (conflict) return conflict;
 
 	const dispatched = await dispatchTranscript(id, "queued");

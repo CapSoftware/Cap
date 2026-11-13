@@ -61,6 +61,7 @@ import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
+import { RelativeTime } from "./RelativeTime";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -1109,7 +1110,7 @@ export const ShareHeader = ({
 										{data.owner.name}
 									</p>
 									<p className="truncate text-xs text-gray-10">
-										{fromNow(data.createdAt)}
+										<RelativeTime date={data.createdAt} format={fromNow} />
 										{views !== undefined && (
 											<Suspense fallback={null}>
 												<ViewCount views={views} />
