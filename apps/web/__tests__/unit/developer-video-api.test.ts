@@ -270,6 +270,22 @@ describe("developer video API", () => {
 			}
 		});
 
+		it("reports no duration when processing read the file but not its length", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				duration: 45,
+				processing: processingState({
+					...base.processing,
+					probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
 		it("keeps the measured duration of a video that failed after it was measured", async () => {
 			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
 			for (const path of ["/video-1", "/video-1/status"]) {

@@ -72,7 +72,9 @@ export function developerVideoOutputStates(
 export function developerVideoReportedDuration(
 	video: Pick<DeveloperVideoRow, "status" | "processing" | "duration">,
 ): number | null {
-	if (video.status === "errored" && !video.processing?.probe) return null;
+	if (video.status === "errored" && video.processing?.probe?.duration == null) {
+		return null;
+	}
 	return video.duration;
 }
 
