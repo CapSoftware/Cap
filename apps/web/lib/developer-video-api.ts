@@ -54,6 +54,53 @@ export function developerVideoPageUrls(
 	return { shareUrl, embedUrl: `${shareUrl}/embed` };
 }
 
+export type AgentDeveloperVideoRow = Pick<
+	DeveloperVideoRow,
+	| "id"
+	| "appId"
+	| "externalUserId"
+	| "name"
+	| "status"
+	| "errorReason"
+	| "playbackId"
+	| "duration"
+	| "width"
+	| "height"
+	| "fps"
+	| "maxResolutionTier"
+	| "renditions"
+	| "transcriptionStatus"
+	| "processing"
+	| "createdAt"
+	| "updatedAt"
+>;
+
+export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
+	const status = developerVideoIsReady(video) ? "ready" : video.status;
+	return {
+		id: video.id,
+		appId: video.appId,
+		externalUserId: video.externalUserId,
+		name: video.name,
+		status,
+		errorReason: status === "errored" ? video.errorReason : null,
+		playbackId: video.playbackId,
+		durationSeconds: video.duration,
+		width: video.width,
+		height: video.height,
+		fps: video.fps,
+		maxResolutionTier: video.maxResolutionTier,
+		renditions: video.renditions ?? [],
+		transcriptionStatus: video.transcriptionStatus,
+		...developerVideoPlaybackUrls(video),
+		...(video.playbackId
+			? developerVideoPageUrls(video.playbackId)
+			: { shareUrl: null, embedUrl: null }),
+		createdAt: video.createdAt.toISOString(),
+		updatedAt: video.updatedAt.toISOString(),
+	};
+}
+
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,

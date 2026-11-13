@@ -25,8 +25,8 @@ export function AgentSetup({ compact = false }: { compact?: boolean }) {
 					!compact && "mt-3",
 				)}
 			>
-				One prompt for Claude Code, Codex or Cursor. Your agent installs the Cap
-				CLI, which includes the Cap MCP server, picks an app, stores the keys
+				One prompt for Claude Code, Codex or Cursor. Put the app's secret key in
+				your project's environment file, and your agent reads the API reference
 				and wires up uploads and playback.
 			</p>
 			<div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -36,13 +36,13 @@ export function AgentSetup({ compact = false }: { compact?: boolean }) {
 					variant={compact ? "ghost" : "primary"}
 				/>
 				<Link
-					href="/docs/agents/setup"
+					href="/docs/api/rest-api"
 					className={clsx(
 						TEXT_LINK,
 						"text-[13px] text-[rgba(232,236,244,0.58)]",
 					)}
 				>
-					Agent docs
+					API reference
 				</Link>
 			</div>
 		</div>
