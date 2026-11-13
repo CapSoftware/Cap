@@ -14,7 +14,6 @@ import {
 } from "@/lib/infra-credit-checkout";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { findCreditCode } from "@/lib/infra-credit-code-lookup";
-import { isFirstLargeCreditPurchase } from "@/lib/infra-credit-purchase-history";
 import {
 	CREDIT_US_EIN_INVALID,
 	CREDIT_US_EIN_MAX_LENGTH,
@@ -125,10 +124,6 @@ app.post(
 		}
 
 		try {
-			const firstLargePurchase = await isFirstLargeCreditPurchase(
-				user.id,
-				amountCents,
-			);
 			const customerId = await ensureDeveloperStripeCustomer({
 				user,
 				account,
@@ -153,7 +148,6 @@ app.post(
 					appName: app.name,
 					amountCents,
 					receiptEmail: user.email,
-					firstLargePurchase,
 				}),
 				...(promotionCodeId
 					? { discounts: [{ promotion_code: promotionCodeId }] }

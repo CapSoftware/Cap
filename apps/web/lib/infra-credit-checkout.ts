@@ -34,16 +34,15 @@ export function creditCheckoutSessionParams({
 	appName,
 	amountCents,
 	receiptEmail,
-	firstLargePurchase,
 }: {
 	customerId: string;
 	accountId: string;
 	appName: string;
 	amountCents: number;
 	receiptEmail: string;
-	firstLargePurchase: boolean;
 }) {
 	const description = creditPurchaseDescription(appName);
+	const largePurchase = amountCents > CREDIT_CHECKOUT_3DS_OVER_CENTS;
 	return {
 		customer: customerId,
 		line_items: [
@@ -57,10 +56,10 @@ export function creditCheckoutSessionParams({
 			},
 		],
 		mode: "payment",
-		payment_method_types: firstLargePurchase
+		payment_method_types: largePurchase
 			? ["card"]
 			: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
-		...(firstLargePurchase
+		...(largePurchase
 			? {
 					payment_method_options: {
 						card: { request_three_d_secure: "any" as const },
