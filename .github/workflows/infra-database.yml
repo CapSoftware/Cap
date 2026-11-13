@@ -1,0 +1,70 @@
+name: Infra Database
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "bun.lock"
+      - ".github/actions/setup-js/**"
+      - ".github/workflows/infra-database.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "bun.lock"
+      - ".github/actions/setup-js/**"
+      - ".github/workflows/infra-database.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-database-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  infra-database:
+    name: Infra billing and uploads against MySQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: cap_infra_tests
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    env:
+      DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Apply migrations
+        working-directory: packages/database
+        run: bun run drizzle-kit migrate --config=drizzle.config.ts
+      # The suites insert billing rows without their parent apps and owners,
+      # so they run on the migrated schema without foreign keys, the same as
+      # the local scratch database they were written against.
+      - name: Drop foreign keys
+        run: |
+          mysql --protocol=TCP -h 127.0.0.1 -u root -N -e \
+            "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` DROP FOREIGN KEY \`', CONSTRAINT_NAME, '\`;') FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = 'cap_infra_tests'" \
+            | mysql --protocol=TCP -h 127.0.0.1 -u root cap_infra_tests
+      - name: Run Infra database suites
+        working-directory: apps/web
+        env:
+          CAP_INFRA_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+          CAP_INFRA_ROUND_TRIPS_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+        run: bun run vitest run __tests__/integration/infra-*-database.test.ts
