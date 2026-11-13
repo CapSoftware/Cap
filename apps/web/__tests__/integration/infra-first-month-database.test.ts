@@ -68,6 +68,13 @@ const {
 	markStorageDayNotified,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
+const {
+	beginPart,
+	createDeveloperVideoProcessingState,
+	markPartDispatched,
+	releasePart,
+	settlePart,
+} = await import("@/lib/developer-video-state");
 const { getInfraFirstMonthChargesSince, getInfraStorageChargesSince } =
 	await import("@/app/(infra)/dashboard/infra/infra-data");
 const { getCurrentUser } = await import("@cap/database/auth/session");
@@ -742,6 +749,53 @@ describe.runIf(Boolean(databaseUrl))(
 					owedMicroCredits: 850,
 				});
 				expect(await firstMonthRows(accountId)).toHaveLength(1);
+			});
+
+			it("is charged once when deleted after a dispatched attempt failed and was reset, even if the retry then found the farm busy", async () => {
+				const started = createDeveloperVideoProcessingState({
+					encodeId: "encode-1",
+					now: Date.now(),
+				});
+				const running = beginPart(started, "mp4", {
+					token: "t-1",
+					now: Date.now(),
+				});
+				const dispatched =
+					running &&
+					markPartDispatched(running, "mp4", { token: "t-1", jobId: "job-1" });
+				const failed =
+					dispatched &&
+					settlePart(dispatched, "mp4", "t-1", {
+						type: "failed",
+						reason: "encoder stopped",
+					});
+				const retried =
+					failed && beginPart(failed, "mp4", { token: "t-2", now: Date.now() });
+				const busy = retried && releasePart(retried, "mp4", "t-2");
+				if (!failed || !busy) throw new Error("state did not advance");
+				expect(failed.mp4).toEqual({ state: "pending" });
+				expect(busy.mp4).toEqual({ state: "pending" });
+
+				for (const state of [failed, busy]) {
+					const { appId, accountId } = await makeApp(1_000_000);
+					const videoId = await makeVideo(appId, {
+						createdAt: new Date(),
+						status: "processing",
+						duration: 600,
+						processing: state,
+					});
+					await deleteNow(videoId);
+
+					expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+						state: "charged",
+						owedMicroCredits: 850,
+					});
+					expect(await settleFirstMonthAtDelete(videoId)).toEqual({
+						state: "skipped",
+						reason: "already_settled",
+					});
+					expect(await firstMonthRows(accountId)).toHaveLength(1);
+				}
 			});
 
 			it("caps the declared length at the 4 hour limit", async () => {
