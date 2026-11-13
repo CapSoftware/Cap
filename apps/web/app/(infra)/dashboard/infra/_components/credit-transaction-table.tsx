@@ -14,26 +14,26 @@ function amountText(microCredits: number) {
 	return `${sign}${formatCharge(microCredits)}`;
 }
 
-function Detail({ row }: { row: LedgerRow }) {
-	const { note, reference } = describeLedgerRow(row);
-	if (!note && !reference) return null;
+export const NO_REFERENCE = "–";
+
+function Note({ row }: { row: LedgerRow }) {
+	const { note } = describeLedgerRow(row);
+	if (!note) return null;
 	return (
-		<>
-			{reference && (
-				<span
-					className={clsx(DETAIL, "block truncate")}
-					title={`${reference.kind} ${reference.value}`}
-				>
-					{reference.kind}{" "}
-					<span className={clsx(MONO, "text-[12px]")}>{reference.value}</span>
-				</span>
-			)}
-			{note && (
-				<span className={clsx(DETAIL, "block whitespace-normal text-pretty")}>
-					{note}
-				</span>
-			)}
-		</>
+		<span className={clsx(DETAIL, "block whitespace-normal text-pretty")}>
+			{note}
+		</span>
+	);
+}
+
+export function Reference({ row }: { row: LedgerRow }) {
+	const { reference } = describeLedgerRow(row);
+	if (!reference) return <>{NO_REFERENCE}</>;
+	return (
+		<span title={`${reference.kind} ${reference.value}`}>
+			{reference.kind}{" "}
+			<span className={clsx(MONO, "text-[12px]")}>{reference.value}</span>
+		</span>
 	);
 }
 
@@ -68,9 +68,11 @@ export function CreditTransactionTable({
 							</td>
 							<td className={clsx(TD, "w-full max-w-0 text-[#E8ECF4]")}>
 								{describeLedgerRow(tx).label}
-								<Detail row={tx} />
+								<Note row={tx} />
 							</td>
-							<td className={clsx(TD, MONO, "text-[12.5px]")}>{tx.id}</td>
+							<td className={clsx(TD, "text-[12.5px]")}>
+								<Reference row={tx} />
+							</td>
 							<td
 								className={clsx(
 									TD,
@@ -134,11 +136,10 @@ export function CreditTransactionTable({
 							</span>
 						</div>
 						<div className="mt-1 min-w-0">
-							<Detail row={tx} />
 							<span className={clsx(DETAIL, "block truncate")}>
-								Reference{" "}
-								<span className={clsx(MONO, "text-[12px]")}>{tx.id}</span>
+								Reference <Reference row={tx} />
 							</span>
+							<Note row={tx} />
 						</div>
 					</li>
 				))}
