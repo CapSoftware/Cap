@@ -566,7 +566,7 @@ The `status` field moves from `uploading` to `processing` when the upload comple
 
 A failed video is not billed. It stays in the list with its `errorReason`, and its uploaded file is removed 24 hours after processing started, after which `storedBytes` is `0`. It cannot be processed again, so create a new video and upload the file to that one.
 
-Poll this endpoint every few seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 300 requests per minute.
+Poll this endpoint every 3 seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 300 requests per minute.
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
@@ -624,7 +624,9 @@ curl -X DELETE https://cap.so/api/developer/v1/videos/abc123def456 \
 
 Send an audio or video file and get text back. Transcription costs $0.10 per audio hour, billed by the second from the app's credit balance.
 
-A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every few seconds until the status is `complete` or `error`. Each key allows 300 requests per minute.
+A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every 5 seconds until the status is `complete` or `error`. Each key allows 300 requests per minute.
+
+To wait on several transcripts, poll them as a batch with one [List Transcripts](/docs/api/rest-api#list-transcripts) call per status instead of one Get Transcript each: `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`. Ask for `queued` first: a transcript only moves from `queued` to `processing` to a final status, so one missing from both lists has finished. Read it with Get Transcript for its text, and keep it in the batch if the status it returns is not yet `complete` or `error`. An app has at most 20 transcripts in flight, and getting each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
 
 An app can have 20 transcripts `queued` or `processing` at once. Starting another answers `429` with the code `too_many_transcripts` and a `Retry-After` header of 15 seconds. Wait for one to finish, then send the request again. Transcripts in `uploading` do not count until they are started.
 
@@ -862,7 +864,7 @@ With `?include=words,segments` a complete transcript also carries:
 }
 ```
 
-`start` and `end` are seconds from the start of the audio, in steps of 0.08 seconds. A word's start is usually within 0.1 seconds of where it is spoken. Its end can run up to 0.4 seconds late and is often the start of the next word, so the timings suit captions and seeking rather than tight cuts at word ends. Timings do not drift on long files.
+`start` and `end` are seconds from the start of the audio. A word's start is usually within 0.1 seconds of where it is spoken. Its end can run up to 0.4 seconds late and is often the start of the next word, so the timings suit captions and seeking rather than tight cuts at word ends. Timings do not drift on long files.
 
 Audio with no speech is not a failure. The transcript completes with `text` set to `""` and `wordCount` set to `0`, and it is billed for its length like any other transcript. A complete transcript with a `wordCount` of `0` is how you tell that no speech was found.
 
@@ -1480,6 +1482,8 @@ When the upload is already H.264 and fits the tier, Cap can keep its video as up
 
 Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create an upload and when you get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
 
+The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
+
 - `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
 
@@ -1550,7 +1554,7 @@ The full video object returned by list and get endpoints:
 ## Best Practices
 
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Create each upload on your server and send only its `cut_` upload token to the browser.
-- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every few seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. Keep polling until `hlsUrl` is set if the player should use HLS. See [Play a Video](/docs/api/rest-api#play-a-video).
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every 3 seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. Keep polling until `hlsUrl` is set if the player should use HLS. See [Play a Video](/docs/api/rest-api#play-a-video).
 - **Switch on `code`.** Every error carries a stable `code`. The `error` text can change.
 - **Watch the rate limit headers.** A secret key allows 300 requests per minute and an upload token 1,200. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
 - **Store your keys securely.** Use environment variables or a secrets manager.
