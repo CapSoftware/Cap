@@ -43,10 +43,12 @@ import {
 } from "@/lib/developer-transcript-hold";
 import { TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS } from "@/lib/developer-transcripts";
 import {
+	AUTO_TOP_UP_DAILY_LIMIT,
 	AUTO_TOP_UP_MAX_AMOUNT_CENTS,
 	AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS,
 	AUTO_TOP_UP_MIN_AMOUNT_CENTS,
 	AUTO_TOP_UP_MIN_THRESHOLD_MICRO_CREDITS,
+	AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS,
 } from "@/lib/infra-auto-top-up";
 import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
 import {
@@ -135,9 +137,11 @@ describe("the Billing page", () => {
 			compileMDX({ source: rest, components: {} }),
 		).resolves.toBeDefined();
 
+		const slugsOf = (source: string) =>
+			extractHeadings(source.replace(/^####\s/gm, "### ")).map((h) => h.slug);
 		const anchors = new Map([
-			["/docs/api/rest-api", extractHeadings(rest).map((h) => h.slug)],
-			["/docs/api/billing", extractHeadings(billing).map((h) => h.slug)],
+			["/docs/api/rest-api", slugsOf(rest)],
+			["/docs/api/billing", slugsOf(billing)],
 		]);
 		const links = [
 			...billing.matchAll(/\]\((\/docs\/api\/rest-api)#([\w-]+)\)/g),
@@ -264,6 +268,11 @@ describe("the Billing page", () => {
 		expect(billing).toContain(
 			`One purchase is from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}`,
 		);
+		expect(
+			fs.readFileSync(path.join(process.cwd(), "public/llms-full.txt"), "utf8"),
+		).toContain(
+			`top-ups from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}, codes`,
+		);
 		expect(billing).toContain(
 			`Cap Pro includes $${PRO_MONTHLY_CREDIT_DOLLARS} of credit every month`,
 		);
@@ -275,6 +284,12 @@ describe("the Billing page", () => {
 		);
 		expect(billing).toContain(
 			`${INFRA_GRACE_DAYS} days after the app first fell short`,
+		);
+		expect(billing).toContain(
+			"- **When.** As soon as the available balance falls below your threshold.",
+		);
+		expect(billing).toContain(
+			`up to ${AUTO_TOP_UP_DAILY_LIMIT} top-ups in any 24 hours, and at most ${wholeDollars(AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS)} a day across all your apps.`,
 		);
 		expect(billing).toContain(`${LEDGER_PAGE_SIZE} to a page`);
 		expect(billing).toContain(

@@ -420,6 +420,47 @@ export async function readMediaServerVideoJob(
 	}
 }
 
+export type MediaServerJobCancel =
+	| "cancelled"
+	| "finished"
+	| "missing"
+	| "failed";
+
+const JOB_CANCEL_TIMEOUT_MS = 5_000;
+
+export async function cancelMediaServerVideoJob(
+	jobId: string,
+): Promise<MediaServerJobCancel> {
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/cancel`,
+			{
+				method: "POST",
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_CANCEL_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (response.ok) return "cancelled";
+		const code =
+			body && typeof body === "object" && "code" in body
+				? body.code
+				: undefined;
+		if (response.status === 400 && code === "INVALID_STATE") {
+			return "finished";
+		}
+		if (response.status === 404 && code === "NOT_FOUND") return "missing";
+		return "failed";
+	} catch {
+		return "failed";
+	}
+}
+
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }

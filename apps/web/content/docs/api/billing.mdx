@@ -90,7 +90,7 @@ Nothing is charged for a hold. Held credit stays in your balance, and the availa
 
 ## Adding credit
 
-Add credit from the app's Billing page in the console. One purchase is from $5 to $1,000, paid in US dollars, and the credit is added when the payment clears.
+Add credit from the app's Billing page in the console. One purchase is from $5 to $10,000, paid in US dollars, and the credit is added when the payment clears.
 
 Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account. A purchase also comes with a paid invoice, which shows any tax ID you add at checkout.
 
@@ -119,9 +119,9 @@ Cap Pro includes $5 of credit every month. It is for any account with Cap Pro, w
 
 Auto top-up adds credit from a saved card when an app's balance runs low. It is off until you switch it on, and saving a card charges nothing.
 
-- **When.** Cap checks at 00:41, 06:41, 12:41 and 18:41 UTC. If the available balance is under your threshold, the card is charged.
+- **When.** As soon as the available balance falls below your threshold. Cap also checks at 00:41, 06:41, 12:41 and 18:41 UTC.
 - **How much.** The amount you set, from $5 to $1,000. The threshold is from $1 to $1,000. The console suggests $25 when the balance is under $5.
-- **How often.** At most one attempt in any 24 hours.
+- **How often.** Each time the balance falls below the threshold, up to 10 top-ups in any 24 hours, and at most $1,000 a day across all your apps. Credit you buy yourself does not count toward that. After a declined charge, the next attempt waits 24 hours.
 - **How to stop.** Switch it off or remove the card on the Billing page. If a charge is declined, auto top-up switches itself off and no credit is added.
 
 ## When credit runs out

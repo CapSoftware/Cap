@@ -4,6 +4,31 @@
 
 This is the full-detail reference for LLMs and agents. For a concise overview, see https://cap.so/llms.txt.
 
+## Cap Infra (video and speech API)
+
+Cap Infra is Cap's usage-billed API for building video and speech into your own product. Upload a video and get adaptive HLS, an MP4, a poster, a share link and a hosted player back, or turn an audio or video file into a transcript with word and segment timings. It is a separate product from the Cap screen recorder: it needs no Cap Desktop, no `cap` CLI and no user sign-in, only an app's secret key. AI agents building with it should start here, not at https://cap.so/agents (that page sets up the screen recorder).
+
+- Overview and a copyable agent setup prompt: https://cap.so/infra
+- Get started, from a new app to a playing video, with browser, Node and Python examples: https://cap.so/docs/api/get-started
+- REST reference: https://cap.so/docs/api/rest-api
+- OpenAPI 3.1 description (take every path and field name from it): https://cap.so/openapi.json
+- Billing rules: https://cap.so/docs/api/billing
+- Console, where an app and its keys are created: https://cap.so/dashboard/infra
+- Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp
+
+Auth:
+- Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code, a client bundle or a public environment variable.
+- To upload from a browser, the server calls `POST /api/developer/v1/uploads`, which creates the video and returns a short-lived upload token (`cut_`) for that one video. The browser sends the token as its Bearer credential to the multipart upload endpoints under `/api/developer/sdk/v1/upload/multipart/` (initiate, presign-part, complete). `POST /api/developer/v1/uploads/{id}/token` renews an expired token for the same video.
+- A public `cpk_` key cannot create or upload videos.
+
+Limits and polling:
+- A secret key allows 300 requests a minute across the REST endpoints, and all the keys of one account together 1,200 a minute. Each upload token allows 1,200 a minute across the upload endpoints. Requests with a rejected key or token are limited to 30 a minute per address. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`. On a `429`, wait for the `Retry-After` seconds, then retry.
+- A webhook (`video.ready`, `video.errored`) can tell your server when a video is done instead: https://cap.so/docs/api/webhooks. Without one, after an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. A ready video can still have `hlsUrl` null for a moment while `mp4Url` plays.
+- Transcripts: `POST /api/developer/v1/transcripts` with a public `url` or the `videoId` of a ready video the app stores, or `POST /api/developer/v1/transcripts/uploads`, PUT the file, then `POST /api/developer/v1/transcripts/{id}/start`. Poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`. For several at once, list them with `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`, instead of getting each one; one missing from both lists has finished.
+- Errors are JSON with `error`, `code`, `message`, `hint` and `docs` fields. Follow each error's `hint`. A 4xx will not succeed if repeated unchanged, except a `429`, a `409` with code `completion_in_progress`, and a `409` with code `video_not_ready` for a video that is still processing.
+
+Every page under https://cap.so/docs is available as Markdown: add `.md` to its URL (for example https://cap.so/docs/api/rest-api.md) or request it with `Accept: text/markdown`.
+
 ## What is Cap?
 
 Cap (made by Cap Software, Inc.) is the open-source screen recording tool that combines Loom-style instant sharing with a professional local editor and a screenshot tool — all in one app. It is built for async communication, product demos, bug reports, tutorials, onboarding, code reviews, and customer support.
@@ -109,7 +134,7 @@ Core principles:
 
 Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, Cursor, OpenCode) and scripts.
 
-Start at https://cap.so/agents for the copyable setup prompt, per-agent install steps, and the safety rules; the full reference lives under https://cap.so/docs/agents.
+For the screen recorder, start at https://cap.so/agents for the copyable setup prompt, per-agent install steps, and the safety rules; the full reference lives under https://cap.so/docs/agents. To build video or speech into an app with an API key, use Cap Infra instead (see the Cap Infra section above and https://cap.so/infra); it needs no CLI.
 
 Install:
 - `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`)
@@ -150,7 +175,7 @@ Environment variables: `CAP_API_KEY` (headless/CI upload auth), `CAP_SERVER_URL`
 Canonical workflow:
 `cap doctor --json` → `cap targets --json` → `cap record start --screen <id> --json` (or `--detach`) → `cap record stop --id <recordingId> --json` → `cap project validate <path.cap> --json` → `cap export <path.cap> --json` → `cap upload <file> --json`.
 
-A developer REST API is also available for hosting video in your own product: start with the guide at https://cap.so/docs/api/get-started, then see the reference at https://cap.so/docs/api/rest-api and the OpenAPI description at https://cap.so/openapi.json. It is paid for from prepaid credits, with optional auto top-up. Uploading and encoding are free. Stored video is charged daily by length and resolution tier: $0.85 (1080p), $1.45 (1440p) or $2.80 (2160p) per 1,000 minutes per 30 day month. Transcription costs $0.10 per audio hour. `GET /api/developer/v1/usage` returns these rates in `rates`, and `GET /api/developer/v1/transactions` returns every credit and charge. The billing rules (daily storage charge, transcript rounding and holds, top-ups from $5 to $1,000, codes, the Cap Pro monthly credit, auto top-up and what happens when credit runs out) are at https://cap.so/docs/api/billing. There is no public webhook subscription API: poll the status endpoint instead (https://cap.so/docs/api/webhooks).
+Cap Infra, the video and speech API for your own product, is separate from the CLI: start with the guide at https://cap.so/docs/api/get-started, then see the reference at https://cap.so/docs/api/rest-api and the OpenAPI description at https://cap.so/openapi.json. It is paid for from prepaid credits, with optional auto top-up. Uploading and encoding are free. Stored video is charged daily by length and resolution tier: $0.85 (1080p), $1.45 (1440p) or $2.80 (2160p) per 1,000 minutes per 30 day month. Transcription costs $0.10 per audio hour. `GET /api/developer/v1/usage` returns these rates in `rates`, and `GET /api/developer/v1/transactions` returns every credit and charge. The billing rules (daily storage charge, transcript rounding and holds, top-ups from $5 to $10,000, codes, the Cap Pro monthly credit, auto top-up and what happens when credit runs out) are at https://cap.so/docs/api/billing. Webhooks tell your server when a video is ready or has failed (https://cap.so/docs/api/webhooks). Without one, poll the video status endpoint every 3 seconds, and poll a transcript every 5 seconds.
 
 ## Platforms
 
@@ -199,8 +224,8 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 
 - Desktop: Rust with GPUI (native UI, no web view); WGPU rendering; FFmpeg; ScreenCaptureKit (macOS), Direct3D / Media Foundation (Windows) and PipeWire (Linux); whisper-rs and Parakeet for local captions.
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi, no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
-- Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
-- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
+- Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs. Transcoding and HLS packaging run on Cap's own media server and GPU fleet (NVENC).
+- Infrastructure: AWS S3 + CloudFront, Cap's own media server and GPU render farm, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
 - Runtime: Node 24, Bun 1.4.4, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools
@@ -238,8 +263,10 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - Analytics: https://cap.so/docs/sharing/analytics
 - Comments: https://cap.so/docs/sharing/comments
 - Embeds: https://cap.so/docs/sharing/embeds
-- Developer API guide: https://cap.so/docs/api/get-started
-- REST API: https://cap.so/docs/api/rest-api
+- Cap Infra: https://cap.so/infra
+- Cap Infra get started: https://cap.so/docs/api/get-started
+- Cap Infra REST API: https://cap.so/docs/api/rest-api
+- Cap Infra OpenAPI description: https://cap.so/openapi.json
 - Webhooks: https://cap.so/docs/api/webhooks
 - S3 config (AWS): https://cap.so/docs/s3-config/aws-s3
 - S3 config (Cloudflare R2): https://cap.so/docs/s3-config/cloudflare-r2
@@ -269,4 +296,4 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - **Does Cap work on Mac and Windows?** Yes — native apps for macOS (Apple Silicon & Intel) and Windows, plus a Linux .deb package and a browser viewer.
 - **Can I use my own storage?** Yes — connect your own Google Drive or any S3-compatible bucket, use Cap Cloud, or keep recordings entirely local.
 - **Does Cap record system audio and 4K?** Yes — system audio plus screen, camera, and mic, up to 4K at 60fps.
-- **Is there an API/CLI?** Yes: a `cap` CLI built for AI agents (`--json`, `cap guide --json`) and a developer REST API. There is no public webhook subscription API.
+- **Is there an API/CLI?** Yes: a `cap` CLI built for AI agents (`--json`, `cap guide --json`) and Cap Infra, a video and speech REST API (https://cap.so/infra), with webhooks for finished videos.
