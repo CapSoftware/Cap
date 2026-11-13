@@ -53,6 +53,14 @@ export function infraAppPath(appId: string, section: InfraSection = "") {
 	return section ? `${base}/${section}` : base;
 }
 
+const INFRA_CONSOLE_ORIGIN = "https://cap.so";
+
+export const infraBillingUrl = (appId: string) =>
+	`${INFRA_CONSOLE_ORIGIN}${infraAppPath(appId, "billing")}`;
+
+export const infraAddCreditsHint = (appId: string) =>
+	`Add credits to this app at ${infraBillingUrl(appId)}, then retry.`;
+
 export function parseInfraPathname(pathname: string): {
 	appId: string | null;
 	section: InfraSection | null;

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Config } from "./config";
+import type { CreditLink } from "./credit-link";
 import type { InfraClient } from "./http";
 import type { UploadTuning } from "./upload";
 import type { WaitTuning } from "./wait";
@@ -24,6 +25,7 @@ export type ToolDeps = {
 	wait: WaitTuning;
 	surface?: ToolSurface;
 	maxWaitSeconds?: number;
+	credit?: CreditLink;
 };
 
 export type Tool = {

@@ -638,6 +638,8 @@ describe("developer SDK multipart completion", () => {
 			error: "Insufficient credits",
 			code: "insufficient_credits",
 			message: refused.message,
+			hint: "Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
+			docs: "https://cap.so/docs/api/rest-api",
 			standing: "active",
 			pausesAt: null,
 			balanceMicroCredits: 100,

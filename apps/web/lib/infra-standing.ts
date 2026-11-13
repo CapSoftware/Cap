@@ -5,6 +5,7 @@ import {
 } from "@cap/database/schema";
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
+import { API_DOCS_URL } from "@/lib/api-errors";
 import {
 	type BillableVideo,
 	UPLOAD_ADMISSION_DAYS,
@@ -19,6 +20,7 @@ import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
 } from "@/lib/infra-first-month-start";
+import { infraAddCreditsHint } from "@/lib/infra-routes";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
@@ -777,7 +779,10 @@ export function infraBillingJson({
 	};
 }
 
-export function uploadAdmissionError(admission: InfraUploadAdmission) {
+export function uploadAdmissionError(
+	admission: InfraUploadAdmission,
+	appId: string,
+) {
 	return {
 		error:
 			admission.reason === "no_account"
@@ -785,6 +790,8 @@ export function uploadAdmissionError(admission: InfraUploadAdmission) {
 				: "Insufficient credits",
 		code: admission.reason ?? "insufficient_credits",
 		message: admission.message ?? "Insufficient credits",
+		hint: infraAddCreditsHint(appId),
+		docs: API_DOCS_URL,
 		standing: admission.standing.state,
 		pausesAt: admission.standing.pausesAt?.toISOString() ?? null,
 		balanceMicroCredits: admission.balanceMicroCredits,

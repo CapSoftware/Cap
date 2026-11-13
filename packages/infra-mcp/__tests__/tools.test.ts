@@ -11,6 +11,7 @@ import { type StubApi, startStubApi } from "./stub-api";
 let stub: StubApi;
 let session: Session;
 let files: Awaited<ReturnType<typeof tempFiles>>;
+const billing = () => `${stub.url}/dashboard/infra/app_stub/billing`;
 
 beforeEach(async () => {
 	stub = await startStubApi();
@@ -469,12 +470,12 @@ describe("out of credit", () => {
 					requiredMicroCredits: 19834,
 					shortfallMicroCredits: 14834,
 				},
-				addCreditAt: `${stub.url}/dashboard/infra`,
+				addCreditAt: billing(),
 			});
 			expect(refused.body.credit).toMatch(
 				/^Out of credit\. Add credit in the Cap Infra console at /,
 			);
-			expect(refused.body.credit).toContain(`${stub.url}/dashboard/infra`);
+			expect(refused.body.credit).toContain(billing());
 			expect(stub.videos.size).toBe(0);
 		},
 	);
@@ -491,7 +492,7 @@ describe("out of credit", () => {
 				hint: "Add credits, then send the request again.",
 				status: 402,
 			},
-			addCreditAt: `${stub.url}/dashboard/infra`,
+			addCreditAt: billing(),
 		});
 		expect(refused.body.credit).toMatch(/^Out of credit\./);
 	});
@@ -509,11 +510,39 @@ describe("out of credit", () => {
 		const videoId = [...stub.videos.keys()][0];
 		expect(refused.body).toMatchObject({
 			error: { code: "insufficient_credits", status: 402 },
-			addCreditAt: `${stub.url}/dashboard/infra`,
+			addCreditAt: billing(),
 			videoId,
 			videoStatus: "uploading",
 		});
 		expect(stub.videos.get(String(videoId))?.aborted).toBe(1);
+	});
+
+	it("links the console root when the server does not say which app the key is for", async () => {
+		stub.state.credit = "insufficient_credits";
+		stub.state.usageAppId = null;
+		const refused = await session.call("transcripts_create", {
+			url: "https://files.example.com/a.mp3",
+		});
+		expect(refused.body.addCreditAt).toBe(`${stub.url}/dashboard/infra`);
+		expect(refused.body.credit).toContain(`${stub.url}/dashboard/infra `);
+	});
+
+	it("asks which app the key is for once, however many calls are refused", async () => {
+		stub.state.credit = "insufficient_credits";
+		for (let round = 0; round < 3; round++) {
+			const refused = await session.call("transcripts_create", {
+				url: "https://files.example.com/a.mp3",
+			});
+			expect(refused.body.addCreditAt).toBe(billing());
+		}
+		expect(stub.calls("GET", "/usage")).toHaveLength(1);
+	});
+
+	it("asks nothing extra when nothing is refused", async () => {
+		await session.call("transcripts_create", {
+			url: "https://files.example.com/a.mp3",
+		});
+		expect(stub.calls("GET", "/usage")).toHaveLength(0);
 	});
 
 	it("points at the console when a transcript ends without credit", async () => {
@@ -528,7 +557,7 @@ describe("out of credit", () => {
 		expect(waited.body).toMatchObject({
 			status: "error",
 			error: { code: "insufficient_credits" },
-			addCreditAt: `${stub.url}/dashboard/infra`,
+			addCreditAt: billing(),
 		});
 	});
 });

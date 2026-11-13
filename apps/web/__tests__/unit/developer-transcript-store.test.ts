@@ -316,6 +316,16 @@ describe("creating a transcript from a URL", () => {
 		});
 	});
 
+	it("links the app's own Billing page when it refuses for credit", async () => {
+		setBalance(0);
+		const result = await fromUrl();
+
+		expect(result).toMatchObject({ ok: false, status: 402 });
+		expect(result.ok === false && result.hint).toBe(
+			"Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
+		);
+	});
+
 	it("says how much to add below the minimum balance", async () => {
 		setBalance(400);
 		expect(await fromUrl()).toMatchObject({
@@ -967,6 +977,7 @@ describe("starting an uploaded transcript", () => {
 		expect(await startTranscriptUpload("app-1", id)).toMatchObject({
 			ok: false,
 			status: 402,
+			hint: "Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
 		});
 		expect(context.start).not.toHaveBeenCalled();
 		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
