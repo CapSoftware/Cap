@@ -203,7 +203,7 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 
 		const sharePageRetry = (
-			route: typeof retryAi,
+			route: (request: Request, props: never) => Promise<Response>,
 			owner: Owner,
 			videoId: string,
 		) => {
