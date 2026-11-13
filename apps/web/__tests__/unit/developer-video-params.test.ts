@@ -17,7 +17,10 @@ const DEFAULTS = {
 	poster: true,
 	keyboard: true,
 	events: true,
-	hideControls: [],
+	qualityMenu: true,
+	speedMenu: true,
+	pip: true,
+	fullscreen: true,
 };
 
 describe("developerVideoPlayback", () => {
@@ -181,7 +184,10 @@ describe("developerVideoPlayback", () => {
 			maxQuality: 720,
 			poster: false,
 			keyboard: false,
-			hideControls: ["quality", "speed", "pip", "fullscreen"],
+			qualityMenu: false,
+			speedMenu: false,
+			pip: false,
+			fullscreen: false,
 		});
 	});
 
@@ -252,8 +258,13 @@ describe("developerVideoPlayback", () => {
 			developerVideoPlayback(
 				{ quality_menu: "0", speed_menu: "1", pip: "yes", fullscreen: "false" },
 				"embed",
-			).hideControls,
-		).toEqual(["quality", "fullscreen"]);
+			),
+		).toMatchObject({
+			qualityMenu: false,
+			speedMenu: true,
+			pip: true,
+			fullscreen: false,
+		});
 	});
 
 	it("keeps the look and feel parameters to the embed", () => {
@@ -267,7 +278,7 @@ describe("developerVideoPlayback", () => {
 			radius: 0,
 			maxQuality: null,
 			poster: true,
-			hideControls: [],
+			pip: true,
 		});
 	});
 });

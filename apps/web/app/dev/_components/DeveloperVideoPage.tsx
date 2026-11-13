@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 import { preload } from "react-dom";
-import { CapPlayer } from "@/components/cap-player/CapPlayer";
+import {
+	CapPlayer,
+	type CapPlayerControl,
+} from "@/components/cap-player/CapPlayer";
 import { Lockup } from "@/components/infra/Lockup";
 import {
 	cappedPlaylistUrl,
@@ -82,6 +85,15 @@ function Notice({
 	);
 }
 
+const hiddenControls = (playback: DeveloperVideoPlayback) => {
+	const hidden: CapPlayerControl[] = [];
+	if (!playback.qualityMenu) hidden.push("quality");
+	if (!playback.speedMenu) hidden.push("speed");
+	if (!playback.pip) hidden.push("pip");
+	if (!playback.fullscreen) hidden.push("fullscreen");
+	return hidden;
+};
+
 function Stage({
 	player,
 	playback,
@@ -113,7 +125,7 @@ function Stage({
 				captions={player.captions ?? undefined}
 				showCaptions={playback.captions}
 				accentColor={playback.accentColor ?? undefined}
-				hideControls={playback.hideControls}
+				hideControls={hiddenControls(playback)}
 				keyboard={playback.keyboard}
 				events={playback.events}
 			/>
