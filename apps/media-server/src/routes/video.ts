@@ -46,6 +46,7 @@ import {
 	trackBackgroundTask,
 } from "../lib/lifecycle";
 import { logReason } from "../lib/log-redaction";
+import { MediaAddressError } from "../lib/media-address-guard";
 import {
 	createGuardedMediaFetch,
 	PROCESS_TIMEOUT_MS,
@@ -63,6 +64,7 @@ import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
 	isUnreadableMediaInput,
+	MediaInputNotAccessibleError,
 	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
@@ -96,7 +98,11 @@ import {
 	uploadToS3,
 } from "../lib/media-video";
 import { encodeAttemptsBudgetMs } from "../lib/nvenc-encoder";
-import { findJobOnPeer, isPeerLookup } from "../lib/peer-jobs";
+import {
+	findJobOnPeer,
+	isPeerLookup,
+	lookUpJobOnPeers,
+} from "../lib/peer-jobs";
 import {
 	MAX_PREVERIFIED_RUN_BYTES,
 	type PreverifiedRunPayload,
@@ -143,6 +149,7 @@ const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const UNREADABLE_INPUT_CODE = "UNREADABLE_INPUT";
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
+const PEER_LOOKUP_RETRY_AFTER_SECONDS = 5;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
 const MUX_FAILURE_LOG_LENGTH = 1_000;
@@ -666,15 +673,15 @@ video.post("/thumbnail", async (c) => {
 	try {
 		const metadata = await probeVideo(result.data.videoUrl);
 
+		// Only the options the caller set: an explicit undefined would replace
+		// the default and reach FFmpeg as NaN.
+		const { videoUrl, ...requested } = result.data;
 		const thumbnailData = await generateThumbnail(
-			result.data.videoUrl,
+			videoUrl,
 			metadata.duration,
-			{
-				timestamp: result.data.timestamp,
-				width: result.data.width,
-				height: result.data.height,
-				quality: result.data.quality,
-			},
+			Object.fromEntries(
+				Object.entries(requested).filter(([, value]) => value !== undefined),
+			),
 		);
 
 		return new Response(Buffer.from(thumbnailData), {
@@ -684,6 +691,43 @@ video.post("/thumbnail", async (c) => {
 			},
 		});
 	} catch (err) {
+		const details = err instanceof Error ? err.message : String(err);
+		if (isUnreadableMediaInput(err) || err instanceof MediaAddressError) {
+			console.warn("[video/thumbnail] Unusable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError ||
+						err instanceof MediaAddressError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+		// The host answered that the file is not there or not ours to read,
+		// which asking again will not change.
+		if (
+			err instanceof MediaInputNotAccessibleError &&
+			err.status !== null &&
+			err.status >= 400 &&
+			err.status < 500 &&
+			err.status !== 408 &&
+			err.status !== 429
+		) {
+			console.warn("[video/thumbnail] Input not accessible:", err.status);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code: "INPUT_NOT_ACCESSIBLE",
+					details: `${details} (HTTP ${err.status})`,
+				},
+				422,
+			);
+		}
+
 		console.error("[video/thumbnail] Error:", err);
 
 		if (isBusyError(err)) {
@@ -2196,11 +2240,23 @@ video.get("/process/:jobId/status", async (c) => {
 			!isPeerLookup(c.req.raw) &&
 			!accept?.includes("text/event-stream")
 		) {
-			const owner = await findJobOnPeer(
+			const lookup = await lookUpJobOnPeers(
 				`/video/process/${encodeURIComponent(jobId)}/status`,
 				"GET",
 			);
-			if (owner) return owner;
+			if (lookup.found) return lookup.found;
+			if (lookup.outcome === "unavailable") {
+				c.header("Retry-After", PEER_LOOKUP_RETRY_AFTER_SECONDS.toString());
+				return c.json(
+					{
+						error: "Could not ask every media server about this job",
+						code: "PEER_LOOKUP_FAILED",
+						instanceId: getInstanceId(),
+						pid: process.pid,
+					},
+					503,
+				);
+			}
 		}
 		return c.json(
 			{

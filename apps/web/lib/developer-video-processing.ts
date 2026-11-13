@@ -57,6 +57,7 @@ import {
 	internalDeveloperVideoUrl,
 	readDeveloperVideoText,
 } from "./developer-video-storage";
+import { announceDeveloperVideoStatus } from "./developer-webhook-dispatch";
 import {
 	MEDIA_SERVER_SHUTDOWN_MESSAGE,
 	readMediaServerVideoJob,
@@ -123,6 +124,7 @@ async function mutateDeveloperVideo(
 			.update(developerVideos)
 			.set(updates)
 			.where(eq(developerVideos.id, videoId));
+		announceDeveloperVideoStatus(video, updates);
 		return { ...video, ...updates } as DeveloperVideoRow;
 	};
 	return executor ? run(executor) : db().transaction(run);
@@ -730,7 +732,9 @@ export async function dispatchDeveloperVideoPart(
 	if (started.status === "busy" || started.status === "unreachable") {
 		await mutateEncode(videoId, encodeId, (processing) => {
 			const released = releasePart(processing, part, token);
-			return released ? { processing: released } : null;
+			return released
+				? { processing: { ...released, busyAt: Date.now() } }
+				: null;
 		});
 		return "busy";
 	}

@@ -466,3 +466,22 @@ it.each(["success", "failure"])(
 		}
 	},
 );
+
+it("says so when a toolbar reaction fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(new Error("Offline"));
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	await act(async () => {
+		root.render(createElement(Toolbar, { data: video }));
+	});
+	const reaction = container.querySelector<HTMLButtonElement>(
+		'button[aria-label="up"]',
+	);
+	if (!reaction) throw new Error("Missing reaction button");
+	await act(async () => reaction.click());
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't add your reaction. Please try again.",
+	);
+});
