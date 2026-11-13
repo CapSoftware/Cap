@@ -155,7 +155,11 @@ export const startingEstimate = () => {
 		SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "") ||
 		(megabits > 0 && megabits < 1);
 	if (!slow) return DEFAULT_BITS_PER_SECOND;
-	return megabits > 0 ? megabits * 800_000 : SLOW_LINE_BITS_PER_SECOND;
+	// Chrome can call a fast line with a long round trip 3g, so a slow reading
+	// never starts the player above a line it does not call slow.
+	return megabits > 0
+		? Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND)
+		: SLOW_LINE_BITS_PER_SECOND;
 };
 
 // The smallest rendition that covers the player in either direction, or the
