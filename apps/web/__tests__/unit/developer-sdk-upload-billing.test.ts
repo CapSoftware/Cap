@@ -729,11 +729,14 @@ describe("developer SDK multipart completion", () => {
 
 	it("answers success when another request recorded the video before storage completion", async () => {
 		mocks.recordedReads = [60];
+		mocks.admission.mockResolvedValue({
+			allowed: false,
+			reason: "insufficient_balance",
+		});
 
 		const response = await complete({ durationInSecs: 60 });
 
 		expect(response.status).toBe(200);
-		expect(mocks.admission).not.toHaveBeenCalled();
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(mocks.videoUpdates).toEqual([]);
 	});
