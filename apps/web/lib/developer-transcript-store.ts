@@ -9,6 +9,7 @@ import {
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
 import {
 	and,
+	asc,
 	count,
 	desc,
 	eq,
@@ -45,6 +46,7 @@ import {
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import {
+	captionLanguage,
 	findVideoForTranscript,
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
@@ -566,6 +568,7 @@ export async function createTranscriptFromVideo(
 			queuedAt: new Date(),
 			sourceType: "video",
 			videoId,
+			requestedAt: new Date(),
 			s3Key: video.sourceKey,
 			requestedLanguage: options.requestedLanguage,
 			metadata: options.metadata,
@@ -962,50 +965,82 @@ export async function deleteTranscriptObjects(
 }
 
 const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;
-const CAPTION_RECONCILE_LIMIT = 200;
+const CAPTION_RECONCILE_PAGE = 200;
+const CAPTION_RECONCILE_BUDGET_MS = 2 * 60 * 1000;
 
-export async function reconcileDeletedVideoCaptions(now = new Date()) {
-	const rows = await db()
-		.selectDistinct({
-			appId: developerTranscripts.appId,
-			videoId: developerTranscripts.videoId,
-			language: developerTranscripts.language,
-		})
-		.from(developerTranscripts)
-		.where(
-			and(
-				eq(developerTranscripts.status, "complete"),
-				gte(
-					developerTranscripts.updatedAt,
-					new Date(now.getTime() - CAPTION_RECONCILE_WINDOW_MS),
-				),
-				isNotNull(developerTranscripts.deletedAt),
-				isNotNull(developerTranscripts.videoId),
-				gt(developerTranscripts.wordCount, 0),
-			),
-		)
-		.limit(CAPTION_RECONCILE_LIMIT);
-
+export async function reconcileDeletedVideoCaptions(
+	now = new Date(),
+	budgetMs = CAPTION_RECONCILE_BUDGET_MS,
+) {
+	const stopAt = Date.now() + budgetMs;
+	const since = new Date(now.getTime() - CAPTION_RECONCILE_WINDOW_MS);
+	const seen = new Set<string>();
+	let after: { updatedAt: Date; id: string } | null = null;
 	let synced = 0;
 	let failed = 0;
-	for (const row of rows) {
-		if (!row.videoId) continue;
-		try {
-			await syncVideoCaptions({
-				appId: row.appId,
-				videoId: row.videoId,
-				language: row.language,
-			});
-			synced++;
-		} catch (error) {
-			failed++;
-			console.error("[developer-transcripts] Caption reconcile failed", {
-				videoId: row.videoId,
-				error,
-			});
+	let finished = false;
+
+	while (Date.now() < stopAt) {
+		const rows = await db()
+			.select({
+				id: developerTranscripts.id,
+				updatedAt: developerTranscripts.updatedAt,
+				appId: developerTranscripts.appId,
+				videoId: developerTranscripts.videoId,
+				language: developerTranscripts.language,
+			})
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.status, "complete"),
+					gte(developerTranscripts.updatedAt, since),
+					isNotNull(developerTranscripts.deletedAt),
+					isNotNull(developerTranscripts.videoId),
+					gt(developerTranscripts.wordCount, 0),
+					after
+						? or(
+								gt(developerTranscripts.updatedAt, after.updatedAt),
+								and(
+									eq(developerTranscripts.updatedAt, after.updatedAt),
+									gt(developerTranscripts.id, after.id),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(
+				asc(developerTranscripts.updatedAt),
+				asc(developerTranscripts.id),
+			)
+			.limit(CAPTION_RECONCILE_PAGE);
+
+		for (const row of rows) {
+			after = { updatedAt: row.updatedAt, id: row.id };
+			if (!row.videoId) continue;
+			const group = `${row.appId}/${row.videoId}/${captionLanguage(row.language)}`;
+			if (seen.has(group)) continue;
+			seen.add(group);
+			try {
+				await syncVideoCaptions({
+					appId: row.appId,
+					videoId: row.videoId,
+					language: row.language,
+				});
+				synced++;
+			} catch (error) {
+				failed++;
+				console.error("[developer-transcripts] Caption reconcile failed", {
+					videoId: row.videoId,
+					error,
+				});
+			}
+		}
+		if (rows.length < CAPTION_RECONCILE_PAGE) {
+			finished = true;
+			break;
 		}
 	}
-	return { synced, failed };
+	return { synced, failed, finished };
 }
 
 export async function expireStaleTranscripts(now = new Date()) {
