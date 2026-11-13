@@ -430,6 +430,10 @@ export const CapPlayer = ({
 			}
 		}
 		setCue("");
+		if (captionsOn !== null && !caption) {
+			setCaptionsOn(null);
+			return;
+		}
 		if (!video || !caption) return;
 
 		let cancelled = false;

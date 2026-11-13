@@ -216,6 +216,23 @@ describe("the captions button", () => {
 		expect(button()?.getAttribute("aria-label")).toBe("Captions, off");
 	});
 
+	it("turns captions off when a refresh removes the language that was on", async () => {
+		await mount({ captions: [english, german] });
+		await click(button());
+		await click(
+			[...container.querySelectorAll('[role="menuitemradio"]')].find(
+				(item) => item.textContent === "English",
+			) ?? null,
+		);
+		expect(button()?.getAttribute("aria-label")).toBe("Captions, English");
+
+		await mount({ captions: [german] });
+
+		expect(button()?.getAttribute("aria-pressed")).toBe("false");
+		await press("c");
+		expect(button()?.getAttribute("aria-pressed")).toBe("true");
+	});
+
 	it("toggles with the c key", async () => {
 		await mount({ captions: [english] });
 
