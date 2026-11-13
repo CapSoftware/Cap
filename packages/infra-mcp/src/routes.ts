@@ -63,7 +63,7 @@ export const ROUTES = {
 		body: ["videoId", "uploadId"],
 	}),
 	createTranscript: route("POST", `${REST}/transcripts`, "secret", {
-		body: ["url", ...TRANSCRIPT_OPTIONS],
+		body: ["url", "videoId", ...TRANSCRIPT_OPTIONS],
 		headers: IDEMPOTENCY,
 	}),
 	createTranscriptUpload: route(

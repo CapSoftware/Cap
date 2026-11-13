@@ -257,6 +257,60 @@ describe("what each row says", () => {
 	});
 });
 
+describe("a video's first month of storage", () => {
+	const firstMonth = (
+		amount: number,
+		owed: number,
+		shortSince: string | null,
+	) =>
+		row({
+			type: "video_create",
+			amountMicroCredits: amount,
+			referenceId: "v1d3o9k2m4x7n1p",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: owed,
+				chargedMicroCredits: -amount,
+				shortSince,
+				durationSeconds: 600,
+				tier: "1080p",
+				paidUntil: "2026-12-12T00:00:00.000Z",
+			},
+		});
+
+	it("names a paid month and points at the video", () => {
+		expect(describeLedgerRow(firstMonth(-850, 850, null))).toEqual({
+			label: "Storage, first month",
+			note: "One month of storage for this video, charged when it became ready. It is charged daily after that.",
+			reference: { kind: "Video", value: "v1d3o9k2m4x7n1p" },
+		});
+	});
+
+	it("names a paid month as paid while it carries an earlier unpaid month", () => {
+		const row = firstMonth(-850, 850, "2026-11-12T14:05:09.000Z");
+		expect(
+			describeLedgerRow({
+				...row,
+				metadata: {
+					...(row.metadata as Record<string, unknown>),
+					outstandingMicroCredits: 16_800,
+				},
+			}).label,
+		).toBe("Storage, first month");
+	});
+
+	it("says when the balance paid part of the month or none of it", () => {
+		const since = "2026-11-12T14:05:09.000Z";
+		expect(describeLedgerRow(firstMonth(-300, 850, since)).label).toBe(
+			"Storage, first month, part paid",
+		);
+		expect(describeLedgerRow(firstMonth(0, 850, since))).toMatchObject({
+			label: "Storage, first month, unpaid",
+			note: "The balance could not pay for this video's first month. It is not charged later.",
+		});
+	});
+});
+
 describe("the API shape", () => {
 	it("carries exact dollars beside the micro-credits", () => {
 		expect(serializeLedgerRow(row())).toEqual({
@@ -461,7 +515,7 @@ describe("CSV export", () => {
 			"2026-11-12T14:20:00Z",
 			"Transcription",
 			"",
-			"developer_transcript",
+			"Transcript",
 			"8kq2m4x7n1p3v5w",
 			"-0.00033",
 			"-33",
@@ -534,6 +588,34 @@ describe("CSV export", () => {
 			expect(records[0]?.cell("reference_id")).toBe(`'${value}`);
 		},
 	);
+
+	it("labels references the way the console does", () => {
+		const adjustment = row({
+			type: "adjustment",
+			referenceType: "manual",
+			referenceId: "test-grant-1",
+		});
+		const { records } = csvTable(ledgerCsv([adjustment]));
+		const { note, reference } = describeLedgerRow(adjustment);
+
+		expect(records[0]?.cell("note")).toBe(note);
+		expect(records[0]?.cell("reference_type")).toBe("Note");
+		expect(records[0]?.cell("reference_id")).toBe("test-grant-1");
+		expect(reference).toEqual({ kind: "Note", value: "test-grant-1" });
+	});
+
+	it("shows a declined day the way the console does", () => {
+		const declined = row({
+			type: "topup_failed",
+			amountMicroCredits: 0,
+			referenceType: "auto_top_up_failed",
+			referenceId: "declined-2026-11-12",
+		});
+		const { records } = csvTable(ledgerCsv([declined]));
+
+		expect(records[0]?.cell("reference_type")).toBe("Day");
+		expect(records[0]?.cell("reference_id")).toBe("2026-11-12");
+	});
 
 	it("leaves negative amounts as numbers", () => {
 		const { records } = csvTable(ledgerCsv([row()]));

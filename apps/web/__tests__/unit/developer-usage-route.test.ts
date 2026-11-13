@@ -35,6 +35,7 @@ vi.mock("@/lib/developer-key-hash", () => ({
 vi.mock("@/lib/infra-standing", () => ({
 	getInfraBilling: async () => ({
 		stored: { videoCount: 2, totalMinutes: 12.5 },
+		storage: { uploadingVideos: 1 },
 	}),
 	infraBillingJson: () => ({
 		standing: { state: "active", pausesAt: null },

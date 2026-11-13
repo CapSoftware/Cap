@@ -14,11 +14,12 @@ import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
 } from "@/lib/developer-transcripts";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import {
 	availableBalance,
 	heldTranscriptMicroCredits,
 } from "@/lib/infra-balance";
-import { accountStanding } from "@/lib/infra-standing";
+import { accountStanding, readStandingAccount } from "@/lib/infra-standing";
 
 export const INSUFFICIENT_CREDITS_MESSAGE =
 	"The credit balance could not cover this transcript. Nothing was charged.";
@@ -59,12 +60,10 @@ export async function transcriptStartRefusal(
 	appId: string,
 	now: Date = new Date(),
 ): Promise<TranscriptStartRefusal | null> {
-	const [account] = await db()
-		.select({ id: developerCreditAccounts.id })
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
-	const available = account ? await availableBalance(appId) : null;
+	const account = await readStandingAccount(appId);
+	const available = account
+		? account.balanceMicroCredits - account.heldMicroCredits
+		: null;
 	if (!account || available === null) {
 		return {
 			code: "insufficient_credits",
@@ -75,7 +74,11 @@ export async function transcriptStartRefusal(
 
 	const { standing, lastCharge } = await accountStanding(
 		db(),
-		{ id: account.id, balanceMicroCredits: available },
+		{
+			id: account.id,
+			balanceMicroCredits: available,
+			disputedAt: account.disputedAt,
+		},
 		now,
 	);
 	if (standing.state !== "active") {
@@ -125,7 +128,7 @@ export async function holdTranscriptCredits(input: {
 	if (!appId) return { state: "skipped" };
 	const needed = Math.max(0, Math.ceil(input.microCredits));
 
-	return db().transaction(async (tx) => {
+	const hold = await db().transaction<TranscriptHold>(async (tx) => {
 		const [account] = await tx
 			.select({
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -186,6 +189,8 @@ export async function holdTranscriptCredits(input: {
 
 		return { state: "held", reservedMicroCredits: needed };
 	});
+	if (hold.state !== "skipped") await scheduleAutoTopUp({ appId });
+	return hold;
 }
 
 export async function reserveTranscriptCredits(input: {
@@ -199,7 +204,7 @@ export async function reserveTranscriptCredits(input: {
 		TRANSCRIPT_FULL_HOLD_MICRO_CREDITS,
 	);
 
-	return db().transaction(async (tx) => {
+	const outcome = await db().transaction<TranscriptReservation>(async (tx) => {
 		const [account] = await tx
 			.select({
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -246,6 +251,8 @@ export async function reserveTranscriptCredits(input: {
 
 		return { state: "reserved", reservedMicroCredits: cost };
 	});
+	if (outcome.state !== "skipped") await scheduleAutoTopUp({ appId });
+	return outcome;
 }
 
 const measurableSeconds = (seconds: number | null | undefined) =>
@@ -264,7 +271,7 @@ export async function settleTranscript(input: {
 	const appId = await findTranscriptApp(input.transcriptId);
 	if (!appId) return { state: "skipped", reason: "missing" };
 
-	return db().transaction(async (tx) => {
+	const settled = await db().transaction<TranscriptSettlement>(async (tx) => {
 		await tx
 			.select({ id: developerCreditAccounts.id })
 			.from(developerCreditAccounts)
@@ -372,4 +379,11 @@ export async function settleTranscript(input: {
 			alreadySettled: false,
 		};
 	});
+	if (
+		settled.state === "insufficient_credits" ||
+		(settled.state === "complete" && settled.chargedMicroCredits > 0)
+	) {
+		await scheduleAutoTopUp({ appId });
+	}
+	return settled;
 }

@@ -114,6 +114,7 @@ beforeEach(() => {
 					return query;
 				},
 				limit: () => query,
+				for: () => query,
 			},
 		);
 		return query;

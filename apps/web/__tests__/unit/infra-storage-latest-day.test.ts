@@ -36,12 +36,15 @@ describe("latest storage day", () => {
 	it("orders one account's storage day rows by the day they bill, up to tomorrow", async () => {
 		await latestStorageCharge(db() as never, "account-1");
 
-		expect(state.queries).toHaveLength(1);
-		const [{ sql, params }] = state.queries as [
+		expect(state.queries).toHaveLength(2);
+		const [firstMonth, { sql, params }] = state.queries as [
+			{ sql: string; params: unknown[] },
 			{ sql: string; params: unknown[] },
 		];
+		expect(firstMonth.params).toEqual(["account-1", "video_create", 1]);
+		expect(firstMonth.sql).not.toContain("referenceId");
 		expect(sql).toBe(
-			"select `createdAt`, `metadata` from `developer_credit_transactions` where (`developer_credit_transactions`.`accountId` = ? and (`developer_credit_transactions`.`type` = ? and `developer_credit_transactions`.`referenceType` = ?) and `developer_credit_transactions`.`referenceId` <= ?) order by `developer_credit_transactions`.`referenceId` desc, `developer_credit_transactions`.`id` desc limit ?",
+			"select `id`, `createdAt`, `metadata` from `developer_credit_transactions` where (`developer_credit_transactions`.`accountId` = ? and (`developer_credit_transactions`.`type` = ? and `developer_credit_transactions`.`referenceType` = ?) and `developer_credit_transactions`.`referenceId` <= ?) order by `developer_credit_transactions`.`referenceId` desc, `developer_credit_transactions`.`id` desc limit ?",
 		);
 		expect(params).toEqual([
 			"account-1",

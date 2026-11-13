@@ -14,8 +14,10 @@ import {
 	serializeDeveloperVideo,
 	serializeDeveloperVideoStatus,
 } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
+import { settleFirstMonthAtDelete } from "@/lib/infra-storage-minimum";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 const ownedBy = (userId: string | undefined) =>
@@ -150,6 +152,8 @@ app.delete("/:id", async (c) => {
 			.update(developerVideos)
 			.set({ deletedAt: new Date() })
 			.where(eq(developerVideos.id, videoId));
+		await settleFirstMonthAtDelete(videoId);
+		await cancelDeveloperVideoEncodes({ appId, videoId });
 	}
 
 	return c.json({ success: true });

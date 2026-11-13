@@ -1,10 +1,15 @@
 import { developerVideoPlaybackUrls } from "./developer-video-api";
 import {
+	type DeveloperVideoCaptionTrack,
+	developerVideoCaptionTracks,
+} from "./developer-video-captions";
+import {
 	findPlayableVideo,
 	PLAYBACK_ID_PATTERN,
 } from "./developer-video-playback";
 import { redriveDeveloperVideoProcessing } from "./developer-video-start";
 import { developerVideoRedrive } from "./developer-video-state";
+import { developerVideoIsTakenDown } from "./developer-video-takedown";
 import { getInfraAppStanding } from "./infra-standing";
 
 const DEFAULT_WIDTH = 16;
@@ -22,10 +27,12 @@ export type DeveloperVideoPlayer = DeveloperVideoFrame &
 				kind: "playing";
 				source: { hls?: string; mp4?: string };
 				poster: string | null;
+				captions: DeveloperVideoCaptionTrack[] | null;
 		  }
 		| { kind: "processing"; uploading: boolean }
 		| { kind: "failed" }
 		| { kind: "paused" }
+		| { kind: "taken_down" }
 	);
 
 type PlayableVideo = NonNullable<Awaited<ReturnType<typeof findPlayableVideo>>>;
@@ -48,6 +55,14 @@ async function redriveStalled(video: PlayableVideo, playbackId: string) {
 	return started ? findPlayableVideo(playbackId) : video;
 }
 
+// Nothing about the video reaches a page that cannot play it.
+const TAKEN_DOWN: DeveloperVideoPlayer = {
+	name: "",
+	width: DEFAULT_WIDTH,
+	height: DEFAULT_HEIGHT,
+	kind: "taken_down",
+};
+
 export async function loadDeveloperVideoPlayer(
 	playbackId: string,
 ): Promise<DeveloperVideoPlayer | null> {
@@ -55,23 +70,28 @@ export async function loadDeveloperVideoPlayer(
 
 	const found = await findPlayableVideo(playbackId);
 	if (!found) return null;
+	if (developerVideoIsTakenDown(found)) return TAKEN_DOWN;
 
 	const standing = await getInfraAppStanding(found.appId);
 	if (standing.state === "paused") return { ...frameOf(found), kind: "paused" };
 
 	const video = await redriveStalled(found, playbackId);
 	if (!video) return null;
+	// The retry reads the row again, so a takedown made meanwhile counts too.
+	if (developerVideoIsTakenDown(video)) return TAKEN_DOWN;
 	const frame = frameOf(video);
 
 	if (video.status === "errored") return { ...frame, kind: "failed" };
 
 	const { hlsUrl, mp4Url, posterUrl } = developerVideoPlaybackUrls(video);
 	if (hlsUrl || mp4Url) {
+		const captions = await developerVideoCaptionTracks(video);
 		return {
 			...frame,
 			kind: "playing",
 			source: { hls: hlsUrl ?? undefined, mp4: mp4Url ?? undefined },
 			poster: posterUrl,
+			captions: captions.length > 0 ? captions : null,
 		};
 	}
 

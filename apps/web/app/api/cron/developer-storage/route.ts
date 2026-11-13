@@ -13,7 +13,9 @@ import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
 import { sendInfraOutOfCreditEmail } from "@/lib/infra-billing-emails";
 import {
 	INFRA_GRACE_DAYS,
+	latestStorageCharge,
 	latestStorageCharges,
+	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
 	type StorageCharge,
 } from "@/lib/infra-standing";
@@ -22,12 +24,20 @@ import {
 	chargeStorageDay,
 	recordStorageDayVisits,
 } from "@/lib/infra-storage-billing";
+import {
+	chargeMissedFirstMonths,
+	markShortfallsNotified,
+	markStorageDayNotified,
+	openFirstMonthShortfalls,
+	shortfallsAwaitingNotice,
+} from "@/lib/infra-storage-minimum";
 import { utcDateKey } from "@/lib/infra-usage";
 
 const BATCH_SIZE = 10;
 const PAGE_SIZE = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GRACE_MS = INFRA_GRACE_DAYS * DAY_MS;
+const SHORTFALL_NOTICE_LOOKBACK_MS = GRACE_MS;
 
 const TOP_UPS_BEFORE_UNTIL_MS = 60_000;
 const STORAGE_UNTIL_MS = 200_000;
@@ -96,6 +106,32 @@ function continueSweep(request: Request, authorization: string, next: Sweep) {
 	);
 }
 
+async function sendShortfallNotices(
+	accounts: readonly { id: string }[],
+	now: Date,
+) {
+	const shortfalls = await shortfallsAwaitingNotice(
+		accounts.map((account) => account.id),
+		new Date(now.getTime() - SHORTFALL_NOTICE_LOOKBACK_MS),
+	);
+	for (const [accountId, { ids }] of shortfalls) {
+		const charge = await latestStorageCharge(db(), accountId);
+		if (
+			!charge?.shortSince ||
+			(await restoredSinceCharge(db(), accountId, charge))
+		) {
+			await markShortfallsNotified(ids, now);
+			continue;
+		}
+		const sent = await sendInfraOutOfCreditEmail({
+			accountId,
+			shortSince: charge.shortSince,
+			pausesAt: new Date(charge.shortSince.getTime() + GRACE_MS),
+		});
+		if (sent) await markShortfallsNotified(ids, now);
+	}
+}
+
 type DateSweep = {
 	complete: boolean;
 	cursor: string | null;
@@ -119,9 +155,12 @@ async function sweepDate({
 	let processed = 0;
 	let short = 0;
 	let cursor = from;
-	const dayEnd = finishing
-		? new Date(Date.parse(`${date}T00:00:00.000Z`) + DAY_MS)
-		: null;
+	const dayStart = new Date(`${date}T00:00:00.000Z`);
+	const dayEnd = finishing ? new Date(dayStart.getTime() + DAY_MS) : null;
+	const dailyCharge = {
+		dailyChargeAt: dayStart,
+		...(dayEnd ? { createdBefore: dayEnd } : {}),
+	};
 
 	while (!outOfTime()) {
 		const page: { id: string; appId: string; createdAt: Date }[] = await db()
@@ -218,21 +257,20 @@ async function sweepDate({
 		const usageByApp =
 			pending.length === 0
 				? new Map<string, StorageUsage>()
-				: dayEnd
-					? await getStorageUsageByApp(appIds, undefined, undefined, {
-							createdBefore: dayEnd,
-						})
-					: await getStorageUsageByApp(appIds);
+				: await getStorageUsageByApp(appIds, undefined, undefined, dailyCharge);
 		const idleAccountIds = pending
 			.filter(
 				(account) =>
 					(usageByApp.get(account.appId)?.dailyMicroCredits ?? 1) <= 0,
 			)
 			.map((account) => account.id);
-		const lastCharges =
+		const [lastCharges, openFirstMonths] =
 			idleAccountIds.length > 0
-				? await latestStorageCharges(db(), idleAccountIds)
-				: new Map<string, StorageCharge>();
+				? await Promise.all([
+						latestStorageCharges(db(), idleAccountIds),
+						openFirstMonthShortfalls(idleAccountIds),
+					])
+				: [new Map<string, StorageCharge>(), new Set<string>()];
 
 		for (let i = 0; i < pending.length; i += BATCH_SIZE) {
 			if (outOfTime()) {
@@ -252,7 +290,8 @@ async function sweepDate({
 					if (!usage) return null;
 					if (
 						usage.dailyMicroCredits <= 0 &&
-						!lastCharges.get(account.id)?.shortSince
+						!lastCharges.get(account.id)?.shortSince &&
+						!openFirstMonths.has(account.id)
 					) {
 						return null;
 					}
@@ -260,6 +299,15 @@ async function sweepDate({
 						appId: account.appId,
 						accountId: account.id,
 						usage,
+						measure: async (tx) =>
+							(
+								await getStorageUsageByApp(
+									[account.appId],
+									undefined,
+									tx,
+									dailyCharge,
+								)
+							).get(account.appId) ?? usage,
 						dateKey: date,
 						now,
 						retryUnpaid: !finishing,
@@ -269,11 +317,12 @@ async function sweepDate({
 						result.fellShort &&
 						result.shortSince
 					) {
-						await sendInfraOutOfCreditEmail({
+						const sent = await sendInfraOutOfCreditEmail({
 							accountId: account.id,
 							shortSince: result.shortSince,
 							pausesAt: new Date(result.shortSince.getTime() + GRACE_MS),
 						});
+						if (sent) await markStorageDayNotified(account.id, date, now);
 					}
 					return result;
 				}),
@@ -302,6 +351,7 @@ async function sweepDate({
 		}
 
 		await recordVisits();
+		if (!finishing) await sendShortfallNotices(accounts, now);
 		cursor = lastAccount.id;
 		if (page.length < PAGE_SIZE) {
 			return { complete: true, cursor, processed, short };
@@ -349,6 +399,8 @@ export async function GET(request: Request) {
 					until: startedAt + TOP_UPS_BEFORE_UNTIL_MS,
 				})
 			: null;
+
+	const firstMonths = hop === 0 ? await chargeMissedFirstMonths(now) : null;
 
 	const dates = sweep.date === today ? [today] : [sweep.date, today];
 	let date = sweep.date;
@@ -409,6 +461,7 @@ export async function GET(request: Request) {
 		hop,
 		appsProcessed: processed,
 		appsShort: short,
+		firstMonths,
 		autoTopUps,
 	});
 }

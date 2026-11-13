@@ -2,6 +2,7 @@ import { DEVELOPER_VIDEO_RESOLUTION_TIERS } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { Hono } from "hono";
 import { z } from "zod";
+import { invalidIdempotencyKey, readIdempotencyKey } from "@/lib/developer-ids";
 import {
 	createDeveloperUploadToken,
 	UPLOAD_TOKEN_DEFAULT_SECONDS,
@@ -20,6 +21,7 @@ import { withDeveloperSecretAuth } from "../../../utils";
 export const app = new Hono<{
 	Variables: {
 		developerAppId: string;
+		developerKeyId: string;
 		developerKeyType: "secret";
 	};
 }>().use(withDeveloperSecretAuth);
@@ -48,6 +50,7 @@ const tokenOptions = {
 
 function issueUploadToken(
 	appId: string,
+	keyId: string,
 	videoId: string,
 	options: { corsOrigin?: string; timeoutSeconds?: number; maxBytes?: number },
 ) {
@@ -64,6 +67,7 @@ function issueUploadToken(
 			expiresAt,
 			corsOrigin,
 			maxBytes: options.maxBytes,
+			keyId,
 		}),
 		expiresAt: new Date(expiresAt).toISOString(),
 		corsOrigin,
@@ -92,17 +96,23 @@ app.post(
 		}),
 	),
 	async (c) => {
+		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
 		const appId = c.get("developerAppId");
 		const { corsOrigin, timeoutSeconds, maxBytes, ...video } =
 			c.req.valid("json");
 
-		const created = await createInfraVideo({ appId, ...video });
+		const created = await createInfraVideo({
+			appId,
+			...video,
+			idempotencyKey: idempotency.key,
+		});
 		if (created.status !== 200) return c.json(created.body, created.status);
 		const { videoId, playbackId, shareUrl, embedUrl } = created.body;
 
 		return c.json({
 			data: {
-				...issueUploadToken(appId, videoId, {
+				...issueUploadToken(appId, c.get("developerKeyId"), videoId, {
 					corsOrigin,
 					timeoutSeconds,
 					maxBytes,
@@ -126,7 +136,12 @@ app.post(
 		if (upload.status !== 200) return c.json(upload.body, upload.status);
 
 		return c.json({
-			data: issueUploadToken(appId, videoId, c.req.valid("json")),
+			data: issueUploadToken(
+				appId,
+				c.get("developerKeyId"),
+				videoId,
+				c.req.valid("json"),
+			),
 		});
 	},
 );

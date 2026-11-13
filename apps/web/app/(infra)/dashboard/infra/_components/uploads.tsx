@@ -17,12 +17,17 @@ import {
 	COMPLETION_IN_PROGRESS,
 	completeRetryPlan,
 	EMPTY_FILE_MESSAGE,
+	fileTooLargeMessage,
 	isDefinitiveRejection,
+	MAX_UPLOAD_BYTES,
+	MAX_UPLOAD_DURATION_SECS,
 	partBytesFor,
 	presignBatch,
 	retryAfterMs,
 	startsLikeAnImageOrDocument,
+	VIDEO_TOO_LONG_MESSAGE,
 } from "@/lib/infra-upload";
+import { INFRA_SUPPORTED_VIDEO_FORMATS } from "@/lib/infra-video-formats";
 import type { InfraLocalUpload } from "@/lib/infra-video-view";
 
 const PART_ATTEMPTS = 3;
@@ -36,13 +41,14 @@ class UploadError extends Error {
 		message: string,
 		readonly status = 0,
 		readonly code: string | null = null,
+		readonly retryAfter: string | null = null,
 	) {
 		super(message);
 	}
 }
 
 const CANCELLED = "Upload cancelled";
-const NOT_A_VIDEO = "That is not a video. MP4, MOV and WebM work best.";
+const NOT_A_VIDEO = `That is not a video. Upload ${INFRA_SUPPORTED_VIDEO_FORMATS}.`;
 
 export type ActiveUpload = {
 	name: string;
@@ -186,6 +192,7 @@ async function call<T>(
 				data.message ?? data.error ?? "The upload could not be started",
 				res.status,
 				typeof data.code === "string" ? data.code : null,
+				res.headers.get("Retry-After"),
 			);
 		}
 		return data;
@@ -243,7 +250,7 @@ function readVideo(file: File) {
 							new UploadError(
 								notVideo
 									? NOT_A_VIDEO
-									: "This browser cannot open that file. MP4, MOV and WebM work best, or upload it through the API.",
+									: `This browser cannot open that file. Cap Infra accepts ${INFRA_SUPPORTED_VIDEO_FORMATS}. If it is one of those, upload it through the API.`,
 							),
 						),
 					);
@@ -312,8 +319,14 @@ async function uploadFile(
 
 	try {
 		if (file.size === 0) throw new UploadError(EMPTY_FILE_MESSAGE);
+		if (file.size > MAX_UPLOAD_BYTES) {
+			throw new UploadError(fileTooLargeMessage());
+		}
 		show(0, "Reading the file");
 		const meta = await readVideo(file);
+		if (meta.duration > MAX_UPLOAD_DURATION_SECS) {
+			throw new UploadError(VIDEO_TOO_LONG_MESSAGE);
+		}
 		stopIfCancelled();
 		show(0, "Starting the upload");
 		const created = await call<{ videoId: string }>(
@@ -388,6 +401,7 @@ async function uploadFile(
 		stopIfCancelled();
 		show(1, "Finishing", true);
 		outcome = "unconfirmed";
+		let busyWaitedMs = 0;
 		for (let attempt = 1; outcome !== "done"; attempt++) {
 			try {
 				await call("/complete", {
@@ -407,8 +421,18 @@ async function uploadFile(
 					outcome = "open";
 					throw error;
 				}
-				const plan = completeRetryPlan(attempt, code, COMPLETE_ATTEMPTS);
+				const plan = completeRetryPlan({
+					attempt,
+					code,
+					attempts: COMPLETE_ATTEMPTS,
+					retryAfter: error instanceof UploadError ? error.retryAfter : null,
+					busyWaitedMs,
+				});
 				if (!plan.retry) throw error;
+				if (plan.busy) {
+					busyWaitedMs += plan.waitMs;
+					show(1, "Still finishing, this can take a few minutes", true);
+				}
 				await new Promise((resolve) => setTimeout(resolve, plan.waitMs));
 			}
 		}

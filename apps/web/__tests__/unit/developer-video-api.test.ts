@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
 	appId: "app-1",
 	playbackUrl: undefined as string | undefined,
 	redrive: vi.fn(),
+	settleAtDelete: vi.fn(),
+	cancelJob: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -30,6 +32,13 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
+}));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtDelete: mocks.settleAtDelete,
+}));
+
+vi.mock("@/lib/media-client", () => ({
+	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
@@ -110,6 +119,7 @@ beforeEach(() => {
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
 	mocks.redrive.mockResolvedValue(false);
+	mocks.cancelJob.mockResolvedValue("cancelled");
 });
 
 describe("developer video API", () => {
@@ -146,11 +156,162 @@ describe("developer video API", () => {
 			deletedAt: null,
 			createdAt: "2026-11-01T00:00:00.000Z",
 			updatedAt: "2026-11-01T00:00:00.000Z",
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 			shareUrl: PAGE,
 			embedUrl: `${PAGE}/embed`,
+		});
+	});
+
+	describe("output states", () => {
+		const outputsOf = async (path: string) =>
+			(await get(path)).body.data.outputs;
+		const withParts = (
+			status: "uploading" | "processing" | "ready" | "errored",
+			hls: Record<string, unknown>,
+			mp4: Record<string, unknown>,
+		) => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status,
+				processing: processingState({
+					...base.processing,
+					hls,
+					mp4,
+				} as never),
+			};
+		};
+
+		it("says an MP4 that failed for good will not come on a ready video", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "failed", reason: "encoder refused" },
+			);
+			for (const path of ["/video-1", "/video-1/status"]) {
+				const { body } = await get(path);
+				expect(body.data.hlsUrl).toBe(`${BASE}/master.m3u8`);
+				expect(body.data.mp4Url).toBeNull();
+				expect(body.data.outputs).toEqual({ hls: "ready", mp4: "failed" });
+			}
+		});
+
+		it("says an MP4 still encoding or waiting for a retry is still coming", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "running", token: "t", jobId: null, startedAt: 1 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "unavailable", reason: "busy", retryAt: 2 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+		});
+
+		it("never says ready while the URL is still null", async () => {
+			withParts(
+				"processing",
+				{ state: "complete", output: "hls-out" },
+				{ state: "pending" },
+			);
+			const { body } = await get("/video-1");
+			expect(body.data.hlsUrl).toBeNull();
+			expect(body.data.outputs).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("says nothing is coming for an errored video", async () => {
+			withParts("errored", { state: "pending" }, { state: "pending" });
+			expect(await outputsOf("/video-1/status")).toEqual({
+				hls: "failed",
+				mp4: "failed",
+			});
+		});
+
+		it("reads a video still uploading as processing", async () => {
+			mocks.store.video = { ...ready(), status: "uploading", processing: null };
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("reports no duration for a video that failed before it was measured", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				errorReason: "This file could not be read as a video.",
+				duration: 0.02,
+				processing: processingState({
+					...base.processing,
+					probe: null,
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when a length measured at upload was never confirmed by processing", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "errored",
+				errorReason: "Processing took too long. Upload the video again.",
+				duration: 60,
+				processing: null,
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when processing read the file but not its length", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				duration: 45,
+				processing: processingState({
+					...base.processing,
+					probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("keeps the measured duration of a video that failed after it was measured", async () => {
+			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBe(12);
+			}
+		});
+
+		it("says none for a video uploaded before encoding existed", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "ready",
+				playbackId: null,
+				processing: null,
+			};
+			expect(await outputsOf("/video-1")).toEqual({ hls: "none", mp4: "none" });
 		});
 	});
 
@@ -627,6 +788,98 @@ describe("developer video API", () => {
 			expect(response.status).toBe(200);
 			expect(await response.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+		});
+
+		it("cancels the encode jobs of a video deleted mid-encode", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: "job-hls",
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+				return "cancelled";
+			});
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob.mock.calls.flat().sort()).toEqual([
+				"job-hls",
+				"job-mp4",
+			]);
+
+			await remove();
+			expect(mocks.cancelJob).toHaveBeenCalledTimes(2);
+		});
+
+		it("cancels only the part that is still running and has a job", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: null,
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+
+			await remove();
+
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-mp4"]]);
+		});
+
+		it("cancels nothing for a video that finished encoding", async () => {
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob).not.toHaveBeenCalled();
+		});
+
+		it("still deletes when the media server cannot cancel the job", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockResolvedValue("failed");
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(warn).toHaveBeenCalledWith(
+				"[developer-video] Could not cancel encode job",
+				{ videoId: "video-1", jobId: "job-mp4" },
+			);
+			warn.mockRestore();
 		});
 
 		it("answers a repeated delete with success and leaves the row alone", async () => {
@@ -639,6 +892,7 @@ describe("developer video API", () => {
 			expect(await second.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toHaveLength(1);
 			expect(mocks.store.video?.deletedAt).toBe(deletedAt);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
 		});
 
 		it("still answers 404 for a video of another app, deleted or not", async () => {
@@ -711,9 +965,11 @@ describe("developer video API", () => {
 			errorReason: null,
 			playbackId: "playback-id-0123456789ab",
 			renditions: ready().renditions,
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 		});
 	});
 

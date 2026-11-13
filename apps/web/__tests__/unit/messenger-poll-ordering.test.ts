@@ -18,6 +18,7 @@ vi.mock("next/image", () => ({
 	default: ({ src, alt }: { src: string; alt: string }) =>
 		createElement("img", { src, alt }),
 }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 vi.mock("next/link", () => ({
 	default: ({ children, href }: { children: ReactNode; href: string }) =>
 		createElement("a", { href }, children),

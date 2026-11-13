@@ -32,7 +32,7 @@ export const Agent = () => (
 			<div className="flex flex-wrap items-center gap-x-5 gap-y-3 self-start lg:col-start-1 lg:row-start-2">
 				<StartLink className={BTN_GHOST} />
 				<Link
-					href={LINKS.docs}
+					href={LINKS.reference}
 					className={`${TEXT_LINK} text-[14px] text-[rgba(232,236,244,0.6)] hover:text-[#E8ECF4]`}
 				>
 					API reference

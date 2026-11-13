@@ -218,6 +218,13 @@ vi.mock("@/lib/infra-standing", () => ({
 	STORAGE_DAY_REFERENCE_TYPE: "storage_day",
 	latestStorageCharges: async () => new Map(),
 }));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	chargeMissedFirstMonths: async () => ({ charged: 0, short: 0, failed: 0 }),
+	shortfallsAwaitingNotice: async () => new Map(),
+	openFirstMonthShortfalls: async () => new Set(),
+	markShortfallsNotified: async () => {},
+	markStorageDayNotified: async () => {},
+}));
 vi.mock("@/lib/infra-auto-top-up", () => ({ runDueAutoTopUps: state.topUps }));
 vi.mock("@/lib/infra-billing-emails", () => ({
 	sendInfraOutOfCreditEmail: state.emails,

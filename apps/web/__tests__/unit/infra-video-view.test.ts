@@ -13,6 +13,7 @@ import {
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
 import {
+	DEFAULT_EMBED_OPTIONS,
 	INFRA_VIDEO_DISPLAY_LABELS,
 	INFRA_VIDEO_FAILURE_FALLBACK,
 	INFRA_VIDEO_PAGE_MAX,
@@ -20,6 +21,7 @@ import {
 	infraRefreshDelayMs,
 	infraVideoDisplayState,
 	infraVideoEmbedCode,
+	infraVideoEmbedUrl,
 	infraVideoFailure,
 	infraVideoIsChanging,
 	infraVideoListLimit,
@@ -35,6 +37,7 @@ const row = (overrides: Parameters<typeof developerVideo>[0] = {}) => {
 	return {
 		...video,
 		legacy: video.playbackId === null && video.processing === null,
+		takenDown: false,
 	};
 };
 
@@ -49,6 +52,7 @@ const LIST_FIELDS = [
 
 const DETAIL_FIELDS = [
 	...LIST_FIELDS,
+	"captions",
 	"embedCode",
 	"failure",
 	"height",
@@ -187,6 +191,7 @@ describe("console video payload", () => {
 		expect(detail.posterUrl).toContain("/playback-id-0123456789ab/");
 		expect(detail.stillEncoding).toBe(false);
 		expect(detail.failure).toBeNull();
+		expect(detail.captions).toEqual([]);
 
 		const sent = JSON.stringify(detail);
 		expect(sent).not.toContain("developer/app-1/video-1/video");
@@ -241,7 +246,7 @@ describe("console video payload", () => {
 
 			expect(detail.shareUrl).toBe(PAGE);
 			expect(detail.embedCode).toBe(
-				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`,
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 			);
 		});
 
@@ -269,6 +274,68 @@ describe("console video payload", () => {
 			expect(
 				toInfraVideoDetail(ready, developerVideoPlaybackUrls(ready)),
 			).toMatchObject({ shareUrl: null, embedCode: null });
+		});
+
+		it("builds the snippet from the console's embed options", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+			const base = { ...DEFAULT_EMBED_OPTIONS };
+
+			expect(infraVideoEmbedCode(`${PAGE}/embed`, video, base)).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, video),
+			);
+			expect(infraVideoEmbedUrl(`${PAGE}/embed`, base)).toBe(`${PAGE}/embed`);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, {
+					color: "#F97316",
+					controls: false,
+					autoplay: true,
+					captions: true,
+					qualityMenu: false,
+				}),
+			).toBe(
+				`${PAGE}/embed?color=f97316&controls=0&autoplay=1&muted=1&captions=1&quality_menu=0`,
+			);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, { ...base, captions: true }),
+			).toBe(`${PAGE}/embed?captions=1`);
+		});
+
+		it("keeps the iframe's attributes whatever the options", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+			const attributes = (code: string) => code.replace(/ src="[^"]*"/, "");
+
+			expect(
+				attributes(
+					infraVideoEmbedCode(`${PAGE}/embed`, video, {
+						color: "#f97316",
+						controls: false,
+						autoplay: true,
+						captions: true,
+						qualityMenu: false,
+					}),
+				),
+			).toBe(attributes(infraVideoEmbedCode(`${PAGE}/embed`, video)));
+		});
+
+		it.each([
+			'red" onload="alert(1)',
+			"#12345g",
+			"3b82f6&autoplay=1",
+			"</iframe><script>alert(1)</script>",
+		])("leaves the hostile colour %j out of the snippet", (color) => {
+			const code = infraVideoEmbedCode(
+				`${PAGE}/embed`,
+				{ name: "Demo", width: 1920, height: 1080 },
+				{ ...DEFAULT_EMBED_OPTIONS, color },
+			);
+
+			expect(code).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, {
+					name: "Demo",
+					width: 1920,
+					height: 1080,
+				}),
+			);
 		});
 
 		it("keeps a video name from breaking out of the title attribute", () => {

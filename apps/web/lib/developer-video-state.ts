@@ -361,8 +361,13 @@ export function developerVideoRedrive(
 			: null;
 	}
 	if (video.status === "processing") {
+		// A video that waited for a free worker is timed from its last busy
+		// answer, so one that starts encoding late is not started over while it
+		// encodes. One whose workflow stopped stops being answered busy.
 		return !video.processing ||
-			now - video.processing.startedAt >= STALE_PROCESSING_MS
+			now -
+				Math.max(video.processing.startedAt, video.processing.busyAt ?? 0) >=
+				STALE_PROCESSING_MS
 			? "start"
 			: null;
 	}
