@@ -25,6 +25,7 @@ const fixture = vi.hoisted(() => ({
 	duringCreate: null as null | (() => Promise<void>),
 	loseNextResponse: false,
 	failNextCall: false,
+	duringSearch: null as null | (() => Promise<void>),
 	delayMs: 40,
 	calledAt: [] as number[],
 	stored: new Map<string, FakeIntent>(),
@@ -50,6 +51,12 @@ vi.mock("@/lib/infra-billing-emails", () => ({
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
 		paymentIntents: {
+			search: async () => {
+				const during = fixture.duringSearch;
+				fixture.duringSearch = null;
+				await during?.();
+				return { data: [] };
+			},
 			retrieve: async (id: string) => {
 				fixture.retrieved.push(id);
 				const intent = fixture.stored.get(id);
@@ -659,6 +666,39 @@ describe.runIf(Boolean(databaseUrl))(
 					.filter((intent) => intent.metadata.accountId === accountId),
 			).toHaveLength(1);
 			errors.mockRestore();
+		});
+
+		it("voids only the stale reservation, never a new one made under the same key", async () => {
+			const { autoTopUpIdempotencyKey, runAutoTopUp } = await import(
+				"@/lib/infra-auto-top-up"
+			);
+			const { accountId } = await makeAccount(30_000);
+			const key = autoTopUpIdempotencyKey(accountId, {
+				topUps: 0,
+				declines: 0,
+			});
+			const reserve = (rowId: string, hoursAgo: number) =>
+				pool.query(
+					`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+						balanceAfterMicroCredits, referenceId, referenceType, metadata, createdAt)
+					 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":500}', UTC_TIMESTAMP() - INTERVAL ? HOUR)`,
+					[rowId, accountId, key, hoursAgo],
+				);
+			const stale = id();
+			const fresh = id();
+			await reserve(stale, 73);
+			fixture.duringSearch = () => reserve(fresh, 0).then(() => undefined);
+
+			expect(await runAutoTopUp(accountId)).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+
+			const [rows] = await pool.query(
+				"SELECT id FROM developer_credit_transactions WHERE accountId = ? AND referenceId = ?",
+				[accountId, key],
+			);
+			expect((rows as { id: string }[]).map((row) => row.id)).toEqual([fresh]);
 		});
 
 		it("keeps counting a charge whose answer was lost against the owner's ceiling", async () => {
