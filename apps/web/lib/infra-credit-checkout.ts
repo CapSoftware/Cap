@@ -5,7 +5,9 @@ export const CREDIT_CHECKOUT_METADATA_TYPE = "developer_credits";
 
 export const STRIPE_DESCRIPTION_LIMIT = 1_000;
 
-export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card", "link"] as const;
+export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card"] as const;
+
+export const CREDIT_CHECKOUT_3DS_OVER_CENTS = 100_000;
 
 const CREDIT_PURCHASE_PREFIX = "Cap Infra credits for ";
 
@@ -40,6 +42,7 @@ export function creditCheckoutSessionParams({
 	receiptEmail: string;
 }) {
 	const description = creditPurchaseDescription(appName);
+	const largePurchase = amountCents > CREDIT_CHECKOUT_3DS_OVER_CENTS;
 	return {
 		customer: customerId,
 		line_items: [
@@ -54,6 +57,13 @@ export function creditCheckoutSessionParams({
 		],
 		mode: "payment",
 		payment_method_types: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
+		...(largePurchase
+			? {
+					payment_method_options: {
+						card: { request_three_d_secure: "any" as const },
+					},
+				}
+			: {}),
 		custom_text: {
 			submit: { message: creditCheckoutSubmitMessage(appName) },
 		},

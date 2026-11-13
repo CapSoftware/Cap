@@ -117,6 +117,62 @@ export async function developerVideoCaptionTracks(
 	}
 }
 
+export type DeveloperVideoCaptionLink = { language: string; url: string };
+
+// One query for a page of videos, on the same rows the player reads. A failed
+// lookup leaves captions out rather than failing the read.
+export async function developerVideosCaptionLinks(
+	appId: string,
+	videos: { id: string; playbackId: string | null }[],
+): Promise<Map<string, DeveloperVideoCaptionLink[]>> {
+	const links = new Map<string, DeveloperVideoCaptionLink[]>();
+	const playable = videos.filter((video) => video.playbackId !== null);
+	if (playable.length === 0) return links;
+	let rows: { videoId: string | null; language: string | null }[];
+	try {
+		rows = await db()
+			.selectDistinct({
+				videoId: developerTranscripts.videoId,
+				language: developerTranscripts.language,
+			})
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.appId, appId),
+					inArray(
+						developerTranscripts.videoId,
+						playable.map((video) => video.id),
+					),
+					eq(developerTranscripts.status, "complete"),
+					isNull(developerTranscripts.deletedAt),
+					gt(developerTranscripts.wordCount, 0),
+				),
+			);
+	} catch (error) {
+		console.error("[developer-video-captions] Failed to list captions", error);
+		return links;
+	}
+	const base = developerPlaybackBaseUrl();
+	for (const video of playable) {
+		const languages = [
+			...new Set(
+				rows
+					.filter((row) => row.videoId === video.id)
+					.map((row) => captionLanguage(row.language)),
+			),
+		].sort();
+		if (languages.length === 0) continue;
+		links.set(
+			video.id,
+			languages.map((language) => ({
+				language,
+				url: `${base}/${video.playbackId}/${captionsFileName(language)}`,
+			})),
+		);
+	}
+	return links;
+}
+
 async function newestCaptionSource(video: VideoRef, language: string) {
 	const stored = await db()
 		.selectDistinct({ language: developerTranscripts.language })

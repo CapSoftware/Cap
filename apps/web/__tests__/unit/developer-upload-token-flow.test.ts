@@ -429,6 +429,79 @@ describe("uploading with the token", () => {
 		},
 	);
 
+	it.each([
+		"text/plain",
+		"text/csv; charset=utf-8",
+		"image/png",
+		"audio/mpeg",
+		"application/json",
+		"application/pdf",
+	])(
+		"refuses %s at initiate with the reason the farm gives",
+		async (contentType) => {
+			const { token } = await created();
+
+			const response = await upload("initiate", token, { contentType });
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "unsupported_content_type",
+				message:
+					"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
+			});
+			expect(state.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		["video/mp4", "video/mp4"],
+		["video/quicktime", "video/quicktime"],
+		["video/x-matroska", "video/x-matroska"],
+		["video/webm", "video/webm"],
+	])("still accepts %s at initiate", async (contentType, stored) => {
+		const { token } = await created();
+
+		const response = await upload("initiate", token, { contentType });
+
+		expect(response.status).toBe(200);
+		expect(state.create).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({ ContentType: stored }),
+		);
+	});
+
+	it("still accepts application/octet-stream at initiate, as browsers send for MKV and MOV", async () => {
+		const { token } = await created();
+
+		const response = await upload("initiate", token, {
+			contentType: "application/octet-stream",
+		});
+
+		expect(response.status).toBe(200);
+		expect(state.create).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({ ContentType: "application/octet-stream" }),
+		);
+	});
+
+	it("still accepts an empty content type at initiate", async () => {
+		const { token } = await created();
+
+		const response = await upload("initiate", token, { contentType: "" });
+
+		expect(response.status).toBe(200);
+		expect(state.create).toHaveBeenCalledTimes(1);
+	});
+
+	it("still accepts an initiate with no content type", async () => {
+		const { token } = await created();
+
+		const response = await upload("initiate", token, {});
+
+		expect(response.status).toBe(200);
+		expect(state.create).toHaveBeenCalledTimes(1);
+	});
+
 	it("accepts the token's own videoId in the body", async () => {
 		const { token, videoId } = await created();
 

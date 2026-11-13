@@ -78,7 +78,12 @@ const MobileTab = () => {
 				{Tabs.filter((i) => !i.adminOnly || canViewSettings)
 					.filter((i) => !i.infraOnly || showInfra)
 					.map((tab) => (
-						<Link href={tab.href} key={tab.href} aria-label={tab.label}>
+						<Link
+							href={tab.href}
+							key={tab.href}
+							aria-label={tab.label}
+							prefetch={tab.infraOnly ? false : undefined}
+						>
 							{tab.icon}
 						</Link>
 					))}

@@ -500,7 +500,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
     "outputs": { "hls": "ready", "mp4": "ready" },
     "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
+    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed",
+    "captions": [{ "language": "en", "url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/captions-en.vtt" }]
   }
 }
 ```
@@ -1564,7 +1565,7 @@ Events arrive as `{ type: "cap-player", event, currentTime, duration, paused, mu
 | `ended` | The video reaches its end | |
 | `timeupdate` | The time moves while playing, at most about four times a second | |
 | `qualitychange` | The rendition shown changes, or the viewer picks one | `quality` such as `"1080p"`, `auto` (true while Auto is on) |
-| `error` | The video stops being playable, the browser refused a `play` command, or the embed has nothing to play | `code`: `"media"` when playback fails, `"play_refused"`, `"unavailable"` for a video that is not available, or `"paused"` while the app's playback is paused. With `"unavailable"` or `"paused"`, no `ready` is sent and commands do nothing |
+| `error` | The video stops being playable, the browser refused a `play` command, or the embed has nothing to play | `code`: `"media"` when playback fails, `"play_refused"`, `"unavailable"` for a video that is not available, deleted or unknown, or `"paused"` while the app's playback is paused. With `"unavailable"` or `"paused"`, no `ready` is sent and commands do nothing |
 
 Commands are sent to the iframe's `contentWindow` as `{ type: "cap-player", command }`. The player takes them only from the page that embeds it, and ignores anything else.
 
@@ -1625,6 +1626,7 @@ The full video object returned by list and get endpoints:
 | `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
+| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its `url` can briefly answer `404`. Not in webhook payloads |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |

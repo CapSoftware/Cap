@@ -164,12 +164,15 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("refuses a purchase over $10,000", async () => {
+	it("refuses an amount outside $5 to $10,000 with the console's sentence", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const res = await POST(
-			makeRequest({ appId: "app-456", amountCents: 1_000_001 }),
-		);
-		expect(res.status).toBe(400);
+		for (const amountCents of [499, 1_000_001]) {
+			const res = await POST(makeRequest({ appId: "app-456", amountCents }));
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Enter an amount from $5 to $10,000.",
+			});
+		}
 		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 
@@ -197,6 +200,8 @@ describe("POST /api/developer/credits/checkout", () => {
 					}),
 				],
 				metadata: expect.objectContaining({ amountCents: "1000000" }),
+				payment_method_types: ["card"],
+				payment_method_options: { card: { request_three_d_secure: "any" } },
 			}),
 		);
 	});
@@ -217,27 +222,17 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("refuses a purchase from an account outside the preview list", async () => {
+	it("lets any signed-in account reach the purchase on Cap's own deployment", async () => {
 		const { buildEnv } = await import("@cap/env");
 		const env = buildEnv as { NEXT_PUBLIC_IS_CAP?: string };
 		env.NEXT_PUBLIC_IS_CAP = "true";
 		try {
 			mockGetCurrentUser.mockResolvedValue(mockUser);
+			mockDb.limit.mockResolvedValueOnce([]);
 			const res = await POST(
 				makeRequest({ appId: "app-456", amountCents: 1000 }),
 			);
-			expect(res.status).toBe(403);
-			expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
-
-			mockGetCurrentUser.mockResolvedValue({
-				...mockUser,
-				email: "richie@cap.so",
-			});
-			mockDb.limit.mockResolvedValueOnce([]);
-			const allowed = await POST(
-				makeRequest({ appId: "app-456", amountCents: 1000 }),
-			);
-			expect(allowed.status).toBe(404);
+			expect(res.status).toBe(404);
 		} finally {
 			env.NEXT_PUBLIC_IS_CAP = "";
 		}
@@ -795,7 +790,7 @@ describe("credit checkout for a named app and a US business", () => {
 			unknown
 		>;
 
-	it("names the app on the Stripe page, the invoice and the payment, and offers card and Link only", async () => {
+	it("names the app on the Stripe page, the invoice and the payment, and offers card only", async () => {
 		mockDb.limit
 			.mockResolvedValueOnce([{ ...mockApp, name: "  Course   site  " }])
 			.mockResolvedValueOnce([fundedAccount]);
@@ -806,7 +801,7 @@ describe("credit checkout for a named app and a US business", () => {
 
 		expect(res.status).toBe(200);
 		expect(lastParams()).toMatchObject({
-			payment_method_types: ["card", "link"],
+			payment_method_types: ["card"],
 			custom_text: {
 				submit: {
 					message:

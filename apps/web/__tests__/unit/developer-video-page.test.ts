@@ -202,7 +202,7 @@ describe("developer video report link", () => {
 		},
 	);
 
-	it("tucks the embed link into the top corner, hidden until the pointer is over a player with its controls showing", () => {
+	it("tucks the embed link into the top corner, hidden until the pointer is over a player with its controls showing and no menu open", () => {
 		const html = render(playing, "embed");
 		const [report] = links(html);
 
@@ -214,7 +214,7 @@ describe("developer video report link", () => {
 		expect(report).toContain("opacity-0");
 		expect(report).toContain("pointer-events-none");
 		expect(report).toContain(
-			"[.group:hover:not(:has([data-idle=true]))_&amp;]:opacity-100",
+			"[.group:hover:not(:has([data-idle=true])):not(:has([data-menu]))_&amp;]:opacity-100",
 		);
 		expect(report).toContain("focus-visible:opacity-100");
 	});

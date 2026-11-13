@@ -24,7 +24,7 @@ const dollarsLabel = (cents: number) =>
 const NOT_AN_AMOUNT = "Enter an amount in dollars, for example 25 or 12.50.";
 export const TOP_UP_RANGE_TEXT = `${dollarsLabel(TOP_UP_MIN_CENTS)} to ${dollarsLabel(TOP_UP_MAX_CENTS)}`;
 export const TOP_UP_AMOUNT_PLACEHOLDER = `Other, ${TOP_UP_RANGE_TEXT.replaceAll("$", "")}`;
-const OUT_OF_RANGE = `Enter an amount from ${TOP_UP_RANGE_TEXT}.`;
+export const TOP_UP_OUT_OF_RANGE = `Enter an amount from ${TOP_UP_RANGE_TEXT}.`;
 
 export function resolveTopUpAmount(
 	typed: string,
@@ -46,7 +46,7 @@ export function resolveTopUpAmount(
 		amountCents < TOP_UP_MIN_CENTS ||
 		amountCents > TOP_UP_MAX_CENTS
 	) {
-		return { amountCents: null, error: OUT_OF_RANGE, custom: true };
+		return { amountCents: null, error: TOP_UP_OUT_OF_RANGE, custom: true };
 	}
 	return { amountCents, error: null, custom: true };
 }

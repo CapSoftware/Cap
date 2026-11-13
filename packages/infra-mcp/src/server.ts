@@ -8,6 +8,7 @@ import type { Config } from "./config";
 import { type ClientTuning, DEFAULT_CLIENT_TUNING, InfraClient } from "./http";
 import { createRedactor } from "./redact";
 import { ANNOTATIONS, createToolRunner } from "./runner";
+import { toolInputSchema } from "./tool";
 import { createTools } from "./tools";
 import { DEFAULT_UPLOAD_TUNING, type UploadTuning } from "./upload";
 import { SERVER_NAME, SERVER_VERSION } from "./version";
@@ -63,7 +64,7 @@ export function createInfraServer(config: Config, options: ServerOptions = {}) {
 			{
 				title: tool.title,
 				description: tool.description,
-				inputSchema: tool.input,
+				inputSchema: toolInputSchema(tool.input),
 				annotations: { title: tool.title, ...ANNOTATIONS[tool.kind] },
 			},
 			(args: unknown, extra: Extra) =>
