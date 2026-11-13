@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "80a971f7-0015-4026-ac3c-854abc283bb0",
+	"id": "3f8dd862-bcf1-4494-9b5b-eb59ef8d77b5",
 	"prevId": "7568082e-2748-491f-897f-16005b895884",
 	"tables": {
 		"accounts": {
@@ -1765,7 +1765,8 @@
 						"width",
 						"height",
 						"storagePaidUntil",
-						"duration"
+						"duration",
+						"createdAt"
 					],
 					"isUnique": false
 				},

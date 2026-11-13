@@ -1926,6 +1926,7 @@ export const developerVideos = mysqlTable(
 			table.height,
 			table.storagePaidUntil,
 			table.duration,
+			table.createdAt,
 		),
 		index("first_month_due_idx").on(
 			table.storagePaidUntil,
