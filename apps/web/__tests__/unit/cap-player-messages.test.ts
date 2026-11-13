@@ -277,6 +277,20 @@ describe("connectMessages", () => {
 		});
 	});
 
+	it("does not report a play that a pause interrupted", async () => {
+		const { video, command, posted } = embedded();
+		video.play = () => {
+			const error = new Error("interrupted");
+			error.name = "AbortError";
+			return Promise.reject(error);
+		};
+
+		command({ type: "cap-player", command: "play" });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(posted).toHaveLength(1);
+	});
+
 	it("stops listening and passing events on once stopped", async () => {
 		const { video, command, connection, posted } = embedded();
 

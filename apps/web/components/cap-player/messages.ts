@@ -116,7 +116,11 @@ export const connectMessages = (
 		const parsed = parseCommand(message.data);
 		if (!parsed) return;
 		if (parsed.command === "play") {
-			void video.play().catch(() => send("error", { code: "play_refused" }));
+			void video.play().catch((error: unknown) => {
+				if (error instanceof Error && error.name === "NotAllowedError") {
+					send("error", { code: "play_refused" });
+				}
+			});
 		} else if (parsed.command === "pause") video.pause();
 		else if (parsed.command === "mute") video.muted = true;
 		else if (parsed.command === "unmute") video.muted = false;
