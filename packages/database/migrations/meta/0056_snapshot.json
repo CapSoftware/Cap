@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "479f2693-cd9b-42da-8863-2c7fee1a3931",
+	"id": "7568082e-2748-491f-897f-16005b895884",
 	"prevId": "2773f4a4-e037-4a2a-9537-3e419186570c",
 	"tables": {
 		"accounts": {
@@ -1177,6 +1177,11 @@
 				"account_ref_dedup_idx": {
 					"name": "account_ref_dedup_idx",
 					"columns": ["accountId", "referenceId", "referenceType"],
+					"isUnique": false
+				},
+				"reference_type_id_idx": {
+					"name": "reference_type_id_idx",
+					"columns": ["referenceType", "referenceId"],
 					"isUnique": false
 				}
 			},

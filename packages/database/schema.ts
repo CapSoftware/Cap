@@ -2140,6 +2140,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.referenceId,
 			table.referenceType,
 		),
+		index("reference_type_id_idx").on(table.referenceType, table.referenceId),
 	],
 );
 
