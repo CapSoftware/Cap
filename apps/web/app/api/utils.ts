@@ -231,6 +231,13 @@ export const corsMiddleware = cors({
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 
+export const developerResponseHeaders = createMiddleware(async (c, next) => {
+	await next();
+	c.header("Cache-Control", "private, no-store");
+	const requestId = c.req.header("x-vercel-id");
+	if (requestId) c.header("X-Request-Id", requestId);
+});
+
 export const developerSdkCors = cors({
 	origin: "*",
 	credentials: false,
@@ -241,6 +248,7 @@ export const developerSdkCors = cors({
 		"X-RateLimit-Limit",
 		"X-RateLimit-Remaining",
 		"X-RateLimit-Reset",
+		"X-Request-Id",
 	],
 });
 

@@ -30,6 +30,7 @@ const REQUEST_SOURCES = [
 	"lib/developer-transcript-store.ts",
 	"lib/developer-transcript-billing.ts",
 	"app/api/developer/v1/[...route]/transcripts.ts",
+	"lib/developer-ids.ts",
 ];
 
 const codesIn = (source: string) => {

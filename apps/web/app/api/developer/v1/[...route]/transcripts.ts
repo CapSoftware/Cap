@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
+import { invalidIdempotencyKey } from "@/lib/developer-ids";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	createTranscriptFromUrl,
@@ -57,12 +58,6 @@ const readIdempotencyKey = (header: string | undefined) => {
 
 const INCLUDE_VALUES = ["words", "segments"] as const;
 
-const invalidIdempotencyKey = apiErrorBody(
-	"invalid_idempotency_key",
-	"Idempotency-Key is not valid",
-	"Send 8 to 128 characters from letters, digits, dot, dash and underscore.",
-);
-
 app.post(
 	"/",
 	developerZValidator(
@@ -80,7 +75,7 @@ app.post(
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
-		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
 
 		const { url, videoId, ...options } = c.req.valid("json");
 		const appId = c.get("developerAppId");
@@ -113,7 +108,7 @@ app.post(
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
-		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
 
 		const result = await createTranscriptUpload(c.get("developerAppId"), {
 			...c.req.valid("json"),

@@ -81,6 +81,20 @@ const transcriptIdParam = {
 	schema: { type: "string" },
 };
 
+const uploadIdempotencyKeyParam = {
+	name: "Idempotency-Key",
+	in: "header",
+	required: false,
+	description:
+		"8 to 128 characters from letters, digits, dot, dash and underscore. Repeating the request with the same key returns the same video with a new upload token instead of creating a second one. A repeat must send the same name, userId, maxResolutionTier and metadata, otherwise it is refused with 409 idempotency_conflict naming the field. corsOrigin, timeoutSeconds and maxBytes only shape the new token, so they may change. A key for a video that was deleted is refused with 409 idempotency_conflict, and once the upload completed the repeat answers 409 upload_already_completed.",
+	schema: {
+		type: "string",
+		minLength: 8,
+		maxLength: 128,
+		pattern: "^[A-Za-z0-9._-]+$",
+	},
+};
+
 const idempotencyKeyParam = {
 	name: "Idempotency-Key",
 	in: "header",
@@ -321,6 +335,24 @@ const playbackProperties = {
 		format: "uri",
 		description: "Poster image. Null until ready.",
 	},
+	outputs: {
+		type: "object",
+		required: ["hls", "mp4"],
+		description:
+			"Whether each output is still coming. ready means its URL is set. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
+		properties: {
+			hls: {
+				type: "string",
+				enum: ["processing", "ready", "failed", "none"],
+				description: "State of hlsUrl.",
+			},
+			mp4: {
+				type: "string",
+				enum: ["processing", "ready", "failed", "none"],
+				description: "State of mp4Url.",
+			},
+		},
+	},
 };
 
 const developerVideoSchema = {
@@ -337,7 +369,7 @@ const developerVideoSchema = {
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing.",
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
 		},
 		width: {
 			type: ["integer", "null"],
@@ -689,7 +721,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "deleteTranscript",
 				summary: "Delete a transcript",
 				description:
-					"Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed.",
+					"Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed. Deleting a transcript this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns 404.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [transcriptIdParam],
@@ -750,14 +782,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createUpload",
 				summary: "Create an upload",
 				description:
-					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
+					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. Send an Idempotency-Key so a retried request returns the same video with a new token instead of creating a second one. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
 				tags: ["Uploads"],
 				security: secretAuth,
+				parameters: [uploadIdempotencyKeyParam],
 				requestBody: jsonBody("CreateUploadRequest"),
 				responses: {
 					"200": json(dataEnvelope(ref("Upload")), "The created upload."),
 					"400": response("BadRequest"),
 					"402": response("UploadPaymentRequired"),
+					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
 					...restErrors,
 				},
