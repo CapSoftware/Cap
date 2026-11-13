@@ -7,9 +7,25 @@ import {
 	users,
 } from "@cap/database/schema";
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
-import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	gt,
+	gte,
+	isNotNull,
+	isNull,
+	lt,
+	or,
+	sql,
+} from "drizzle-orm";
 import { start } from "workflow/api";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import {
+	developerIdFromKey,
+	isDeveloperIdempotencyKey,
+} from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -33,6 +49,11 @@ import {
 	transcriptObjectKeys,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
+import {
+	captionLanguage,
+	findVideoForTranscript,
+	syncVideoCaptions,
+} from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
@@ -164,12 +185,7 @@ export function transcriptIdForIdempotencyKey(appId: string, key: string) {
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 128 &&
-		/^[A-Za-z0-9._-]+$/.test(value)
-	);
+	return isDeveloperIdempotencyKey(value);
 }
 
 export type TranscriptOptionsInput = {
@@ -542,6 +558,135 @@ export async function createTranscriptFromUrl(
 	return { ok: true, transcript };
 }
 
+const VIDEO_NOT_FOUND = fail(
+	404,
+	"video_not_found",
+	"Video not found",
+	"Check the video ID and that it belongs to this app.",
+);
+
+const TRANSCRIPT_MAX_VIDEO_ID_LENGTH = 64;
+
+export async function createTranscriptFromVideo(
+	appId: string,
+	input: TranscriptOptionsInput & { videoId: string; idempotencyKey?: string },
+): Promise<{ ok: true; transcript: TranscriptRow } | TranscriptFailure> {
+	const options = validateTranscriptOptions(input);
+	if (!options.ok) return options;
+
+	const videoId = typeof input.videoId === "string" ? input.videoId.trim() : "";
+	if (videoId.length === 0 || videoId.length > TRANSCRIPT_MAX_VIDEO_ID_LENGTH) {
+		return fail(
+			400,
+			"invalid_video_id",
+			"The video ID is not valid",
+			"Send the id of a video in this app.",
+		);
+	}
+
+	const id = input.idempotencyKey
+		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
+		: nanoId();
+
+	const differsFromRequest = (existing: TranscriptRow) => {
+		if (existing.sourceType !== "video") return IDEMPOTENCY_CONFLICT;
+		if (existing.videoId !== videoId) return idempotencyMismatch("videoId");
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? existing.name,
+		});
+		if (different) return idempotencyMismatch(different);
+		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
+	};
+
+	if (input.idempotencyKey) {
+		const existing = await findTranscriptAnyState(appId, id);
+		if (existing) {
+			const conflict = differsFromRequest(existing);
+			if (conflict) return conflict;
+			if (existing.status === "queued") {
+				await dispatchTranscript(id, "queued");
+			}
+			return {
+				ok: true,
+				transcript: (await findTranscript(appId, id)) ?? existing,
+			};
+		}
+	}
+
+	const video = await findVideoForTranscript(appId, videoId);
+	if (video.state === "not_found") return VIDEO_NOT_FOUND;
+	if (video.state === "not_ready") {
+		return video.status === "ready" || video.status === "errored"
+			? fail(
+					409,
+					"video_not_ready",
+					video.status === "errored"
+						? "The video failed to process and has no file to transcribe"
+						: "The video has no stored file to transcribe",
+					"Upload the video again, then transcribe the new video.",
+				)
+			: fail(
+					409,
+					"video_not_ready",
+					"The video is not ready yet",
+					"Wait until the video status is ready, then send the request again.",
+				);
+	}
+
+	const gate = await startGate(appId);
+	if (gate) return gate;
+
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId,
+					name: options.name ?? video.name,
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "video",
+					videoId,
+					requestedAt: new Date(),
+					s3Key: video.sourceKey,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
+	);
+	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
+
+	const stored = await findTranscriptAnyState(appId, id);
+	if (!stored) return NOT_FOUND;
+	const conflict = differsFromRequest(stored);
+	if (conflict) return conflict;
+
+	const dispatched = await dispatchTranscript(id, "queued");
+	if (dispatched === "failed") {
+		await db()
+			.delete(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.id, id),
+					eq(developerTranscripts.appId, appId),
+					eq(developerTranscripts.status, "queued"),
+					isNull(developerTranscripts.startedAt),
+				),
+			);
+		return SPEECH_UNAVAILABLE;
+	}
+
+	const transcript = await findTranscript(appId, id);
+	if (!transcript) return NOT_FOUND;
+	return { ok: true, transcript };
+}
+
 export type TranscriptUploadTarget = {
 	method: "PUT";
 	url: string;
@@ -756,6 +901,8 @@ const summaryColumns = {
 	status: developerTranscripts.status,
 	sourceType: developerTranscripts.sourceType,
 	sourceUrl: developerTranscripts.sourceUrl,
+	videoId: developerTranscripts.videoId,
+	requestedAt: developerTranscripts.requestedAt,
 	s3Key: developerTranscripts.s3Key,
 	resultKey: developerTranscripts.resultKey,
 	sourceBytes: developerTranscripts.sourceBytes,
@@ -863,7 +1010,12 @@ export async function deleteTranscript(
 	transcriptId: string,
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
-	if (!transcript) return NOT_FOUND;
+	if (!transcript) {
+		const deleted = await findTranscriptAnyState(appId, transcriptId);
+		if (!deleted?.deletedAt) return NOT_FOUND;
+		await deleteTranscriptObjects(appId, deleted.id);
+		return { ok: true };
+	}
 
 	await db()
 		.update(developerTranscripts)
@@ -879,12 +1031,119 @@ export async function deleteTranscript(
 	return { ok: true };
 }
 
+async function syncDeletedTranscriptCaptions(
+	appId: string,
+	transcriptId: string,
+	known?: TranscriptRow | null,
+) {
+	const transcript =
+		known === undefined
+			? await findTranscriptAnyState(appId, transcriptId)
+			: known;
+	if (
+		!transcript?.deletedAt ||
+		!transcript.videoId ||
+		transcript.status !== "complete" ||
+		(transcript.wordCount ?? 0) === 0
+	) {
+		return;
+	}
+	await syncVideoCaptions({
+		appId,
+		videoId: transcript.videoId,
+		language: transcript.language,
+	});
+}
+
 export async function deleteTranscriptObjects(
 	appId: string,
 	transcriptId: string,
 ) {
-	const keys = transcriptObjectKeys(appId, transcriptId);
-	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	if (transcript?.status !== "processing") {
+		const keys = transcriptObjectKeys(appId, transcriptId);
+		await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	}
+	await syncDeletedTranscriptCaptions(appId, transcriptId, transcript);
+}
+
+const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;
+const CAPTION_RECONCILE_PAGE = 200;
+const CAPTION_RECONCILE_BUDGET_MS = 2 * 60 * 1000;
+
+export async function reconcileDeletedVideoCaptions(
+	now = new Date(),
+	budgetMs = CAPTION_RECONCILE_BUDGET_MS,
+) {
+	const stopAt = Date.now() + budgetMs;
+	const since = new Date(now.getTime() - CAPTION_RECONCILE_WINDOW_MS);
+	const seen = new Set<string>();
+	let after: { updatedAt: Date; id: string } | null = null;
+	let synced = 0;
+	let failed = 0;
+	let finished = false;
+
+	while (Date.now() < stopAt) {
+		const rows = await db()
+			.select({
+				id: developerTranscripts.id,
+				updatedAt: developerTranscripts.updatedAt,
+				appId: developerTranscripts.appId,
+				videoId: developerTranscripts.videoId,
+				language: developerTranscripts.language,
+			})
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.status, "complete"),
+					gte(developerTranscripts.updatedAt, since),
+					isNotNull(developerTranscripts.deletedAt),
+					isNotNull(developerTranscripts.videoId),
+					gt(developerTranscripts.wordCount, 0),
+					after
+						? or(
+								gt(developerTranscripts.updatedAt, after.updatedAt),
+								and(
+									eq(developerTranscripts.updatedAt, after.updatedAt),
+									gt(developerTranscripts.id, after.id),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(
+				asc(developerTranscripts.updatedAt),
+				asc(developerTranscripts.id),
+			)
+			.limit(CAPTION_RECONCILE_PAGE);
+
+		for (const row of rows) {
+			after = { updatedAt: row.updatedAt, id: row.id };
+			if (!row.videoId) continue;
+			const group = `${row.appId}/${row.videoId}/${captionLanguage(row.language)}`;
+			if (seen.has(group)) continue;
+			seen.add(group);
+			try {
+				await syncVideoCaptions({
+					appId: row.appId,
+					videoId: row.videoId,
+					language: row.language,
+				});
+				synced++;
+			} catch (error) {
+				failed++;
+				console.error("[developer-transcripts] Caption reconcile failed", {
+					videoId: row.videoId,
+					error,
+				});
+			}
+		}
+		if (rows.length < CAPTION_RECONCILE_PAGE) {
+			finished = true;
+			break;
+		}
+	}
+	return { synced, failed, finished };
 }
 
 export async function expireStaleTranscripts(now = new Date()) {

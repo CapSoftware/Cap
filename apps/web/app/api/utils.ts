@@ -10,7 +10,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
@@ -33,6 +33,7 @@ import {
 	isDeveloperPublicKey,
 	missingUploadTokenRefusal,
 	publicKeyRefusal,
+	UPLOAD_TOKEN_MAX_SECONDS,
 	UPLOAD_TOKEN_PREFIX,
 	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
@@ -242,14 +243,18 @@ const bearerCredential = (c: Context) =>
 // credential outside this shape is refused without being hashed or looked up.
 const SECRET_KEY_SHAPE = /^csk_[A-Za-z0-9_-]{1,124}$/;
 
-type DeveloperSecretKey = { appId: string; ownerId: string };
+type DeveloperSecretKey = { appId: string; keyId: string; ownerId: string };
 
 async function findDeveloperSecretKey(
 	credential: string,
 ): Promise<DeveloperSecretKey | null> {
 	const keyHash = await hashKey(credential);
 	const [row] = await db()
-		.select({ appId: developerApps.id, ownerId: developerApps.ownerId })
+		.select({
+			appId: developerApps.id,
+			keyId: developerApiKeys.id,
+			ownerId: developerApps.ownerId,
+		})
 		.from(developerApiKeys)
 		.innerJoin(
 			developerApps,
@@ -280,9 +285,22 @@ const unknownSecretKey = () =>
 
 type DeveloperSecretVariables = {
 	developerAppId: string;
+	developerKeyId: string;
 	developerOwnerId: string;
 	developerKeyType: "secret";
 };
+
+// Every path that accepts a secret key sets the same variables, so a route
+// gets the key's id whichever middleware looked it up.
+function setDeveloperSecretKey(
+	c: Context<{ Variables: DeveloperSecretVariables }>,
+	key: DeveloperSecretKey,
+) {
+	c.set("developerAppId", key.appId);
+	c.set("developerKeyId", key.keyId);
+	c.set("developerOwnerId", key.ownerId);
+	c.set("developerKeyType", "secret");
+}
 
 // A request without a well formed key costs nothing here and is answered by
 // the route. A well formed key is looked up once: an unknown one counts
@@ -302,9 +320,7 @@ export const developerRateLimiter = createMiddleware<{
 		if (await tooManyAuthFailures(c)) return authFailuresLimited(c);
 		return c.json(unknownSecretKey(), 401);
 	}
-	c.set("developerAppId", key.appId);
-	c.set("developerOwnerId", key.ownerId);
-	c.set("developerKeyType", "secret" as const);
+	setDeveloperSecretKey(c, key);
 
 	const [byKey, byOwner] = await Promise.all([
 		credentialDigest(credential).then((digest) =>
@@ -428,6 +444,13 @@ export const corsMiddleware = cors({
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 
+export const developerResponseHeaders = createMiddleware(async (c, next) => {
+	await next();
+	c.header("Cache-Control", "private, no-store");
+	const requestId = c.req.header("x-vercel-id");
+	if (requestId) c.header("X-Request-Id", requestId);
+});
+
 export const developerSdkCors = cors({
 	origin: "*",
 	credentials: false,
@@ -438,6 +461,7 @@ export const developerSdkCors = cors({
 		"X-RateLimit-Limit",
 		"X-RateLimit-Remaining",
 		"X-RateLimit-Reset",
+		"X-Request-Id",
 	],
 });
 
@@ -447,6 +471,8 @@ export const refuseDeveloperPublicKey = createMiddleware(async (c, next) => {
 	}
 	await next();
 });
+
+const UNKEYED_UPLOAD_TOKEN = "";
 
 export const withDeveloperUploadToken = createMiddleware<{
 	Variables: {
@@ -463,7 +489,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 
 	const check = verifyDeveloperUploadToken(credential);
 	if (!check.ok) return c.json(uploadTokenRefusal(check.reason), 401);
-	const { appId, videoId, corsOrigin, maxBytes } = check.token;
+	const { appId, videoId, corsOrigin, maxBytes, keyId } = check.token;
 
 	if (corsOrigin !== null && c.req.header("origin") !== corsOrigin) {
 		return c.json(
@@ -480,6 +506,8 @@ export const withDeveloperUploadToken = createMiddleware<{
 		.select({
 			duration: developerVideos.duration,
 			deletedAt: developerVideos.deletedAt,
+			keyId: developerApiKeys.id,
+			keyRevokedAt: developerApiKeys.revokedAt,
 		})
 		.from(developerVideos)
 		.innerJoin(
@@ -487,6 +515,14 @@ export const withDeveloperUploadToken = createMiddleware<{
 			and(
 				eq(developerVideos.appId, developerApps.id),
 				isNull(developerApps.deletedAt),
+			),
+		)
+		.leftJoin(
+			developerApiKeys,
+			and(
+				eq(developerApiKeys.id, keyId ?? UNKEYED_UPLOAD_TOKEN),
+				eq(developerApiKeys.appId, developerVideos.appId),
+				eq(developerApiKeys.keyType, "secret"),
 			),
 		)
 		.where(
@@ -505,6 +541,26 @@ export const withDeveloperUploadToken = createMiddleware<{
 		);
 	}
 
+	if (keyId === undefined) {
+		const [revoked] = await db()
+			.select({ id: developerApiKeys.id })
+			.from(developerApiKeys)
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					eq(developerApiKeys.keyType, "secret"),
+					gt(
+						developerApiKeys.revokedAt,
+						new Date(check.token.expiresAt - UPLOAD_TOKEN_MAX_SECONDS * 1000),
+					),
+				),
+			)
+			.limit(1);
+		if (revoked) return c.json(uploadTokenRefusal("rotated"), 401);
+	} else if (video.keyId === null || video.keyRevokedAt) {
+		return c.json(uploadTokenRefusal("rotated"), 401);
+	}
+
 	c.set("developerAppId", appId);
 	c.set("developerVideoId", videoId);
 	c.set("developerUploadCompleted", video.duration !== null);
@@ -515,7 +571,11 @@ export const withDeveloperUploadToken = createMiddleware<{
 export const withDeveloperSecretAuth = createMiddleware<{
 	Variables: DeveloperSecretVariables;
 }>(async (c, next) => {
-	if (c.get("developerAppId")) return next();
+	// Only a secret key the rate limiter already accepted skips the lookup. An
+	// app id set by any other middleware, such as an upload token's, does not.
+	if (c.get("developerAppId") && c.get("developerKeyType") === "secret") {
+		return next();
+	}
 
 	const credential = bearerCredential(c);
 	if (!credential || !SECRET_KEY_SHAPE.test(credential)) {
@@ -532,9 +592,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 	const key = await findDeveloperSecretKey(credential);
 	if (!key) return c.json(unknownSecretKey(), 401);
 
-	c.set("developerAppId", key.appId);
-	c.set("developerOwnerId", key.ownerId);
-	c.set("developerKeyType", "secret" as const);
+	setDeveloperSecretKey(c, key);
 	await next();
 });
 

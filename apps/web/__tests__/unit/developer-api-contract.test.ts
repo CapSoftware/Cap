@@ -4,7 +4,12 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	keyRows: [] as { appId: string; ownerId?: string; environment?: string }[],
+	keyRows: [] as {
+		appId: string;
+		keyId?: string;
+		ownerId?: string;
+		environment?: string;
+	}[],
 	hashKey: vi.fn(),
 	accounts: [] as { balanceMicroCredits: number }[],
 	videoStats: [] as Record<string, unknown>[],
@@ -39,7 +44,11 @@ vi.mock("@cap/database", async () => {
 					limit: async () => rowsFor(table, fields),
 					groupBy: async () => rowsFor(table, fields),
 				});
-			const query = { innerJoin: () => query, where };
+			const query = {
+				innerJoin: () => query,
+				leftJoin: () => query,
+				where,
+			};
 			return query;
 		},
 	});
@@ -96,8 +105,10 @@ vi.mock("@/lib/infra-video-upload", () => ({
 	abortInfraUpload: vi.fn(),
 }));
 
+import { Hono } from "hono";
 import * as sdk from "@/app/api/developer/sdk/v1/[...route]/route";
 import * as rest from "@/app/api/developer/v1/[...route]/route";
+import { withDeveloperSecretAuth } from "@/app/api/utils";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -133,6 +144,7 @@ const freshKey = (prefix: "csk" | "cpk" | "cut") =>
 				videoId: `video-${++keySerial}`,
 				expiresAt: Date.now() + 60_000,
 				corsOrigin: null,
+				keyId: "key-contract",
 			})
 		: `${prefix}_key_${++keySerial}`;
 
@@ -359,6 +371,7 @@ describe("rate limit headers", () => {
 			"X-RateLimit-Limit",
 			"X-RateLimit-Remaining",
 			"X-RateLimit-Reset",
+			"X-Request-Id",
 		]);
 	});
 });
@@ -564,6 +577,7 @@ describe("one account's keys share a budget", () => {
 		expect(mocks.selected).toHaveLength(1);
 		expect(Object.keys(mocks.selected[0] ?? {}).sort()).toEqual([
 			"appId",
+			"keyId",
 			"ownerId",
 		]);
 		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
@@ -599,6 +613,61 @@ describe("one account's keys share a budget", () => {
 			retryAfter: "60",
 		});
 		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+});
+
+describe("secret key check behind other middleware", () => {
+	const guarded = (preset: Record<string, string>) =>
+		new Hono<{ Variables: Record<string, string> }>()
+			.use(async (c, next) => {
+				for (const [name, value] of Object.entries(preset)) c.set(name, value);
+				await next();
+			})
+			.use(withDeveloperSecretAuth)
+			.get("/", (c) =>
+				c.json({
+					appId: c.get("developerAppId"),
+					keyId: c.get("developerKeyId") ?? null,
+				}),
+			);
+	const send = (
+		preset: Record<string, string>,
+		headers: Record<string, string> = {},
+	) => guarded(preset).request("https://cap.so/", { headers });
+
+	it("still asks for a secret key when an app was set by something other than a secret key", async () => {
+		const response = await send({ developerAppId: "app-from-token" });
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_secret_key",
+		});
+		expect(mocks.hashKey).not.toHaveBeenCalled();
+	});
+
+	it("takes the app and key from the secret key, not from what was set before", async () => {
+		mocks.keyRows = [{ appId: "app-1", keyId: "key-1", ownerId: "owner-1" }];
+
+		const response = await send(
+			{ developerAppId: "app-from-token" },
+			{ Authorization: `Bearer ${freshKey("csk")}` },
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ appId: "app-1", keyId: "key-1" });
+		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not look the key up again once the rate limiter accepted it", async () => {
+		const response = await send({
+			developerAppId: "app-1",
+			developerKeyId: "key-1",
+			developerKeyType: "secret",
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ appId: "app-1", keyId: "key-1" });
+		expect(mocks.hashKey).not.toHaveBeenCalled();
 	});
 });
 
@@ -965,7 +1034,8 @@ describe("browser access", () => {
 			"access-control-allow-methods": "GET,POST,OPTIONS",
 			"access-control-allow-headers": "Content-Type,Authorization",
 			"access-control-expose-headers":
-				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,X-Request-Id",
+			"cache-control": "private, no-store",
 			vary: "Access-Control-Request-Headers",
 		});
 	});
@@ -1248,5 +1318,134 @@ describe("usage", () => {
 		expect(Object.keys(data.rates).sort()).toEqual(
 			[...schema.properties.rates.required].sort(),
 		);
+	});
+});
+
+describe("Idempotency-Key on create upload", () => {
+	const create = (headers: Record<string, string>) =>
+		call(rest, "POST", "/api/developer/v1/uploads", {
+			key: freshKey("csk"),
+			headers: { "Content-Type": "application/json", ...headers },
+			body: JSON.stringify({ name: "Demo" }),
+		});
+
+	it("passes a valid key to the store", async () => {
+		const response = await create({ "Idempotency-Key": "retry-upload-0001" });
+
+		expect(response.status).toBe(200);
+		expect(mocks.createVideo).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-1",
+			name: "Demo",
+			idempotencyKey: "retry-upload-0001",
+		});
+	});
+
+	it.each([
+		["too short", "short"],
+		["a colon", "retry:upload:0001"],
+		["a space", "retry upload 0001"],
+		["too long", "k".repeat(129)],
+	])("refuses a key with %s before creating anything", async (_label, key) => {
+		const response = await create({ "Idempotency-Key": key });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_idempotency_key",
+			error: "Idempotency-Key is not valid",
+		});
+		expect(mocks.createVideo).not.toHaveBeenCalled();
+	});
+});
+
+describe("response headers on the developer APIs", () => {
+	const PRIVATE = "private, no-store";
+
+	it("marks every secret-key API answer private, errors and limits included", async () => {
+		const key = freshKey("csk");
+		const answers = [
+			await call(rest, "GET", "/api/developer/v1/usage", { key }),
+			await call(rest, "GET", "/api/developer/v1/usage"),
+			await call(rest, "GET", "/api/developer/v1/nope", { key }),
+			await call(rest, "POST", "/api/developer/v1/usage", { key }),
+		];
+		for (
+			let request = 3;
+			request < DEVELOPER_KEY_REQUESTS_PER_MINUTE;
+			request++
+		) {
+			await call(rest, "GET", "/api/developer/v1/usage", { key });
+		}
+		answers.push(await call(rest, "GET", "/api/developer/v1/usage", { key }));
+
+		expect(answers.map((response) => response.status)).toEqual([
+			200, 401, 404, 405, 429,
+		]);
+		for (const response of answers) {
+			expect(response.headers.get("Cache-Control")).toBe(PRIVATE);
+		}
+	});
+
+	it("marks the upload token API answers private too", async () => {
+		const answers = [
+			await call(
+				sdk,
+				"POST",
+				"/api/developer/sdk/v1/upload/multipart/initiate",
+				{
+					key: freshKey("cut"),
+					headers: { "Content-Type": "application/json" },
+					body: "{}",
+				},
+			),
+			await call(
+				sdk,
+				"POST",
+				"/api/developer/sdk/v1/upload/multipart/initiate",
+				{
+					headers: { "Content-Type": "application/json" },
+					body: "{}",
+				},
+			),
+		];
+
+		expect(answers.map((response) => response.status)).toEqual([200, 401]);
+		for (const response of answers) {
+			expect(response.headers.get("Cache-Control")).toBe(PRIVATE);
+		}
+	});
+
+	it("echoes the platform request id and lets a page read it", async () => {
+		const requestId = "fra1::iad1::abcde-1763031000000-0123456789ab";
+		const rested = await call(rest, "GET", "/api/developer/v1/usage", {
+			key: freshKey("csk"),
+			headers: { "x-vercel-id": requestId },
+		});
+		const sdked = await call(
+			sdk,
+			"POST",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
+			{
+				key: freshKey("cut"),
+				headers: {
+					Origin: "https://app.example",
+					"Content-Type": "application/json",
+					"x-vercel-id": requestId,
+				},
+				body: "{}",
+			},
+		);
+
+		expect(rested.headers.get("X-Request-Id")).toBe(requestId);
+		expect(sdked.headers.get("X-Request-Id")).toBe(requestId);
+		expect(
+			sdked.headers
+				.get("Access-Control-Expose-Headers")
+				?.split(",")
+				.map((name) => name.trim()),
+		).toContain("X-Request-Id");
+		const withoutId = await call(rest, "GET", "/api/developer/v1/usage", {
+			key: freshKey("csk"),
+		});
+		expect(withoutId.headers.get("X-Request-Id")).toBeNull();
 	});
 });
