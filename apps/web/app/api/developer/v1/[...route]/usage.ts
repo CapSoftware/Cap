@@ -5,7 +5,11 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 } from "@/lib/developer-pricing";
 import { getSpeechUsage } from "@/lib/developer-transcript-usage";
-import { INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/infra-pricing";
+import { deliveryJson, getDeliveredUsage } from "@/lib/infra-delivery";
+import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
 import {
 	getInfraBilling,
 	infraBillingJson,
@@ -24,9 +28,10 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [billing, credit] = await Promise.all([
+	const [billing, credit, delivered] = await Promise.all([
 		getInfraBilling(appId),
 		getSpeechUsage(appId),
+		getDeliveredUsage(appId),
 	]);
 	const { stored, storage } = billing;
 
@@ -35,6 +40,7 @@ app.get("/", async (c) => {
 
 	return c.json({
 		data: {
+			appId,
 			balanceMicroCredits,
 			balanceDollars: creditDollars(balanceMicroCredits),
 			totalVideos: stored.videoCount,
@@ -42,12 +48,17 @@ app.get("/", async (c) => {
 			totalDurationMinutes: stored.totalMinutes,
 			standing,
 			upload,
-			storage: infraStorageJson(storage),
+			storage: {
+				...infraStorageJson(storage),
+				storedMonthlyMicroCredits: Math.round(stored.monthlyMicroCredits),
+			},
 			...speech,
+			delivery: deliveryJson(delivered),
 			rates: {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 				storageDollarsPer1000MinutesPerMonth:
 					INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+				deliveryDollarsPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 				speechDollarsPerHour: SPEECH_DOLLARS_PER_HOUR,
 				uploadAdmissionDays: UPLOAD_ADMISSION_DAYS,
 			},

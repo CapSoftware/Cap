@@ -18,6 +18,8 @@ const MEBIBYTE = 1024 * 1024;
 export const HOSTED_PART_MIN_BYTES = 64 * MEBIBYTE;
 export const HOSTED_MAX_PARTS = 100;
 export const PART_LINK_SECONDS = 3600;
+// About 700 bytes a link: ten keep a result near 7 KB whatever the file size.
+export const PART_LINKS_PER_RESULT = 10;
 const ABORT_BUDGET_MS = 5_000;
 
 export function planParts(size: number) {
@@ -43,7 +45,11 @@ const fileTitle = (fileName: string | undefined) => {
 	return (stem || fileName).slice(0, 255);
 };
 
-function uploadSteps(partBytes: number, count: number) {
+function uploadSteps(
+	partBytes: number,
+	count: number,
+	nextFromPart: number | null,
+) {
 	const put = (file: string, part: string) =>
 		`curl -sS --fail -X PUT --upload-file ${file} -D - -o /dev/null "<${part}>"`;
 	const finish =
@@ -56,8 +62,13 @@ function uploadSteps(partBytes: number, count: number) {
 	}
 	return [
 		`Split the file into ${count} parts of ${partBytes} bytes, in order: split -b ${partBytes} <file> cap-part- (cap-part-aa is part 1, cap-part-ab is part 2, and so on).`,
-		`Upload each part to its own url: ${put("cap-part-aa", "url of part 1")}, then the same for every other part. Keep the ETag response header of each.`,
-		finish,
+		`Upload each part listed in parts to its own url: ${put("cap-part-aa", "url of part 1")}, then the same for every other part. Keep the ETag response header of each.`,
+		...(nextFromPart === null
+			? []
+			: [
+					`This result signs at most ${PART_LINKS_PER_RESULT} parts. For the next ones, call videos_create_upload with this videoId, the same contentLength and fromPart ${nextFromPart}, and repeat with each result's nextFromPart until it is null. Every result has the same uploadId.`,
+				]),
+		`${finish} Then delete the cap-part- files.`,
 	];
 }
 
@@ -68,7 +79,7 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 		tool({
 			name: "videos_create_upload",
 			title: "Create a video upload",
-			description: `Create a video and get signed links to upload its file directly to storage. Send the file size in bytes. Returns the video id, an uploadId and one link per part with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. Then call videos_complete_upload. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to start a failed upload again in the same video.`,
+			description: `Create a video and get signed links to upload its file directly to storage. Send the file size in bytes. Returns the video id, an uploadId and one link per part, up to ${PART_LINKS_PER_RESULT} parts per result, with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. When nextFromPart is not null, call again with videoId and fromPart for the next links. Then call videos_complete_upload. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to start a failed upload again in the same video.`,
 			kind: "write",
 			input: {
 				contentLength: z
@@ -119,6 +130,15 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 					.describe(
 						"Start again in this existing video whose upload never completed, instead of creating a new one",
 					),
+				fromPart: z
+					.number()
+					.int()
+					.min(1)
+					.max(HOSTED_MAX_PARTS)
+					.optional()
+					.describe(
+						"First part to sign links for, from nextFromPart of an earlier result. Needs videoId and the same contentLength. Leave out to start at part 1",
+					),
 			},
 			run: async (args, call) => {
 				if (
@@ -133,6 +153,28 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 					);
 				}
 				const plan = planParts(args.contentLength);
+				const fromPart = args.fromPart ?? 1;
+				if (args.fromPart !== undefined && args.videoId === undefined) {
+					throw new ApiError(
+						400,
+						"invalid_request",
+						"fromPart needs the videoId of the upload",
+						"Send the videoId and contentLength of the earlier videos_create_upload result together with fromPart.",
+					);
+				}
+				if (fromPart > plan.count) {
+					throw new ApiError(
+						400,
+						"invalid_request",
+						`fromPart is past the last part: a file of ${args.contentLength} bytes has ${plan.count} ${plan.count === 1 ? "part" : "parts"}`,
+						"Send the same contentLength as the earlier result, and fromPart from its nextFromPart.",
+					);
+				}
+				const lastPart = Math.min(
+					plan.count,
+					fromPart + PART_LINKS_PER_RESULT - 1,
+				);
+				const nextFromPart = lastPart < plan.count ? lastPart + 1 : null;
 				const name = args.name ?? fileTitle(args.fileName);
 				const contentType =
 					args.contentType ??
@@ -198,9 +240,13 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 					);
 					const parts: { partNumber: number; bytes: number; url: Disclosed }[] =
 						[];
-					for (let first = 1; first <= plan.count; first += PART_URL_BATCH) {
+					for (
+						let first = fromPart;
+						first <= lastPart;
+						first += PART_URL_BATCH
+					) {
 						const partNumbers = Array.from(
-							{ length: Math.min(PART_URL_BATCH, plan.count - first + 1) },
+							{ length: Math.min(PART_URL_BATCH, lastPart - first + 1) },
 							(_, offset) => first + offset,
 						);
 						const reply = asRecord(
@@ -235,11 +281,16 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 						status: "uploading",
 						bytes: args.contentLength,
 						partBytes: plan.partBytes,
+						partCount: plan.count,
 						parts,
+						nextFromPart,
 						linksExpireInSeconds: PART_LINK_SECONDS,
 						...videoLinks(pages),
-						steps: uploadSteps(plan.partBytes, plan.count),
-						next: "Upload the parts as the steps say, then call videos_complete_upload. If the links expire first, call videos_create_upload again with this videoId: it continues the same upload, so parts already stored keep their ETags.",
+						steps: uploadSteps(plan.partBytes, plan.count, nextFromPart),
+						next:
+							nextFromPart === null
+								? "Upload the parts as the steps say, then call videos_complete_upload. If the links expire first, call videos_create_upload again with this videoId: it continues the same upload, so parts already stored keep their ETags."
+								: `Upload these parts, then call videos_create_upload with this videoId, the same contentLength and fromPart ${nextFromPart} for the next links. It continues the same upload, so parts already stored keep their ETags. Call videos_complete_upload once every part is stored.`,
 					};
 				} catch (error) {
 					// A retry with videoId gets back the open upload and the parts

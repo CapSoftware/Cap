@@ -1,7 +1,15 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
+import { creditLinkFor } from "./credit-link";
+import { createDocsTool, fetchDocs } from "./docs";
+import {
+	ApiError,
+	isCreditCode,
+	isUnanswered,
+	LocalError,
+	withContext,
+} from "./errors";
 import { inspectFile, storageTimeoutMs } from "./files";
 import { createHostedUploadTools } from "./hosted-upload";
 import { asRecord, confirmed, dataOf, listOf, storagePut } from "./http";
@@ -11,6 +19,7 @@ import {
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoDurationSeconds,
 	videoImport,
 	videoLinks,
 	videoRow,
@@ -23,7 +32,7 @@ import {
 	tool,
 } from "./tool";
 import { uploadVideo } from "./upload";
-import { waitFor } from "./wait";
+import { singleCheckBelowSeconds, waitFor } from "./wait";
 
 export type {
 	Tool,
@@ -114,14 +123,20 @@ const offset = z
 	.min(0)
 	.optional()
 	.describe("How many to skip (default 0)");
-const waitSeconds = (max: number) =>
+const waitSeconds = (
+	max: number,
+	pollSeconds: number,
+	singleCheckBelow: number,
+) =>
 	z
 		.number()
 		.int()
 		.min(1)
 		.max(max)
 		.optional()
-		.describe(`Longest time to wait, in seconds (default and maximum ${max})`);
+		.describe(
+			`Longest time to wait, in seconds (default and maximum ${max}). Checks are at least ${pollSeconds} seconds apart, so a timeout below ${singleCheckBelow} makes one check and returns at once`,
+		);
 const metadata = z
 	.record(z.string(), z.unknown())
 	.optional()
@@ -142,9 +157,24 @@ export function createTools(deps: ToolDeps): Tool[] {
 	const surface = deps.surface ?? "local";
 	const local = surface === "local";
 	const maxWaitSeconds = deps.maxWaitSeconds ?? MAX_WAIT_SECONDS;
-	const timeoutSeconds = waitSeconds(maxWaitSeconds);
-	const transcript = (fields: Record<string, unknown>, text = false) =>
-		transcriptView(fields, config.consoleUrl, { text });
+	const timeoutSeconds = waitSeconds(
+		maxWaitSeconds,
+		deps.wait.pollIntervalMs / 1000,
+		singleCheckBelowSeconds(deps.wait),
+	);
+	const credit = deps.credit ?? creditLinkFor(config.consoleUrl, client);
+	const transcript = async (
+		fields: Record<string, unknown>,
+		text = false,
+		signal?: AbortSignal,
+	) =>
+		transcriptView(
+			fields,
+			isCreditCode(asRecord(fields.error).code)
+				? await credit.resolve(signal)
+				: credit.url,
+			{ text },
+		);
 
 	const waitOutcome = (
 		outcome: { settled: boolean; waitedSeconds: number; lastError: unknown },
@@ -188,7 +218,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			);
 		}
 		call.announce("transcript_created", { transcriptId: id });
-		if (target === null) return transcript(created);
+		if (target === null) return transcript(created, false, call.signal);
 
 		let stored = false;
 		try {
@@ -217,10 +247,12 @@ export function createTools(deps: ToolDeps): Tool[] {
 			stored = true;
 			for (let attempt = 1; ; attempt++) {
 				try {
-					return transcript(
+					return await transcript(
 						dataOf(
 							await client.call("startTranscript", { id, signal: call.signal }),
 						),
+						false,
+						call.signal,
 					);
 				} catch (error) {
 					if (!isUnanswered(error) || attempt >= START_ATTEMPTS) throw error;
@@ -251,10 +283,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 		}
 	};
 
-	const videoTranscriptSource = async (
-		id: string,
-		call: ToolCall,
-	): Promise<{ url: string; name: string | undefined }> => {
+	const waitForVideoMp4 = async (id: string, call: ToolCall): Promise<void> => {
 		const outcome = await waitFor({
 			poll: async (deadlineAt) =>
 				dataOf(
@@ -297,10 +326,6 @@ export function createTools(deps: ToolDeps): Tool[] {
 				context,
 			);
 		}
-		return {
-			url: video.mp4Url,
-			name: typeof video.name === "string" ? video.name : undefined,
-		};
 	};
 
 	const tools = [
@@ -308,7 +333,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_upload",
 			title: "Upload a video",
 			description:
-				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to retry a failed upload into the same video.",
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to retry a failed upload into the same video.",
 			kind: "write",
 			input: {
 				path: z
@@ -512,6 +537,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
+					durationSeconds: videoDurationSeconds(last),
 					...videoLinks({ ...firstLook(), ...last }),
 					...(firstAbsent === undefined
 						? waitOutcome(outcome, "videos_wait")
@@ -578,7 +604,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "transcripts_create",
 			title: "Create a transcript",
 			description: local
-				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
+				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
 				: "Turn speech into text from exactly one source: url (a public audio or video link) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
 			kind: "write",
 			input: {
@@ -610,7 +636,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					.max(255)
 					.optional()
 					.describe(
-						"Your own user id for this transcript, used to filter lists",
+						"Your own user id for this transcript, used to filter lists. With videoId, leave it out to use the video's userId",
 					),
 				metadata,
 				idempotencyKey: z
@@ -667,7 +693,8 @@ export function createTools(deps: ToolDeps): Tool[] {
 					};
 				}
 
-				if (!local && args.videoId !== undefined) {
+				if (args.videoId !== undefined) {
+					if (local) await waitForVideoMp4(args.videoId, call);
 					const created = dataOf(
 						await client.call("createTranscript", {
 							body: {
@@ -681,33 +708,23 @@ export function createTools(deps: ToolDeps): Tool[] {
 							signal: call.signal,
 						}),
 					);
-					return { ...transcript(created), next };
+					return { ...(await transcript(created, false, call.signal)), next };
 				}
-
-				const fromVideo =
-					args.videoId === undefined
-						? null
-						: await videoTranscriptSource(args.videoId, call);
-				const url = fromVideo?.url ?? args.url;
-				const name = args.name ?? fromVideo?.name;
-				const stored =
-					args.videoId === undefined
-						? args.metadata
-						: { ...args.metadata, videoId: args.videoId };
 
 				const created = dataOf(
 					await client.call("createTranscript", {
 						body: {
-							url,
+							url: args.url,
 							...options,
-							...(name === undefined ? {} : { name }),
-							...(stored === undefined ? {} : { metadata: stored }),
+							...(args.metadata === undefined
+								? {}
+								: { metadata: args.metadata }),
 						},
 						headers,
 						signal: call.signal,
 					}),
 				);
-				return { ...transcript(created), next };
+				return { ...(await transcript(created, false, call.signal)), next };
 			},
 		}),
 		tool({
@@ -742,7 +759,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					}),
 				);
 				return {
-					...transcript(found, true),
+					...(await transcript(found, true, call.signal)),
 					...(args.words ? { words: found.words ?? null } : {}),
 					...(args.segments ? { segments: found.segments ?? null } : {}),
 					...captionsNext(found),
@@ -785,7 +802,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				return {
 					...(last === null
 						? { id: args.transcriptId, status: "unknown" }
-						: transcript(last)),
+						: await transcript(last, false, call.signal)),
 					...waitOutcome(outcome, "transcripts_wait"),
 					...(outcome.settled && last !== null ? captionsNext(last) : {}),
 					...(last?.status === "uploading"
@@ -857,7 +874,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 					},
 					signal: call.signal,
 				});
-				const transcripts = listOf(reply).map((row) => transcript(row));
+				const transcripts = await Promise.all(
+					listOf(reply).map((row) => transcript(row, false, call.signal)),
+				);
 				return { transcripts, ...page(reply, size, skip, transcripts.length) };
 			},
 		}),
@@ -889,6 +908,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const usage = dataOf(
 					await client.call("getUsage", { signal: call.signal }),
 				);
+				credit.learn(usage);
 				const standing = asRecord(usage.standing).state;
 				const needsCredit =
 					asRecord(usage.upload).allowed === false ||
@@ -902,7 +922,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 									Math.round(usage.totalDurationMinutes * 100) / 100,
 							}
 						: {}),
-					...(needsCredit ? { addCreditAt: config.consoleUrl } : {}),
+					...(needsCredit ? { addCreditAt: credit.url } : {}),
 				};
 			},
 		}),
@@ -927,11 +947,10 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
-	// The npm package lists its tools in a README that changes only with a
-	// release, so the stdio server gets videos_import in its next release.
-	if (local) return tools.filter((entry) => entry.name !== "videos_import");
+	if (local) return tools;
 	return [
 		...createHostedUploadTools(deps),
 		...tools.filter((entry) => entry.name !== "videos_upload"),

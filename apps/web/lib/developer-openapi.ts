@@ -361,6 +361,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 const restErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
+	"405": response("MethodNotAllowed"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -370,6 +371,7 @@ const sdkErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
 	"404": response("NotFound"),
+	"405": response("MethodNotAllowed"),
 	"415": response("UnsupportedMediaType"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
@@ -515,7 +517,7 @@ const developerVideoSchema = {
 		captions: {
 			type: "array",
 			description:
-				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its url can briefly answer 404. Returned by Get Video and List Videos, not in webhook payloads.",
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its url answers as soon as it appears. Returned by Get Video and List Videos, not in webhook payloads.",
 			items: {
 				type: "object",
 				required: ["language", "url"],
@@ -537,10 +539,15 @@ const developerVideoSchema = {
 			description: "Your user ID, as passed to createUpload.",
 		},
 		name: { type: "string", description: "Video name." },
+		durationSeconds: {
+			type: ["number", "null"],
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed. The same name transcripts use.",
+		},
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
+				"Deprecated: use durationSeconds, which always holds the same value. duration keeps working.",
 		},
 		width: {
 			type: ["integer", "null"],
@@ -979,7 +986,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listTransactions",
 				summary: "List transactions",
 				description:
-					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
+					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, daily delivery, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
 				tags: ["Usage"],
 				security: secretAuth,
 				parameters: [
@@ -1307,6 +1314,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"error",
 					"code",
 					"message",
+					"hint",
+					"docs",
 					"standing",
 					"pausesAt",
 					"balanceMicroCredits",
@@ -1324,6 +1333,15 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					message: {
 						type: "string",
 						description: "Says how much to add before uploading.",
+					},
+					hint: {
+						type: "string",
+						description: "Links the app's Billing page, where credit is added.",
+					},
+					docs: {
+						type: "string",
+						format: "uri",
+						description: "Documentation for this API.",
 					},
 					standing: { type: "string", enum: ["active", "grace", "paused"] },
 					pausesAt: {
@@ -1482,6 +1500,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"ID of a ready video of this app. Cap transcribes its stored MP4 directly. Leave it out when you send url.",
 					},
 					...transcriptOptionProperties,
+					userId: {
+						...transcriptOptionProperties.userId,
+						description:
+							"Your own identifier for the end user, used to filter lists. With videoId, leaving it out uses the video's userId, and a repeat with the same Idempotency-Key may leave it out too.",
+					},
 				},
 			},
 			CreateTranscriptUploadRequest: {
@@ -1505,7 +1528,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: {
 					id: { type: "string" },
 					externalUserId: developerVideoSchema.properties.externalUserId,
-					duration: { type: ["number", "null"] },
+					durationSeconds: developerVideoSchema.properties.durationSeconds,
+					duration: developerVideoSchema.properties.duration,
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
 					transcriptionStatus:
@@ -1542,12 +1566,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					type: {
 						type: "string",
 						description:
-							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), delivery_daily (one row per app per delivered day), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
 					},
 					description: {
 						type: "string",
 						description:
-							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment.",
+							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Delivery, Transcription or Adjustment.",
 					},
 					note: {
 						type: ["string", "null"],
@@ -1579,6 +1603,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"manual",
 							"pro_monthly_credit",
 							"storage_day",
+							"delivery_day",
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
@@ -1591,7 +1616,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					referenceId: {
 						type: ["string", "null"],
 						description:
-							"The transcript ID, the UTC day a storage charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
+							"The transcript ID, the UTC day a storage or delivery charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
 					},
 					createdAt: { type: "string", format: "date-time" },
 				},
@@ -1615,11 +1640,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			Usage: {
 				type: "object",
 				required: [
+					"appId",
 					"balanceMicroCredits",
 					"balanceDollars",
 					"availableMicroCredits",
 					"heldMicroCredits",
 					"speech",
+					"delivery",
 					"totalVideos",
 					"uploadingVideos",
 					"totalDurationMinutes",
@@ -1629,6 +1656,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"rates",
 				],
 				properties: {
+					appId: {
+						type: "string",
+						description:
+							"The app the secret key belongs to. Its Billing page, where credit is added, is https://cap.so/dashboard/infra/{appId}/billing.",
+					},
 					balanceMicroCredits: {
 						type: "integer",
 						description: "Remaining balance. 100,000 micro-credits = $1.",
@@ -1668,6 +1700,36 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							},
 						},
 					},
+					delivery: {
+						type: ["object", "null"],
+						description:
+							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech, and null until delivery has been measured for this app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.",
+						required: ["minutes", "minutesByTier", "finalThrough"],
+						properties: {
+							minutes: {
+								type: "number",
+								description: "Delivered minutes across every rendition tier.",
+							},
+							minutesByTier: {
+								type: "object",
+								description: "Delivered minutes for each rendition tier.",
+								required: ["360p", "720p", "1080p", "1440p", "2160p"],
+								properties: {
+									"360p": { type: "number" },
+									"720p": { type: "number" },
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							finalThrough: {
+								type: ["string", "null"],
+								format: "date",
+								description:
+									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
+							},
+						},
+					},
 					balanceDollars: {
 						type: "string",
 						description:
@@ -1696,7 +1758,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage or delivery charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],
@@ -1782,6 +1844,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "integer",
 								description: "The same over a 30 day month.",
 							},
+							storedMonthlyMicroCredits: {
+								type: "integer",
+								description:
+									"What a 30 day month of storage costs for every video in minutesByTier, those in their first month included, at the current rates. Answers how much the stored videos cost a month, where monthlyMicroCredits leaves out the first months already charged.",
+							},
 						},
 					},
 					rates: {
@@ -1791,6 +1858,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						required: [
 							"microCreditsPerDollar",
 							"storageDollarsPer1000MinutesPerMonth",
+							"deliveryDollarsPer1000Minutes",
 							"speechDollarsPerHour",
 							"uploadAdmissionDays",
 						],
@@ -1810,6 +1878,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 										{ type: "number" },
 									]),
 								),
+							},
+							deliveryDollarsPer1000Minutes: {
+								type: "number",
+								description:
+									"Dollars per 1,000 delivered minutes, one flat rate at every resolution. Each day is charged once, when its figures become final.",
 							},
 							speechDollarsPerHour: {
 								type: "number",
@@ -2352,6 +2425,20 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"Retry-After": {
 						description: `Seconds to wait before retrying, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}.`,
 						schema: { type: "integer" },
+					},
+				},
+			},
+			MethodNotAllowed: {
+				...json(
+					ref("Error"),
+					"The path exists but does not take the method that was sent, for example PATCH on a video (code method_not_allowed). The Allow header lists the methods it takes.",
+				),
+				headers: {
+					...rateLimitHeaders,
+					Allow: {
+						description:
+							"The methods this path takes, separated by a comma and a space.",
+						schema: { type: "string" },
 					},
 				},
 			},

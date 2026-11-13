@@ -318,6 +318,22 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				return latestStorageDayRows().slice(0, 1);
 			}
 			const [, type, at] = rendered.params;
+			if (at === "delivery_day") {
+				return ledger.rows
+					.filter(
+						(row) =>
+							row.type === type &&
+							row.referenceType === at &&
+							row.metadata?.duringShortfall === undefined,
+					)
+					.sort(
+						(a, b) =>
+							b.createdAt.getTime() - a.createdAt.getTime() ||
+							String(b.referenceId).localeCompare(String(a.referenceId)) ||
+							byId(a, b),
+					)
+					.slice(0, 1);
+			}
 			const ofType = latestWritten(
 				ledger.rows.filter((row) => row.type === type),
 			);

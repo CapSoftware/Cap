@@ -16,6 +16,9 @@ vi.mock("next/navigation", () => ({
 	},
 	useRouter: () => ({ refresh: () => undefined }),
 }));
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({ WEB_URL: "https://web.example" }),
+}));
 vi.mock("@/lib/developer-video-player", () => ({
 	loadDeveloperVideoPlayer: mocks.load,
 }));
@@ -132,13 +135,15 @@ describe("developer video page states", () => {
 		expect(html).not.toContain("<video");
 	});
 
-	it("tells a viewer of a failed video one neutral sentence and nothing else", () => {
+	it("tells a viewer of a failed video a neutral heading and line and nothing else", () => {
 		const html = render(failed);
 		const text = html
 			.replace(/<style>.*?<\/style>/g, "")
-			.replace(/<[^>]+>/g, " ");
+			.replace(/<[^>]+>/g, " ")
+			.replaceAll("&#x27;", "'");
 
-		expect(text).toContain("This video is not available.");
+		expect(text).toContain("This video isn't available");
+		expect(text).toContain("There is nothing to play at this link.");
 		expect(text.match(/[.!?](\s|$)/g)).toHaveLength(1);
 		expect(text).not.toMatch(/upload|export|processed|owner|credit/i);
 		expect(html).not.toContain("<video");
@@ -532,6 +537,72 @@ describe("developer video page routes", () => {
 		},
 	);
 
+	it("unfurls the share page as the MP4 with an oEmbed link to the embed", async () => {
+		const metadata = await sharePage.generateMetadata(params());
+		const share = `https://web.example/dev/${PLAYBACK_ID}`;
+
+		expect(metadata.openGraph).toEqual({
+			title: "Launch demo",
+			type: "video.other",
+			url: share,
+			images: [`${BASE}/poster.jpg`],
+			videos: [
+				{
+					url: `${BASE}/video.mp4`,
+					secureUrl: `${BASE}/video.mp4`,
+					type: "video/mp4",
+					width: 1920,
+					height: 1080,
+				},
+			],
+		});
+		expect(metadata.alternates).toEqual({
+			types: {
+				"application/json+oembed": `https://web.example/api/developer/oembed?url=${encodeURIComponent(share)}&format=json`,
+			},
+		});
+	});
+
+	it("leaves the embed document without video tags or an oEmbed link", async () => {
+		const metadata = await embedPage.generateMetadata(params());
+
+		expect(metadata.openGraph).not.toHaveProperty("videos");
+		expect(metadata).not.toHaveProperty("alternates");
+	});
+
+	it("names no video file for a video that cannot play yet, and keeps the oEmbed link", async () => {
+		for (const player of [processing, failed, paused]) {
+			mocks.load.mockResolvedValue(player);
+			const metadata = await sharePage.generateMetadata(params());
+			expect(metadata.openGraph).not.toHaveProperty("videos");
+			expect(JSON.stringify(metadata)).not.toMatch(/mp4|m3u8/);
+			expect(metadata.alternates?.types).toHaveProperty(
+				"application/json+oembed",
+			);
+		}
+	});
+
+	it("gives a taken down or unknown video no video tags or oEmbed link", async () => {
+		for (const player of [takenDown, null]) {
+			mocks.load.mockResolvedValue(player);
+			const metadata = await sharePage.generateMetadata(params());
+			expect(metadata.openGraph).not.toHaveProperty("videos");
+			expect(metadata).not.toHaveProperty("alternates");
+		}
+	});
+
+	it("leaves secure_url out for a video file served over plain HTTP", async () => {
+		mocks.load.mockResolvedValue({
+			...playing,
+			source: { mp4: "http://localhost:3000/video.mp4" },
+		});
+		const metadata = await sharePage.generateMetadata(params());
+		expect(
+			(metadata.openGraph as { videos: { secureUrl?: string }[] }).videos[0]
+				?.secureUrl,
+		).toBeUndefined();
+	});
+
 	it("previews with no image when there is nothing to play", async () => {
 		mocks.load.mockResolvedValue(paused);
 
@@ -597,7 +668,7 @@ describe("developer video page routes", () => {
 			}),
 		);
 
-		expect(html).toContain("This video is not available.");
+		expect(html).toContain("This video isn&#x27;t available");
 	});
 
 	it("hands the query of each route to the player", async () => {

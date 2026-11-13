@@ -160,6 +160,7 @@ import {
 	captionsFileName,
 	developerVideoCaptions,
 	developerVideoCaptionTracks,
+	developerVideosCaptionLinks,
 	findVideoForTranscript,
 	syncVideoCaptions,
 	videoCaptionsKey,
@@ -561,6 +562,163 @@ describe("repeating a video transcript with an Idempotency-Key", () => {
 	});
 });
 
+describe("the user of a transcript made from a video", () => {
+	const KEY = "user-key-01";
+
+	it("takes the video's userId when the request sends none", async () => {
+		seedVideo({ externalUserId: "user-7" });
+
+		const result = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+		});
+
+		if (!result.ok) throw new Error("create failed");
+		expect(transcripts()[0]?.externalUserId).toBe("user-7");
+		expect(serializeTranscript(result.transcript)).toMatchObject({
+			userId: "user-7",
+		});
+		expect(
+			(await listTranscripts("app-1", { limit: 10, userId: "user-7" }))
+				.transcripts,
+		).toHaveLength(1);
+	});
+
+	it("keeps a userId the request sends over the video's", async () => {
+		seedVideo({ externalUserId: "user-7" });
+
+		await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			userId: "user-9",
+		});
+
+		expect(transcripts()[0]?.externalUserId).toBe("user-9");
+	});
+
+	it("stores no user for a video without one", async () => {
+		seedVideo({ externalUserId: null });
+
+		await createTranscriptFromVideo("app-1", { videoId: "video-1" });
+
+		expect(transcripts()[0]?.externalUserId).toBeNull();
+	});
+
+	it("replays a retry that leaves userId out, or sends the video's", async () => {
+		seedVideo({ externalUserId: "user-7" });
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+		const omitted = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+		const explicit = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+			userId: "user-7",
+		});
+
+		if (!first.ok || !omitted.ok || !explicit.ok) {
+			throw new Error("create failed");
+		}
+		expect(omitted.transcript.id).toBe(first.transcript.id);
+		expect(explicit.transcript.id).toBe(first.transcript.id);
+		expect(transcripts()).toHaveLength(1);
+		expect(context.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("replays a retry without userId of a request that sent the video's userId", async () => {
+		seedVideo({ externalUserId: "user-7" });
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+			userId: "user-7",
+		});
+		const retry = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+
+		if (!first.ok || !retry.ok) throw new Error("create failed");
+		expect(retry.transcript.id).toBe(first.transcript.id);
+	});
+
+	it("still replays a retry without userId after the video was deleted", async () => {
+		const video = seedVideo({ externalUserId: "user-7" });
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+		video.deletedAt = new Date("2026-11-12T09:00:00.000Z");
+
+		const retry = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+
+		if (!first.ok || !retry.ok) throw new Error("create failed");
+		expect(retry.transcript.id).toBe(first.transcript.id);
+	});
+
+	it("replays a retry without userId of a transcript stored before userIds were inherited", async () => {
+		seedVideo({ externalUserId: "user-7" });
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+		const row = transcripts()[0];
+		if (row) row.externalUserId = null;
+
+		const retry = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+
+		if (!first.ok || !retry.ok) throw new Error("create failed");
+		expect(retry.transcript.id).toBe(first.transcript.id);
+	});
+
+	it("refuses a retry without userId when the first request sent a different one", async () => {
+		seedVideo({ externalUserId: "user-7" });
+		await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+			userId: "user-9",
+		});
+
+		expect(
+			await createTranscriptFromVideo("app-1", {
+				videoId: "video-1",
+				idempotencyKey: KEY,
+			}),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			message: "Idempotency key was already used with a different userId",
+		});
+	});
+
+	it("refuses a retry with another userId than the inherited one", async () => {
+		seedVideo({ externalUserId: "user-7" });
+		await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: KEY,
+		});
+
+		expect(
+			await createTranscriptFromVideo("app-1", {
+				videoId: "video-1",
+				idempotencyKey: KEY,
+				userId: "user-9",
+			}),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			message: "Idempotency key was already used with a different userId",
+		});
+	});
+});
+
 describe("finding the stored file of a video", () => {
 	it("returns the MP4 of the finished encode and the known duration", async () => {
 		seedVideo({ duration: 95.5 });
@@ -568,6 +726,7 @@ describe("finding the stored file of a video", () => {
 		expect(await findVideoForTranscript("app-1", "video-1")).toEqual({
 			state: "ok",
 			name: "Launch walkthrough",
+			externalUserId: null,
 			sourceKey: MP4_KEY,
 			durationSeconds: 95.5,
 		});
@@ -651,6 +810,171 @@ describe("caption files for the playback side", () => {
 				key: "developer/app-1/video-1/captions/und.vtt",
 			},
 		]);
+	});
+});
+
+describe("listing a caption track only once its file is in storage", () => {
+	const PLAYABLE = { ...VIDEO, playbackId: "playback-1" };
+	const fresh = (id: string, row: Record<string, unknown> = {}) =>
+		seedCompleted(id, "fresh words here", {
+			completedAt: new Date(),
+			updatedAt: new Date("2026-11-13T10:00:00.000Z"),
+			...row,
+		});
+	const listedEverywhere = async () => ({
+		player: (await developerVideoCaptionTracks(PLAYABLE)).map(
+			(track) => track.language,
+		),
+		api: (
+			(await developerVideosCaptionLinks("app-1", [PLAYABLE])).get("video-1") ??
+			[]
+		).map((link) => link.language),
+		console: (await developerVideoCaptions(VIDEO)).map(
+			(caption) => caption.language,
+		),
+	});
+
+	it("leaves out a just-completed transcript until its file is written, then lists it", async () => {
+		seedVideo();
+		fresh("t-fresh");
+
+		expect(await listedEverywhere()).toEqual({
+			player: [],
+			api: [],
+			console: [],
+		});
+
+		await syncVideoCaptions({
+			appId: "app-1",
+			videoId: "video-1",
+			language: "en",
+		});
+
+		expect(context.objects.has(EN_KEY)).toBe(true);
+		expect(await listedEverywhere()).toEqual({
+			player: ["en"],
+			api: ["en"],
+			console: ["en"],
+		});
+	});
+
+	it("records the write only after storage took the file", async () => {
+		seedVideo();
+		fresh("t-fresh");
+		let recordedAtPut: unknown = "not called";
+		context.afterPut = () => {
+			recordedAtPut = transcripts()[0]?.metadata ?? null;
+		};
+
+		await syncVideoCaptions({
+			appId: "app-1",
+			videoId: "video-1",
+			language: "en",
+		});
+
+		expect(recordedAtPut).toBeNull();
+		expect(transcripts()[0]?.metadata).toMatchObject({
+			__capCaptionsWritten: { metadataWasNull: true },
+		});
+	});
+
+	it("keeps a track out when the upload fails", async () => {
+		seedVideo();
+		fresh("t-fresh");
+		context.failPuts = 1;
+
+		await expect(
+			syncVideoCaptions({ appId: "app-1", videoId: "video-1", language: "en" }),
+		).rejects.toThrow("storage is unavailable");
+
+		expect(context.objects.has(EN_KEY)).toBe(false);
+		expect(await listedEverywhere()).toEqual({
+			player: [],
+			api: [],
+			console: [],
+		});
+	});
+
+	it("still lists a transcript that completed before writes were recorded", async () => {
+		seedVideo();
+		seedCompleted("t-old", "older words here", {
+			completedAt: new Date(Date.now() - 11 * 60 * 1000),
+		});
+
+		expect((await listedEverywhere()).api).toEqual(["en"]);
+	});
+
+	it("hides the record from the client and keeps metadata and updatedAt as they were", async () => {
+		seedVideo();
+		const withNone = fresh("t-none", { metadata: null });
+		const withSome = fresh("t-some", {
+			language: "de",
+			metadata: { ticket: 42 },
+		});
+		const before = {
+			none: serializeTranscript(withNone as never),
+			some: serializeTranscript(withSome as never),
+		};
+
+		for (const language of ["en", "de"]) {
+			await syncVideoCaptions({ appId: "app-1", videoId: "video-1", language });
+		}
+
+		const rows = transcripts();
+		const none = rows.find((row) => row.id === "t-none");
+		const some = rows.find((row) => row.id === "t-some");
+		expect(none?.metadata).toMatchObject({
+			__capCaptionsWritten: { metadataWasNull: true },
+		});
+		expect(some?.metadata).toMatchObject({
+			ticket: 42,
+			__capCaptionsWritten: { metadataWasNull: false },
+		});
+		expect(serializeTranscript(none as never)).toEqual(before.none);
+		expect(serializeTranscript(some as never)).toEqual(before.some);
+	});
+});
+
+describe("Cap's caption record in a transcript's metadata", () => {
+	it("cannot be set by a client", async () => {
+		const created = await createTranscriptFromUrl(
+			"app-1",
+			{
+				url: "https://media.example.com/a.mp3",
+				metadata: { ticket: 1, __capCaptionsWritten: { at: "x" } },
+			},
+			{ isBlocked: async () => false },
+		);
+
+		expect(created.ok).toBe(true);
+		expect(transcripts()[0]?.metadata).toEqual({ ticket: 1 });
+	});
+
+	it("does not turn a repeat of the same request into a conflict", async () => {
+		seedVideo();
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "captions-meta-01",
+			metadata: { ticket: 7 },
+		});
+		if (!first.ok) throw new Error("create failed");
+		const row = transcripts()[0];
+		if (!row) throw new Error("missing row");
+		row.metadata = {
+			ticket: 7,
+			__capCaptionsWritten: {
+				at: "2026-11-13T10:00:00.000Z",
+				metadataWasNull: false,
+			},
+		};
+
+		const repeat = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "captions-meta-01",
+			metadata: { ticket: 7 },
+		});
+
+		expect(repeat.ok).toBe(true);
 	});
 });
 
