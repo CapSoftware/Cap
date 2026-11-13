@@ -556,7 +556,7 @@ struct DeveloperAppDeleteInput {
 struct DeveloperDomainAddInput {
     /// App id from developer_apps_list
     app_id: String,
-    /// Origin to store, for example https://app.example.com
+    /// Site to allow, for example https://app.example.com
     domain: String,
     /// true only after the user confirmed the change
     confirmed: bool,
@@ -3044,7 +3044,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_domain_add",
-        description = "Store an origin on a developer app after explicit user confirmation. Nothing checks stored origins today: uploads, embeds and playback work from any origin, so this restricts nothing. To limit a browser upload to one origin, set corsOrigin when creating the upload",
+        description = "Allow a site to embed a developer app's player, after explicit user confirmation. With no sites added any site can embed it; once one is added, only listed sites can. Share links, HLS, MP4 and poster URLs stay open to everyone. Only https sites, or localhost for testing, are accepted",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -3078,7 +3078,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_domain_remove",
-        description = "Remove a stored origin from a developer app after explicit user confirmation. Nothing checks stored origins today, so removing one blocks nothing. Call with dry_run=true first to show the user which origin would be removed",
+        description = "Remove a site from the ones allowed to embed a developer app's player, after explicit user confirmation. Removing the last one lets any site embed it again. Call with dry_run=true first to show the user which site would be removed",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
