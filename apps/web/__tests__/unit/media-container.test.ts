@@ -351,6 +351,21 @@ describe("sniffing a stored file by URL", () => {
 		},
 	);
 
+	it("accepts audio that sits behind padding after a tag of album art, as a short tag does", async () => {
+		const padding = new Uint8Array(32);
+		serve(join(id3(ALBUM_ART_BYTES), padding, MPEG_FRAMES));
+		expect(await sniffMediaUrl(URL)).toBe("media");
+
+		serve(join(id3(60), padding, MPEG_FRAMES));
+		expect(await sniffMediaUrl(URL)).toBe("media");
+	});
+
+	it("still refuses a playlist behind padding after a tag of album art", async () => {
+		serve(join(id3(ALBUM_ART_BYTES), text("\n\n  "), HLS));
+
+		expect(await sniffMediaUrl(URL)).toBe("playlist");
+	});
+
 	it("refuses a playlist that starts in the last bytes of the first read", async () => {
 		const tag = id3(MEDIA_CONTAINER_SNIFF_BYTES - 10 - 3);
 		const stored = serve(join(tag, HLS, new Uint8Array(8000)));

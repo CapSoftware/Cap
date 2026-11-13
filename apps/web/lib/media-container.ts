@@ -196,6 +196,7 @@ export async function sniffMediaUrl(
 ): Promise<MediaSniff> {
 	const signal = AbortSignal.timeout(timeoutMs);
 	let start = 0;
+	let skippedTag = false;
 	let window = await readSniffWindow(url, start, signal);
 	for (let reads = 1; window && reads < MAX_ID3_TAGS; reads++) {
 		const tagsEnd = id3TagsEnd(window);
@@ -207,7 +208,10 @@ export async function sniffMediaUrl(
 			break;
 		}
 		start += tagsEnd;
+		skippedTag = true;
 		window = await readSniffWindow(url, start, signal);
 	}
-	return window ? sniffMedia(window) : "media";
+	if (!window) return "media";
+	const found = sniffMedia(window);
+	return skippedTag && found === "unknown" ? "media" : found;
 }
