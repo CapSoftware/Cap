@@ -14,6 +14,7 @@ import {
 	transcriptFailureCodesText,
 	transcriptRequestErrorsText,
 } from "@/lib/developer-transcript-errors";
+import { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -413,9 +414,18 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
 			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
+			"",
+			`Agents can use the same operations as tools through the hosted MCP server at ${baseUrl}${INFRA_MCP_PATH} (Streamable HTTP). Send the secret key as Authorization: Bearer. Its requests count toward the same per-key limit. Setup for Claude Code, Cursor and Codex is at https://cap.so/docs/api/get-started#10-use-with-agents-mcp.`,
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },
+		"x-mcp": {
+			url: `${baseUrl}${INFRA_MCP_PATH}`,
+			transport: "streamable-http",
+			authorization: "Authorization: Bearer <secret key>",
+			documentation:
+				"https://cap.so/docs/api/get-started#10-use-with-agents-mcp",
+		},
 	},
 	externalDocs: { description: "REST API guide", url: API_DOCS_URL },
 	servers: [{ url: baseUrl, description: "Cap" }],
