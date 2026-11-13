@@ -147,6 +147,19 @@ export function TopUp({
 			<p className="m-0 -mt-2 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
 				{topUpCoversText()}
 			</p>
+			{!einOpen && (
+				<p className="m-0 -mt-3 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+					US business?{" "}
+					<button
+						type="button"
+						onClick={() => setEinOpen(true)}
+						className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
+					>
+						Add your EIN
+					</button>{" "}
+					before you pay so it is on your invoice.
+				</p>
+			)}
 			{amount.error && (
 				<p
 					id={amountErrorId}
@@ -237,11 +250,6 @@ export function TopUp({
 				{!codeOpen && (
 					<Button variant="quiet" onClick={() => setCodeOpen(true)}>
 						Have a code?
-					</Button>
-				)}
-				{!einOpen && (
-					<Button variant="quiet" onClick={() => setEinOpen(true)}>
-						Add a US EIN
 					</Button>
 				)}
 			</div>

@@ -410,7 +410,7 @@ describe("developer routes of the agent API", () => {
 				enabled: true,
 				invoice_data: { description: "Cap Infra credits for Course site" },
 			},
-			payment_method_types: ["card", "link"],
+			payment_method_types: ["card"],
 			payment_intent_data: {
 				description: "Cap Infra credits for Course site",
 				receipt_email: "owner@example.com",
@@ -451,6 +451,10 @@ describe("developer routes of the agent API", () => {
 		const [params] = state.createCheckoutSession.mock.calls[0] ?? [];
 		expect(params.metadata.amountCents).toBe("1000000");
 		expect(params.line_items[0].price_data.unit_amount).toBe(1_000_000);
+		expect(params.payment_method_types).toEqual(["card"]);
+		expect(params.payment_method_options).toEqual({
+			card: { request_three_d_secure: "any" },
+		});
 	});
 
 	it("says what to do when the developer scope is missing", async () => {

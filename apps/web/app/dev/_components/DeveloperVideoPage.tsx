@@ -174,9 +174,10 @@ function Stage({
 }
 
 // The embed sits on someone else's page, so its link only shows while the
-// pointer is over a player whose controls are showing, or on keyboard focus.
+// pointer is over a player whose controls are showing and no menu is open,
+// or on keyboard focus.
 const EMBED_REPORT_CLASS =
-	"pointer-events-none absolute right-2 top-2 z-10 rounded-[6px] bg-[rgba(5,5,6,0.55)] px-2 py-1 text-[12px] leading-none text-[rgba(232,236,244,0.72)] opacity-0 outline-none transition-opacity duration-200 hover:text-[#E8ECF4] focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)] [.group:hover:not(:has([data-idle=true]))_&]:pointer-events-auto [.group:hover:not(:has([data-idle=true]))_&]:opacity-100";
+	"pointer-events-none absolute right-2 top-2 z-10 rounded-[6px] bg-[rgba(5,5,6,0.55)] px-2 py-1 text-[12px] leading-none text-[rgba(232,236,244,0.72)] opacity-0 outline-none transition-opacity duration-200 hover:text-[#E8ECF4] focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)] [.group:hover:not(:has([data-idle=true])):not(:has([data-menu]))_&]:pointer-events-auto [.group:hover:not(:has([data-idle=true])):not(:has([data-menu]))_&]:opacity-100";
 
 export function DeveloperVideoView({
 	playbackId,

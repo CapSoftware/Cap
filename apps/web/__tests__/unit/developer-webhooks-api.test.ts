@@ -98,7 +98,9 @@ async function create(
 		body: (await response.json()) as {
 			data: Record<string, unknown> & { id: string; secret: string };
 			code?: string;
+			message?: string;
 			hint?: string;
+			docs?: string;
 		},
 	};
 }
@@ -173,6 +175,44 @@ describe("creating a webhook endpoint", () => {
 		expect(created.status).toBe(400);
 		expect(created.body.code).toBe("invalid_request");
 		expect(rows()).toHaveLength(0);
+	});
+
+	it("explains an unknown or missing event in plain words", async () => {
+		const unknown = await create(A, {
+			url: "https://a.example/x",
+			events: ["video.ready", "video.updated"],
+		});
+		expect(unknown.body.message).toBe(
+			'Invalid request: events.1: Unknown event "video.updated". Use video.ready or video.errored.',
+		);
+		const none = await create(A, { url: "https://a.example/x", events: [] });
+		expect(none.body.message).toBe(
+			"Invalid request: events: events must list at least one of: video.ready, video.errored",
+		);
+		expect(unknown.body.docs).toBe("https://cap.so/docs/api/rest-api");
+
+		const objectEvent = await create(A, {
+			url: "https://a.example/x",
+			events: [{ toString: null }],
+		});
+		expect(objectEvent.status).toBe(400);
+		expect(objectEvent.body.message).toBe(
+			"Invalid request: events.0: Unknown event. Use video.ready or video.errored.",
+		);
+		expect(rows()).toHaveLength(0);
+	});
+
+	it("links webhook errors to the webhooks guide", async () => {
+		const missing = await send("GET", "/wh_missing", A);
+		expect(await missing.json()).toMatchObject({
+			code: "webhook_not_found",
+			docs: "https://cap.so/docs/api/webhooks",
+		});
+		const refused = await create(A, { url: "http://hooks.example.com/cap" });
+		expect(refused.body).toMatchObject({
+			code: "invalid_webhook_url",
+			docs: "https://cap.so/docs/api/webhooks",
+		});
 	});
 
 	it.each([

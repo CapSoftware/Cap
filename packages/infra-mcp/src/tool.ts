@@ -35,6 +35,23 @@ export type Tool = {
 	run: (args: unknown, call: ToolCall) => Promise<unknown>;
 };
 
+const listNames = (names: readonly string[]) =>
+	names.length < 2
+		? (names[0] ?? "no arguments")
+		: `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+// MCP clients drop the reason a strict schema refused a call unless it is in
+// the issue message, so the accepted names travel in it, as REST's hint does.
+export function toolInputSchema<Shape extends z.ZodRawShape>(input: Shape) {
+	const accepted = listNames(Object.keys(input));
+	return z.strictObject(input, {
+		error: (issue) =>
+			issue.code === "unrecognized_keys"
+				? `${issue.keys.length === 1 ? "Unrecognized key" : "Unrecognized keys"}: ${issue.keys.map((key) => `"${key}"`).join(", ")}. This tool accepts ${accepted}.`
+				: undefined,
+	});
+}
+
 export function tool<Shape extends z.ZodRawShape>(definition: {
 	name: string;
 	title: string;
@@ -43,7 +60,7 @@ export function tool<Shape extends z.ZodRawShape>(definition: {
 	input: Shape;
 	run: (args: z.infer<z.ZodObject<Shape>>, call: ToolCall) => Promise<unknown>;
 }): Tool {
-	const schema = z.object(definition.input);
+	const schema = toolInputSchema(definition.input);
 	return {
 		...definition,
 		run: (args, call) => definition.run(schema.parse(args), call),

@@ -28,6 +28,10 @@
 	user-select: none;
 }
 
+.player:focus {
+	outline: none;
+}
+
 .player[data-idle="true"] {
 	cursor: none;
 }
@@ -476,6 +480,15 @@
 		0 12px 36px rgba(0, 0, 0, 0.5);
 	backdrop-filter: blur(14px);
 	animation: cap-player-menu 0.13s ease-out;
+}
+
+.menu[data-sheet] {
+	right: auto;
+	bottom: auto;
+	box-sizing: border-box;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+	align-content: start;
 }
 
 @keyframes cap-player-menu {
