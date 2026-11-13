@@ -12,6 +12,7 @@ import { sendInfraOutOfCreditEmail } from "@/lib/infra-billing-emails";
 import {
 	INFRA_GRACE_DAYS,
 	latestStorageCharge,
+	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
 } from "@/lib/infra-standing";
 import { getStorageUsageByApp } from "@/lib/infra-storage";
@@ -24,7 +25,7 @@ import { utcDateKey } from "@/lib/infra-usage";
 
 const BATCH_SIZE = 10;
 const GRACE_MS = INFRA_GRACE_DAYS * 24 * 60 * 60 * 1000;
-const CRON_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const FIRST_MONTH_NOTICE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -146,13 +147,20 @@ export async function GET(request: Request) {
 
 	const shortfalls = await firstMonthShortfallsSince(
 		accounts.map((account) => account.id),
-		new Date(now.getTime() - CRON_INTERVAL_MS),
+		new Date(now.getTime() - FIRST_MONTH_NOTICE_LOOKBACK_MS),
 	);
-	for (const [accountId, shortSince] of shortfalls) {
+	for (const accountId of shortfalls.keys()) {
+		const charge = await latestStorageCharge(db(), accountId);
+		if (
+			!charge?.shortSince ||
+			(await restoredSinceCharge(db(), accountId, charge))
+		) {
+			continue;
+		}
 		await sendInfraOutOfCreditEmail({
 			accountId,
-			shortSince,
-			pausesAt: new Date(shortSince.getTime() + GRACE_MS),
+			shortSince: charge.shortSince,
+			pausesAt: new Date(charge.shortSince.getTime() + GRACE_MS),
 		});
 	}
 
