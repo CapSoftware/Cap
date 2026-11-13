@@ -4,6 +4,7 @@ type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
 	balance: 0,
+	heldMicroCredits: 0,
 	owner: "user-1",
 	transactions: [] as Record<string, unknown>[],
 	lock: Promise.resolve(),
@@ -75,6 +76,10 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "txn" }));
 vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
 vi.mock("@cap/utils", () => ({ stripe: () => ({}), userIsPro: () => true }));
+vi.mock("@/lib/infra-balance", () => ({
+	AVAILABLE_AFTER_FIELD: "availableAfterMicroCredits",
+	heldTranscriptMicroCredits: async () => state.heldMicroCredits,
+}));
 vi.mock("@cap/database/schema", () => ({
 	users: { table: "users", id: "id" },
 	developerCreditAccounts: {
@@ -112,6 +117,7 @@ const claim = (now = november, accountId = "account-1") =>
 describe("Cap Pro monthly Infra credit", () => {
 	beforeEach(() => {
 		state.balance = 0;
+		state.heldMicroCredits = 0;
 		state.owner = "user-1";
 		state.transactions = [];
 		state.lock = Promise.resolve();
@@ -133,6 +139,18 @@ describe("Cap Pro monthly Infra credit", () => {
 		expect(
 			nextProCreditDate(new Date("2026-12-15T08:00:00Z")).toISOString(),
 		).toBe("2027-01-01T00:00:00.000Z");
+	});
+
+	it("records the credit available after the claim, net of held transcript credit", async () => {
+		state.balance = 100_000;
+		state.heldMicroCredits = 60_000;
+
+		await claim();
+
+		expect(state.transactions[0]?.metadata).toMatchObject({
+			period: "2026-11",
+			availableAfterMicroCredits: 100_000 + 500_000 - 60_000,
+		});
 	});
 
 	it("adds the credit and writes one ledger row", async () => {

@@ -101,6 +101,12 @@ const asTime = (value: unknown) => {
 	).getTime();
 };
 
+const availableAfter = (row: LedgerRow) =>
+	Number(
+		(row.metadata as { availableAfterMicroCredits?: number } | null | undefined)
+			?.availableAfterMicroCredits ?? row.balanceAfterMicroCredits,
+	);
+
 const newestFirst = (rows: LedgerRow[]) =>
 	[...rows].sort(
 		(a, b) =>
@@ -444,14 +450,28 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				ledger.rows.filter((row) => types.includes(row.referenceType)),
 			).slice(0, 1);
 		}
-		if (keys === "id" && rendered.sql.includes("balanceAfterMicroCredits")) {
-			const [, since, , owed] = rendered.params;
+		if (keys === "id" && rendered.sql.includes("JSON_EXTRACT")) {
+			const [, , , owed, since] = rendered.params;
 			return ledger.rows.filter(
 				(row) =>
-					row.createdAt.getTime() >= asTime(since) &&
+					row.createdAt.getTime() > asTime(since) &&
 					row.amountMicroCredits > 0 &&
-					row.balanceAfterMicroCredits >= Number(owed),
+					availableAfter(row) >= Number(owed),
 			);
+		}
+		if (keys === "amountMicroCredits,balanceAfterMicroCredits,id,restores") {
+			const [, , , owed, , at] = rendered.params;
+			return ledger.rows
+				.filter((row) => row.createdAt.getTime() === asTime(at))
+				.map((row) => ({
+					id: row.id,
+					amountMicroCredits: row.amountMicroCredits,
+					balanceAfterMicroCredits: row.balanceAfterMicroCredits,
+					restores:
+						row.amountMicroCredits > 0 && availableAfter(row) >= Number(owed)
+							? 1
+							: 0,
+				}));
 		}
 		if (keys === "id") {
 			const [, referenceId, ...referenceTypes] = rendered.params;
@@ -506,6 +526,8 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			firstMonth2160p: firstMonth(video.seconds, 280),
 		}));
 	}
+
+	if (keys === "storagePaidUntil" || keys === "createdAt") return [];
 
 	throw new Error(`Unexpected select: ${keys}`);
 }
