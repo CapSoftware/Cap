@@ -718,6 +718,37 @@ describe("a visit on a day leaves a marker when nothing is charged", () => {
 		expect(chargedFor("2026-11-13")).toContain("account-0300");
 	});
 
+	it("charges a video that becomes ready after the last run of its day from the next day, as main does", async () => {
+		state.videos.set("app-0300", [
+			{
+				createdAt: new Date("2026-11-12T19:00:00Z"),
+				readyAt: new Date("2026-11-12T19:05:00Z"),
+			},
+		]);
+		for (const at of [
+			"2026-11-12T06:41:00Z",
+			"2026-11-12T12:41:00Z",
+			"2026-11-12T18:41:00Z",
+		]) {
+			await tick(at);
+		}
+		expect(state.markers.has("app-0300|2026-11-12")).toBe(true);
+
+		await tick("2026-11-13T00:41:00Z");
+		await tick("2026-11-13T06:41:00Z");
+
+		expect(callsFor("2026-11-12").map((call) => call.accountId)).not.toContain(
+			"account-0300",
+		);
+		expect(chargedFor("2026-11-12")).not.toContain("account-0300");
+		expect(
+			callsFor("2026-11-13").filter(
+				(call) => call.accountId === "account-0300",
+			),
+		).toEqual([expect.objectContaining({ dailyMicroCredits: 28 })]);
+		expect(chargedFor("2026-11-13")).toContain("account-0300");
+	});
+
 	it("charges a day for an app the sweep never reached that day, for videos created before midnight", async () => {
 		state.videos.set("app-0300", [
 			new Date("2026-11-12T10:00:00Z"),
