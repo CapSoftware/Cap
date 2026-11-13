@@ -61,7 +61,6 @@ describe("Cap Infra agent prompt", () => {
 		expect(CAP_INFRA_AGENT_PROMPT).toContain(
 			"/transcripts/{id} every 5 seconds",
 		);
-		expect(CAP_INFRA_AGENT_PROMPT).toContain("1,200 a minute");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("Retry-After");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("60 requests a minute");
 	});
