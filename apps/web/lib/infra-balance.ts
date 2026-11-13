@@ -74,6 +74,30 @@ export async function readBalanceAndHolds(
 		: null;
 }
 
+export async function accountWithAvailableBalance(
+	appId: string,
+	executor: Pick<InfraDbExecutor, "select"> = db(),
+): Promise<{ id: string; availableMicroCredits: number } | null> {
+	const [row] = await executor
+		.select({
+			id: developerCreditAccounts.id,
+			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			heldMicroCredits: sql<
+				string | number | null
+			>`(${heldTranscriptsQuery(executor, appId, null)})`,
+		})
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, appId))
+		.limit(1);
+	return row
+		? {
+				id: row.id,
+				availableMicroCredits:
+					row.balanceMicroCredits - (Number(row.heldMicroCredits ?? 0) || 0),
+			}
+		: null;
+}
+
 export async function availableBalance(
 	appId: string,
 	executor: InfraDbExecutor = db(),

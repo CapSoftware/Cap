@@ -1,8 +1,5 @@
 import { db } from "@cap/database";
-import {
-	developerCreditAccounts,
-	developerCreditTransactions,
-} from "@cap/database/schema";
+import { developerCreditTransactions } from "@cap/database/schema";
 import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
@@ -11,7 +8,7 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
-import { availableBalance } from "@/lib/infra-balance";
+import { accountWithAvailableBalance } from "@/lib/infra-balance";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
@@ -270,18 +267,11 @@ async function appStanding(
 	now: Date,
 	executor: InfraDbExecutor = db(),
 ) {
-	const [account] = await executor
-		.select({
-			id: developerCreditAccounts.id,
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-		})
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
+	const account = await accountWithAvailableBalance(appId, executor);
 	if (!account) return { account: null, lastCharge: null, standing: ACTIVE };
 	const funded = {
 		id: account.id,
-		balanceMicroCredits: (await availableBalance(appId, executor)) ?? 0,
+		balanceMicroCredits: account.availableMicroCredits,
 	};
 	return {
 		account: funded,

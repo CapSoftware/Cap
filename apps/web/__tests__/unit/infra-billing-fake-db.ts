@@ -184,7 +184,9 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		) {
 			return [];
 		}
-		return [account];
+		return "heldMicroCredits" in query.fields
+			? [{ ...account, heldMicroCredits: ledger.heldMicroCredits }]
+			: [account];
 	}
 
 	if (query.table === developerCreditTransactions) {
