@@ -171,8 +171,8 @@ describe("console video duration", () => {
 			duration: 120,
 			processing: processingState({
 				probe: null,
-				hls: { state: "failed" },
-				mp4: { state: "failed" },
+				hls: { state: "failed", reason: "unreadable" },
+				mp4: { state: "failed", reason: "unreadable" },
 			}),
 		});
 
@@ -182,8 +182,8 @@ describe("console video duration", () => {
 			status: "errored",
 			duration: 60,
 			processing: processingState({
-				hls: { state: "failed" },
-				mp4: { state: "failed" },
+				hls: { state: "failed", reason: "unreadable" },
+				mp4: { state: "failed", reason: "unreadable" },
 			}),
 		});
 		mocks.rows = [
