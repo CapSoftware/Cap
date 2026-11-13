@@ -788,6 +788,7 @@ describe("attachSource with hls.js", () => {
 
 		expect(video.src).toBe("");
 		expect(hls.source).toBe(SHORT_HLS);
+		expect(hls.config).toMatchObject({ preferManagedMediaSource: false });
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.loadLevel).toBe(hls.startLevel);
 		expect(hls.startLoads).toEqual([-1]);
@@ -1036,6 +1037,23 @@ describe("attachSource sharpening while the pointer rests on play", () => {
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+
+		held(hls);
+
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("drops a waiting swap once play is pressed", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		sharpen();
+		void video.play();
+		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);
 	});

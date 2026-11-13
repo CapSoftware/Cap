@@ -370,6 +370,10 @@ export const attachSource = (
 				abrEwmaDefaultEstimate: estimate,
 				abrEwmaDefaultEstimateMax: estimate,
 				startFragPrefetch: true,
+				// Safari on a Mac runs hls.js only where it has the classic
+				// MediaSource. With the managed one, a seek far ahead never
+				// finished in Safari 27: no segment was asked for.
+				preferManagedMediaSource: false,
 				backBufferLength: 30,
 				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
 				// Cap's streams carry no subtitle renditions and no captions inside
@@ -426,6 +430,9 @@ export const attachSource = (
 			// player, so a fast line does not play its first seconds soft.
 			let heldSeconds = 0;
 			let swappedTo = AUTO_LEVEL;
+			// A pointer can rest on play before the held segment has arrived.
+			// The swap then waits for it.
+			let sharpenWhenHeld = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
 				if (!playRequested) heldSeconds = data.frag.duration;
@@ -436,9 +443,11 @@ export const attachSource = (
 					const at = video.currentTime;
 					video.currentTime = at;
 				}
+				if (sharpenWhenHeld) sharpen();
 			});
 			sharpen = () => {
 				if (playRequested || startPending || picked !== AUTO_LEVEL) return;
+				sharpenWhenHeld = !heldSeconds;
 				if (!heldSeconds) return;
 				const level = pickStartingLevel(
 					hls.levels,
