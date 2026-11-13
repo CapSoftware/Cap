@@ -436,8 +436,29 @@ describe.runIf(Boolean(databaseUrl))(
 				deletedAt: new Date("2026-11-20T02:00:00Z"),
 			});
 
-			await chargeMissedFirstMonths(new Date("2026-11-20T06:41:00Z"));
-			await chargeMissedFirstMonths(new Date("2026-11-20T12:41:00Z"));
+			const noEncodeState = await makeVideo(appId, {
+				processing: null,
+				createdAt: new Date("2026-11-19T00:00:00Z"),
+			});
+			const noAccount = id();
+			await database()
+				.insert(developerApps)
+				.values({
+					id: noAccount,
+					ownerId: id() as never,
+					name: "No credit account",
+					environment: "development",
+				});
+			const unbillable = await makeVideo(noAccount, {
+				createdAt: new Date("2026-11-19T00:00:00Z"),
+			});
+
+			await chargeMissedFirstMonths(new Date("2026-11-20T06:41:00Z"), 2);
+			await chargeMissedFirstMonths(new Date("2026-11-20T12:41:00Z"), 2);
+			await chargeMissedFirstMonths(new Date("2026-11-20T18:41:00Z"), 2);
+
+			expect((await videoRow(noEncodeState))?.storagePaidUntil).not.toBeNull();
+			expect((await videoRow(unbillable))?.storagePaidUntil).not.toBeNull();
 
 			const rows = await firstMonthRows(accountId);
 			expect(rows.map((row) => row.referenceId).sort()).toEqual(

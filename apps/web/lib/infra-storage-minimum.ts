@@ -53,12 +53,7 @@ export type FirstMonthCharge =
 	| { state: "exempt"; paidUntil: Date }
 	| {
 			state: "skipped";
-			reason:
-				| "missing"
-				| "already_settled"
-				| "not_ready"
-				| "never_encoded"
-				| "no_account";
+			reason: "missing" | "already_settled" | "not_ready";
 	  };
 
 export type FirstMonthOptions = {
@@ -134,7 +129,6 @@ async function settleFirstMonth(
 	if (!video) return skipped("missing");
 	if (video.storagePaidUntil !== null) return skipped("already_settled");
 	if (video.status !== "ready") return skipped("not_ready");
-	if (video.processing === null) return skipped("never_encoded");
 
 	const paidUntil = firstMonthStoragePaidUntil(
 		now,
@@ -149,11 +143,10 @@ async function settleFirstMonth(
 			})
 			.where(eq(developerVideos.id, videoId));
 
-	if (options.deletedBeforeReady) {
+	if (options.deletedBeforeReady || video.processing === null || !account) {
 		await markSettled();
 		return { state: "exempt", paidUntil };
 	}
-	if (!account) return skipped("no_account");
 
 	const [recorded] = await tx
 		.select({ id: developerCreditTransactions.id })
