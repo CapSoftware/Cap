@@ -27,6 +27,7 @@ vi.mock("@/lib/developer-credits-product", () => ({
 import {
 	dailyStorageMicroCredits,
 	emptyStorageMinutes,
+	firstMonthStorageMicroCredits,
 	MICRO_CREDITS_PER_DOLLAR,
 	monthlyStorageMicroCredits,
 	SPEECH_DOLLARS_PER_HOUR,
@@ -152,7 +153,7 @@ describe("the Billing page", () => {
 		for (const tier of INFRA_RESOLUTION_TIERS) {
 			const price = `$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`;
 			expect(billing).toContain(
-				`| ${names[tier]} | ${price} per 1,000 minutes per month | Once a day |`,
+				`| ${names[tier]} | ${price} per 1,000 minutes per month | First month when the video is ready, then once a day |`,
 			);
 			expect(rest).toContain(`| ${price} |`);
 		}
@@ -204,6 +205,50 @@ describe("the Billing page", () => {
 			`covers ${UPLOAD_ADMISSION_DAYS} days of storage`,
 		);
 		expect(rest).toContain(`covers ${UPLOAD_ADMISSION_DAYS} days of storage`);
+	});
+
+	it("works every first month example out from the pricing functions", () => {
+		const tiers: Record<string, InfraResolutionTier> = {
+			"1080p": "1080p",
+			"1440p": "1440p",
+			"4K": "2160p",
+		};
+		const rows = tableRows(billing, "### The first month");
+		expect(rows).toHaveLength(3);
+		for (const [video, firstMonth, perDay] of rows) {
+			const match = /^([\d,]+) minutes at (\S+)$/.exec(video ?? "");
+			expect(match, video).not.toBeNull();
+			const tier = tiers[match?.[2] ?? ""];
+			expect(tier, video).toBeDefined();
+			if (!tier) continue;
+			const minutes = Number(match?.[1]?.replaceAll(",", ""));
+			expect(firstMonth).toBe(
+				formatCharge(
+					firstMonthStorageMicroCredits({
+						durationSeconds: minutes * 60,
+						tier,
+					}),
+				),
+			);
+			expect(perDay).toBe(
+				formatCharge(
+					dailyStorageMicroCredits({
+						...emptyStorageMinutes(),
+						[tier]: minutes,
+					}),
+				),
+			);
+		}
+		const twentyMinutes4K = firstMonthStorageMicroCredits({
+			durationSeconds: 1200,
+			tier: "2160p",
+		});
+		expect(billing).toContain(
+			`With ${formatNeed(uploadAdmissionMicroCredits(0, twentyMinutes4K))} of credit and nothing else in flight, one 20 minute video billed at 4K is accepted. Three of them in flight need ${formatNeed(uploadAdmissionMicroCredits(0, 3 * twentyMinutes4K))}.`,
+		);
+		expect(billing).toContain(
+			`The month is ${STORAGE_BILLING_DAYS_PER_MONTH} UTC days`,
+		);
 	});
 
 	it("works every speech example out from the pricing functions", () => {
@@ -339,17 +384,17 @@ describe("examples in the REST API reference", () => {
 				balanceMicroCredits: body.balanceMicroCredits,
 				standing: { state: "active", pausesAt: null },
 				lastOwedMicroCredits: 0,
-				usage: {
-					monthlyMicroCredits:
-						(body.requiredMicroCredits * STORAGE_BILLING_DAYS_PER_MONTH) /
-						UPLOAD_ADMISSION_DAYS,
+				storage: {
+					dailyCharge: { monthlyMicroCredits: 0 },
+					firstMonthDue: { monthlyMicroCredits: body.requiredMicroCredits },
 				},
 			}),
 		);
 
 		expect(body).toEqual(refusal);
+		expect(body.message).toMatch(/^Not enough credit /);
 		expect(body.message).toContain(
-			`needs ${formatNeed(body.requiredMicroCredits)} of credit`,
+			`needs ${formatNeed(body.requiredMicroCredits)}, enough for the first month of storage`,
 		);
 		expect(body.message).toContain(
 			`The balance is ${formatCredits(body.balanceMicroCredits)}, so add at least ${formatNeed(body.shortfallMicroCredits)}.`,
@@ -361,13 +406,17 @@ describe("examples in the REST API reference", () => {
 
 	it("keeps the usage example consistent with the pricing functions", () => {
 		const { data } = jsonAfter(rest, "### Get Usage");
-		const monthly = monthlyStorageMicroCredits(data.storage.minutesByTier);
+		const daily = data.storage.dailyChargeMinutesByTier;
+		const monthly = monthlyStorageMicroCredits(daily);
 
 		expect(data.balanceDollars).toBe(creditDollars(data.balanceMicroCredits));
 		expect(data.storage.monthlyMicroCredits).toBe(Math.round(monthly));
 		expect(data.storage.dailyMicroCredits).toBe(
-			dailyStorageMicroCredits(data.storage.minutesByTier),
+			dailyStorageMicroCredits(daily),
 		);
+		for (const tier of INFRA_RESOLUTION_TIERS) {
+			expect(daily[tier]).toBeLessThanOrEqual(data.storage.minutesByTier[tier]);
+		}
 		expect(data.upload.requiredMicroCredits).toBe(
 			uploadAdmissionMicroCredits(monthly),
 		);

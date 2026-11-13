@@ -116,7 +116,7 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 | `200` | Success |
 | `400` | Bad request. The `code` says what was wrong, for example `invalid_request`, `invalid_json`, `invalid_limit` or `unknown_parameter` |
 | `401` | Unauthorized. The API key or upload token is missing, invalid, revoked or expired |
-| `402` | Payment required. The app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
+| `402` | Payment required. The app is out of credit, its balance does not cover the storage an upload needs, or it is below the minimum to start a transcript |
 | `403` | Forbidden. On the SDK API, a public key was sent (`public_key_not_allowed`), the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
 | `404` | Not found. The video, transcript or multipart upload does not exist (`video_not_found`, `transcript_not_found`, `upload_not_found` for an `uploadId`), or no route matches the path (`not_found`) |
 | `405` | Method not allowed. The path exists but not with this method (`method_not_allowed`). The `Allow` header lists the methods it takes |
@@ -245,18 +245,18 @@ A video whose upload is never completed stays in the `uploading` status and coun
 
 `corsOrigin` is a convenience for browser uploads. When it is set, the SDK API refuses a request whose `Origin` header is anything else. A script can send any `Origin` it likes, so the token is what protects the upload, not the origin. Leave `corsOrigin` out to upload from a server or a native app.
 
-Creating an upload is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
+Creating an upload is free. It returns `402` if the app is out of credit, or if its balance does not cover the first month of storage for every upload of the app still encoding plus 7 days for the videos past their first month. Here one 60 minute video billed at 4K is still encoding. The `402` body says how much is needed:
 
 ```json
 {
   "error": "Insufficient credits",
   "code": "insufficient_credits",
-  "message": "Uploading needs $0.19834 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.14834.",
+  "message": "Not enough credit to upload. Uploading needs $0.16800, enough for the first month of storage for each video being uploaded or encoded. The balance is $0.05, so add at least $0.11800.",
   "standing": "active",
   "pausesAt": null,
   "balanceMicroCredits": 5000,
-  "requiredMicroCredits": 19834,
-  "shortfallMicroCredits": 14834
+  "requiredMicroCredits": 16800,
+  "shortfallMicroCredits": 11800
 }
 ```
 
@@ -907,14 +907,15 @@ curl https://cap.so/api/developer/v1/usage \
     "upload": {
       "allowed": true,
       "reason": null,
-      "requiredMicroCredits": 1736,
+      "requiredMicroCredits": 1190,
       "shortfallMicroCredits": 0,
       "message": null
     },
     "storage": {
       "minutesByTier": { "1080p": 87.5, "1440p": 0, "2160p": 0 },
-      "dailyMicroCredits": 247,
-      "monthlyMicroCredits": 7438
+      "dailyChargeMinutesByTier": { "1080p": 60, "1440p": 0, "2160p": 0 },
+      "dailyMicroCredits": 170,
+      "monthlyMicroCredits": 5100
     },
     "rates": {
       "microCreditsPerDollar": 100000,
@@ -934,7 +935,7 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 **Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
 
-**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
+**What is billed.** Uploading and encoding are free. From today, each video is charged its first month of storage when it first becomes ready, by its length and resolution tier, and is charged once a day after that month, with a month counted as 30 days. Videos that were ready before today keep the daily charge. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
 
 | Tier | Pixels (width times height) | Storage per 1,000 minutes per month |
 |------|-----------------------------|-------------------------------------|
@@ -944,16 +945,16 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
-**Storage.** `storage` describes the videos counted in `totalVideos`: their minutes in each tier, and what they cost per day and per 30 day month.
+**Storage.** `storage.minutesByTier` is what is stored: the minutes of the videos counted in `totalVideos`, in each tier. `storage.dailyChargeMinutesByTier` is the part of it the daily charge covers, the videos past their first month, and `dailyMicroCredits` and `monthlyMicroCredits` are what those cost per day and per 30 day month. A video in its first month counts in `minutesByTier` and not in the daily figures, because its month was charged when it became ready.
 
-**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores, counting videos that are still encoding. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
+**Uploading.** `upload.allowed` is true when the app is in good standing and its balance pays for the first month of every video still encoding and covers 7 days of storage for the videos past their first month. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 
 **Standing.** `standing.state` is one of:
 
 | State | Meaning |
 |-------|---------|
 | `active` | In good standing. |
-| `grace` | A daily storage charge was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
+| `grace` | A storage charge, for a day or for a video's first month, was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
 | `paused` | Playback is paused until credits are added. Videos stay stored. |
 
 Adding credits that cover one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
@@ -1027,10 +1028,11 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 | `topup_pending` | Auto top-up pending | `auto_top_up_pending` | The payment |
 | `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
 | `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
+| `video_create` | Storage, first month | `developer_video` | The video ID |
 | `transcription` | Transcription | `developer_transcript` | The transcript ID |
 | `adjustment` | Adjustment | `manual` | A note, when there is one |
 
-A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
+A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day, and a first month row as "Storage, first month, part paid" or "Storage, first month, unpaid" when it could not cover that month. `note` holds a sentence of explanation for the rows that need one.
 
 Rows written in the same second have the same `createdAt`. Within a page they are ordered so each balance follows from the row beneath it.
 
@@ -1204,7 +1206,7 @@ A mistake in the request returns one of these:
 | `400` | `file_too_large` | The parts add up to more than 36 GB, or more than the token's `maxBytes`. The upload was aborted and its parts were discarded. | Export the video at a lower bitrate or split it, then initiate again on the same video and upload the smaller file. |
 | `404` | `upload_not_found` | No open upload matches the `uploadId`. It was aborted or the ID is wrong. | Initiate again and upload the parts again. |
 
-The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as [Create Upload](/docs/api/rest-api#create-upload), and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
+The balance must pay for the first month of storage of this video and of every other upload of the app still encoding, and cover 7 days of storage for the videos past their first month. If it does not, complete returns `402` with the same body as [Create Upload](/docs/api/rest-api#create-upload), and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
 
 Each video accepts one completed upload, and its token is used up with it. Once the upload completes, initiate, presign-part and abort return `409` with the code `upload_already_completed`, and repeating complete returns `{ "success": true }` without doing anything.
 

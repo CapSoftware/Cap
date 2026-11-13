@@ -174,8 +174,9 @@ export function BillingView({
 						</table>
 					</div>
 					<p className="m-0 mt-4 max-w-[520px] text-pretty text-[13px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
-						Storage is charged once a day for each video at its resolution.
-						Uploading needs a balance that covers seven days of storage.{" "}
+						Each video is charged one month of storage when it becomes ready,
+						then once a day at its resolution. Uploading needs a balance that
+						covers that first month.{" "}
 						<Link
 							href="/docs/api/billing"
 							className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
