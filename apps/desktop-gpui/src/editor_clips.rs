@@ -4605,7 +4605,7 @@ mod tests {
                 config.keyboard_segments[1].start,
                 config.keyboard_segments[1].end,
             ),
-            (1.0, 2.5)
+            (1.0, 2.0)
         );
         assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 0.0);
         assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 500.0);
