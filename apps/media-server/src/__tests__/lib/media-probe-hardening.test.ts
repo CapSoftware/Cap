@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { maxEncodeSeconds } from "../../lib/media-common";
+import { UNSUPPORTED_FORMAT_MESSAGE } from "../../lib/media-input-policy";
 import {
 	isUnreadableMediaInput,
 	probeVideoFile,
@@ -61,6 +62,21 @@ beforeAll(async () => {
 	const source = ["-f", "lavfi", "-i", "testsrc=d=1:s=128x96:r=10"];
 	await ffmpeg([...source, "-c:v", "mpeg4", join(dir, "part2.mp4")]);
 	await ffmpeg([...source, "-c:v", "mpeg2video", join(dir, "mpeg2.mkv")]);
+	await ffmpeg([
+		...source,
+		"-f",
+		"lavfi",
+		"-i",
+		"sine=d=1",
+		"-c:v",
+		"mpeg2video",
+		"-c:a",
+		"mp2",
+		"-f",
+		"mpegts",
+		join(dir, "broadcast.ts"),
+	]);
+	await ffmpeg(["-f", "lavfi", "-i", "sine=d=1", join(dir, "audio-only.m4a")]);
 	await ffmpeg([...source, "-c:v", "prores_ks", join(dir, "prores.mov")]);
 	// Three frames an hour apart.
 	await ffmpeg([
@@ -109,6 +125,17 @@ describe("probe input checks", () => {
 		const error = await probeError("mpeg2.mkv");
 		expect(error).toBeInstanceOf(UnreadableMediaInputError);
 		expect((error as Error).message).toContain("not supported");
+	}, 30_000);
+
+	test("a video track the parser cannot read is an unsupported format, not a missing track", async () => {
+		const error = await probeError("broadcast.ts");
+		expect(error).toBeInstanceOf(UnreadableMediaInputError);
+		expect((error as Error).message).toBe(UNSUPPORTED_FORMAT_MESSAGE);
+	}, 30_000);
+
+	test("a file with no video at all still says so", async () => {
+		const error = await probeError("audio-only.m4a");
+		expect((error as Error).message).toBe("No video stream found");
 	}, 30_000);
 
 	test("an allowed codec the parser does not name is still accepted", async () => {

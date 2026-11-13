@@ -12,6 +12,7 @@ import {
 } from "./media-operations";
 import { runProbe } from "./media-probe-pool";
 import {
+	NO_VIDEO_STREAM_MESSAGE,
 	type ProbedMedia,
 	type TrackSpans,
 	UnreadableMediaInputError,
@@ -28,6 +29,7 @@ export {
 	MediaInputNotAccessibleError,
 	playlistReferences,
 	type TrackSpans,
+	UNFINISHED_RECORDING_MESSAGE,
 	UnreadableMediaInputError,
 } from "./media-probe-read";
 
@@ -190,7 +192,7 @@ async function withTrueDuration(
 	if (declaredDuration === null || measuredDuration === null) return metadata;
 	const declaredEnd = declaredDuration + durationTolerance(declaredDuration);
 	if (measuredDuration <= declaredEnd) return metadata;
-	if ((await hasPacketsBeyond(path, declaredEnd)) === false) {
+	if (probed.mayTrim && (await hasPacketsBeyond(path, declaredEnd)) === false) {
 		return metadata;
 	}
 	return {
@@ -204,8 +206,50 @@ async function withTrueDuration(
 	};
 }
 
+// Whether a file the parser found no video in has a video stream in a codec
+// this server does not take (MPEG-2 in a transport stream, for one), as
+// opposed to having none. Cover art does not count.
+async function hasUnsupportedVideoStream(path: string): Promise<boolean> {
+	const result = await runFfprobe([
+		"-v",
+		"error",
+		"-show_entries",
+		"stream=codec_type,codec_name:stream_disposition=attached_pic",
+		"-of",
+		"json",
+		path,
+	]);
+	if (result === null) return false;
+	if (result.exitCode !== 0) return isDecoderRejectedMessage(result.stderr);
+	try {
+		const { streams = [] } = JSON.parse(result.stdout) as {
+			streams?: {
+				codec_type?: string;
+				disposition?: { attached_pic?: number };
+			}[];
+		};
+		return streams.some(
+			(stream) =>
+				stream.codec_type === "video" && stream.disposition?.attached_pic !== 1,
+		);
+	} catch {
+		return false;
+	}
+}
+
 async function probeMetadata(path: string): Promise<VideoMetadata> {
-	const probed = await runProbe("metadata", path, PROBE_TIMEOUT_MS);
+	const probed = await runProbe("metadata", path, PROBE_TIMEOUT_MS).catch(
+		async (error: unknown) => {
+			if (
+				error instanceof UnreadableMediaInputError &&
+				error.message === NO_VIDEO_STREAM_MESSAGE &&
+				(await hasUnsupportedVideoStream(path))
+			) {
+				throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+			}
+			throw error;
+		},
+	);
 	await assertSupportedCodecs(path, probed.metadata);
 	return await withTrueDuration(path, probed);
 }
