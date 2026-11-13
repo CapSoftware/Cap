@@ -1414,16 +1414,26 @@ describe("native HLS renditions", () => {
 		expect(video.currentTime).toBe(0);
 	});
 
-	it("restores only the latest switch's time", async () => {
+	it("keeps the place across picks made before the first switch has loaded", async () => {
 		const { video, setLevel, index } = await nativePlayer();
-		video.currentTime = 9;
+		await video.play();
+		video.currentTime = 12.5;
+
 		setLevel(index("360p"));
-		video.currentTime = 4;
-		setLevel(index("720p"));
+		video.currentTime = 0;
+		video.paused = true;
+		setLevel(index("1080p"));
+
+		expect(video.src).toBe(`${HLS}?rendition=1080p`);
+		expect(video.plays).toBe(3);
+		video.reach(30);
+		expect(video.currentTime).toBe(12.5);
+
+		video.currentTime = 20;
+		setLevel(AUTO_LEVEL);
 		video.currentTime = 0;
 		video.reach(30);
-
-		expect(video.currentTime).toBe(4);
+		expect(video.currentTime).toBe(20);
 	});
 
 	it("ignores a pick it has no rendition for", async () => {
