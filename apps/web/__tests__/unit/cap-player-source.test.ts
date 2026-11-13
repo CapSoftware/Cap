@@ -788,6 +788,7 @@ describe("attachSource with hls.js", () => {
 
 		expect(video.src).toBe("");
 		expect(hls.source).toBe(SHORT_HLS);
+		expect(hls.config).toMatchObject({ preferManagedMediaSource: false });
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.loadLevel).toBe(hls.startLevel);
 		expect(hls.startLoads).toEqual([-1]);

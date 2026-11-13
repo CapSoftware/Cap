@@ -370,6 +370,10 @@ export const attachSource = (
 				abrEwmaDefaultEstimate: estimate,
 				abrEwmaDefaultEstimateMax: estimate,
 				startFragPrefetch: true,
+				// Safari on a Mac runs hls.js only where it has the classic
+				// MediaSource. With the managed one, a seek far ahead never
+				// finished in Safari 27: no segment was asked for.
+				preferManagedMediaSource: false,
 				backBufferLength: 30,
 				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
 			});
