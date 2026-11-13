@@ -860,7 +860,7 @@ A failed transcript has the status `error` and an `error` object with one of the
 | `source_too_large` | The file is larger than 2 GB |
 | `source_missing` | The uploaded file was not found |
 | `no_audio_track` | The file has no audio |
-| `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted |
+| `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted. When a URL returns a web page, the message says so |
 | `no_speech` | No longer returned. Audio with no speech now completes with empty text. Transcripts that failed this way before the change keep the code |
 | `duration_too_long` | The audio is longer than 4 hours |
 | `upload_expired` | The file was not uploaded within 24 hours |
@@ -963,7 +963,7 @@ curl https://cap.so/api/developer/v1/usage \
 
 Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
 
-**Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
+**Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Each transcript is charged on its length rounded to a whole second and then down to a whole micro-credit, so `seconds` times the rate can differ slightly from `microCredits`: for the exact charge use `microCredits`, or each transcript's `costMicroCredits`. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
 
 **Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 
@@ -1069,7 +1069,7 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 
 A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
 
-Rows written in the same second have the same `createdAt`. Within a page they are ordered so each balance follows from the row beneath it.
+Rows written in the same second have the same `createdAt`. They are ordered so each balance follows from the row beneath it, within a page and across page edges, so walking the list with any `limit` returns the same order.
 
 The console's Billing page shows the same rows and exports them all as CSV.
 
