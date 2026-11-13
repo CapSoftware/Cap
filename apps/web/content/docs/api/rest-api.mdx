@@ -1574,7 +1574,7 @@ Commands are sent to the iframe's `contentWindow` as `{ type: "cap-player", comm
   window.addEventListener("message", ({ source, data }) => {
     if (source !== player.contentWindow || data?.type !== "cap-player") return;
     if (data.event === "ready") send({ command: "seek", time: 30 });
-    if (data.event === "ended") console.log("Watched to the end");
+    if (data.event === "ended") console.log("Reached the end");
   });
 </script>
 ```
