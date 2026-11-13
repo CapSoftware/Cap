@@ -75,7 +75,7 @@ If you are self-hosting Cap, replace `cap.so` with your custom domain.
 
 ## Error Handling
 
-Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text.
+Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text. Every response on cap.so carries an `X-Request-Id` header: quote it when you contact support about a call.
 
 ```json
 {
@@ -186,6 +186,8 @@ POST /api/developer/v1/uploads
 | `maxBytes` | integer | No | Largest file the token may upload, in bytes, from `1` to `36000000000`. Leave it out for no cap beyond the 36 GB limit |
 
 The body is optional. A request with no body creates an upload with the defaults.
+
+Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
 A field this list does not have returns `400` with the code `invalid_request`, and the error names the field. Field names are case-sensitive, so `user_id` in place of `userId` is refused instead of creating a video with no user:
 
@@ -387,6 +389,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "deletedAt": null,
       "createdAt": "2025-06-15T10:30:00.000Z",
       "updatedAt": "2025-06-15T10:32:00.000Z",
+      "takenDown": false,
       "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
       "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
       "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
@@ -414,6 +417,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "deletedAt": null,
       "createdAt": "2025-06-15T10:20:00.000Z",
       "updatedAt": "2025-06-15T10:20:00.000Z",
+      "takenDown": false,
       "hlsUrl": null,
       "mp4Url": null,
       "posterUrl": null,
@@ -486,6 +490,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "deletedAt": null,
     "createdAt": "2025-06-15T10:30:00.000Z",
     "updatedAt": "2025-06-15T10:32:00.000Z",
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
@@ -546,6 +551,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
       { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
       { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
     ],
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
@@ -564,9 +570,11 @@ A video is `ready` as soon as its first output can be played, so playback can st
 
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
 
-`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed.
+`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed. While `takenDown` is `true` the playback URLs are `null` whatever `outputs` says, and `outputs` keeps describing what was encoded.
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
+
+`takenDown` is `true` when Cap has taken the video down after a report. Its playback URLs are then `null`, its playback files answer `410 Gone` to every new request, and its page and embed show only "This video is not available." A player that already loaded the video holds signed media links that keep working until they expire, at most 18 hours later. `status` does not change, and the video is stored and billed as before. Email hello@cap.so about a takedown.
 
 `transcriptionStatus` is `null`. Uploaded videos are not transcribed automatically. To get text, send the file to [Transcripts](/docs/api/rest-api#transcripts).
 
@@ -897,6 +905,8 @@ DELETE /api/developer/v1/transcripts/:id
 ```
 
 Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed. It stays deleted: it is not listed and its text is not kept.
+
+Deleting a transcript this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 
 #### Transcript billing
 
@@ -1502,6 +1512,7 @@ The full video object returned by list and get endpoints:
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
+| `takenDown` | boolean | `true` when Cap has taken the video down after a report. The playback URLs are then null, the playback files answer `410 Gone`, and the page and embed show that the video is not available |
 | `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
