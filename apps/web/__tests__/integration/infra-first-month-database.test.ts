@@ -33,6 +33,13 @@ vi.mock("@/lib/server", () => ({
 		Effect.runPromise(effect),
 }));
 vi.mock("workflow/api", () => ({ start: vi.fn() }));
+vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => false }));
+vi.mock("next/headers", () => ({
+	cookies: async () => ({ get: () => null }),
+	headers: async () => ({ get: () => null }),
+}));
+vi.mock("next/navigation", () => ({ redirect: vi.fn(), notFound: vi.fn() }));
 vi.mock("@/workflows/process-developer-video", () => ({
 	processDeveloperVideoWorkflow: "workflow",
 }));
@@ -54,6 +61,8 @@ const {
 	settleFirstMonthAtReady,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
+const { getInfraFirstMonthChargesSince, getInfraStorageChargesSince } =
+	await import("@/app/(infra)/dashboard/infra/infra-data");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -660,6 +669,41 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(
 				(await getInfraUploadAdmission(clips, clip)).requiredMicroCredits,
 			).toBe(5);
+		});
+
+		it("counts first months in the month's storage spending on the console", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const monthStart = new Date(Date.now() - 60 * 60 * 1000);
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId),
+				deletedAt: null,
+			});
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, {
+					duration: 3600,
+					width: 3840,
+					height: 2160,
+					maxResolutionTier: "2160p",
+				}),
+				deletedAt: null,
+			});
+			await billDay(accountId, "2026-11-13");
+			await database()
+				.update(developerCreditTransactions)
+				.set({ amountMicroCredits: -28 })
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						eq(developerCreditTransactions.type, "storage_daily"),
+					),
+				);
+
+			expect(await getInfraStorageChargesSince(accountId, monthStart)).toBe(
+				850 + 16_800 + 28,
+			);
+			expect(
+				await getInfraFirstMonthChargesSince(accountId, monthStart),
+			).toEqual({ chargedMicroCredits: 850 + 16_800, videos: 2 });
 		});
 
 		it("reports what is stored apart from what the daily charge covers", async () => {

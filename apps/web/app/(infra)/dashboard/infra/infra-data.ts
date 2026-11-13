@@ -380,10 +380,39 @@ export async function getInfraStorageChargesSince(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "storage_daily"),
+				inArray(developerCreditTransactions.type, [
+					"storage_daily",
+					"video_create",
+				]),
 				gte(developerCreditTransactions.createdAt, since),
 			),
 		);
 
 	return Number(row?.total ?? 0) || 0;
+}
+
+export async function getInfraFirstMonthChargesSince(
+	accountId: string,
+	since: Date,
+) {
+	const [row] = await db()
+		.select({
+			total: sql<
+				string | number | null
+			>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
+			videos: count(),
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, "video_create"),
+				gte(developerCreditTransactions.createdAt, since),
+			),
+		);
+
+	return {
+		chargedMicroCredits: Number(row?.total ?? 0) || 0,
+		videos: Number(row?.videos ?? 0) || 0,
+	};
 }

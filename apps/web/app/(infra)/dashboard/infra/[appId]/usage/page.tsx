@@ -30,6 +30,7 @@ import {
 	TR,
 } from "../../_components/ui";
 import {
+	getInfraFirstMonthChargesSince,
 	getInfraStorageSnapshots,
 	infraPageMetadata,
 	requireInfraApp,
@@ -68,13 +69,16 @@ export default async function InfraUsagePage({
 	const { app } = await requireInfraApp(appId);
 	const now = new Date();
 
-	const [storage, snapshots, transcription] = await Promise.all([
+	const [storage, snapshots, transcription, firstMonths] = await Promise.all([
 		getAppStorage(app.id),
 		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
 		getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
 			console.error("[infra-usage] Transcription usage unavailable", error);
 			return null;
 		}),
+		app.creditAccount
+			? getInfraFirstMonthChargesSince(app.creditAccount.id, utcMonthStart(now))
+			: Promise.resolve({ chargedMicroCredits: 0, videos: 0 }),
 	]);
 	const usage = storage.stored;
 	const audioHours = (transcription?.audioSeconds ?? 0) / 3600;
@@ -113,8 +117,17 @@ export default async function InfraUsagePage({
 				/>
 				<Figure
 					label={`Storage in ${monthName}`}
-					hint={`${month.billedDays} billed ${month.billedDays === 1 ? "day" : "days"}`}
-					value={formatCharge(month.chargedMicroCredits)}
+					hint={[
+						`${month.billedDays} billed ${month.billedDays === 1 ? "day" : "days"}`,
+						...(firstMonths.videos > 0
+							? [
+									`${firstMonths.videos} first ${firstMonths.videos === 1 ? "month" : "months"}`,
+								]
+							: []),
+					].join(", ")}
+					value={formatCharge(
+						month.chargedMicroCredits + firstMonths.chargedMicroCredits,
+					)}
 				/>
 				{transcription && (
 					<Figure
