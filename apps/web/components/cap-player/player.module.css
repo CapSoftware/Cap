@@ -228,6 +228,10 @@
 	pointer-events: none;
 }
 
+.player[data-crowded="true"][data-started="false"] .chrome {
+	visibility: hidden;
+}
+
 .track {
 	position: relative;
 	z-index: 2;

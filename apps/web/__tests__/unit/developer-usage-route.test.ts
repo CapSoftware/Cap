@@ -192,4 +192,46 @@ describe("GET /usage", () => {
 			finalThrough: "2026-11-18",
 		});
 	});
+
+	it("keeps answering with storage, speech and billing when the delivery read fails", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.delivered.mockRejectedValue(
+			Object.assign(new Error("Failed query"), {
+				cause: Object.assign(new Error("Lock wait timeout exceeded"), {
+					code: "ER_LOCK_WAIT_TIMEOUT",
+					errno: 1205,
+				}),
+			}),
+		);
+
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+
+		expect(response.status).toBe(200);
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.delivery).toBeNull();
+		expect(data).toMatchObject({
+			balanceMicroCredits: 949_286,
+			totalVideos: 2,
+			uploadingVideos: 1,
+			totalDurationMinutes: 12.5,
+			standing: { state: "active", pausesAt: null },
+			upload: { allowed: true },
+			storage: { dailyMicroCredits: 0 },
+			speech: {
+				periodStart: "2026-11-01T00:00:00.000Z",
+				seconds: 18_252.4,
+				microCredits: 50_714,
+				transcripts: 104,
+			},
+		});
+		expect(errors).toHaveBeenCalledWith(
+			"[developer-usage] Delivery usage unavailable",
+			expect.any(Error),
+		);
+		errors.mockRestore();
+	});
 });

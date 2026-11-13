@@ -12,26 +12,26 @@ export function InfraSpeed() {
 	return (
 		<InfraStage
 			className="px-6 py-9 sm:px-12 sm:py-12"
-			caption="Measured on production from a cloud machine. For short clips, the adaptive renditions followed within seconds."
+			caption="Playback starts while the rest of the ladder encodes. Every rendition up to 4K follows in about 2 minutes."
 		>
 			<div>
 				<div className="text-[15.5px] font-medium leading-[1.5] tracking-[-0.01em] text-[#E8ECF4]">
-					From upload finished to playable
+					From upload finished
 				</div>
 				<div className="mt-7 grid gap-y-6 sm:grid-cols-2 sm:gap-x-12">
 					{SPEED_TESTS.map((test) => (
-						<div key={test.source} className="shrink-0">
+						<div key={test.label} className="shrink-0">
 							<div className={`flex items-baseline gap-2 text-[14px] ${MUTED}`}>
-								about
+								{test.qualifier}
 								<span
 									className={`${MONO} text-[clamp(34px,4vw,44px)] leading-none tracking-[-0.04em] text-[#E8ECF4]`}
 								>
-									{test.seconds}
+									{test.value}
 								</span>
-								seconds
+								{test.unit}
 							</div>
 							<div className="mt-2.5 text-pretty text-[14px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
-								for {test.source}
+								{test.label}
 							</div>
 						</div>
 					))}

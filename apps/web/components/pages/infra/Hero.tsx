@@ -11,9 +11,8 @@ import {
 	LINKS,
 	PREVIEW_NOTE,
 	PRICES,
-	SPEED_LONG_MINUTES,
-	SPEED_LONG_SECONDS,
-	SPEED_SHORT_CLIP_SECONDS,
+	SPEED_PLAYABLE_SECONDS,
+	SPEED_PROCESSED_MINUTES,
 	usd,
 } from "./content";
 import { FilmButton } from "./Film";
@@ -31,13 +30,13 @@ const PROOFS = [
 	},
 	{
 		href: `#${ANCHORS.speed}`,
-		figure: `~${SPEED_SHORT_CLIP_SECONDS} sec`,
-		label: "after upload until a short clip is playable, in our tests",
+		figure: `<${SPEED_PLAYABLE_SECONDS} sec`,
+		label: "after upload until 1 hour of 4K is playable",
 	},
 	{
 		href: `#${ANCHORS.speed}`,
-		figure: `~${SPEED_LONG_SECONDS} sec`,
-		label: `after upload until ${SPEED_LONG_MINUTES} minutes of 4K is playable, in our tests`,
+		figure: `~${SPEED_PROCESSED_MINUTES} min`,
+		label: "after upload until 1 hour of 4K is fully processed",
 	},
 ] as const;
 
