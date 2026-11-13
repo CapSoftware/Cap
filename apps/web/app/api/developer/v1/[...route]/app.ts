@@ -11,6 +11,7 @@ import * as transcripts from "./transcripts";
 import * as uploads from "./uploads";
 import * as usage from "./usage";
 import * as videos from "./videos";
+import * as webhooks from "./webhooks";
 
 export const app = new Hono()
 	.basePath("/api/developer/v1")
@@ -21,6 +22,7 @@ export const app = new Hono()
 	.route("/transcripts", transcripts.app)
 	.route("/usage", usage.app)
 	.route("/transactions", transactions.app)
+	.route("/webhooks", webhooks.app)
 	.onError(developerApiError);
 
 app.notFound((c) => developerApiNotFound(c, app.routes));
