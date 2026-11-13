@@ -144,6 +144,7 @@ import {
 } from "@/lib/developer-transcript-store";
 import {
 	isTranscriptStatus,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
@@ -459,6 +460,15 @@ const developerMediaFailure = (
 					...commonError(requestId, failure.message),
 					code: "CONFLICT",
 				});
+	}
+	if (failure.status === 429) {
+		return new Agent.AgentRateLimitedError({
+			message: `${failure.message}. Wait for one to finish, then retry.`,
+			code: "RATE_LIMITED",
+			retryable: true,
+			retryAfterMs: TRANSCRIPT_BUSY_RETRY_SECONDS * 1000,
+			requestId,
+		});
 	}
 	if (failure.status === 503) {
 		return temporarilyUnavailable(requestId, failure.message, 5_000);

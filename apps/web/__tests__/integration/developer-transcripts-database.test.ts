@@ -1159,4 +1159,202 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		}
 		expect([...seen].sort()).toEqual([40_000, 50_000]);
 	});
+
+	const transcriptRow = async (transcriptId: string) => {
+		const [row] = await database()
+			.select()
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.id, transcriptId));
+		if (!row) throw new Error("Transcript fixture is missing.");
+		return row;
+	};
+
+	it("charges a transcript deleted while processing exactly once when the delete races the settle", async () => {
+		for (let round = 0; round < 24; round++) {
+			const appId = await makeApp(50_000);
+			const transcriptId = await makeTranscript(appId);
+			await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+			const [settled, deleted] = await Promise.all(
+				round % 2 === 0
+					? [settle(transcriptId, 3600), deleteTranscript(appId, transcriptId)]
+					: [
+							new Promise<Awaited<ReturnType<typeof settle>>>((resolve) =>
+								setTimeout(() => resolve(settle(transcriptId, 3600)), 2),
+							),
+							deleteTranscript(appId, transcriptId),
+						],
+			);
+
+			expect(settled).toMatchObject({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+			});
+			expect(await balanceOf(appId)).toBe(40_000);
+			expect(await ledgerOf(appId)).toEqual([
+				expect.objectContaining({
+					type: "transcription",
+					amount: -10_000,
+					referenceId: transcriptId,
+				}),
+			]);
+			const row = await transcriptRow(transcriptId);
+			expect(deleted).toEqual({ ok: true });
+			expect(row).toMatchObject({
+				status: "complete",
+				billedMicroCredits: 10_000,
+				reservedMicroCredits: 0,
+				text: null,
+			});
+			expect(row.deletedAt).toBeInstanceOf(Date);
+			expect(await getTranscript(appId, transcriptId)).toBeNull();
+			expect(await settle(transcriptId, 3600)).toMatchObject({
+				state: "complete",
+				alreadySettled: true,
+			});
+			expect(await balanceOf(appId)).toBe(40_000);
+			expect(await getAvailableTranscriptBalance(appId)).toBe(40_000);
+		}
+	});
+
+	it("keeps the hold of a transcript deleted while processing, and charges it when it settles", async () => {
+		const appId = await makeApp(12_000);
+		const transcriptId = await makeTranscript(appId);
+		await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+		expect(await deleteTranscript(appId, transcriptId)).toEqual({ ok: true });
+
+		expect(await getAvailableTranscriptBalance(appId)).toBe(2_000);
+		expect(await getSpeechUsage(appId)).toMatchObject({
+			balanceMicroCredits: 12_000,
+			heldMicroCredits: 10_000,
+			availableMicroCredits: 2_000,
+		});
+		const spend = await database().transaction((tx) =>
+			debitDeveloperUsage(tx, {
+				appId,
+				microCredits: 5_000,
+				type: "video_create",
+				referenceId: id(),
+				referenceType: "developer_video",
+			}),
+		);
+		expect(spend).toEqual({ state: "insufficient" });
+
+		expect(await settle(transcriptId, 3600)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(await balanceOf(appId)).toBe(2_000);
+		expect(await getAvailableTranscriptBalance(appId)).toBe(2_000);
+		expect((await listTranscripts(appId, { limit: 10 })).transcripts).toEqual(
+			[],
+		);
+	});
+
+	it("charges nothing for a transcript deleted before it was processing or after it failed", async () => {
+		const appId = await makeApp(50_000);
+		for (const status of ["uploading", "queued", "error"] as const) {
+			const transcriptId = await makeTranscript(appId, { status });
+			await deleteTranscript(appId, transcriptId);
+
+			expect(await settle(transcriptId, 3600)).toEqual({
+				state: "skipped",
+				reason: "deleted",
+			});
+			expect((await transcriptRow(transcriptId)).status).toBe(status);
+		}
+		expect(await balanceOf(appId)).toBe(50_000);
+		expect(await ledgerOf(appId)).toEqual([]);
+		expect(await getAvailableTranscriptBalance(appId)).toBe(50_000);
+	});
+
+	it("admits exactly 20 transcripts when 40 are created at once", async () => {
+		const appId = await makeApp(500_000);
+
+		const results = await Promise.all(
+			Array.from({ length: 40 }, (_, index) =>
+				createTranscriptFromUrl(
+					appId,
+					{ url: `https://media.example.com/clip-${index}.mp3` },
+					guards,
+				),
+			),
+		);
+
+		expect(results.filter((result) => result.ok)).toHaveLength(20);
+		const refused = results.filter((result) => !result.ok);
+		expect(refused).toHaveLength(20);
+		for (const result of refused) {
+			expect(result).toMatchObject({
+				status: 429,
+				code: "too_many_transcripts",
+			});
+		}
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(rows).toHaveLength(20);
+		expect(fixture.start).toHaveBeenCalledTimes(20);
+
+		const [first] = results;
+		if (!first?.ok) {
+			const admitted = results.find((result) => result.ok);
+			if (!admitted?.ok) throw new Error("Nothing was admitted.");
+			await deleteTranscript(appId, admitted.transcript.id);
+		} else {
+			await deleteTranscript(appId, first.transcript.id);
+		}
+		expect(
+			(await createTranscriptFromUrl(appId, { url: URL_A }, guards)).ok,
+		).toBe(true);
+		expect(
+			await createTranscriptFromUrl(appId, { url: URL_A }, guards),
+		).toMatchObject({ ok: false, status: 429 });
+	});
+
+	it("starts only as many uploads as there are slots when they are started at once", async () => {
+		const appId = await makeApp(500_000);
+		for (let index = 0; index < 18; index++) await makeTranscript(appId);
+		const uploads: string[] = [];
+		for (let index = 0; index < 8; index++) {
+			const created = await createTranscriptUpload(appId, {
+				fileName: `clip-${index}.mp3`,
+				contentLength: 1024,
+			});
+			if (!created.ok) throw new Error("Upload transcript was not created.");
+			uploads.push(created.transcript.id);
+		}
+		fixture.objectSize = 1024;
+
+		const results = await Promise.all(
+			uploads.map((transcriptId) => startTranscriptUpload(appId, transcriptId)),
+		);
+
+		expect(results.filter((result) => result.ok)).toHaveLength(2);
+		expect(
+			results.filter((result) => !result.ok && result.status === 429),
+		).toHaveLength(6);
+		expect(fixture.start).toHaveBeenCalledTimes(2);
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(rows.filter((row) => row.status === "queued")).toHaveLength(2);
+		expect(rows.filter((row) => row.status === "uploading")).toHaveLength(6);
+	});
+
+	it("does not let another app's transcripts use this app's slots", async () => {
+		const busy = await makeApp(500_000);
+		const quiet = await makeApp(500_000);
+		for (let index = 0; index < 20; index++) await makeTranscript(busy);
+
+		expect(
+			await createTranscriptFromUrl(busy, { url: URL_A }, guards),
+		).toMatchObject({ ok: false, status: 429 });
+		expect(
+			(await createTranscriptFromUrl(quiet, { url: URL_A }, guards)).ok,
+		).toBe(true);
+	});
 });
