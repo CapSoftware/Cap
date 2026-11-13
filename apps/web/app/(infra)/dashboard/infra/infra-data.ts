@@ -12,7 +12,6 @@ import {
 	developerVideos,
 	organizations,
 } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
 import { and, count, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
@@ -27,6 +26,7 @@ import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
+import { proCreditEligibility } from "@/lib/infra-pro-credit-eligibility";
 import {
 	INFRA_APP_COOKIE,
 	INFRA_BASE_PATH,
@@ -246,7 +246,7 @@ export async function getInfraOrganizations() {
 }
 
 export type InfraProCredit = {
-	status: "available" | "claimed" | "not_pro";
+	status: "available" | "claimed" | "trial" | "not_pro";
 	nextDate: string;
 };
 
@@ -254,7 +254,8 @@ export async function getInfraProCredit(): Promise<InfraProCredit> {
 	const user = await requireInfraUser();
 	const now = new Date();
 	const nextDate = nextProCreditDate(now).toISOString();
-	if (!userIsPro(user)) return { status: "not_pro", nextDate };
+	const eligibility = proCreditEligibility(user);
+	if (eligibility !== "paid") return { status: eligibility, nextDate };
 	const claimed = await hasClaimedProCredit(user.id, now);
 	return { status: claimed ? "claimed" : "available", nextDate };
 }

@@ -129,7 +129,7 @@ describe("storage totals are computed once per request", () => {
 		await InfraOverviewPage(params);
 
 		expect(storageAggregates()).toHaveLength(1);
-		expect(state.queries).toHaveLength(10);
+		expect(state.queries).toHaveLength(11);
 	});
 
 	it("on the console usage page", async () => {

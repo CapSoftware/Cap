@@ -2074,7 +2074,9 @@ export type DeveloperCreditReferenceType =
 	| "storage_day"
 	| "auto_top_up"
 	| "auto_top_up_failed"
-	| "auto_top_up_pending";
+	| "auto_top_up_pending"
+	| "stripe_refund"
+	| "stripe_dispute";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -2118,6 +2120,8 @@ export const developerCreditTransactions = mysqlTable(
 				"auto_top_up",
 				"auto_top_up_failed",
 				"auto_top_up_pending",
+				"stripe_refund",
+				"stripe_dispute",
 			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),

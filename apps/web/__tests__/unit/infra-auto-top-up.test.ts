@@ -242,6 +242,25 @@ describe("auto top-up charge", () => {
 		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 	});
 
+	it("does not charge the card of an app whose payment was disputed", async () => {
+		arm();
+		ledger.rows.push({
+			id: "disputed",
+			accountId: "account-1",
+			type: "adjustment",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 30_000,
+			referenceId: "dp_1",
+			referenceType: "stripe_dispute",
+			createdAt: new Date(ledger.now),
+		});
+
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "disputed",
+		});
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+	});
 	it("charges the saved card off session and grants credit keyed by the payment intent", async () => {
 		const result = await runAutoTopUp("account-1", now());
 
