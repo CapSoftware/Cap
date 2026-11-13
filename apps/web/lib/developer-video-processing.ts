@@ -12,6 +12,7 @@ import { billableVideo } from "@/lib/developer-pricing";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
+import { INFRA_SUPPORTED_VIDEO_FORMATS } from "@/lib/infra-video-formats";
 import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
@@ -281,8 +282,7 @@ export class DeveloperVideoRejected extends Error {
 	override name = "DeveloperVideoRejected";
 }
 
-const UNREADABLE_FILE =
-	"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.";
+const UNREADABLE_FILE = `This file could not be read as a video. Upload ${INFRA_SUPPORTED_VIDEO_FORMATS}.`;
 const PLAYLIST_FILE =
 	"This file is a playlist, not a video. Upload the video file itself.";
 const UNENCODABLE_FILE =

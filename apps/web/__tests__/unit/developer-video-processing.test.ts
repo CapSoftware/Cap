@@ -1411,7 +1411,7 @@ describe("developer video dispatch", () => {
 
 		await expect(refusal).rejects.toBeInstanceOf(DeveloperVideoRejected);
 		await expect(refusal).rejects.toThrow(
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		);
 		expect(video().processing?.probing).toBeUndefined();
 	});
@@ -1425,11 +1425,11 @@ describe("developer video dispatch", () => {
 		["Media input is empty", "The uploaded file is empty. Upload it again."],
 		[
 			"Media input could not be read",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Input has an unsupported or unrecognizable format.",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Video frame is larger than 8K, the largest size this server accepts",
@@ -1513,7 +1513,7 @@ describe("developer video dispatch", () => {
 		[
 			"a file that is not media",
 			"unknown",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 	])(
 		"refuses %s without asking the media server",
