@@ -23,6 +23,7 @@ import {
 	UNREADABLE_VIDEO_REASON,
 } from "@/lib/infra-video-formats";
 import {
+	IMPORT_ADMISSION_CHECK_BYTES,
 	IMPORT_MAX_BYTES,
 	IMPORT_MAX_IN_FLIGHT_PER_APP,
 	IMPORT_MAX_PER_KEY_PER_HOUR,
@@ -844,10 +845,15 @@ function storagePartWriter(
 // Streams the source into fixed size parts. One part uploads while the next
 // fills, so at most two parts are held in memory.
 export async function streamSourceToParts(
-	source: Pick<ImportSource, "read">,
+	source: { read: () => Promise<ReadableStreamReadResult<Uint8Array>> },
 	first: { chunks: Uint8Array[]; length: number; done: boolean },
 	writer: PartWriter,
-	options: { maxBytes: number; partBytes: number },
+	options: {
+		maxBytes: number;
+		partBytes: number;
+		checkpointBytes?: number;
+		checkpoint?: (totalBytes: number) => Promise<void>;
+	},
 ): Promise<{ parts: UploadPart[]; totalBytes: number }> {
 	const parts: UploadPart[] = [];
 	let pending: Promise<void> | null = null;
@@ -855,12 +861,21 @@ export async function streamSourceToParts(
 	let filled = 0;
 	let totalBytes = 0;
 	let partNumber = 1;
+	let checkedAt = 0;
 
 	const flush = async () => {
 		if (filled === 0) return;
 		const bytes = filled === buffer.length ? buffer : buffer.slice(0, filled);
 		const number = partNumber++;
 		const size = filled;
+		if (
+			options.checkpoint &&
+			options.checkpointBytes &&
+			totalBytes - checkedAt >= options.checkpointBytes
+		) {
+			checkedAt = totalBytes;
+			await options.checkpoint(totalBytes);
+		}
 		if (pending) await pending;
 		pending = writer.put(number, bytes).then((etag) => {
 			parts.push({ partNumber: number, etag, size });
@@ -911,6 +926,7 @@ export type ImportRunDeps = {
 		signal: AbortSignal;
 	}) => PartWriter;
 	partBytes?: number;
+	checkpointBytes?: number;
 	now?: () => number;
 };
 
@@ -946,6 +962,7 @@ export async function runInfraVideoImport(
 			deletedAt: developerVideos.deletedAt,
 			duration: developerVideos.duration,
 			status: developerVideos.status,
+			maxResolutionTier: developerVideos.maxResolutionTier,
 		})
 		.from(developerVideos)
 		.where(
@@ -999,6 +1016,30 @@ export async function runInfraVideoImport(
 			{
 				maxBytes: deps.guards?.maxBytes ?? IMPORT_MAX_BYTES,
 				partBytes: deps.partBytes ?? IMPORT_PART_BYTES,
+				// A file with no declared size was admitted on nothing. The
+				// balance is asked again as it grows, so an app that cannot pay
+				// for it stops long before the size cap.
+				checkpointBytes: deps.checkpointBytes ?? IMPORT_ADMISSION_CHECK_BYTES,
+				checkpoint: async (totalBytes) => {
+					const admission = await admitDeveloperVideoUpload({
+						appId,
+						videoId,
+						durationSeconds: totalBytes / STORED_BYTES_PER_SECOND,
+						width: null,
+						height: null,
+						maxResolutionTier: video.maxResolutionTier,
+					});
+					if (!admission.allowed) {
+						await scheduleAutoTopUp({ appId });
+						throw new ImportStop(
+							"insufficient_credits",
+							String(
+								admission.message ??
+									"Not enough credit to store the file being imported",
+							),
+						);
+					}
+				},
 			},
 		);
 		if (source.contentLength !== null && totalBytes < source.contentLength) {

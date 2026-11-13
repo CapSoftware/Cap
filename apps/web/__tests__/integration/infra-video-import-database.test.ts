@@ -585,6 +585,44 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
+			it("asks the balance again as an undeclared file grows, and stops when it runs out", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				let checks = 0;
+				mocks.admit.mockImplementation(async () => {
+					checks++;
+					return checks < 2
+						? { allowed: true }
+						: { allowed: false, message: "Add credit" };
+				});
+				const { parts, writer } = recordingWriter();
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: serving(mp4Bytes(200), false),
+					writer,
+					partBytes: 16,
+					checkpointBytes: 64,
+				});
+				expect(outcome).toBe("failed");
+				expect(mocks.admit).toHaveBeenCalledTimes(2);
+				const [first, second] = mocks.admit.mock.calls.map(
+					([input]) => input.durationSeconds * 2_500_000,
+				);
+				expect(first).toBeGreaterThanOrEqual(64);
+				expect(first).toBeLessThan(64 + 16 + 7);
+				expect(second).toBeGreaterThanOrEqual((first ?? 0) + 64);
+				expect(parts.length).toBeLessThan(13);
+				expect(mocks.complete).not.toHaveBeenCalled();
+				expect(mocks.abort).toHaveBeenCalled();
+				expect(mocks.topUp).toHaveBeenCalledWith({ appId });
+				expect(await importRow(videoId)).toMatchObject({
+					state: "failed",
+					errorCode: "insufficient_credits",
+				});
+				expect((await videoRow(videoId))?.errorReason).toBe(
+					"Import failed: Add credit",
+				);
+			});
+
 			it("fails the video when completion is refused for credit", async () => {
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);

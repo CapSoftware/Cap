@@ -370,10 +370,11 @@ describe("what the URL serves", () => {
 	});
 
 	it("accepts octet-stream and no type when the bytes look like a video", async () => {
-		for (const headers of [
+		const variants: Record<string, string>[] = [
 			{ "content-type": "application/octet-stream" },
 			{},
-		]) {
+		];
+		for (const headers of variants) {
 			expect(
 				await codeOf(
 					preflightImport(

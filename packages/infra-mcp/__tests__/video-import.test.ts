@@ -158,6 +158,34 @@ describe("videos_wait on an imported video", () => {
 		expect(result.next).toBeUndefined();
 	});
 
+	it("keeps a signed source link's query out of the result", async () => {
+		const client = {
+			call: vi.fn(async () => ({
+				data: {
+					id: "video-1",
+					status: "errored",
+					import: {
+						sourceUrl:
+							"https://bucket.example.com/a.mp4?X-Amz-Signature=secret#t=1",
+						state: "failed",
+						errorCode: "timeout",
+					},
+				},
+			})),
+		};
+		const tools = toolsWith(client, "hosted");
+		for (const [name, args] of [
+			["videos_wait", { videoId: "video-1" }],
+			["videos_get", { videoId: "video-1" }],
+		] as const) {
+			const result = await tools.tool(name).run(args, call);
+			expect(JSON.stringify(result), name).not.toContain("secret");
+			expect(result, name).toMatchObject({
+				import: { sourceUrl: "https://bucket.example.com/a.mp4" },
+			});
+		}
+	});
+
 	it("stops on a failed import with its reason", async () => {
 		const client = {
 			call: vi.fn(async () => ({

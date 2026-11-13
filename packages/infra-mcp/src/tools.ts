@@ -11,6 +11,7 @@ import {
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoImport,
 	videoLinks,
 	videoRow,
 } from "./shape";
@@ -422,7 +423,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				return {
 					videoId: id,
 					status: video.status ?? "uploading",
-					...(video.import ? { import: video.import } : {}),
+					...videoImport(video),
 					...videoLinks(video),
 					next: "Call videos_wait with this videoId to get the playback links once the file is downloaded and encoded.",
 				};
@@ -520,7 +521,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 								waitedSeconds: outcome.waitedSeconds,
 								next: MISSING_LINK_ADVICE[surface][firstAbsent],
 							}),
-					...(last.import ? { import: last.import } : {}),
+					...videoImport(last),
 					...(last.status === "uploading" && !videoIsDownloading(last)
 						? {
 								next: UPLOADING_NEXT[surface],
