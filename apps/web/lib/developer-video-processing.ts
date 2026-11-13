@@ -629,6 +629,7 @@ async function buildJobRequest(
 			expiresIn,
 		),
 		webhookUrl: webhookUrl(part, token),
+		infra: true,
 		...(inputExtension ? { inputExtension } : {}),
 	};
 

@@ -76,6 +76,9 @@ export function isUnreadableMediaInput(error: unknown): boolean {
 
 const UNREADABLE_MESSAGE = "Media input could not be read";
 
+// What a probe worker exits with when the parser throws outside a request.
+export const PARSER_FAULT_EXIT_CODE = 70;
+
 function isTimeout(error: unknown): boolean {
 	return (
 		error instanceof Error &&

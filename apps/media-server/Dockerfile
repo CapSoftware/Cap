@@ -51,4 +51,9 @@ EXPOSE 3456
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then(async (response) => process.exit(response.ok || (await response.json().catch(() => ({}))).status === 'draining' ? 0 : 1)).catch(() => process.exit(1))"]
 
+# Starts as root to hand the temp directory to the bun user, then runs the
+# server as that user. See docker-entrypoint.sh.
+COPY apps/media-server/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod 755 ./docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]
