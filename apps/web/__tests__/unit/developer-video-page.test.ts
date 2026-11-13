@@ -132,13 +132,15 @@ describe("developer video page states", () => {
 		expect(html).not.toContain("<video");
 	});
 
-	it("tells a viewer of a failed video one neutral sentence and nothing else", () => {
+	it("tells a viewer of a failed video a neutral heading and line and nothing else", () => {
 		const html = render(failed);
 		const text = html
 			.replace(/<style>.*?<\/style>/g, "")
-			.replace(/<[^>]+>/g, " ");
+			.replace(/<[^>]+>/g, " ")
+			.replaceAll("&#x27;", "'");
 
-		expect(text).toContain("This video is not available.");
+		expect(text).toContain("This video isn't available");
+		expect(text).toContain("There is nothing to play at this link.");
 		expect(text.match(/[.!?](\s|$)/g)).toHaveLength(1);
 		expect(text).not.toMatch(/upload|export|processed|owner|credit/i);
 		expect(html).not.toContain("<video");
@@ -597,7 +599,7 @@ describe("developer video page routes", () => {
 			}),
 		);
 
-		expect(html).toContain("This video is not available.");
+		expect(html).toContain("This video isn&#x27;t available");
 	});
 
 	it("hands the query of each route to the player", async () => {

@@ -21,7 +21,10 @@ import {
 	DEVELOPER_VIDEO_UNAVAILABLE,
 	developerVideoReportHref,
 } from "@/lib/developer-video-takedown";
-import { INFRA_VIDEO_PUBLIC_FAILURE } from "@/lib/infra-video-view";
+import {
+	INFRA_VIDEO_PUBLIC_FAILURE,
+	INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
+} from "@/lib/infra-video-view";
 import { EmbedError } from "./EmbedError";
 import { RefreshUntilReady } from "./RefreshUntilReady";
 
@@ -146,7 +149,10 @@ function Stage({
 	if (player.kind === "failed") {
 		return (
 			<>
-				<Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />
+				<Notice
+					title={INFRA_VIDEO_PUBLIC_FAILURE}
+					detail={INFRA_VIDEO_PUBLIC_FAILURE_DETAIL}
+				/>
 				{playback.events && <EmbedError code="unavailable" />}
 			</>
 		);
