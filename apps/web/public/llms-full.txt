@@ -14,6 +14,7 @@ Cap Infra is Cap's usage-billed API for building video and speech into your own 
 - OpenAPI 3.1 description (take every path and field name from it): https://cap.so/openapi.json
 - Billing rules: https://cap.so/docs/api/billing
 - Console, where an app and its keys are created: https://cap.so/dashboard/infra
+- Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp
 
 Auth:
 - Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code, a client bundle or a public environment variable.
