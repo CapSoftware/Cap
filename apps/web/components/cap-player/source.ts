@@ -300,6 +300,7 @@ export const attachSource = (
 	let nativeLevels: MasterLevel[] = [];
 	let nativeSrc = "";
 	let listing: AbortController | null = null;
+	let resumeAfterSwitch: (() => void) | null = null;
 
 	function onNativeError() {
 		playFile();
@@ -320,6 +321,13 @@ export const attachSource = (
 			.catch(() => undefined);
 	}
 
+	function dropResume() {
+		if (resumeAfterSwitch) {
+			video.removeEventListener("loadedmetadata", resumeAfterSwitch);
+		}
+		resumeAfterSwitch = null;
+	}
+
 	function pickNativeLevel(index: number) {
 		const hls = source.hls;
 		if (!hls || fileAttached) return;
@@ -329,16 +337,16 @@ export const attachSource = (
 				: renditionSource(hls, nativeLevels[index]?.uri);
 		if (!next || next === nativeSrc) return;
 		const { resumeAt, wasPlaying } = position();
+		dropResume();
 		nativeSrc = next;
 		video.src = next;
 		if (resumeAt > 0) {
-			video.addEventListener(
-				"loadedmetadata",
-				() => {
-					video.currentTime = resumeAt;
-				},
-				{ once: true },
-			);
+			const resume = () => {
+				resumeAfterSwitch = null;
+				video.currentTime = resumeAt;
+			};
+			resumeAfterSwitch = resume;
+			video.addEventListener("loadedmetadata", resume, { once: true });
 		}
 		if (wasPlaying) void video.play().catch(() => undefined);
 	}
@@ -376,6 +384,7 @@ export const attachSource = (
 			return;
 		}
 		fileAttached = true;
+		dropResume();
 		setLevel = () => undefined;
 		onLevels?.([]);
 		video.removeEventListener("error", onNativeError);
@@ -398,6 +407,7 @@ export const attachSource = (
 		cancelled = true;
 		cancelWarm();
 		listing?.abort();
+		dropResume();
 		video.removeEventListener("error", onNativeError);
 		video.removeEventListener("loadedmetadata", listNativeLevels);
 		video.removeEventListener("loadedmetadata", seekToStart);

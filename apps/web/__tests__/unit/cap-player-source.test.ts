@@ -1265,6 +1265,30 @@ describe("native HLS renditions", () => {
 		expect(video.src).toBe(HLS);
 	});
 
+	it("does not carry a switch's time over to a source attached after it stops", async () => {
+		const { video, setLevel, index, stop } = await nativePlayer();
+		video.currentTime = 9;
+
+		setLevel(index("360p"));
+		stop();
+		video.currentTime = 0;
+		video.reach(30);
+
+		expect(video.currentTime).toBe(0);
+	});
+
+	it("restores only the latest switch's time", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		video.currentTime = 9;
+		setLevel(index("360p"));
+		video.currentTime = 4;
+		setLevel(index("720p"));
+		video.currentTime = 0;
+		video.reach(30);
+
+		expect(video.currentTime).toBe(4);
+	});
+
 	it("ignores a pick it has no rendition for", async () => {
 		const { video, setLevel } = await nativePlayer();
 
