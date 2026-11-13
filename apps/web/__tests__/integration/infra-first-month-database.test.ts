@@ -15,6 +15,7 @@ import {
 	afterAll,
 	afterEach,
 	beforeAll,
+	beforeEach,
 	describe,
 	expect,
 	it,
@@ -71,9 +72,8 @@ const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const { restoredSinceCharge } = await import("@/lib/infra-standing");
 const { chargeDeliveryDay } = await import("@/lib/infra-delivery-billing");
 const { deliveryMicroCredits } = await import("@/lib/infra-delivery-rollup");
-const { firstMonthChargesBegan } = await import(
-	"@/lib/infra-first-month-start"
-);
+const { clearFirstMonthChargesBeganCache, firstMonthChargesBegan } =
+	await import("@/lib/infra-first-month-start");
 const {
 	chargeDeveloperVideoFirstMonth,
 	chargeMissedFirstMonths,
@@ -210,6 +210,10 @@ describe.runIf(Boolean(databaseUrl))(
 					dailyChargeAt: at,
 				})
 			).get(appId)?.totalMinutes ?? 0;
+
+		beforeEach(() => {
+			clearFirstMonthChargesBeganCache();
+		});
 
 		beforeAll(async () => {
 			if (!databaseUrl) throw new Error("Missing isolated test database URL.");
