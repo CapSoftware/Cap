@@ -108,6 +108,7 @@ describe("the Billing page", () => {
 			(section) => section.title === "API & Developers",
 		);
 		expect(group?.items.map((item) => item.slug)).toEqual([
+			"api/get-started",
 			"api/rest-api",
 			"api/billing",
 			"api/webhooks",

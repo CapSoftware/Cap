@@ -82,6 +82,11 @@ import {
 } from "@/lib/agent-api";
 import { developerAppBillingSection } from "@/lib/agent-developer-billing";
 import {
+	developerAppNotFound,
+	developerResourceNotFound,
+	missingAgentScope,
+} from "@/lib/agent-developer-errors";
+import {
 	agentAction,
 	agentViewerSettings,
 	decodeNotificationCursor,
@@ -133,6 +138,7 @@ import {
 	reserveDeveloperAppSlot,
 } from "@/lib/developer-app-limits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import { developerIdFromKey } from "@/lib/developer-ids";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
 	createTranscriptFromUrl,
@@ -147,6 +153,9 @@ import {
 	isTranscriptStatus,
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
+import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
+import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
+import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
@@ -518,7 +527,7 @@ const requireScope = (
 ) =>
 	principal.scopes.has(scope)
 		? Effect.void
-		: Effect.fail(forbidden(requestId, `The ${scope} permission is required`));
+		: Effect.fail(missingAgentScope(requestId, scope));
 
 const pickViewerSettings = (
 	settings:
@@ -1725,7 +1734,7 @@ const requireDeveloperAppOwner = Effect.fn("Agent.requireDeveloperAppOwner")(
 				)
 				.limit(1),
 		);
-		if (!app) return yield* notFound(requestId);
+		if (!app) return yield* developerAppNotFound(requestId);
 	},
 );
 
@@ -3723,8 +3732,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								...row,
 								createdAt: row.createdAt.toISOString(),
 								updatedAt: row.updatedAt.toISOString(),
-								capabilities,
 							})),
+							capabilities,
 							requestId,
 						};
 					}),
@@ -3737,6 +3746,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					Effect.gen(function* () {
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:read", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const management = yield* AgentManagement;
 						const context = yield* management.getDeveloperAppContext(
 							principal.id,
@@ -3798,6 +3808,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if ((externalUserId?.length ?? 0) > 255) {
 							return yield* badRequest(requestId, "User ID is too long");
 						}
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const management = yield* AgentManagement;
 						const rows = yield* management.listDeveloperVideos(
 							principal.id,
@@ -3811,20 +3822,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const next = hasMore ? page.at(-1) : undefined;
 						const capabilities = developerCapabilities(principal.scopes);
 						return {
-							videos: page.map((video) => ({
-								id: video.id,
-								appId: video.appId,
-								externalUserId: video.externalUserId,
-								name: video.name,
-								durationSeconds: video.duration,
-								width: video.width,
-								height: video.height,
-								fps: video.fps,
-								transcriptionStatus: video.transcriptionStatus,
-								createdAt: video.createdAt.toISOString(),
-								updatedAt: video.updatedAt.toISOString(),
-								capabilities,
-							})),
+							videos: page.map(toAgentDeveloperVideo),
+							capabilities,
 							nextCursor: next
 								? encodeAgentCursor({
 										updatedAt: next.createdAt.toISOString(),
@@ -3833,6 +3832,38 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								: null,
 							requestId,
 						};
+					}),
+					requestId,
+				);
+			})
+			.handle("getDeveloperVideo", ({ path, urlParams }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:read", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const management = yield* AgentManagement;
+						const read = management.getDeveloperVideo(
+							principal.id,
+							path.appId,
+							path.videoId,
+						);
+						const video = yield* read;
+						if (!video) {
+							return yield* developerResourceNotFound(requestId, "Video");
+						}
+						if (
+							urlParams.restart === "false" ||
+							!developerVideoRedrive({ ...video, deletedAt: null }, Date.now())
+						) {
+							return { video: toAgentDeveloperVideo(video), requestId };
+						}
+						const restarted = yield* Effect.promise(() =>
+							redriveDeveloperVideoProcessing(video.id).catch(() => false),
+						);
+						const current = restarted ? ((yield* read) ?? video) : video;
+						return { video: toAgentDeveloperVideo(current), requestId };
 					}),
 					requestId,
 				);
@@ -3854,6 +3885,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									id: decodedCursor.id,
 								}
 							: null;
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const management = yield* AgentManagement;
 						const rows = yield* management.listDeveloperTransactions(
 							principal.id,
@@ -4015,6 +4047,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: { path, ...payload, name, logoUrl },
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: developerAppNotFound,
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4070,6 +4103,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: path,
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: developerAppNotFound,
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4133,6 +4167,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: { path, domain },
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: developerAppNotFound,
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4147,7 +4182,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!app) return { state: "not_found" };
-								const id = deterministicAgentId(
+								const id = developerIdFromKey(
 									"developer_domain",
 									path.appId,
 									domain,
@@ -4158,11 +4193,21 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.onDuplicateKeyUpdate({
 										set: { domain: sql`${Db.developerAppDomains.domain}` },
 									});
+								const [stored] = await tx
+									.select({ id: Db.developerAppDomains.id })
+									.from(Db.developerAppDomains)
+									.where(
+										and(
+											eq(Db.developerAppDomains.appId, path.appId),
+											eq(Db.developerAppDomains.domain, domain),
+										),
+									)
+									.limit(1);
 								return {
 									state: "success",
 									response: mutationResponse(
 										"developer_domain",
-										id,
+										stored?.id ?? id,
 										"created",
 										requestId,
 									),
@@ -4180,6 +4225,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireAgentWrites(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						return yield* runAgentMutation({
 							principal,
 							operation: "remove_developer_domain",
@@ -4187,6 +4233,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: path,
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: (id) => developerResourceNotFound(id, "Domain"),
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4249,6 +4296,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							decodeReplay: Schema.decodeUnknownSync(
 								DeveloperKeyOperationResult,
 							),
+							notFound: developerAppNotFound,
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4365,7 +4413,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								)
 								.limit(1),
 						);
-						if (!account) return yield* notFound(requestId);
+						if (!account) return yield* developerAppNotFound(requestId);
 						const thresholdMicroCredits =
 							payload.thresholdMicroCredits ??
 							account.autoTopUpThresholdMicroCredits;
@@ -4385,6 +4433,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: { path, payload },
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: developerAppNotFound,
 							execute: async (tx) => {
 								const [app] = await tx
 									.select({ id: Db.developerApps.id })
@@ -4486,7 +4535,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											)
 											.limit(1),
 									);
-									if (!account) return yield* notFound(requestId);
+									if (!account) return yield* developerAppNotFound(requestId);
 									const customerId = yield* ensureAgentStripeCustomer(
 										principal,
 										providerIdempotencyKey,
@@ -4553,6 +4602,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						return yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_video",
@@ -4560,6 +4610,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: path,
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: (id) => developerResourceNotFound(id, "Video"),
 							execute: async (tx) => {
 								const [video] = await tx
 									.select({ id: Db.developerVideos.id })
@@ -4657,7 +4708,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								developerMediaFailure(requestId, result),
 							);
 						}
-						return { video: result.video, requestId };
+						const management = yield* AgentManagement;
+						const video = yield* management.getDeveloperVideo(
+							principal.id,
+							path.appId,
+							result.video.id,
+						);
+						if (!video) {
+							return yield* developerResourceNotFound(requestId, "Video");
+						}
+						return { video: toAgentDeveloperVideo(video), requestId };
 					}),
 					requestId,
 				);
@@ -4721,10 +4781,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							getTranscript(path.appId, path.transcriptId),
 						);
 						if (!transcript) {
-							return yield* new Agent.AgentNotFoundError({
-								...commonError(requestId, "Transcript not found"),
-								code: "NOT_FOUND",
-							});
+							return yield* developerResourceNotFound(requestId, "Transcript");
 						}
 						const includeSegments = (urlParams.include ?? "")
 							.split(",")
@@ -4839,6 +4896,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const response = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_transcript",
@@ -4846,6 +4904,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: path,
 							requestId,
 							decodeReplay: decodeMutationResponse,
+							notFound: (id) => developerResourceNotFound(id, "Transcript"),
 							execute: async (tx) => {
 								const [transcript] = await tx
 									.select({ id: Db.developerTranscripts.id })
