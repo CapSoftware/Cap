@@ -1801,47 +1801,82 @@ pub fn ripple_insert_output_tracks(
     }
 }
 
-pub fn ripple_keyboard_for_clip_trim(
+pub fn carry_keyboard_with_clips(
     before: &TimelineConfiguration,
     timeline: &mut TimelineConfiguration,
-    index: usize,
-    start_edge: bool,
+    new_index: impl Fn(usize) -> usize,
 ) {
-    let (Some(old), Some(new)) = (before.segments.get(index), timeline.segments.get(index)) else {
-        return;
+    let old_offsets = editor_timeline::clip_timeline_offsets(before);
+    let new_offsets = editor_timeline::clip_timeline_offsets(timeline);
+    let clips = &timeline.segments;
+    let carry = |output: f64| -> Option<f64> {
+        let mut owners = before
+            .segments
+            .iter()
+            .zip(&old_offsets)
+            .enumerate()
+            .rev()
+            .filter(|(_, (clip, offset))| **offset <= output && output < **offset + clip.duration())
+            .peekable();
+        if owners.peek().is_none() {
+            return Some(output);
+        }
+        owners.find_map(|(index, (clip, offset))| {
+            let source = clip.start + (output - offset) * clip.timescale;
+            let target = new_index(index);
+            let clip = clips.get(target)?;
+            (clip.start..clip.end)
+                .contains(&source)
+                .then(|| new_offsets[target] + (source - clip.start) / clip.timescale)
+        })
     };
-    let (old_duration, new_duration) = (old.duration(), new.duration());
-    if !old_duration.is_finite() || !new_duration.is_finite() {
-        return;
-    }
-    let shift = clip_timeline_duration(before) - clip_timeline_duration(timeline);
-    if shift.abs() < 1e-9 {
-        return;
-    }
-    let clip_start = editor_timeline::clip_timeline_offsets(before)
-        .get(index)
-        .copied()
-        .unwrap_or(0.0);
-    let holds = before.hold_windows();
-    let edge = if start_edge {
-        clip_start
-    } else {
-        clip_start + old_duration.min(new_duration)
-    };
-    if shift > 0.0 {
-        let cut_start = effective_to_output_end(&holds, edge);
-        let cut_end =
-            effective_to_output(&holds, edge + old_duration - new_duration).max(cut_start);
-        timeline
-            .keyboard_segments
-            .retain_mut(|segment| segment.ripple_delete(cut_start, cut_end, shift));
-    } else {
-        crate::editor_clips::ripple_keyboard_track(
-            &mut timeline.keyboard_segments,
-            effective_to_output(&holds, edge),
-            -shift,
-        );
-    }
+    timeline.keyboard_segments.retain_mut(|segment| {
+        let times: Vec<f64> = if segment.keys.is_empty() {
+            vec![segment.start]
+        } else {
+            segment
+                .keys
+                .iter()
+                .map(|key| segment.start + key.time_offset / 1000.0)
+                .collect()
+        };
+        let carried: Vec<Option<f64>> = times.iter().map(|time| carry(*time)).collect();
+        let Some((first, moved)) = times
+            .iter()
+            .zip(&carried)
+            .find_map(|(time, carried)| carried.map(|carried| (*time, carried)))
+        else {
+            return false;
+        };
+        if carried.iter().any(Option::is_none) {
+            let chars: Vec<char> = segment.display_text.chars().collect();
+            if chars.len() != segment.keys.len() {
+                return false;
+            }
+            segment.display_text = chars
+                .into_iter()
+                .zip(&carried)
+                .filter_map(|(ch, carried)| carried.map(|_| ch))
+                .collect();
+        }
+        let lead = first - segment.start;
+        let lead_survives =
+            carry(segment.start).is_some_and(|start| (moved - lead - start).abs() < 1e-6);
+        let start = if lead_survives { moved - lead } else { moved };
+        segment.end = (segment.end + moved - first).max(start);
+        segment.start = start;
+        let mut carried = carried.into_iter();
+        segment
+            .keys
+            .retain_mut(|key| match carried.next().flatten() {
+                Some(time) => {
+                    key.time_offset = ((time - start) * 1000.0).max(0.0);
+                    true
+                }
+                None => false,
+            });
+        true
+    });
 }
 
 /// The seven plain splits. 3D is **not** among them: `splitCamera3DSegment`
@@ -4676,7 +4711,6 @@ mod tests {
     fn trimmed_keyboard(
         timescale: f64,
         index: usize,
-        start_edge: bool,
         source: (f64, f64),
     ) -> Vec<(String, f64, Vec<f64>)> {
         let mut project = config(serde_json::json!({
@@ -4709,7 +4743,7 @@ mod tests {
         let before = timeline.clone();
         timeline.segments[index].start = source.0;
         timeline.segments[index].end = source.1;
-        ripple_keyboard_for_clip_trim(&before, timeline, index, start_edge);
+        carry_keyboard_with_clips(&before, timeline, |index| index);
         timeline
             .keyboard_segments
             .iter()
@@ -4741,9 +4775,47 @@ mod tests {
     }
 
     #[test]
+    fn trimming_before_a_crossfade_keeps_the_next_clips_keypresses() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 30.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": [],
+                "keyboardSegments": [
+                    {
+                        "id": "cut", "start": 8.5, "end": 8.8,
+                        "displayText": "a", "keys": [{ "key": "a", "timeOffset": 0.0 }]
+                    },
+                    {
+                        "id": "overlap", "start": 9.5, "end": 10.5,
+                        "displayText": "k", "keys": [{ "key": "k", "timeOffset": 0.0 }]
+                    },
+                    {
+                        "id": "late", "start": 15.0, "end": 16.0,
+                        "displayText": "b", "keys": [{ "key": "b", "timeOffset": 0.0 }]
+                    }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = timeline.clone();
+        timeline.segments[0].end = 8.0;
+        carry_keyboard_with_clips(&before, timeline, |index| index);
+        let starts: Vec<_> = timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| (segment.id.as_str(), segment.start))
+            .collect();
+        assert_eq!(starts, vec![("overlap", 7.5), ("late", 13.0)]);
+    }
+
+    #[test]
     fn shrinking_a_clip_end_pulls_later_keypresses_back() {
         assert_keyboard(
-            trimmed_keyboard(1.0, 0, false, (0.0, 8.0)),
+            trimmed_keyboard(1.0, 0, (0.0, 8.0)),
             &[
                 ("a", 2.0, &[2.0]),
                 ("xy", 8.2, &[8.2, 9.7]),
@@ -4755,10 +4827,10 @@ mod tests {
     #[test]
     fn shrinking_a_clip_start_drops_the_keypresses_it_cut() {
         assert_keyboard(
-            trimmed_keyboard(1.0, 1, true, (31.0, 40.0)),
+            trimmed_keyboard(1.0, 1, (31.0, 40.0)),
             &[
                 ("a", 2.0, &[2.0]),
-                ("y", 10.0, &[10.7]),
+                ("y", 10.7, &[10.7]),
                 ("b", 14.0, &[14.0]),
             ],
         );
@@ -4767,7 +4839,7 @@ mod tests {
     #[test]
     fn growing_a_clip_pushes_later_keypresses_out() {
         assert_keyboard(
-            trimmed_keyboard(1.0, 1, true, (28.0, 40.0)),
+            trimmed_keyboard(1.0, 1, (28.0, 40.0)),
             &[
                 ("a", 2.0, &[2.0]),
                 ("xy", 12.2, &[12.2, 13.7]),
@@ -4775,7 +4847,7 @@ mod tests {
             ],
         );
         assert_keyboard(
-            trimmed_keyboard(1.0, 0, false, (0.0, 12.0)),
+            trimmed_keyboard(1.0, 0, (0.0, 12.0)),
             &[
                 ("a", 2.0, &[2.0]),
                 ("xy", 12.2, &[12.2, 13.7]),
@@ -4787,7 +4859,7 @@ mod tests {
     #[test]
     fn clip_trims_move_keypresses_in_output_time_for_retimed_clips() {
         assert_keyboard(
-            trimmed_keyboard(2.0, 0, false, (0.0, 16.0)),
+            trimmed_keyboard(2.0, 0, (0.0, 16.0)),
             &[
                 ("a", 2.0, &[2.0]),
                 ("xy", 8.2, &[8.2, 9.7]),

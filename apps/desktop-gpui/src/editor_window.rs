@@ -5832,12 +5832,7 @@ impl EditorWindow {
                 }
                 segment.start = draft.start;
                 segment.end = draft.end;
-                edits::ripple_keyboard_for_clip_trim(
-                    &before,
-                    timeline,
-                    draft.index,
-                    draft.start_edge,
-                );
+                edits::carry_keyboard_with_clips(&before, timeline, |index| index);
                 true
             },
             window,
