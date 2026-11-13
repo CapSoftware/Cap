@@ -5,10 +5,9 @@ vi.mock("@/lib/developer-credits-product", () => ({
 }));
 
 import {
-	CREDIT_APP_NAME_MAX_LENGTH,
-	creditAppName,
 	creditCheckoutSessionParams,
 	creditPurchaseDescription,
+	STRIPE_DESCRIPTION_LIMIT,
 } from "@/lib/infra-credit-checkout";
 import { parseCreditUsEin } from "@/lib/infra-credit-us-ein";
 
@@ -23,11 +22,15 @@ describe("credit purchase text", () => {
 		expect(creditPurchaseDescription("   ")).toBe("Cap Infra credits");
 	});
 
-	it("limits a long name without splitting a character", () => {
-		const name = `${"a".repeat(CREDIT_APP_NAME_MAX_LENGTH - 1)}🎬🎬`;
-		const limited = creditAppName(name);
-		expect(Array.from(limited)).toHaveLength(CREDIT_APP_NAME_MAX_LENGTH);
-		expect(limited.endsWith("🎬")).toBe(true);
+	it("caps the description at Stripe's 1,000 characters, like auto top-up", () => {
+		const description = creditPurchaseDescription("x".repeat(5_000));
+		expect(description.length).toBe(STRIPE_DESCRIPTION_LIMIT);
+		expect(description.startsWith("Cap Infra credits for x")).toBe(true);
+	});
+
+	it("falls back when there is no name at all", () => {
+		expect(creditPurchaseDescription(null)).toBe("Cap Infra credits");
+		expect(creditPurchaseDescription(undefined)).toBe("Cap Infra credits");
 	});
 
 	it("keeps the credits product so codes still apply", () => {

@@ -3,23 +3,26 @@ import { developerCreditsProductId } from "@/lib/developer-credits-product";
 
 export const CREDIT_CHECKOUT_METADATA_TYPE = "developer_credits";
 
-export const CREDIT_APP_NAME_MAX_LENGTH = 100;
+export const STRIPE_DESCRIPTION_LIMIT = 1_000;
 
 export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card", "link"] as const;
 
-export function creditAppName(name: string) {
-	return Array.from(name.replace(/\s+/g, " ").trim())
-		.slice(0, CREDIT_APP_NAME_MAX_LENGTH)
-		.join("")
-		.trim();
+const CREDIT_PURCHASE_PREFIX = "Cap Infra credits for ";
+
+export function creditAppName(appName: string | null | undefined) {
+	return (appName ?? "").replace(/\s+/g, " ").trim();
 }
 
-export function creditPurchaseDescription(appName: string) {
+export function creditPurchaseDescription(appName: string | null | undefined) {
 	const name = creditAppName(appName);
-	return name ? `Cap Infra credits for ${name}` : "Cap Infra credits";
+	if (!name) return "Cap Infra credits";
+	const room = STRIPE_DESCRIPTION_LIMIT - CREDIT_PURCHASE_PREFIX.length;
+	return `${CREDIT_PURCHASE_PREFIX}${name.slice(0, room).trim()}`;
 }
 
-export function creditCheckoutSubmitMessage(appName: string) {
+export function creditCheckoutSubmitMessage(
+	appName: string | null | undefined,
+) {
 	return `${creditPurchaseDescription(appName)}. Credit stays with this app and cannot be moved to another app.`;
 }
 
