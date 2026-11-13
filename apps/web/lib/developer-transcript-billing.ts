@@ -14,6 +14,7 @@ import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
 } from "@/lib/developer-transcripts";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import {
 	availableBalance,
 	heldTranscriptMicroCredits,
@@ -125,7 +126,7 @@ export async function holdTranscriptCredits(input: {
 	if (!appId) return { state: "skipped" };
 	const needed = Math.max(0, Math.ceil(input.microCredits));
 
-	return db().transaction(async (tx) => {
+	const hold = await db().transaction<TranscriptHold>(async (tx) => {
 		const [account] = await tx
 			.select({
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -186,6 +187,8 @@ export async function holdTranscriptCredits(input: {
 
 		return { state: "held", reservedMicroCredits: needed };
 	});
+	if (hold.state !== "skipped") scheduleAutoTopUp({ appId });
+	return hold;
 }
 
 export async function reserveTranscriptCredits(input: {
@@ -199,7 +202,7 @@ export async function reserveTranscriptCredits(input: {
 		TRANSCRIPT_FULL_HOLD_MICRO_CREDITS,
 	);
 
-	return db().transaction(async (tx) => {
+	const outcome = await db().transaction<TranscriptReservation>(async (tx) => {
 		const [account] = await tx
 			.select({
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -246,6 +249,8 @@ export async function reserveTranscriptCredits(input: {
 
 		return { state: "reserved", reservedMicroCredits: cost };
 	});
+	if (outcome.state !== "skipped") scheduleAutoTopUp({ appId });
+	return outcome;
 }
 
 export async function settleTranscript(input: {
@@ -260,7 +265,7 @@ export async function settleTranscript(input: {
 	if (!appId) return { state: "skipped", reason: "missing" };
 	const cost = transcriptionMicroCredits(input.durationSeconds);
 
-	return db().transaction(async (tx) => {
+	const settled = await db().transaction<TranscriptSettlement>(async (tx) => {
 		await tx
 			.select({ id: developerCreditAccounts.id })
 			.from(developerCreditAccounts)
@@ -353,4 +358,11 @@ export async function settleTranscript(input: {
 			alreadySettled: false,
 		};
 	});
+	if (
+		settled.state === "insufficient_credits" ||
+		(settled.state === "complete" && settled.chargedMicroCredits > 0)
+	) {
+		scheduleAutoTopUp({ appId });
+	}
+	return settled;
 }

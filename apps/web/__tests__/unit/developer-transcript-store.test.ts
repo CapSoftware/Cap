@@ -19,6 +19,11 @@ const context = vi.hoisted(() => ({
 	presigned: [] as { key: string; contentLength: number }[],
 	failSigning: false,
 	onDelete: null as null | (() => Promise<void>),
+	scheduleAutoTopUp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	scheduleAutoTopUp: context.scheduleAutoTopUp,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -163,6 +168,7 @@ const fromUrl = (url = URL_A, idempotencyKey?: string, appId = "app-1") =>
 beforeEach(() => {
 	fake().reset();
 	context.ids = 0;
+	context.scheduleAutoTopUp.mockReset();
 	context.speechConfigured = true;
 	context.hosted = true;
 	context.start.mockReset();
@@ -305,6 +311,9 @@ describe("creating a transcript from a URL", () => {
 		});
 		expect(transcripts()).toHaveLength(0);
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
 	});
 
 	it("says how much to add below the minimum balance", async () => {
@@ -953,12 +962,16 @@ describe("starting an uploaded transcript", () => {
 		const id = await created();
 		context.objectSize = 1024;
 		setBalance(0);
+		context.scheduleAutoTopUp.mockReset();
 
 		expect(await startTranscriptUpload("app-1", id)).toMatchObject({
 			ok: false,
 			status: 402,
 		});
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
 	});
 
 	it("can be retried after the job could not be started", async () => {
