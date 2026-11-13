@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
 	nextKey: 0,
 	presignFails: false,
 	completeStatus: 200,
+	completeBody: null as Record<string, unknown> | null,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -100,7 +101,10 @@ async function restAnswer(request: Request): Promise<Response> {
 		case "POST /api/developer/sdk/v1/upload/multipart/complete":
 			if (state.completeStatus !== 200) {
 				return Response.json(
-					{ code: "internal_error", message: "Something went wrong" },
+					state.completeBody ?? {
+						code: "internal_error",
+						message: "Something went wrong",
+					},
 					{ status: state.completeStatus },
 				);
 			}
@@ -158,6 +162,7 @@ beforeEach(() => {
 	state.gatedApps.clear();
 	state.presignFails = false;
 	state.completeStatus = 200;
+	state.completeBody = null;
 });
 
 const newKey = (appId = "app1", revoked = false) => {
@@ -473,6 +478,24 @@ describe("hosted Cap Infra MCP tools", () => {
 			videoStatus: "unknown",
 			next: expect.stringContaining("videos_get"),
 		});
+	});
+
+	it("tells the caller to upload again when completing removed the file", async () => {
+		state.completeStatus = 402;
+		state.completeBody = {
+			code: "insufficient_credits",
+			message: "Not enough credit to store this video",
+			fileRemoved: true,
+		};
+		const completed = await callTool(newKey(), "videos_complete_upload", {
+			videoId: "video-1",
+			uploadId: "upload-1",
+			parts: [{ partNumber: 1, etag: "etag-1" }],
+		});
+		expect(completed.isError).toBe(true);
+		expect(completed.body.error).toMatchObject({ fileRemoved: true });
+		expect(completed.body.next).toContain("upload the file again");
+		expect(completed.body.next).not.toContain("parts are kept");
 	});
 
 	it("refuses a local path for a transcript", async () => {

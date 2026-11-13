@@ -324,6 +324,10 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 						isUnanswered(error) ||
 						(error instanceof ApiError &&
 							(error.status >= 500 || error.code === "completion_in_progress"));
+					const discarded =
+						error instanceof ApiError &&
+						(error.details.fileRemoved === true ||
+							error.code === "file_too_large");
 					throw withContext(
 						error,
 						unclear
@@ -332,11 +336,17 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 									videoStatus: "unknown",
 									next: "The upload may have completed. Check it with videos_get before uploading again, and call videos_complete_upload again with the same parts if it is still uploading.",
 								}
-							: {
-									videoId: args.videoId,
-									videoStatus: "uploading",
-									next: "The video still has no file and its stored parts are kept. Fix what the error says and call videos_complete_upload again, or call videos_create_upload with this videoId for new links.",
-								},
+							: discarded
+								? {
+										videoId: args.videoId,
+										videoStatus: "uploading",
+										next: "Cap removed the uploaded file, so its parts cannot be completed. Fix what the error says, then upload the file again: call videos_create_upload with this videoId for new links.",
+									}
+								: {
+										videoId: args.videoId,
+										videoStatus: "uploading",
+										next: "The video still has no file and its stored parts are kept. Fix what the error says and call videos_complete_upload again, or call videos_create_upload with this videoId for new links.",
+									},
 					);
 				}
 				return {
