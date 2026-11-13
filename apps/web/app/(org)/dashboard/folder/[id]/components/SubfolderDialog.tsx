@@ -7,7 +7,6 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	Input,
 } from "@cap/ui";
 import type { Folder, Space } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
@@ -22,7 +21,7 @@ import { PublicCollectionField } from "../../../_components/PublicCollectionFiel
 import { useDashboardContext } from "../../../Contexts";
 import {
 	DEFAULT_FOLDER_COLOR,
-	FolderColorPicker,
+	FolderDetailsFields,
 } from "../../../caps/components/FolderColorPicker";
 
 interface Props {
@@ -93,29 +92,20 @@ export const SubfolderDialog: React.FC<Props> = ({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="w-[calc(100%-20px)]">
+			<DialogContent className="w-[calc(100%-20px)] max-w-md">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faFolderPlus} className="size-3.5" />}
 				>
 					<DialogTitle>New subfolder</DialogTitle>
 				</DialogHeader>
 				<div className="flex flex-col gap-3 p-5">
-					<Input
-						autoFocus
-						value={folderName}
-						onChange={(e) => setFolderName(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-							e.preventDefault();
-							submit();
-						}}
-						required
+					<FolderDetailsFields
+						name={folderName}
+						onNameChange={setFolderName}
+						color={selectedColor}
+						onColorChange={setSelectedColor}
+						onSubmit={submit}
 						placeholder="Subfolder name"
-						aria-label="Subfolder name"
-					/>
-					<FolderColorPicker
-						value={selectedColor}
-						onChange={setSelectedColor}
 						disabled={createSubfolder.isPending}
 					/>
 					<PublicCollectionField

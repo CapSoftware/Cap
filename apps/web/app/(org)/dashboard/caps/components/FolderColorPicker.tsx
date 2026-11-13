@@ -1,9 +1,13 @@
 "use client";
 
+import { Input } from "@cap/ui";
 import type { Folder } from "@cap/web-domain";
-import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
 import clsx from "clsx";
-import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { Check } from "lucide-react";
+import {
+	FolderDoodle,
+	libraryDoodleHost,
+} from "../../_components/library-doodles";
 
 export const DEFAULT_FOLDER_COLOR: Folder.FolderColor = "normal";
 
@@ -28,7 +32,7 @@ export function FolderColorPicker({
 	disabled?: boolean;
 }) {
 	return (
-		<fieldset className="grid grid-cols-4 gap-2 min-w-0">
+		<fieldset className="flex gap-2 items-center min-w-0">
 			<legend className="sr-only">Folder color</legend>
 			{FOLDER_COLOR_OPTIONS.map((option) => {
 				const selected = value === option.value;
@@ -36,25 +40,74 @@ export function FolderColorPicker({
 					<button
 						type="button"
 						key={option.value}
+						aria-label={option.label}
 						aria-pressed={selected}
+						title={option.label}
 						disabled={disabled}
 						onClick={() => onChange(option.value)}
 						className={clsx(
-							"flex gap-2 justify-center items-center px-2 h-10 min-w-0 text-[13px] rounded-lg border transition-colors",
-							selected
-								? "font-medium border-gray-12 bg-gray-3 text-gray-12"
-								: "border-gray-4 text-gray-11 hover:border-gray-6 hover:bg-gray-3",
+							"flex justify-center items-center rounded-full ring-offset-2 transition-[box-shadow,transform] duration-150 size-6 ring-offset-gray-1 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
+							selected && "ring-2 ring-gray-12",
 						)}
+						style={{ backgroundColor: option.color }}
 					>
-						<FontAwesomeIcon
-							icon={faFolder}
-							className="shrink-0 size-4"
-							style={{ color: option.color }}
-						/>
-						<span className="truncate">{option.label}</span>
+						{selected && <Check className="text-white size-3.5" />}
 					</button>
 				);
 			})}
 		</fieldset>
+	);
+}
+
+export function FolderDetailsFields({
+	name,
+	onNameChange,
+	color,
+	onColorChange,
+	onSubmit,
+	placeholder,
+	disabled,
+}: {
+	name: string;
+	onNameChange: (name: string) => void;
+	color: Folder.FolderColor;
+	onColorChange: (color: Folder.FolderColor) => void;
+	onSubmit: () => void;
+	placeholder: string;
+	disabled?: boolean;
+}) {
+	return (
+		<div
+			className={clsx(
+				libraryDoodleHost,
+				"flex gap-4 items-center p-4 rounded-xl border border-gray-4 bg-gray-1",
+			)}
+		>
+			<div className="flex justify-center items-center rounded-xl size-16 shrink-0 bg-gray-2">
+				<FolderDoodle key={color} size={44} color={color} />
+			</div>
+			<div className="flex flex-col flex-1 gap-3 min-w-0">
+				<Input
+					autoFocus
+					value={name}
+					disabled={disabled}
+					maxLength={255}
+					onChange={(event) => onNameChange(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+						event.preventDefault();
+						onSubmit();
+					}}
+					required
+					placeholder={placeholder}
+					aria-label={placeholder}
+				/>
+				<FolderColorPicker
+					value={color}
+					onChange={onColorChange}
+					disabled={disabled}
+				/>
+			</div>
+		</div>
 	);
 }

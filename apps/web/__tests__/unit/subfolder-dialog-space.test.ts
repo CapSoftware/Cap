@@ -85,7 +85,7 @@ async function createIn(spaceId?: Space.SpaceIdOrOrganisationId) {
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 	});
 	const buttons = [...document.querySelectorAll("button")];
-	const color = buttons.find((b) => b.textContent?.trim() === "Blue");
+	const color = buttons.find((b) => b.getAttribute("aria-label") === "Blue");
 	const create = buttons.find((b) => b.textContent?.trim() === "Create");
 	if (!color || !create) throw new Error("Dialog buttons missing");
 	await act(async () => color.click());

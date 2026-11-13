@@ -7,7 +7,6 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	Input,
 } from "@cap/ui";
 import type { Folder, Space } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
@@ -20,7 +19,7 @@ import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { PublicCollectionField } from "../../_components/PublicCollectionField";
 import { useDashboardContext } from "../../Contexts";
-import { DEFAULT_FOLDER_COLOR, FolderColorPicker } from "./FolderColorPicker";
+import { DEFAULT_FOLDER_COLOR, FolderDetailsFields } from "./FolderColorPicker";
 
 interface Props {
 	open: boolean;
@@ -87,29 +86,20 @@ export const NewFolderDialog: React.FC<Props> = ({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="w-[calc(100%-20px)]">
+			<DialogContent className="w-[calc(100%-20px)] max-w-md">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faFolderPlus} className="size-3.5" />}
 				>
 					<DialogTitle>New folder</DialogTitle>
 				</DialogHeader>
 				<div className="flex flex-col gap-3 p-5">
-					<Input
-						autoFocus
-						value={folderName}
-						onChange={(e) => setFolderName(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-							e.preventDefault();
-							submit();
-						}}
-						required
+					<FolderDetailsFields
+						name={folderName}
+						onNameChange={setFolderName}
+						color={selectedColor}
+						onColorChange={setSelectedColor}
+						onSubmit={submit}
 						placeholder="Folder name"
-						aria-label="Folder name"
-					/>
-					<FolderColorPicker
-						value={selectedColor}
-						onChange={setSelectedColor}
 						disabled={createFolder.isPending}
 					/>
 					<PublicCollectionField
