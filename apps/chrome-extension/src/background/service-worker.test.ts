@@ -254,7 +254,7 @@ describe("bootstrap account ownership", () => {
 		await send("auth-revoke");
 		stale.resolve(Response.json(oldBootstrap));
 
-		expect(await loading).toMatchObject({ ok: false });
+		expect(await loading).toMatchObject({ ok: true, auth: null });
 		expect(stored[cacheKey]).toBeUndefined();
 	});
 
@@ -280,16 +280,6 @@ describe("bootstrap account ownership", () => {
 			await signIn(newAuth);
 			expect(stored[AUTH_KEY]).toEqual({
 				...newAuth,
-				apiBaseUrl: defaultOrigin,
-			});
-		});
-
-		it("records the server on an older sign-in once the server accepts it", async () => {
-			delete stored[cacheKey];
-			requests.mockImplementation(async () => Response.json(oldBootstrap));
-			await send("bootstrap");
-			expect(stored[AUTH_KEY]).toEqual({
-				...oldAuth,
 				apiBaseUrl: defaultOrigin,
 			});
 		});
@@ -331,6 +321,38 @@ describe("bootstrap account ownership", () => {
 			expect(state.ok && state.authError).toBe(
 				"Your Cap sign-in is no longer valid. Sign in again to keep recording.",
 			);
+		});
+
+		it("answers signed out when the server rejects the key and nothing is cached", async () => {
+			delete stored[cacheKey];
+			requests.mockImplementation(
+				async () => new Response("", { status: 401 }),
+			);
+
+			const state = await send("bootstrap");
+			expect(state).toMatchObject({ ok: true, auth: null });
+			expect(state.ok && state.authError).toBe(
+				"Your Cap sign-in is no longer valid. Sign in again to keep recording.",
+			);
+			expect(stored[AUTH_KEY]).toBeUndefined();
+		});
+
+		it("keeps a newer sign-in when the old key's rejection arrives late", async () => {
+			const rejection = deferred<Response>();
+			requests.mockImplementation(async (url, options) =>
+				String(url).endsWith("/bootstrap") &&
+				new Headers(options?.headers).get("Authorization") ===
+					`Bearer ${oldAuth.authApiKey}`
+					? rejection.promise
+					: Response.json(oldBootstrap),
+			);
+			await send("bootstrap");
+			const newAuth = { authApiKey: "new-fixture-key", userId: "old-account" };
+			await signIn(newAuth);
+			rejection.resolve(new Response("", { status: 401 }));
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			expect(stored[AUTH_KEY]).toMatchObject(newAuth);
 		});
 
 		it("keeps the sign-in when the server is unreachable", async () => {
