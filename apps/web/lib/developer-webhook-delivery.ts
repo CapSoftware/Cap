@@ -1,7 +1,6 @@
 import { db } from "@cap/database";
 import { decrypt } from "@cap/database/crypto";
 import { developerApps, developerWebhookEndpoints } from "@cap/database/schema";
-import { NODE_ENV } from "@cap/env";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import {
 	WEBHOOK_DISABLE_AFTER_FAILURES,
@@ -45,6 +44,7 @@ export type WebhookSendResult =
 	  };
 
 export type WebhookGuards = {
+	// Tests only. Lets a local server act as the customer endpoint.
 	allowPrivate?: boolean;
 	isBlocked?: (url: string) => Promise<boolean>;
 	request?: (url: string, init: RequestInit) => Promise<Response>;
@@ -52,10 +52,11 @@ export type WebhookGuards = {
 	now?: () => number;
 };
 
-// A receiver on localhost is how a webhook handler is written, so a local
-// build may call plain http and private addresses. Every production build,
-// Cap's own or a self-hosted one, only calls public https hosts.
-export const allowsPrivateWebhookTargets = () => NODE_ENV !== "production";
+// Plain http and private addresses are reachable only when a caller passes
+// allowPrivate: true, and only tests do. No environment variable and no
+// NODE_ENV value can turn it on, so a preview deployment, a self-hosted
+// install or a misconfigured server always calls public https hosts only.
+const PRIVATE_TARGETS_BY_DEFAULT = false;
 
 const URL_PROBLEM_MESSAGES: Record<WebhookUrlProblem, string> = {
 	invalid_url: "The URL is not valid",
@@ -74,7 +75,7 @@ export const webhookUrlProblemMessage = (problem: WebhookUrlProblem) =>
 
 export function webhookUrlProblem(
 	value: string,
-	allowPrivate: boolean = allowsPrivateWebhookTargets(),
+	allowPrivate: boolean = PRIVATE_TARGETS_BY_DEFAULT,
 ): WebhookUrlProblem | null {
 	const problem = publicMediaUrlProblem(value);
 	if (problem === "unsupported_scheme") return "https_required";
@@ -92,7 +93,7 @@ export async function checkWebhookUrl(
 	value: string,
 	guards: Pick<WebhookGuards, "allowPrivate" | "isBlocked"> = {},
 ): Promise<WebhookUrlProblem | null> {
-	const allowPrivate = guards.allowPrivate ?? allowsPrivateWebhookTargets();
+	const allowPrivate = guards.allowPrivate ?? PRIVATE_TARGETS_BY_DEFAULT;
 	const problem = webhookUrlProblem(value, allowPrivate);
 	if (problem || allowPrivate) return problem;
 	return (await (guards.isBlocked ?? isBlockedS3Endpoint)(value))
@@ -128,7 +129,7 @@ export async function sendDeveloperWebhook(
 		durationMs: now() - started,
 	});
 
-	const allowPrivate = guards.allowPrivate ?? allowsPrivateWebhookTargets();
+	const allowPrivate = guards.allowPrivate ?? PRIVATE_TARGETS_BY_DEFAULT;
 	const request =
 		guards.request ?? (allowPrivate ? requestAnyAddress : requestPublicOnly);
 	const abort = new AbortController();

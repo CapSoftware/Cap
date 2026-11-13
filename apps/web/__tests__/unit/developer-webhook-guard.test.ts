@@ -9,12 +9,8 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@cap/database", () => ({ db: () => ({}) }));
 
-const {
-	allowsPrivateWebhookTargets,
-	checkWebhookUrl,
-	sendDeveloperWebhook,
-	webhookUrlProblem,
-} = await import("@/lib/developer-webhook-delivery");
+const { checkWebhookUrl, sendDeveloperWebhook, webhookUrlProblem } =
+	await import("@/lib/developer-webhook-delivery");
 const { isBlockedS3Endpoint, isPrivateAddress } = await import(
 	"@/lib/s3-endpoint-policy"
 );
@@ -36,8 +32,9 @@ const event = {
 };
 
 describe("webhook URL policy in a production build", () => {
-	it("is strict in production", () => {
-		expect(allowsPrivateWebhookTargets()).toBe(false);
+	it("is strict unless a caller opts in", () => {
+		expect(webhookUrlProblem("http://127.0.0.1/cap")).toBe("https_required");
+		expect(webhookUrlProblem("http://127.0.0.1/cap", true)).toBeNull();
 	});
 
 	it("accepts a public https URL", () => {
