@@ -37,7 +37,7 @@ describe("latest storage day", () => {
 		await latestStorageCharge(db() as never, "account-1");
 
 		expect(state.queries).toHaveLength(2);
-		const [{ sql, params }, firstMonth] = state.queries as [
+		const [firstMonth, { sql, params }] = state.queries as [
 			{ sql: string; params: unknown[] },
 			{ sql: string; params: unknown[] },
 		];

@@ -201,19 +201,70 @@ async function latestFirstMonthCharge(
 	);
 }
 
+const shortfallRows = (accountId: string, shortSince: Date) =>
+	and(
+		eq(developerCreditTransactions.accountId, accountId),
+		inArray(developerCreditTransactions.type, [
+			FIRST_MONTH_TRANSACTION_TYPE,
+			"storage_daily",
+		]),
+		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${shortSince.toISOString()}`,
+		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+	);
+
+export async function shortfallOwed(
+	executor: InfraDbExecutor,
+	accountId: string,
+	shortSince: Date,
+) {
+	const owedField = (field: string) =>
+		sql`COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${field}`})) AS SIGNED), 0)`;
+	const [largest] = await executor
+		.select({
+			owedMicroCredits: sql<
+				string | number | null
+			>`MAX(GREATEST(${owedField("owedMicroCredits")}, ${owedField("outstandingMicroCredits")}))`,
+		})
+		.from(developerCreditTransactions)
+		.where(shortfallRows(accountId, shortSince));
+	return Number(largest?.owedMicroCredits) || 0;
+}
+
+async function sizedShortfall(
+	executor: InfraDbExecutor,
+	accountId: string,
+	charge: StorageCharge | null,
+): Promise<StorageCharge | null> {
+	if (!charge?.shortSince || charge.resolvedAt) return charge;
+	return {
+		...charge,
+		owedMicroCredits: Math.max(
+			charge.owedMicroCredits,
+			await shortfallOwed(executor, accountId, charge.shortSince),
+		),
+	};
+}
+
 export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ): Promise<StorageCharge | null> {
-	const daily = await latestDailyCharge(executor, accountId);
-	const firstMonth = await latestFirstMonthCharge(executor, accountId);
+	const firstMonth = await sizedShortfall(
+		executor,
+		accountId,
+		await latestFirstMonthCharge(executor, accountId),
+	);
 	if (
 		firstMonth?.shortSince &&
 		!(await restoredSinceCharge(executor, accountId, firstMonth))
 	) {
 		return { ...firstMonth, firstMonth: true };
 	}
-	return daily;
+	return sizedShortfall(
+		executor,
+		accountId,
+		await latestDailyCharge(executor, accountId),
+	);
 }
 
 export async function latchCoveredShortfall(
@@ -231,26 +282,10 @@ export async function latchCoveredShortfall(
 	) {
 		return false;
 	}
-	const sameShortfall = and(
-		eq(developerCreditTransactions.accountId, accountId),
-		inArray(developerCreditTransactions.type, [
-			FIRST_MONTH_TRANSACTION_TYPE,
-			"storage_daily",
-		]),
-		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
-		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
-	);
-	const owedField = (field: string) =>
-		sql`COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${field}`})) AS SIGNED), 0)`;
-	const [largest] = await tx
-		.select({
-			owedMicroCredits: sql<
-				string | number | null
-			>`MAX(GREATEST(${owedField("owedMicroCredits")}, ${owedField("outstandingMicroCredits")}))`,
-		})
-		.from(developerCreditTransactions)
-		.where(sameShortfall);
-	if (availableMicroCredits < (Number(largest?.owedMicroCredits) || 0)) {
+	if (
+		availableMicroCredits <
+		(await shortfallOwed(tx, accountId, charge.shortSince))
+	) {
 		return false;
 	}
 	await tx
@@ -258,7 +293,7 @@ export async function latchCoveredShortfall(
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${developerCreditTransactions.metadata}, JSON_OBJECT()), '$.resolvedAt', ${now.toISOString()})`,
 		})
-		.where(sameShortfall);
+		.where(shortfallRows(accountId, charge.shortSince));
 	return true;
 }
 

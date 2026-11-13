@@ -7,6 +7,17 @@ type Table = object;
 
 const dialect = new MySqlDialect();
 
+const metadataOf = (value: unknown): Row => {
+	if (typeof value === "string") {
+		try {
+			return metadataOf(JSON.parse(value));
+		} catch {
+			return {};
+		}
+	}
+	return typeof value === "object" && value !== null ? (value as Row) : {};
+};
+
 const comparable = (value: unknown) =>
 	value instanceof Date
 		? value.toISOString().slice(0, -1).replace("T", " ")
@@ -82,8 +93,40 @@ function compile(condition: SQL | undefined, outer: Row = {}): Predicate {
 		return (row) => row[column] === value;
 	};
 
+	const jsonField = () => {
+		expect("json_extract");
+		expect("(");
+		const column = columnName();
+		expect(",");
+		const field = take();
+		expect(")");
+		return (row: Row) => metadataOf(row[column])[field];
+	};
+
+	const jsonComparison = (): Predicate => {
+		if (peek() === "json_unquote") {
+			take();
+			expect("(");
+			const field = jsonField();
+			expect(")");
+			expect("=");
+			const value = param();
+			return (row) => {
+				const found = field(row);
+				return found !== null && found !== undefined && String(found) === value;
+			};
+		}
+		const field = jsonField();
+		expect("is");
+		expect("null");
+		return (row) => field(row) === null || field(row) === undefined;
+	};
+
 	const comparison = (): Predicate => {
 		if (peek() === "cast") return binaryComparison();
+		if (peek() === "json_unquote" || peek() === "json_extract") {
+			return jsonComparison();
+		}
 		const column = columnName();
 		const operator = take().toLowerCase();
 		if (operator === "is") {
@@ -163,7 +206,8 @@ const columnName = (value: unknown) =>
 		: null;
 
 const isAggregate = (value: unknown) =>
-	isSql(value) && /SUM\(|count\(\*\)/i.test(dialect.sqlToQuery(value).sql);
+	isSql(value) &&
+	/SUM\(|count\(\*\)|MAX\(GREATEST\(/i.test(dialect.sqlToQuery(value).sql);
 
 function rowExpression(row: Row, field: SQL) {
 	const text = dialect.sqlToQuery(field).sql;
@@ -194,6 +238,15 @@ function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 				);
 			} else if (/count\(\*\)/i.test(text)) {
 				result[alias] = rows.length;
+			} else if (/MAX\(GREATEST\(/i.test(text)) {
+				const fields = dialect
+					.sqlToQuery(field as SQL)
+					.params.map((path) => String(path).replace(/^\$\./, ""));
+				const values = rows.map((row) => {
+					const metadata = metadataOf(row.metadata);
+					return Math.max(...fields.map((name) => Number(metadata[name]) || 0));
+				});
+				result[alias] = values.length > 0 ? Math.max(...values) : null;
 			} else {
 				throw new Error(`Unsupported aggregate ${text}`);
 			}
