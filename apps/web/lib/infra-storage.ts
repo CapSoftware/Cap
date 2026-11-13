@@ -1,10 +1,21 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
-import { and, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import {
+	and,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	lt,
+	ne,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
 	firstMonthStorageMicroCredits,
+	STORAGE_BILLING_DAYS_PER_MONTH,
 	type StorageUsage,
 	storageMicroCreditsPerMinutePerMonth,
 	storageUsage,
@@ -26,6 +37,9 @@ type StoredVideoGroup = {
 	firstMonth1080p: number | string | null;
 	firstMonth1440p: number | string | null;
 	firstMonth2160p: number | string | null;
+	owedFirstMonth1080p: number | string | null;
+	owedFirstMonth1440p: number | string | null;
+	owedFirstMonth2160p: number | string | null;
 };
 
 const firstMonthSum = (tier: InfraResolutionTier) =>
@@ -33,7 +47,32 @@ const firstMonthSum = (tier: InfraResolutionTier) =>
 		number | string | null
 	>`COALESCE(SUM(GREATEST(1, FLOOR(${developerVideos.duration} / 60 * ${storageMicroCreditsPerMinutePerMonth(tier)}))), 0)`;
 
+const owedFirstMonthSum = (tier: InfraResolutionTier, owesMonth: SQL) =>
+	sql<
+		number | string | null
+	>`COALESCE(SUM(CASE WHEN ${owesMonth} THEN GREATEST(1, FLOOR(${developerVideos.duration} / 60 * ${storageMicroCreditsPerMinutePerMonth(tier)})) ELSE 0 END), 0)`;
+
 const APP_ID_CHUNK = 500;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function firstMonthsOwedSince(executor: Pick<InfraDbExecutor, "select">) {
+	const [earliest] = await executor
+		.select({
+			storagePaidUntil:
+				sql<Date | null>`MIN(${developerVideos.storagePaidUntil})`.mapWith(
+					developerVideos.storagePaidUntil,
+				),
+		})
+		.from(developerVideos)
+		.where(isNotNull(developerVideos.storagePaidUntil));
+	const paidUntil = earliest?.storagePaidUntil;
+	return paidUntil instanceof Date && !Number.isNaN(paidUntil.getTime())
+		? new Date(
+				paidUntil.getTime() - (STORAGE_BILLING_DAYS_PER_MONTH - 1) * DAY_MS,
+			)
+		: null;
+}
 
 export type StorageUsageOptions = {
 	includeProcessing?: boolean;
@@ -48,8 +87,12 @@ export function storedVideoGroupsQuery(
 	excludeVideoId?: string,
 	now: Date = new Date(),
 	createdBefore?: Date,
+	firstMonthsOwedSince?: Date | null,
 ) {
-	const inFirstMonth = gt(developerVideos.storagePaidUntil, now);
+	const owesMonth = firstMonthsOwedSince
+		? sql`(${developerVideos.status} = 'ready' AND ${developerVideos.storagePaidUntil} IS NULL AND ${developerVideos.createdAt} >= ${firstMonthsOwedSince})`
+		: sql`FALSE`;
+	const inFirstMonth = sql`(${gt(developerVideos.storagePaidUntil, now)} OR ${owesMonth})`;
 	return executor
 		.select({
 			appId: developerVideos.appId,
@@ -71,6 +114,9 @@ export function storedVideoGroupsQuery(
 			firstMonth1080p: firstMonthSum("1080p"),
 			firstMonth1440p: firstMonthSum("1440p"),
 			firstMonth2160p: firstMonthSum("2160p"),
+			owedFirstMonth1080p: owedFirstMonthSum("1080p", owesMonth),
+			owedFirstMonth1440p: owedFirstMonthSum("1440p", owesMonth),
+			owedFirstMonth2160p: owedFirstMonthSum("2160p", owesMonth),
 		})
 		.from(developerVideos)
 		.where(
@@ -98,6 +144,7 @@ async function storedVideoGroups(
 	excludeVideoId?: string,
 	now?: Date,
 	createdBefore?: Date,
+	firstMonthsOwedSince?: Date | null,
 ) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
@@ -108,6 +155,7 @@ async function storedVideoGroups(
 				excludeVideoId,
 				now,
 				createdBefore,
+				firstMonthsOwedSince,
 			)),
 		);
 	}
@@ -190,6 +238,8 @@ export async function getAppStorage(
 		executor,
 		options.excludeVideoId,
 		options.now,
+		undefined,
+		await firstMonthsOwedSince(executor),
 	);
 	const videoOf = (group: StoredVideoGroup, daily: boolean) =>
 		billableVideo({
@@ -208,14 +258,19 @@ export async function getAppStorage(
 		);
 	const firstMonthOf = (group: StoredVideoGroup) => {
 		const video = videoOf(group, false);
-		return video ? Number(group[`firstMonth${video.tier}`]) || 0 : 0;
+		if (!video) return 0;
+		return group.status === "processing"
+			? Number(group[`firstMonth${video.tier}`]) || 0
+			: Number(group[`owedFirstMonth${video.tier}`]) || 0;
 	};
 	return {
 		stored: usage(false),
 		dailyCharge: usage(true),
 		firstMonthMicroCredits:
 			groups
-				.filter((group) => group.status === "processing")
+				.filter(
+					(group) => group.status === "processing" || group.status === "ready",
+				)
 				.reduce((sum, group) => sum + firstMonthOf(group), 0) +
 			(newVideo ? firstMonthStorageMicroCredits(newVideo) : 0),
 		uploadingVideos: groups.reduce(

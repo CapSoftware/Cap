@@ -2193,6 +2193,81 @@ describe.runIf(Boolean(databaseUrl))(
 			).toBe(5);
 		});
 
+		describe("a ready video whose first month is not charged yet", () => {
+			const fourK = {
+				status: "ready" as const,
+				duration: 1200,
+				width: 3840,
+				height: 2160,
+				maxResolutionTier: "2160p" as const,
+				storagePaidUntil: null,
+			};
+			const upload = {
+				durationSeconds: 1200,
+				width: 3840,
+				height: 2160,
+				tier: "2160p" as const,
+			};
+			let sentinel: string;
+
+			beforeAll(async () => {
+				const { appId } = await makeApp(0);
+				sentinel = await makeVideo(appId, {
+					storagePaidUntil: new Date("2026-10-31T00:00:00Z"),
+				});
+			});
+
+			afterAll(async () => {
+				await database()
+					.delete(developerVideos)
+					.where(eq(developerVideos.id, sentinel));
+			});
+
+			it("still reserves its month, so a second upload the balance cannot pay for both is refused", async () => {
+				const { appId } = await makeApp(7_000);
+				await makeVideo(appId, fourK);
+
+				const storage = await getAppStorage(appId);
+				expect(storage.firstMonthMicroCredits).toBe(5_600);
+				expect(storage.dailyCharge.totalMinutes).toBe(0);
+				expect(storage.stored.totalMinutes).toBe(20);
+				expect(await getInfraUploadAdmission(appId, upload)).toMatchObject({
+					allowed: false,
+					reason: "insufficient_credits",
+					requiredMicroCredits: 11_200,
+				});
+			});
+
+			it("stops reserving it once the month is charged", async () => {
+				const { appId, accountId } = await makeApp(7_000);
+				const videoId = await makeVideo(appId, fourK);
+				await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
+				expect(await balanceOf(accountId)).toBe(1_400);
+
+				const storage = await getAppStorage(appId);
+				expect(storage.firstMonthMicroCredits).toBe(0);
+				expect(storage.stored.totalMinutes).toBe(20);
+				expect(
+					(await getInfraUploadAdmission(appId, upload)).requiredMicroCredits,
+				).toBe(5_600);
+			});
+
+			it("leaves a video created before first month charging began to the daily charge", async () => {
+				const { appId } = await makeApp(7_000);
+				await makeVideo(appId, {
+					...fourK,
+					createdAt: new Date("2026-09-01T00:00:00Z"),
+				});
+
+				const storage = await getAppStorage(appId);
+				expect(storage.firstMonthMicroCredits).toBe(0);
+				expect(storage.dailyCharge.totalMinutes).toBe(20);
+				expect(
+					(await getInfraUploadAdmission(appId, upload)).requiredMicroCredits,
+				).toBe(6_907);
+			});
+		});
+
 		it("counts first months in the month's storage spending on the console", async () => {
 			const { appId, accountId } = await makeApp(1_000_000);
 			const monthStart = new Date(Date.now() - 60 * 60 * 1000);

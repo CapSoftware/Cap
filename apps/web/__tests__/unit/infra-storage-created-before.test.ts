@@ -45,9 +45,12 @@ describe("stored video bounded by creation time", () => {
 		await getStorageUsageByApp(["app-1"]);
 		await getAppStorage("app-1");
 
-		expect(state.queries).toHaveLength(2);
-		for (const { sql } of state.queries) {
-			expect(sql).not.toContain("createdAt");
+		const aggregates = state.queries.filter(({ sql }) =>
+			sql.includes("group by"),
+		);
+		expect(aggregates).toHaveLength(2);
+		for (const { sql } of aggregates) {
+			expect(sql.slice(sql.indexOf(" where "))).not.toContain("createdAt");
 		}
 	});
 });
