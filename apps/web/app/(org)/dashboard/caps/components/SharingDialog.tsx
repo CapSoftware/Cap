@@ -28,6 +28,10 @@ import {
 	inviteVideoViewer,
 	revokeVideoViewer,
 } from "@/actions/videos/viewer-invites";
+import {
+	libraryDoodleHost,
+	SpaceDoodle,
+} from "@/app/(org)/dashboard/_components/library-doodles";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
@@ -650,12 +654,22 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 							</div>
 
 							<div className="rounded-lg border bg-gray-1 border-gray-4">
-								<div className="p-3 pb-2">
-									<p className="text-sm font-medium text-gray-12">Spaces</p>
-									<p className="mt-0.5 text-xs text-gray-10 text-pretty">
-										Members of a space can watch it there. It also stays in My
-										Caps. To file it in a folder, use Move.
-									</p>
+								<div
+									className={clsx(
+										libraryDoodleHost,
+										"flex gap-3 items-center p-3 pb-2",
+									)}
+								>
+									<span className="flex justify-center items-center rounded-full size-8 shrink-0 bg-gray-3">
+										<SpaceDoodle size={20} />
+									</span>
+									<div className="min-w-0">
+										<p className="text-sm font-medium text-gray-12">Spaces</p>
+										<p className="text-xs text-gray-10 text-pretty">
+											Members of a space can watch it there. It also stays in My
+											Caps. To file it in a folder, use Move.
+										</p>
+									</div>
 								</div>
 								{allShareableItems.length > SPACE_SEARCH_THRESHOLD && (
 									<div className="relative px-3 pb-2">
@@ -795,7 +809,7 @@ const SpaceRow = ({
 				selected ? "bg-blue-10 border-blue-10" : "border-gray-6 bg-gray-1",
 			)}
 		>
-			{selected && <Check className="text-white" size={12} />}
+			{selected && <Check className="text-white" size={12} strokeWidth={3} />}
 		</span>
 	</button>
 );
