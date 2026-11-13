@@ -152,13 +152,12 @@ describe("the Cap Infra landing page", () => {
 
 		expect(billing).toContain(content.STORAGE_RULE);
 		expect(getStarted).toContain(content.STORAGE_RULE);
-		expect(billing).toContain(content.DELETED_WHILE_PROCESSING_RULE);
 		expect(
 			content.infraFaqs.find(
 				(faq) => faq.question === "What does Cap Infra charge for?",
 			)?.answer,
-		).toContain(
-			`${content.STORAGE_RULE} ${content.DELETED_WHILE_PROCESSING_RULE}`,
+		).toBe(
+			`Two things: stored video and speech to text. ${content.STORAGE_RULE}`,
 		);
 		expect(
 			pageSources().find((source) => source.file === "Pricing.tsx")?.text,

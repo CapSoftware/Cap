@@ -161,7 +161,7 @@ describe("the Billing page", () => {
 		for (const tier of INFRA_RESOLUTION_TIERS) {
 			const price = `$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`;
 			expect(billing).toContain(
-				`| ${names[tier]} | ${price} per 1,000 minutes per month | First month when the video is ready, then once a day |`,
+				`| ${names[tier]} | ${price} per 1,000 minutes per month | First month when the video is ready, then once a day after it |`,
 			);
 			expect(rest).toContain(`| ${price} |`);
 		}
@@ -261,7 +261,7 @@ describe("the Billing page", () => {
 
 	it("states the first month rule and its example the same way in the billing and get started docs", () => {
 		const rule =
-			"Each video is charged one month of storage when it first becomes ready, then daily after that. Uploading and encoding stay free.";
+			"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
 		const tenMinutes = { durationSeconds: 600, tier: "1080p" as const };
 		const example = `A 10 minute 1080p video costs ${formatCharge(firstMonthStorageMicroCredits(tenMinutes))} when it becomes ready, then ${formatCharge(dailyStorageMicroCredits({ ...emptyStorageMinutes(), "1080p": 10 }))} a day after its first month.`;
 
@@ -269,6 +269,18 @@ describe("the Billing page", () => {
 			expect(doc).toContain(rule);
 			expect(doc).toContain(example);
 		}
+		expect(billing).toContain(
+			"Videos that were ready before November 13, 2026 are not charged a first month.",
+		);
+		expect(billing).not.toMatch(/\b(before|from) today\b/i);
+	});
+
+	it("says in the billing and REST docs that a video deleted while it is processed pays its first month", () => {
+		const deleted =
+			"A video deleted while it is being processed is charged its first month too";
+		expect(billing).toContain(deleted);
+		expect(rest).toContain(deleted);
+		expect(rest).not.toMatch(/\b(before|from) today\b/i);
 	});
 
 	it("works every speech example out from the pricing functions", () => {
