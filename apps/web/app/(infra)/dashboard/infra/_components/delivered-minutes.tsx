@@ -17,12 +17,18 @@ export const DELIVERY_TIER_LABELS: Record<DeliveryTier, string> = {
 
 export const NO_DELIVERY = "No delivery measured yet.";
 
+export const DELIVERY_UNAVAILABLE = "Delivery usage unavailable.";
+
+export const DELIVERY_MAY_CHANGE = "Today and yesterday may still change.";
+
 export function DeliveredMinutes({
 	delivery,
 	monthName,
+	unavailable = false,
 }: {
 	delivery: DeliveryJson | null;
 	monthName: string;
+	unavailable?: boolean;
 }) {
 	const tiers = delivery
 		? DELIVERY_TIERS.filter((tier) => delivery.minutesByTier[tier] > 0)
@@ -30,49 +36,58 @@ export function DeliveredMinutes({
 	return (
 		<Block
 			title="Delivered minutes"
-			description="How much video your viewers watched. Not billed."
+			description="How much video your viewers watched."
 		>
-			{!delivery ? (
+			{unavailable ? (
+				<Empty>{DELIVERY_UNAVAILABLE}</Empty>
+			) : !delivery ? (
 				<Empty>{NO_DELIVERY}</Empty>
 			) : (
-				<table className="w-full border-collapse">
-					<thead>
-						<tr className={TR}>
-							<th className={TH}>Resolution</th>
-							<th className={clsx(TH, "text-right")}>Minutes in {monthName}</th>
-						</tr>
-					</thead>
-					<tbody>
-						{tiers.map((tier) => (
-							<tr key={tier} className={TR}>
-								<td className={clsx(TD, "text-[#E8ECF4]")}>
-									{DELIVERY_TIER_LABELS[tier]}
-								</td>
+				<>
+					<table className="w-full border-collapse">
+						<thead>
+							<tr className={TR}>
+								<th className={TH}>Resolution</th>
+								<th className={clsx(TH, "text-right")}>
+									Minutes in {monthName}
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							{tiers.map((tier) => (
+								<tr key={tier} className={TR}>
+									<td className={clsx(TD, "text-[#E8ECF4]")}>
+										{DELIVERY_TIER_LABELS[tier]}
+									</td>
+									<td
+										className={clsx(
+											TD,
+											MONO,
+											"text-right text-[13px] tabular-nums",
+										)}
+									>
+										{formatMinutes(delivery.minutesByTier[tier])}
+									</td>
+								</tr>
+							))}
+							<tr className={TR}>
+								<td className={clsx(TD, "text-[#E8ECF4]")}>Total</td>
 								<td
 									className={clsx(
 										TD,
 										MONO,
-										"text-right text-[13px] tabular-nums",
+										"text-right text-[13px] tabular-nums text-white",
 									)}
 								>
-									{formatMinutes(delivery.minutesByTier[tier])}
+									{formatMinutes(delivery.minutes)}
 								</td>
 							</tr>
-						))}
-						<tr className={TR}>
-							<td className={clsx(TD, "text-[#E8ECF4]")}>Total</td>
-							<td
-								className={clsx(
-									TD,
-									MONO,
-									"text-right text-[13px] tabular-nums text-white",
-								)}
-							>
-								{formatMinutes(delivery.minutes)}
-							</td>
-						</tr>
-					</tbody>
-				</table>
+						</tbody>
+					</table>
+					<p className="m-0 py-3 text-[12.5px] leading-[1.45] text-[rgba(232,236,244,0.46)]">
+						{DELIVERY_MAY_CHANGE}
+					</p>
+				</>
 			)}
 		</Block>
 	);

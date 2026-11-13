@@ -86,10 +86,13 @@ export default async function InfraUsagePage({
 						utcMonthStart(now),
 					)
 				: Promise.resolve({ chargedMicroCredits: 0, videos: 0 }),
-			getDeliveredUsage(app.id, now).catch((error) => {
-				console.error("[infra-usage] Delivery usage unavailable", error);
-				return null;
-			}),
+			getDeliveredUsage(app.id, now).then(
+				(usage) => ({ usage, failed: false }),
+				(error) => {
+					console.error("[infra-usage] Delivery usage unavailable", error);
+					return { usage: null, failed: true };
+				},
+			),
 		]);
 	const usage = storage.stored;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
@@ -248,8 +251,9 @@ export default async function InfraUsagePage({
 			)}
 
 			<DeliveredMinutes
-				delivery={deliveryJson(delivered)}
+				delivery={deliveryJson(delivered.usage)}
 				monthName={monthName}
+				unavailable={delivered.failed}
 			/>
 
 			<Block

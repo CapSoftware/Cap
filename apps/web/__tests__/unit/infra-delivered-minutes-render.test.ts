@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@cap/database", () => ({ db: () => ({}) }));
 
 import {
+	DELIVERY_MAY_CHANGE,
+	DELIVERY_UNAVAILABLE,
 	DeliveredMinutes,
 	NO_DELIVERY,
 } from "@/app/(infra)/dashboard/infra/_components/delivered-minutes";
@@ -32,7 +34,7 @@ const rows = () =>
 	);
 
 describe("Delivered minutes on the Usage page", () => {
-	it("says what it is and that it is not billed", () => {
+	it("says what it is, with no billing claim", () => {
 		act(() =>
 			root.render(
 				createElement(DeliveredMinutes, {
@@ -44,8 +46,9 @@ describe("Delivered minutes on the Usage page", () => {
 
 		expect(container.textContent).toContain("Delivered minutes");
 		expect(container.textContent).toContain(
-			"How much video your viewers watched. Not billed.",
+			"How much video your viewers watched.",
 		);
+		expect(container.textContent).not.toMatch(/bill|price|charge|cost|\$/i);
 	});
 
 	it("shows one quiet line when nothing has been measured", () => {
@@ -60,7 +63,24 @@ describe("Delivered minutes on the Usage page", () => {
 
 		expect(container.textContent).toContain(NO_DELIVERY);
 		expect(container.querySelector("table")).toBeNull();
+		expect(container.textContent).not.toContain(DELIVERY_MAY_CHANGE);
 		expect(container.textContent).not.toMatch(/\$/);
+	});
+
+	it("says when the delivery figures could not be read, instead of showing them as empty", () => {
+		act(() =>
+			root.render(
+				createElement(DeliveredMinutes, {
+					delivery: null,
+					monthName: "November",
+					unavailable: true,
+				}),
+			),
+		);
+
+		expect(container.textContent).toContain(DELIVERY_UNAVAILABLE);
+		expect(container.textContent).not.toContain(NO_DELIVERY);
+		expect(container.querySelector("table")).toBeNull();
 	});
 
 	it("shows the minutes for each resolution with any delivery and a total", () => {
@@ -76,8 +96,7 @@ describe("Delivered minutes on the Usage page", () => {
 							"1440p": 0,
 							"2160p": 0,
 						},
-						measured: true,
-						billed: false,
+						finalThrough: "2026-11-18",
 					},
 					monthName: "November",
 				}),
@@ -94,6 +113,7 @@ describe("Delivered minutes on the Usage page", () => {
 			["Total", "1,249"],
 		]);
 		expect(container.textContent).not.toContain(NO_DELIVERY);
-		expect(container.textContent).not.toMatch(/\$|cost|price/i);
+		expect(container.textContent).toContain(DELIVERY_MAY_CHANGE);
+		expect(container.textContent).not.toMatch(/\$|cost|price|bill/i);
 	});
 });
