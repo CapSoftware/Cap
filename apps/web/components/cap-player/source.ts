@@ -191,14 +191,16 @@ export const warmSource = (source: CapPlayerSource) => {
 export const startingEstimate = () => {
 	const connection = (navigator as Navigator & { connection?: ConnectionHint })
 		.connection;
+	if (connection?.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
 	const megabits = connection?.downlink ?? 0;
 	const slow =
-		connection?.saveData === true ||
 		SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "") ||
 		(megabits > 0 && megabits < 1);
 	if (!slow) return DEFAULT_BITS_PER_SECOND;
+	// Chrome can call a fast line with a long round trip 3g, so a slow reading
+	// never starts the player above a line it does not call slow.
 	return megabits > 0
-		? Math.min(megabits * 800_000, SLOW_LINE_BITS_PER_SECOND)
+		? Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND)
 		: SLOW_LINE_BITS_PER_SECOND;
 };
 
