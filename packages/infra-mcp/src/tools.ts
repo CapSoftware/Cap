@@ -333,7 +333,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_upload",
 			title: "Upload a video",
 			description:
-				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to retry a failed upload into the same video.",
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to retry a failed upload into the same video.",
 			kind: "write",
 			input: {
 				path: z

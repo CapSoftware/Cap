@@ -131,6 +131,10 @@
 	pointer-events: none;
 }
 
+.replay svg {
+	margin-left: 0;
+}
+
 .player[data-waiting="true"] .start,
 .player[data-menu] .start {
 	visibility: hidden;
@@ -374,6 +378,7 @@
 
 .control:focus-visible,
 .cover:focus-visible,
+.start:focus-visible,
 .track:focus-visible,
 .volumeTrack:focus-visible,
 .item:focus-visible {

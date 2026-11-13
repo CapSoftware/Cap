@@ -54,6 +54,9 @@ import {
 } from "@/lib/infra-auto-top-up";
 import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
 import {
+	INFRA_DELIVERY_BILLED_FROM_TEXT,
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_DELIVERY_PRICE_TEXT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 	INFRA_TIER_MAX_PIXELS,
@@ -61,6 +64,8 @@ import {
 } from "@/lib/infra-pricing";
 import { PRO_MONTHLY_CREDIT_DOLLARS } from "@/lib/infra-pro-credit";
 import {
+	DELIVERY_DAY_REFERENCE_TYPE,
+	DELIVERY_DAY_TRANSACTION_TYPE,
 	INFRA_GRACE_DAYS,
 	uploadAdmission,
 	uploadAdmissionError,
@@ -181,6 +186,9 @@ describe("the Billing page", () => {
 			`| Speech to text | $${SPEECH_DOLLARS_PER_HOUR.toFixed(2)} per audio hour | When a transcript completes |`,
 		);
 		expect(billing).toContain(
+			`| Delivery | ${INFRA_DELIVERY_PRICE_TEXT} | Once a day, when the day is final |`,
+		);
+		expect(billing).toContain(
 			`which is ${SPEECH_MICRO_CREDITS_PER_HOUR.toLocaleString("en-US")} micro-credits`,
 		);
 		expect(billing).toContain(
@@ -297,9 +305,9 @@ describe("the Billing page", () => {
 
 	it("says grace can follow any storage charge, first month or daily", () => {
 		const outOfCredit =
-			"| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage charge could not be paid. The message says how much to add |";
+			"| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage or delivery charge could not be paid. The message says how much to add |";
 		const graceStanding =
-			"grace: a storage charge was more than the balance, uploads are blocked";
+			"grace: a storage or delivery charge was more than the balance, uploads are blocked";
 		const specText = JSON.stringify(developerOpenApiSpec("https://cap.so"));
 
 		expect(rest).toContain(outOfCredit);
@@ -429,18 +437,74 @@ describe("the Billing page", () => {
 			"invoices",
 			"receipt",
 			"receipts",
-			"delivery",
 			"watched",
 		]) {
 			expect(unagreed, word).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
 		}
 		expect(billing).not.toContain(String.fromCodePoint(0x2014));
+		expect(rest).not.toMatch(/\bwatched\b/i);
 		expect(rest.split(DELIVERY_SENTENCE)).toHaveLength(2);
 		expect(DELIVERY_SENTENCE).not.toMatch(/bill|price|charge|cost|credit|\$/i);
 		expect(rest).toMatch(DELIVERY_EXAMPLE);
+	});
+
+	it("documents delivery billing and its ledger rows the way the code writes them", () => {
+		const definition =
+			"A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted.";
+		const spec = developerOpenApiSpec("https://cap.so") as unknown as {
+			components: {
+				schemas: {
+					Transaction: {
+						properties: {
+							type: { description: string };
+							referenceType: { enum: (string | null)[] };
+						};
+					};
+					Usage: { properties: { rates: { properties: object } } };
+				};
+			};
+		};
+		const transaction = spec.components.schemas.Transaction.properties;
+
+		for (const doc of [billing, getStarted]) {
+			expect(doc).toContain(definition);
+		}
+		for (const doc of [billing, rest, getStarted]) {
+			expect(doc).not.toMatch(/\b(before|from) today\b/i);
+		}
+		for (const sentence of definition.split(/(?<=\.) (?=[A-Z])/).slice(1)) {
+			expect(rest.split(sentence), sentence).toHaveLength(2);
+			expect(billing.split(sentence), sentence).toHaveLength(2);
+		}
+		expect(billing).toContain(
+			"Delivery follows the same balance, shortfall and grace rules as storage.",
+		);
+		expect(billing).toContain(INFRA_DELIVERY_BILLED_FROM_TEXT);
+		expect(billing).toContain(
+			"Each day is charged once from the app's credit balance, when its figures become final.",
+		);
+		expect(billing).toContain(
+			"Three things are charged: stored video, delivered video and speech to text. Uploading and encoding are free.",
+		);
+		expect(billing).toContain("or one day of delivery,");
+		expect(billing).not.toMatch(/abandonedBytes/i);
+		expect(billing).toContain("| Delivery | The UTC day it charges |");
+		expect(rest).toContain(
+			`| \`${DELIVERY_DAY_TRANSACTION_TYPE}\` | Delivery | \`${DELIVERY_DAY_REFERENCE_TYPE}\` | The UTC day, as \`YYYY-MM-DD\` |`,
+		);
+		expect(transaction.type.description).toContain(
+			`${DELIVERY_DAY_TRANSACTION_TYPE} (one row per app per delivered day)`,
+		);
+		expect(transaction.referenceType.enum).toContain(
+			DELIVERY_DAY_REFERENCE_TYPE,
+		);
 		expect(
-			rest.replace(DELIVERY_SENTENCE, "").replace(DELIVERY_EXAMPLE, ""),
-		).not.toMatch(/\bdelivery\b|\bwatched\b/i);
+			Object.keys(spec.components.schemas.Usage.properties.rates.properties),
+		).toContain("deliveryDollarsPer1000Minutes");
+		expect(rest).not.toContain("The delivery price is not in `rates`.");
+		expect(billing).toContain(
+			'labelled "Delivery", with the UTC day as its reference.',
+		);
 	});
 });
 
@@ -517,6 +581,9 @@ describe("examples in the REST API reference", () => {
 		).toBe(data.totalDurationMinutes);
 		expect(data.rates.storageDollarsPer1000MinutesPerMonth).toEqual(
 			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+		);
+		expect(data.rates.deliveryDollarsPer1000Minutes).toBe(
+			INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 		);
 		expect(data.rates.speechDollarsPerHour).toBe(SPEECH_DOLLARS_PER_HOUR);
 		expect(data.rates.uploadAdmissionDays).toBe(UPLOAD_ADMISSION_DAYS);

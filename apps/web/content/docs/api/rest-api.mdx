@@ -725,7 +725,7 @@ A transcript request can be refused. The response carries a `code` and a `messag
 | `400` | `invalid_idempotency_key` | The `Idempotency-Key` is not 8 to 128 characters of letters, digits, dot, dash and underscore |
 | `400` | `invalid_status` | The status filter is not one of the transcript statuses |
 | `400` | `invalid_include` | `include` has a value other than `words` or `segments`. The message names it |
-| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage charge could not be paid. The message says how much to add |
+| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage or delivery charge could not be paid. The message says how much to add |
 | `402` | `insufficient_credits` | The available balance is under $0.01. The message says how much to add |
 | `403` | `infra_not_available` | Cap Infra is not enabled for this account |
 | `404` | `transcript_not_found` | No transcript with this ID belongs to the app |
@@ -1061,6 +1061,7 @@ curl https://cap.so/api/developer/v1/usage \
     "rates": {
       "microCreditsPerDollar": 100000,
       "storageDollarsPer1000MinutesPerMonth": { "1080p": 0.85, "1440p": 1.45, "2160p": 2.8 },
+      "deliveryDollarsPer1000Minutes": 0.95,
       "speechDollarsPerHour": 0.1,
       "uploadAdmissionDays": 7
     }
@@ -1078,9 +1079,9 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 **Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 
-**Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
+**Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars for each 1,000 delivered minutes, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
 
-**What is billed.** Uploading and encoding are free. From November 13, 2026, each video is charged its first month of storage when it first becomes ready, by its length and resolution tier, and is charged once a day after that month, with a month counted as 30 days. Videos that were ready before November 13, 2026 keep the daily charge. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
+**What is billed.** Uploading and encoding are free. From November 13, 2026, each video is charged its first month of storage when it first becomes ready, by its length and resolution tier, and is charged once a day after that month, with a month counted as 30 days. Videos that were ready before November 13, 2026 keep the daily charge. Delivery is billed per delivered minute, one flat rate at every resolution priced in [Billing](/docs/api/billing), and charged once a day when the day's figures become final. **Delivery** above says how delivered minutes are measured. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
 
 | Tier | Pixels (width times height) | Storage per 1,000 minutes per month |
 |------|-----------------------------|-------------------------------------|
@@ -1099,10 +1100,10 @@ A video is billed at the lower of two tiers: the tier its source falls in by pix
 | State | Meaning |
 |-------|---------|
 | `active` | In good standing. |
-| `grace` | A storage charge, for a day or for a video's first month, was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
+| `grace` | A storage or delivery charge, for a day or for a video's first month, was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
 | `paused` | Playback is paused until credits are added. Videos stay stored. |
 
-Once the available balance covers the charge that fell short, one day of storage or a video's first month, the app returns to `active` at once, whether credit was added or a transcript's hold was released. A later charge falling short starts a new grace period. What it could not pay is not charged afterwards.
+Once the available balance covers the charge that fell short, one day of storage, a video's first month or one day of delivery, the app returns to `active` at once, whether credit was added or a transcript's hold was released. A later charge falling short starts a new grace period. What it could not pay is not charged afterwards.
 
 ### List Transactions
 
@@ -1173,6 +1174,7 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 | `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
 | `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
 | `video_create` | Storage, first month | `developer_video` | The video ID |
+| `delivery_daily` | Delivery | `delivery_day` | The UTC day, as `YYYY-MM-DD` |
 | `transcription` | Transcription | `developer_transcript` | The transcript ID |
 | `adjustment` | Adjustment | `manual` | A note, when there is one |
 | `refund` | Payment reversed | `stripe_refund` | The refund |
@@ -1581,7 +1583,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 
 The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
 
-- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
+- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link. Pasted into a chat or a page builder, it previews as the video: the page carries `og:video` tags for the MP4 and an oEmbed link to `https://cap.so/api/developer/oembed?url=SHARE_URL`, which answers with the embed's iframe. A video in an app with [Allowed Sites](#allowed-sites) gets no iframe from it, since other sites could not show one.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe, unless you limit it to your own sites with [Allowed Sites](#allowed-sites):
 
 ```html
@@ -1594,6 +1596,8 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
   loading="lazy"
 ></iframe>
 ```
+
+`allow="autoplay"` lets a play command your page sends after a click start the video with sound. Firefox does not know that name and logs a harmless warning about it.
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
@@ -1616,7 +1620,7 @@ Add these to `embedUrl` as query parameters, for example `https://cap.so/dev/Zk3
 | `autoplay=1` | Starts playing when the player loads. A browser that refuses to autoplay with sound gets the video muted, and one that refuses autoplay altogether shows the paused player |
 | `muted=1` | Starts with the sound off. The viewer can turn it on |
 | `loop=1` | Starts again from the beginning when the video ends |
-| `t=90` | Starts at that many seconds. Decimals work, such as `t=12.5`. A time past the end is ignored. `shareUrl` takes this parameter too |
+| `t=90` | Starts at that time. Seconds work, with decimals such as `t=12.5`, and so do hours, minutes and seconds such as `t=1m30s`, `t=90s` or `t=1h2m3s`. A time past the end is ignored. `shareUrl` takes this parameter too |
 | `controls=0` | Hides the control bar. A play button stays on a paused video and the keyboard keeps working |
 | `captions=1` | Starts with captions on, for a video that has them. The viewer can turn them off |
 
