@@ -1645,6 +1645,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"availableMicroCredits",
 					"heldMicroCredits",
 					"speech",
+					"delivery",
 					"totalVideos",
 					"uploadingVideos",
 					"totalDurationMinutes",
@@ -1695,6 +1696,36 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							transcripts: {
 								type: "integer",
 								description: "How many transcripts completed.",
+							},
+						},
+					},
+					delivery: {
+						type: ["object", "null"],
+						description:
+							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech, and null until delivery has been measured for this app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.",
+						required: ["minutes", "minutesByTier", "finalThrough"],
+						properties: {
+							minutes: {
+								type: "number",
+								description: "Delivered minutes across every rendition tier.",
+							},
+							minutesByTier: {
+								type: "object",
+								description: "Delivered minutes for each rendition tier.",
+								required: ["360p", "720p", "1080p", "1440p", "2160p"],
+								properties: {
+									"360p": { type: "number" },
+									"720p": { type: "number" },
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							finalThrough: {
+								type: ["string", "null"],
+								format: "date",
+								description:
+									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
 							},
 						},
 					},
