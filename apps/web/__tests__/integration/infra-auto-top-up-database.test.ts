@@ -21,6 +21,8 @@ const fixture = vi.hoisted(() => ({
 	>(),
 	created: [] as FakeIntent[],
 	createdKeys: [] as string[],
+	sent: [] as Record<string, unknown>[],
+	duringCreate: null as null | (() => Promise<void>),
 	loseNextResponse: false,
 	delayMs: 40,
 	calledAt: [] as number[],
@@ -75,6 +77,10 @@ vi.mock("@cap/utils", () => ({
 				}
 				if (entry?.state === "done") return entry.intent;
 				fixture.keys.set(key, { state: "pending", params: sent });
+				fixture.sent.push(params as unknown as Record<string, unknown>);
+				const during = fixture.duringCreate;
+				fixture.duringCreate = null;
+				await during?.();
 				fixture.calledAt.push(Date.now());
 				await new Promise((resolve) => setTimeout(resolve, fixture.delayMs));
 				const intent: FakeIntent = {
@@ -232,9 +238,7 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		it("makes no second payment when the amount changes after a lost response", async () => {
-			const { runAutoTopUp, settleAutoTopUpPaymentIntent } = await import(
-				"@/lib/infra-auto-top-up"
-			);
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
 			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 			const { accountId } = await makeAccount(30_000);
 			const before = fixture.created.length;
@@ -247,18 +251,12 @@ describe.runIf(Boolean(databaseUrl))(
 				"UPDATE developer_credit_accounts SET autoTopUpAmountCents = 2500 WHERE id = ?",
 				[accountId],
 			);
-			expect(await runAutoTopUp(accountId)).toEqual({
-				state: "skipped",
-				reason: "in_progress",
+			expect(await runAutoTopUp(accountId)).toMatchObject({
+				state: "succeeded",
 			});
 			expect(fixture.created.length - before).toBe(1);
+			expect(await topUpsOf(accountId)).toHaveLength(1);
 
-			const [lost] = fixture.created.slice(before);
-			if (!lost) throw new Error("No payment was created");
-			await settleAutoTopUpPaymentIntent(
-				lost as unknown as Parameters<typeof settleAutoTopUpPaymentIntent>[0],
-				"succeeded",
-			);
 			await setBalance(accountId, 10);
 			expect(await runAutoTopUp(accountId)).toMatchObject({
 				state: "succeeded",
@@ -511,11 +509,27 @@ describe.runIf(Boolean(databaseUrl))(
 				topUps: 0,
 				declines: 0,
 			});
+			const [[owner]] = (await pool.query(
+				"SELECT u.email FROM users u JOIN developer_credit_accounts c ON c.ownerId = u.id WHERE c.id = ?",
+				[accountId],
+			)) as unknown as [[{ email: string }]];
 			await pool.query(
 				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
 					balanceAfterMicroCredits, referenceId, referenceType, metadata)
-				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":500}')`,
-				[id(), accountId, key],
+				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', ?)`,
+				[
+					id(),
+					accountId,
+					key,
+					JSON.stringify({
+						amountCents: 500,
+						customerId: "cus_test",
+						paymentMethodId: "pm_test",
+						receiptEmail: owner.email,
+						description: "Cap Infra credits for Top-up test, auto top-up",
+						period: "2026-11-13",
+					}),
+				],
 			);
 			const before = fixture.createdKeys.length;
 
@@ -546,6 +560,146 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(await topUpsOf(accountId)).toHaveLength(1);
 			expect(await balanceOf(accountId)).toBe(530_000);
 			errors.mockRestore();
+		});
+
+		it("checks and charges one amount, read under the lock, when the setting changes mid-attempt", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const app = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const other = await makeAccount(30_000, { ownerId });
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup', 50000000, 50030000, ?, 'auto_top_up', '{}')`,
+				[id(), other.accountId, `pi_today_${other.accountId}`],
+			);
+			const setAmount = (cents: number) =>
+				pool.query(
+					"UPDATE developer_credit_accounts SET autoTopUpAmountCents = ? WHERE id = ?",
+					[cents, app.accountId],
+				);
+
+			expect(await runAutoTopUp(app.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+
+			await setAmount(500);
+			fixture.duringCreate = () => setAmount(60_000).then(() => undefined);
+			expect((await runAutoTopUp(app.accountId)).state).toBe("succeeded");
+
+			expect(fixture.sent.at(-1)?.amount).toBe(500);
+			const [[total]] = (await pool.query(
+				`SELECT SUM(t.amountMicroCredits) AS micro FROM developer_credit_transactions t
+				 JOIN developer_credit_accounts c ON c.id = t.accountId
+				 WHERE c.ownerId = ? AND t.type = 'topup' AND t.referenceType = 'auto_top_up'`,
+				[ownerId],
+			)) as unknown as [[{ micro: number }]];
+			expect(Number(total.micro)).toBe(50_500_000);
+			warn.mockRestore();
+		});
+
+		it("keeps counting a charge whose answer was lost against the owner's ceiling", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const first = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const second = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const before = fixture.created.length;
+
+			fixture.loseNextResponse = true;
+			expect(await runAutoTopUp(first.accountId)).toEqual({ state: "error" });
+			expect(await runAutoTopUp(second.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+			expect(fixture.created.length - before).toBe(1);
+			expect(await topUpsOf(second.accountId)).toEqual([]);
+			errors.mockRestore();
+			warn.mockRestore();
+		});
+
+		it("lets the sweep reconcile a 72 hour old payment even when every limit applies", async () => {
+			const { runDueAutoTopUps } = await import("@/lib/infra-auto-top-up");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const stale = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 100_000,
+			});
+			const other = await makeAccount(30_000, { ownerId });
+			const stalePayment = `pi_stale1000_${stale.accountId}`;
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata, createdAt)
+				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":100000}', UTC_TIMESTAMP() - INTERVAL 73 HOUR)`,
+				[id(), stale.accountId, stalePayment],
+			);
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup', 500000, 530000, ?, 'auto_top_up', '{}')`,
+				[id(), other.accountId, `pi_today_${other.accountId}`],
+			);
+			fixture.stored.set(stalePayment, {
+				id: stalePayment,
+				status: "succeeded",
+				amount: 100_000,
+				amount_received: 100_000,
+				currency: "usd",
+				metadata: { type: "developer_auto_top_up", accountId: stale.accountId },
+			});
+			await pool.query(
+				"UPDATE developer_credit_accounts SET balanceMicroCredits = 99000000, autoTopUpEnabled = 0 WHERE id = ?",
+				[stale.accountId],
+			);
+
+			await runDueAutoTopUps(new Date());
+
+			expect(await topUpsOf(stale.accountId)).toEqual([stalePayment]);
+			expect(await balanceOf(stale.accountId)).toBe(99_000_000 + 100_000_000);
+			warn.mockRestore();
+		});
+
+		it("never shows a pending row in the customer's ledger", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const { listAppLedgerPage, readAppLedger } = await import(
+				"@/lib/infra-ledger-store"
+			);
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { accountId, appId } = await makeAccount(30_000);
+			fixture.loseNextResponse = true;
+			await runAutoTopUp(accountId);
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup_pending', 0, 30000, 'pi_processing', 'auto_top_up_pending', '{}'),
+				        (?, ?, 'storage_daily', -100, 29900, '2026-11-12', 'storage_day', '{}')`,
+				[id(), accountId, id(), accountId],
+			);
+
+			const page = await listAppLedgerPage(appId, { limit: 50 });
+			const exported = [];
+			for await (const rows of readAppLedger(appId)) exported.push(...rows);
+
+			expect(page.rows.map((row) => row.type)).toEqual(["storage_daily"]);
+			expect(exported.map((row) => row.type)).toEqual(["storage_daily"]);
+			errors.mockRestore();
+		});
+
+		it("names the app in the charge description", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const { accountId } = await makeAccount(30_000);
+
+			expect((await runAutoTopUp(accountId)).state).toBe("succeeded");
+			expect(fixture.sent.at(-1)?.description).toBe(
+				"Cap Infra credits for Top-up test, auto top-up",
+			);
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {
