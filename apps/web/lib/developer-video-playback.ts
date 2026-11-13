@@ -115,8 +115,6 @@ export function wantsShortSegments(request: Request): boolean {
 	return values.length === 1 && values[0] === "short";
 }
 
-// Carries the choice from the master playlist to the playlists it lists, so a
-// player only has to ask for the short form once.
 export function listShortSegmentPlaylists(master: string): string {
 	return master
 		.split(/\r?\n/)
@@ -135,8 +133,6 @@ export function listShortSegmentPlaylists(master: string): string {
 		.join("\n");
 }
 
-// `listedByName` says whether a segment at this signed URL may be listed by
-// file name instead. Every segment it refuses stays signed.
 export async function signMediaPlaylist(
 	playlist: string,
 	sign: (name: string) => Promise<string>,
