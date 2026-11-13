@@ -11,6 +11,7 @@ import {
 } from "../lib/auth";
 import { HLS_LADDER_TIER_NAMES } from "../lib/hls-ladder";
 import { encodeHlsLadder } from "../lib/hls-ladder-encode";
+import { posterThumbnailOptions } from "../lib/infra-poster";
 import type {
 	Job,
 	RecordingErrorCode,
@@ -1605,7 +1606,7 @@ async function encodeLadderAsync(
 				? generateThumbnail(
 						ladder.poster.path,
 						ladder.poster.durationSeconds,
-						{},
+						posterThumbnailOptions(options.infra),
 						uploadSignal,
 					)
 						.then((image) =>
@@ -2078,7 +2079,12 @@ async function processVideoAsync(
 		const previewAbort = new AbortController();
 		const previewSignal = AbortSignal.any([signal, previewAbort.signal]);
 		const thumbnailRender = thumbnailPresignedUrl
-			? generateThumbnail(outputPath, metadata.duration, {}, previewSignal)
+			? generateThumbnail(
+					outputPath,
+					metadata.duration,
+					posterThumbnailOptions(options.infra),
+					previewSignal,
+				)
 			: undefined;
 		const previewGifRender = previewGifPresignedUrl
 			? generatePreviewGif(outputPath, metadata.duration, {}, previewSignal)
