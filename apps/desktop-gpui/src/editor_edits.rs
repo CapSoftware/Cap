@@ -1913,11 +1913,14 @@ pub fn carry_keyboard_with_clips(
     });
 }
 
+const KEYBOARD_CONTINUATION: &str = "-continued";
+
 pub fn keyboard_follow_holds(
     before: &TimelineConfiguration,
     timeline: &mut TimelineConfiguration,
 ) -> bool {
-    let holds = timeline.hold_windows();
+    let old_holds = before.hold_windows();
+    let new_holds = timeline.hold_windows();
     let same_clips = before.segments.len() == timeline.segments.len()
         && before
             .segments
@@ -1930,86 +1933,130 @@ pub fn keyboard_follow_holds(
                     && old.timescale == new.timescale
             })
         && before.transitions == timeline.transitions;
-    if !same_clips || before.hold_windows() == holds {
+    if !same_clips || old_holds == new_holds {
         return false;
     }
-    carry_keyboard_with_clips(before, timeline, |index| index);
-    let mut segments = Vec::with_capacity(timeline.keyboard_segments.len());
-    for segment in timeline.keyboard_segments.drain(..) {
-        let mut rest = Some(segment);
-        for &(hold_start, hold_end) in &holds {
-            let Some(piece) = rest.take() else {
-                break;
-            };
-            if piece.end <= hold_start || piece.start >= hold_end {
-                rest = Some(piece);
-                continue;
-            }
-            let (left, right) = split_keyboard_at_hold(piece, hold_start, hold_end);
-            segments.extend(left);
-            rest = right;
-        }
-        segments.extend(rest);
+    let segments = &mut timeline.keyboard_segments;
+    rejoin_keyboard_across_holds(segments, &old_holds);
+    for segment in segments.iter_mut() {
+        let end = retime_through_holds(&old_holds, &new_holds, segment.end, true);
+        segment.remap_times(|time| retime_through_holds(&old_holds, &new_holds, time, false));
+        segment.end = end.max(segment.start);
     }
-    timeline.keyboard_segments = segments;
+    cut_keyboard_around_holds(segments, &new_holds);
     true
 }
 
-fn split_keyboard_at_hold(
+fn retime_through_holds(old: &[(f64, f64)], new: &[(f64, f64)], time: f64, end: bool) -> f64 {
+    let effective = time - held_time_before(old, time);
+    let frame = effective_to_output_end(new, effective);
+    let held_for = old
+        .iter()
+        .find(|(start, finish)| {
+            if end {
+                *start < time && time <= *finish
+            } else {
+                *start <= time && time < *finish
+            }
+        })
+        .map(|(start, _)| time - start);
+    let still_held = new.iter().find(|(start, _)| (start - frame).abs() < 1e-9);
+    match (held_for, still_held) {
+        (Some(held_for), Some((start, finish))) => start + held_for.min(finish - start),
+        _ if end => frame,
+        _ => effective_to_output(new, effective),
+    }
+}
+
+fn rejoin_keyboard_across_holds(segments: &mut Vec<KeyboardTrackSegment>, holds: &[(f64, f64)]) {
+    let effective = |time: f64| time - held_time_before(holds, time);
+    sort_track(segments);
+    for index in (0..segments.len()).rev() {
+        let right = &segments[index];
+        let Some(parent) = right.id.strip_suffix(KEYBOARD_CONTINUATION) else {
+            continue;
+        };
+        let resumes_at = effective(right.start);
+        let Some(left) = segments[..index]
+            .iter()
+            .position(|left| left.id == parent && (effective(left.end) - resumes_at).abs() < 1e-6)
+        else {
+            continue;
+        };
+        let right = segments.remove(index);
+        let left = &mut segments[left];
+        let rebase = (right.start - left.start) * 1000.0;
+        if !right.keys.is_empty() {
+            left.display_text.push_str(&right.display_text);
+        }
+        left.keys.extend(
+            right
+                .keys
+                .into_iter()
+                .map(|key| cap_project::KeyPressDisplay {
+                    time_offset: key.time_offset + rebase,
+                    ..key
+                }),
+        );
+        left.end = right.end;
+    }
+    for orphan in segments
+        .iter_mut()
+        .filter(|segment| segment.id.ends_with(KEYBOARD_CONTINUATION))
+    {
+        orphan.id = split_id("kb-edit");
+    }
+}
+
+fn cut_keyboard_around_holds(segments: &mut Vec<KeyboardTrackSegment>, holds: &[(f64, f64)]) {
+    let mut pieces = Vec::with_capacity(segments.len());
+    for mut rest in segments.drain(..) {
+        for &(hold_start, hold_end) in holds {
+            if rest.start < hold_start && hold_end < rest.end {
+                let (left, right) = cut_keyboard_at_hold(rest, hold_start, hold_end);
+                pieces.extend(left);
+                rest = right;
+            }
+        }
+        pieces.push(rest);
+    }
+    sort_track(&mut pieces);
+    *segments = pieces;
+}
+
+fn cut_keyboard_at_hold(
     segment: KeyboardTrackSegment,
     hold_start: f64,
     hold_end: f64,
-) -> (Option<KeyboardTrackSegment>, Option<KeyboardTrackSegment>) {
-    let times: Vec<f64> = segment
+) -> (Option<KeyboardTrackSegment>, KeyboardTrackSegment) {
+    let typed_before = segment
         .keys
         .iter()
-        .map(|key| segment.start + key.time_offset / 1000.0)
-        .collect();
-    let split = times
-        .iter()
-        .position(|time| *time >= hold_start)
-        .unwrap_or(times.len());
-    let chars: Vec<char> = segment.display_text.chars().collect();
-    let (has_left, has_right) = if times.is_empty() {
-        (segment.start < hold_start, segment.end > hold_end)
-    } else if chars.len() != times.len() {
-        (split > 0, split == 0)
-    } else {
-        (split > 0, split < times.len())
-    };
-    let left = has_left.then(|| {
+        .filter(|key| segment.start + key.time_offset / 1000.0 < hold_start)
+        .count();
+    let (left, mut right) = if typed_before == segment.keys.len() {
         let mut left = segment.clone();
-        left.end = left.end.min(hold_start);
-        if has_right {
-            left.keys.truncate(split);
-            left.display_text = chars[..split].iter().collect();
+        left.end = hold_start;
+        let mut continuation = segment;
+        continuation.keys.clear();
+        (Some(left), continuation)
+    } else if typed_before == 0 {
+        (None, segment)
+    } else {
+        match segment.split_at(hold_start) {
+            Some((left, right)) => (Some(left), right),
+            None => return (None, segment),
         }
-        left
-    });
-    let right = has_right.then(|| {
-        let mut right = segment.clone();
-        right.start = times
-            .get(split)
-            .map_or(segment.start.max(hold_end), |first| {
-                segment.start.max(hold_end).min(*first)
-            });
-        right.end = right.end.max(right.start);
-        right.keys = segment
-            .keys
-            .iter()
-            .zip(&times)
-            .skip(split)
-            .map(|(key, time)| cap_project::KeyPressDisplay {
-                key: key.key.clone(),
-                time_offset: (time - right.start) * 1000.0,
-            })
-            .collect();
-        if has_left {
-            right.display_text = chars[split..].iter().collect();
-            right.id = split_id("kb-edit");
-        }
-        right
-    });
+    };
+    let resume = right
+        .keys
+        .iter()
+        .map(|key| right.start + key.time_offset / 1000.0)
+        .fold(hold_end, f64::min);
+    right.trim_start_to(resume);
+    if let Some(left) = &left {
+        right.id = format!("{}{KEYBOARD_CONTINUATION}", left.id);
+    }
     (left, right)
 }
 
@@ -5078,6 +5125,261 @@ mod tests {
         );
         let before = timeline.clone();
         assert!(!keyboard_follow_holds(&before, timeline));
+    }
+
+    fn place_cards(timeline: &mut TimelineConfiguration, cards: &[(f64, f64)]) -> bool {
+        let before = timeline.clone();
+        timeline.text_segments = cards
+            .iter()
+            .map(|(start, end)| {
+                serde_json::from_value(serde_json::json!({
+                    "start": start, "end": end, "track": 0,
+                    "content": "Hold", "layout": "fullscreen"
+                }))
+                .unwrap()
+            })
+            .collect();
+        keyboard_follow_holds(&before, timeline)
+    }
+
+    fn assert_spans(timeline: &TimelineConfiguration, expected: &[(&str, f64, f64, &[f64])]) {
+        let actual = keyboard_spans(timeline);
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for ((text, start, end, keys), (want_text, want_start, want_end, want_keys)) in
+            actual.iter().zip(expected)
+        {
+            assert_eq!(text, want_text, "{actual:?}");
+            assert!((start - want_start).abs() < 1e-9, "{actual:?}");
+            assert!((end - want_end).abs() < 1e-9, "{actual:?}");
+            assert_eq!(keys.len(), want_keys.len(), "{actual:?}");
+            for (key, want) in keys.iter().zip(*want_keys) {
+                assert!((key - want).abs() < 1e-9, "{actual:?}");
+            }
+        }
+    }
+
+    fn keyboard_json(timeline: &TimelineConfiguration) -> serde_json::Value {
+        serde_json::to_value(&timeline.keyboard_segments).unwrap()
+    }
+
+    #[test]
+    fn moving_a_card_inside_a_typed_segment_heals_the_previous_cut() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        let original = keyboard_json(timeline);
+
+        assert!(place_cards(timeline, &[(5.0, 6.0)]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 3.0, &[2.0]),
+                ("x", 4.5, 5.0, &[4.5]),
+                ("y", 6.0, 8.0, &[7.0]),
+                ("b", 9.0, 10.0, &[9.0]),
+            ],
+        );
+
+        assert!(place_cards(timeline, &[(5.5, 6.5)]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 3.0, &[2.0]),
+                ("x", 4.5, 5.5, &[4.5]),
+                ("y", 6.5, 8.0, &[7.0]),
+                ("b", 9.0, 10.0, &[9.0]),
+            ],
+        );
+        assert_eq!(timeline.keyboard_segments[1].id, "kb-edit-0-kb-2");
+        assert_eq!(timeline.keyboard_segments[2].id, "kb-edit-0-kb-2-continued");
+
+        let settled = keyboard_json(timeline);
+        for _ in 0..3 {
+            assert!(place_cards(timeline, &[(5.0, 6.0)]));
+            assert!(place_cards(timeline, &[(5.0, 5.5)]));
+            assert!(place_cards(timeline, &[(5.5, 6.5)]));
+        }
+        assert_eq!(keyboard_json(timeline), settled);
+
+        assert!(place_cards(timeline, &[]));
+        assert_eq!(keyboard_json(timeline), original);
+    }
+
+    #[test]
+    fn a_card_in_a_linger_or_an_extended_end_continues_it_after_the_card() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.keyboard_segments[2].end = 9.8;
+        let original = keyboard_json(timeline);
+
+        assert!(place_cards(timeline, &[(2.4, 3.4), (10.5, 11.0)]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 2.4, &[2.0]),
+                ("a", 3.4, 4.0, &[]),
+                ("xy", 5.5, 8.0, &[5.5, 7.0]),
+                ("b", 9.0, 10.5, &[9.0]),
+                ("b", 11.0, 11.3, &[]),
+            ],
+        );
+
+        assert!(place_cards(timeline, &[]));
+        assert_eq!(keyboard_json(timeline), original);
+    }
+
+    #[test]
+    fn overlapping_segments_cut_by_one_card_each_heal_to_their_own_original() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.keyboard_segments = serde_json::from_value(serde_json::json!([
+            {
+                "id": "kb-edit-0-uv", "start": 6.2, "end": 7.4, "displayText": "uv",
+                "keys": [{ "key": "u", "timeOffset": 0.0 }, { "key": "v", "timeOffset": 900.0 }]
+            },
+            {
+                "id": "kb-edit-0-wx", "start": 6.9, "end": 7.7, "displayText": "wx",
+                "keys": [{ "key": "w", "timeOffset": 0.0 }, { "key": "x", "timeOffset": 300.0 }]
+            }
+        ]))
+        .unwrap();
+
+        assert!(place_cards(timeline, &[(7.0, 8.0)]));
+        assert_spans(
+            timeline,
+            &[
+                ("u", 6.2, 7.0, &[6.2]),
+                ("w", 6.9, 7.0, &[6.9]),
+                ("v", 8.0, 8.4, &[8.1]),
+                ("x", 8.0, 8.7, &[8.2]),
+            ],
+        );
+
+        assert!(place_cards(timeline, &[]));
+        assert_spans(
+            timeline,
+            &[("uv", 6.2, 7.4, &[6.2, 7.1]), ("wx", 6.9, 7.7, &[6.9, 7.2])],
+        );
+        let ids: Vec<_> = timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| segment.id.as_str())
+            .collect();
+        assert_eq!(ids, ["kb-edit-0-uv", "kb-edit-0-wx"]);
+    }
+
+    #[test]
+    fn a_continuation_the_user_moved_stays_its_own_segment() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(place_cards(timeline, &[(5.0, 6.0)]));
+        let moved = &mut timeline.keyboard_segments[2];
+        moved.start += 0.5;
+        moved.end += 0.5;
+
+        assert!(place_cards(timeline, &[]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 3.0, &[2.0]),
+                ("x", 4.5, 5.0, &[4.5]),
+                ("y", 5.5, 7.5, &[6.5]),
+                ("b", 8.0, 9.0, &[8.0]),
+            ],
+        );
+
+        assert!(place_cards(timeline, &[(4.6, 4.8)]));
+        let ids: std::collections::HashSet<_> = timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| segment.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), timeline.keyboard_segments.len());
+        assert!(ids.contains("kb-edit-0-kb-2-continued"));
+    }
+
+    #[test]
+    fn a_piece_the_user_trimmed_is_not_rejoined() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(place_cards(timeline, &[(5.0, 6.0)]));
+        timeline.keyboard_segments[1].end = 4.9;
+
+        assert!(place_cards(timeline, &[]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 3.0, &[2.0]),
+                ("x", 4.5, 4.9, &[4.5]),
+                ("y", 5.0, 7.0, &[6.0]),
+                ("b", 8.0, 9.0, &[8.0]),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_segment_inside_a_card_stays_put_when_another_card_changes() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(place_cards(timeline, &[(5.0, 6.0)]));
+        timeline.keyboard_segments = serde_json::from_value(serde_json::json!([{
+            "id": "kb-edit-on-card", "start": 5.2, "end": 5.8,
+            "displayText": "k", "keys": [{ "key": "k", "timeOffset": 0.0 }]
+        }]))
+        .unwrap();
+
+        assert!(place_cards(timeline, &[(5.0, 6.0), (8.5, 9.0)]));
+        assert_spans(timeline, &[("k", 5.2, 5.8, &[5.2])]);
+        assert!(place_cards(timeline, &[(5.0, 6.0)]));
+        assert_spans(timeline, &[("k", 5.2, 5.8, &[5.2])]);
+    }
+
+    #[test]
+    fn a_segment_cut_by_two_cards_heals_one_cut_at_a_time() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.keyboard_segments = serde_json::from_value(serde_json::json!([{
+            "id": "kb-edit-abc", "start": 1.0, "end": 4.0, "displayText": "abc",
+            "keys": [
+                { "key": "a", "timeOffset": 0.0 },
+                { "key": "b", "timeOffset": 1000.0 },
+                { "key": "c", "timeOffset": 2000.0 }
+            ]
+        }]))
+        .unwrap();
+
+        assert!(place_cards(timeline, &[(1.5, 2.0), (3.0, 3.5)]));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 1.0, 1.5, &[1.0]),
+                ("b", 2.0, 3.0, &[2.5]),
+                ("c", 3.5, 5.0, &[4.0]),
+            ],
+        );
+        let ids: Vec<_> = timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| segment.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "kb-edit-abc",
+                "kb-edit-abc-continued",
+                "kb-edit-abc-continued-continued"
+            ]
+        );
+
+        assert!(place_cards(timeline, &[(2.5, 3.0)]));
+        assert_spans(
+            timeline,
+            &[("ab", 1.0, 2.5, &[1.0, 2.0]), ("c", 3.0, 4.5, &[3.5])],
+        );
+        assert_eq!(timeline.keyboard_segments[1].id, "kb-edit-abc-continued");
+
+        assert!(place_cards(timeline, &[]));
+        assert_spans(timeline, &[("abc", 1.0, 4.0, &[1.0, 2.0, 3.0])]);
+        assert_eq!(timeline.keyboard_segments[0].id, "kb-edit-abc");
     }
 
     #[test]
