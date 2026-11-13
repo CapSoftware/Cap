@@ -1011,13 +1011,13 @@ describe("the part numbers a token can sign", () => {
 
 	it.each([
 		["a cap of one byte", 1, 1],
-		["a cap under one part", PART - 1, 1],
-		["a cap of exactly one part", PART, 1],
-		["a cap one byte over one part", PART + 1, 2],
-		["a cap of exactly ten parts", 10 * PART, 10],
-		["a cap of 250 MB", 250_000_000, 48],
-		["the largest cap", 36_000_000_000, 6867],
-	])("with %s, signs up to part %i", async (_label, maxBytes, highest) => {
+		["a cap under one part", 1, PART - 1],
+		["a cap of exactly one part", 1, PART],
+		["a cap one byte over one part", 2, PART + 1],
+		["a cap of exactly ten parts", 10, 10 * PART],
+		["a cap of 250 MB", 48, 250_000_000],
+		["the largest cap", 6867, 36_000_000_000],
+	])("with %s, signs up to part %i", async (_label, highest, maxBytes) => {
 		const { token } = await created({ maxBytes });
 
 		const allowed = await presign(token, { partNumber: highest });
