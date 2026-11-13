@@ -6,7 +6,10 @@ import {
 } from "@/lib/developer-pricing";
 import { getSpeechUsage } from "@/lib/developer-transcript-usage";
 import { deliveryJson, getDeliveredUsage } from "@/lib/infra-delivery";
-import { INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/infra-pricing";
+import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
 import {
 	getInfraBilling,
 	infraBillingJson,
@@ -55,6 +58,7 @@ app.get("/", async (c) => {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 				storageDollarsPer1000MinutesPerMonth:
 					INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+				deliveryDollarsPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 				speechDollarsPerHour: SPEECH_DOLLARS_PER_HOUR,
 				uploadAdmissionDays: UPLOAD_ADMISSION_DAYS,
 			},

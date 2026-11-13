@@ -10,13 +10,14 @@ This page covers what is charged, when, and how to check it. The endpoints are i
 
 ## What is charged
 
-Two things are charged: stored video and speech to text. Uploading and encoding are free.
+Three things are charged: stored video, delivered video and speech to text. Uploading and encoding are free.
 
 | | Price | Charged |
 |---|---|---|
 | Storage, up to 1080p | $0.85 per 1,000 minutes per month | First month when the video is ready, then once a day after it |
 | Storage, 1440p | $1.45 per 1,000 minutes per month | First month when the video is ready, then once a day after it |
 | Storage, 4K (2160p) | $2.80 per 1,000 minutes per month | First month when the video is ready, then once a day after it |
+| Delivery | $0.95 per 1,000 delivered minutes | Once a day, when the day is final |
 | Speech to text | $0.10 per audio hour | When a transcript completes |
 | Uploading and encoding | Free | |
 
@@ -88,6 +89,18 @@ Counting the videos still encoding means several uploads finishing at once canno
 
 Nothing is charged for it. It is a check, and the balance is drawn down by the first month when each video becomes ready and by the daily charge after that. `GET /api/developer/v1/usage` returns the amount as `upload.requiredMicroCredits` and what is missing as `upload.shortfallMicroCredits`.
 
+## Delivery
+
+Delivery is billed per delivered minute, at the price in the table above. It is one flat rate at every resolution. Delivery is billed from 14 November 2026. Earlier days are not charged.
+
+A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted.
+
+Each day is charged once from the app's credit balance, when its figures become final. It is one ledger row, labelled "Delivery", with the UTC day as its reference.
+
+Delivery follows the same balance, shortfall and grace rules as storage. If the balance cannot pay the whole day, what is there is taken, the rest is not charged later, and the app goes into `grace`. See [When credit runs out](#when-credit-runs-out).
+
+The player is included: the hosted page and the iframe embed have no separate fee. The video it streams counts as delivery.
+
 ## Speech to text
 
 Transcription costs $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio itself, rounds its length to the nearest whole second with a minimum of one, and charges those seconds at the hourly rate, rounded down to a whole micro-credit and never less than one.
@@ -153,14 +166,14 @@ Auto top-up adds credit from a saved card when an app's balance runs low. It is 
 | State | What it means |
 |-------|---------------|
 | `active` | In good standing. |
-| `grace` | A storage charge, for a day or for a video's first month, was more than the balance. What was there was taken, uploads and new transcripts are refused, and playback continues until `standing.pausesAt`, 7 days after the app first fell short. |
+| `grace` | A storage or delivery charge, for a day or for a video's first month, was more than the balance. What was there was taken, uploads and new transcripts are refused, and playback continues until `standing.pausesAt`, 7 days after the app first fell short. |
 | `paused` | Playback is paused until credit is added. Videos stay stored. |
 
-Once the available balance covers the charge that fell short, one day of storage or the video's first month, the app returns to `active` at once, whether credit was added or a transcript's hold was released. From the next storage charge that shortfall stays settled even if the balance drops again, and only a new charge falling short starts a new grace period. What it could not pay is not charged afterwards.
+Once the available balance covers the charge that fell short, one day of storage, the video's first month or one day of delivery, the app returns to `active` at once, whether credit was added or a transcript's hold was released. From the next storage or delivery charge that shortfall stays settled even if the balance drops again, and only a new charge falling short starts a new grace period. What it could not pay is not charged afterwards.
 
 An app that stores nothing owes nothing, so it stays `active` with a zero balance. It cannot upload or start a transcript until it has credit.
 
-The app's owner is emailed once when a storage charge first falls short, with the day playback will pause, and again whenever an auto top-up is declined.
+The app's owner is emailed once when a storage or delivery charge first falls short, with the day playback will pause, and again whenever an auto top-up is declined.
 
 ## Checking what you were charged
 
@@ -173,6 +186,7 @@ Every credit and charge is a row in the app's ledger, with the time in UTC, the 
 | Cap Pro credit | The month it is for |
 | Storage | The UTC day it charges |
 | Storage, first month | The video ID |
+| Delivery | The UTC day it charges |
 | Transcription | The transcript ID |
 | Adjustment | A credit or correction applied by Cap |
 | Payment reversed | The payment that was returned to you. The credit it bought is taken back, in proportion to the amount returned |

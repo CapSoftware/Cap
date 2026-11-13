@@ -26,6 +26,7 @@ const state = vi.hoisted(() => ({
 	longestIdList: 0,
 	secondsPerCharge: 0,
 	topUps: vi.fn(),
+	delivery: vi.fn(),
 	emails: vi.fn(),
 	afters: [] as Promise<unknown>[],
 	continuations: [] as { url: string; authorization: string | null }[],
@@ -228,6 +229,11 @@ vi.mock("@/lib/infra-storage-minimum", () => ({
 vi.mock("@/lib/infra-auto-top-up", () => ({ runDueAutoTopUps: state.topUps }));
 vi.mock("@/lib/infra-billing-emails", () => ({
 	sendInfraOutOfCreditEmail: state.emails,
+}));
+vi.mock("@/lib/infra-delivery-billing", () => ({
+	deliveryBillingStart: () => "2026-11-01",
+	markDeliveryDayNotified: async () => {},
+	settleDeliveryDays: state.delivery,
 }));
 
 import {
@@ -950,5 +956,38 @@ describe("auto top-ups run once per sweep", () => {
 		await run();
 
 		expect(state.topUps).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("delivery days settle once per sweep", () => {
+	it("settles after storage on the last hop only, inside the run's time budget", async () => {
+		state.secondsPerCharge = 1.6;
+		const order: string[] = [];
+		state.delivery.mockImplementation(async () => {
+			order.push("delivery");
+			return { billed: 0 };
+		});
+		state.topUps.mockImplementation(async () => {
+			order.push("top-up");
+			return { attempted: 0, succeeded: 0, failed: 0 };
+		});
+
+		const first = await run();
+		expect(first.continued).toBe(true);
+		expect(state.delivery).not.toHaveBeenCalled();
+
+		state.secondsPerCharge = 0;
+		const bodies = await followChain(first);
+		expect(bodies.at(-1)).toMatchObject({
+			complete: true,
+			delivery: { billed: 0 },
+		});
+		expect(state.delivery).toHaveBeenCalledTimes(1);
+		expect(order.slice(-2)).toEqual(["delivery", "top-up"]);
+		const [[options]] = state.delivery.mock.calls as [
+			[{ startDay: string; outOfTime: () => boolean; now: Date }],
+		];
+		expect(options.startDay).toBe("2026-11-01");
+		expect(options.outOfTime()).toBe(false);
 	});
 });

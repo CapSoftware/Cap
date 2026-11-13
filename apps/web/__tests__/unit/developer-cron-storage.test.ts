@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
 	restoredSinceCharge: vi.fn(),
 	runDueAutoTopUps: vi.fn(),
 	sendInfraOutOfCreditEmail: vi.fn(),
+	deliveryBillingStart: vi.fn(),
+	settleDeliveryDays: vi.fn(),
+	markDeliveryDayNotified: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -115,6 +118,11 @@ vi.mock("@/lib/infra-auto-top-up", () => ({
 vi.mock("@/lib/infra-billing-emails", () => ({
 	sendInfraOutOfCreditEmail: mocks.sendInfraOutOfCreditEmail,
 }));
+vi.mock("@/lib/infra-delivery-billing", () => ({
+	deliveryBillingStart: mocks.deliveryBillingStart,
+	settleDeliveryDays: mocks.settleDeliveryDays,
+	markDeliveryDayNotified: mocks.markDeliveryDayNotified,
+}));
 
 import { GET } from "@/app/api/cron/developer-storage/route";
 
@@ -179,6 +187,16 @@ beforeEach(() => {
 	mocks.runDueAutoTopUps.mockResolvedValue(NO_TOP_UPS);
 	mocks.latestStorageCharges.mockResolvedValue(new Map());
 	mocks.chargeStorageDay.mockResolvedValue(billed());
+	mocks.deliveryBillingStart.mockReset();
+	mocks.deliveryBillingStart.mockReturnValue(null);
+	mocks.settleDeliveryDays.mockReset();
+	mocks.settleDeliveryDays.mockImplementation(
+		async ({ startDay }: { startDay: string | null }) => ({
+			enabled: !!startDay,
+			billed: 0,
+		}),
+	);
+	mocks.markDeliveryDayNotified.mockReset();
 });
 
 describe("developer-storage cron job", () => {
@@ -588,6 +606,93 @@ describe("developer-storage cron job", () => {
 
 		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
 		expect(mocks.markShortfallsNotified).not.toHaveBeenCalled();
+	});
+
+	it("settles delivery days after the storage charges with the start day from the env, and none while it is unset", async () => {
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(28)]]),
+		);
+		const order: string[] = [];
+		mocks.chargeStorageDay.mockImplementation(async () => {
+			order.push("storage");
+			return billed();
+		});
+		mocks.settleDeliveryDays.mockImplementation(
+			async ({ startDay }: { startDay: string | null }) => {
+				order.push(`delivery ${startDay}`);
+				return { enabled: !!startDay, billed: 0 };
+			},
+		);
+
+		const off = await authorized();
+		expect(off.body.delivery).toMatchObject({ enabled: false });
+
+		mocks.deliveryBillingStart.mockReturnValue("2026-11-15");
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		const on = await authorized();
+
+		expect(on.body.delivery).toMatchObject({ enabled: true });
+		expect(order.filter((step) => step.startsWith("delivery"))).toEqual([
+			"delivery null",
+			"delivery 2026-11-15",
+		]);
+		expect(order.lastIndexOf("storage")).toBeLessThan(
+			order.indexOf("delivery 2026-11-15"),
+		);
+	});
+
+	it("emails a delivery day that first falls short, and stamps its row only once the email is accepted", async () => {
+		mocks.deliveryBillingStart.mockReturnValue("2026-11-15");
+		const shortSince = new Date("2026-11-17T06:41:00Z");
+		mocks.settleDeliveryDays.mockImplementation(
+			async ({
+				onFellShort,
+			}: {
+				onFellShort: (shortfall: {
+					accountId: string;
+					dateKey: string;
+					shortSince: Date;
+				}) => Promise<void>;
+			}) => {
+				await onFellShort({
+					accountId: "account-1",
+					dateKey: "2026-11-15",
+					shortSince,
+				});
+				await onFellShort({
+					accountId: "account-2",
+					dateKey: "2026-11-15",
+					shortSince,
+				});
+				return { billed: 2, short: 2 };
+			},
+		);
+		mocks.sendInfraOutOfCreditEmail
+			.mockResolvedValueOnce(true)
+			.mockResolvedValueOnce(false);
+
+		await authorized();
+
+		expect(mocks.sendInfraOutOfCreditEmail.mock.calls).toEqual([
+			[
+				{
+					accountId: "account-1",
+					shortSince,
+					pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
+				},
+			],
+			[
+				{
+					accountId: "account-2",
+					shortSince,
+					pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
+				},
+			],
+		]);
+		expect(mocks.markDeliveryDayNotified.mock.calls).toEqual([
+			["account-1", "2026-11-15", expect.any(Date)],
+		]);
 	});
 
 	it("answers with zero apps when there are none", async () => {

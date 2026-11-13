@@ -38,7 +38,7 @@ describe("UploadDrop copy", () => {
 		const text = (container.textContent ?? "").replace(/\s+/g, " ");
 
 		expect(text).toContain(
-			"Encoding is free. Stored video is billed by the minute, and uploading needs a balance that covers its first month.",
+			"Encoding is free. Stored and delivered video are billed by the minute, and uploading needs a balance that covers its first month.",
 		);
 		expect(text).not.toMatch(/uploads are free/i);
 	});
