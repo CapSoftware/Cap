@@ -107,6 +107,7 @@ export async function startStubApi() {
 		refuseTranscriptFile: false,
 		videoOutcome: "ready" as "ready" | "errored",
 		transcriptOutcome: "complete" as "complete" | "insufficient_credits",
+		usageAppId: "app_stub" as string | null,
 	};
 	let origin = "";
 
@@ -605,6 +606,7 @@ export async function startStubApi() {
 		if (resource === "usage" && key === undefined && method === "GET") {
 			return send(response, 200, {
 				data: {
+					...(state.usageAppId === null ? {} : { appId: state.usageAppId }),
 					balanceMicroCredits: 500000,
 					balanceDollars: "5.00",
 					totalVideos: videos.size,

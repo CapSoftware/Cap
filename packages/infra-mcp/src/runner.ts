@@ -1,3 +1,4 @@
+import type { CreditLink } from "./credit-link";
 import {
 	ApiError,
 	creditNotice,
@@ -39,7 +40,7 @@ export type RunHooks = {
 	sendLog: (data: unknown) => Promise<void>;
 };
 
-function errorBody(error: ToolError, consoleUrl: string) {
+function errorBody(error: ToolError, creditUrl: string | null) {
 	const api = error instanceof ApiError ? error : null;
 	return {
 		error: {
@@ -51,20 +52,20 @@ function errorBody(error: ToolError, consoleUrl: string) {
 				? { retryAfterSeconds: api.retryAfterSeconds }
 				: {}),
 		},
-		...(isCreditError(error)
-			? { credit: creditNotice(consoleUrl), addCreditAt: consoleUrl }
-			: {}),
+		...(creditUrl === null
+			? {}
+			: { credit: creditNotice(creditUrl), addCreditAt: creditUrl }),
 		...error.context,
 	};
 }
 
 export function createToolRunner(options: {
-	consoleUrl: string;
+	credit: CreditLink;
 	redact: (text: string) => string;
 	log: (line: string) => void;
 	budgetMs?: number;
 }) {
-	const { consoleUrl, redact, log, budgetMs } = options;
+	const { credit, redact, log, budgetMs } = options;
 
 	const result = (body: unknown, isError: boolean): ToolResult => ({
 		content: [
@@ -121,7 +122,10 @@ export function createToolRunner(options: {
 						toToolError(thrown).context,
 					)
 				: toToolError(thrown);
-			const body = errorBody(error, consoleUrl);
+			const body = errorBody(
+				error,
+				isCreditError(error) ? await credit.resolve(hooks.signal) : null,
+			);
 			if (error.code === "internal_error" && thrown instanceof Error) {
 				log(`${tool.name} failed unexpectedly: ${thrown.message}`);
 			}

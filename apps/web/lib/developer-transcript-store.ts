@@ -56,6 +56,7 @@ import {
 } from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
 import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
+import { infraAddCreditsHint } from "@/lib/infra-routes";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	assertPublicMediaUrl,
@@ -79,9 +80,6 @@ const fail = (
 	message: string,
 	hint: string,
 ): TranscriptFailure => ({ ok: false, status, code, message, hint });
-
-const ADD_CREDITS_HINT =
-	"Add credits to this app at https://cap.so/dashboard/infra, then retry.";
 
 const NOT_FOUND = fail(
 	404,
@@ -444,7 +442,7 @@ async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	const refusal = await transcriptStartRefusal(appId);
 	if (!refusal) return null;
 	await scheduleAutoTopUp({ appId });
-	return fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT);
+	return fail(402, refusal.code, refusal.message, infraAddCreditsHint(appId));
 }
 
 export async function createTranscriptFromUrl(

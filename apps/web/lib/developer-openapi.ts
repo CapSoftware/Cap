@@ -1238,6 +1238,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"error",
 					"code",
 					"message",
+					"hint",
+					"docs",
 					"standing",
 					"pausesAt",
 					"balanceMicroCredits",
@@ -1255,6 +1257,15 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					message: {
 						type: "string",
 						description: "Says how much to add before uploading.",
+					},
+					hint: {
+						type: "string",
+						description: "Links the app's Billing page, where credit is added.",
+					},
+					docs: {
+						type: "string",
+						format: "uri",
+						description: "Documentation for this API.",
 					},
 					standing: { type: "string", enum: ["active", "grace", "paused"] },
 					pausesAt: {
@@ -1545,6 +1556,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			Usage: {
 				type: "object",
 				required: [
+					"appId",
 					"balanceMicroCredits",
 					"balanceDollars",
 					"availableMicroCredits",
@@ -1559,6 +1571,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"rates",
 				],
 				properties: {
+					appId: {
+						type: "string",
+						description:
+							"The app the secret key belongs to. Its Billing page, where credit is added, is https://cap.so/dashboard/infra/{appId}/billing.",
+					},
 					balanceMicroCredits: {
 						type: "integer",
 						description: "Remaining balance. 100,000 micro-credits = $1.",
