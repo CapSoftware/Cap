@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
 	queries: [] as { sql: string; params: unknown[] }[],
+	hold: null as Promise<void> | null,
 }));
 
 vi.mock("@cap/database", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
 	const client = drizzle(async (sql, params) => {
 		state.queries.push({ sql, params });
+		if (state.hold) await state.hold;
 		return { rows: [] };
 	});
 	return { db: () => client };
@@ -24,6 +26,7 @@ const LATEST_DAY =
 
 beforeEach(() => {
 	state.queries = [];
+	state.hold = null;
 	vi.useFakeTimers();
 	vi.setSystemTime(new Date("2026-11-13T23:59:59Z"));
 });
@@ -53,6 +56,24 @@ describe("latest storage day", () => {
 			"2026-11-14",
 			1,
 		]);
+	});
+
+	it("asks for the latest first month and the latest storage day at once, not one after the other", async () => {
+		let release = () => {};
+		state.hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+
+		const charge = latestStorageCharge(db() as never, "account-1");
+		await vi.waitFor(() => expect(state.queries).toHaveLength(2));
+		expect(state.queries.map(({ params }) => params[1])).toEqual([
+			"video_create",
+			"storage_daily",
+		]);
+
+		release();
+		expect(await charge).toBeNull();
+		expect(state.queries).toHaveLength(2);
 	});
 
 	it("finds every account's latest day in one statement, one bounded lookup per account", async () => {

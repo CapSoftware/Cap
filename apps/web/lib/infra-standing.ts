@@ -283,10 +283,14 @@ export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ): Promise<StorageCharge | null> {
+	const [latestFirstMonth, latestDaily] = await Promise.all([
+		latestFirstMonthCharge(executor, accountId),
+		latestDailyCharge(executor, accountId),
+	]);
 	const firstMonth = await sizedShortfall(
 		executor,
 		accountId,
-		await latestFirstMonthCharge(executor, accountId),
+		latestFirstMonth,
 	);
 	if (
 		firstMonth?.shortSince &&
@@ -294,11 +298,7 @@ export async function latestStorageCharge(
 	) {
 		return { ...firstMonth, firstMonth: true };
 	}
-	return sizedShortfall(
-		executor,
-		accountId,
-		await latestDailyCharge(executor, accountId),
-	);
+	return sizedShortfall(executor, accountId, latestDaily);
 }
 
 export async function latchCoveredShortfall(
