@@ -49,6 +49,7 @@ const RATE_PRICE = clsx(
 );
 
 const LEDGER_ANCHOR = "transactions";
+const AUTO_TOP_UP_ANCHOR = "auto-top-up";
 
 export type BillingAccount = {
 	balanceMicroCredits: number;
@@ -112,7 +113,12 @@ export function BillingView({
 					<div className="mt-9">
 						{account ? (
 							<>
-								<TopUp appId={app.id} />
+								<TopUp
+									appId={app.id}
+									autoTopUpHref={
+										account.autoTopUpEnabled ? null : `#${AUTO_TOP_UP_ANCHOR}`
+									}
+								/>
 								<div className="mt-8 border-t border-[rgba(222,230,246,0.08)] pt-6">
 									<ProCredit appId={app.id} credit={proCredit} />
 								</div>
@@ -187,19 +193,21 @@ export function BillingView({
 			</div>
 
 			{account && (
-				<Block
-					title="Auto top-up"
-					description="Add credits from a saved card when the balance runs low."
-				>
-					<AutoTopUp
-						appId={app.id}
-						hasCard={account.hasCard}
-						enabled={account.autoTopUpEnabled}
-						thresholdMicroCredits={account.autoTopUpThresholdMicroCredits}
-						amountCents={account.autoTopUpAmountCents}
-						failure={autoTopUpFailure}
-					/>
-				</Block>
+				<div id={AUTO_TOP_UP_ANCHOR} className="scroll-mt-24">
+					<Block
+						title="Auto top-up"
+						description="Add credits from a saved card when the balance runs low."
+					>
+						<AutoTopUp
+							appId={app.id}
+							hasCard={account.hasCard}
+							enabled={account.autoTopUpEnabled}
+							thresholdMicroCredits={account.autoTopUpThresholdMicroCredits}
+							amountCents={account.autoTopUpAmountCents}
+							failure={autoTopUpFailure}
+						/>
+					</Block>
+				</div>
 			)}
 
 			<div id={LEDGER_ANCHOR} className="scroll-mt-24">
