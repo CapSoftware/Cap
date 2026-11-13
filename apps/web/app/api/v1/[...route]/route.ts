@@ -168,6 +168,7 @@ import {
 	creditCheckoutSessionParams,
 } from "@/lib/infra-credit-checkout";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
+import { settleFirstMonthAtDelete } from "@/lib/infra-storage-minimum";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -4614,7 +4615,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
-						return yield* runAgentMutation({
+						const deleted = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_video",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4659,6 +4660,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						yield* Effect.promise(() => settleFirstMonthAtDelete(path.videoId));
+						return deleted;
 					}),
 					requestId,
 				);

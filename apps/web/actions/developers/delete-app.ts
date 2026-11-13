@@ -10,6 +10,7 @@ import {
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { canUseInfra } from "@/lib/infra-access";
+import { settleFirstMonthsForDeletedApp } from "@/lib/infra-storage-minimum";
 
 export async function deleteDeveloperApp(appId: string) {
 	const user = await getCurrentUser();
@@ -55,6 +56,7 @@ export async function deleteDeveloperApp(appId: string) {
 				),
 			);
 	});
+	await settleFirstMonthsForDeletedApp(appId);
 
 	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
