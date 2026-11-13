@@ -75,6 +75,13 @@ import { docsConfig } from "../../app/(docs)/docs/docs-config";
 const billing = getDocBySlug("api/billing")?.content ?? "";
 const rest = getDocBySlug("api/rest-api")?.content ?? "";
 
+const POLICY_SENTENCES = [
+	"Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account.",
+	"A purchase also comes with a paid invoice, which shows any tax ID you add at checkout.",
+	"Credit does not expire.",
+	"If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.",
+];
+
 const wholeDollars = (cents: number) =>
 	`$${(cents / 100).toLocaleString("en-US")}`;
 
@@ -288,7 +295,17 @@ describe("the Billing page", () => {
 		expect(billing.split(times)).toHaveLength(3);
 	});
 
+	it("states receipts, expiry and refunds only in the agreed sentences", () => {
+		for (const sentence of POLICY_SENTENCES) {
+			expect(billing.split(sentence), sentence).toHaveLength(2);
+		}
+	});
+
 	it("leaves the open policy questions and uncharged prices out", () => {
+		const unagreed = POLICY_SENTENCES.reduce(
+			(doc, sentence) => doc.replace(sentence, ""),
+			billing,
+		);
 		for (const word of [
 			"refund",
 			"refunds",
@@ -306,7 +323,7 @@ describe("the Billing page", () => {
 			"delivery",
 			"watched",
 		]) {
-			expect(billing, word).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
+			expect(unagreed, word).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
 		}
 		expect(billing).not.toContain(String.fromCodePoint(0x2014));
 		expect(rest).not.toMatch(/\bdelivery\b|\bwatched\b/i);
