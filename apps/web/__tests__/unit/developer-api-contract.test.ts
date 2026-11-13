@@ -1656,3 +1656,43 @@ describe("response headers on the developer APIs", () => {
 		expect(withoutId.headers.get("X-Request-Id")).toBeNull();
 	});
 });
+
+describe("OpenAPI description", () => {
+	it("names the product Cap Infra API", () => {
+		const { info } = developerOpenApiSpec(ORIGIN);
+		expect(info.title).toBe("Cap Infra API");
+		expect(info.description).toMatch(/^The Cap Infra API does two things/);
+		expect(JSON.stringify(info)).not.toContain("Developer API");
+	});
+});
+
+describe("video captions in OpenAPI", () => {
+	it("documents captions on the video as language and url, outside what webhooks must carry", () => {
+		const spec = developerOpenApiSpec(ORIGIN) as unknown as {
+			components: {
+				schemas: {
+					DeveloperVideo: {
+						required: string[];
+						properties: {
+							captions: {
+								type: string;
+								items: { required: string[]; properties: object };
+							};
+						};
+					};
+				};
+			};
+		};
+		const video = spec.components.schemas.DeveloperVideo;
+		expect(video.properties.captions.type).toBe("array");
+		expect(video.properties.captions.items.required).toEqual([
+			"language",
+			"url",
+		]);
+		expect(Object.keys(video.properties.captions.items.properties)).toEqual([
+			"language",
+			"url",
+		]);
+		expect(video.required).not.toContain("captions");
+	});
+});

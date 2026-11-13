@@ -556,7 +556,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 		version: "1.0.0",
 		summary: "Host video in your product and turn audio or video into text.",
 		description: [
-			"The Cap Developer API does two things for your product. It hosts video: upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4 or with the hosted player. It turns speech into text: send an audio or video file and get a transcript back, with timings.",
+			"The Cap Infra API does two things for your product. It hosts video: upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4 or with the hosted player. It turns speech into text: send an audio or video file and get a transcript back, with timings.",
 			"",
 			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos, transcribe audio and video, and read credit usage.",
 			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for up to 50 parts at a time, then completeSdkUpload. If the token expires before the upload completes, renewUploadToken returns a new one for the same video and the upload continues with the same uploadId.",
