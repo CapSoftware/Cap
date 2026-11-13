@@ -4135,7 +4135,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!app) return { state: "not_found" };
-								const now = new Date();
+								const now = new Date(Math.floor(Date.now() / 1000) * 1000);
 								await tx
 									.update(Db.developerApiKeys)
 									.set({ revokedAt: now })

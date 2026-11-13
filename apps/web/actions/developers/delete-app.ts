@@ -30,7 +30,7 @@ export async function deleteDeveloperApp(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
-	const now = new Date();
+	const now = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		await tx
 			.update(developerApiKeys)

@@ -319,8 +319,13 @@ describe("deleteDeveloperApp", () => {
 
 		await deleteDeveloperApp("app-456");
 
-		const deletedAt = mockDb.set.mock.calls.at(-1)?.[0]?.deletedAt;
+		const stamps = mockDb.set.mock.calls.map(
+			([values]) => values.deletedAt ?? values.revokedAt,
+		);
+		const deletedAt = stamps[0];
 		expect(deletedAt).toBeInstanceOf(Date);
+		expect(deletedAt.getTime() % 1000).toBe(0);
+		expect(stamps).toEqual([deletedAt, deletedAt, deletedAt]);
 		expect(mockCancelEncodes).toHaveBeenCalledExactlyOnceWith({
 			appId: "app-456",
 			deletedAt,
