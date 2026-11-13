@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	readText: vi.fn(),
 	probe: vi.fn(),
 	startJob: vi.fn(),
+	cancelJob: vi.fn(),
 	charge: vi.fn(),
 	sniff: vi.fn(),
 }));
@@ -46,6 +47,7 @@ vi.mock("@/lib/media-client", () => ({
 	MEDIA_SERVER_SHUTDOWN_MESSAGE: "Server shutting down",
 	tryProbeVideoViaMediaServer: mocks.probe,
 	startMediaServerVideoJob: mocks.startJob,
+	cancelMediaServerVideoJob: mocks.cancelJob,
 	readMediaServerVideoJob: vi.fn(),
 }));
 vi.mock("@/lib/media-container", () => ({
@@ -78,6 +80,7 @@ beforeEach(() => {
 		contentType: "video/quicktime",
 	});
 	mocks.sniff.mockResolvedValue("media");
+	mocks.cancelJob.mockResolvedValue("cancelled");
 	mocks.charge.mockResolvedValue("charged");
 	mocks.startJob.mockImplementation(async (path: string) => ({
 		status: "started",
@@ -319,5 +322,60 @@ describe("settling a finished part", () => {
 
 		expect(await settling).toEqual({ success: true, applied: true });
 		expect(video().processing?.hls).toMatchObject({ state: "complete" });
+	});
+});
+
+describe("a video deleted while its parts are dispatched", () => {
+	const deleteDuringStart = (result: (path: string) => unknown) =>
+		mocks.startJob.mockImplementation(async (path: string) => {
+			mocks.store.video = { ...video(), deletedAt: new Date() };
+			return result(path);
+		});
+
+	it("cancels the job of each part that started", async () => {
+		deleteDuringStart((path) => ({
+			status: "started",
+			jobId: path === "/video/ladder" ? "job-hls" : "job-mp4",
+		}));
+
+		const results = await dispatchDeveloperVideoParts("video-1", "encode-1", {
+			contentType: "video/mp4",
+		});
+
+		expect(results).toEqual([
+			{ status: "fulfilled", value: "dispatched" },
+			{ status: "fulfilled", value: "dispatched" },
+		]);
+		expect(mocks.cancelJob).toHaveBeenCalledTimes(2);
+		expect(mocks.cancelJob.mock.calls.map(([jobId]) => jobId).sort()).toEqual([
+			"job-hls",
+			"job-mp4",
+		]);
+		expect(video().processing).toMatchObject({
+			hls: { jobId: null },
+			mp4: { jobId: null },
+		});
+	});
+
+	it("cancels only the part whose start was confirmed", async () => {
+		deleteDuringStart((path) =>
+			path === "/video/ladder"
+				? { status: "started", jobId: "job-hls" }
+				: { status: "unconfirmed" },
+		);
+
+		await dispatchDeveloperVideoParts("video-1", "encode-1", {
+			contentType: "video/mp4",
+		});
+
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-hls");
+	});
+
+	it("cancels nothing when the video is still there", async () => {
+		await dispatchDeveloperVideoParts("video-1", "encode-1", {
+			contentType: "video/mp4",
+		});
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
 	});
 });
