@@ -805,27 +805,41 @@ async function unrecordedVideosPage(
 		.limit(UNRECORDED_PAGE);
 }
 
+// A video that never received a file is retired too, or abandoned uploads
+// would stay listed for good. It is left alone while an upload for it is
+// still open, and whenever storage cannot say for certain what is there.
 async function removeUnrecordedFile(
 	row: { id: string; appId: string; s3Key: string | null },
 	now: Date,
 ) {
 	const s3Key = row.s3Key;
 	if (!s3Key) return false;
-	const stale = await Effect.gen(function* () {
+	const file = await Effect.gen(function* () {
 		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-		const object = yield* bucket.headObject(s3Key);
-		const modified = object.LastModified?.getTime() ?? 0;
-		return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
+		const head = yield* Effect.either(bucket.headObject(s3Key));
+		if (head._tag === "Right") {
+			const modified = head.right.LastModified?.getTime() ?? 0;
+			return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS
+				? ("stale" as const)
+				: ("fresh" as const);
+		}
+		if (!storedObjectIsMissing(head.left)) return "unknown" as const;
+		const open = yield* bucket.multipart.listUploads({ prefix: s3Key });
+		return open.IsTruncated ||
+			(open.Uploads ?? []).some((upload) => upload.Key === s3Key)
+			? ("uploading" as const)
+			: ("missing" as const);
 	})
 		.pipe(provideOptionalAuth, runPromise)
-		.catch(() => false);
-	if (!stale) return false;
+		.catch(() => "unknown" as const);
+	if (file !== "stale" && file !== "missing") return false;
 	const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
 		(error) => {
 			console.error("Error retiring an unrecorded upload:", row.id, error);
 			return false;
 		},
 	);
+	if (file === "missing") return retired;
 	return retired && (await removeStoredFile(s3Key));
 }
 
