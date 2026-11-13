@@ -1,7 +1,8 @@
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
 import { LocalError } from "./errors";
+import { isSelfContainedMedia, MEDIA_SNIFF_BYTES } from "./media-sniff";
 
 export type LocalFile = {
 	path: string;
@@ -21,6 +22,17 @@ export const CONTENT_TYPES: Record<string, string> = {
 };
 
 const GIGABYTE = 1e9;
+
+async function firstBytes(path: string) {
+	const handle = await open(path, "r");
+	try {
+		const buffer = Buffer.alloc(MEDIA_SNIFF_BYTES);
+		const { bytesRead } = await handle.read(buffer, 0, MEDIA_SNIFF_BYTES, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		await handle.close().catch(() => {});
+	}
+}
 
 export async function inspectFile(
 	rawPath: string,
@@ -56,6 +68,21 @@ export async function inspectFile(
 			"file_too_large",
 			`The file is larger than the ${Math.round(limit.maxBytes / GIGABYTE)} GB limit for ${limit.what}`,
 			"Export it at a lower bitrate or split it, then try again.",
+		);
+	}
+	const head = await firstBytes(path).catch(() => null);
+	if (!head) {
+		throw new LocalError(
+			"file_not_found",
+			"No file exists at that path, or it cannot be read",
+			"Check the path and that this server runs on the machine that holds the file.",
+		);
+	}
+	if (!isSelfContainedMedia(head)) {
+		throw new LocalError(
+			"not_media",
+			"The file is not a video or audio file",
+			"Send a video or audio file such as MP4, MOV, WebM, MKV, AVI, MPEG-TS, MP3, M4A, WAV, FLAC or Ogg. A playlist, image or document cannot be uploaded.",
 		);
 	}
 	const fileName = basename(path);
