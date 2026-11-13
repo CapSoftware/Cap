@@ -1197,7 +1197,7 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("measures the segment after hls.js has reached a start time", async () => {
+	it("swaps once hls.js has reached a start time", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		const { hls } = await started(video, { startAt: 45 });
@@ -1208,9 +1208,21 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		expect(hls.currentLevel).toBe(-1);
 
 		video.dispatchEvent(new Event("seeked"));
-		held(hls);
 
 		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("drops a swap waiting on a start time when the viewer picks a quality", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video, { startAt: 45 });
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		setLevel(3);
+		video.dispatchEvent(new Event("seeked"));
+
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("swaps by resolution when bitrate does not rise with it", async () => {

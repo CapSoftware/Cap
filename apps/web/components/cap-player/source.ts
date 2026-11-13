@@ -420,8 +420,17 @@ export const attachSource = (
 			// hls.js seeks to the start time itself. The time stays pending
 			// until that seek lands, so a fallback to the MP4 before then
 			// still starts at it.
+			let swappedTo = AUTO_LEVEL;
+			let swapAfterStart = AUTO_LEVEL;
+			const swapTo = (level: number) => {
+				swappedTo = level;
+				hls.currentLevel = level;
+			};
 			const reachedStart = () => {
 				startPending = false;
+				const level = swapAfterStart;
+				swapAfterStart = AUTO_LEVEL;
+				if (level !== AUTO_LEVEL && picked === AUTO_LEVEL) swapTo(level);
 			};
 			const destroy = () => {
 				hlsSeeks = false;
@@ -448,7 +457,6 @@ export const attachSource = (
 			// segment is replaced at once, before play or while the first
 			// seconds play, rather than playing on soft until the next segment.
 			let measured = false;
-			let swappedTo = AUTO_LEVEL;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
 				if (data.frag.level === swappedTo) {
@@ -463,9 +471,7 @@ export const attachSource = (
 					}
 					return;
 				}
-				// A start time is reached by hls.js's own seek; the segment after
-				// it is the one measured.
-				if (measured || startPending) return;
+				if (measured) return;
 				measured = true;
 				if (picked !== AUTO_LEVEL) return;
 				const level = pickStartingLevel(
@@ -474,8 +480,10 @@ export const attachSource = (
 					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
 				);
 				if (!isSharper(hls.levels, level, data.frag.level)) return;
-				swappedTo = level;
-				hls.currentLevel = level;
+				// hls.js is still seeking to the start time; switching now would
+				// undo its seek, so the switch waits for it to land.
+				if (startPending) swapAfterStart = level;
+				else swapTo(level);
 			});
 			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
 				if (!startPending) return;
