@@ -10,6 +10,7 @@ import {
 	claimProMonthlyCredit,
 	PRO_CREDIT_CLAIMED_MESSAGE,
 	PRO_CREDIT_NOT_PRO_MESSAGE,
+	PRO_CREDIT_SEATS_CLAIMED_MESSAGE,
 	proCreditPayer,
 } from "@/lib/infra-pro-credit";
 import {
@@ -54,7 +55,13 @@ export async function claimDeveloperProCredit(appId: string) {
 		subscription: payer.subscription,
 	});
 
-	if (!result.claimed) return actionFailure(PRO_CREDIT_CLAIMED_MESSAGE);
+	if (!result.claimed) {
+		return actionFailure(
+			result.reason === "seats_claimed"
+				? PRO_CREDIT_SEATS_CLAIMED_MESSAGE
+				: PRO_CREDIT_CLAIMED_MESSAGE,
+		);
+	}
 
 	return { balanceMicroCredits: result.balanceMicroCredits };
 }

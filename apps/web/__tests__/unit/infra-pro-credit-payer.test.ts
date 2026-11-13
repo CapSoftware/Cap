@@ -5,7 +5,28 @@ const mocks = vi.hoisted(() => ({
 	retrieve: vi.fn(),
 }));
 
-vi.mock("@cap/database", () => ({ db: () => ({}) }));
+vi.mock("@cap/database", () => ({
+	db: () => {
+		const chain = {
+			select: () => chain,
+			from: () => chain,
+			where: () => chain,
+			limit: async () => [{ id: "owner" }],
+		};
+		return chain;
+	},
+}));
+vi.mock("@cap/database/schema", () => ({
+	users: { id: "id", email: "email" },
+	developerCreditAccounts: {},
+	developerCreditTransactions: {},
+}));
+vi.mock("drizzle-orm", () => ({
+	and: vi.fn(),
+	count: vi.fn(),
+	eq: vi.fn(),
+	sql: vi.fn(),
+}));
 vi.mock("@cap/database/helpers", () => ({
 	nanoId: () => "txn",
 	nanoIdLength: 15,
@@ -33,6 +54,11 @@ const subscription = (
 	id,
 	status,
 	items: { data: quantities.map((quantity) => ({ quantity })) },
+	customer: {
+		id: "cus_1",
+		email: "owner@example.com",
+		metadata: { userId: "owner" },
+	},
 });
 
 const member = (fields: Record<string, string | null> = {}) => ({
@@ -60,9 +86,11 @@ describe("the subscription that pays for a Cap Pro credit", () => {
 
 		expect(await proCreditPayer(direct)).toEqual({
 			state: "ok",
-			subscription: { id: "sub_own", seats: 1 },
+			subscription: { id: "sub_own", seats: 1, payerId: "user-1" },
 		});
-		expect(mocks.retrieve).toHaveBeenCalledWith("sub_own");
+		expect(mocks.retrieve).toHaveBeenCalledWith("sub_own", {
+			expand: ["customer"],
+		});
 	});
 
 	it("is the team subscription for a member on a seat, with its paid seats", async () => {
@@ -72,9 +100,11 @@ describe("the subscription that pays for a Cap Pro credit", () => {
 
 		expect(await proCreditPayer(seated)).toEqual({
 			state: "ok",
-			subscription: { id: "sub_team", seats: 5 },
+			subscription: { id: "sub_team", seats: 5, payerId: "owner" },
 		});
-		expect(mocks.retrieve).toHaveBeenCalledWith("sub_team");
+		expect(mocks.retrieve).toHaveBeenCalledWith("sub_team", {
+			expand: ["customer"],
+		});
 	});
 
 	it("is the member's own subscription when they have both", async () => {
@@ -85,7 +115,9 @@ describe("the subscription that pays for a Cap Pro credit", () => {
 			thirdPartyStripeSubscriptionId: "sub_team",
 		});
 
-		expect(mocks.retrieve).toHaveBeenCalledWith("sub_own");
+		expect(mocks.retrieve).toHaveBeenCalledWith("sub_own", {
+			expand: ["customer"],
+		});
 	});
 
 	it("falls back to the team subscription when the member's own is a trial", async () => {
@@ -97,7 +129,9 @@ describe("the subscription that pays for a Cap Pro credit", () => {
 			stripeSubscriptionStatus: "trialing",
 		});
 
-		expect(mocks.retrieve).toHaveBeenCalledWith("sub_team");
+		expect(mocks.retrieve).toHaveBeenCalledWith("sub_team", {
+			expand: ["customer"],
+		});
 	});
 
 	it("refuses a seat on a team subscription that is still a trial", async () => {

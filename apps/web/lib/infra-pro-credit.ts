@@ -8,7 +8,7 @@ import {
 import { buildEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import type { User } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import {
@@ -49,7 +49,11 @@ export async function hasClaimedProCredit(userId: User.UserId, now: Date) {
 	return !!existing;
 }
 
-export type ProCreditSubscription = { id: string; seats: number };
+export type ProCreditSubscription = {
+	id: string;
+	seats: number;
+	payerId: User.UserId;
+};
 
 export type ProCreditPayer =
 	| { state: "refused"; message: string }
@@ -58,10 +62,32 @@ export type ProCreditPayer =
 export const PRO_CREDIT_NOT_PRO_MESSAGE = "This credit comes with Cap Pro.";
 export const PRO_CREDIT_CLAIMED_MESSAGE =
 	"This month's credit is already claimed. It is one per account, not one per app.";
+export const PRO_CREDIT_SEATS_CLAIMED_MESSAGE =
+	"This month's Cap Pro credits for your team are all claimed. There is one for each paid seat.";
 export const PRO_CREDIT_CHECK_FAILED_MESSAGE =
 	"Could not check your Cap Pro subscription. Try again in a moment.";
 
 const STRIPE_PAID_STATUSES = new Set<string>(["active", "past_due"]);
+
+async function payerOf(customer: Stripe.Subscription["customer"]) {
+	if (typeof customer === "string" || customer.deleted) return null;
+	const claimedId = customer.metadata?.userId;
+	if (claimedId) {
+		const [byId] = await db()
+			.select({ id: users.id })
+			.from(users)
+			.where(eq(users.id, claimedId as User.UserId))
+			.limit(1);
+		if (byId) return byId.id;
+	}
+	if (!customer.email) return null;
+	const [byEmail] = await db()
+		.select({ id: users.id })
+		.from(users)
+		.where(eq(users.email, customer.email))
+		.limit(1);
+	return byEmail?.id ?? null;
+}
 
 export async function proCreditPayer(user: {
 	id: User.UserId;
@@ -82,7 +108,9 @@ export async function proCreditPayer(user: {
 
 	let subscription: Stripe.Subscription;
 	try {
-		subscription = await stripe().subscriptions.retrieve(subscriptionId);
+		subscription = await stripe().subscriptions.retrieve(subscriptionId, {
+			expand: ["customer"],
+		});
 	} catch (error) {
 		console.error("[infra-billing] Could not read a Cap Pro subscription", {
 			userId: user.id,
@@ -98,6 +126,13 @@ export async function proCreditPayer(user: {
 		return { state: "refused", message: PRO_CREDIT_NOT_PRO_MESSAGE };
 	}
 
+	const payerId = ownSubscriptionId
+		? user.id
+		: await payerOf(subscription.customer);
+	if (!payerId) {
+		return { state: "refused", message: PRO_CREDIT_CHECK_FAILED_MESSAGE };
+	}
+
 	return {
 		state: "ok",
 		subscription: {
@@ -106,6 +141,7 @@ export async function proCreditPayer(user: {
 				(total, item) => total + (item.quantity || 1),
 				0,
 			),
+			payerId,
 		},
 	};
 }
@@ -121,17 +157,24 @@ export async function claimProMonthlyCredit({
 	now: Date;
 	subscription?: ProCreditSubscription | null;
 }): Promise<
-	{ claimed: true; balanceMicroCredits: number } | { claimed: false }
+	| { claimed: true; balanceMicroCredits: number }
+	| { claimed: false; reason: "already_claimed" | "seats_claimed" }
 > {
 	const period = proCreditPeriod(now);
 
 	return db().transaction(async (tx) => {
-		await tx
-			.select({ id: users.id })
-			.from(users)
-			.where(eq(users.id, userId))
-			.limit(1)
-			.for("update");
+		const lockedUserIds =
+			subscription && subscription.payerId !== userId
+				? [subscription.payerId, userId]
+				: [userId];
+		for (const lockedUserId of lockedUserIds) {
+			await tx
+				.select({ id: users.id })
+				.from(users)
+				.where(eq(users.id, lockedUserId))
+				.limit(1)
+				.for("update");
+		}
 
 		const [existing] = await tx
 			.select({ id: developerCreditTransactions.id })
@@ -149,7 +192,29 @@ export async function claimProMonthlyCredit({
 			)
 			.limit(1);
 
-		if (existing) return { claimed: false as const };
+		if (existing) {
+			return { claimed: false as const, reason: "already_claimed" as const };
+		}
+
+		if (subscription) {
+			const [claims] = await tx
+				.select({ total: count() })
+				.from(developerCreditAccounts)
+				.innerJoin(
+					developerCreditTransactions,
+					eq(developerCreditTransactions.accountId, developerCreditAccounts.id),
+				)
+				.where(
+					and(
+						eq(developerCreditTransactions.referenceType, REFERENCE_TYPE),
+						eq(developerCreditTransactions.referenceId, period),
+						sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.subscriptionId')) = ${subscription.id}`,
+					),
+				);
+			if (Number(claims?.total ?? 0) >= subscription.seats) {
+				return { claimed: false as const, reason: "seats_claimed" as const };
+			}
+		}
 
 		await tx
 			.update(developerCreditAccounts)
