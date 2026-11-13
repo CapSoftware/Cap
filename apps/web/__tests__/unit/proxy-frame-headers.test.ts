@@ -4,11 +4,20 @@ import { proxy } from "../../proxy";
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
-		select: () => ({ from: () => ({ where: async () => [] }) }),
+		select: () => ({
+			from: () => ({
+				where: async () => [],
+				innerJoin: () => ({ where: async () => [] }),
+			}),
+		}),
 	}),
 }));
 
-vi.mock("@cap/database/schema", () => ({ organizations: {} }));
+vi.mock("@cap/database/schema", () => ({
+	organizations: {},
+	developerAppDomains: {},
+	developerVideos: {},
+}));
 
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
