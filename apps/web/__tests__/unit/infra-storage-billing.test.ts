@@ -392,6 +392,36 @@ describe("admission prices a video the way the storage job will", () => {
 	});
 });
 
+describe("first months charged in the same second", () => {
+	const firstMonth = (amount: number, shortSince: Date | null) => ({
+		id: `first-${ledger.rows.length}`,
+		accountId: "account-1",
+		type: "video_create",
+		amountMicroCredits: -amount,
+		balanceAfterMicroCredits: 0,
+		referenceId: `video-${ledger.rows.length}`,
+		referenceType: "developer_video",
+		metadata: {
+			owedMicroCredits: 850,
+			chargedMicroCredits: amount,
+			shortSince: shortSince?.toISOString() ?? null,
+		},
+		createdAt: new Date(ledger.now),
+	});
+
+	it("keeps the app out of credit whichever of the two rows comes first", async () => {
+		for (const order of ["paid first", "short first"]) {
+			resetLedger();
+			ledger.videos = [];
+			const paid = firstMonth(850, null);
+			const short = firstMonth(0, new Date(ledger.now));
+			ledger.rows = order === "paid first" ? [paid, short] : [short, paid];
+
+			expect(await standing(), order).toMatchObject({ state: "grace" });
+		}
+	});
+});
+
 describe("standing through the ledger", () => {
 	it("goes active, grace, paused and back to active", async () => {
 		ledger.account.balanceMicroCredits = 200;

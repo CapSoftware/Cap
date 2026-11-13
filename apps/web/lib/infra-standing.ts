@@ -111,7 +111,7 @@ export function resolveStanding({
 async function latestChargeOfType(
 	executor: InfraDbExecutor,
 	accountId: string,
-	type: "storage_daily" | typeof FIRST_MONTH_TRANSACTION_TYPE,
+	type: "storage_daily",
 ) {
 	const [row] = await executor
 		.select({
@@ -130,16 +130,46 @@ async function latestChargeOfType(
 	return row ? parseStorageCharge(row) : null;
 }
 
+async function latestFirstMonthCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
+	const ofAccount = and(
+		eq(developerCreditTransactions.accountId, accountId),
+		eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+	);
+	const [latest] = await executor
+		.select({ createdAt: developerCreditTransactions.createdAt })
+		.from(developerCreditTransactions)
+		.where(ofAccount)
+		.orderBy(desc(developerCreditTransactions.createdAt))
+		.limit(1);
+	if (!latest) return null;
+	const sameSecond = (
+		await executor
+			.select({
+				createdAt: developerCreditTransactions.createdAt,
+				metadata: developerCreditTransactions.metadata,
+			})
+			.from(developerCreditTransactions)
+			.where(
+				and(
+					ofAccount,
+					eq(developerCreditTransactions.createdAt, latest.createdAt),
+				),
+			)
+	).map(parseStorageCharge);
+	return (
+		sameSecond.find((charge) => charge.shortSince) ?? sameSecond[0] ?? null
+	);
+}
+
 export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ): Promise<StorageCharge | null> {
 	const daily = await latestChargeOfType(executor, accountId, "storage_daily");
-	const firstMonth = await latestChargeOfType(
-		executor,
-		accountId,
-		FIRST_MONTH_TRANSACTION_TYPE,
-	);
+	const firstMonth = await latestFirstMonthCharge(executor, accountId);
 	if (
 		firstMonth?.shortSince &&
 		(!daily || firstMonth.createdAt.getTime() >= daily.createdAt.getTime())

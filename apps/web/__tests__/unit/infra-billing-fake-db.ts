@@ -128,12 +128,21 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	}
 
 	if (query.table === developerCreditTransactions) {
-		if (keys === "createdAt,metadata") {
-			const type = rendered.params.at(-1);
+		if (keys === "createdAt") {
+			const type = rendered.params[1];
 			return newestFirst(ledger.rows.filter((row) => row.type === type)).slice(
 				0,
 				1,
 			);
+		}
+		if (keys === "createdAt,metadata") {
+			const [, type, at] = rendered.params;
+			const ofType = newestFirst(
+				ledger.rows.filter((row) => row.type === type),
+			);
+			return at === undefined
+				? ofType.slice(0, 1)
+				: ofType.filter((row) => row.createdAt.getTime() === asTime(at));
 		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
