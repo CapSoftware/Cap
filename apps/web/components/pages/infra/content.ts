@@ -14,6 +14,9 @@ export const PRICES = {
 
 export const TIERS = INFRA_RESOLUTION_TIERS;
 
+export const STORAGE_RULE =
+	"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
+
 export const DEFAULT_TIER: InfraResolutionTier = "1080p";
 
 export const TIER_LABEL: Record<InfraResolutionTier, string> = {
@@ -92,11 +95,12 @@ export const BAA = "BAA available.";
 
 export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
-const DOCS = "/docs/api/rest-api";
+const REFERENCE = "/docs/api/rest-api";
 
 export const LINKS = {
-	docs: DOCS,
-	uploadDocs: `${DOCS}#multipart-upload`,
+	docs: "/docs/api/get-started",
+	reference: REFERENCE,
+	uploadDocs: `${REFERENCE}#multipart-upload`,
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -254,7 +258,7 @@ export const PLAYER: readonly CodeSample[] = [
   src="${SAMPLE_PLAYBACK.embed}"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
   allowfullscreen
   loading="lazy"
 ></iframe>`,
@@ -330,12 +334,11 @@ export const infraFaqs: readonly Faq[] = [
 	...PREVIEW_FAQ,
 	{
 		question: "What does Cap Infra charge for?",
-		answer:
-			"Two things: stored video and speech to text. Uploading and encoding are free at every resolution.",
+		answer: `Two things: stored video and speech to text. ${STORAGE_RULE}`,
 	},
 	{
 		question: "How does resolution change the price?",
-		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload.`,
+		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. One month is charged when a video first becomes ready, then it is charged daily once that month is over. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload.`,
 	},
 	{
 		question: "How do I pay?",
@@ -353,7 +356,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "How do I know when a video is ready?",
 		answer:
-			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
+			"Check the video's status from your server every 3 seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
 	},
 	{
 		question: "How do API keys work?",

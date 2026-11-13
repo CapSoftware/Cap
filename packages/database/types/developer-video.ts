@@ -57,6 +57,8 @@ export interface DeveloperVideoProcessingState {
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;
 	lostJobs?: Partial<Record<DeveloperVideoPart, number>>;
+	// When every worker last answered busy to a start of this encode.
+	busyAt?: number;
 	unavailableChecks: number;
 	poster: { output: string } | null;
 	bytes: {

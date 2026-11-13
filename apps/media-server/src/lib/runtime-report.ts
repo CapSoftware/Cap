@@ -10,6 +10,7 @@ import {
 	getMaxConcurrentAudioOperations,
 	getMaxConcurrentProbeOperations,
 } from "./media-operations";
+import { getProbeWorkerStats } from "./media-probe-pool";
 import { getMediaTransferCacheUsage } from "./media-transfer";
 import { getTempDirUsage } from "./temp-files";
 import {
@@ -22,6 +23,8 @@ export async function getRuntimeReport() {
 	const jobs = getAllJobs();
 	return {
 		draining: isDraining(),
+		runsAsUid: process.getuid?.() ?? null,
+		probeWorkers: getProbeWorkerStats(),
 		shutdownGraceMs: getShutdownGraceMs(),
 		processUptimeSeconds: Math.round(process.uptime()),
 		activeJobs: jobs.filter(

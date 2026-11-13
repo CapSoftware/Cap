@@ -25,7 +25,7 @@ import {
 	infraAppPath,
 	parseInfraPathname,
 } from "@/lib/infra-routes";
-import { formatCredits } from "@/lib/infra-usage";
+import { formatBalanceCents, formatCredits } from "@/lib/infra-usage";
 import type { InfraAppSummary } from "../infra-data";
 import { AppSwitcher } from "./app-switcher";
 import { FOCUS, FOCUS_INSET, LIT, MONO, SURFACE } from "./ui";
@@ -44,6 +44,7 @@ export function Brand({
 		<Link
 			href={href}
 			onNavigate={onNavigate}
+			aria-label="Cap Infra"
 			className={clsx("flex shrink-0 items-center rounded-[6px]", FOCUS)}
 		>
 			<Lockup height={22} />
@@ -215,12 +216,18 @@ export function Shell({
 									</Link>
 								</div>
 								<p
+									title={formatCredits(balanceMicroCredits)}
 									className={clsx(
 										MONO,
 										"m-0 mt-1.5 text-[21px] leading-[1.1] tracking-[-0.04em] tabular-nums text-white [overflow-wrap:anywhere]",
 									)}
 								>
-									{formatCredits(balanceMicroCredits)}
+									<span aria-hidden="true">
+										{formatBalanceCents(balanceMicroCredits)}
+									</span>
+									<span className="sr-only">
+										{formatCredits(balanceMicroCredits)}
+									</span>
 								</p>
 							</div>
 							<div

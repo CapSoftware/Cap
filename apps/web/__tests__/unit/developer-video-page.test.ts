@@ -34,6 +34,13 @@ const playing: DeveloperVideoPlayer = {
 	kind: "playing",
 	source: { hls: `${BASE}/master.m3u8`, mp4: `${BASE}/video.mp4` },
 	poster: `${BASE}/poster.jpg`,
+	captions: null,
+};
+const captioned: DeveloperVideoPlayer = {
+	...playing,
+	captions: [
+		{ language: "en", label: "English", url: `${BASE}/captions-en.vtt` },
+	],
 };
 const processing: DeveloperVideoPlayer = {
 	...frame,
@@ -120,7 +127,8 @@ describe("developer video page states", () => {
 	it("says when the upload has not finished", () => {
 		const html = render({ ...processing, uploading: true });
 
-		expect(html).toContain("Waiting for the upload");
+		expect(html).toContain("This video is being prepared");
+		expect(html).not.toContain("upload");
 		expect(html).not.toContain("<video");
 	});
 
@@ -261,6 +269,43 @@ describe("a taken down video page", () => {
 		},
 	);
 
+	it("ignores every embed parameter", async () => {
+		mocks.load.mockResolvedValue(takenDownFromLoader);
+		const plain = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: {},
+			}),
+		);
+		const styled = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: {
+					autoplay: "1",
+					muted: "1",
+					controls: "0",
+					t: "30",
+					captions: "1",
+					color: "f97316",
+					radius: "16",
+					quality: "720",
+					quality_menu: "0",
+					speed_menu: "0",
+					pip: "0",
+					fullscreen: "0",
+					poster: "0",
+					keyboard: "0",
+				},
+			}),
+		);
+
+		expect(styled).toBe(plain);
+		expect(styled).not.toContain("f97316");
+		expect(styled).not.toContain("border-radius");
+	});
+
 	it("never renders the video's own name or size even if the loader passed them", () => {
 		const html = render(takenDown, "share");
 
@@ -336,8 +381,114 @@ describe("developer video page parameters", () => {
 		expect(embed({ nope: "1" })).toBe(embed({}));
 	});
 
+	it("offers no captions button for a video without captions", () => {
+		expect(embed({})).not.toContain('aria-label="Captions"');
+		expect(embed({ captions: "1" })).toBe(embed({}));
+	});
+
+	it("offers a captions button, off by default, when the video has captions", () => {
+		const html = render(
+			captioned,
+			"embed",
+			developerVideoPlayback({}, "embed"),
+		);
+
+		expect(html).toContain('aria-pressed="false"');
+		expect(html).toContain('aria-label="Captions"');
+	});
+
+	it("starts with captions on when the embed asks", () => {
+		const on = (captions: string) =>
+			render(captioned, "embed", developerVideoPlayback({ captions }, "embed"));
+
+		expect(on("1")).toContain('aria-pressed="true"');
+		expect(on("0")).toContain('aria-pressed="false"');
+	});
+
+	it("keeps the caption file out of the markup so nothing loads before captions are on", () => {
+		expect(render(captioned)).not.toContain("captions-en.vtt");
+	});
+
+	it("keeps captions off on the share page whatever the query says", () => {
+		expect(
+			render(
+				captioned,
+				"share",
+				developerVideoPlayback({ captions: "1" }, "share"),
+			),
+		).toContain('aria-pressed="false"');
+	});
+
+	it("colours the player with the embed's accent", () => {
+		expect(embed({ color: "3b82f6" })).toContain("--cap-player-accent:#3b82f6");
+		expect(embed({})).not.toContain("--cap-player-accent");
+	});
+
+	it.each([
+		"red;}</style><script>alert(1)</script>",
+		'#fff" onload="alert(1)',
+		"3b82f6;background:url(https://evil.example/x)",
+	])("keeps the hostile colour %j out of the page", (color) => {
+		const html = embed({ color });
+
+		expect(html).toBe(embed({}));
+		expect(html).not.toContain("evil.example");
+		expect(html).not.toContain("alert(1)");
+	});
+
+	it("rounds the embed's corners on a clear page", () => {
+		const html = embed({ radius: "12" });
+
+		expect(html).toContain("border-radius:12px");
+		expect(html).toContain("html,body{background:transparent}");
+		expect(embed({})).toContain("html,body{background:#000}");
+		expect(embed({})).not.toContain("border-radius:");
+		expect(embed({ radius: "12px;}</style>" })).toBe(embed({}));
+	});
+
+	it.each([
+		["failed", failed],
+		["paused", paused],
+	])(
+		"keeps the %s embed square and opaque whatever the radius",
+		(_, player) => {
+			const html = render(
+				player,
+				"embed",
+				developerVideoPlayback({ radius: "12" }, "embed"),
+			);
+
+			expect(html).not.toContain("border-radius");
+			expect(html).not.toContain("background:transparent");
+		},
+	);
+
+	it("leaves the poster out when asked", () => {
+		expect(embed({ poster: "0" })).not.toContain("poster=");
+		expect(embed({ poster: "1" })).toContain(`poster="${BASE}/poster.jpg"`);
+	});
+
+	it("hides the buttons the embed switches off", () => {
+		expect(embed({})).toContain('aria-label="Full screen"');
+		const html = embed({ fullscreen: "0", speed_menu: "0" });
+
+		expect(html).not.toContain('aria-label="Full screen"');
+		expect(html).not.toContain("Playback speed");
+		expect(html).toContain('aria-label="Play"');
+	});
+
 	it("keeps the embed-only switches off the share page", () => {
-		const query = { autoplay: "1", muted: "1", loop: "1", controls: "0" };
+		const query = {
+			autoplay: "1",
+			muted: "1",
+			loop: "1",
+			controls: "0",
+			color: "f00",
+			radius: "12",
+			poster: "0",
+			fullscreen: "0",
+			quality: "360",
+		};
 
 		expect(
 			render(playing, "share", developerVideoPlayback(query, "share")),

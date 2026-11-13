@@ -80,7 +80,7 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		status: 402,
 		code: "out_of_credit",
 		meaning:
-			"The app is in grace or paused because a daily storage charge could not be paid. The message says how much to add",
+			"The app is in grace or paused because a storage charge could not be paid. The message says how much to add",
 	},
 	{
 		status: 402,
@@ -160,7 +160,7 @@ export const TRANSCRIPT_FAILURE_CODES = [
 	{
 		code: "unsupported_format",
 		meaning:
-			"The file is not a self-contained audio or video file. Playlists and manifests are not accepted",
+			"The file is not a self-contained audio or video file. Playlists and manifests are not accepted. When a URL returns a web page, the message says so",
 	},
 	{
 		code: "no_speech",

@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Account = { id: string; lastAttemptAt: Date | null };
+type Account = { id: string; lastAttemptAt: Date | null; waiting?: boolean };
 
 const state = vi.hoisted(() => ({
-	accounts: [] as { id: string; lastAttemptAt: Date | null }[],
+	accounts: [] as {
+		id: string;
+		lastAttemptAt: Date | null;
+		waiting?: boolean;
+	}[],
 	pages: [] as {
 		sql: string;
 		params: unknown[];
@@ -25,21 +29,14 @@ vi.mock("@cap/database", async () => {
 	const client = drizzle(async (sql, params) => {
 		if (sql.startsWith("select `developer_credit_accounts`.`id`, cast(")) {
 			const limit = Number(params.at(-1));
-			const keyset = sql.includes(" or (");
+			const keyset = sql.includes("and `developer_credit_accounts`.`id` > ?))");
 			const after = keyset
 				? { key: String(params.at(-4)), id: String(params.at(-2)) }
 				: null;
-			const cutoff = String(
-				params.find(
-					(param) =>
-						typeof param === "string" &&
-						/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(param),
-				),
-			);
 			state.pages.push({ sql, params, after, limit });
 			const rows = state.accounts
+				.filter((account) => !account.waiting)
 				.map((account) => ({ id: account.id, key: keyOf(account) }))
-				.filter((row) => row.key <= cutoff)
 				.filter(
 					(row) =>
 						!after ||
@@ -68,7 +65,7 @@ vi.mock("@cap/database", async () => {
 					.map((account) => [account.id]),
 			};
 		}
-		if (sql.includes("`autoTopUpAmountCents`")) {
+		if (sql.includes("`developer_apps`.`name`")) {
 			state.reads.push(String(params[0]));
 			vi.setSystemTime(Date.now() + state.msPerAccount);
 			return { rows: [] };
@@ -92,7 +89,7 @@ vi.mock("@/lib/infra-billing-emails", () => ({
 }));
 
 import {
-	autoTopUpRetryCutoff,
+	AUTO_TOP_UP_DAILY_LIMIT,
 	getAutoTopUpFailure,
 	runDueAutoTopUps,
 } from "@/lib/infra-auto-top-up";
@@ -104,11 +101,16 @@ const accounts = (
 	count: number,
 	from = 0,
 	lastAttemptAt: Date | null = null,
+	waiting = false,
 ): Account[] =>
 	Array.from({ length: count }, (_, index) => ({
 		id: `account-${String(from + index).padStart(4, "0")}`,
 		lastAttemptAt,
+		waiting,
 	}));
+
+const sqlTime = (date: Date) =>
+	date.toISOString().slice(0, 23).replace("T", " ");
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -136,7 +138,7 @@ describe("auto top-up sweep selection", () => {
 		expect(state.reads).toHaveLength(450);
 	});
 
-	it("asks the database for enabled accounts under their threshold after held credit, not tried since the retry cutoff", async () => {
+	it("asks the database for enabled accounts under their threshold after held credit that nothing makes wait", async () => {
 		state.accounts = [];
 
 		await runDueAutoTopUps(NOW);
@@ -154,14 +156,27 @@ describe("auto top-up sweep selection", () => {
 		expect(sql).toContain(
 			"(select max(`developer_credit_transactions`.`createdAt`) from `developer_credit_transactions` where `developer_credit_transactions`.`accountId` = `developer_credit_accounts`.`id` and `developer_credit_transactions`.`type` in (?, ?, ?) and `developer_credit_transactions`.`referenceType` in (?, ?, ?))",
 		);
+		expect(sql).toContain(
+			"not (exists (select 1 from `developer_credit_transactions` `pending_attempt` where `pending_attempt`.`accountId` = `developer_credit_accounts`.`id` and `pending_attempt`.`type` = ? and `pending_attempt`.`referenceType` = ? and `pending_attempt`.`createdAt` > ? and `pending_attempt`.`referenceId` not like ? and not exists (select 1 from `developer_credit_transactions` `settled_attempt` where `settled_attempt`.`accountId` = `pending_attempt`.`accountId` and `settled_attempt`.`referenceId` = `pending_attempt`.`referenceId`",
+		);
+		expect(sql).toContain(
+			"exists (select 1 from `developer_credit_transactions` `declined_attempt` where `declined_attempt`.`accountId` = `developer_credit_accounts`.`id` and `declined_attempt`.`type` = ? and `declined_attempt`.`referenceType` = ? and `declined_attempt`.`createdAt` > ? and not exists (select 1 from `developer_credit_transactions` `later_top_up` where `later_top_up`.`accountId` = `declined_attempt`.`accountId` and `later_top_up`.`type` = ?",
+		);
+		expect(sql).toContain(
+			"(select count(*) from `developer_credit_transactions` `recent_top_up` where `recent_top_up`.`accountId` = `developer_credit_accounts`.`id` and `recent_top_up`.`type` = ? and `recent_top_up`.`referenceType` = ? and `recent_top_up`.`createdAt` > ?) >= ?",
+		);
 		expect(sql).toMatch(
 			/order by attemptKey, `developer_credit_accounts`\.`id` asc limit \?$/,
 		);
-		expect(params).toContain(
-			autoTopUpRetryCutoff(NOW).toISOString().slice(0, 23).replace("T", " "),
+		expect(params).toContain(sqlTime(new Date(NOW.getTime() - 72 * HOUR_MS)));
+		expect(params).toContain(sqlTime(new Date(NOW.getTime() - 24 * HOUR_MS)));
+		expect(params).toContain(AUTO_TOP_UP_DAILY_LIMIT);
+		expect(params).toContain("infra-auto-top-up:%");
+		expect(sql).toContain(
+			"or exists (select 1 from `developer_credit_transactions` `stale_payment` where `stale_payment`.`accountId` = `developer_credit_accounts`.`id` and `stale_payment`.`type` = ? and `stale_payment`.`referenceType` = ? and `stale_payment`.`createdAt` <= ?",
 		);
-		expect(autoTopUpRetryCutoff(NOW)).toEqual(
-			new Date(NOW.getTime() - 24 * HOUR_MS),
+		expect(sql).toContain(
+			"from `developer_credit_accounts` `owner_account` join `developer_credit_transactions` `owner_entry` on `owner_entry`.`accountId` = `owner_account`.`id` where `owner_account`.`ownerId` = `developer_credit_accounts`.`ownerId`",
 		);
 	});
 
@@ -190,11 +205,12 @@ describe("auto top-up sweep selection", () => {
 			"account-0005",
 			"account-0003",
 			"account-0001",
+			"account-0004",
 		]);
 	});
 
-	it("reaches 50 due accounts in one run behind 300 accounts tried inside the retry window", async () => {
-		const tried = accounts(300, 0, new Date(NOW.getTime() - HOUR_MS));
+	it("reaches 50 due accounts in one run behind 300 accounts that must wait", async () => {
+		const tried = accounts(300, 0, new Date(NOW.getTime() - HOUR_MS), true);
 		const due = accounts(50, 300);
 		state.accounts = [...tried, ...due];
 		state.msPerAccount = 250;

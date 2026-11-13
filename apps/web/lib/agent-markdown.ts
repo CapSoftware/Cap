@@ -28,7 +28,24 @@ export const prefersMarkdown = (accept: string | null) => {
 	return markdown > 0 && markdown >= html;
 };
 
-const markdownHeaders = (cacheControl: string) => ({
+export const DOCS_MARKDOWN_ROUTE = "/docs-markdown";
+
+const MARKDOWN_EXTENSION = /\.mdx?$/;
+
+export const docsMarkdownSlug = (
+	pathname: string,
+	accept: string | null,
+): string | null => {
+	const explicit = MARKDOWN_EXTENSION.test(pathname);
+	if (!explicit && !prefersMarkdown(accept)) return null;
+	const path = pathname.replace(MARKDOWN_EXTENSION, "").replace(/\/+$/, "");
+	if (path === "/docs") return "introduction";
+	if (!path.startsWith("/docs/")) return null;
+	const slug = path.slice("/docs/".length);
+	return slug ? slug : null;
+};
+
+export const markdownHeaders = (cacheControl: string) => ({
 	"Content-Type": `${MARKDOWN_TYPE}; charset=utf-8`,
 	Vary: "Accept",
 	"Cache-Control": cacheControl,

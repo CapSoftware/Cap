@@ -1068,6 +1068,11 @@ export const AgentDeveloperAppContextResponse = Schema.Struct({
 					"1440p": Schema.Number,
 					"2160p": Schema.Number,
 				}),
+				dailyChargeMinutesByTier: Schema.Struct({
+					"1080p": Schema.Number,
+					"1440p": Schema.Number,
+					"2160p": Schema.Number,
+				}),
 				dailyMicroCredits: Schema.Number,
 				monthlyMicroCredits: Schema.Number,
 			}),

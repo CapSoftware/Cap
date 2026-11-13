@@ -66,7 +66,7 @@ describe("tool list", () => {
 		const description = (name: string) =>
 			tools.find((tool) => tool.name === name)?.description ?? "";
 		expect(description("videos_upload")).toMatch(
-			/stored video is billed daily/,
+			/Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily/,
 		);
 		expect(description("transcripts_create")).toMatch(/billed per audio hour/);
 		expect(description("videos_delete")).toMatch(/cannot be undone/);

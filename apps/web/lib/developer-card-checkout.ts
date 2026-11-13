@@ -10,11 +10,26 @@ import type { User } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import { ensureDeveloperStripeCustomer } from "@/lib/developer-stripe-customer";
 import { canUseInfra } from "@/lib/infra-access";
+import { creditAppName } from "@/lib/infra-credit-checkout";
 import { infraAppPath } from "@/lib/infra-routes";
 
 export type DeveloperCardCheckout =
 	| { status: "ok"; url: string }
 	| { status: "forbidden" | "not_found" | "failed" };
+
+export function cardCheckoutSubmitMessage({
+	appName,
+	autoTopUpEnabled,
+}: {
+	appName: string;
+	autoTopUpEnabled: boolean;
+}) {
+	const name = creditAppName(appName);
+	const saving = name ? `Saving this card for ${name}` : "Saving this card";
+	return autoTopUpEnabled
+		? `${saving} charges nothing now. Auto top-up is on and will use this card.`
+		: `${saving} charges nothing. Auto top-up stays off until you switch it on.`;
+}
 
 export async function createDeveloperCardCheckout({
 	user,
@@ -29,6 +44,8 @@ export async function createDeveloperCardCheckout({
 		.select({
 			id: developerCreditAccounts.id,
 			stripeCustomerId: developerCreditAccounts.stripeCustomerId,
+			autoTopUpEnabled: developerCreditAccounts.autoTopUpEnabled,
+			appName: developerApps.name,
 			userStripeCustomerId: users.stripeCustomerId,
 		})
 		.from(developerCreditAccounts)
@@ -63,6 +80,14 @@ export async function createDeveloperCardCheckout({
 			customer: customerId,
 			mode: "setup",
 			payment_method_types: ["card"],
+			custom_text: {
+				submit: {
+					message: cardCheckoutSubmitMessage({
+						appName: account.appName,
+						autoTopUpEnabled: account.autoTopUpEnabled,
+					}),
+				},
+			},
 			success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?card=saved`,
 			cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
 			metadata,

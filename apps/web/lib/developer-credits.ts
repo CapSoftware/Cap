@@ -16,18 +16,20 @@ export async function addCreditsToAccount({
 	referenceId,
 	referenceType,
 	metadata,
+	executor,
 }: {
 	accountId: string;
 	amountCents: number;
 	referenceId?: string;
 	referenceType?: DeveloperCreditReferenceType;
 	metadata?: Record<string, unknown>;
+	executor?: DeveloperCreditTransaction;
 }): Promise<number> {
 	const microCreditsToAdd = Math.floor(
 		(amountCents / 100) * MICRO_CREDITS_PER_DOLLAR,
 	);
 
-	const newBalance = await db().transaction(async (tx) => {
+	const grant = async (tx: DeveloperCreditTransaction) => {
 		if (referenceId && referenceType) {
 			const [account] = await tx
 				.select({
@@ -86,9 +88,9 @@ export async function addCreditsToAccount({
 		});
 
 		return updated.balanceMicroCredits;
-	});
+	};
 
-	return newBalance;
+	return executor ? grant(executor) : db().transaction(grant);
 }
 
 type DeveloperCreditTransaction = Parameters<
