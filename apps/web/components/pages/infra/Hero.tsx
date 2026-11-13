@@ -48,18 +48,16 @@ const FILM_FILES = filmFiles(buildEnv.NEXT_PUBLIC_INFRA_FILM_URL);
 export const Hero = () => (
 	<section className={styles.hero}>
 		<HeroArt />
-		{FILM_FILES ? (
-			<div
-				className={styles.stage}
-				style={
-					{
-						"--slab-base": PLAIN.slabBase,
-					} as CSSProperties
-				}
-			>
-				<FilmButton files={FILM_FILES} />
-			</div>
-		) : null}
+		<div
+			className={styles.stage}
+			style={
+				{
+					"--slab-base": PLAIN.slabBase,
+				} as CSSProperties
+			}
+		>
+			<FilmButton files={FILM_FILES} />
+		</div>
 		<div className="mx-auto flex h-full max-w-[1184px] flex-col px-5 sm:px-8 lg:justify-center lg:pb-[7vh]">
 			<div className="max-w-[520px]">
 				<h1

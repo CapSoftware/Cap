@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const env = vi.hoisted(() => ({
 	NEXT_PUBLIC_IS_CAP: "true" as string | undefined,
+	NEXT_PUBLIC_INFRA_FILM_URL: undefined as string | undefined,
 }));
 
 vi.mock("@cap/env", () => ({ buildEnv: env }));
@@ -252,6 +253,67 @@ describe("the rendered page", () => {
 		).toBeLessThanOrEqual(PRO_MONTHLY_CREDIT_DOLLARS);
 		expect(days31).toBeGreaterThan(PRO_MONTHLY_CREDIT_DOLLARS);
 		expect(billing).toContain("A month is counted as 30 days");
+	});
+});
+
+describe("the film", () => {
+	const names = {
+		hls: "master.m3u8",
+		mp4: "video.mp4",
+		poster: "poster.jpg",
+	} as const;
+	const under = (base: string) => ({
+		hls: `${base}/${names.hls}`,
+		mp4: `${base}/${names.mp4}`,
+		poster: `${base}/${names.poster}`,
+	});
+
+	beforeEach(() => {
+		env.NEXT_PUBLIC_INFRA_FILM_URL = undefined;
+	});
+
+	it("plays from the default base when no other is set", async () => {
+		const { FILM_DEFAULT_BASE, filmFiles } = await import(
+			"@/components/pages/infra/film-source"
+		);
+
+		expect(FILM_DEFAULT_BASE).toMatch(
+			/^https:\/\/cap\.so\/api\/developer\/playback\/[\w-]+$/,
+		);
+		expect(filmFiles(undefined)).toEqual(under(FILM_DEFAULT_BASE));
+		expect(filmFiles("")).toEqual(under(FILM_DEFAULT_BASE));
+		expect(filmFiles("   ")).toEqual(under(FILM_DEFAULT_BASE));
+	});
+
+	it("plays from the configured base when one is set", async () => {
+		const { filmFiles } = await import("@/components/pages/infra/film-source");
+
+		expect(filmFiles("https://media.example.com/film")).toEqual(
+			under("https://media.example.com/film"),
+		);
+		expect(filmFiles(" https://media.example.com/film// ")).toEqual(
+			under("https://media.example.com/film"),
+		);
+	});
+
+	it.each([
+		["unset", undefined],
+		["empty", ""],
+		["set", "https://media.example.com/film"],
+	])("renders the button with the base %s", async (_name, value) => {
+		env.NEXT_PUBLIC_INFRA_FILM_URL = value;
+		vi.resetModules();
+		const { Hero } = await import("@/components/pages/infra/Hero");
+		const page = parse(renderToStaticMarkup(React.createElement(Hero)));
+		const buttons = [...page.querySelectorAll("button")].map((button) =>
+			button.textContent?.trim(),
+		);
+
+		expect(buttons).toContain("Watch the film");
+		expect(page.querySelector("dialog")?.hasAttribute("open")).toBe(false);
+		expect(page.querySelectorAll("video, iframe")).toHaveLength(0);
+		expect(page.documentElement.outerHTML).not.toContain("/playback/");
+		expect(page.documentElement.outerHTML).not.toContain("media.example.com");
 	});
 });
 
