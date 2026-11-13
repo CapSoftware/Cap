@@ -761,20 +761,29 @@ function storedUpload(s3Key: string, now: Date): Promise<StoredUpload> {
 		}
 		if (!storedObjectIsMissing(head.left)) return "unknown" as const;
 		const open = yield* bucket.multipart.listUploads({ prefix: s3Key });
-		return open.IsTruncated ||
+		if (
+			open.IsTruncated ||
 			(open.Uploads ?? []).some((upload) => upload.Key === s3Key)
-			? ("uploading" as const)
-			: ("missing" as const);
+		) {
+			return "uploading" as const;
+		}
+		// An upload assembled between the two reads above shows in neither, so
+		// the file is looked for once more now that no upload is open.
+		const again = yield* Effect.either(bucket.headObject(s3Key));
+		if (again._tag === "Right") return "fresh" as const;
+		return storedObjectIsMissing(again.left)
+			? ("missing" as const)
+			: ("unknown" as const);
 	})
 		.pipe(provideOptionalAuth, runPromise)
 		.catch(() => "unknown" as const);
 }
 
 // A video with no file is retired only after storage is asked again under its
-// row lock. Initiate opens an upload under the same lock, and completion can
-// assemble a file only from an upload that is still open, which storage
-// replaces with the file in one step. A claim left by a completion that died
-// before assembling does not keep the video.
+// row lock, and never while a completion's claim is recent. Initiate opens an
+// upload under the same lock, and completion can assemble a file only from an
+// upload that is still open. A claim left by a completion that died before
+// assembling keeps the video only until that claim would be released anyway.
 async function retireUnrecordedVideo(
 	appId: string,
 	videoId: string,
@@ -797,11 +806,22 @@ async function retireUnrecordedVideo(
 			: read.for("update"));
 		if (!current || current.duration !== null) return false;
 		if (current.deletedAt) return true;
-		if (
-			missingKey !== undefined &&
-			(await storedUpload(missingKey, now)) !== "missing"
-		) {
-			return false;
+		if (missingKey !== undefined) {
+			const [claim] = await tx
+				.select({
+					status: developerVideos.status,
+					updatedAt: developerVideos.updatedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.limit(1);
+			if (
+				claim?.status === "processing" &&
+				now.getTime() - claim.updatedAt.getTime() < STALE_UPLOAD_CLAIM_MS
+			) {
+				return false;
+			}
+			if ((await storedUpload(missingKey, now)) !== "missing") return false;
 		}
 
 		await tx

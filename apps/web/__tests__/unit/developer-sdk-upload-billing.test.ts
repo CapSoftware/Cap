@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 	deletedAt: null as Date | null,
 	maxTier: "1080p" as string,
 	status: "uploading" as string,
+	claimedAt: new Date(0),
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
@@ -89,6 +90,9 @@ vi.mock("@cap/database", async () => {
 					deletedAt: mocks.deletedAt,
 				},
 			];
+		}
+		if (keys === "status,updatedAt") {
+			return [{ status: mocks.status, updatedAt: mocks.claimedAt }];
 		}
 		if (keys === "deletedAt,duration") {
 			return [
@@ -761,6 +765,7 @@ describe("removing files that were assembled but never recorded", () => {
 
 	beforeEach(() => {
 		mocks.status = "uploading";
+		mocks.claimedAt = hoursAgo(25);
 		mocks.storedDuration = null;
 		mocks.deletedAt = null;
 		mocks.events = [];
@@ -940,10 +945,41 @@ describe("removing files that were assembled but never recorded", () => {
 	it("retires a video with no file whose completion died holding its claim", async () => {
 		mocks.unrecorded = [row("abandoned")];
 		mocks.status = "processing";
+		mocks.claimedAt = hoursAgo(1);
 		mocks.headObject.mockImplementation(missing);
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
 		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
+	});
+
+	it("leaves a video with no file alone while a completion's claim is recent", async () => {
+		mocks.unrecorded = [row("claimed")];
+		mocks.status = "processing";
+		mocks.claimedAt = new Date(now.getTime() - 60_000);
+		mocks.headObject.mockImplementation(missing);
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.deletedAt).toBe(null);
+	});
+
+	it("does not retire a video whose upload is assembled between storage's file read and its upload listing", async () => {
+		mocks.unrecorded = [row("assembling")];
+		let assembled = false;
+		let listings = 0;
+		mocks.headObject.mockImplementation(() =>
+			assembled ? Effect.succeed({ LastModified: now }) : missing(),
+		);
+		mocks.listUploads.mockImplementation(() => {
+			listings++;
+			if (listings === 2) assembled = true;
+			return Effect.succeed({ Uploads: [] });
+		});
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.deletedAt).toBe(null);
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
 	});
 
 	it("does not retire a video with no file when storage shows a file or an open upload once the row is locked", async () => {
