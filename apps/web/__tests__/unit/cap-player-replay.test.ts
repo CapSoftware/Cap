@@ -126,6 +126,38 @@ describe("cap player replay at the end", () => {
 		expect(document.activeElement).toBe(player);
 	});
 
+	it("keeps the keyboard on the player when k replays from the focused button", () => {
+		const { player, video } = render();
+		reachEnd(video);
+		const button = replay();
+		if (!button) throw new Error("no replay button");
+		act(() => button.focus());
+
+		act(() => {
+			button.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "k",
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		});
+
+		expect(playing).toBe(true);
+		expect(replay()).toBeNull();
+		expect(document.activeElement).toBe(player);
+		act(() => {
+			player.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "k",
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		});
+		expect(playing).toBe(false);
+	});
+
 	it("goes away when the viewer seeks back from the end", () => {
 		const { video } = render();
 		reachEnd(video);

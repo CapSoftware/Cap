@@ -867,6 +867,7 @@ export const CapPlayer = ({
 			const level = video.muted ? 0 : video.volume;
 			if (key === " " || key === "k") {
 				if (key === " " && onButton) return;
+				keepKeys();
 				toggle();
 			} else if (key === "arrowleft" || key === "arrowright") {
 				const direction = key === "arrowleft" ? -1 : 1;
