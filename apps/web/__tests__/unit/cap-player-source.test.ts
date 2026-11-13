@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	AUTO_LEVEL,
 	attachSource,
+	isSharper,
 	listLevels,
 	parseMasterLevels,
 	pickPlaybackMode,
@@ -10,6 +11,7 @@ import {
 	renditionSource,
 	SECONDS_AHEAD_BEFORE_PLAY,
 	SECONDS_TO_SHARPEN,
+	startingEstimate,
 	startWithin,
 	withShortPlaylists,
 } from "@/components/cap-player/source";
@@ -97,12 +99,23 @@ const hlsMock = vi.hoisted(() => {
 vi.mock("hls.js", () => ({ default: hlsMock.FakeHls }));
 
 const LADDER = [
-	{ bitrate: 450_000, width: 640 },
-	{ bitrate: 3_400_000, width: 1280 },
-	{ bitrate: 6_650_000, width: 1920 },
-	{ bitrate: 11_400_000, width: 2560 },
-	{ bitrate: 19_400_000, width: 3840 },
+	{ bitrate: 450_000, width: 640, height: 360 },
+	{ bitrate: 3_400_000, width: 1280, height: 720 },
+	{ bitrate: 6_650_000, width: 1920, height: 1080 },
+	{ bitrate: 11_400_000, width: 2560, height: 1440 },
+	{ bitrate: 19_400_000, width: 3840, height: 2160 },
 ];
+
+// A constant quality ladder of a simple video: 1080p carries fewer bits than
+// 720p, so hls.js, which lists levels by bitrate, puts 1080p before 720p.
+const UNEVEN_LADDER = [
+	{ bitrate: 740_000, width: 640, height: 360, name: "360p" },
+	{ bitrate: 2_300_000, width: 1920, height: 1080, name: "1080p" },
+	{ bitrate: 4_800_000, width: 1280, height: 720, name: "720p" },
+];
+
+// A player as wide as `width`, judged on width alone.
+const wide = (width: number) => ({ width, height: Number.POSITIVE_INFINITY });
 
 const video = (nativeHls: boolean) =>
 	({
@@ -138,23 +151,102 @@ afterEach(() => {
 
 describe("pickStartingLevel", () => {
 	it("starts at the lowest rendition on a slow connection", () => {
-		expect(pickStartingLevel(LADDER, 1920, 1_400_000)).toBe(0);
+		expect(pickStartingLevel(LADDER, wide(1920), 1_400_000)).toBe(0);
 	});
 
 	it("stops at the first rendition that covers the player", () => {
-		expect(pickStartingLevel(LADDER, 1408, 8_000_000)).toBe(2);
-		expect(pickStartingLevel(LADDER, 600, 50_000_000)).toBe(0);
-		expect(pickStartingLevel(LADDER, 1280, 50_000_000)).toBe(1);
+		expect(pickStartingLevel(LADDER, wide(1408), 8_000_000)).toBe(2);
+		expect(pickStartingLevel(LADDER, wide(600), 50_000_000)).toBe(0);
+		expect(pickStartingLevel(LADDER, wide(1280), 50_000_000)).toBe(1);
+	});
+
+	it("counts a rendition as covering when it is as tall as the player", () => {
+		expect(
+			pickStartingLevel(LADDER, { width: 5000, height: 700 }, 50_000_000),
+		).toBe(1);
 	});
 
 	it("never picks a rendition the connection cannot carry", () => {
-		expect(pickStartingLevel(LADDER, 3840, 8_000_000)).toBe(2);
-		expect(pickStartingLevel(LADDER, 3840, 50_000_000)).toBe(4);
+		expect(pickStartingLevel(LADDER, wide(3840), 8_000_000)).toBe(2);
+		expect(pickStartingLevel(LADDER, wide(3840), 50_000_000)).toBe(4);
+	});
+
+	it("starts a 1136 by 639 player on 720p with the default estimate", () => {
+		expect(
+			pickStartingLevel(LADDER, { width: 1136, height: 639 }, 5_000_000),
+		).toBe(1);
+	});
+
+	it("chooses by resolution when bitrate does not rise with it", () => {
+		const player = { width: 1136, height: 639 };
+		expect(pickStartingLevel(UNEVEN_LADDER, player, 5_000_000)).toBe(2);
+		expect(pickStartingLevel(UNEVEN_LADDER, player, 3_000_000)).toBe(0);
+		expect(
+			pickStartingLevel(
+				UNEVEN_LADDER,
+				{ width: 1920, height: 1080 },
+				5_000_000,
+			),
+		).toBe(1);
+		expect(pickStartingLevel(UNEVEN_LADDER, wide(600), 50_000_000)).toBe(0);
 	});
 
 	it("handles a single rendition and an empty ladder", () => {
-		expect(pickStartingLevel(LADDER.slice(0, 1), 3840, 50_000_000)).toBe(0);
-		expect(pickStartingLevel([], 3840, 50_000_000)).toBe(0);
+		expect(pickStartingLevel(LADDER.slice(0, 1), wide(3840), 50_000_000)).toBe(
+			0,
+		);
+		expect(pickStartingLevel([], wide(3840), 50_000_000)).toBe(0);
+	});
+});
+
+describe("isSharper", () => {
+	it("compares resolution, not the order hls.js lists levels in", () => {
+		expect(isSharper(UNEVEN_LADDER, 1, 2)).toBe(true);
+		expect(isSharper(UNEVEN_LADDER, 2, 1)).toBe(false);
+		expect(isSharper(UNEVEN_LADDER, 2, 0)).toBe(true);
+		expect(isSharper(UNEVEN_LADDER, 1, 1)).toBe(false);
+		expect(isSharper(UNEVEN_LADDER, 0, -1)).toBe(true);
+	});
+});
+
+describe("listLevels", () => {
+	it("lists the quality menu by resolution when bitrate does not rise with it", () => {
+		expect(listLevels(UNEVEN_LADDER).map((level) => level.label)).toEqual([
+			"1080p",
+			"720p",
+			"360p",
+		]);
+		expect(listLevels(UNEVEN_LADDER).map((level) => level.index)).toEqual([
+			1, 2, 0,
+		]);
+	});
+});
+
+describe("startingEstimate", () => {
+	const hint = (connection?: object) =>
+		vi.stubGlobal("navigator", { vendor: "", connection });
+
+	it("assumes a line for the player's rendition when there is no hint", () => {
+		hint();
+		expect(startingEstimate()).toBe(5_000_000);
+	});
+
+	it("ignores Chrome's low reading on a fast line", () => {
+		hint({ downlink: 1.6, effectiveType: "4g" });
+		expect(startingEstimate()).toBe(5_000_000);
+		hint({ downlink: 10, effectiveType: "4g" });
+		expect(startingEstimate()).toBe(5_000_000);
+	});
+
+	it("starts low on a line the browser calls slow", () => {
+		hint({ effectiveType: "3g", downlink: 1.6 });
+		expect(startingEstimate()).toBe(500_000);
+		hint({ effectiveType: "slow-2g" });
+		expect(startingEstimate()).toBe(500_000);
+		hint({ downlink: 0.4 });
+		expect(startingEstimate()).toBe(320_000);
+		hint({ saveData: true, downlink: 10 });
+		expect(startingEstimate()).toBe(500_000);
 	});
 });
 
@@ -213,6 +305,7 @@ class FakeVideo extends EventTarget {
 	currentTime = 0;
 	duration = Number.NaN;
 	clientWidth = 1280;
+	clientHeight = 720;
 	plays = 0;
 	refusals: string[] = [];
 
@@ -260,6 +353,7 @@ const page = (options: {
 	loaded: boolean;
 	touchPoints?: number;
 	megabits?: number;
+	effectiveType?: string;
 }) => {
 	const view = new EventTarget();
 	Object.assign(view, { devicePixelRatio: 1 });
@@ -268,7 +362,14 @@ const page = (options: {
 	vi.stubGlobal("navigator", {
 		vendor: options.vendor,
 		maxTouchPoints: options.touchPoints ?? 0,
-		...(options.megabits ? { connection: { downlink: options.megabits } } : {}),
+		...(options.megabits || options.effectiveType
+			? {
+					connection: {
+						downlink: options.megabits,
+						effectiveType: options.effectiveType,
+					},
+				}
+			: {}),
 	});
 	const doc = { readyState: options.loaded ? "complete" : "loading" };
 	vi.stubGlobal("document", doc);
@@ -805,7 +906,7 @@ describe("attachSource with hls.js", () => {
 		expect(hls.startLoads).toEqual([-1]);
 	});
 
-	it("starts on a low rendition when the browser gives no connection estimate", async () => {
+	it("starts on the rendition that fits when the browser gives no connection estimate", async () => {
 		macSafari();
 		const video = new FakeVideo(true);
 
@@ -813,8 +914,8 @@ describe("attachSource with hls.js", () => {
 		const hls = await hlsFor();
 		hls.emit("manifestParsed", LADDER_DATA);
 
-		expect(hls.startLevel).toBe(0);
-		expect(hls.config.abrEwmaDefaultEstimate).toBe(1_500_000);
+		expect(hls.startLevel).toBe(1);
+		expect(hls.config.abrEwmaDefaultEstimate).toBe(5_000_000);
 	});
 
 	it("hands a fatal hls.js error in Safari to its own HLS player, then to the MP4", async () => {
@@ -953,13 +1054,13 @@ describe("withShortPlaylists", () => {
 describe("attachSource swapping the held segment for one that fits", () => {
 	type Hls = InstanceType<typeof hlsMock.FakeHls>;
 
-	// A line whose browser estimate starts the player on the lowest rendition.
+	// A line the browser calls slow, so the player holds the lowest rendition.
 	const lowEstimate = () =>
 		page({
 			vendor: "Google Inc.",
 			mediaSource: true,
 			loaded: true,
-			megabits: 1,
+			effectiveType: "3g",
 		});
 
 	const countSeeks = (video: FakeVideo) => {
@@ -1092,6 +1193,21 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("swaps by resolution when bitrate does not rise with it", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", { levels: UNEVEN_LADDER });
+
+		expect(hls.loadLevel).toBe(0);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+
+		expect(hls.currentLevel).toBe(2);
 	});
 });
 
