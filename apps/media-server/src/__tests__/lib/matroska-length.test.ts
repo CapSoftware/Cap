@@ -56,9 +56,9 @@ async function lastPacketTime(path: string): Promise<number> {
 
 async function secondsFromTail(path: string): Promise<number> {
 	const end = await matroskaEndFromTail(path);
-	if (typeof end !== "number")
+	if (typeof end !== "object" || end === null)
 		throw new Error(`No length from the tail: ${end}`);
-	return end;
+	return end.seconds;
 }
 
 // The length a probe gave this file before the tail was read: every
@@ -167,6 +167,13 @@ beforeAll(async () => {
 		SPARSE_BYTES - tailBytes.length,
 	);
 	await sparse.close();
+
+	// A finished recording in a file its recorder preallocated: real
+	// clusters, then zero fill.
+	await writeFile(
+		join(dir, "preallocated.mkv"),
+		Buffer.concat([pipedBytes, Buffer.alloc(8 * 1024 * 1024)]),
+	);
 
 	// A recording cut off with no cluster anywhere near its end.
 	await writeFile(
@@ -291,7 +298,23 @@ describe("the length of a Matroska file with no Duration and no Cues", () => {
 		}
 	}, 60_000);
 
-	test("a file that ends in zero bytes is refused as unfinished, not timed out", async () => {
+	test("a preallocated recording is measured from its last block before the zero fill", async () => {
+		const expected = await lastPacketTime(join(dir, "piped.mkv"));
+		const end = await matroskaEndFromTail(join(dir, "preallocated.mkv"));
+		expect(end).toMatchObject({ padded: true });
+		for (const source of [
+			join(dir, "preallocated.mkv"),
+			`${origin}/preallocated.mkv`,
+		]) {
+			const started = performance.now();
+			const metadata = await probeVideo(source);
+			expect(performance.now() - started).toBeLessThan(10_000);
+			expect(Math.abs(metadata.duration - expected)).toBeLessThan(1);
+			expect(encodeLengthLimit(metadata)).toBeGreaterThanOrEqual(expected);
+		}
+	}, 60_000);
+
+	test("a file whose tail is all zero bytes is refused as unfinished, not timed out", async () => {
 		const started = performance.now();
 		const error = await probeVideo(`${origin}/no-tail.mkv`).then(
 			() => null,

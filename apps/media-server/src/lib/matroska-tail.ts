@@ -231,36 +231,60 @@ async function readTail(
 		: await readLocalRange(path, "tail", bytes);
 }
 
-// How much of a tail must be zero bytes for it to count as blank: what a
+// How much of a tail must be zero bytes for it to count as padding: what a
 // recorder that preallocated its file and stopped leaves behind.
-const BLANK_TAIL_BYTES = 64 * 1024;
+const PADDING_BYTES = 64 * 1024;
 
-function endsBlank(tail: Uint8Array): boolean {
-	if (tail.length < BLANK_TAIL_BYTES) return false;
-	for (let i = tail.length - BLANK_TAIL_BYTES; i < tail.length; i++) {
-		if (tail[i] !== 0) return false;
-	}
-	return true;
+// The tail without its trailing zero bytes, and whether those were padding.
+function withoutPadding(tail: Uint8Array): {
+	data: Uint8Array;
+	padded: boolean;
+} {
+	let end = tail.length;
+	while (end > 0 && tail[end - 1] === 0) end--;
+	return {
+		data: tail.subarray(0, end),
+		padded: tail.length - end >= PADDING_BYTES,
+	};
 }
 
-// The time of the last block in a Matroska or WebM file, in seconds, from
-// its first 64 KB and its last few megabytes. "blank" when the file ends in
-// zero bytes, null when no cluster starts in the tail (the file was cut off,
-// or its last cluster is larger than the read), undefined when the source
-// cannot be read by range. A failed read throws.
+export type MatroskaTailEnd =
+	// The time of the last block, and whether zero padding followed it.
+	| { seconds: number; padded: boolean }
+	// Zero padding with no cluster before it in the tail.
+	| "blank"
+	// No cluster starts in the tail: the file was cut off, or its last
+	// cluster is larger than the read.
+	| null
+	// The source cannot be read by range.
+	| undefined;
+
+// Where the last block of a Matroska or WebM file ends, from its first 64 KB
+// and its last few megabytes. Trailing zero padding is skipped, so a
+// preallocated recording is measured from its last block before it. A zero
+// run longer than the largest tail read is not followed further back: how
+// far it goes is unknown, so such a file counts as blank. A failed read
+// throws.
 export async function matroskaEndFromTail(
 	path: string,
-): Promise<number | "blank" | null | undefined> {
+): Promise<MatroskaTailEnd> {
 	const head = await readHead(path);
 	if (!head) return undefined;
+	let padded = false;
 	for (const bytes of TAIL_READS) {
 		const tail = await readTail(path, bytes);
 		if (!tail) return undefined;
-		if (endsBlank(tail)) return "blank";
-		const last = lastBlockTimestamp(tail);
-		if (last !== null) return (last * timecodeScaleNs(head)) / 1_000_000_000;
-		// The whole file was read and holds no cluster.
-		if (tail.length < bytes) return null;
+		const trimmed = withoutPadding(tail);
+		padded ||= trimmed.padded;
+		const last = lastBlockTimestamp(trimmed.data);
+		if (last !== null) {
+			return {
+				seconds: (last * timecodeScaleNs(head)) / 1_000_000_000,
+				padded,
+			};
+		}
+		// The whole file was read.
+		if (tail.length < bytes) break;
 	}
-	return null;
+	return padded ? "blank" : null;
 }

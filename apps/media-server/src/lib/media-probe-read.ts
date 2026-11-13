@@ -353,13 +353,12 @@ function isMatroskaFamily(format: InputFormat): boolean {
 }
 
 // The length of a Matroska or WebM file from its last cluster, counted from
-// its first timestamp. "blank" when the file ends in zero bytes, null when
-// no cluster starts in its tail, undefined when the source cannot be read by
-// range.
+// its first timestamp. See matroskaEndFromTail for the other answers; a
+// last block at 0 is inconclusive, like a tail with no cluster.
 async function matroskaLengthFromTail(
 	input: ReturnType<typeof createMediaInput>,
 	path: string,
-): Promise<number | "blank" | null | undefined> {
+): Promise<{ length: number; padded: boolean } | "blank" | null | undefined> {
 	const [end, start] = await Promise.all([
 		matroskaEndFromTail(path).catch((error: unknown) => {
 			throw asSourceReadError(error);
@@ -367,8 +366,13 @@ async function matroskaLengthFromTail(
 		input.getFirstTimestamp(),
 	]);
 	if (end === undefined || end === null || end === "blank") return end;
-	if (!Number.isFinite(end) || end <= 0) return null;
-	return Math.max(0, end - (Number.isFinite(start) && start > 0 ? start : 0));
+	const length = Math.max(
+		0,
+		end.seconds - (Number.isFinite(start) && start > 0 ? start : 0),
+	);
+	return Number.isFinite(length) && length > 0
+		? { length, padded: end.padded }
+		: null;
 }
 
 // The length of a file whose container declares none. Matroska and WebM
@@ -376,7 +380,8 @@ async function matroskaLengthFromTail(
 // unfinalised recording takes as long as fetching the whole file, so the
 // last cluster is read from the tail first. The full measure is still used
 // when it finishes quickly, so a short recording keeps the length it has
-// always had. Only a file whose length neither finds is refused as
+// always had, except after zero padding, which it would read through until
+// the deadline. Only a file whose length neither finds is refused as
 // unfinished.
 async function measureUndeclaredLength(
 	input: ReturnType<typeof createMediaInput>,
@@ -387,18 +392,15 @@ async function measureUndeclaredLength(
 	}
 	const fromTail = await matroskaLengthFromTail(input, path);
 	if (fromTail === undefined) return await measureLength(input);
-	// A file that ends in zero bytes was cut off, and reading through the
-	// padding from the start would only run into the probe deadline.
 	if (fromTail === "blank") {
 		throw new UnreadableMediaInputError(UNFINISHED_RECORDING_MESSAGE);
 	}
-	// No cluster starting in the tail means the file was cut off, or that its
-	// last cluster is larger than the tail read. The full measure decides.
+	if (fromTail?.padded) return fromTail.length;
 	const measured = await measureWithinBudget(
 		input,
 		UNDECLARED_MEASURE_BUDGET_MS,
 	);
-	const length = measured ?? fromTail;
+	const length = measured ?? fromTail?.length ?? null;
 	if (length === null || length <= 0) {
 		throw new UnreadableMediaInputError(UNFINISHED_RECORDING_MESSAGE);
 	}
@@ -417,7 +419,9 @@ async function measureDeclaredLength(
 		return measured;
 	}
 	const fromTail = await matroskaLengthFromTail(input, path).catch(() => null);
-	return typeof fromTail === "number" && fromTail > 0 ? fromTail : null;
+	return typeof fromTail === "object" && fromTail !== null
+		? fromTail.length
+		: null;
 }
 
 async function readMediaMetadata(
