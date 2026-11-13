@@ -141,6 +141,7 @@ describe("takedown marker", () => {
 			'$."__capTakedown".metadata',
 			'$."__capTakedown".metadata',
 		]);
+		expect(listed.sql).toMatch(/^COALESCE\(\(JSON_TYPE\(.*\), FALSE\)$/);
 		expect(listed.params).toEqual([
 			'$."__capTakedown".at',
 			'$."__capTakedown".metadata',
@@ -461,6 +462,12 @@ describe("the developer API", () => {
 			metadata: { orderId: 7 },
 			shareUrl: `https://web.example/dev/${PLAYBACK_ID}`,
 		});
+	});
+
+	it("gives the agent API a boolean even when the database answers NULL", () => {
+		const row = { ...withEnv(), takenDown: null as unknown as boolean };
+
+		expect(api.toAgentDeveloperVideo(row).takenDown).toBe(false);
 	});
 
 	it("adds takenDown false to a regular video and changes nothing else", () => {

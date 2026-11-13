@@ -119,7 +119,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		maxResolutionTier: video.maxResolutionTier,
 		renditions: video.renditions ?? [],
 		transcriptionStatus: video.transcriptionStatus,
-		takenDown: video.takenDown,
+		takenDown: video.takenDown === true,
 		...developerVideoPlaybackUrls(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)

@@ -22,9 +22,10 @@ export function restoredMetadataSql(): SQL {
 }
 
 // For queries that list videos without loading their metadata. It matches
-// developerVideoIsTakenDown in the web app.
+// developerVideoIsTakenDown in the web app. Without the COALESCE a row with no
+// metadata reads as NULL, which drizzle passes through without mapWith.
 export function developerVideoTakenDownSql(): SQL<boolean> {
-	return sql<boolean>`(JSON_TYPE(JSON_EXTRACT(${developerVideos.metadata}, ${AT_PATH})) = 'STRING' AND JSON_CONTAINS_PATH(${developerVideos.metadata}, 'one', ${KEPT_PATH}))`.mapWith(
+	return sql<boolean>`COALESCE((JSON_TYPE(JSON_EXTRACT(${developerVideos.metadata}, ${AT_PATH})) = 'STRING' AND JSON_CONTAINS_PATH(${developerVideos.metadata}, 'one', ${KEPT_PATH})), FALSE)`.mapWith(
 		(value) => Number(value) === 1,
 	);
 }
