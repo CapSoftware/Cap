@@ -2082,10 +2082,9 @@ pub fn split_segment(
         if at < min || duration - at < min {
             return false;
         }
-        let Some((head, mut tail)) = segment.split_at(segment.start + at) else {
+        let Some((head, tail)) = split_keyboard_segment(segment, segment.start + at) else {
             return false;
         };
-        tail.id = split_id("kb-edit");
         timeline.keyboard_segments[index] = head;
         timeline.keyboard_segments.insert(index + 1, tail);
         return true;
@@ -2093,6 +2092,31 @@ pub fn split_segment(
     with_track!(timeline, kind, |segments| split_at(
         segments, index, at, min
     ))
+}
+
+fn split_keyboard_segment(
+    segment: &KeyboardTrackSegment,
+    at: f64,
+) -> Option<(KeyboardTrackSegment, KeyboardTrackSegment)> {
+    let (head, mut tail) = segment.split_at(at)?;
+    tail.id = split_id("kb-edit");
+    Some((head, tail))
+}
+
+fn split_keyboard_at_clip_cut(segments: &mut Vec<KeyboardTrackSegment>, at: f64) {
+    let tails: Vec<_> = segments
+        .iter_mut()
+        .filter(|segment| !segment.keys.is_empty())
+        .filter_map(|segment| {
+            let (head, tail) = split_keyboard_segment(segment, at)?;
+            *segment = head;
+            Some(tail)
+        })
+        .collect();
+    if !tails.is_empty() {
+        segments.extend(tails);
+        sort_track(segments);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2766,6 +2790,7 @@ pub fn split_clip_segment(
     tail.start = boundary;
     timeline.segments.insert(index + 1, tail);
     timeline.segments[index].end = boundary;
+    split_keyboard_at_clip_cut(&mut timeline.keyboard_segments, output_time);
 
     // `transitionsAfterClipSplit` -- everything after the split point shifts
     // up by one, and the split boundary itself is a hard cut.
@@ -5380,6 +5405,45 @@ mod tests {
         assert!(place_cards(timeline, &[]));
         assert_spans(timeline, &[("abc", 1.0, 4.0, &[1.0, 2.0, 3.0])]);
         assert_eq!(timeline.keyboard_segments[0].id, "kb-edit-abc");
+    }
+    #[test]
+    fn splitting_a_clip_splits_the_keyboard_segment_typed_across_the_cut() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(split_clip_segment(timeline, 5.0, None));
+        assert!(split_clip_segment(timeline, 8.5, None));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 2.0, 3.0, &[2.0]),
+                ("x", 4.5, 5.0, &[4.5]),
+                ("y", 5.0, 7.0, &[6.0]),
+                ("b", 8.0, 9.0, &[8.0]),
+            ],
+        );
+        assert_eq!(timeline.keyboard_segments[1].id, "kb-edit-0-kb-2");
+        assert!(
+            timeline.keyboard_segments[2]
+                .id
+                .starts_with("kb-edit-split-")
+        );
+    }
+
+    #[test]
+    fn a_clip_cut_after_a_card_splits_the_keyboard_segment_in_held_output_time() {
+        let mut project = hold_project(serde_json::json!([]));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(place_cards(timeline, &[(1.0, 2.0)]));
+        assert!(split_clip_segment(timeline, 6.0, None));
+        assert_spans(
+            timeline,
+            &[
+                ("a", 3.0, 4.0, &[3.0]),
+                ("x", 5.5, 6.0, &[5.5]),
+                ("y", 6.0, 8.0, &[7.0]),
+                ("b", 9.0, 10.0, &[9.0]),
+            ],
+        );
     }
 
     #[test]
