@@ -256,6 +256,13 @@ function valueAfter(args: string[], flag: string) {
 }
 
 describe("buildHlsLadderArgs", () => {
+	test("holds the output to the length it is given, and only then", () => {
+		const capped = buildHlsLadderArgs(argsInput({ maxOutputSeconds: 12.5 }));
+		expect(valueAfter(capped, "-t")).toBe("12.5");
+		expect(capped.indexOf("-t")).toBeGreaterThan(capped.lastIndexOf("-i"));
+		expect(buildHlsLadderArgs(argsInput())).not.toContain("-t");
+	});
+
 	test("encodes every rendition on the GPU from one upload", () => {
 		const args = buildHlsLadderArgs(
 			argsInput({ nvenc: { options: NVENC, gpuDecode: false } }),
