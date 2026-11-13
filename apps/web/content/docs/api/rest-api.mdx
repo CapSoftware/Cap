@@ -187,7 +187,7 @@ POST /api/developer/v1/uploads
 
 The body is optional. A request with no body creates an upload with the defaults.
 
-Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url): the same key with a different body, or for a video that was deleted, is refused with `409 idempotency_conflict` and the message names the field that differs, and a repeat after the upload completed answers `409 upload_already_completed`.
+Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
 A field this list does not have returns `400` with the code `invalid_request`, and the error names the field. Field names are case-sensitive, so `user_id` in place of `userId` is refused instead of creating a video with no user:
 

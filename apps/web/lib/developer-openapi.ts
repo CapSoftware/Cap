@@ -86,7 +86,7 @@ const uploadIdempotencyKeyParam = {
 	in: "header",
 	required: false,
 	description:
-		"8 to 128 characters from letters, digits, dot, dash and underscore. Repeating the request with the same key and the same body returns the same video with a new upload token instead of creating a second one. The same key with a different body, or for a video that was deleted, is refused with 409 idempotency_conflict, and once the upload completed the repeat answers 409 upload_already_completed.",
+		"8 to 128 characters from letters, digits, dot, dash and underscore. Repeating the request with the same key returns the same video with a new upload token instead of creating a second one. A repeat must send the same name, userId, maxResolutionTier and metadata, otherwise it is refused with 409 idempotency_conflict naming the field. corsOrigin, timeoutSeconds and maxBytes only shape the new token, so they may change. A key for a video that was deleted is refused with 409 idempotency_conflict, and once the upload completed the repeat answers 409 upload_already_completed.",
 	schema: {
 		type: "string",
 		minLength: 8,
