@@ -91,7 +91,7 @@ export const Section = ({
 }) => (
 	<section
 		id={id}
-		className={classNames("scroll-mt-[86px] px-5 sm:px-8", className)}
+		className={classNames("scroll-mt-[85px] px-5 sm:px-8", className)}
 	>
 		<div className="mx-auto max-w-[1120px]">{children}</div>
 	</section>

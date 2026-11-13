@@ -11,7 +11,7 @@ import { Code, Section, SectionHeading } from "./shared";
 import { TEXT_LINK } from "./theme";
 
 export const Video = () => (
-	<section id={ANCHORS.video} className="scroll-mt-[86px] pt-16 lg:pt-10">
+	<section id={ANCHORS.video} className="scroll-mt-[85px] pt-16 lg:pt-10">
 		<div className="relative mx-auto max-w-[1680px]">
 			<div className="px-5 sm:px-8 lg:absolute lg:inset-0 lg:z-10 lg:flex lg:items-center">
 				<div className="mx-auto w-full max-w-[1120px]">
