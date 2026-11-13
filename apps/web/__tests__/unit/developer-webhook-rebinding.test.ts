@@ -1,7 +1,15 @@
 import type { LookupAddress } from "node:dns";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 // The name below answers with a public address the first time it is asked
 // (the check) and a private one after that (the connection). The guard must

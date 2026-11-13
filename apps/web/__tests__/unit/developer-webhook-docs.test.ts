@@ -173,10 +173,10 @@ describe("webhooks in the OpenAPI description", () => {
 			)
 			.sort();
 		expect(described).toEqual(served);
-		expect(described).toHaveLength(6);
+		expect(described).toHaveLength(7);
 	});
 
-	it("returns the signing secret from create only", () => {
+	it("returns the signing secret from create and rotate only", () => {
 		const schemas = spec.components.schemas as Record<
 			string,
 			{ properties?: object }
@@ -185,13 +185,17 @@ describe("webhooks in the OpenAPI description", () => {
 			Object.keys(schemas.WebhookEndpoint?.properties ?? {}),
 		).not.toContain("secret");
 		const text = (operation: unknown) => JSON.stringify(operation);
-		expect(text(paths["/api/developer/v1/webhooks"]?.post)).toContain(
-			"WebhookEndpointWithSecret",
-		);
+		for (const operation of [
+			paths["/api/developer/v1/webhooks"]?.post,
+			paths["/api/developer/v1/webhooks/{id}/rotate-secret"]?.post,
+		]) {
+			expect(text(operation)).toContain("WebhookEndpointWithSecret");
+		}
 		for (const operation of [
 			paths["/api/developer/v1/webhooks"]?.get,
 			paths["/api/developer/v1/webhooks/{id}"]?.get,
 			paths["/api/developer/v1/webhooks/{id}"]?.patch,
+			paths["/api/developer/v1/webhooks/{id}/test"]?.post,
 		]) {
 			expect(text(operation)).not.toContain("WebhookEndpointWithSecret");
 		}
