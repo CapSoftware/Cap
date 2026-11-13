@@ -1808,26 +1808,38 @@ pub fn carry_keyboard_with_clips(
 ) {
     let old_offsets = editor_timeline::clip_timeline_offsets(before);
     let new_offsets = editor_timeline::clip_timeline_offsets(timeline);
+    let old_holds = before.hold_windows();
+    let new_holds = timeline.hold_windows();
     let clips = &timeline.segments;
     let carry = |output: f64| -> Option<f64> {
+        let effective = output
+            - old_holds
+                .iter()
+                .map(|(start, end)| (output - start).clamp(0.0, end - start))
+                .sum::<f64>();
         let mut owners = before
             .segments
             .iter()
             .zip(&old_offsets)
             .enumerate()
             .rev()
-            .filter(|(_, (clip, offset))| **offset <= output && output < **offset + clip.duration())
+            .filter(|(_, (clip, offset))| {
+                **offset <= effective && effective < **offset + clip.duration()
+            })
             .peekable();
         if owners.peek().is_none() {
             return Some(output);
         }
         owners.find_map(|(index, (clip, offset))| {
-            let source = clip.start + (output - offset) * clip.timescale;
+            let source = clip.start + (effective - offset) * clip.timescale;
             let target = new_index(index);
             let clip = clips.get(target)?;
-            (clip.start..clip.end)
-                .contains(&source)
-                .then(|| new_offsets[target] + (source - clip.start) / clip.timescale)
+            (clip.start..clip.end).contains(&source).then(|| {
+                effective_to_output(
+                    &new_holds,
+                    new_offsets[target] + (source - clip.start) / clip.timescale,
+                )
+            })
         })
     };
     timeline.keyboard_segments.retain_mut(|segment| {
@@ -4810,6 +4822,43 @@ mod tests {
             .map(|segment| (segment.id.as_str(), segment.start))
             .collect();
         assert_eq!(starts, vec![("overlap", 7.5), ("late", 13.0)]);
+    }
+
+    #[test]
+    fn trimming_maps_keypresses_through_fullscreen_holds() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [{
+                    "start": 5.0, "end": 7.0, "track": 0,
+                    "content": "Hold", "layout": "fullscreen"
+                }],
+                "keyboardSegments": [
+                    {
+                        "id": "after-hold", "start": 7.5, "end": 8.0,
+                        "displayText": "a", "keys": [{ "key": "a", "timeOffset": 0.0 }]
+                    },
+                    {
+                        "id": "next-clip", "start": 15.0, "end": 16.0,
+                        "displayText": "b", "keys": [{ "key": "b", "timeOffset": 0.0 }]
+                    }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = timeline.clone();
+        timeline.segments[0].start = 2.0;
+        carry_keyboard_with_clips(&before, timeline, |index| index);
+        let starts: Vec<_> = timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| (segment.id.as_str(), segment.start))
+            .collect();
+        assert_eq!(starts, vec![("after-hold", 3.5), ("next-clip", 13.0)]);
     }
 
     #[test]
