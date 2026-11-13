@@ -324,7 +324,7 @@ const playbackProperties = {
 	takenDown: {
 		type: "boolean",
 		description:
-			"True when Cap has taken the video down after a report. Its playback URLs are null, and its page, embed and playback files answer 410 Gone until Cap restores it. status is unchanged, and the video is stored and billed as before. Email hello@cap.so about a takedown.",
+			"True when Cap has taken the video down after a report. Its playback URLs are null, and its page, embed and playback files answer 410 Gone to new requests until Cap restores it. Signed media links a player already loaded keep working until they expire, at most 18 hours later. status is unchanged, and the video is stored and billed as before. Email hello@cap.so about a takedown.",
 	},
 };
 

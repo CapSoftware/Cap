@@ -566,7 +566,7 @@ On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that ou
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
 
-`takenDown` is `true` when Cap has taken the video down after a report. Its playback URLs are then `null`, and its page, embed and playback files answer `410 Gone`. `status` does not change, and the video is stored and billed as before. Email hello@cap.so about a takedown.
+`takenDown` is `true` when Cap has taken the video down after a report. Its playback URLs are then `null`, and its page, embed and playback files answer `410 Gone` to every new request. A player that already loaded the video holds signed media links that keep working until they expire, at most 18 hours later. `status` does not change, and the video is stored and billed as before. Email hello@cap.so about a takedown.
 
 `transcriptionStatus` is `null`. Uploaded videos are not transcribed automatically. To get text, send the file to [Transcripts](/docs/api/rest-api#transcripts).
 
