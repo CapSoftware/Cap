@@ -73,6 +73,8 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "txn" }));
+vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
+vi.mock("@cap/utils", () => ({ stripe: () => ({}), userIsPro: () => true }));
 vi.mock("@cap/database/schema", () => ({
 	users: { table: "users", id: "id" },
 	developerCreditAccounts: {
@@ -143,6 +145,21 @@ describe("Cap Pro monthly Infra credit", () => {
 			balanceAfterMicroCredits: 500_000,
 			referenceId: "2026-11",
 			referenceType: "pro_monthly_credit",
+		});
+	});
+
+	it("records the subscription that paid for the claim", async () => {
+		await claimProMonthlyCredit({
+			userId: state.owner as never,
+			accountId: "account-1",
+			now: november,
+			subscription: { id: "sub_team", seats: 3 },
+		});
+
+		expect(state.transactions[0]).toMatchObject({
+			referenceId: "2026-11",
+			referenceType: "pro_monthly_credit",
+			metadata: { period: "2026-11", subscriptionId: "sub_team", seats: 3 },
 		});
 	});
 

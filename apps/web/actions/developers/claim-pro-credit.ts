@@ -3,18 +3,28 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps, developerCreditAccounts } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
 import { and, eq, isNull } from "drizzle-orm";
 import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
-import { claimProMonthlyCredit } from "@/lib/infra-pro-credit";
+import {
+	claimProMonthlyCredit,
+	PRO_CREDIT_CLAIMED_MESSAGE,
+	PRO_CREDIT_NOT_PRO_MESSAGE,
+	proCreditPayer,
+} from "@/lib/infra-pro-credit";
+import {
+	PRO_CREDIT_TRIAL_MESSAGE,
+	proCreditEligibility,
+} from "@/lib/infra-pro-credit-eligibility";
 
 export async function claimDeveloperProCredit(appId: string) {
 	const user = await getCurrentUser();
 	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
-	if (!userIsPro(user)) {
-		return actionFailure("This credit comes with Cap Pro.");
+	const eligibility = proCreditEligibility(user);
+	if (eligibility === "not_pro") {
+		return actionFailure(PRO_CREDIT_NOT_PRO_MESSAGE);
 	}
+	if (eligibility === "trial") return actionFailure(PRO_CREDIT_TRIAL_MESSAGE);
 
 	const [account] = await db()
 		.select({ id: developerCreditAccounts.id })
@@ -34,17 +44,17 @@ export async function claimDeveloperProCredit(appId: string) {
 
 	if (!account) throw new Error("App not found");
 
+	const payer = await proCreditPayer(user);
+	if (payer.state === "refused") return actionFailure(payer.message);
+
 	const result = await claimProMonthlyCredit({
 		userId: user.id,
 		accountId: account.id,
 		now: new Date(),
+		subscription: payer.subscription,
 	});
 
-	if (!result.claimed) {
-		return actionFailure(
-			"This month's credit is already claimed. It is one per account, not one per app.",
-		);
-	}
+	if (!result.claimed) return actionFailure(PRO_CREDIT_CLAIMED_MESSAGE);
 
 	return { balanceMicroCredits: result.balanceMicroCredits };
 }
