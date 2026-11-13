@@ -19,6 +19,7 @@ import {
 } from "@/lib/developer-transcript-errors";
 import {
 	MAX_WEBHOOK_ENDPOINTS_PER_APP,
+	READY_EVENT_MAX_WAIT_MS,
 	WEBHOOK_DISABLE_AFTER_FAILURES,
 	WEBHOOK_EVENT_TYPES,
 	WEBHOOK_MAX_ATTEMPTS,
@@ -619,6 +620,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"video.ready",
 			"A video is ready to play",
 			ref("DeveloperVideo"),
+			`Sent once every playback URL is ready, so hlsUrl is set unless HLS failed. An output still encoding ${READY_EVENT_MAX_WAIT_MS / 60_000} minutes after the video could first be played is left out, and Get Video returns it once it is ready. ${videoEventDescription("video.ready")}`,
 		),
 		"video.errored": webhookDelivery(
 			"video.errored",
