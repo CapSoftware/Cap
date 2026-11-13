@@ -274,6 +274,7 @@ export const CapPlayer = ({
 	const tipRef = useRef<HTMLDivElement>(null);
 	const timeRef = useRef<HTMLSpanElement>(null);
 	const playRef = useRef<HTMLButtonElement>(null);
+	const coverRef = useRef<HTMLButtonElement>(null);
 	const volumeRef = useRef<HTMLDivElement>(null);
 	const volumeFillRef = useRef<HTMLDivElement>(null);
 	const attachmentRef = useRef<Attachment | null>(null);
@@ -332,8 +333,15 @@ export const CapPlayer = ({
 	}, [startMuted]);
 
 	useLayoutEffect(() => {
-		if (focusOnMount) playRef.current?.focus({ preventScroll: true });
-	}, [focusOnMount]);
+		if (!focusOnMount) return;
+		const target = controls ? playRef.current : coverRef.current;
+		target?.focus({ preventScroll: true });
+	}, [focusOnMount, controls]);
+
+	const showsTime = !hideControls.includes("time");
+	useLayoutEffect(() => {
+		if (showsTime) videoRef.current?.dispatchEvent(new Event("timeupdate"));
+	}, [showsTime]);
 
 	const showsVolume = !hideControls.includes("volume");
 	useLayoutEffect(() => {
@@ -366,6 +374,7 @@ export const CapPlayer = ({
 		let waitTimer = 0;
 		let intentTimer = 0;
 		let shownText = "";
+		let shownOn: HTMLSpanElement | null = null;
 		let scrubbing = false;
 		let resumeAfterScrub = false;
 		let settingVolume = false;
@@ -399,9 +408,10 @@ export const CapPlayer = ({
 				})`;
 			}
 			const text = `${clock(now)} / ${clock(Math.round(total))}`;
-			if (text !== shownText) {
+			if (text !== shownText || timeRef.current !== shownOn) {
 				shownText = text;
-				if (timeRef.current) timeRef.current.textContent = text;
+				shownOn = timeRef.current;
+				if (shownOn) shownOn.textContent = text;
 				track.setAttribute("aria-valuenow", String(Math.floor(now)));
 				track.setAttribute("aria-valuemax", String(Math.round(total)));
 				track.setAttribute(
@@ -907,6 +917,7 @@ export const CapPlayer = ({
 			{controls || failed ? null : (
 				<button
 					type="button"
+					ref={coverRef}
 					className={styles.cover}
 					data-action="toggle"
 					aria-label={playing ? "Pause" : "Play"}
