@@ -8,18 +8,41 @@ import {
 	planHlsLadderSlices,
 	readHlsSlicePlaylist,
 } from "@/lib/developer-video-sliced-playlist";
-import {
-	HLS_LADDER_AUDIO_BITRATE_KBPS,
-	HLS_LADDER_AUDIO_NAME,
-	HLS_LADDER_SEGMENT_SECONDS,
-	planHlsLadderSlices as planOnMediaServer,
-	stitchHlsLadderSlices,
-} from "../../../media-server/src/lib/hls-ladder";
 import { slicePlaylist } from "../fixtures/developer-video-slices";
 
 // The media server's ladder module reaches a Bun-only import through its
-// input policy. Nothing here runs it.
+// input policy. Nothing here runs it. It is loaded at run time behind the
+// shape below, because a static import would bring Bun's global types into
+// the web app's typecheck and change what `fetch` means everywhere.
 vi.mock("bun", () => ({ spawnSync: vi.fn() }));
+
+interface MediaServerLadder {
+	HLS_LADDER_AUDIO_BITRATE_KBPS: number;
+	HLS_LADDER_AUDIO_NAME: string;
+	HLS_LADDER_SEGMENT_SECONDS: number;
+	planHlsLadderSlices(
+		durationSeconds: number,
+		workers: number,
+		minSliceSeconds?: number,
+	): { startSeconds: number; durationSeconds?: number }[];
+	stitchHlsLadderSlices(
+		slices: { master: string; playlists: Record<string, string> }[],
+		options: { hasAudio: boolean },
+	): {
+		master: string;
+		playlists: Record<string, string>;
+		media: { slice: number; source: string; name: string }[];
+	};
+}
+
+const MEDIA_SERVER_LADDER = "../../../media-server/src/lib/hls-ladder";
+const {
+	HLS_LADDER_AUDIO_BITRATE_KBPS,
+	HLS_LADDER_AUDIO_NAME,
+	HLS_LADDER_SEGMENT_SECONDS,
+	planHlsLadderSlices: planOnMediaServer,
+	stitchHlsLadderSlices,
+} = (await import(/* @vite-ignore */ MEDIA_SERVER_LADDER)) as MediaServerLadder;
 
 const read = (stream: string, slice: number, segments: number[]) =>
 	readHlsSlicePlaylist(
