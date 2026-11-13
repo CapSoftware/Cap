@@ -266,7 +266,7 @@ const errorSchema = {
 const PLAYER_PAGE_DESCRIPTION =
 	"Hosted player page for the video, built from its playbackId. Public, needs no API key and works before the video is ready. Takes the query parameter t (seconds) to start at a time.";
 const PLAYER_EMBED_DESCRIPTION =
-	"The hosted player with nothing around it, for an iframe on any origin. Built from the playbackId. Takes the query parameters autoplay=1, muted=1, loop=1, t (seconds to start at) and controls=0.";
+	"The hosted player with nothing around it, for an iframe on any origin. Built from the playbackId. Takes the query parameters autoplay=1, muted=1, loop=1, t (seconds to start at), controls=0 and captions=1 (captions on from the start, for a video that has them).";
 
 const playbackProperties = {
 	status: {
