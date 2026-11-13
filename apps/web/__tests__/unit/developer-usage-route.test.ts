@@ -137,7 +137,7 @@ describe("GET /usage", () => {
 		expect(mocks.delivered).toHaveBeenCalledWith("app-1");
 	});
 
-	it("reports delivered minutes in total and by resolution, measured and not billed", async () => {
+	it("reports delivered minutes in total and by rendition tier, with the last final day", async () => {
 		mocks.delivered.mockResolvedValue({
 			seconds: 74_910,
 			secondsByTier: {
@@ -147,6 +147,7 @@ describe("GET /usage", () => {
 				"1440p": 0,
 				"2160p": 0,
 			},
+			finalThrough: "2026-11-18",
 		});
 
 		const response = await app.request("/", {
@@ -165,8 +166,7 @@ describe("GET /usage", () => {
 				"1440p": 0,
 				"2160p": 0,
 			},
-			measured: true,
-			billed: false,
+			finalThrough: "2026-11-18",
 		});
 	});
 });

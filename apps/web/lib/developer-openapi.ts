@@ -1672,16 +1672,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					delivery: {
 						type: ["object", "null"],
 						description:
-							"Minutes of video your viewers watched in the current calendar month (UTC), the same period as speech. Measured, not billed. null until delivery has been measured for this app.",
-						required: ["minutes", "minutesByTier", "measured", "billed"],
+							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech. HLS counts the exact seconds of the segments served and MP4 downloads count the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted. null until delivery has been measured for this app.",
+						required: ["minutes", "minutesByTier", "finalThrough"],
 						properties: {
 							minutes: {
 								type: "number",
-								description: "Delivered minutes across every resolution.",
+								description: "Delivered minutes across every rendition tier.",
 							},
 							minutesByTier: {
 								type: "object",
-								description: "Delivered minutes for each resolution.",
+								description: "Delivered minutes for each rendition tier.",
 								required: ["360p", "720p", "1080p", "1440p", "2160p"],
 								properties: {
 									"360p": { type: "number" },
@@ -1691,8 +1691,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 									"2160p": { type: "number" },
 								},
 							},
-							measured: { type: "boolean", enum: [true] },
-							billed: { type: "boolean", enum: [false] },
+							finalThrough: {
+								type: ["string", "null"],
+								format: "date",
+								description:
+									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day becomes final from 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
+							},
 						},
 					},
 					balanceDollars: {
