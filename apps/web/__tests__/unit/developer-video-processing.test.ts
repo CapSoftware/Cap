@@ -1198,6 +1198,47 @@ describe("developer video dispatch", () => {
 		);
 	});
 
+	it("marks every job request it can send as Cap Infra work", async () => {
+		const sizes = [
+			{ width: 640, height: 360 },
+			{ width: 1920, height: 1080 },
+			{ width: 2560, height: 1440 },
+			{ width: 3840, height: 2160 },
+			{ width: 1080, height: 1920 },
+		];
+		const contentTypes = ["video/quicktime", "video/mp4", undefined];
+		const sent = new Set<string>();
+		for (const tier of ["1080p", "1440p", "2160p"] as const) {
+			for (const size of sizes) {
+				for (const contentType of contentTypes) {
+					for (const part of ["hls", "mp4"] as const) {
+						mocks.startJob.mockReset();
+						mocks.startJob.mockResolvedValue({
+							status: "started",
+							jobId: "job-infra",
+						});
+						mocks.head.mockResolvedValue({ bytes: 1_000, contentType });
+						mocks.store.video = developerVideo({
+							maxResolutionTier: tier,
+							processing: processingState({
+								probe: { duration: 12, ...size, fps: 30 },
+							}),
+						});
+						await dispatchDeveloperVideoPart("video-1", "encode-1", part);
+						expect(mocks.startJob).toHaveBeenCalledTimes(1);
+						const [path, body] = mocks.startJob.mock.calls[0] ?? [];
+						sent.add(path);
+						expect({ path, infra: body?.infra }).toEqual({
+							path,
+							infra: true,
+						});
+					}
+				}
+			}
+		}
+		expect([...sent].sort()).toEqual(["/video/ladder", "/video/process"]);
+	});
+
 	it("caps the MP4 job at the video's tier", async () => {
 		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-9" });
 		mocks.store.video = developerVideo({
