@@ -42,6 +42,7 @@ export const videoDetail = (video: Fields) => ({
 	userId: video.externalUserId ?? null,
 	...pick(video, ["maxResolutionTier", "metadata", "createdAt"]),
 	...videoLinks(video),
+	...pick(video, ["captions"]),
 });
 
 export function transcriptView(
@@ -55,6 +56,7 @@ export function transcriptView(
 		...pick(transcript, ["id", "status", "name"]),
 		source: { type: source.type ?? null, url: withoutQuery(source.url) },
 		...pick(transcript, [
+			"videoId",
 			"durationSeconds",
 			"language",
 			"wordCount",
@@ -68,6 +70,17 @@ export function transcriptView(
 		...(options.text ? pick(transcript, ["text"]) : {}),
 	};
 }
+
+export const CAPTIONS_NEXT =
+	"This transcript came from a stored video, so that video's player, share page and embed now offer it as captions. videos_get lists them under captions, with the url of each WebVTT file.";
+
+export const captionsNext = (transcript: Fields) =>
+	transcript.status === "complete" &&
+	typeof transcript.videoId === "string" &&
+	typeof transcript.wordCount === "number" &&
+	transcript.wordCount > 0
+		? { next: CAPTIONS_NEXT }
+		: {};
 
 export const transactionRow = (row: Fields) =>
 	pick(row, [
