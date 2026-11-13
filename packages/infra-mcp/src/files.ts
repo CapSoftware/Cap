@@ -25,6 +25,55 @@ export const SUPPORTED_VIDEO_FORMATS =
 
 const UNSUPPORTED_VIDEO_EXTENSIONS = new Set([".avi"]);
 
+export const UNREADABLE_VIDEO_REASON = `This file could not be read as a video. Upload ${SUPPORTED_VIDEO_FORMATS}.`;
+
+const NON_VIDEO_CONTENT_TYPE =
+	/^(text|image|audio)\/|^application\/(json|pdf)$/;
+
+// Only names that are never a video container. Browsers send an empty type or
+// application/octet-stream for real MKV and MOV files, and an unknown
+// extension may still be a video, so none of those is refused.
+const NON_VIDEO_EXTENSIONS = new Set([
+	".txt",
+	".md",
+	".csv",
+	".json",
+	".xml",
+	".html",
+	".htm",
+	".pdf",
+	".doc",
+	".docx",
+	".zip",
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".heic",
+	".svg",
+	".bmp",
+	".tif",
+	".tiff",
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".flac",
+	".opus",
+	".srt",
+	".vtt",
+]);
+
+export function isNonVideoContentType(contentType: string | undefined) {
+	const essence = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+	return NON_VIDEO_CONTENT_TYPE.test(essence);
+}
+
+export const isNonVideoFileName = (fileName: string | undefined) =>
+	fileName !== undefined &&
+	NON_VIDEO_EXTENSIONS.has(extname(fileName).toLowerCase());
+
 export function refuseUnsupportedVideo(file: LocalFile) {
 	if (!UNSUPPORTED_VIDEO_EXTENSIONS.has(extname(file.fileName).toLowerCase())) {
 		return;

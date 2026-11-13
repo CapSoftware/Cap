@@ -1,7 +1,13 @@
 import { extname } from "node:path";
 import { z } from "zod";
 import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
-import { CONTENT_TYPES } from "./files";
+import {
+	CONTENT_TYPES,
+	isNonVideoContentType,
+	isNonVideoFileName,
+	SUPPORTED_VIDEO_FORMATS,
+	UNREADABLE_VIDEO_REASON,
+} from "./files";
 import { asRecord, confirmed, dataOf } from "./http";
 import { Disclosed } from "./redact";
 import { videoLinks } from "./shape";
@@ -62,7 +68,7 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 		tool({
 			name: "videos_create_upload",
 			title: "Create a video upload",
-			description: `Create a video and get signed links to upload its file directly to storage, for when this server cannot read your files. Send the file size in bytes. Returns the video id, an uploadId and one link per part with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. Then call videos_complete_upload. Uploading and encoding are free, and stored video is billed daily by its length and resolution tier until it is deleted. Pass videoId to start a failed upload again in the same video.`,
+			description: `Create a video and get signed links to upload its file directly to storage. Send the file size in bytes. Returns the video id, an uploadId and one link per part with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. Then call videos_complete_upload. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to start a failed upload again in the same video.`,
 			kind: "write",
 			input: {
 				contentLength: z
@@ -115,6 +121,17 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 					),
 			},
 			run: async (args, call) => {
+				if (
+					isNonVideoContentType(args.contentType) ||
+					isNonVideoFileName(args.fileName)
+				) {
+					throw new ApiError(
+						400,
+						"unsupported_content_type",
+						UNREADABLE_VIDEO_REASON,
+						`No video was created. Cap Infra accepts ${SUPPORTED_VIDEO_FORMATS}. For speech in an audio file, use transcripts_create with a public url.`,
+					);
+				}
 				const plan = planParts(args.contentLength);
 				const name = args.name ?? fileTitle(args.fileName);
 				const contentType =

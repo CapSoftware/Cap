@@ -46,7 +46,9 @@ import {
 } from "@/lib/infra-upload";
 import {
 	INFRA_UPLOAD_CONTENT_TYPES,
+	isNonVideoUploadContentType,
 	isRefusedUploadContentType,
+	UNREADABLE_VIDEO_REASON,
 	UNSUPPORTED_CONTENT_TYPE_HINT,
 } from "@/lib/infra-video-formats";
 import { runPromise } from "@/lib/server";
@@ -507,6 +509,14 @@ export async function initiateInfraUpload({
 			400,
 			"unsupported_content_type",
 			`${contentType} files are not supported`,
+			UNSUPPORTED_CONTENT_TYPE_HINT,
+		);
+	}
+	if (isNonVideoUploadContentType(contentType)) {
+		return fail(
+			400,
+			"unsupported_content_type",
+			UNREADABLE_VIDEO_REASON,
 			UNSUPPORTED_CONTENT_TYPE_HINT,
 		);
 	}

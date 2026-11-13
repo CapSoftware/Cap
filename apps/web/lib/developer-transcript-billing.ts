@@ -14,12 +14,17 @@ import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
 } from "@/lib/developer-transcripts";
-import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
+import type { AutoTopUpTarget } from "@/lib/infra-auto-top-up";
 import {
 	availableBalance,
 	heldTranscriptMicroCredits,
 } from "@/lib/infra-balance";
 import { accountStanding, readStandingAccount } from "@/lib/infra-standing";
+
+// Loaded on first use: the auto top-up module pulls in Stripe and the email
+// templates, and this file ships in the step bundle every workflow loads.
+const scheduleAutoTopUp = async (target: AutoTopUpTarget) =>
+	(await import("@/lib/infra-auto-top-up")).scheduleAutoTopUp(target);
 
 export const INSUFFICIENT_CREDITS_MESSAGE =
 	"The credit balance could not cover this transcript. Nothing was charged.";
