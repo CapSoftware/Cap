@@ -136,9 +136,11 @@ const HLS_MIME = "application/vnd.apple.mpegurl";
 // The line assumed before anything is measured. Chrome's connection hint
 // reads about 1.6 Mbps on a fast line as on a slow one, so it starts low, and
 // the first segment's measured speed then swaps a fast line up. Safari and
-// Firefox give no hint and assume enough for the rendition that fits a
-// desktop player.
+// Firefox give no hint at all. Assuming a fast line there held a slow-line
+// viewer on a whole 720p segment before the first frame (5 to 11 s on 3G),
+// so they start as low as Chrome does and are swapped up the same way.
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
+const UNHINTED_BITS_PER_SECOND = 1_200_000;
 const SLOW_LINE_BITS_PER_SECOND = 500_000;
 const SLOW_LINE_TYPES = ["slow-2g", "2g", "3g"];
 
@@ -194,7 +196,8 @@ export const warmSource = (source: CapPlayerSource) => {
 export const startingEstimate = () => {
 	const connection = (navigator as Navigator & { connection?: ConnectionHint })
 		.connection;
-	if (connection?.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
+	if (!connection) return UNHINTED_BITS_PER_SECOND;
+	if (connection.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
 	const megabits = connection?.downlink ?? 0;
 	if (megabits > 0) {
 		return Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND);
@@ -678,12 +681,24 @@ export const attachSource = (
 				destroy();
 				playNative(reached);
 			});
-			// A pick changes rendition at the next segment. Switching at once
-			// flushes the whole buffer and freezes the picture on a slow line.
-			// Before play a pick is only remembered, so it downloads nothing.
+			// A pick of a lower rendition, or of Auto, changes at the next
+			// segment: switching at once flushes the buffer and freezes the
+			// picture on a slow line. A pick sharper than the picture switches at
+			// once, or the old rendition plays out everything already buffered
+			// under the new label. Before play a pick is only remembered, so it
+			// downloads nothing.
 			setLevel = (index) => {
 				picked = index;
-				if (playRequested) hls.nextLevel = index;
+				if (!playRequested) return;
+				if (
+					index !== AUTO_LEVEL &&
+					isSharper(hls.levels, index, hls.currentLevel)
+				) {
+					swappedTo = index;
+					hls.currentLevel = index;
+				} else {
+					hls.nextLevel = index;
+				}
 			};
 			video.preload = "auto";
 			hls.loadSource(withShortPlaylists(source.hls));

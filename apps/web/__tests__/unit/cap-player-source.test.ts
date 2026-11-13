@@ -230,9 +230,20 @@ describe("startingEstimate", () => {
 	const hint = (connection?: object) =>
 		vi.stubGlobal("navigator", { vendor: "", connection });
 
-	it("assumes a line for the player's rendition when there is no hint", () => {
+	it("starts as low as Chrome's reading when the browser gives no hint", () => {
 		hint();
-		expect(startingEstimate()).toBe(5_000_000);
+		expect(startingEstimate()).toBe(1_200_000);
+	});
+
+	it("picks the smallest rendition of a 1136 px hero with no hint, so a slow line shows a frame soon", () => {
+		hint();
+		expect(
+			pickStartingLevel(
+				LADDER,
+				{ width: 1136, height: 639 },
+				startingEstimate(),
+			),
+		).toBe(0);
 	});
 
 	it("takes the browser's reading, never above the default", () => {
@@ -913,7 +924,7 @@ describe("attachSource with hls.js", () => {
 		expect(hls.startLoads).toEqual([-1]);
 	});
 
-	it("starts on the rendition that fits when the browser gives no connection estimate", async () => {
+	it("starts low when the browser gives no connection estimate, then steps up on a fast line at play", async () => {
 		macSafari();
 		const video = new FakeVideo(true);
 
@@ -921,8 +932,29 @@ describe("attachSource with hls.js", () => {
 		const hls = await hlsFor();
 		hls.emit("manifestParsed", LADDER_DATA);
 
-		expect(hls.startLevel).toBe(1);
-		expect(hls.config.abrEwmaDefaultEstimate).toBe(5_000_000);
+		expect(hls.startLevel).toBe(0);
+		expect(hls.loadLevel).toBe(0);
+		expect(hls.config.abrEwmaDefaultEstimate).toBe(1_200_000);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		expect(hls.currentLevel).toBe(-1);
+		void video.play();
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("stays low at play when the first segment shows a slow line", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_600_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
+
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("hands a fatal hls.js error in Safari to its own HLS player, then to the MP4", async () => {
@@ -1251,7 +1283,61 @@ describe("attachSource switching to the rendition that fits", () => {
 		setLevel(3);
 		video.dispatchEvent(new Event("seeked"));
 
+		expect(hls.currentLevel).toBe(3);
+	});
+
+	it("switches at once to a pick sharper than the picture, and redraws when it lands", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const seeks = countSeeks(video);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 0;
+		const before = seeks();
+
+		setLevel(2);
+
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		held(hls, 2);
+		expect(seeks()).toBe(before + 1);
+	});
+
+	it("changes to a lower pick or to Auto at the next segment", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 2;
+
+		setLevel(0);
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(0);
+
+		setLevel(AUTO_LEVEL);
+		expect(hls.currentLevel).toBe(2);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			AUTO_LEVEL,
+		);
+	});
+
+	it("keeps a pick made before play from loading anything until play", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+
+		setLevel(2);
 		expect(hls.currentLevel).toBe(-1);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(
+			undefined,
+		);
+		void video.play();
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(2);
 	});
 
 	it("switches by resolution when bitrate does not rise with it", async () => {
