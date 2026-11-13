@@ -109,10 +109,6 @@ describe("the Cap Infra landing page", () => {
 		expect(priced[0]?.rates).toEqual(
 			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 		);
-		expect(
-			content.PRICE_ROWS.find((row) => row.meter === "Speech to text")?.price,
-		).toBe(`$${INFRA_SPEECH_DOLLARS_PER_HOUR.toFixed(2)}`);
-
 		for (const tier of INFRA_RESOLUTION_TIERS) {
 			const price = `$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`;
 			expect(billing).toContain(`${price} per 1,000 minutes per month`);
@@ -131,7 +127,7 @@ describe("the Cap Infra landing page", () => {
 		);
 		expect(
 			content.PRICE_ROWS.filter((row) => row.unit).map((row) => row.meter),
-		).toEqual(["Storage", "Speech to text"]);
+		).toEqual(["Storage"]);
 
 		const text = [
 			content.infraSeo.description,
@@ -236,6 +232,29 @@ describe("the rendered page", () => {
 				(image.getAttribute("src") ?? "").includes("plain-lit");
 			if (!eager) expect(image.getAttribute("loading")).toBe("lazy");
 		}
+	});
+
+	it("prices speech to text on its own row, outside the resolution table", async () => {
+		await load("true");
+		const { Pricing } = await import("@/components/pages/infra/Pricing");
+		const page = parse(renderToStaticMarkup(React.createElement(Pricing)));
+		const speech = `$${INFRA_SPEECH_DOLLARS_PER_HOUR.toFixed(2)}`;
+		const table = page.querySelector("table");
+
+		expect(table?.querySelector("caption")?.textContent).toBe(
+			"Cap Infra prices by resolution",
+		);
+		expect(table?.textContent).not.toContain("Speech to text");
+		expect(table?.textContent).not.toContain(speech);
+
+		const row = [...page.querySelectorAll("dl")].find(
+			(list) => list.querySelector("dt")?.textContent?.trim() === "Speech to text",
+		);
+		expect(row).toBeDefined();
+		expect(row?.closest("table")).toBeNull();
+		expect(row?.querySelector("dd")?.textContent).toBe(
+			`${speech} per audio hour`,
+		);
 	});
 
 	it("says a month of storage only where billing would agree", async () => {
