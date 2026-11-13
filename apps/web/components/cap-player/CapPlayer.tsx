@@ -1112,7 +1112,7 @@ export const CapPlayer = ({
 		{
 			value: AUTO_LEVEL,
 			label: "Auto",
-			hint: picked === AUTO_LEVEL ? resolution : undefined,
+			hint: picked === AUTO_LEVEL && started ? resolution : undefined,
 			checked: picked === AUTO_LEVEL,
 		},
 		...levels.map((level) => ({
@@ -1151,6 +1151,10 @@ export const CapPlayer = ({
 	const pickedLabel = levels.find((level) => level.index === picked)?.label;
 	const quality = pickedLabel ?? resolution;
 	const autoQuality = picked === AUTO_LEVEL;
+	// Before play, Auto shows the rendition held for the first frame, which
+	// can be the smallest one while the line is measured. The bar says Auto
+	// until there is a picture worth naming.
+	const qualityShown = autoQuality && !started ? "Auto" : quality;
 
 	live.current = {
 		onFirstPlay,
@@ -1365,10 +1369,10 @@ export const CapPlayer = ({
 									className={`${styles.control} ${styles.text}`}
 									aria-haspopup="menu"
 									aria-expanded={menu === "quality"}
-									aria-label={`Quality, ${picked === AUTO_LEVEL ? "auto, " : ""}${quality}`}
+									aria-label={`Quality, ${autoQuality ? (started ? `auto, ${quality}` : "auto") : quality}`}
 									onClick={() => setMenu(menu === "quality" ? null : "quality")}
 								>
-									{quality}
+									{qualityShown}
 								</button>
 								{menu === "quality" ? (
 									<Menu
