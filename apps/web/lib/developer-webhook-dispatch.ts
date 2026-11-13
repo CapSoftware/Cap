@@ -7,9 +7,9 @@ import { and, eq, isNull } from "drizzle-orm";
 import { after } from "next/server";
 import { start } from "workflow/api";
 import { serializeDeveloperVideo } from "@/lib/developer-video-api";
-import {
-	developerVideoEventType,
-	type WebhookEventType,
+import type {
+	DeveloperVideoEventStep,
+	WebhookEventType,
 } from "@/lib/developer-webhook-events";
 import { developerVideoEventId } from "@/lib/developer-webhook-signature";
 import { deliverDeveloperWebhookWorkflow } from "@/workflows/deliver-developer-webhook";
@@ -18,6 +18,16 @@ const STATUS_OF_EVENT: Record<WebhookEventType, string> = {
 	"video.ready": "ready",
 	"video.errored": "errored",
 };
+
+// A ready video still carrying the marker has not been announced, which is
+// also what a rolled back announcement leaves behind.
+function eventIsCommitted(
+	video: typeof developerVideos.$inferSelect,
+	type: WebhookEventType,
+): boolean {
+	if (video.deletedAt || video.status !== STATUS_OF_EVENT[type]) return false;
+	return type !== "video.ready" || video.processing?.readyEventDueAt == null;
+}
 
 async function subscribedEndpointIds(
 	appId: string,
@@ -64,9 +74,7 @@ export async function enqueueDeveloperVideoEvent(
 	if (endpointIds.length === 0) return 0;
 
 	const video = await committedVideo(target.id);
-	if (!video || video.deletedAt || video.status !== STATUS_OF_EVENT[type]) {
-		return 0;
-	}
+	if (!video || !eventIsCommitted(video, type)) return 0;
 
 	const eventId = developerVideoEventId(video.id, type);
 	const body = JSON.stringify({
@@ -95,11 +103,11 @@ export async function enqueueDeveloperVideoEvent(
 
 // Never awaited: a video's status change must not wait for, or fail on,
 // anything to do with webhooks.
-export function announceDeveloperVideoStatus(
-	video: { id: string; appId: string; status: string },
-	updates: { status?: string },
+export function announceDeveloperVideoEvent(
+	video: { id: string; appId: string },
+	step: DeveloperVideoEventStep,
 ): void {
-	const type = developerVideoEventType(video.status, updates.status);
+	const type = step.type;
 	if (!type) return;
 	const queued = enqueueDeveloperVideoEvent(video, type).catch((error) => {
 		console.error("[developer-webhook] Failed to queue an event", {
