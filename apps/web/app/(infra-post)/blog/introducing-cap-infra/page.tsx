@@ -34,7 +34,7 @@ export default function InfraPostPage() {
 	const author = "author" in post.metadata ? post.metadata.author : "";
 
 	return (
-		<article className="mx-auto max-w-[680px] px-5 pb-24 pt-20 sm:pb-32 sm:pt-24">
+		<article className="mx-auto max-w-[680px] px-5 pb-24 pt-[108px] sm:pb-32 sm:pt-[124px]">
 			<InfraCover />
 			<header>
 				<h1 className={`${H_DISPLAY} m-0 text-[40px] sm:text-[56px]`}>

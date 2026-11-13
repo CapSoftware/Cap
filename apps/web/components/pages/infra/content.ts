@@ -135,26 +135,29 @@ export const PREVIEW_NOTE = OPEN_ACCESS
 	? null
 	: `Cap Infra is in preview. Email ${ACCESS_EMAIL} for access.`;
 
-export const SPEED_SHORT_CLIP_SECONDS = 3;
+// The same figures as the launch film.
+export const SPEED_PLAYABLE_SECONDS = 5;
 
-export const SPEED_LONG_MINUTES = 20;
-
-export const SPEED_LONG_SECONDS = 15;
+export const SPEED_PROCESSED_MINUTES = 2;
 
 export const SPEED_TESTS = [
 	{
-		source: "a short clip",
-		seconds: SPEED_SHORT_CLIP_SECONDS,
+		qualifier: "under",
+		value: SPEED_PLAYABLE_SECONDS,
+		unit: "seconds",
+		label: "for 1 hour of 4K to be playable",
 	},
 	{
-		source: `a ${SPEED_LONG_MINUTES} minute 4K screen recording`,
-		seconds: SPEED_LONG_SECONDS,
+		qualifier: "about",
+		value: SPEED_PROCESSED_MINUTES,
+		unit: "minutes",
+		label: "for 1 hour of 4K to be fully processed",
 	},
 ] as const;
 
 export const SPEED_LONG = {
-	sourceSeconds: SPEED_LONG_MINUTES * 60,
-	seconds: SPEED_LONG_SECONDS,
+	sourceSeconds: 60 * 60,
+	seconds: SPEED_PLAYABLE_SECONDS,
 } as const;
 
 export const clock = (totalSeconds: number) => {

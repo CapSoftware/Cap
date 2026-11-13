@@ -74,6 +74,7 @@ const VOLUME_KEY = "cap-player-volume";
 const DEFAULT_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const MENU_CLEARANCE = 64;
 const SHEET_INSET = 6;
+const START_CLEARANCE = 4;
 const HOVER_INTENT_MS = 100;
 const PLAYS = '[data-action="toggle"], [data-action="surface"]';
 const NO_CONTROLS: readonly CapPlayerControl[] = [];
@@ -1034,6 +1035,24 @@ export const CapPlayer = ({
 		) {
 			onPip();
 		}
+		// A short player, such as a wide video at phone width, has no room for
+		// the big play button above the bar. Until the first play it shows the
+		// button alone, so a tap on it cannot land on the seek bar beneath.
+		const fitStart = () => {
+			const start = startRef.current;
+			root.dataset.crowded = String(
+				start !== null &&
+					start.getBoundingClientRect().bottom + START_CLEARANCE >
+						track.getBoundingClientRect().top,
+			);
+		};
+		const sizeObserver =
+			typeof ResizeObserver === "undefined"
+				? null
+				: new ResizeObserver(fitStart);
+		sizeObserver?.observe(root);
+		fitStart();
+
 		onVolume();
 		onResize();
 		onRate();
@@ -1041,6 +1060,7 @@ export const CapPlayer = ({
 		if (!video.paused) onPlay();
 
 		return () => {
+			sizeObserver?.disconnect();
 			cancelAnimationFrame(frame);
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(waitTimer);

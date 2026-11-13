@@ -41,6 +41,8 @@ const nextConfig = {
 		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
 		"/docs-markdown/**": ["./content/docs/**/*.mdx"],
 		"/api/developer/mcp": ["./content/docs/api/*.mdx"],
+		"/infra/llms.txt": ["./content/docs/api/*.mdx"],
+		"/infra/llms-full.txt": ["./content/docs/api/*.mdx"],
 	},
 	transpilePackages: [
 		"@cap/ui",
@@ -164,6 +166,16 @@ const nextConfig = {
 				source: "/docs/s3-config",
 				destination: "/docs",
 				permanent: true,
+			},
+			{
+				source: "/docs/api",
+				destination: "/docs/api/get-started",
+				permanent: false,
+			},
+			{
+				source: "/docs/api.md",
+				destination: "/docs/api/get-started.md",
+				permanent: false,
 			},
 		];
 	},
