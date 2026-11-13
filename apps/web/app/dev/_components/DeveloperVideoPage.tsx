@@ -163,7 +163,9 @@ function Stage({
 		<>
 			<Notice
 				waiting
-				title={player.uploading ? "Waiting for the upload" : "Processing video"}
+				title={
+					player.uploading ? "This video is being prepared" : "Processing video"
+				}
 				detail="This page updates when the video is ready to play."
 			/>
 			<RefreshUntilReady />

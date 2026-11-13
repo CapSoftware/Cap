@@ -233,7 +233,7 @@ export function infraVideoEmbedCode(
 		video.width > 0 &&
 		video.height > 0;
 	const shape = measured ? `${video.width} / ${video.height}` : "16 / 9";
-	return `<iframe src="${escapeAttribute(infraVideoEmbedUrl(embedUrl, options))}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`;
+	return `<iframe src="${escapeAttribute(infraVideoEmbedUrl(embedUrl, options))}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`;
 }
 
 export function toInfraVideoDetail(

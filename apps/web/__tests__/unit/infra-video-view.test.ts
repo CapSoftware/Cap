@@ -246,7 +246,7 @@ describe("console video payload", () => {
 
 			expect(detail.shareUrl).toBe(PAGE);
 			expect(detail.embedCode).toBe(
-				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`,
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 			);
 		});
 
