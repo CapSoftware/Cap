@@ -632,6 +632,86 @@ describe("an event that arrives before its grant", () => {
 	});
 });
 
+describe("a charge with more refunds than one page", () => {
+	const pages = (all: Stripe.Refund[]) =>
+		mocks.listRefunds.mockImplementation(
+			async ({ starting_after }: { starting_after?: string }) => {
+				const from = starting_after
+					? all.findIndex((item) => item.id === starting_after) + 1
+					: 0;
+				return {
+					data: all.slice(from, from + 100),
+					has_more: from + 100 < all.length,
+				};
+			},
+		);
+
+	it("applies every refund once across pages and never passes the grant", async () => {
+		await topUp();
+		const all = Array.from({ length: 250 }, (_, index) =>
+			refund(`re_${index + 1}`, 10),
+		).reverse();
+		pages(all);
+
+		const results = await reverseRefundedCharge(charge("pi_1", null));
+
+		expect(mocks.listRefunds).toHaveBeenCalledTimes(3);
+		expect(mocks.listRefunds.mock.calls.map(([params]) => params)).toEqual([
+			{ charge: "ch_1", limit: 100 },
+			{ charge: "ch_1", limit: 100, starting_after: "re_151" },
+			{ charge: "ch_1", limit: 100, starting_after: "re_51" },
+		]);
+		expect(results).toHaveLength(250);
+		expect(results.every((result) => result.state === "reversed")).toBe(true);
+		expect(new Set(reversals().map((row) => row.referenceId)).size).toBe(250);
+		expect(
+			reversals().reduce((total, row) => total - row.amountMicroCredits, 0),
+		).toBe(GRANT);
+		expect(ledger.account.balanceMicroCredits).toBe(0);
+		addsUp();
+
+		const again = await reverseRefundedCharge(charge("pi_1", null));
+		expect(again.every((result) => result.state === "duplicate")).toBe(true);
+		expect(reversals()).toHaveLength(250);
+	});
+
+	it("takes back only the grant when the pages hold a refund for all of it and more rows", async () => {
+		await topUp();
+		pages(
+			[
+				...Array.from({ length: 120 }, (_, index) =>
+					refund(`re_${index + 1}`, 20),
+				),
+				refund("re_121", 100),
+				refund("re_122", 700, "failed"),
+			].reverse(),
+		);
+
+		const results = await reverseRefundedCharge(charge("pi_1", null));
+
+		expect(results).toHaveLength(121);
+		expect(
+			reversals().reduce((total, row) => total - row.amountMicroCredits, 0),
+		).toBe(GRANT);
+		expect(ledger.account.balanceMicroCredits).toBe(0);
+	});
+
+	it("fails instead of cutting the list short, so the event is retried", async () => {
+		await topUp();
+		let served = 0;
+		mocks.listRefunds.mockImplementation(async () => ({
+			data: Array.from({ length: 100 }, () => refund(`re_${++served}`, 1)),
+			has_more: true,
+		}));
+
+		await expect(reverseRefundedCharge(charge("pi_1", null))).rejects.toThrow(
+			"more than 5000 refunds",
+		);
+		expect(reversals()).toHaveLength(0);
+		expect(ledger.account.balanceMicroCredits).toBe(GRANT);
+	});
+});
+
 describe("a disputed top-up", () => {
 	const armed = async () => {
 		await topUp();

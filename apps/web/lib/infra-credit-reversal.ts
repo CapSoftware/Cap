@@ -322,12 +322,36 @@ async function applyReversal({
 	});
 }
 
+const REFUND_PAGE_SIZE = 100;
+const MAX_REFUNDS_PER_CHARGE = 5_000;
+
+async function listRefunds(chargeId: string) {
+	const refunds: Stripe.Refund[] = [];
+	let startingAfter: string | undefined;
+	for (;;) {
+		const page = await stripe().refunds.list({
+			charge: chargeId,
+			limit: REFUND_PAGE_SIZE,
+			...(startingAfter ? { starting_after: startingAfter } : {}),
+		});
+		refunds.push(...page.data);
+		const last = page.data.at(-1);
+		if (!page.has_more || !last) return refunds;
+		if (refunds.length >= MAX_REFUNDS_PER_CHARGE) {
+			throw new Error(
+				`Charge ${chargeId} has more than ${MAX_REFUNDS_PER_CHARGE} refunds`,
+			);
+		}
+		startingAfter = last.id;
+	}
+}
+
 async function refundsOf(charge: Stripe.Charge) {
 	const embedded = charge.refunds;
 	const refunds =
 		embedded && Array.isArray(embedded.data) && !embedded.has_more
 			? embedded.data
-			: (await stripe().refunds.list({ charge: charge.id, limit: 100 })).data;
+			: await listRefunds(charge.id);
 	return refunds
 		.filter(
 			(refund) =>
