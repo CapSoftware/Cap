@@ -52,7 +52,7 @@ Pass an `idempotencyKey` when you might repeat a create call for the same file, 
 ## What costs money
 
 - Uploading and encoding a video are free.
-- Stored video is billed every day by its length and resolution tier until it is deleted. `maxResolutionTier` defaults to `1080p`, the cheapest. Only raise it when the user asks for higher resolution.
+- Stored video is billed by its length and resolution tier: one month when it becomes ready, then every day until it is deleted. `maxResolutionTier` defaults to `1080p`, the cheapest. Only raise it when the user asks for higher resolution.
 - Transcripts are billed per audio hour when they complete. A transcript that fails, or is deleted before it completes, is not charged. Audio with no speech is still billed for its length.
 - Every read, list and wait tool is free.
 - `account_usage` has the current rates, and `account_transactions` lists every charge.
@@ -65,6 +65,6 @@ Tell the user before you do something that keeps costing money, such as uploadin
 
 ## Limits to respect
 
-- The API allows 60 requests a minute for each key. The wait tools already pace themselves, so call a wait tool and let it run, and do not poll `videos_get` or `transcripts_get` in a loop.
+- The API limits how many requests each key can send a minute. The wait tools already pace themselves, so call a wait tool and let it run, and do not poll `videos_get` or `transcripts_get` in a loop.
 - A video can be up to 36 GB and 4 hours. A transcript source can be up to 2 GB and 4 hours.
 - Lists return 50 items unless you set `limit` (up to 100). When `nextOffset` is not null, pass it as `offset` for the next page.

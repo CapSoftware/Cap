@@ -6,16 +6,29 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
+import {
+	CREDIT_US_EIN_INVALID,
+	CREDIT_US_EIN_MAX_LENGTH,
+	parseCreditUsEin,
+} from "@/lib/infra-credit-us-ein";
 import { infraAppPath } from "@/lib/infra-routes";
 import {
 	resolveTopUpAmount,
+	TOP_UP_AMOUNT_PLACEHOLDER,
 	TOP_UP_DEFAULT_CENTS,
 	TOP_UP_PRESETS_CENTS,
 	topUpButtonLabel,
+	topUpCoversText,
 } from "@/lib/infra-top-up";
-import { Button, FOCUS, Input, MONO } from "../../_components/ui";
+import { Button, FOCUS, Input, MONO, TEXT_LINK } from "../../_components/ui";
 
-export function TopUp({ appId }: { appId: string }) {
+export function TopUp({
+	appId,
+	autoTopUpHref,
+}: {
+	appId: string;
+	autoTopUpHref: string | null;
+}) {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const amountId = useId();
@@ -26,6 +39,14 @@ export function TopUp({ appId }: { appId: string }) {
 	const codeNoteId = useId();
 	const [codeOpen, setCodeOpen] = useState(false);
 	const [code, setCode] = useState("");
+	const einId = useId();
+	const einNoteId = useId();
+	const einErrorId = useId();
+	const [einOpen, setEinOpen] = useState(false);
+	const [usEin, setUsEin] = useState("");
+	const [purchased] = useState(
+		() => searchParams.get("purchase") === "success",
+	);
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
@@ -44,6 +65,7 @@ export function TopUp({ appId }: { appId: string }) {
 					appId,
 					amountCents,
 					...(code.trim() ? { code: code.trim() } : {}),
+					...(ein.state === "valid" ? { usEin: ein.ein } : {}),
 				}),
 			});
 			const data: { url?: string; error?: string } = await res
@@ -62,13 +84,15 @@ export function TopUp({ appId }: { appId: string }) {
 	});
 
 	const amount = resolveTopUpAmount(custom, selected);
+	const ein = parseCreditUsEin(einOpen ? usEin : undefined);
+	const einInvalid = ein.state === "invalid";
 
 	return (
 		<form
 			className="flex flex-col gap-5"
 			onSubmit={(e) => {
 				e.preventDefault();
-				if (amount.amountCents === null) return;
+				if (amount.amountCents === null || einInvalid) return;
 				checkout.mutate(amount.amountCents);
 			}}
 		>
@@ -115,11 +139,27 @@ export function TopUp({ appId }: { appId: string }) {
 						aria-invalid={amount.error ? true : undefined}
 						aria-describedby={amount.error ? amountErrorId : undefined}
 						onChange={(e) => setCustom(e.target.value)}
-						placeholder="Other, 5 to 1,000"
+						placeholder={TOP_UP_AMOUNT_PLACEHOLDER}
 						className="h-[38px] w-[176px] pl-6"
 					/>
 				</div>
 			</div>
+			<p className="m-0 -mt-2 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+				{topUpCoversText()}
+			</p>
+			{!einOpen && (
+				<p className="m-0 -mt-3 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+					US business?{" "}
+					<button
+						type="button"
+						onClick={() => setEinOpen(true)}
+						className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
+					>
+						Add your EIN
+					</button>{" "}
+					before you pay so it is on your invoice.
+				</p>
+			)}
 			{amount.error && (
 				<p
 					id={amountErrorId}
@@ -158,10 +198,50 @@ export function TopUp({ appId }: { appId: string }) {
 					</p>
 				</div>
 			)}
+			{einOpen && (
+				<div className="flex max-w-[520px] flex-col gap-2">
+					<label htmlFor={einId} className="sr-only">
+						US EIN
+					</label>
+					<div className="w-[240px] max-w-full">
+						<Input
+							id={einId}
+							value={usEin}
+							maxLength={CREDIT_US_EIN_MAX_LENGTH}
+							autoFocus
+							autoComplete="off"
+							inputMode="numeric"
+							spellCheck={false}
+							aria-invalid={einInvalid ? true : undefined}
+							aria-describedby={einInvalid ? einErrorId : einNoteId}
+							onChange={(e) => setUsEin(e.target.value)}
+							placeholder="US EIN, 12-3456789"
+							className={clsx(MONO, "h-[38px]")}
+						/>
+					</div>
+					{einInvalid ? (
+						<p
+							id={einErrorId}
+							role="alert"
+							className="m-0 text-[13px] leading-[1.5] text-[#F2A199]"
+						>
+							{CREDIT_US_EIN_INVALID}.
+						</p>
+					) : (
+						<p
+							id={einNoteId}
+							className="m-0 text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]"
+						>
+							For a US business. It is saved to your billing details, so it
+							shows on the invoice for this purchase and later ones.
+						</p>
+					)}
+				</div>
+			)}
 			<div className="flex flex-wrap items-center gap-2">
 				<Button
 					type="submit"
-					disabled={amount.amountCents === null}
+					disabled={amount.amountCents === null || einInvalid}
 					aria-describedby={amount.error ? amountErrorId : undefined}
 					loading={checkout.isPending}
 				>
@@ -173,6 +253,18 @@ export function TopUp({ appId }: { appId: string }) {
 					</Button>
 				)}
 			</div>
+			{purchased && autoTopUpHref && (
+				<p className="m-0 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+					Switch on{" "}
+					<a
+						href={autoTopUpHref}
+						className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
+					>
+						auto top-up
+					</a>{" "}
+					to add credit as soon as the balance falls below a threshold you set.
+				</p>
+			)}
 		</form>
 	);
 }

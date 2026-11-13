@@ -171,6 +171,16 @@ export function makeUseEffectQuery<R>(
 	};
 }
 
+/**
+ * `mutateAsync` from `useEffectMutation` resolves with an `Exit` instead of
+ * rejecting. Chain this before handing the promise to something that only
+ * notices rejections, such as `toast.promise`.
+ */
+export const rejectOnFailure = <A, E>(exit: Exit.Exit<A, E>): Promise<A> =>
+	Exit.isSuccess(exit)
+		? Promise.resolve(exit.value)
+		: Promise.reject(exit.cause);
+
 export function makeUseEffectMutation<R>(
 	useEffectRuntime: () => ManagedRuntime.ManagedRuntime<R, any>,
 ) {

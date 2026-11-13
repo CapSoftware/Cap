@@ -11,7 +11,11 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
-import { agentMarkdownResponse } from "@/lib/agent-markdown";
+import {
+	agentMarkdownResponse,
+	DOCS_MARKDOWN_ROUTE,
+	docsMarkdownSlug,
+} from "@/lib/agent-markdown";
 import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
@@ -211,6 +215,16 @@ async function route(request: NextRequest) {
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
+		const docsSlug =
+			request.method === "GET" || request.method === "HEAD"
+				? docsMarkdownSlug(path, request.headers.get("accept"))
+				: null;
+		if (docsSlug) {
+			return NextResponse.rewrite(
+				new URL(`${DOCS_MARKDOWN_ROUTE}/${docsSlug}`, url.origin),
+			);
+		}
+
 		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
 		if (!markdown) return serve(request);
 		return new NextResponse(markdown.body, {

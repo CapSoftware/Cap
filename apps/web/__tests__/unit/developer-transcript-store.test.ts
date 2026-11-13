@@ -19,6 +19,11 @@ const context = vi.hoisted(() => ({
 	presigned: [] as { key: string; contentLength: number }[],
 	failSigning: false,
 	onDelete: null as null | (() => Promise<void>),
+	scheduleAutoTopUp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	scheduleAutoTopUp: context.scheduleAutoTopUp,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -163,6 +168,7 @@ const fromUrl = (url = URL_A, idempotencyKey?: string, appId = "app-1") =>
 beforeEach(() => {
 	fake().reset();
 	context.ids = 0;
+	context.scheduleAutoTopUp.mockReset();
 	context.speechConfigured = true;
 	context.hosted = true;
 	context.start.mockReset();
@@ -305,6 +311,9 @@ describe("creating a transcript from a URL", () => {
 		});
 		expect(transcripts()).toHaveLength(0);
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
 	});
 
 	it("says how much to add below the minimum balance", async () => {
@@ -953,12 +962,16 @@ describe("starting an uploaded transcript", () => {
 		const id = await created();
 		context.objectSize = 1024;
 		setBalance(0);
+		context.scheduleAutoTopUp.mockReset();
 
 		expect(await startTranscriptUpload("app-1", id)).toMatchObject({
 			ok: false,
 			status: 402,
 		});
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
 	});
 
 	it("can be retried after the job could not be started", async () => {
@@ -1139,10 +1152,49 @@ describe("deleting", () => {
 			"developer/app-1/transcripts/tr-1/result.json",
 		]);
 		expect(await getTranscript("app-1", "tr-1")).toBeNull();
-		expect(await deleteTranscript("app-1", "tr-1")).toMatchObject({
-			ok: false,
-			status: 404,
+	});
+
+	it("answers a repeat delete of a deleted transcript with success and clears its files again", async () => {
+		fake().seed(developerTranscripts, {
+			id: "tr-1",
+			appId: "app-1",
+			status: "complete",
+			sourceType: "upload",
+			text: "secret words",
 		});
+		expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
+		const deletedAt = transcripts()[0]?.deletedAt;
+		context.deleted = [];
+
+		expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
+
+		expect(transcripts()[0]?.deletedAt).toEqual(deletedAt);
+		expect(context.deleted).toEqual([
+			"developer/_uploads/app-1/t-tr-1",
+			"developer/app-1/transcripts/tr-1/audio.mp3",
+			"developer/app-1/transcripts/tr-1/result.json",
+		]);
+	});
+
+	it("still answers 404 for a transcript that never existed, or another app's deleted one", async () => {
+		fake().seed(developerTranscripts, {
+			id: "tr-2",
+			appId: "app-2",
+			status: "complete",
+			sourceType: "upload",
+			text: "other app",
+		});
+		expect(await deleteTranscript("app-2", "tr-2")).toEqual({ ok: true });
+		context.deleted = [];
+
+		for (const id of ["tr-2", "never-existed"]) {
+			expect(await deleteTranscript("app-1", id)).toMatchObject({
+				ok: false,
+				status: 404,
+				code: "transcript_not_found",
+			});
+		}
+		expect(context.deleted).toEqual([]);
 	});
 
 	it("does not delete another app's transcript", async () => {
@@ -1457,5 +1509,34 @@ describe("input validation", () => {
 		expect(isTranscriptIdempotencyKey("has spaces in it")).toBe(false);
 		expect(isTranscriptIdempotencyKey("k".repeat(129))).toBe(false);
 		expect(isTranscriptIdempotencyKey(undefined)).toBe(false);
+	});
+});
+
+describe("deleting a transcript that is still running", () => {
+	it("leaves its files for the run to settle and clean up, and removes them otherwise", async () => {
+		for (const [status, kept] of [
+			["processing", true],
+			["queued", false],
+			["complete", false],
+			["error", false],
+		] as const) {
+			context.deleted = [];
+			const id = `tr-${status}`;
+			fake().seed(developerTranscripts, {
+				id,
+				appId: "app-1",
+				status,
+				sourceType: "upload",
+			});
+
+			expect(await deleteTranscript("app-1", id)).toEqual({ ok: true });
+
+			expect(context.deleted.length > 0).toBe(!kept);
+			expect(
+				fake()
+					.rows(developerTranscripts)
+					.find((row) => row.id === id)?.deletedAt,
+			).toBeInstanceOf(Date);
+		}
 	});
 });

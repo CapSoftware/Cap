@@ -199,6 +199,10 @@ describe("storage rates", () => {
 
 describe("upload admission", () => {
 	const active = { state: "active" as const, pausesAt: null };
+	const pastFirstMonth = (monthlyMicroCredits: number) => ({
+		dailyCharge: { monthlyMicroCredits },
+		firstMonthMicroCredits: 0,
+	});
 
 	it("needs seven days of storage, rounded up, and at least one micro-credit", () => {
 		expect(UPLOAD_ADMISSION_DAYS).toBe(7);
@@ -207,12 +211,54 @@ describe("upload admission", () => {
 		expect(uploadAdmissionMicroCredits(4335)).toBe(1012);
 	});
 
+	it("needs the whole first month of every video still to be charged, plus seven days of the rest", () => {
+		expect(uploadAdmissionMicroCredits(0, 5_600)).toBe(5_600);
+		expect(uploadAdmissionMicroCredits(0, 3 * 5_600)).toBe(16_800);
+		expect(uploadAdmissionMicroCredits(85_000, 5_600)).toBe(25_434);
+		expect(uploadAdmissionMicroCredits(0, 0.4)).toBe(1);
+	});
+
+	it("says what the credit is for when videos are still to be charged their first month", () => {
+		const firstMonthOnly = uploadAdmission({
+			balanceMicroCredits: 5_599,
+			standing: active,
+			lastOwedMicroCredits: 0,
+			storage: {
+				dailyCharge: { monthlyMicroCredits: 0 },
+				firstMonthMicroCredits: 5_600,
+			},
+		});
+		expect(firstMonthOnly).toMatchObject({
+			allowed: false,
+			reason: "insufficient_credits",
+			requiredMicroCredits: 5_600,
+			shortfallMicroCredits: 1,
+		});
+		expect(firstMonthOnly.message).toBe(
+			"Not enough credit to upload. Uploading needs $0.05600, enough for the first month of storage for each video being uploaded or encoded. The balance is $0.05599, so add at least $0.00001.",
+		);
+
+		const both = uploadAdmission({
+			balanceMicroCredits: 0,
+			standing: active,
+			lastOwedMicroCredits: 0,
+			storage: {
+				dailyCharge: { monthlyMicroCredits: 85_000 },
+				firstMonthMicroCredits: 16_800,
+			},
+		});
+		expect(both.requiredMicroCredits).toBe(36_634);
+		expect(both.message).toBe(
+			"Not enough credit to upload. Add at least $0.36634, enough for the first month of storage for each video being uploaded or encoded and 7 days of storage for the videos past their first month.",
+		);
+	});
+
 	it("admits when the balance covers seven days of everything stored", () => {
 		const admission = uploadAdmission({
 			balanceMicroCredits: 19_834,
 			standing: active,
 			lastOwedMicroCredits: 0,
-			usage: { monthlyMicroCredits: 85_000 },
+			storage: pastFirstMonth(85_000),
 		});
 		expect(admission).toMatchObject({
 			allowed: true,
@@ -228,13 +274,13 @@ describe("upload admission", () => {
 			balanceMicroCredits: 19_833,
 			standing: active,
 			lastOwedMicroCredits: 0,
-			usage: { monthlyMicroCredits: 85_000 },
+			storage: pastFirstMonth(85_000),
 		});
 		expect(admission.allowed).toBe(false);
 		expect(admission.reason).toBe("insufficient_credits");
 		expect(admission.shortfallMicroCredits).toBe(1);
 		expect(admission.message).toBe(
-			"Uploading needs $0.19834 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.19833, so add at least $0.00001.",
+			"Not enough credit to upload. Uploading needs $0.19834, enough for 7 days of storage for the videos past their first month. The balance is $0.19833, so add at least $0.00001.",
 		);
 	});
 
@@ -243,12 +289,12 @@ describe("upload admission", () => {
 			balanceMicroCredits: 967,
 			standing: active,
 			lastOwedMicroCredits: 0,
-			usage: { monthlyMicroCredits: 4_675 },
+			storage: pastFirstMonth(4_675),
 		});
 		expect(admission.requiredMicroCredits).toBe(1_091);
 		expect(admission.shortfallMicroCredits).toBe(124);
 		expect(admission.message).toBe(
-			"Uploading needs $0.01091 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.00967, so add at least $0.00124.",
+			"Not enough credit to upload. Uploading needs $0.01091, enough for 7 days of storage for the videos past their first month. The balance is $0.00967, so add at least $0.00124.",
 		);
 	});
 
@@ -257,12 +303,12 @@ describe("upload admission", () => {
 			balanceMicroCredits: 0,
 			standing: active,
 			lastOwedMicroCredits: 0,
-			usage: { monthlyMicroCredits: 0 },
+			storage: pastFirstMonth(0),
 		});
 		expect(admission.allowed).toBe(false);
 		expect(admission.reason).toBe("insufficient_credits");
 		expect(admission.message).toBe(
-			"This app has no credit. Add credits to start uploading.",
+			"Not enough credit to upload. Add credits to start uploading.",
 		);
 	});
 
@@ -272,7 +318,7 @@ describe("upload admission", () => {
 				balanceMicroCredits: 50,
 				standing: { state, pausesAt: new Date("2026-11-18T00:00:00Z") },
 				lastOwedMicroCredits: 144,
-				usage: { monthlyMicroCredits: 4335 },
+				storage: pastFirstMonth(4335),
 			});
 			expect(admission.allowed).toBe(false);
 			expect(admission.reason).toBe("out_of_credit");
@@ -289,7 +335,7 @@ describe("upload admission", () => {
 			balanceMicroCredits: 0,
 			standing: { state: "grace", pausesAt: new Date() },
 			lastOwedMicroCredits: 5000,
-			usage: { monthlyMicroCredits: 300 },
+			storage: pastFirstMonth(300),
 		});
 		expect(admission.requiredMicroCredits).toBe(5000);
 	});
@@ -301,7 +347,7 @@ describe("upload admission", () => {
 				balanceMicroCredits: 0,
 				standing: { state: "grace", pausesAt },
 				lastOwedMicroCredits: 144,
-				usage: { monthlyMicroCredits: 4335 },
+				storage: pastFirstMonth(4335),
 			}),
 		);
 		expect(body).toMatchObject({
@@ -514,5 +560,39 @@ describe("standing", () => {
 			parseStorageCharge({ createdAt: shortSince, metadata: "not json" })
 				.shortSince,
 		).toBe(null);
+	});
+
+	it("keeps a carried first month shortfall in grace until the balance covers what is still unpaid", () => {
+		const carried = parseStorageCharge({
+			createdAt: at("2026-11-12T09:00:00Z"),
+			metadata: {
+				owedMicroCredits: 850,
+				chargedMicroCredits: 850,
+				outstandingMicroCredits: 16_800,
+				shortSince: shortSince.toISOString(),
+				fellShort: false,
+			},
+		});
+
+		expect(carried).toMatchObject({ owedMicroCredits: 16_800, shortSince });
+		expect(
+			resolveStanding({
+				balanceMicroCredits: 50,
+				lastCharge: carried,
+				restored: false,
+				now: at("2026-11-12T09:00:00Z"),
+			}),
+		).toEqual({
+			state: "grace",
+			pausesAt: at("2026-11-18T06:41:00Z"),
+		});
+		expect(
+			resolveStanding({
+				balanceMicroCredits: 16_800,
+				lastCharge: carried,
+				restored: false,
+				now: at("2026-11-12T09:00:00Z"),
+			}).state,
+		).toBe("active");
 	});
 });

@@ -14,7 +14,7 @@ vi.mock("@/lib/rate-limit", () => ({
 
 const state = vi.hoisted(() => ({
 	scopes: [] as string[],
-	apps: [] as { id: string }[],
+	apps: [] as { id: string; appName?: string }[],
 	videos: [] as Record<string, unknown>[],
 	transactions: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
@@ -22,6 +22,21 @@ const state = vi.hoisted(() => ({
 	redrive: vi.fn(async (_videoId: string) => false),
 	users: [] as Record<string, unknown>[],
 	createCheckoutSession: vi.fn(),
+	cancelEncodes: vi.fn(async () => undefined),
+	settleAtDelete: vi.fn(async () => null),
+	settleDeletedApp: vi.fn(async () => undefined),
+	videoUpdates: [] as Record<string, unknown>[],
+	appStamps: [] as unknown[],
+}));
+
+vi.mock("@/lib/developer-video-cancel", () => ({
+	cancelDeveloperVideoEncodes: state.cancelEncodes,
+}));
+
+vi.mock("@/lib/infra-storage-minimum", async (original) => ({
+	...(await original<typeof import("@/lib/infra-storage-minimum")>()),
+	settleFirstMonthAtDelete: state.settleAtDelete,
+	settleFirstMonthsForDeletedApp: state.settleDeletedApp,
 }));
 
 vi.mock("@cap/utils", async (original) => ({
@@ -86,7 +101,18 @@ vi.mock("@cap/database", () => {
 	};
 	const writer = (table: unknown) => {
 		const chain = Object.assign(Promise.resolve([{ affectedRows: 1 }]), {
-			set: () => chain,
+			set: (values: Record<string, unknown>) => {
+				if (table === state.tables.developerVideos) {
+					state.videoUpdates.push(values);
+				}
+				if (table === state.tables.developerApps) {
+					state.appStamps.push(values.deletedAt);
+				}
+				if (table === state.tables.developerApiKeys) {
+					state.appStamps.push(values.revokedAt);
+				}
+				return chain;
+			},
 			where: () => chain,
 			onDuplicateKeyUpdate: () => chain,
 			values: (values: Record<string, unknown>) => {
@@ -144,6 +170,7 @@ describe("developer routes of the agent API", () => {
 		state.tables = {
 			agentApiKeys: schema.agentApiKeys,
 			developerApps: schema.developerApps,
+			developerApiKeys: schema.developerApiKeys,
 			developerVideos: schema.developerVideos,
 			developerCreditTransactions: schema.developerCreditTransactions,
 			agentApiIdempotency: schema.agentApiIdempotency,
@@ -166,6 +193,11 @@ describe("developer routes of the agent API", () => {
 		state.idempotency = null;
 		state.users = [];
 		state.createCheckoutSession.mockReset();
+		state.cancelEncodes.mockClear();
+		state.settleAtDelete.mockClear();
+		state.settleDeletedApp.mockClear();
+		state.videoUpdates = [];
+		state.appStamps = [];
 	});
 
 	const call = async (method: string, path: string, body?: unknown) => {
@@ -248,8 +280,95 @@ describe("developer routes of the agent API", () => {
 		expect([...tested].sort()).toEqual([...declared].sort());
 	});
 
+	it("cancels a deleted video's encode jobs once the delete has committed", async () => {
+		state.apps = [{ id: APP }];
+		state.videos = [{ id: "video0000000001" }];
+
+		const result = await call(
+			"DELETE",
+			`/developer/apps/${APP}/videos/video0000000001`,
+		);
+
+		expect(result.status).toBe(200);
+		expect(state.videoUpdates).toEqual([
+			{ deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+		]);
+		expect(state.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: APP,
+			videoId: "video0000000001",
+		});
+	});
+
+	it("cancels nothing for a video it could not find", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call(
+			"DELETE",
+			`/developer/apps/${APP}/videos/video0000000001`,
+		);
+
+		expect(result.status).toBe(404);
+		expect(state.cancelEncodes).not.toHaveBeenCalled();
+	});
+
+	it("deletes an app's videos with it and cancels their encode jobs", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(200);
+		expect(state.videoUpdates).toEqual([
+			{ deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+		]);
+		const deletedAt = state.videoUpdates[0]?.deletedAt;
+		expect(deletedAt).toBeInstanceOf(Date);
+		expect((deletedAt as Date).getTime() % 1000).toBe(0);
+		expect(state.appStamps).toEqual([deletedAt, deletedAt]);
+		expect(state.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: APP,
+			deletedAt,
+		});
+	});
+
+	it("settles the first month of the videos an app delete stamped, once, after the delete and before the cancel", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(200);
+		const deletedAt = state.videoUpdates[0]?.deletedAt;
+		expect(state.settleDeletedApp).toHaveBeenCalledExactlyOnceWith(
+			APP,
+			deletedAt,
+		);
+		const [settled] = state.settleDeletedApp.mock.invocationCallOrder;
+		const [cancelled] = state.cancelEncodes.mock.invocationCallOrder;
+		expect(settled).toBeLessThan(cancelled ?? 0);
+	});
+
+	it("settles nothing for an app it could not find", async () => {
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(404);
+		expect(state.settleDeletedApp).not.toHaveBeenCalled();
+	});
+
+	it("settles a deleted video's first month before cancelling its encode", async () => {
+		state.apps = [{ id: APP }];
+		state.videos = [{ id: "video0000000001" }];
+
+		await call("DELETE", `/developer/apps/${APP}/videos/video0000000001`);
+
+		expect(state.settleAtDelete).toHaveBeenCalledExactlyOnceWith(
+			"video0000000001",
+		);
+		const [settled] = state.settleAtDelete.mock.invocationCallOrder;
+		const [cancelled] = state.cancelEncodes.mock.invocationCallOrder;
+		expect(settled).toBeLessThan(cancelled ?? 0);
+	});
+
 	it("opens a credit checkout with the console's receipt, tax and payment tag", async () => {
-		state.apps = [{ id: "account-1" }];
+		state.apps = [{ id: "account-1", appName: "Course site" }];
 		state.users = [{ stripeCustomerId: "cus_agent" }];
 		state.createCheckoutSession.mockResolvedValue({
 			url: "https://checkout.stripe.com/agent",
@@ -271,6 +390,7 @@ describe("developer routes of the agent API", () => {
 			...creditCheckoutSessionParams({
 				customerId: "cus_agent",
 				accountId: "account-1",
+				appName: "Course site",
 				amountCents: 2500,
 				receiptEmail: "owner@example.com",
 			}),
@@ -288,9 +408,11 @@ describe("developer routes of the agent API", () => {
 			mode: "payment",
 			invoice_creation: {
 				enabled: true,
-				invoice_data: { description: "Cap Infra credits" },
+				invoice_data: { description: "Cap Infra credits for Course site" },
 			},
+			payment_method_types: ["card"],
 			payment_intent_data: {
+				description: "Cap Infra credits for Course site",
 				receipt_email: "owner@example.com",
 				metadata: { type: "developer_credits", accountId: "account-1" },
 			},
@@ -300,6 +422,39 @@ describe("developer routes of the agent API", () => {
 		});
 		expect(params).not.toHaveProperty("automatic_tax");
 		expect(options.idempotencyKey).toMatch(/:checkout$/);
+	});
+
+	it("opens a $10,000 credit checkout and refuses one cent more", async () => {
+		state.apps = [{ id: "account-1" }];
+		state.users = [{ stripeCustomerId: "cus_agent" }];
+		state.createCheckoutSession.mockResolvedValue({
+			url: "https://checkout.stripe.com/agent",
+		});
+
+		const refused = await call(
+			"POST",
+			`/developer/apps/${APP}/credits/checkout`,
+			{ amountCents: 1_000_001 },
+		);
+		expect(refused.status).toBe(400);
+		expect(refused.body.message).toBe(
+			"Developer credit purchase must be from $5 to $10,000",
+		);
+		expect(state.createCheckoutSession).not.toHaveBeenCalled();
+
+		const opened = await call(
+			"POST",
+			`/developer/apps/${APP}/credits/checkout`,
+			{ amountCents: 1_000_000 },
+		);
+		expect(opened.status).toBe(200);
+		const [params] = state.createCheckoutSession.mock.calls[0] ?? [];
+		expect(params.metadata.amountCents).toBe("1000000");
+		expect(params.line_items[0].price_data.unit_amount).toBe(1_000_000);
+		expect(params.payment_method_types).toEqual(["card"]);
+		expect(params.payment_method_options).toEqual({
+			card: { request_three_d_secure: "any" },
+		});
 	});
 
 	it("says what to do when the developer scope is missing", async () => {
@@ -346,6 +501,7 @@ describe("developer routes of the agent API", () => {
 			},
 		],
 		transcriptionStatus: null,
+		takenDown: false,
 		processing: {
 			hls: { state: "complete" },
 			mp4: { state: "complete" },
@@ -380,6 +536,7 @@ describe("developer routes of the agent API", () => {
 			maxResolutionTier: "1080p",
 			renditions: videoRow().renditions,
 			transcriptionStatus: null,
+			takenDown: false,
 			hlsUrl:
 				"http://localhost/api/developer/playback/playback-id-000000000001/master.m3u8",
 			mp4Url:

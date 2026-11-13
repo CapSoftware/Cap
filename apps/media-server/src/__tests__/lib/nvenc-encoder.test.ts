@@ -386,6 +386,27 @@ describe("nvenc fallback", () => {
 });
 
 describe("process video args", () => {
+	test("a process encode is held to the length it is given, and only then", () => {
+		const source = {
+			duration: 10,
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			videoCodec: "h264",
+			audioCodec: "aac",
+			audioChannels: 2,
+			sampleRate: 48000,
+			bitrate: 1_000_000,
+			fileSize: 1_000_000,
+		};
+		const capped = buildProcessVideoArgs(
+			processArgs(source, { maxOutputSeconds: 12 }),
+		);
+		expect(capped[capped.indexOf("-t") + 1]).toBe("12");
+		expect(capped.indexOf("-t")).toBeGreaterThan(capped.lastIndexOf("-i"));
+		expect(buildProcessVideoArgs(processArgs(source))).not.toContain("-t");
+	});
+
 	test("keeps the default libx264 args unchanged", () => {
 		const source = metadata(3024, 1964, "h264");
 		expect(buildProcessVideoArgs(processArgs(source))).toEqual([

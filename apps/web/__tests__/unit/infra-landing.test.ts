@@ -41,6 +41,7 @@ import { getDocBySlug } from "@/utils/docs";
 
 const rest = getDocBySlug("api/rest-api")?.content ?? "";
 const billing = getDocBySlug("api/billing")?.content ?? "";
+const getStarted = getDocBySlug("api/get-started")?.content ?? "";
 
 const PAGE_DIR = path.join(process.cwd(), "components/pages/infra");
 
@@ -109,10 +110,6 @@ describe("the Cap Infra landing page", () => {
 		expect(priced[0]?.rates).toEqual(
 			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 		);
-		expect(
-			content.PRICE_ROWS.find((row) => row.meter === "Speech to text")?.price,
-		).toBe(`$${INFRA_SPEECH_DOLLARS_PER_HOUR.toFixed(2)}`);
-
 		for (const tier of INFRA_RESOLUTION_TIERS) {
 			const price = `$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`;
 			expect(billing).toContain(`${price} per 1,000 minutes per month`);
@@ -131,7 +128,7 @@ describe("the Cap Infra landing page", () => {
 		);
 		expect(
 			content.PRICE_ROWS.filter((row) => row.unit).map((row) => row.meter),
-		).toEqual(["Storage", "Speech to text"]);
+		).toEqual(["Storage"]);
 
 		const text = [
 			content.infraSeo.description,
@@ -146,18 +143,35 @@ describe("the Cap Infra landing page", () => {
 		expect(text).not.toContain(String.fromCodePoint(0x2014));
 	});
 
-	it("asks for access while Cap Infra is in preview", async () => {
+	it("states the first month of storage in the words the docs use", async () => {
 		const content = await load("true");
 
-		expect(content.OPEN_ACCESS).toBe(false);
-		expect(content.START.label).toBe("Request access");
-		expect(content.START.href).toBe(
-			"mailto:hello@cap.so?subject=Cap%20Infra%20access",
+		expect(billing).toContain(content.STORAGE_RULE);
+		expect(getStarted).toContain(content.STORAGE_RULE);
+		expect(
+			content.infraFaqs.find(
+				(faq) => faq.question === "What does Cap Infra charge for?",
+			)?.answer,
+		).toBe(
+			`Two things: stored video and speech to text. ${content.STORAGE_RULE}`,
 		);
-		expect(content.PREVIEW_NOTE).toBe(
-			"Cap Infra is in preview. Email hello@cap.so for access.",
-		);
-		expect(content.infraFaqs[0]?.answer).toBe(content.PREVIEW_NOTE);
+		expect(
+			pageSources().find((source) => source.file === "Pricing.tsx")?.text,
+		).toContain("{STORAGE_RULE}");
+	});
+
+	it("lets anyone start building on Cap's own deployment", async () => {
+		const content = await load("true");
+
+		expect(content.OPEN_ACCESS).toBe(true);
+		expect(content.START).toEqual({
+			label: "Start building",
+			href: "/dashboard/infra",
+		});
+		expect(content.PREVIEW_NOTE).toBeNull();
+		expect(
+			content.infraFaqs.some((faq) => faq.answer.includes("preview")),
+		).toBe(false);
 	});
 
 	it("opens the console where anyone can use it", async () => {
@@ -227,8 +241,9 @@ describe("the rendered page", () => {
 		const embed = content.PLAYER.find((entry) => entry.id === "embed")?.code;
 		expect(embed).toContain('loading="lazy"');
 		expect(text).toContain(embed);
-		expect(text).toContain("Request access");
-		expect(text).not.toContain("Start building");
+		expect(text).toContain("Start building");
+		expect(text).not.toContain("Request access");
+		expect(text).not.toContain("in preview");
 		for (const image of page.querySelectorAll("img")) {
 			expect(image.hasAttribute("alt")).toBe(true);
 			const eager =
@@ -236,6 +251,30 @@ describe("the rendered page", () => {
 				(image.getAttribute("src") ?? "").includes("plain-lit");
 			if (!eager) expect(image.getAttribute("loading")).toBe("lazy");
 		}
+	});
+
+	it("prices speech to text on its own row, outside the resolution table", async () => {
+		await load("true");
+		const { Pricing } = await import("@/components/pages/infra/Pricing");
+		const page = parse(renderToStaticMarkup(React.createElement(Pricing)));
+		const speech = `$${INFRA_SPEECH_DOLLARS_PER_HOUR.toFixed(2)}`;
+		const table = page.querySelector("table");
+
+		expect(table?.querySelector("caption")?.textContent).toBe(
+			"Cap Infra prices by resolution",
+		);
+		expect(table?.textContent).not.toContain("Speech to text");
+		expect(table?.textContent).not.toContain(speech);
+
+		const row = [...page.querySelectorAll("dl")].find(
+			(list) =>
+				list.querySelector("dt")?.textContent?.trim() === "Speech to text",
+		);
+		expect(row).toBeDefined();
+		expect(row?.closest("table")).toBeNull();
+		expect(row?.querySelector("dd")?.textContent).toBe(
+			`${speech} per audio hour`,
+		);
 	});
 
 	it("says a month of storage only where billing would agree", async () => {
@@ -354,7 +393,7 @@ describe("the agent section", () => {
 		expect(text).toContain(rest.join("\n").trim());
 		expect(text).toContain(CAP_INFRA_POINTER_PROMPT);
 		expect(text).toContain("Copy prompt");
-		expect(text).toContain("Cap Infra is in preview.");
+		expect(text).not.toContain("Cap Infra is in preview.");
 		expect(text).not.toMatch(CLI);
 		const hrefs = [...page.querySelectorAll("a")].map((link) =>
 			link.getAttribute("href"),

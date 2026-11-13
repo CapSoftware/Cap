@@ -474,8 +474,10 @@ describe("developer SDK multipart upload", () => {
 		const response = await post("/abort", { uploadId: "upload-1" });
 
 		expect(response.status).toBe(409);
+		expect(response.headers.get("Retry-After")).toBeNull();
 		await expect(response.json()).resolves.toMatchObject({
 			code: "completion_in_progress",
+			hint: "Do not repeat the abort. Wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 		});
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});
@@ -677,17 +679,19 @@ describe("client mistakes on complete and abort", () => {
 		},
 	);
 
-	it("answers 404 when aborting an upload that does not exist", async () => {
+	it("answers a repeated abort with success, whether storage accepts it again or no longer knows the upload", async () => {
 		mocks.video = uploaded;
+
+		const first = await post("/abort", { uploadId: "upload-1" });
+		const repeated = await post("/abort", { uploadId: "upload-1" });
 		mocks.abort.mockImplementation(fails("NoSuchUpload", 404));
+		const gone = await post("/abort", { uploadId: "upload-1" });
 
-		const response = await post("/abort", { uploadId: "not-an-upload" });
-
-		expect(await refusal(response)).toMatchObject({
-			status: 404,
-			code: "upload_not_found",
-			hint: expect.stringContaining("Nothing was aborted"),
-		});
+		for (const response of [first, repeated, gone]) {
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+		}
+		expect(mocks.abort).toHaveBeenCalledTimes(3);
 		expect(console.error).not.toHaveBeenCalled();
 	});
 
