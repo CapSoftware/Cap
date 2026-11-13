@@ -47,6 +47,13 @@ function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("timed out");
 }
 
+// A source with no video stream is a problem with the input, not the server.
+// The body keeps the same error and details as before, so callers that read
+// them see no change; only the status and code say it is not worth retrying.
+function isNoVideoStreamError(err: unknown): boolean {
+	return err instanceof Error && err.message === "No video stream found";
+}
+
 function drainingResponse(c: Context) {
 	c.header("Retry-After", DRAIN_RETRY_AFTER_SECONDS.toString());
 	return c.json(
@@ -116,6 +123,17 @@ audio.post("/check", async (c) => {
 					details: err instanceof Error ? err.message : String(err),
 				},
 				504,
+			);
+		}
+
+		if (isNoVideoStreamError(err)) {
+			return c.json(
+				{
+					error: "Failed to check audio track",
+					code: "NO_VIDEO_STREAM",
+					details: (err as Error).message,
+				},
+				422,
 			);
 		}
 
@@ -217,6 +235,17 @@ audio.post("/extract", async (c) => {
 					details: err instanceof Error ? err.message : String(err),
 				},
 				504,
+			);
+		}
+
+		if (isNoVideoStreamError(err)) {
+			return c.json(
+				{
+					error: "Failed to extract audio",
+					code: "NO_VIDEO_STREAM",
+					details: (err as Error).message,
+				},
+				422,
 			);
 		}
 
