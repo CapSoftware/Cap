@@ -30,6 +30,7 @@ import {
 import {
 	claimTranscriptRun,
 	failTranscriptRun,
+	runFinishedTranscript,
 	transcriptAwaitsSpeech,
 } from "@/lib/developer-transcript-run";
 import {
@@ -197,6 +198,9 @@ export async function developerTranscribeWorkflow(
 		if (fast.resume === "unclaimed") {
 			return { success: true, message: "Transcript is not waiting to run" };
 		}
+		if (fast.resume === "finalize") {
+			return finishTranscript(transcriptId, fast.settlement);
+		}
 		if (
 			fast.resume === "claim" &&
 			!(await claimTranscript(transcriptId, runId))
@@ -275,19 +279,12 @@ export async function developerTranscribeWorkflow(
 			return { success: false, message: transcription.message };
 		}
 
-		const settlement =
+		return finishTranscript(
+			transcriptId,
 			fast.resume === "done"
 				? fast.settlement
-				: await settleTranscriptStep(transcriptId, transcription);
-		await cleanupTranscriptObjects(transcriptId, settlement !== "complete");
-		if (settlement === "complete") await writeVideoCaptions(transcriptId);
-		return {
-			success: settlement === "complete",
-			message:
-				settlement === "complete"
-					? "Transcript completed"
-					: `Transcript was not completed: ${settlement}`,
-		};
+				: await settleTranscriptStep(transcriptId, transcription),
+		);
 	} catch (error) {
 		await failTranscriptStep(
 			transcriptId,
@@ -297,6 +294,18 @@ export async function developerTranscribeWorkflow(
 		);
 		throw error;
 	}
+}
+
+async function finishTranscript(transcriptId: string, settlement: Settlement) {
+	await cleanupTranscriptObjects(transcriptId, settlement !== "complete");
+	if (settlement === "complete") await writeVideoCaptions(transcriptId);
+	return {
+		success: settlement === "complete",
+		message:
+			settlement === "complete"
+				? "Transcript completed"
+				: `Transcript was not completed: ${settlement}`,
+	};
 }
 
 async function loadTranscript(transcriptId: string) {
@@ -330,6 +339,7 @@ export const FAST_PATH_BUDGET_MS = 2 * 60 * 1000;
 
 type FastPath =
 	| { resume: "unclaimed" }
+	| { resume: "finalize"; settlement: Settlement }
 	| { resume: "claim" }
 	| { resume: "prepare"; source: StepFailure | HoldWait | null }
 	| { resume: "extract"; audio: StepFailure | HoldRaise | null }
@@ -358,7 +368,13 @@ export async function runTranscriptFastPath(
 	const overBudget = () => performance.now() - startedAt > FAST_PATH_BUDGET_MS;
 	try {
 		if (!(await claimTranscriptRun(transcriptId, runId))) {
-			return { resume: "unclaimed" };
+			const finished = await runFinishedTranscript(transcriptId, runId);
+			if (finished === "complete") {
+				return { resume: "finalize", settlement: "complete" };
+			}
+			return finished === "ended"
+				? { resume: "finalize", settlement: "skipped" }
+				: { resume: "unclaimed" };
 		}
 	} catch (error) {
 		handOff(transcriptId, "claim", error);
