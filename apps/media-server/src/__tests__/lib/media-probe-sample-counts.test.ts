@@ -155,6 +155,54 @@ describe.skipIf(!patched)("sample counts a file only declares", () => {
 		expect(spans.video).toBeCloseTo(1, 1);
 	});
 
+	// The audio track's chunk table has two runs. Moving the second run's first
+	// chunk far out claims that many chunks for the first run, while the file
+	// only lists a handful.
+	function withChunkGap(gap: number, name: string) {
+		const data = Buffer.from(
+			readFileSync(join(FIXTURES_DIR, "test-bframes-64-pcm.mov")),
+		);
+		const chunkTable = data.lastIndexOf("stsc", undefined, "latin1");
+		expect(data.readUInt32BE(chunkTable + 8)).toBe(2);
+		data.writeUInt32BE(1, chunkTable + 12);
+		data.writeUInt32BE(1, chunkTable + 16);
+		data.writeUInt32BE(gap + 1, chunkTable + 24);
+		data.writeUInt32BE(1, chunkTable + 28);
+		const path = join(dir, name);
+		writeFileSync(path, data);
+		return path;
+	}
+
+	// The parser walks a sound track's chunk runs one chunk at a time without
+	// yielding, so a timeout cannot stop it. The small gap fails in well under a
+	// second when the runs are not bounded; the largest gap only runs once that
+	// has passed, so a missing bound cannot hang the image build.
+	let chunkRunsBounded = false;
+
+	test("a sound track's chunk runs end at the last chunk the file lists", async () => {
+		const started = performance.now();
+		const spans = await probeTrackSpans(
+			withChunkGap(20_000_000, "pcm-chunk-gap-20m.mov"),
+		);
+		expect(performance.now() - started).toBeLessThan(200);
+		expect(spans.video).toBeCloseTo(1, 1);
+		expect(spans.audio as number).toBeLessThan(2);
+		chunkRunsBounded = true;
+	});
+
+	test("a sound track claiming the largest possible chunk gap probes at once", async () => {
+		expect(chunkRunsBounded).toBe(true);
+		const path = withChunkGap(MAX - 1, "pcm-chunk-gap-max.mov");
+		const result = await probeWithin(path);
+		const spans = await probeTrackSpans(path);
+		expect(result.error).toBeNull();
+		expect(result.metadata?.width).toBe(64);
+		expect(result.metadata?.duration).toBeCloseTo(1.1, 1);
+		expect(result.grownMb).toBeLessThan(80);
+		expect(result.ms).toBeLessThan(500);
+		expect(spans.audio as number).toBeLessThan(2);
+	});
+
 	test("a fragment run claiming more samples than a fragment can hold is refused at once", async () => {
 		const at = FRAGMENTED.indexOf("trun", 0, "latin1");
 		expect(at).toBeGreaterThan(0);
