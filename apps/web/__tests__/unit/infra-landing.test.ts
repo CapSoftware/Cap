@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { JSDOM } from "jsdom";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,14 +52,7 @@ const pageSources = () =>
 			text: fs.readFileSync(path.join(PAGE_DIR, file), "utf8"),
 		}));
 
-const visibleText = (html: string) =>
-	html
-		.replace(/<[^>]+>/g, "")
-		.replace(/&#x27;/g, "'")
-		.replace(/&quot;/g, '"')
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&amp;/g, "&");
+const parse = (html: string) => new JSDOM(html).window.document;
 
 const load = async (isCap: string | undefined) => {
 	env.NEXT_PUBLIC_IS_CAP = isCap;
@@ -206,8 +200,11 @@ describe("the rendered page", () => {
 		const { InfraPage } = await import("@/components/pages/infra/InfraPage");
 		const html = renderToStaticMarkup(React.createElement(InfraPage));
 
-		const levels = [...html.matchAll(/<h([1-6])[\s>]/g)].map((match) =>
-			Number(match[1]),
+		const page = parse(html);
+		const text = page.body.textContent ?? "";
+
+		const levels = [...page.querySelectorAll("h1,h2,h3,h4,h5,h6")].map(
+			(heading) => Number(heading.tagName.slice(1)),
 		);
 		expect(levels.filter((level) => level === 1)).toHaveLength(1);
 		expect(levels[0]).toBe(1);
@@ -215,29 +212,46 @@ describe("the rendered page", () => {
 			expect(level - (levels[index - 1] ?? 1)).toBeLessThanOrEqual(1);
 		}
 
-		const ids = new Set(
-			[...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]),
-		);
-		const anchors = [...html.matchAll(/href="#([^"]+)"/g)].map(
-			(match) => match[1],
+		const anchors = [...page.querySelectorAll('a[href^="#"]')].map(
+			(link) => link.getAttribute("href")?.slice(1) ?? "",
 		);
 		expect(anchors.length).toBeGreaterThan(0);
-		for (const anchor of anchors) expect(ids, anchor).toContain(anchor);
+		for (const anchor of anchors) {
+			expect(page.getElementById(anchor), anchor).not.toBeNull();
+		}
 		for (const anchor of Object.values(content.ANCHORS)) {
-			expect(ids, anchor).toContain(anchor);
+			expect(page.getElementById(anchor), anchor).not.toBeNull();
 		}
 
 		const embed = content.PLAYER.find((entry) => entry.id === "embed")?.code;
 		expect(embed).toContain('loading="lazy"');
-		expect(visibleText(html)).toContain(embed);
-		expect(html).toContain("Request access");
-		expect(html).not.toContain("Start building");
-		expect(html).not.toMatch(/<img(?![^>]*\salt=)[^>]*>/);
-		for (const image of html.match(/<img[^>]*>/g) ?? []) {
-			if (!image.includes("fetchPriority") && !image.includes("plain-lit")) {
-				expect(image, image).toContain('loading="lazy"');
-			}
+		expect(text).toContain(embed);
+		expect(text).toContain("Request access");
+		expect(text).not.toContain("Start building");
+		for (const image of page.querySelectorAll("img")) {
+			expect(image.hasAttribute("alt")).toBe(true);
+			const eager =
+				image.hasAttribute("fetchpriority") ||
+				(image.getAttribute("src") ?? "").includes("plain-lit");
+			if (!eager) expect(image.getAttribute("loading")).toBe("lazy");
 		}
+	});
+
+	it("says a month of storage only where billing would agree", async () => {
+		const content = await load("true");
+		const stored = content.PRO_CREDIT_COVERS[0];
+		const days31 =
+			(stored.amount / 1000) *
+			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH["1080p"] *
+			(31 / 30);
+
+		expect(stored.unit).toBe("minutes stored for 30 days");
+		expect(
+			(stored.amount / 1000) *
+				INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH["1080p"],
+		).toBeLessThanOrEqual(PRO_MONTHLY_CREDIT_DOLLARS);
+		expect(days31).toBeGreaterThan(PRO_MONTHLY_CREDIT_DOLLARS);
+		expect(billing).toContain("A month is counted as 30 days");
 	});
 });
 
@@ -266,21 +280,25 @@ describe("the agent section", () => {
 		const { CAP_INFRA_AGENT_PROMPT: prompt, CAP_INFRA_POINTER_PROMPT } =
 			await import("@/data/infra-agent-prompt");
 		const html = renderToStaticMarkup(React.createElement(Agent));
-		const text = visibleText(html);
+		const page = parse(html);
+		const text = page.body.textContent ?? "";
 		const [opening = "", ...rest] = prompt.split("\n");
 
 		expect(opening).toBe(
 			"Set up Cap Infra in this project so it can upload and play video.",
 		);
-		expect(html).toContain('id="agents"');
+		expect(page.getElementById("agents")).not.toBeNull();
 		expect(text).toContain(opening);
 		expect(text).toContain(rest.join("\n").trim());
 		expect(text).toContain(CAP_INFRA_POINTER_PROMPT);
 		expect(text).toContain("Copy prompt");
 		expect(text).toContain("Cap Infra is in preview.");
 		expect(text).not.toMatch(CLI);
-		expect(html).toContain('href="/docs/api/rest-api"');
-		expect(html).not.toContain('href="/docs/agents"');
+		const hrefs = [...page.querySelectorAll("a")].map((link) =>
+			link.getAttribute("href"),
+		);
+		expect(hrefs).toContain("/docs/api/rest-api");
+		expect(hrefs).not.toContain("/docs/agents");
 	});
 
 	it("promises only what the prompt asks the agent to do", async () => {
@@ -322,6 +340,11 @@ describe("the calculator's number field", () => {
 		});
 		expect(parseAmount("", 100)).toEqual({ draft: "", value: 0 });
 		expect(parseAmount("abc", 100)).toEqual({ draft: "", value: 0 });
-		expect(parseAmount("250", 100)).toEqual({ draft: "250", value: 100 });
+		expect(parseAmount("100", 100)).toEqual({ draft: "100", value: 100 });
+		expect(parseAmount("250", 100)).toEqual({ draft: "100", value: 100 });
+		expect(parseAmount("200000", 100_000)).toEqual({
+			draft: "100000",
+			value: 100_000,
+		});
 	});
 });
