@@ -303,6 +303,33 @@ function withLimit(value: unknown) {
 	};
 }
 
+const UNFINISHED_LOOM_MESSAGE =
+	"Loom has no video file for this recording, so it can't be imported. The recording may not have finished uploading to Loom.";
+
+function mockUnfinishedLoomRecording() {
+	vi.mocked(fetch).mockImplementation(async (input) => {
+		const url = typeof input === "string" ? input : input.toString();
+		if (url === "https://www.loom.com/graphql") {
+			return Response.json({
+				data: {
+					getVideo: {
+						id: "loom-abc1234567",
+						name: "Unfinished recording",
+						createdAt: new Date(
+							Date.now() - 3 * 24 * 60 * 60 * 1000,
+						).toISOString(),
+						downloadable: true,
+						download_enabled: true,
+						nullableRawCdnUrl: null,
+						__typename: "RegularUserVideo",
+					},
+				},
+			});
+		}
+		return new Response("Conflict", { status: 409 });
+	});
+}
+
 describe("importFromLoom", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -573,6 +600,18 @@ describe("importFromLoom", () => {
 			errorCode: "loom_temporarily_unavailable",
 			retryAfterMs: 90_000,
 		});
+	});
+
+	it("reports a Loom recording with no source file as a permanent failure", async () => {
+		mockUnfinishedLoomRecording();
+
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo(
+			"https://www.loom.com/share/loom-abc1234567",
+		);
+
+		expect(result).toEqual({ success: false, error: UNFINISHED_LOOM_MESSAGE });
 	});
 
 	it("returns streaming Loom URLs for browser conversion instead of proxying", async () => {
@@ -1291,6 +1330,43 @@ describe("importFromLoom", () => {
 				errorCode: "loom_temporarily_unavailable",
 			},
 		]);
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it("does not mark CSV rows for a Loom recording with no source file as retryable", async () => {
+		whereMock.mockImplementation((conditions: unknown) => {
+			if (JSON.stringify(conditions).includes("sourceId")) {
+				return Promise.resolve([]);
+			}
+
+			return withLimit([{ userId: "member-123", email: "member@example.com" }]);
+		});
+		mockUnfinishedLoomRecording();
+
+		const { importFromLoomCsv } = await import("@/actions/loom");
+
+		const result = await importFromLoomCsv({
+			orgId: "org-1" as never,
+			rows: [
+				{
+					rowNumber: 2,
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					userEmail: "member@example.com",
+				},
+			],
+		});
+
+		expect(result.results).toStrictEqual([
+			{
+				rowNumber: 2,
+				userEmail: "member@example.com",
+				spaceName: undefined,
+				success: false,
+				videoId: undefined,
+				error: UNFINISHED_LOOM_MESSAGE,
+			},
+		]);
+		expect(result.results[0]).not.toHaveProperty("errorCode");
 		expect(startMock).not.toHaveBeenCalled();
 	});
 

@@ -11,11 +11,13 @@
 //! them and every switch goes through [`EditorWindow::set_panel_tab`].
 
 use gpui::{
-    AnyElement, Context, CursorStyle, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, SharedString, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    AnyElement, AnyWindowHandle, Context, CursorStyle, Div, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString, StyleRefinement, Styled,
+    Window, div, prelude::FluentBuilder, px, svg,
 };
 
+use crate::editor_edits::Selection;
+use crate::editor_timeline::TrackKind;
 use crate::editor_window::{EditorWindow, SIDEBAR_TAB_BAR_HEIGHT, SIDEBAR_WIDTH};
 use crate::i18n::tr;
 use crate::theme::Theme;
@@ -88,10 +90,13 @@ pub(crate) struct PanelState {
     pub(crate) width: f32,
     /// `(pointer x, width)` when the drag started.
     pub(crate) resize: Option<(f32, f32)>,
+    /// The editor's own window, for the tab switch a selection asks for from
+    /// a path that was handed no window.
+    window: AnyWindowHandle,
 }
 
 impl PanelState {
-    pub(crate) fn load() -> Self {
+    pub(crate) fn load(window: AnyWindowHandle) -> Self {
         let width = crate::store::store_section(STORE_SECTION)
             .get(WIDTH_KEY)
             .and_then(serde_json::Value::as_f64)
@@ -103,6 +108,7 @@ impl PanelState {
         Self {
             width,
             resize: None,
+            window,
         }
     }
 
@@ -184,7 +190,8 @@ pub(crate) fn panel_header(
 }
 
 /// The one empty state the panel's tabs share: a quiet icon, a title, a line
-/// of help. The caller adds whatever action belongs under it.
+/// of help (left out when empty). The caller adds whatever action belongs
+/// under it.
 pub(crate) fn panel_empty_state(
     theme: &Theme,
     icon: &'static str,
@@ -192,6 +199,7 @@ pub(crate) fn panel_empty_state(
     description: impl Into<SharedString>,
 ) -> Div {
     let editor = theme.editor;
+    let description = description.into();
     div()
         .flex_1()
         .min_h_0()
@@ -216,15 +224,17 @@ pub(crate) fn panel_empty_state(
                 .text_color(Hsla::from(editor.text_1))
                 .child(title.into()),
         )
-        .child(
-            div()
-                .max_w(px(280.))
-                .text_size(px(12.))
-                .line_height(px(18.))
-                .text_center()
-                .text_color(Hsla::from(editor.text_2))
-                .child(description.into()),
-        )
+        .when(!description.is_empty(), |empty| {
+            empty.child(
+                div()
+                    .max_w(px(280.))
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_center()
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(description),
+            )
+        })
 }
 
 impl EditorWindow {
@@ -248,8 +258,9 @@ impl EditorWindow {
 
     /// [`Self::set_panel_tab`] without the readiness gate. Leaving Clips runs
     /// its own close (a rename commits, a pending editor recording is
-    /// cancelled) and clears the timeline selection, as its toggle always did;
-    /// leaving Transcript hands focus back to the window.
+    /// cancelled) and clears the clip selection, as its toggle always did, but
+    /// keeps a segment whose settings Style is about to show; leaving
+    /// Transcript hands focus back to the window.
     pub(crate) fn switch_panel_tab(
         &mut self,
         tab: PanelTab,
@@ -262,7 +273,9 @@ impl EditorWindow {
         }
         match current {
             PanelTab::Clips => {
-                self.set_selection(None, cx);
+                if self.sidebar_selection().is_none() {
+                    self.set_selection(None, cx);
+                }
                 self.close_clips(window, cx);
             }
             PanelTab::Transcript => self.close_transcript_panel(window, cx),
@@ -278,6 +291,41 @@ impl EditorWindow {
         }
         tracing::debug!(from = ?current, to = ?tab, "editor panel tab");
         cx.notify();
+    }
+
+    /// A segment's settings live on the Style tab and nowhere else, so a
+    /// segment arriving in the selection brings Style forward. It runs on
+    /// every such selection, changed or not, so clicking a segment that is
+    /// already selected still reveals its settings. Clips are left where they
+    /// are, as [`EditorWindow::sidebar_selection`] leaves them out of the
+    /// sidebar.
+    ///
+    /// `set_selection` is handed no window and the switch moves focus, so it
+    /// runs as the current update unwinds, ahead of the next frame.
+    pub(crate) fn follow_selection_to_style(
+        &mut self,
+        selection: Option<&Selection>,
+        cx: &mut Context<Self>,
+    ) {
+        let segment = selection.is_some_and(|selection| selection.track != TrackKind::Clip);
+        if !segment || self.panel_tab() == PanelTab::Style {
+            return;
+        }
+        let handle = self.panel.window;
+        let editor = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    if let Some(editor) = editor.upgrade() {
+                        editor.update(cx, |this, cx| {
+                            if this.sidebar_selection().is_some() {
+                                this.set_panel_tab(PanelTab::Style, window, cx);
+                            }
+                        });
+                    }
+                })
+                .ok();
+        });
     }
 
     /// Escape with nothing else to dismiss: back to Style.

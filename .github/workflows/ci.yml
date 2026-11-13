@@ -22,7 +22,9 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
+      # apps/cli is in the root workspace only; the GPUI app is its own
+      # workspace and never builds it, so CLI-only changes skip the app jobs.
+      gpui: ${{ steps.filter.outputs.rust-without-cli == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
       ios: ${{ steps.filter.outputs.ios }}
     steps:
@@ -46,8 +48,20 @@ jobs:
               - 'scripts/setup*'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            rust-without-cli:
+              - '.cargo/**'
+              - '.github/actions/install-desktop-deps/**'
+              - '.github/actions/setup-rust-cache/**'
+              - '.github/workflows/ci.yml'
+              - 'crates/**'
+              - 'vendor/**'
+              - 'scripts/diagnostic-build.rs'
+              - 'scripts/setup*'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             gpui:
               - '.gitattributes'
+              - 'scripts/setup.js'
               - 'apps/desktop-gpui/**'
               - 'apps/media-server/src/__tests__/fixtures/**'
               - 'scripts/build-desktop-binaries*'
@@ -101,90 +115,23 @@ jobs:
           bun test apps/render-farm
           bun run --cwd apps/render-farm typecheck
 
-      - name: Test web React compatibility
-        run: >-
-          bun run --cwd apps/web test
-          __tests__/unit/add-videos-dialog-retry.test.ts
-          __tests__/unit/analytics-track-route.test.ts
-          __tests__/unit/caps-analytics-round-trips.test.ts
-          __tests__/unit/caps-keyboard.test.ts
-          __tests__/unit/caption-translation-ownership.test.ts
-          __tests__/unit/checkout-request-limits.test.ts
-          __tests__/unit/clock-hours.test.ts
-          __tests__/unit/comment-composer-composition.test.ts
-          __tests__/unit/currency-hook.test.ts
-          __tests__/unit/dashboard-analytics-cap-access.test.ts
-          __tests__/unit/dashboard-analytics-membership.test.ts
-          __tests__/unit/dashboard-analytics-space-access.test.ts
-          __tests__/unit/desktop-subscribe-route.test.ts
-          __tests__/unit/detect-platform.test.ts
-          __tests__/unit/embed-page-round-trips.test.ts
-          __tests__/unit/embed-video-playback-chrome.test.ts
-          __tests__/unit/first-view-email.test.ts
-          __tests__/unit/folder-delete.test.ts
-          __tests__/unit/folder-videos.test.ts
-          __tests__/unit/generate-ai-duration.test.ts
-          __tests__/unit/homepage-demo-accessibility.test.ts
-          __tests__/unit/invite-decline-pro-seat.test.ts
-          __tests__/unit/invite-decline.test.ts
-          __tests__/unit/linkified-text.test.ts
-          __tests__/unit/loom-import-ui.test.ts
-          __tests__/unit/messenger-message-limits.test.ts
-          __tests__/unit/messenger-poll-ordering.test.ts
-          __tests__/unit/media-comment-playback-cleanup.test.ts
-          __tests__/unit/media-client.test.ts
-          __tests__/unit/media-format-converter-selection.test.ts
-          __tests__/unit/media-format-converter.test.ts
-          __tests__/unit/gif-video-errors.test.ts
-          __tests__/unit/media-player-store-refs.test.ts
-          __tests__/unit/mobile-cap-view-notification.test.ts
-          __tests__/unit/mobile-caps-list.test.ts
-          __tests__/unit/mobile-loom-import.test.ts
-          __tests__/unit/mobile-organization-analytics.test.ts
-          __tests__/unit/notification-read-state.test.ts
-          __tests__/unit/organization-preferences-switch.test.ts
-          __tests__/unit/organization-preferences-target.test.ts
-          __tests__/unit/organization-settings-ownership.test.ts
-          __tests__/unit/playback-store.test.ts
-          __tests__/unit/pro-checkout-session.test.ts
-          __tests__/unit/pro-checkout-webhook.test.ts
-          __tests__/unit/referral-checkout.test.ts
-          __tests__/unit/remove-organization-member.test.ts
-          __tests__/unit/reply-notification.test.ts
-          __tests__/unit/seo-demo-videos.test.ts
-          __tests__/unit/share-comments-rendering.test.ts
-          __tests__/unit/share-page-round-trips.test.ts
-          __tests__/unit/share-transcript-rendering.test.ts
-          __tests__/unit/share-video-quota-loading.test.ts
-          __tests__/unit/sdk-recorder-hook.test.ts
-          __tests__/unit/signed-baa-card.test.ts
-          __tests__/unit/sonner-theme.test.ts
-          __tests__/unit/space-folder-page-access.test.ts
-          __tests__/unit/space-page-round-trips.test.ts
-          __tests__/unit/speed-controller-metadata.test.ts
-          __tests__/unit/speed-controller-playback-failure.test.ts
-          __tests__/unit/speed-controller.test.ts
-          __tests__/unit/subscribe-checkout.test.ts
-          __tests__/unit/summary-chapters.test.ts
-          __tests__/unit/summary-editor.test.ts
-          __tests__/unit/sso-login-pages.test.ts
-          __tests__/unit/timeline-paused-window.test.ts
-          __tests__/unit/toggle-pro-seat.test.ts
-          __tests__/unit/transcript-arrow-text.test.ts
-          __tests__/unit/transcript-hours.test.ts
-          __tests__/unit/transcript-numbers.test.ts
-          __tests__/unit/translate-transcript-once.test.ts
-          __tests__/unit/trimming-tool-audio.test.ts
-          __tests__/unit/update-seat-quantity.test.ts
-          __tests__/unit/video-ai-route-retry.test.ts
-          __tests__/unit/video-analytics-access.test.ts
-          __tests__/unit/video-analytics-bulk.test.ts
-          __tests__/unit/video-create-atomicity.test.ts
-          __tests__/unit/video-download-permissions.test.ts
-          __tests__/unit/voice-note-playback.test.ts
-
       - name: Typecheck
         run: bun run typecheck
+
+  web-tests:
+    name: Web tests
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - run: bun run --cwd apps/web next typegen
+
+      # The whole web unit suite, about a minute on this runner.
+      - name: Test web
+        run: bun run --cwd apps/web test __tests__/unit
 
   ios:
     name: iOS
@@ -342,6 +289,10 @@ jobs:
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
           cargo test --locked -p cap --bin cap caps::tests::cap_operations_validate_wait_timeouts_before_submitting
           cargo test --locked -p cap --test cli organization_operations_validate_wait_timeouts_before_submitting
+          cargo test --locked -p cap --bin cap developer_media::tests
+          cargo test --locked -p cap --test cli developer_ids_that_begin_with_a_dash_are_read_as_values
+          cargo test --locked -p cap --test cli developer_dry_runs_show_the_target_and_change_nothing
+          cargo test --locked -p cap --test cli commands_without_their_own_json_errors_still_print_one
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
@@ -365,6 +316,12 @@ jobs:
             runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
+        # The Intel build is not a merge gate and takes over an hour on a
+        # GitHub-hosted runner, so it runs on main and by hand, not on PRs.
+        exclude:
+          - settings:
+              target: x86_64-apple-darwin
+              runner: ${{ github.event_name == 'pull_request' && 'macos-26-intel' || 'none' }}
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
@@ -402,6 +359,18 @@ jobs:
         run: node scripts/setup.js
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      # setup.js strips the local symbols from Microsoft's ONNX Runtime dylib
+      # before Cap bundles it; the C API ort loads through must still resolve
+      # and run a real inference.
+      - name: Test the prepared ONNX Runtime
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dylib=target/native-deps/onnxruntime/lib/libonnxruntime.dylib
+          nm -gU "$dylib" | grep -q OrtGetApiBase
+          cargo test --locked -p cap-camera-effects --lib segmentation::tests::inference_runs_from_a_caller_with_a_tiny_stack -- --ignored --exact
 
       # The test build compiles every line the binary build does (the app has
       # no cfg(not(test)) code), so a separate binary build only repeated the

@@ -10,8 +10,9 @@ import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 
 export async function editTitle(videoId: Video.VideoId, title: string) {
 	const user = await getCurrentUser();
+	const name = title?.trim();
 
-	if (!user || !title || !videoId) {
+	if (!user || !name || !videoId) {
 		throw new Error("Missing required data for updating video title");
 	}
 
@@ -35,7 +36,7 @@ export async function editTitle(videoId: Video.VideoId, title: string) {
 		await db()
 			.update(videos)
 			.set({
-				name: title,
+				name,
 				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
 			})
 			.where(eq(videos.id, videoId));

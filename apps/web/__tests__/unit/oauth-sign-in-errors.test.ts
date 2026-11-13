@@ -48,7 +48,7 @@ vi.mock("framer-motion", () => ({
 }));
 vi.mock("next/image", () => ({ default: "img" }));
 vi.mock("next/link", () => ({ default: "a" }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("@/actions/organization/get-organization-sso-data", () => ({
