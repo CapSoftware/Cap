@@ -13,7 +13,6 @@ import type {
 } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
-import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
@@ -33,10 +32,12 @@ import { CollectionShareControl } from "../../_components/CollectionShareControl
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
+import { DragHint } from "../../caps/components/DragHint";
 import type { FolderDataType } from "../../caps/components/Folder";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
+import { useCapsMoved } from "../../caps/components/useCapsMoved";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
@@ -129,7 +130,6 @@ export const SharedCaps = ({
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / limit);
-	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
 	const [isSpaceSettingsOpen, setIsSpaceSettingsOpen] = useState(false);
@@ -173,6 +173,9 @@ export const SharedCaps = ({
 		organizationData?.name ??
 		activeOrganization?.organization.name ??
 		"All organization";
+	useCapsMoved((ids) =>
+		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+	);
 	const handleCapSelection = (capId: Video.VideoId) => {
 		setSelectedCaps((current) =>
 			current.includes(capId)
@@ -332,19 +335,7 @@ export const SharedCaps = ({
 	return (
 		<div className="flex relative flex-col w-full h-full">
 			{spaceSettingsDialog}
-			{isDraggingCap && (
-				<div className="fixed inset-0 z-50 pointer-events-none">
-					<div className="flex justify-center items-center w-full h-full">
-						<div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
-							<FontAwesomeIcon
-								className="size-3.5 text-white opacity-50"
-								icon={faInfoCircle}
-							/>
-							<p className="text-white">Drag to a folder to move</p>
-						</div>
-					</div>
-				</div>
-			)}
+			<DragHint caps="Drop on a folder to move" />
 			{canManageCurrentSharedCollection && (
 				<NewFolderDialog
 					open={openNewFolderDialog}
@@ -470,8 +461,7 @@ export const SharedCaps = ({
 												? () => handleCapSelection(cap.id)
 												: undefined
 										}
-										onDragStart={() => setIsDraggingCap(true)}
-										onDragEnd={() => setIsDraggingCap(false)}
+										selectedIds={selectedCaps}
 									/>
 								);
 							})}
