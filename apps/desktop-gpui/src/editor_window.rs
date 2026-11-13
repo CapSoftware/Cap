@@ -5823,6 +5823,7 @@ impl EditorWindow {
         };
         let committed = self.edit(
             |timeline| {
+                let before = timeline.clone();
                 let Some(segment) = timeline.segments.get_mut(draft.index) else {
                     return false;
                 };
@@ -5831,6 +5832,12 @@ impl EditorWindow {
                 }
                 segment.start = draft.start;
                 segment.end = draft.end;
+                edits::ripple_keyboard_for_clip_trim(
+                    &before,
+                    timeline,
+                    draft.index,
+                    draft.start_edge,
+                );
                 true
             },
             window,

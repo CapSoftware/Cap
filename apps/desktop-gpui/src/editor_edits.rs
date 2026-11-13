@@ -1801,6 +1801,49 @@ pub fn ripple_insert_output_tracks(
     }
 }
 
+pub fn ripple_keyboard_for_clip_trim(
+    before: &TimelineConfiguration,
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    start_edge: bool,
+) {
+    let (Some(old), Some(new)) = (before.segments.get(index), timeline.segments.get(index)) else {
+        return;
+    };
+    let (old_duration, new_duration) = (old.duration(), new.duration());
+    if !old_duration.is_finite() || !new_duration.is_finite() {
+        return;
+    }
+    let shift = clip_timeline_duration(before) - clip_timeline_duration(timeline);
+    if shift.abs() < 1e-9 {
+        return;
+    }
+    let clip_start = editor_timeline::clip_timeline_offsets(before)
+        .get(index)
+        .copied()
+        .unwrap_or(0.0);
+    let holds = before.hold_windows();
+    let edge = if start_edge {
+        clip_start
+    } else {
+        clip_start + old_duration.min(new_duration)
+    };
+    if shift > 0.0 {
+        let cut_start = effective_to_output_end(&holds, edge);
+        let cut_end =
+            effective_to_output(&holds, edge + old_duration - new_duration).max(cut_start);
+        timeline
+            .keyboard_segments
+            .retain_mut(|segment| segment.ripple_delete(cut_start, cut_end, shift));
+    } else {
+        crate::editor_clips::ripple_keyboard_track(
+            &mut timeline.keyboard_segments,
+            effective_to_output(&holds, edge),
+            -shift,
+        );
+    }
+}
+
 /// The seven plain splits. 3D is **not** among them: `splitCamera3DSegment`
 /// rebuilds both halves' pose tracks around the pose the segment held at the
 /// cut (`ED/context.ts:640-676`), which needs the keyframe evaluator; see the
@@ -4628,6 +4671,129 @@ mod tests {
         assert_eq!(keyboard.keys.len(), 2);
         assert_eq!(keyboard.keys[0].time_offset, 0.0);
         assert_eq!(keyboard.keys[1].time_offset, 1500.0);
+    }
+
+    fn trimmed_keyboard(
+        timescale: f64,
+        index: usize,
+        start_edge: bool,
+        source: (f64, f64),
+    ) -> Vec<(String, f64, Vec<f64>)> {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": timescale, "start": 0.0, "end": 10.0 * timescale },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 30.0, "end": 40.0 }
+                ],
+                "zoomSegments": [],
+                "keyboardSegments": [
+                    {
+                        "id": "early", "start": 2.0, "end": 3.0,
+                        "displayText": "a", "keys": [{ "key": "a", "timeOffset": 0.0 }]
+                    },
+                    {
+                        "id": "typed", "start": 10.2, "end": 12.0, "displayText": "xy",
+                        "keys": [
+                            { "key": "x", "timeOffset": 0.0 },
+                            { "key": "y", "timeOffset": 1500.0 }
+                        ]
+                    },
+                    {
+                        "id": "late", "start": 15.0, "end": 16.0,
+                        "displayText": "b", "keys": [{ "key": "b", "timeOffset": 0.0 }]
+                    }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = timeline.clone();
+        timeline.segments[index].start = source.0;
+        timeline.segments[index].end = source.1;
+        ripple_keyboard_for_clip_trim(&before, timeline, index, start_edge);
+        timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.display_text.clone(),
+                    segment.start,
+                    segment
+                        .keys
+                        .iter()
+                        .map(|key| segment.start + key.time_offset / 1000.0)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_keyboard(actual: Vec<(String, f64, Vec<f64>)>, expected: &[(&str, f64, &[f64])]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for ((text, start, keys), (want_text, want_start, want_keys)) in actual.iter().zip(expected)
+        {
+            assert_eq!(text, want_text);
+            assert!((start - want_start).abs() < 1e-9, "{actual:?}");
+            assert_eq!(keys.len(), want_keys.len());
+            for (key, want) in keys.iter().zip(*want_keys) {
+                assert!((key - want).abs() < 1e-9, "{actual:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn shrinking_a_clip_end_pulls_later_keypresses_back() {
+        assert_keyboard(
+            trimmed_keyboard(1.0, 0, false, (0.0, 8.0)),
+            &[
+                ("a", 2.0, &[2.0]),
+                ("xy", 8.2, &[8.2, 9.7]),
+                ("b", 13.0, &[13.0]),
+            ],
+        );
+    }
+
+    #[test]
+    fn shrinking_a_clip_start_drops_the_keypresses_it_cut() {
+        assert_keyboard(
+            trimmed_keyboard(1.0, 1, true, (31.0, 40.0)),
+            &[
+                ("a", 2.0, &[2.0]),
+                ("y", 10.0, &[10.7]),
+                ("b", 14.0, &[14.0]),
+            ],
+        );
+    }
+
+    #[test]
+    fn growing_a_clip_pushes_later_keypresses_out() {
+        assert_keyboard(
+            trimmed_keyboard(1.0, 1, true, (28.0, 40.0)),
+            &[
+                ("a", 2.0, &[2.0]),
+                ("xy", 12.2, &[12.2, 13.7]),
+                ("b", 17.0, &[17.0]),
+            ],
+        );
+        assert_keyboard(
+            trimmed_keyboard(1.0, 0, false, (0.0, 12.0)),
+            &[
+                ("a", 2.0, &[2.0]),
+                ("xy", 12.2, &[12.2, 13.7]),
+                ("b", 17.0, &[17.0]),
+            ],
+        );
+    }
+
+    #[test]
+    fn clip_trims_move_keypresses_in_output_time_for_retimed_clips() {
+        assert_keyboard(
+            trimmed_keyboard(2.0, 0, false, (0.0, 16.0)),
+            &[
+                ("a", 2.0, &[2.0]),
+                ("xy", 8.2, &[8.2, 9.7]),
+                ("b", 13.0, &[13.0]),
+            ],
+        );
     }
 
     #[test]
