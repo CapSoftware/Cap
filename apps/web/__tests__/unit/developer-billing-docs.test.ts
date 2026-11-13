@@ -80,6 +80,7 @@ const rest = getDocBySlug("api/rest-api")?.content ?? "";
 const POLICY_SENTENCES = [
 	"Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account.",
 	"A purchase also comes with a paid invoice, which shows any tax ID you add at checkout.",
+	"For a larger amount, email hello@cap.so and we will send an invoice.",
 	"Credit does not expire.",
 	"If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.",
 ];
@@ -267,6 +268,11 @@ describe("the Billing page", () => {
 	it("states the limits the code enforces", () => {
 		expect(billing).toContain(
 			`One purchase is from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}`,
+		);
+		expect(
+			fs.readFileSync(path.join(process.cwd(), "public/llms-full.txt"), "utf8"),
+		).toContain(
+			`top-ups from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}, codes`,
 		);
 		expect(billing).toContain(
 			`Cap Pro includes $${PRO_MONTHLY_CREDIT_DOLLARS} of credit every month`,
