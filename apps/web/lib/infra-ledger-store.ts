@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
 import { type LedgerRow, orderLedgerRows } from "@/lib/infra-ledger";
 
 const EXPORT_BATCH_SIZE = 1_000;
@@ -20,7 +20,11 @@ const columns = {
 	createdAt: developerCreditTransactions.createdAt,
 };
 
-const ofApp = (appId: string) => eq(developerCreditAccounts.appId, appId);
+const ofApp = (appId: string) =>
+	and(
+		eq(developerCreditAccounts.appId, appId),
+		sql`${developerCreditTransactions.type} <> 'topup_pending'`,
+	);
 
 const appLedger = () =>
 	db()
