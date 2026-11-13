@@ -143,6 +143,7 @@ function autoTopUpWaits() {
 		pending: of("topup_pending", "auto_top_up_pending").some(
 			(row) =>
 				row.createdAt.getTime() > now - 72 * HOUR_MS &&
+				!String(row.referenceId).startsWith("infra-auto-top-up:") &&
 				!settledIds.has(row.referenceId),
 		),
 		decline: of("topup_failed", "auto_top_up_failed").some(
@@ -413,7 +414,19 @@ function update(table: unknown) {
 	return {
 		set(values: Record<string, unknown>) {
 			return {
-				async where() {
+				async where(condition?: SQL) {
+					if (table === developerCreditTransactions && condition) {
+						const [accountId, referenceId, referenceType] =
+							dialect.sqlToQuery(condition).params;
+						const rows = ledger.rows.filter(
+							(row) =>
+								row.accountId === accountId &&
+								row.referenceId === referenceId &&
+								row.referenceType === referenceType,
+						);
+						for (const row of rows) Object.assign(row, values);
+						return [{ affectedRows: rows.length }];
+					}
 					if (table !== developerCreditAccounts) return [{ affectedRows: 0 }];
 					const { balanceMicroCredits, ...rest } = values;
 					if (balanceMicroCredits !== undefined) {
@@ -464,10 +477,31 @@ function insert(table: unknown) {
 	};
 }
 
+function remove(table: unknown) {
+	return {
+		async where(condition: SQL) {
+			if (table !== developerCreditTransactions) return [{ affectedRows: 0 }];
+			const [accountId, referenceId, referenceType] =
+				dialect.sqlToQuery(condition).params;
+			const before = ledger.rows.length;
+			ledger.rows = ledger.rows.filter(
+				(row) =>
+					!(
+						row.accountId === accountId &&
+						row.referenceId === referenceId &&
+						row.referenceType === referenceType
+					),
+			);
+			return [{ affectedRows: before - ledger.rows.length }];
+		},
+	};
+}
+
 type FakeDb = {
 	select: typeof select;
 	update: typeof update;
 	insert: typeof insert;
+	delete: typeof remove;
 	transaction: <T>(run: (tx: FakeDb) => Promise<T>) => Promise<T>;
 };
 
@@ -475,5 +509,6 @@ export const fakeDb: FakeDb = {
 	select,
 	update,
 	insert,
+	delete: remove,
 	transaction: (run) => run(fakeDb),
 };

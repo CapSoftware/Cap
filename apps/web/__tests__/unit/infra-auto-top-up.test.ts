@@ -94,6 +94,7 @@ const intent = (
 			type: "developer_auto_top_up",
 			accountId: "account-1",
 			period: "2026-11-11",
+			attempt: "0:0",
 		},
 		last_payment_error: null,
 		...extra,
@@ -120,6 +121,12 @@ const arm = () => {
 
 const topUps = () =>
 	ledger.rows.filter((row) => row.referenceType === "auto_top_up");
+const reservations = () =>
+	ledger.rows.filter(
+		(row) =>
+			row.referenceType === "auto_top_up_pending" &&
+			String(row.referenceId).startsWith("infra-auto-top-up:"),
+	);
 const failures = () =>
 	ledger.rows.filter((row) => row.referenceType === "auto_top_up_failed");
 
@@ -366,6 +373,57 @@ describe("auto top-up charge", () => {
 		expect(now().toISOString().slice(0, 10)).toBe("2026-11-11");
 	});
 
+	it("reserves the attempt before calling Stripe and removes the reservation with the grant", async () => {
+		mocks.createPaymentIntent.mockImplementation(async () => {
+			expect(reservations()).toEqual([
+				expect.objectContaining({
+					type: "topup_pending",
+					amountMicroCredits: 0,
+					referenceId: "infra-auto-top-up:account-1:0:0",
+				}),
+			]);
+			return intent("pi_1", "succeeded");
+		});
+
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			state: "succeeded",
+		});
+		expect(reservations()).toHaveLength(0);
+		expect(ledger.rows.map((row) => row.type)).toEqual(["topup"]);
+	});
+
+	it("voids the reservation when the request never reached Stripe", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.createPaymentIntent.mockRejectedValueOnce(
+			new Error("STRIPE_SECRET_KEY is not set"),
+		);
+
+		expect(await runAutoTopUp("account-1", now())).toEqual({ state: "error" });
+		expect(ledger.rows).toHaveLength(0);
+		errors.mockRestore();
+	});
+
+	it("lets the webhook settle a reservation whose response was lost", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.createPaymentIntent.mockRejectedValueOnce(
+			Object.assign(new Error("timeout"), { type: "StripeConnectionError" }),
+		);
+		await runAutoTopUp("account-1", now());
+		expect(reservations()).toHaveLength(1);
+
+		await settleAutoTopUpPaymentIntent(
+			intent("pi_1", "succeeded"),
+			"succeeded",
+		);
+
+		expect(reservations()).toHaveLength(0);
+		expect(topUps()).toEqual([
+			expect.objectContaining({ referenceId: "pi_1" }),
+		]);
+		expect(ledger.account.balanceMicroCredits).toBe(530_000);
+		errors.mockRestore();
+	});
+
 	it("repeats the same key when retried before the attempt settles", async () => {
 		mocks.createPaymentIntent.mockRejectedValueOnce(
 			Object.assign(new Error("network"), { type: "StripeConnectionError" }),
@@ -394,7 +452,14 @@ describe("auto top-up charge", () => {
 			"[infra-billing] Auto top-up could not be attempted",
 			expect.objectContaining({ accountId: "account-1" }),
 		);
-		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.rows).toEqual([
+			expect.objectContaining({
+				type: "topup_pending",
+				amountMicroCredits: 0,
+				referenceId: "infra-auto-top-up:account-1:0:0",
+				metadata: { amountCents: 500, period: "2026-11-11" },
+			}),
+		]);
 		expect(ledger.account.autoTopUpEnabled).toBe(true);
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
 
@@ -421,7 +486,8 @@ describe("auto top-up charge", () => {
 			reason: "in_progress",
 		});
 		expect(ledger.account.autoTopUpEnabled).toBe(true);
-		expect(ledger.rows).toHaveLength(0);
+		expect(reservations()).toHaveLength(1);
+		expect(ledger.rows).toHaveLength(1);
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
@@ -451,7 +517,13 @@ describe("auto top-up charge", () => {
 		const [first, changed] = mocks.createPaymentIntent.mock.calls;
 		expect(changed?.[0].amount).toBe(2_500);
 		expect(changed?.[1].idempotencyKey).toBe(first?.[1].idempotencyKey);
-		expect(ledger.rows).toHaveLength(0);
+		expect(reservations()).toEqual([
+			expect.objectContaining({
+				referenceId: "infra-auto-top-up:account-1:0:0",
+				metadata: { amountCents: 500, period: "2026-11-11" },
+			}),
+		]);
+		expect(ledger.rows).toHaveLength(1);
 		expect(ledger.account.autoTopUpEnabled).toBe(true);
 	});
 
@@ -878,7 +950,8 @@ describe("auto top-up charge", () => {
 
 		expect(await runAutoTopUp("account-1", now())).toEqual({ state: "error" });
 		expect(ledger.account.autoTopUpEnabled).toBe(true);
-		expect(ledger.rows).toHaveLength(0);
+		expect(reservations()).toHaveLength(1);
+		expect(ledger.rows).toHaveLength(1);
 	});
 
 	it("ignores payments that are not auto top-ups or did not settle in dollars", async () => {

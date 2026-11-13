@@ -157,7 +157,7 @@ describe("auto top-up sweep selection", () => {
 			"(select max(`developer_credit_transactions`.`createdAt`) from `developer_credit_transactions` where `developer_credit_transactions`.`accountId` = `developer_credit_accounts`.`id` and `developer_credit_transactions`.`type` in (?, ?, ?) and `developer_credit_transactions`.`referenceType` in (?, ?, ?))",
 		);
 		expect(sql).toContain(
-			"not (exists (select 1 from `developer_credit_transactions` `pending_attempt` where `pending_attempt`.`accountId` = `developer_credit_accounts`.`id` and `pending_attempt`.`type` = ? and `pending_attempt`.`referenceType` = ? and `pending_attempt`.`createdAt` > ? and not exists (select 1 from `developer_credit_transactions` `settled_attempt` where `settled_attempt`.`accountId` = `pending_attempt`.`accountId` and `settled_attempt`.`referenceId` = `pending_attempt`.`referenceId`",
+			"not (exists (select 1 from `developer_credit_transactions` `pending_attempt` where `pending_attempt`.`accountId` = `developer_credit_accounts`.`id` and `pending_attempt`.`type` = ? and `pending_attempt`.`referenceType` = ? and `pending_attempt`.`createdAt` > ? and `pending_attempt`.`referenceId` not like ? and not exists (select 1 from `developer_credit_transactions` `settled_attempt` where `settled_attempt`.`accountId` = `pending_attempt`.`accountId` and `settled_attempt`.`referenceId` = `pending_attempt`.`referenceId`",
 		);
 		expect(sql).toContain(
 			"exists (select 1 from `developer_credit_transactions` `declined_attempt` where `declined_attempt`.`accountId` = `developer_credit_accounts`.`id` and `declined_attempt`.`type` = ? and `declined_attempt`.`referenceType` = ? and `declined_attempt`.`createdAt` > ? and not exists (select 1 from `developer_credit_transactions` `later_top_up` where `later_top_up`.`accountId` = `declined_attempt`.`accountId` and `later_top_up`.`type` = ?",
@@ -171,6 +171,10 @@ describe("auto top-up sweep selection", () => {
 		expect(params).toContain(sqlTime(new Date(NOW.getTime() - 72 * HOUR_MS)));
 		expect(params).toContain(sqlTime(new Date(NOW.getTime() - 24 * HOUR_MS)));
 		expect(params).toContain(AUTO_TOP_UP_DAILY_LIMIT);
+		expect(params).toContain("infra-auto-top-up:%");
+		expect(sql).toContain(
+			"from `developer_credit_accounts` `owner_account` join `developer_credit_transactions` `owner_entry` on `owner_entry`.`accountId` = `owner_account`.`id` where `owner_account`.`ownerId` = `developer_credit_accounts`.`ownerId`",
+		);
 	});
 
 	it("tries the least recently tried account first", async () => {
