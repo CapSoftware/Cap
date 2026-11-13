@@ -136,7 +136,9 @@ export const INFRA_VIDEO_FAILURE_FALLBACK =
 // All a viewer of the public page is told. A stored reason is written for
 // the uploader and says what to do next, which on someone else's site reads
 // as an instruction to their visitor, so no reason is passed on at all.
-export const INFRA_VIDEO_PUBLIC_FAILURE = "This video is not available.";
+export const INFRA_VIDEO_PUBLIC_FAILURE = "This video isn't available";
+export const INFRA_VIDEO_PUBLIC_FAILURE_DETAIL =
+	"There is nothing to play at this link.";
 
 // Some stored reasons come from the encoder and are worded for operators, so
 // the owner gets only the sentences written for customers.

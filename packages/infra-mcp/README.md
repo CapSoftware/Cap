@@ -48,6 +48,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 | Tool | What it does | Cost |
 |------|--------------|------|
 | `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed one month when it becomes ready, then daily until deleted. |
+| `videos_import` | Creates a video from a public https link to a video file, such as an .mp4 on a CDN or storage bucket. Cap downloads and encodes it, so nothing is uploaded from your machine. The download must finish within 12 minutes; upload larger or slower files instead. | Billed like an upload |
 | `videos_wait` | Waits until a video has its playback links or has failed, then returns status, length, playback id and the HLS, MP4, poster, share and embed links. Waits for both HLS and MP4 unless `output` asks for one. | Free |
 | `videos_get` | Returns one video. | Free |
 | `videos_list` | Lists videos, newest first, optionally for one `userId`, with `limit` and `offset`. | Free |
@@ -60,6 +61,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 | `transcripts_delete` | Deletes a transcript, its text and its files for good. | Free |
 | `account_usage` | Returns balance, standing, whether uploads are accepted, stored minutes, daily storage cost and rates. | Free |
 | `account_transactions` | Lists the ledger, newest first. | Free |
+| `docs_read` | Returns a section of the Cap Infra docs (`get-started`, `rest-api`, `webhooks` or `billing`) as Markdown, found by heading with `section` or by search with `query`, up to 8 KB with a link to the rest. With neither, returns the page outline. Fetched from cap.so, or `CAP_API_URL`, and cached for 10 minutes. | Free |
 
 There is no tool that adds credit. Buying credit needs a signed-in browser, so when the API answers that the app is out of credit, the result says so and carries the console link in `addCreditAt`. `account_usage` carries that link only when the app cannot take an upload or is in `grace` or `paused`.
 

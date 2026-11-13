@@ -1,18 +1,28 @@
 import { serverEnv } from "@cap/env";
 import {
 	createHostedTools,
+	type DocsSource,
 	HOSTED_INSTRUCTIONS,
 	SERVER_NAME,
 	SERVER_VERSION,
 } from "@cap/infra-mcp/hosted";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { docToMarkdown } from "@/lib/docs-markdown";
 import { inProcessDeveloperFetch } from "@/lib/infra-mcp-rest";
+import { getDocBySlug } from "@/utils/docs";
 
 export { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 export const INFRA_MCP_MAX_BODY_BYTES = 65_536;
 
+export const infraDocsSource: DocsSource = async (page) => {
+	const doc = getDocBySlug(`api/${page}`);
+	if (!doc) throw new Error(`Missing docs page api/${page}`);
+	return docToMarkdown(doc, serverEnv().WEB_URL);
+};
+
 export function createInfraMcpServer(options: {
 	secretKey: string;
+	appId?: string;
 	fetch: typeof fetch;
 	budgetMs?: number;
 }) {
@@ -23,9 +33,11 @@ export function createInfraMcpServer(options: {
 	const tools = createHostedTools({
 		apiUrl: serverEnv().WEB_URL,
 		secretKey: options.secretKey,
+		appId: options.appId,
 		fetch: options.fetch,
 		log: (line) => console.info(line),
 		budgetMs: options.budgetMs,
+		docs: infraDocsSource,
 	});
 	for (const tool of tools) {
 		server.registerTool(
@@ -54,6 +66,7 @@ export const infraMcpHandler = createMcpHandler(
 		if (!authInfo?.token) throw new Error("Missing Cap Infra secret key");
 		return createInfraMcpServer({
 			secretKey: authInfo.token,
+			appId: authInfo.clientId,
 			fetch: inProcessDeveloperFetch(requestInfo?.headers ?? new Headers()),
 		});
 	},

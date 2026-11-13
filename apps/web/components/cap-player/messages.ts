@@ -103,6 +103,8 @@ export interface MessageTarget {
 export interface PlayerActions {
 	setQuality: (quality: string) => void;
 	seekDuringSwitch?: (time: number) => boolean;
+	heldTime?: () => number | null;
+	takeSwitchPlay?: () => boolean;
 }
 
 export const connectMessages = (
@@ -110,10 +112,33 @@ export const connectMessages = (
 	video: HTMLVideoElement,
 	actions: PlayerActions,
 ) => {
+	// While a quality switch or a start time is still landing, the element
+	// reads zero for its time and nothing for its length. The events carry the
+	// place it is going to and the length it had.
+	let lastDuration = Number.NaN;
+	const rememberDuration = () => {
+		if (Number.isFinite(video.duration) && video.duration > 0) {
+			lastDuration = video.duration;
+		}
+	};
 	const send = (
 		event: PlayerEventName,
 		extra?: Record<string, string | boolean>,
-	) => target.parent.postMessage(playerEvent(event, video, extra), "*");
+	) => {
+		rememberDuration();
+		const known = Number.isFinite(video.duration) && video.duration > 0;
+		const held = actions.heldTime?.() ?? null;
+		const state =
+			held === null
+				? video
+				: {
+						currentTime: held,
+						duration: known ? video.duration : lastDuration,
+						paused: video.paused,
+						muted: video.muted,
+					};
+		target.parent.postMessage(playerEvent(event, state, extra), "*");
+	};
 	const throttle = createThrottle(TIMEUPDATE_GAP_MS);
 	// A parent may seek on ready, before the duration is known. The time is
 	// kept until the metadata arrives rather than clamped to nothing.
@@ -171,10 +196,17 @@ export const connectMessages = (
 	};
 
 	const relayed: [string, () => void][] = [
+		["loadedmetadata", rememberDuration],
+		["durationchange", rememberDuration],
 		["loadedmetadata", seekWhenKnown],
 		["loadedmetadata", playWhenAttached],
 		["durationchange", seekWhenKnown],
-		["play", () => send("play")],
+		[
+			"play",
+			() => {
+				if (!actions.takeSwitchPlay?.()) send("play");
+			},
+		],
 		["pause", () => send("pause")],
 		["ended", () => send("ended")],
 		[

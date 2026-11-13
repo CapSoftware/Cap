@@ -7,6 +7,7 @@ import {
 	HttpApiSchema,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
+import { consoleErrorResponse } from "@/lib/infra-console-errors";
 import {
 	abortInfraUpload,
 	completeInfraUpload,
@@ -218,4 +219,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
-export const POST = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
+
+export const POST = async (request: Request) =>
+	consoleErrorResponse(await handler(request));

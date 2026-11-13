@@ -17,6 +17,7 @@ mkdirSync(out);
 cpSync(join(root, "dist"), join(out, "dist"), { recursive: true });
 cpSync(join(root, "skill"), join(out, "skill"), { recursive: true });
 cpSync(join(root, "README.md"), join(out, "README.md"));
+cpSync(join(root, "CHANGELOG.md"), join(out, "CHANGELOG.md"));
 cpSync(join(root, "..", "..", "LICENSE"), join(out, "LICENSE"));
 
 const manifest = {
@@ -25,7 +26,7 @@ const manifest = {
 	description: source.description,
 	type: "module",
 	bin: { "cap-infra-mcp": "dist/bin.js" },
-	files: ["dist", "skill", "README.md", "LICENSE"],
+	files: ["dist", "skill", "README.md", "CHANGELOG.md", "LICENSE"],
 	engines: source.engines,
 	license: "AGPL-3.0-only",
 	homepage: "https://cap.so/docs/api/get-started#10-use-with-agents-mcp",

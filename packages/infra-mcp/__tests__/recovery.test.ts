@@ -13,6 +13,7 @@ import { type StubApi, type StubRequest, startStubApi } from "./stub-api";
 let stub: StubApi;
 let session: Session;
 let files: Awaited<ReturnType<typeof tempFiles>>;
+const billing = () => `${stub.url}/dashboard/infra/app_stub/billing`;
 
 beforeEach(async () => {
 	stub = await startStubApi();
@@ -215,7 +216,7 @@ describe("account_usage", () => {
 			const usage = await session.call("account_usage");
 			expect(usage.isError).toBe(false);
 			expect(usage.body.upload).toMatchObject({ allowed: false, reason: code });
-			expect(usage.body.addCreditAt).toBe(`${stub.url}/dashboard/infra`);
+			expect(usage.body.addCreditAt).toBe(billing());
 		},
 	);
 });
@@ -355,7 +356,8 @@ describe("outputs that arrive after the video is ready", () => {
 		expect(waited.body.mp4Url).toMatch(/video\.mp4$/);
 		const created = await session.call("transcripts_create", { videoId });
 		expect(created.isError).toBe(false);
-		expect(created.body.metadata).toEqual({ videoId });
+		expect(created.body.videoId).toBe(videoId);
+		expect(created.body.metadata).toBeNull();
 	});
 
 	it("waits briefly for the MP4 link when creating a transcript from a ready video", async () => {
@@ -365,10 +367,8 @@ describe("outputs that arrive after the video is ready", () => {
 		stub.state.mp4AfterReads = (stub.videos.get(videoId)?.readyReads ?? 0) + 2;
 		const created = await session.call("transcripts_create", { videoId });
 		expect(created.isError).toBe(false);
-		expect(stub.calls("POST", "/transcripts")[0]?.body).toMatchObject({
-			url: `${stub.url}/api/developer/playback/${stub.videos.get(videoId)?.playbackId}/video.mp4`,
-			name: "Interview",
-		});
+		expect(stub.calls("POST", "/transcripts")[0]?.body).toEqual({ videoId });
+		expect(created.body).toMatchObject({ videoId, name: "Interview" });
 		expect(
 			stub.calls("GET", `/videos/${videoId}`).length,
 		).toBeGreaterThanOrEqual(3);
@@ -470,7 +470,7 @@ describe("a completion that fails on the server after the file was assembled", (
 		expect(failed.body).toMatchObject({
 			error: { code: "insufficient_credits", status: 402, fileRemoved: true },
 			videoStatus: "unknown",
-			addCreditAt: `${stub.url}/dashboard/infra`,
+			addCreditAt: billing(),
 		});
 		expect(failed.body.next).toMatch(/videos_get/);
 		expect(stub.calls("POST", "/abort")).toHaveLength(0);

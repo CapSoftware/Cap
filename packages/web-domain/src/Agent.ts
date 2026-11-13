@@ -1148,6 +1148,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"topup",
 		"video_create",
 		"storage_daily",
+		"delivery_daily",
 		"transcription",
 		"refund",
 		"adjustment",
