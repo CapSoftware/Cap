@@ -253,7 +253,8 @@ describe("transcript docs keep up with the API", () => {
 		expect(JSON.stringify(schemas.TranscriptDetail)).not.toContain(
 			"confidence",
 		);
-		expect(transcriptDocs).toContain("steps of 0.08 seconds");
+		expect(transcriptDocs).not.toContain("steps of 0.08 seconds");
+		expect(JSON.stringify(schemas.TranscriptDetail)).not.toContain("0.08");
 	});
 
 	it("states the download limit and the upload expiry", () => {

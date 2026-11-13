@@ -13,9 +13,15 @@ import {
 	TOP_UP_PRESETS_CENTS,
 	topUpButtonLabel,
 } from "@/lib/infra-top-up";
-import { Button, FOCUS, Input, MONO } from "../../_components/ui";
+import { Button, FOCUS, Input, MONO, TEXT_LINK } from "../../_components/ui";
 
-export function TopUp({ appId }: { appId: string }) {
+export function TopUp({
+	appId,
+	autoTopUpHref,
+}: {
+	appId: string;
+	autoTopUpHref: string | null;
+}) {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const amountId = useId();
@@ -26,6 +32,9 @@ export function TopUp({ appId }: { appId: string }) {
 	const codeNoteId = useId();
 	const [codeOpen, setCodeOpen] = useState(false);
 	const [code, setCode] = useState("");
+	const [purchased] = useState(
+		() => searchParams.get("purchase") === "success",
+	);
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
@@ -173,6 +182,18 @@ export function TopUp({ appId }: { appId: string }) {
 					</Button>
 				)}
 			</div>
+			{purchased && autoTopUpHref && (
+				<p className="m-0 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+					Switch on{" "}
+					<a
+						href={autoTopUpHref}
+						className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
+					>
+						auto top-up
+					</a>{" "}
+					to add credit as soon as the balance falls below a threshold you set.
+				</p>
+			)}
 		</form>
 	);
 }
