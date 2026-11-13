@@ -112,6 +112,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
 		if (
+			keys === "id" &&
+			/`id` = \?$/.test(rendered.sql) &&
+			rendered.params[0] !== account.id
+		) {
+			return [];
+		}
+		if (
 			rendered.sql.includes("autoTopUpThresholdMicroCredits") &&
 			keys === "id" &&
 			!(
@@ -132,6 +139,32 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
 			return storageRows().filter((row) => row.createdAt.getTime() >= since);
+		}
+		if (keys === "accountId,amountMicroCredits") {
+			const [accountId, referenceId, ...referenceTypes] = rendered.params;
+			return ledger.rows.filter(
+				(row) =>
+					row.type === "topup" &&
+					row.accountId === accountId &&
+					row.referenceId === referenceId &&
+					referenceTypes.includes(row.referenceType),
+			);
+		}
+		if (keys === "metadata,referenceId,referenceType") {
+			const allowed = rendered.params.slice(1);
+			return ledger.rows.filter(
+				(row) =>
+					allowed.includes(row.type) && allowed.includes(row.referenceType),
+			);
+		}
+		if (keys === "createdAt,referenceType") {
+			const types = rendered.params.slice(2);
+			return newestFirst(
+				ledger.rows.filter(
+					(row) =>
+						row.type === "adjustment" && types.includes(row.referenceType),
+				),
+			).slice(0, 1);
 		}
 		if (keys === "createdAt,metadata,type") {
 			const types = rendered.params.slice(1);

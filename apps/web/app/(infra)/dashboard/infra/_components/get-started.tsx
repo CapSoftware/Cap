@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import Link from "next/link";
+import { PRO_CREDIT_TRIAL_MESSAGE } from "@/lib/infra-pro-credit-eligibility";
 import { infraAppPath } from "@/lib/infra-routes";
 import type { InfraProCredit } from "../infra-data";
 import { CodeBlock } from "./copy";
@@ -35,7 +36,9 @@ export function FirstCredit({
 			<StepNote>
 				{proCredit.status === "claimed"
 					? "Uploading needs a balance. This month's Cap Pro credit is already claimed, and it is one per account, not one per app."
-					: "Uploading needs a balance. Credits start at $5, and Cap Pro includes $5 every month."}
+					: proCredit.status === "trial"
+						? `Uploading needs a balance. ${PRO_CREDIT_TRIAL_MESSAGE}`
+						: "Uploading needs a balance. Credits start at $5, and Cap Pro includes $5 every month."}
 			</StepNote>
 		</div>
 	);
