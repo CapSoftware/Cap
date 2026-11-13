@@ -541,6 +541,72 @@ describe("developer video playback route", () => {
 		}
 	});
 
+	describe("choosing renditions", () => {
+		const stored = ladder(
+			variant("1080p", 4_573_338, "1920x1080"),
+			variant("720p", 2_501_452, "1280x720"),
+			variant("360p", 739_748, "640x360"),
+		);
+		const served = async (query: string) =>
+			(await play("master.m3u8", PLAYBACK_ID, asking(query))).text();
+
+		beforeEach(() => {
+			mocks.readText.mockResolvedValue(stored);
+		});
+
+		it("serves a master that lists only the picked rendition, with its audio", async () => {
+			const body = await served("?rendition=1080p");
+
+			expect(order(body)).toEqual(["1080p.m3u8"]);
+			expect(body).toContain(
+				'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="audio",URI="audio.m3u8"',
+			);
+			expect(body).toContain("RESOLUTION=1920x1080");
+		});
+
+		it("keeps renditions no taller than the cap", async () => {
+			expect(order(await served("?max=720"))).toEqual([
+				"720p.m3u8",
+				"360p.m3u8",
+			]);
+			expect(order(await served("?max=1080"))).toEqual([
+				"720p.m3u8",
+				"1080p.m3u8",
+				"360p.m3u8",
+			]);
+		});
+
+		it("keeps the smallest rendition when the cap is below every one", async () => {
+			expect(order(await served("?max=240"))).toEqual(["360p.m3u8"]);
+		});
+
+		it("carries a cap and a pick into the short form", async () => {
+			expect(
+				(await served("?max=720&segments=short"))
+					.split("\n")
+					.filter((line) => line.endsWith(".m3u8?segments=short")),
+			).toEqual(["720p.m3u8?segments=short", "360p.m3u8?segments=short"]);
+			expect(order(await served("?rendition=360p&max=720"))).toEqual([
+				"360p.m3u8",
+			]);
+		});
+
+		it.each([
+			"?rendition=480p",
+			"?rendition=audio",
+			"?rendition=../1080p",
+			"?rendition=1080p.m3u8",
+			"?rendition=1080p&rendition=720p",
+			"?max=720p",
+			"?max=-1",
+			"?max=abc",
+			"?max=720&max=360",
+			"?rendition=%0A%23EXT-X-ENDLIST",
+		])("leaves the master as it serves it for %s", async (query) => {
+			expect(await served(query)).toBe(await served(""));
+		});
+	});
+
 	it("redirects a segment listed by file name to the URL the playlist signs", async () => {
 		mocks.readText.mockResolvedValue(storedRendition(16));
 

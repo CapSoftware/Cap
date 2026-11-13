@@ -196,6 +196,84 @@ export async function signMediaPlaylist(
 	return lines.join("\n");
 }
 
+const RENDITION_NAME_PATTERN = /^(\d{3,4})p$/;
+const RENDITION_HEIGHT_PATTERN = /^\d{3,4}$/;
+
+function onlyQueryValue(request: Request, name: string): string | null {
+	const values = new URL(request.url).searchParams.getAll(name);
+	return values.length === 1 ? (values[0] ?? null) : null;
+}
+
+export function renditionChoice(request: Request): {
+	rendition: string | null;
+	max: number | null;
+} {
+	const rendition = onlyQueryValue(request, "rendition");
+	const max = onlyQueryValue(request, "max");
+	return {
+		rendition:
+			rendition && RENDITION_NAME_PATTERN.test(rendition) ? rendition : null,
+		max: max && RENDITION_HEIGHT_PATTERN.test(max) ? Number(max) : null,
+	};
+}
+
+// A master playlist narrowed to some of its renditions. Safari's own HLS
+// player offers no way to pick a rendition, so the hosted player picks one by
+// loading a master that lists only it; the audio rendition stays listed, which
+// a rendition's own playlist would leave out. A cap keeps every rendition no
+// taller than it, or the smallest when none is. A choice that matches nothing
+// leaves the master as it is.
+export function selectRenditions(
+	master: string,
+	choice: { rendition: string | null; max: number | null },
+): string {
+	if (choice.rendition === null && choice.max === null) return master;
+	const lines = master.split(/\r?\n/).filter((line) => line.trim().length > 0);
+	const others: string[] = [];
+	const variants: { height: number; uri: string; lines: string[] }[] = [];
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		if (!line.startsWith("#EXT-X-STREAM-INF:")) {
+			others.push(line);
+			continue;
+		}
+		const uri = lines[index + 1]?.trim();
+		if (!uri || uri.startsWith("#")) return master;
+		const named = /^(\d{3,4})p\.m3u8$/.exec(uri);
+		const resolution = line.match(/[:,]RESOLUTION=(\d+)x(\d+)/);
+		const height = named
+			? Number(named[1])
+			: resolution
+				? Math.min(Number(resolution[1]), Number(resolution[2]))
+				: 0;
+		variants.push({ height, uri, lines: [line, uri] });
+		index++;
+	}
+	if (variants.length === 0) return master;
+
+	let kept = variants;
+	if (choice.rendition !== null) {
+		const named = variants.filter(
+			(variant) => variant.uri === `${choice.rendition}.m3u8`,
+		);
+		if (named.length > 0) kept = named;
+	}
+	if (choice.max !== null) {
+		const max = choice.max;
+		const below = kept.filter((variant) => variant.height <= max);
+		kept =
+			below.length > 0
+				? below
+				: [
+						kept.reduce((low, variant) =>
+							variant.height < low.height ? variant : low,
+						),
+					];
+	}
+	if (kept.length === variants.length) return master;
+	return `${[...others, ...kept.flatMap((variant) => variant.lines)].join("\n")}\n`;
+}
+
 // Players start on the first rendition a master playlist lists, and the encoder
 // lists the largest first. Lead with the best rendition an ordinary connection
 // starts quickly and leave the others in their order, so the player steps up or
@@ -357,7 +435,9 @@ export async function developerPlaybackResponse(
 	if (!playlist) return notFound();
 	const short = wantsShortSegments(request);
 	if (file === DEVELOPER_VIDEO_MASTER_PLAYLIST) {
-		const master = leadWithStartRendition(playlist);
+		const master = leadWithStartRendition(
+			selectRenditions(playlist, renditionChoice(request)),
+		);
 		return playlistResponse(short ? listShortSegmentPlaylists(master) : master);
 	}
 	return playlistResponse(
