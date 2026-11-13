@@ -1336,6 +1336,7 @@ describe("attachSource switching to the rendition that fits", () => {
 		held(hls);
 		void video.play();
 		hls.currentLevel = 0;
+		hls.bandwidthEstimate = (LADDER[2]?.bitrate ?? 0) * 4;
 		const before = seeks();
 
 		setLevel(2);
@@ -1348,6 +1349,21 @@ describe("attachSource switching to the rendition that fits", () => {
 		expect(seeks()).toBe(before + 1);
 	});
 
+	it("changes to a sharper pick at the next segment when the line could not refill the buffer quickly", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
+		held(hls);
+		void video.play();
+		hls.currentLevel = 0;
+		hls.bandwidthEstimate = (LADDER[2]?.bitrate ?? 0) * 4 - 1;
+
+		setLevel(2);
+
+		expect(hls.currentLevel).toBe(0);
+		expect((hls as unknown as { nextLevel?: number }).nextLevel).toBe(2);
+	});
+
 	it("changes to a lower pick or to Auto at the next segment", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
@@ -1355,6 +1371,7 @@ describe("attachSource switching to the rendition that fits", () => {
 		held(hls);
 		void video.play();
 		hls.currentLevel = 2;
+		hls.bandwidthEstimate = 1_000_000_000;
 
 		setLevel(0);
 		expect(hls.currentLevel).toBe(2);

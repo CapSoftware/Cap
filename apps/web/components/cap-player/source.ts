@@ -152,6 +152,12 @@ export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 // measured on the segment held first, for it to replace that one before play.
 export const SECONDS_TO_SHARPEN = 0.5;
 
+// A manual pick sharper than the picture switches at once only when the
+// measured line brings a segment of it in about this share of its length.
+// On a slower line the flush froze the picture for longer than waiting for
+// the next segment does (5 s further behind after 15 s on 3G).
+export const PICK_AT_ONCE_SHARE = 0.25;
+
 type ConnectionHint = {
 	downlink?: number;
 	effectiveType?: string;
@@ -713,17 +719,22 @@ export const attachSource = (
 				destroy();
 				playNative(reached);
 			});
-			// A pick of a lower rendition, or of Auto, changes at the next
-			// segment: switching at once flushes the buffer and freezes the
-			// picture on a slow line. A pick sharper than the picture switches at
-			// once, or the old rendition plays out everything already buffered
-			// under the new label. Before play a pick is only remembered, so it
-			// downloads nothing.
+			// A pick changes at the next segment: switching at once flushes the
+			// buffer and freezes the picture on a slow line. A pick sharper than
+			// the picture switches at once on a line fast enough to refill it
+			// quickly, or the old rendition plays out everything already
+			// buffered. Before play a pick is only remembered, so it downloads
+			// nothing.
 			setLevel = (index) => {
 				picked = index;
 				if (!playRequested) return;
+				const level = hls.levels[index];
+				const fast =
+					!!level &&
+					hls.bandwidthEstimate * PICK_AT_ONCE_SHARE >= level.bitrate;
 				if (
 					index !== AUTO_LEVEL &&
+					fast &&
 					isSharper(hls.levels, index, hls.currentLevel)
 				) {
 					swappedTo = index;

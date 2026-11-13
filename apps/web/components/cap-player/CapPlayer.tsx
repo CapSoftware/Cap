@@ -1154,7 +1154,22 @@ export const CapPlayer = ({
 	// Before play, Auto shows the rendition held for the first frame, which
 	// can be the smallest one while the line is measured. The bar says Auto
 	// until there is a picture worth naming.
-	const qualityShown = autoQuality && !started ? "Auto" : quality;
+	// A pick lands at the next segment on a slow line, so until then the bar
+	// names the rendition on screen rather than the one asked for.
+	const switching =
+		started &&
+		pickedLabel !== undefined &&
+		resolution !== "" &&
+		resolution !== pickedLabel;
+	const qualityShown =
+		autoQuality && !started ? "Auto" : switching ? resolution : quality;
+	const qualityAria = autoQuality
+		? started
+			? `auto, ${quality}`
+			: "auto"
+		: switching
+			? `${quality}, switching from ${resolution}`
+			: quality;
 
 	live.current = {
 		onFirstPlay,
@@ -1369,7 +1384,7 @@ export const CapPlayer = ({
 									className={`${styles.control} ${styles.text}`}
 									aria-haspopup="menu"
 									aria-expanded={menu === "quality"}
-									aria-label={`Quality, ${autoQuality ? (started ? `auto, ${quality}` : "auto") : quality}`}
+									aria-label={`Quality, ${qualityAria}`}
 									onClick={() => setMenu(menu === "quality" ? null : "quality")}
 								>
 									{qualityShown}

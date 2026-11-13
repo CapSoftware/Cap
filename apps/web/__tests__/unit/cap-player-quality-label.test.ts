@@ -117,6 +117,34 @@ describe("cap player quality label before play", () => {
 		expect(button()?.textContent).toBe("720p");
 	});
 
+	it("names the rendition on screen until a pick reaches it", async () => {
+		const video = await render();
+		act(() => {
+			video.dispatchEvent(new Event("play"));
+		});
+		const quality = button();
+		if (!quality) throw new Error("no quality button");
+		act(() => quality.click());
+		const item = [
+			...container.querySelectorAll<HTMLButtonElement>(
+				'[role="menuitemradio"]',
+			),
+		].find((entry) => entry.textContent?.startsWith("720p"));
+		if (!item) throw new Error("no 720p row");
+		act(() => item.click());
+
+		expect(button()?.textContent).toBe("360p");
+		expect(button()?.getAttribute("aria-label")).toBe(
+			"Quality, 720p, switching from 360p",
+		);
+		size = { width: 1280, height: 720 };
+		act(() => {
+			video.dispatchEvent(new Event("resize"));
+		});
+		expect(button()?.textContent).toBe("720p");
+		expect(button()?.getAttribute("aria-label")).toBe("Quality, 720p");
+	});
+
 	it("names the rendition from the start when the player autoplays", async () => {
 		await render(true);
 
