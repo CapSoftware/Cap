@@ -191,6 +191,7 @@ const UPLOAD_TOKEN_RATE_LIMIT: DeveloperRateLimit = {
 // last minute is let through even then.
 const blockedAddresses = new Map<string, number>();
 const refusedCredentials = new Map<string, number>();
+const pendingLookups = new Map<string, Promise<DeveloperSecretKey | null>>();
 const acceptedAt = new Map<string, number>();
 
 function refusedKey(address: string, digest: string) {
@@ -369,8 +370,25 @@ export const developerRateLimiter = createMiddleware<{
 		return c.json(unknownSecretKey(), 401);
 	}
 
-	const key = await findDeveloperSecretKey(credential);
+	// Requests with the same credential from the same address share one lookup,
+	// and only that lookup counts a refusal, so a burst of retries with a
+	// rotated key counts once however many arrive before it finishes.
+	const pairKey = address ? refusedKey(address, digest) : null;
+	let pending = pairKey ? pendingLookups.get(pairKey) : undefined;
+	const leads = pending === undefined;
+	if (!pending) {
+		pending = findDeveloperSecretKey(credential);
+		if (pairKey) {
+			pendingLookups.set(pairKey, pending);
+			void pending.then(
+				() => pendingLookups.delete(pairKey),
+				() => pendingLookups.delete(pairKey),
+			);
+		}
+	}
+	const key = await pending;
 	if (!key) {
+		if (!leads) return c.json(unknownSecretKey(), 401);
 		if (address) rememberRefused(address, digest);
 		if (await tooManyAuthFailures(c)) return authFailuresLimited(c);
 		return c.json(unknownSecretKey(), 401);

@@ -848,6 +848,41 @@ describe("credentials that are not accepted", () => {
 		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
 	});
 
+	it("counts a burst of parallel retries with one refused key once, so a valid key from that address still passes", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		const address = { "x-real-ip": "203.0.113.93" };
+		const accepted = mocks.keyRows;
+		mocks.keyRows = [];
+		const rotated = freshKey("csk");
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		mocks.hashKey.mockImplementation(async (key: string) => {
+			await gate;
+			return `hash:${key}`;
+		});
+
+		const burst = Array.from({ length: 50 }, () => getUsage(rotated, address));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		release();
+		const statuses = (await Promise.all(burst)).map(
+			(response) => response.status,
+		);
+
+		expect(statuses).toEqual(Array(50).fill(401));
+		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+		expect(
+			mocks.firewall.mock.calls.filter(
+				([ruleId]) => ruleId === "rl_developer_auth_failure",
+			),
+		).toHaveLength(1);
+
+		mocks.hashKey.mockImplementation(async (key: string) => `hash:${key}`);
+		mocks.keyRows = accepted;
+		expect((await getUsage(freshKey("csk"), address)).status).toBe(200);
+	});
+
 	it("bounds the lookups an address sending different refused keys can cause to the per-address ceiling", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-11-12T13:20:00Z"));
