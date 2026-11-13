@@ -21,8 +21,8 @@ export type DeveloperVideoQuery = Record<string, string | string[] | undefined>;
 
 const SECONDS_PATTERN = /^\d{1,6}(\.\d{1,3})?$/;
 const HEX_COLOR_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
-const RADIUS_PATTERN = /^\d{1,2}$/;
-const QUALITY_PATTERN = /^(\d{3,4})p?$/i;
+const RADIUS_PATTERN = /^\d+$/;
+const QUALITY_PATTERN = /^(\d+)p?$/i;
 const MAX_EMBED_RADIUS = 24;
 const LOWEST_QUALITY = 144;
 const HIGHEST_QUALITY = 4320;
@@ -56,9 +56,12 @@ const cornerRadius = (value: string | string[] | undefined) => {
 	return Math.min(MAX_EMBED_RADIUS, Number(text));
 };
 
+// A number outside the heights a rendition can have is clamped, not ignored:
+// below every rendition, the playback route keeps only the smallest one.
 const qualityCap = (value: string | string[] | undefined) => {
 	const height = Number(QUALITY_PATTERN.exec(first(value) ?? "")?.[1]);
-	return height >= LOWEST_QUALITY && height <= HIGHEST_QUALITY ? height : null;
+	if (!(height > 0)) return null;
+	return Math.min(HIGHEST_QUALITY, Math.max(LOWEST_QUALITY, height));
 };
 
 export function developerVideoPlayback(
