@@ -1,9 +1,13 @@
 import { pathToFileURL } from "node:url";
 
-const USAGE = `Take a Cap Infra video down, or restore it.
+const USAGE = `Take a Cap Infra video down, restore it, or delete it.
 
   bun scripts/infra-video-takedown.ts down <video>
   bun scripts/infra-video-takedown.ts restore <video>
+  bun scripts/infra-video-takedown.ts delete <video>
+
+delete takes the video down, deletes it as its owner would and removes its
+files at once, so links already handed out stop working. It cannot be undone.
 
 <video> is a playback id, a video id, or the hosted, embed or playback URL.
 
@@ -18,23 +22,24 @@ type TakedownAnswer = {
 		videoId: string;
 		appId: string;
 		playbackId: string | null;
-		takenDown: boolean;
-		changed: boolean;
+		takenDown?: boolean;
+		changed?: boolean;
+		alreadyDeleted?: boolean;
+		filesPurged?: boolean;
 	};
 	error?: string;
 };
 
 export function parseTakedownArgs(
 	argv: readonly string[],
-): { video: string; takenDown: boolean } | null {
+):
+	| { video: string; takenDown: boolean }
+	| { video: string; delete: true }
+	| null {
 	const [action, video, ...rest] = argv;
-	if (
-		rest.length > 0 ||
-		!video ||
-		(action !== "down" && action !== "restore")
-	) {
-		return null;
-	}
+	if (rest.length > 0 || !video) return null;
+	if (action === "delete") return { video, delete: true };
+	if (action !== "down" && action !== "restore") return null;
 	return { video, takenDown: action === "down" };
 }
 
@@ -81,10 +86,18 @@ export async function runTakedown({
 		fail(`${response.status}: ${body?.error ?? "unexpected answer"}`);
 		return 1;
 	}
+	const name = `${data.videoId} (playback ${data.playbackId ?? "none"}, app ${data.appId})`;
+	if ("delete" in parsed) {
+		const files = data.filesPurged
+			? "its files are removed"
+			: "its files could not be removed yet and the purge job will retry";
+		log(
+			`${name} is deleted${data.alreadyDeleted ? " (it already was)" : ""}, and ${files}.`,
+		);
+		return data.filesPurged ? 0 : 1;
+	}
 	const state = data.takenDown ? "taken down" : "playing normally";
-	log(
-		`${data.videoId} (playback ${data.playbackId ?? "none"}, app ${data.appId}) is ${state}${data.changed ? "" : ", unchanged"}.`,
-	);
+	log(`${name} is ${state}${data.changed ? "" : ", unchanged"}.`);
 	return 0;
 }
 
