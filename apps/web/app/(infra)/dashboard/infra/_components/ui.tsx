@@ -7,14 +7,22 @@ export const MONO =
 	"[font-family:var(--font-infra-mono),ui-monospace,SFMono-Regular,monospace]";
 
 export const TEXT = "text-[#E8ECF4]";
-export const MUTED = "text-[rgba(232,236,244,0.58)]";
-export const FAINT = "text-[rgba(232,236,244,0.4)]";
+export const MUTED = "text-[rgba(232,236,244,0.62)]";
+export const FAINT = "text-[rgba(232,236,244,0.44)]";
 export const RULE = "border-[rgba(222,230,246,0.08)]";
+
+// The console sits on a lifted charcoal, the same one the /infra page reads as
+// once its art is behind it. Surfaces are translucent so the light behind the
+// page shows through them.
+export const BG = "#0A0B0D";
+export const SURFACE =
+	"bg-[linear-gradient(180deg,rgba(222,230,246,0.045),rgba(222,230,246,0.022))] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.085),inset_0_1px_0_rgba(255,255,255,0.04)]";
+export const PANEL = clsx("rounded-[14px]", SURFACE);
 export const LIT =
 	"bg-white shadow-[0_0_8px_1px_rgba(214,228,255,0.7),0_0_28px_4px_rgba(190,210,255,0.28)]";
 
 export const FOCUS =
-	"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]";
+	"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0B0D]";
 
 export const FOCUS_INSET =
 	"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[rgba(232,236,244,0.8)]";
@@ -29,9 +37,10 @@ const BUTTON_BASE =
 	"inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[8px] font-medium transition-[background-color,box-shadow,color,opacity] duration-200 disabled:pointer-events-none disabled:opacity-40";
 
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-	primary: "bg-[#E8ECF4] text-[#050506] hover:bg-white",
+	primary:
+		"bg-[#E8ECF4] text-[#050506] shadow-[inset_0_1px_0_rgba(255,255,255,0.6),0_1px_2px_rgba(0,0,0,0.4)] hover:bg-white hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.6),0_0_18px_rgba(214,228,255,0.18)]",
 	ghost:
-		"font-normal text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.16)] hover:bg-[rgba(222,230,246,0.05)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.28)]",
+		"font-normal text-[#E8ECF4] bg-[rgba(222,230,246,0.035)] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.14)] hover:bg-[rgba(222,230,246,0.07)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.26)]",
 	danger:
 		"font-normal text-[#F2A199] shadow-[inset_0_0_0_1px_rgba(242,161,153,0.28)] hover:bg-[rgba(242,161,153,0.08)] hover:shadow-[inset_0_0_0_1px_rgba(242,161,153,0.5)]",
 	quiet:
@@ -103,7 +112,7 @@ export function ButtonLink({
 
 export const inputClass = (className?: string) =>
 	clsx(
-		"h-9 w-full min-w-0 rounded-[8px] border-0 bg-[rgba(222,230,246,0.04)] px-3 text-[14px] text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12)] outline-none transition-shadow duration-200 placeholder:text-[rgba(232,236,244,0.32)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.22)] focus:shadow-[inset_0_0_0_1px_rgba(232,236,244,0.7)] focus:ring-0",
+		"h-9 w-full min-w-0 rounded-[8px] border-0 bg-[rgba(5,6,8,0.5)] px-3 text-[14px] text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12)] outline-none transition-shadow duration-200 placeholder:text-[rgba(232,236,244,0.32)] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.22)] focus:shadow-[inset_0_0_0_1px_rgba(232,236,244,0.7)] focus:ring-0",
 		className,
 	);
 
@@ -123,7 +132,7 @@ export function PageHeader({
 	return (
 		<header className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
 			<div className="min-w-0">
-				<h1 className="m-0 text-[26px] font-medium leading-[1.15] tracking-[-0.03em] text-[#E8ECF4]">
+				<h1 className="m-0 text-[28px] font-medium leading-[1.12] tracking-[-0.032em] text-[#E8ECF4]">
 					{title}
 				</h1>
 				{description && (
@@ -175,8 +184,27 @@ export function Block({
 				</div>
 				{action}
 			</div>
-			<div className={clsx("border-t", RULE)}>{children}</div>
+			<div className={clsx(PANEL, CARD_ROWS, "px-5 py-1")}>{children}</div>
 		</section>
+	);
+}
+
+// Rows inside a panel draw their own bottom rule; the panel's edge replaces the
+// last one.
+export const CARD_ROWS =
+	"min-w-0 [&>:last-child]:border-b-0 [&_li:last-child]:border-b-0 [&_tbody>tr:last-child]:border-b-0";
+
+export function Panel({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<div className={clsx(PANEL, CARD_ROWS, "px-5 py-1", className)}>
+			{children}
+		</div>
 	);
 }
 
@@ -192,8 +220,8 @@ export function Split({
 	return (
 		<section
 			className={clsx(
-				"grid gap-x-16 gap-y-5 border-t py-9 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]",
-				RULE,
+				"grid gap-x-16 gap-y-5 p-6 sm:p-8 lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)] [section+&]:mt-3",
+				PANEL,
 			)}
 		>
 			<div className="min-w-0">
@@ -211,7 +239,7 @@ export function Split({
 					</p>
 				)}
 			</div>
-			<div className="min-w-0">{children}</div>
+			<div className="min-w-0 [&>:last-child]:border-b-0">{children}</div>
 		</section>
 	);
 }
@@ -228,10 +256,7 @@ export function Disclosure({
 	children: ReactNode;
 }) {
 	return (
-		<details
-			open={open}
-			className="group min-w-0 border-t border-[rgba(222,230,246,0.08)] pt-5"
-		>
+		<details open={open} className={clsx("group min-w-0 px-5 py-4", PANEL)}>
 			<summary
 				className={clsx(
 					"flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[6px] text-[14px] text-[#E8ECF4] [&::-webkit-details-marker]:hidden",
@@ -252,19 +277,14 @@ export function Disclosure({
 					</span>
 				)}
 			</summary>
-			<div className="min-w-0 pt-6">{children}</div>
+			<div className="min-w-0 pb-2 pt-6">{children}</div>
 		</details>
 	);
 }
 
 export function Figures({ children }: { children: ReactNode }) {
 	return (
-		<dl
-			className={clsx(
-				"m-0 grid border-y sm:grid-flow-col sm:auto-cols-fr",
-				RULE,
-			)}
-		>
+		<dl className="m-0 grid grid-cols-2 gap-3 sm:grid-flow-col sm:grid-cols-none sm:auto-cols-fr">
 			{children}
 		</dl>
 	);
@@ -284,11 +304,17 @@ export function Figure({
 	return (
 		<div
 			className={clsx(
-				"flex min-w-0 items-baseline justify-between gap-4 border-b py-4 last:border-b-0 sm:flex-col-reverse sm:items-start sm:justify-end sm:gap-2.5 sm:border-b-0 sm:border-l sm:py-6 sm:pl-6 sm:first:border-l-0 sm:first:pl-0",
-				RULE,
+				"relative flex min-w-0 flex-col-reverse justify-end gap-2.5 overflow-hidden px-4 py-4 sm:px-5 sm:py-5",
+				PANEL,
 			)}
 		>
-			<dt className="min-w-0 text-[13px] leading-[1.35] text-[rgba(232,236,244,0.5)]">
+			{lead && (
+				<span
+					aria-hidden="true"
+					className="pointer-events-none absolute inset-x-0 top-0 h-full bg-[radial-gradient(120%_90%_at_0%_0%,rgba(214,228,255,0.09),transparent_60%)]"
+				/>
+			)}
+			<dt className="relative min-w-0 text-[13px] leading-[1.35] text-[rgba(232,236,244,0.56)]">
 				{label}
 				{hint && (
 					<span className="block text-[12px] text-[rgba(232,236,244,0.34)]">
@@ -299,8 +325,8 @@ export function Figure({
 			<dd
 				className={clsx(
 					MONO,
-					"m-0 text-[17px] leading-none tracking-[-0.04em] tabular-nums",
-					"sm:text-[22px] xl:text-[28px]",
+					"relative m-0 truncate text-[19px] leading-none tracking-[-0.04em] tabular-nums",
+					"sm:text-[22px] xl:text-[26px]",
 					lead ? "text-white" : "text-[rgba(232,236,244,0.82)]",
 				)}
 			>
@@ -321,8 +347,10 @@ export function EnvTag({
 	return (
 		<span
 			className={clsx(
-				"inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] leading-none",
-				live ? "text-[#E8ECF4]" : "text-[rgba(232,236,244,0.5)]",
+				"inline-flex h-[20px] w-fit items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11.5px] leading-none",
+				live
+					? "bg-[rgba(214,228,255,0.08)] text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(214,228,255,0.16)]"
+					: "bg-[rgba(222,230,246,0.05)] text-[rgba(232,236,244,0.6)] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.08)]",
 				className,
 			)}
 		>
@@ -332,7 +360,7 @@ export function EnvTag({
 					"size-[5px] rounded-full",
 					live
 						? "bg-white shadow-[0_0_6px_1px_rgba(214,228,255,0.8)]"
-						: "bg-[rgba(232,236,244,0.36)]",
+						: "bg-[rgba(232,236,244,0.4)]",
 				)}
 			/>
 			{live ? "Production" : "Development"}
@@ -341,9 +369,9 @@ export function EnvTag({
 }
 
 export const TH =
-	"whitespace-nowrap py-3 pr-6 text-left text-[12.5px] font-normal text-[rgba(232,236,244,0.42)] last:pr-0";
+	"whitespace-nowrap py-3 pr-6 text-left text-[12.5px] font-normal text-[rgba(232,236,244,0.48)] last:pr-0";
 export const TD =
-	"whitespace-nowrap py-3 pr-6 text-[13.5px] text-[rgba(232,236,244,0.72)] last:pr-0";
+	"whitespace-nowrap py-3 pr-6 text-[13.5px] text-[rgba(232,236,244,0.78)] last:pr-0";
 export const TR = "border-b border-[rgba(222,230,246,0.07)]";
 
 export function Empty({ children }: { children: ReactNode }) {
