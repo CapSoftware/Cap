@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	clearEmbedOriginsCache,
+	EMBED_ORIGINS_CACHE_MS,
+} from "@/lib/developer-embed-origins";
 import { proxy } from "../../proxy";
 
 const state = vi.hoisted(() => ({
@@ -55,7 +59,12 @@ beforeEach(() => {
 	state.domains = [];
 	state.fail = false;
 	state.lookups = 0;
+	clearEmbedOriginsCache();
 	vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 describe("embed frame-ancestors", () => {
@@ -109,6 +118,35 @@ describe("embed frame-ancestors", () => {
 		const response = await send(EMBED);
 		expect(response.status).toBe(200);
 		expect(headerList(response)).toEqual([["x-middleware-next", "1"]]);
+	});
+
+	it("reads an app's list once a minute per instance", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		state.domains = ["https://myshop.com"];
+		await send(EMBED);
+		state.domains = [];
+		const cached = await send(EMBED);
+		expect(state.lookups).toBe(1);
+		expect(cached.headers.get("content-security-policy")).toBe(
+			"frame-ancestors 'self' https://myshop.com",
+		);
+
+		vi.setSystemTime(Date.now() + EMBED_ORIGINS_CACHE_MS + 1);
+		const fresh = await send(EMBED);
+		expect(state.lookups).toBe(2);
+		expect(fresh.headers.get("content-security-policy")).toBeNull();
+	});
+
+	it("does not keep a failed read", async () => {
+		state.domains = ["https://myshop.com"];
+		state.fail = true;
+		await send(EMBED);
+		state.fail = false;
+		const response = await send(EMBED);
+		expect(state.lookups).toBe(2);
+		expect(response.headers.get("content-security-policy")).toBe(
+			"frame-ancestors 'self' https://myshop.com",
+		);
 	});
 
 	it.each([

@@ -1514,6 +1514,7 @@ Only these sites can embed your player. Add them under Allowed sites in the app'
 - Each entry is one site, such as `https://myshop.com`. A subdomain is a separate site, so add `https://www.myshop.com` on its own. Wildcards are not supported.
 - Only https sites are accepted, plus `http://localhost` for testing.
 - Once a site is added, `embedUrl` tells browsers that only the listed sites, and Cap's own pages, may show it in a frame. On any other site the browser refuses to show the frame, so the player never loads and sends no `postMessage` events, not even `error`.
+- A change to the list reaches every embed within a minute.
 - The list only controls embedding. `shareUrl` and the `hlsUrl`, `mp4Url` and `posterUrl` playback URLs stay open to everyone who has them.
 
 ### Embed Parameters
