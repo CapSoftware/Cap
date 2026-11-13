@@ -23,11 +23,10 @@ beforeEach(() => {
 	root = createRoot(container);
 	act(() =>
 		root.render(
-			createElement(
-				QueryClientProvider,
-				{ client: new QueryClient() },
-				createElement(TopUp, { appId: "app-1" }),
-			),
+			createElement(QueryClientProvider, {
+				client: new QueryClient(),
+				children: createElement(TopUp, { appId: "app-1", autoTopUpHref: null }),
+			}),
 		),
 	);
 });
