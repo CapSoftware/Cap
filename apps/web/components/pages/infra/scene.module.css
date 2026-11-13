@@ -1,0 +1,513 @@
+@property --front {
+	syntax: "<number>";
+	inherits: true;
+	initial-value: 0.5977;
+}
+
+.hero {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
+	padding: 112px 0 468px;
+}
+
+.art,
+.stage {
+	position: absolute;
+	left: 50%;
+	bottom: 0;
+	height: 500px;
+	aspect-ratio: 2 / 1;
+	translate: -50% 0;
+}
+
+.stage {
+	z-index: 1;
+	pointer-events: none;
+}
+
+.art {
+	--front: var(--slit-top);
+	z-index: -1;
+	background-size: 100% 100%;
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 16%,
+			#000 76%,
+			transparent 98%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 12%,
+			#000 88%,
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 16%,
+			#000 76%,
+			transparent 98%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 12%,
+			#000 88%,
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+	animation: travel 8.1s linear 0.9s both;
+}
+
+.base,
+.lit {
+	position: absolute;
+	display: block;
+	width: 100%;
+	height: 100%;
+	user-select: none;
+	pointer-events: none;
+}
+
+.base {
+	inset: 0;
+}
+
+.dust {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 1.8s ease;
+}
+
+.dust[data-on="true"] {
+	opacity: 1;
+}
+
+.litBox {
+	position: absolute;
+	left: calc(var(--lit-x) * 100%);
+	top: calc(var(--lit-y) * 100%);
+	width: calc(var(--lit-w) * 100%);
+	height: calc(var(--lit-h) * 100%);
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent
+				calc((var(--front) - var(--lit-y)) / var(--lit-h) * 100% - 1.5%),
+			#000 calc((var(--front) - var(--lit-y)) / var(--lit-h) * 100%)
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 30%,
+			#000 70%,
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent
+				calc((var(--front) - var(--lit-y)) / var(--lit-h) * 100% - 1.5%),
+			#000 calc((var(--front) - var(--lit-y)) / var(--lit-h) * 100%)
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 30%,
+			#000 70%,
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+}
+
+.pulse {
+	position: absolute;
+	left: 50%;
+	top: calc(var(--front) * 100%);
+	width: 0;
+	height: 0;
+	opacity: 0;
+	scale: clamp(
+		0.22,
+		calc((var(--front) - var(--horizon)) / (1 - var(--horizon))),
+		1
+	);
+	animation: pulse-life 8.1s linear 0.9s both;
+}
+
+.pulse::before {
+	content: "";
+	position: absolute;
+	left: -90px;
+	top: -90px;
+	width: 180px;
+	height: 180px;
+	background: radial-gradient(
+		circle,
+		rgba(255, 255, 255, 1) 0%,
+		rgba(226, 236, 255, 0.85) 3%,
+		rgba(200, 218, 255, 0.28) 10%,
+		rgba(200, 218, 255, 0.08) 28%,
+		rgba(200, 218, 255, 0) 60%
+	);
+}
+
+.pulse::after {
+	content: "";
+	position: absolute;
+	left: -1.5px;
+	top: 0;
+	width: 3px;
+	height: 300px;
+	background: linear-gradient(
+		to bottom,
+		rgba(255, 255, 255, 0.95) 0%,
+		rgba(214, 228, 255, 0.4) 30%,
+		rgba(214, 228, 255, 0) 100%
+	);
+}
+
+@keyframes pulse-life {
+	0% {
+		opacity: 0;
+	}
+	2% {
+		opacity: 1;
+	}
+	80.5% {
+		opacity: 1;
+	}
+	82%,
+	100% {
+		opacity: 0;
+	}
+}
+
+@keyframes travel {
+	0% {
+		--front: 1;
+	}
+	3.09% {
+		--front: 0.95052;
+	}
+	6.17% {
+		--front: 0.91429;
+	}
+	9.88% {
+		--front: 0.88185;
+	}
+	14.2% {
+		--front: 0.85378;
+	}
+	19.14% {
+		--front: 0.82995;
+	}
+	24.69% {
+		--front: 0.80991;
+	}
+	31.48% {
+		--front: 0.79167;
+	}
+	39.51% {
+		--front: 0.77577;
+	}
+	48.77% {
+		--front: 0.76226;
+	}
+	59.26% {
+		--front: 0.75092;
+	}
+	70.37% {
+		--front: 0.74189;
+	}
+	81.48%,
+	83.33% {
+		--front: var(--slab-base);
+	}
+	100% {
+		--front: var(--slit-top);
+	}
+}
+
+@media (min-width: 640px) {
+	.hero {
+		padding-bottom: 572px;
+	}
+
+	.art,
+	.stage {
+		height: 620px;
+	}
+}
+
+@media (min-width: 1024px) {
+	.hero {
+		height: clamp(700px, 100svh, 940px);
+		padding: 0;
+	}
+
+	.art,
+	.stage {
+		left: 67%;
+		height: 104%;
+	}
+
+	.art {
+		-webkit-mask-image:
+			linear-gradient(
+				to bottom,
+				transparent 0%,
+				#000 10%,
+				#000 84%,
+				transparent 100%
+			),
+			linear-gradient(
+				to right,
+				transparent 0%,
+				#000 10%,
+				#000 90%,
+				transparent 100%
+			);
+		mask-image:
+			linear-gradient(
+				to bottom,
+				transparent 0%,
+				#000 10%,
+				#000 84%,
+				transparent 100%
+			),
+			linear-gradient(
+				to right,
+				transparent 0%,
+				#000 10%,
+				#000 90%,
+				transparent 100%
+			);
+	}
+}
+
+.plates {
+	position: relative;
+	margin: 0;
+	aspect-ratio: var(--plates-ratio-small);
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 14%,
+			#000 78%,
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 10%,
+			#000 90%,
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 14%,
+			#000 78%,
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 10%,
+			#000 90%,
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+	background-size: 100% 100%;
+}
+
+.rung {
+	position: absolute;
+	left: calc(var(--sx) * 100%);
+	top: calc(var(--sy) * 100%);
+	width: calc((var(--sto) - var(--sx)) * 100%);
+	height: 1px;
+	background: linear-gradient(
+		to right,
+		rgba(232, 236, 244, 0.55),
+		rgba(232, 236, 244, 0.18)
+	);
+}
+
+.rung span {
+	position: absolute;
+	left: calc(100% + 8px);
+	top: 50%;
+	translate: 0 -50%;
+	white-space: nowrap;
+}
+
+@media (min-width: 768px) {
+	.plates {
+		aspect-ratio: var(--plates-ratio);
+	}
+
+	.rung {
+		left: calc(var(--x) * 100%);
+		top: calc(var(--y) * 100%);
+		width: calc((var(--to) - var(--x)) * 100%);
+	}
+}
+
+.night {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
+}
+
+.nightArt {
+	position: absolute;
+	z-index: -1;
+	left: 50%;
+	bottom: 0;
+	width: max(100%, 980px);
+	aspect-ratio: var(--night-ratio);
+	translate: -50% 0;
+	background-size: 100% 100%;
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 22%,
+			#000 78%,
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 14%,
+			#000 86%,
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0%,
+			#000 22%,
+			#000 78%,
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0%,
+			#000 14%,
+			#000 86%,
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+}
+
+.grain {
+	pointer-events: none;
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	opacity: 0.055;
+	background-size: 160px 160px;
+}
+
+.measure {
+	position: relative;
+	height: 1px;
+	background: rgba(222, 230, 246, 0.16);
+}
+
+.measure::before,
+.measure::after {
+	content: "";
+	position: absolute;
+	top: -4px;
+	width: 1px;
+	height: 9px;
+	background: rgba(222, 230, 246, 0.3);
+}
+
+.measure::before {
+	left: 0;
+}
+
+.measure::after {
+	right: 0;
+}
+
+.taken {
+	position: absolute;
+	left: 0;
+	top: -1px;
+	height: 3px;
+	min-width: 3px;
+	width: calc(var(--share) * 100%);
+	background: #fff;
+	box-shadow:
+		0 0 8px 1px rgba(214, 228, 255, 0.7),
+		0 0 28px 4px rgba(190, 210, 255, 0.28);
+}
+
+.caret {
+	display: inline-block;
+	width: 2px;
+	height: 1.15em;
+	margin-left: 0.45em;
+	vertical-align: -0.2em;
+	background: #fff;
+	box-shadow:
+		0 0 8px 1px rgba(214, 228, 255, 0.7),
+		0 0 28px 4px rgba(190, 210, 255, 0.28);
+	animation: caret-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes caret-breathe {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.3;
+	}
+}
+
+.promptFade {
+	max-height: 128px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		rgba(0, 0, 0, 0.55) 45%,
+		transparent 100%
+	);
+	mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		rgba(0, 0, 0, 0.55) 45%,
+		transparent 100%
+	);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.art,
+	.pulse,
+	.caret {
+		animation: none;
+	}
+}
