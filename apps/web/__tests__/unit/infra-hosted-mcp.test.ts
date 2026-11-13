@@ -394,7 +394,10 @@ describe("hosted Cap Infra MCP tools", () => {
 				tools: {
 					name: string;
 					inputSchema: {
-						properties: Record<string, { maximum?: number; description?: string }>;
+						properties: Record<
+							string,
+							{ maximum?: number; description?: string }
+						>;
 						additionalProperties?: boolean;
 					};
 				}[];
