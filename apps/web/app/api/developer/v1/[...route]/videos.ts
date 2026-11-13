@@ -14,6 +14,7 @@ import {
 	serializeDeveloperVideo,
 	serializeDeveloperVideoStatus,
 } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { withDeveloperSecretAuth } from "../../../utils";
@@ -150,6 +151,7 @@ app.delete("/:id", async (c) => {
 			.update(developerVideos)
 			.set({ deletedAt: new Date() })
 			.where(eq(developerVideos.id, videoId));
+		await cancelDeveloperVideoEncodes({ appId, videoId });
 	}
 
 	return c.json({ success: true });

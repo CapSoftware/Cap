@@ -92,11 +92,12 @@ export const BAA = "BAA available.";
 
 export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
-const DOCS = "/docs/api/rest-api";
+const REFERENCE = "/docs/api/rest-api";
 
 export const LINKS = {
-	docs: DOCS,
-	uploadDocs: `${DOCS}#multipart-upload`,
+	docs: "/docs/api/get-started",
+	reference: REFERENCE,
+	uploadDocs: `${REFERENCE}#multipart-upload`,
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -353,7 +354,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "How do I know when a video is ready?",
 		answer:
-			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
+			"Check the video's status from your server every 3 seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
 	},
 	{
 		question: "How do API keys work?",

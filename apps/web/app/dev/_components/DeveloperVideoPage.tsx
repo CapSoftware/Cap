@@ -104,6 +104,8 @@ function Stage({
 				loop={playback.loop}
 				controls={playback.controls}
 				startAt={playback.startAt}
+				captions={player.captions ?? undefined}
+				showCaptions={playback.captions}
 			/>
 		);
 	}

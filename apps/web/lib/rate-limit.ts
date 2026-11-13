@@ -1,5 +1,6 @@
 import { checkRateLimit } from "@vercel/firewall";
 import { headers as nextHeaders } from "next/headers";
+import { DEVELOPER_AUTH_FAILURES_PER_MINUTE } from "@/lib/developer-rate-limits";
 
 const FIREWALL_FORWARDED_HEADER_NAMES = [
 	"host",
@@ -223,10 +224,14 @@ export const RATE_LIMIT_IDS = {
 	DEVELOPER_APP_CREATE: "rl_developer_app_create",
 	/** Developer key rotations from the console and the agent API. Suggested: 10 / 1h per key (user). */
 	DEVELOPER_KEY_ROTATE: "rl_developer_key_rotate",
-	/** Developer REST API requests per secret key. 60 / 1m per key (hash of the credential). */
+	/** Developer REST API requests per secret key. 300 / 1m per key (hash of the credential). */
 	DEVELOPER_API_KEY: "rl_developer_api_key",
 	/** Developer SDK upload requests per upload token. 1200 / 1m per key (hash of the credential). */
 	DEVELOPER_UPLOAD_TOKEN: "rl_developer_upload_token",
+	/** Developer REST API requests per account, across all of its keys. 1200 / 1m per key (owner id). */
+	DEVELOPER_API_OWNER: "rl_developer_api_owner",
+	/** Developer API requests whose key or upload token was not accepted. 300 / 1m per IP. */
+	DEVELOPER_AUTH_FAILURE: "rl_developer_auth_failure",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -289,6 +294,10 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.DEVELOPER_KEY_ROTATE]: {
 		limit: 10,
 		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DEVELOPER_AUTH_FAILURE]: {
+		limit: DEVELOPER_AUTH_FAILURES_PER_MINUTE,
+		windowMs: MINUTE_MS,
 	},
 };
 

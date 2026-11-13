@@ -1010,7 +1010,7 @@ export async function startStubApi() {
 									? apiError(
 											"rate_limited",
 											"Rate limit exceeded",
-											"Wait for the Retry-After seconds, then retry. Each key allows 60 requests per minute.",
+											"Wait for the Retry-After seconds, then retry.",
 										)
 									: apiError(
 											"internal_error",
@@ -1033,7 +1033,7 @@ export async function startStubApi() {
 						apiError(
 							"rate_limited",
 							"Rate limit exceeded",
-							"Wait for the Retry-After seconds, then retry. Each key allows 60 requests per minute.",
+							"Wait for the Retry-After seconds, then retry.",
 						),
 						{ "Retry-After": String(state.retryAfterSeconds) },
 					);

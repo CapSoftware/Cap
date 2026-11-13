@@ -9,13 +9,20 @@ import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { infraAppPath } from "@/lib/infra-routes";
 import {
 	resolveTopUpAmount,
+	TOP_UP_AMOUNT_PLACEHOLDER,
 	TOP_UP_DEFAULT_CENTS,
 	TOP_UP_PRESETS_CENTS,
 	topUpButtonLabel,
 } from "@/lib/infra-top-up";
-import { Button, FOCUS, Input, MONO } from "../../_components/ui";
+import { Button, FOCUS, Input, MONO, TEXT_LINK } from "../../_components/ui";
 
-export function TopUp({ appId }: { appId: string }) {
+export function TopUp({
+	appId,
+	autoTopUpHref,
+}: {
+	appId: string;
+	autoTopUpHref: string | null;
+}) {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const amountId = useId();
@@ -26,6 +33,9 @@ export function TopUp({ appId }: { appId: string }) {
 	const codeNoteId = useId();
 	const [codeOpen, setCodeOpen] = useState(false);
 	const [code, setCode] = useState("");
+	const [purchased] = useState(
+		() => searchParams.get("purchase") === "success",
+	);
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
@@ -115,7 +125,7 @@ export function TopUp({ appId }: { appId: string }) {
 						aria-invalid={amount.error ? true : undefined}
 						aria-describedby={amount.error ? amountErrorId : undefined}
 						onChange={(e) => setCustom(e.target.value)}
-						placeholder="Other, 5 to 1,000"
+						placeholder={TOP_UP_AMOUNT_PLACEHOLDER}
 						className="h-[38px] w-[176px] pl-6"
 					/>
 				</div>
@@ -173,6 +183,18 @@ export function TopUp({ appId }: { appId: string }) {
 					</Button>
 				)}
 			</div>
+			{purchased && autoTopUpHref && (
+				<p className="m-0 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+					Switch on{" "}
+					<a
+						href={autoTopUpHref}
+						className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
+					>
+						auto top-up
+					</a>{" "}
+					to add credit as soon as the balance falls below a threshold you set.
+				</p>
+			)}
 		</form>
 	);
 }
