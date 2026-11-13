@@ -266,14 +266,14 @@ export function uploadAdmission({
 	lastOwedMicroCredits: number;
 	storage: {
 		dailyCharge: Pick<AppStorage["dailyCharge"], "monthlyMicroCredits">;
-		firstMonthDue: Pick<AppStorage["firstMonthDue"], "monthlyMicroCredits">;
+		firstMonthMicroCredits: number;
 	};
 }): InfraUploadAdmission {
 	const inGoodStanding = standing.state === "active";
 	const requiredMicroCredits = Math.max(
 		uploadAdmissionMicroCredits(
 			storage.dailyCharge.monthlyMicroCredits,
-			storage.firstMonthDue.monthlyMicroCredits,
+			storage.firstMonthMicroCredits,
 		),
 		inGoodStanding ? 0 : lastOwedMicroCredits,
 	);
@@ -319,9 +319,9 @@ export function uploadAdmission({
 
 function uploadCreditCovers(storage: {
 	dailyCharge: { monthlyMicroCredits: number };
-	firstMonthDue: { monthlyMicroCredits: number };
+	firstMonthMicroCredits: number;
 }) {
-	const firstMonth = storage.firstMonthDue.monthlyMicroCredits > 0;
+	const firstMonth = storage.firstMonthMicroCredits > 0;
 	const daily = storage.dailyCharge.monthlyMicroCredits > 0;
 	const firstMonthText =
 		"the first month of storage for each video being uploaded or encoded";

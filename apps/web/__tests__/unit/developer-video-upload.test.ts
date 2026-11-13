@@ -96,9 +96,8 @@ vi.mock("@/workflows/process-developer-video", () => ({
 
 vi.mock("@/lib/infra-storage", async () => {
 	const schema = await import("@cap/database/schema");
-	const { billableVideo, storageUsage } = await import(
-		"@/lib/developer-pricing"
-	);
+	const { billableVideo, firstMonthStorageMicroCredits, storageUsage } =
+		await import("@/lib/developer-pricing");
 	return {
 		getAppStorage: async (
 			appId: string,
@@ -131,7 +130,12 @@ vi.mock("@/lib/infra-storage", async () => {
 			return {
 				stored: storageUsage(ready),
 				dailyCharge: storageUsage(ready),
-				firstMonthDue: storageUsage(due),
+				firstMonthMicroCredits: due.reduce(
+					(sum, entry) =>
+						sum +
+						(entry.video ? firstMonthStorageMicroCredits(entry.video) : 0),
+					0,
+				),
 				uploadingVideos: 0,
 			};
 		},

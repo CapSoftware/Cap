@@ -644,6 +644,22 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(
 				(await getInfraUploadAdmission(appId, upload)).requiredMicroCredits,
 			).toBe(16_800);
+
+			const clips = (await makeApp(0)).appId;
+			for (let n = 0; n < 3; n++) {
+				await makeVideo(clips, { status: "processing", duration: 1 });
+			}
+			await makeVideo(clips, { status: "processing", duration: 0.2 });
+			const clip = {
+				durationSeconds: 1,
+				width: 1920,
+				height: 1080,
+				tier: "1080p" as const,
+			};
+			expect((await getAppStorage(clips)).firstMonthMicroCredits).toBe(4);
+			expect(
+				(await getInfraUploadAdmission(clips, clip)).requiredMicroCredits,
+			).toBe(5);
 		});
 
 		it("reports what is stored apart from what the daily charge covers", async () => {
@@ -673,10 +689,7 @@ describe.runIf(Boolean(databaseUrl))(
 				monthlyMicroCredits: 30 * 85,
 				dailyMicroCredits: Math.floor((30 * 85) / 30),
 			});
-			expect(storage.firstMonthDue).toMatchObject({
-				videoCount: 1,
-				monthlyMicroCredits: 5 * 85,
-			});
+			expect(storage.firstMonthMicroCredits).toBe(5 * 85);
 			expect(storage.uploadingVideos).toBe(1);
 
 			const billing = await getInfraBilling(appId);

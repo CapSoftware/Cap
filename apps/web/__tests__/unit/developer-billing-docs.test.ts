@@ -386,7 +386,7 @@ describe("examples in the REST API reference", () => {
 				lastOwedMicroCredits: 0,
 				storage: {
 					dailyCharge: { monthlyMicroCredits: 0 },
-					firstMonthDue: { monthlyMicroCredits: body.requiredMicroCredits },
+					firstMonthMicroCredits: body.requiredMicroCredits,
 				},
 			}),
 		);

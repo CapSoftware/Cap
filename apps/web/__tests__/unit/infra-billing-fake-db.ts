@@ -197,11 +197,16 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					(video) => !video.videoId || !rendered.params.includes(video.videoId),
 				)
 			: ledger.videos;
+		const firstMonth = (seconds: number, perMinute: number) =>
+			Math.max(1, Math.floor((seconds / 60) * perMinute));
 		return videos.map((video) => ({
 			...video,
 			status: video.status ?? "ready",
 			dailySeconds: video.dailySeconds ?? video.seconds,
 			dailyCount: video.dailyCount ?? video.count,
+			firstMonth1080p: firstMonth(video.seconds, 85),
+			firstMonth1440p: firstMonth(video.seconds, 145),
+			firstMonth2160p: firstMonth(video.seconds, 280),
 		}));
 	}
 

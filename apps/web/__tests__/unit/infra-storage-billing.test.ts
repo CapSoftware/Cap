@@ -600,11 +600,7 @@ describe("which videos are billed after the pipeline measures them", () => {
 
 		const { storage, admission } = await billing();
 
-		expect(storage.firstMonthDue.minutesByTier).toEqual({
-			"1080p": 0,
-			"1440p": 0,
-			"2160p": 10,
-		});
+		expect(storage.firstMonthMicroCredits).toBe(10 * 280);
 		expect(storage.stored.minutesByTier["2160p"]).toBe(0);
 		expect(storage.dailyCharge.minutesByTier["2160p"]).toBe(0);
 		expect(admission.requiredMicroCredits).toBe(
@@ -659,9 +655,9 @@ describe("upload admission against what is stored", () => {
 		});
 
 		expect(stored.dailyCharge.monthlyMicroCredits).toBe(4335);
-		expect(stored.firstMonthDue.monthlyMicroCredits).toBe(0);
+		expect(stored.firstMonthMicroCredits).toBe(0);
 		expect(withNew.dailyCharge.monthlyMicroCredits).toBe(4335);
-		expect(withNew.firstMonthDue.monthlyMicroCredits).toBe(28_000);
+		expect(withNew.firstMonthMicroCredits).toBe(28_000);
 		expect(withNew.stored.videoCount).toBe(3);
 
 		ledger.account.balanceMicroCredits = 1012;

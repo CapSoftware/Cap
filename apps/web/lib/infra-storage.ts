@@ -4,9 +4,12 @@ import { and, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
+	firstMonthStorageMicroCredits,
 	type StorageUsage,
+	storageMicroCreditsPerMinutePerMonth,
 	storageUsage,
 } from "@/lib/developer-pricing";
+import type { InfraResolutionTier } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 type StoredVideoGroup = {
@@ -20,7 +23,15 @@ type StoredVideoGroup = {
 	rows: number | string;
 	dailySeconds: number | string | null;
 	dailyCount: number | string | null;
+	firstMonth1080p: number | string | null;
+	firstMonth1440p: number | string | null;
+	firstMonth2160p: number | string | null;
 };
+
+const firstMonthSum = (tier: InfraResolutionTier) =>
+	sql<
+		number | string | null
+	>`COALESCE(SUM(GREATEST(1, FLOOR(${developerVideos.duration} / 60 * ${storageMicroCreditsPerMinutePerMonth(tier)}))), 0)`;
 
 const APP_ID_CHUNK = 500;
 
@@ -55,6 +66,9 @@ export function storedVideoGroupsQuery(
 			dailyCount: sql<
 				number | string | null
 			>`COALESCE(SUM(CASE WHEN ${inFirstMonth} THEN 0 WHEN ${developerVideos.duration} IS NULL THEN 0 ELSE 1 END), 0)`,
+			firstMonth1080p: firstMonthSum("1080p"),
+			firstMonth1440p: firstMonthSum("1440p"),
+			firstMonth2160p: firstMonthSum("2160p"),
 		})
 		.from(developerVideos)
 		.where(
@@ -153,7 +167,7 @@ export async function getAppStorageUsage(
 export type AppStorage = {
 	stored: StorageUsage;
 	dailyCharge: StorageUsage;
-	firstMonthDue: StorageUsage;
+	firstMonthMicroCredits: number;
 	uploadingVideos: number;
 };
 
@@ -169,29 +183,33 @@ export async function getAppStorage(
 		options.excludeVideoId,
 		options.now,
 	);
-	const usage = (
-		status: "ready" | "processing",
-		daily: boolean,
-		extra: BillableVideo | null = null,
-	) =>
-		storageUsage([
-			...groups
-				.filter((group) => group.status === status)
-				.map((group) => ({
-					video: billableVideo({
-						duration: Number(daily ? group.dailySeconds : group.seconds),
-						width: group.width,
-						height: group.height,
-						maxResolutionTier: group.maxResolutionTier,
-					}),
-					count: Number(daily ? group.dailyCount : group.count) || 0,
-				})),
-			...(extra ? [{ video: extra, count: 1 }] : []),
-		]);
+	const videoOf = (group: StoredVideoGroup, daily: boolean) =>
+		billableVideo({
+			duration: Number(daily ? group.dailySeconds : group.seconds),
+			width: group.width,
+			height: group.height,
+			maxResolutionTier: group.maxResolutionTier,
+		});
+	const ready = groups.filter((group) => group.status === "ready");
+	const usage = (daily: boolean) =>
+		storageUsage(
+			ready.map((group) => ({
+				video: videoOf(group, daily),
+				count: Number(daily ? group.dailyCount : group.count) || 0,
+			})),
+		);
+	const firstMonthOf = (group: StoredVideoGroup) => {
+		const video = videoOf(group, false);
+		return video ? Number(group[`firstMonth${video.tier}`]) || 0 : 0;
+	};
 	return {
-		stored: usage("ready", false),
-		dailyCharge: usage("ready", true),
-		firstMonthDue: usage("processing", false, newVideo),
+		stored: usage(false),
+		dailyCharge: usage(true),
+		firstMonthMicroCredits:
+			groups
+				.filter((group) => group.status === "processing")
+				.reduce((sum, group) => sum + firstMonthOf(group), 0) +
+			(newVideo ? firstMonthStorageMicroCredits(newVideo) : 0),
 		uploadingVideos: groups.reduce(
 			(sum, group) =>
 				sum + (Number(group.rows) || 0) - (Number(group.count) || 0),

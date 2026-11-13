@@ -201,7 +201,7 @@ describe("upload admission", () => {
 	const active = { state: "active" as const, pausesAt: null };
 	const pastFirstMonth = (monthlyMicroCredits: number) => ({
 		dailyCharge: { monthlyMicroCredits },
-		firstMonthDue: { monthlyMicroCredits: 0 },
+		firstMonthMicroCredits: 0,
 	});
 
 	it("needs seven days of storage, rounded up, and at least one micro-credit", () => {
@@ -225,7 +225,7 @@ describe("upload admission", () => {
 			lastOwedMicroCredits: 0,
 			storage: {
 				dailyCharge: { monthlyMicroCredits: 0 },
-				firstMonthDue: { monthlyMicroCredits: 5_600 },
+				firstMonthMicroCredits: 5_600,
 			},
 		});
 		expect(firstMonthOnly).toMatchObject({
@@ -244,7 +244,7 @@ describe("upload admission", () => {
 			lastOwedMicroCredits: 0,
 			storage: {
 				dailyCharge: { monthlyMicroCredits: 85_000 },
-				firstMonthDue: { monthlyMicroCredits: 16_800 },
+				firstMonthMicroCredits: 16_800,
 			},
 		});
 		expect(both.requiredMicroCredits).toBe(36_634);
