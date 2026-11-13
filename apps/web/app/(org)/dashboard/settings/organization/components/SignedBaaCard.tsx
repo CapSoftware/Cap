@@ -2,10 +2,6 @@
 
 import {
 	Button,
-	Card,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogHeader,
@@ -17,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+	type ReactNode,
 	Suspense,
 	useCallback,
 	useEffect,
@@ -35,6 +32,12 @@ import {
 } from "@/actions/organization/signed-baa";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import {
+	canManageOrganizationBilling,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
+import { AgreementDoodle } from "../_components/doodles";
+import { SettingsRow, StatusChip } from "../_components/settings-ui";
 import { SignaturePad } from "./SignaturePad";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -50,13 +53,54 @@ const EMPTY_FORM: FormState = {
 	noticesEmail: "",
 };
 
+const DESCRIPTION =
+	"HIPAA Business Associate Agreement between your organization and Cap Software, Inc.";
+
+function SignedBaaRow({
+	meta,
+	control,
+	children,
+}: {
+	meta?: ReactNode;
+	control?: ReactNode;
+	children?: ReactNode;
+}) {
+	return (
+		<SettingsRow
+			anchor="signed-baa"
+			icon={<AgreementDoodle />}
+			title="Signed BAA"
+			meta={meta}
+			description={DESCRIPTION}
+			control={control}
+		>
+			{children}
+		</SettingsRow>
+	);
+}
+
 export function SignedBaaCard() {
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, user } = useDashboardContext();
+	const role = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: activeOrganization?.members?.find(
+			(member) => member.userId === user.id,
+		)?.role,
+	});
+
+	if (!canManageOrganizationBilling(role)) {
+		return (
+			<SignedBaaRow meta={<StatusChip>Add-on</StatusChip>}>
+				<p className="mt-4 text-[13px] leading-5 text-gray-11 sm:pl-[58px]">
+					Ask your organization owner to add and sign the BAA.
+				</p>
+			</SignedBaaRow>
+		);
+	}
 
 	return (
-		<Suspense
-			fallback={<div className="h-32 rounded-xl animate-pulse bg-gray-4" />}
-		>
+		<Suspense fallback={<SignedBaaRow />}>
 			<SignedBaaCardContent key={activeOrganization?.organization.id} />
 		</Suspense>
 	);
@@ -165,8 +209,8 @@ function SignedBaaCardContent() {
 		onSuccess: (result) => {
 			toast.success(
 				result.emailSent
-					? "Signed BAA is active — a signed copy is on its way to your inbox"
-					: "Signed BAA is active — download your signed copy below",
+					? "Signed BAA is active. A signed copy is on its way to your inbox"
+					: "Signed BAA is active. Download your signed copy below",
 			);
 			setDialogOpen(false);
 			setForm(EMPTY_FORM);
@@ -287,121 +331,121 @@ function SignedBaaCardContent() {
 		},
 	];
 
+	const actionButton = isActive ? (
+		<Button
+			type="button"
+			size="xs"
+			variant="outline"
+			className="px-4"
+			onClick={() => {
+				window.location.href = downloadUrl;
+			}}
+		>
+			Download signed copy
+		</Button>
+	) : isPaid ? (
+		<Button
+			type="button"
+			size="xs"
+			variant="dark"
+			className="px-4"
+			disabled={actionsBlocked || signatureMutation.isPending}
+			onClick={openDialog}
+		>
+			Complete and sign BAA
+		</Button>
+	) : isProcessing ? null : (
+		<Button
+			type="button"
+			size="xs"
+			variant="dark"
+			className="px-4"
+			disabled={actionsBlocked || signatureMutation.isPending}
+			onClick={openDialog}
+		>
+			Get Signed BAA
+		</Button>
+	);
+	const settled =
+		!verificationPending && !verificationError && !statusFailed && !isLoading;
+
 	return (
-		<Card className="flex flex-col">
-			<CardHeader>
-				<CardTitle>Signed BAA</CardTitle>
-				<CardDescription>
-					HIPAA Business Associate Agreement between your organization and Cap
-					Software, Inc.
-				</CardDescription>
-			</CardHeader>
-			<div className="flex flex-wrap gap-5 justify-between items-center pt-4 mt-auto">
+		<SignedBaaRow
+			meta={
+				settled ? (
+					isActive ? (
+						<StatusChip tone="positive">Active</StatusChip>
+					) : isPaid ? (
+						<StatusChip tone="warning">Paid, awaiting signature</StatusChip>
+					) : isProcessing ? (
+						<StatusChip>Processing</StatusChip>
+					) : (
+						<StatusChip>Add-on</StatusChip>
+					)
+				) : null
+			}
+			control={settled ? actionButton : null}
+		>
+			<div className="flex flex-col gap-3 mt-4 text-[13px] leading-5 text-gray-11 sm:pl-[58px]">
 				{verificationPending ? (
-					<output className="text-sm text-gray-11">
-						Confirming your BAA payment...
-					</output>
+					<output>Confirming your BAA payment...</output>
 				) : verificationError ? (
-					<div className="flex flex-col gap-3 text-sm text-gray-11">
+					<>
 						<p role="alert">{verificationError}</p>
 						<p>Do not pay again. We need to verify your existing payment.</p>
 						{sessionId && (
 							<Button
 								type="button"
-								size="sm"
-								variant="gray"
+								size="xs"
+								variant="outline"
+								className="px-4 w-fit"
 								onClick={() => paymentConfirmation.refetch()}
 							>
 								Retry payment confirmation
 							</Button>
 						)}
-					</div>
+					</>
 				) : statusFailed ? (
-					<div className="flex flex-col gap-3 text-sm text-gray-11">
+					<>
 						<p role="alert">
 							Unable to load your BAA status. Please try again.
 						</p>
 						<Button
 							type="button"
-							size="sm"
-							variant="gray"
+							size="xs"
+							variant="outline"
+							className="px-4 w-fit"
 							onClick={() => refetchStatus()}
 						>
 							Retry
 						</Button>
-					</div>
-				) : isLoading ? (
-					<div className="h-5 w-64 rounded animate-pulse bg-gray-4" />
-				) : isActive ? (
-					<>
-						<div className="flex gap-2 items-center text-sm text-gray-11">
-							<span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-								Active
-							</span>
-							{baa?.signedAt && (
-								<span>
-									Signed {format(new Date(baa.signedAt), "MMM d, yyyy")}
-									{baa.entityName ? ` for ${baa.entityName}` : ""}
-								</span>
-							)}
-						</div>
-						<Button
-							type="button"
-							size="sm"
-							variant="dark"
-							onClick={() => {
-								window.location.href = downloadUrl;
-							}}
-						>
-							Download signed copy
-						</Button>
 					</>
+				) : isLoading ? null : isActive ? (
+					baa?.signedAt && (
+						<p>
+							Signed {format(new Date(baa.signedAt), "MMM d, yyyy")}
+							{baa.entityName ? ` for ${baa.entityName}` : ""}
+						</p>
+					)
 				) : isPaid ? (
-					<>
-						<div className="flex flex-col gap-1 text-sm text-gray-11">
-							<span className="font-medium text-gray-12">
-								Paid — awaiting signature
-							</span>
-							<span>
-								Payment received. Complete your details and sign your agreement.
-							</span>
-						</div>
-						<Button
-							type="button"
-							size="sm"
-							variant="primary"
-							disabled={actionsBlocked || signatureMutation.isPending}
-							onClick={openDialog}
-						>
-							Complete and sign BAA
-						</Button>
-					</>
+					<p>
+						Payment received. Complete your details and sign your agreement.
+					</p>
 				) : isProcessing ? (
-					<output className="text-sm text-gray-11">
+					<output>
 						Your BAA is processing. Please wait before trying again.
 					</output>
 				) : (
 					<>
-						<div className="flex flex-col gap-1 text-sm text-gray-11">
-							<span>
-								<span className="font-medium text-gray-12">$99/mo</span> — sign,
-								pay, and receive your countersigned agreement instantly.
-							</span>
-							{!canPurchase && (
-								<span className="text-xs text-gray-10">
-									Requires an active Cap Pro subscription with a card on file.
-								</span>
-							)}
-						</div>
-						<Button
-							type="button"
-							size="sm"
-							variant="primary"
-							disabled={actionsBlocked || signatureMutation.isPending}
-							onClick={openDialog}
-						>
-							Get Signed BAA
-						</Button>
+						<p>
+							<span className="font-medium text-gray-12">$99/mo</span>. Sign,
+							pay, and receive your countersigned agreement instantly.
+						</p>
+						{!canPurchase && (
+							<p className="text-xs text-gray-10">
+								Requires an active Cap Pro subscription with a card on file.
+							</p>
+						)}
 					</>
 				)}
 			</div>
@@ -507,6 +551,6 @@ function SignedBaaCardContent() {
 					</div>
 				</DialogContent>
 			</Dialog>
-		</Card>
+		</SignedBaaRow>
 	);
 }

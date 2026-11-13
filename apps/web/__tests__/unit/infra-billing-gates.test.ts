@@ -57,7 +57,10 @@ vi.mock("@cap/env", () => ({
 		NEXT_PUBLIC_IS_CAP: "true",
 		NEXT_PUBLIC_WEB_URL: "https://cap.test",
 	},
-	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
+	serverEnv: () => ({
+		WEB_URL: "https://cap.test",
+		NEXTAUTH_SECRET: "unit-test-signing-secret",
+	}),
 }));
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
@@ -102,9 +105,9 @@ vi.mock("@/app/api/utils", async () => {
 			c.set("user", mocks.user);
 			await next();
 		}),
-		withDeveloperPublicAuth: createMiddleware(async (c, next) => {
+		withDeveloperSecretAuth: createMiddleware(async (c, next) => {
 			c.set("developerAppId", "app-1");
-			c.set("developerKeyType", "public");
+			c.set("developerKeyType", "secret");
 			await next();
 		}),
 	};
@@ -112,7 +115,7 @@ vi.mock("@/app/api/utils", async () => {
 
 import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card";
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
-import { app as videoCreate } from "@/app/api/developer/sdk/v1/[...route]/video-create";
+import { app as uploads } from "@/app/api/developer/v1/[...route]/uploads";
 import { createDeveloperCardCheckout } from "@/lib/developer-card-checkout";
 import {
 	ownsInfraApp,
@@ -151,9 +154,9 @@ beforeEach(() => {
 	mocks.ensureCustomer.mockResolvedValue("cus_1");
 });
 
-describe("creating a video", () => {
+describe("creating an upload", () => {
 	const create = () =>
-		videoCreate.request("/create", {
+		uploads.request("/", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ name: "Demo" }),
@@ -184,16 +187,32 @@ describe("creating a video", () => {
 		const response = await create();
 
 		expect(response.status).toBe(200);
-		await expect(response.json()).resolves.toMatchObject({
-			videoId: "video-1",
-			s3Key: "developer/app-1/video-1/video",
-		});
+		const { data } = await response.json();
+		expect(data).toMatchObject({ id: "video-1", videoId: "video-1" });
+		expect(Object.keys(data).sort()).toEqual([
+			"corsOrigin",
+			"embedUrl",
+			"expiresAt",
+			"id",
+			"maxBytes",
+			"playbackId",
+			"shareUrl",
+			"status",
+			"token",
+			"uploadUrl",
+			"videoId",
+		]);
 		expect(mocks.inserts).toEqual([
 			expect.objectContaining({ id: "video-1", appId: "app-1", name: "Demo" }),
 		]);
 		const playbackId = mocks.inserts[0]?.playbackId;
 		expect(typeof playbackId).toBe("string");
 		expect(String(playbackId).length).toBeGreaterThan(8);
+		expect(data).toMatchObject({
+			playbackId,
+			shareUrl: `https://cap.test/dev/${playbackId}`,
+			embedUrl: `https://cap.test/dev/${playbackId}/embed`,
+		});
 		expect(mocks.inserts[0]?.maxResolutionTier).toBeTruthy();
 	});
 });
@@ -303,19 +322,24 @@ describe("auto top-up settings action", () => {
 	it("refuses to switch on without a saved card", async () => {
 		mocks.selects = [[account({ stripePaymentMethodId: null })]];
 
-		await expect(save()).rejects.toThrow(
-			"Save a card before switching auto top-up on",
-		);
+		await expect(save()).resolves.toEqual({
+			success: false,
+			message: "Save a card before switching auto top-up on",
+		});
 		expect(mocks.sets).toHaveLength(0);
 	});
 
 	it("refuses an amount under $5 or a threshold under $1", async () => {
 		mocks.selects = [[account()], [account()]];
 
-		await expect(save({ amountCents: 100 })).rejects.toThrow("amount");
-		await expect(save({ thresholdMicroCredits: 10 })).rejects.toThrow(
-			"threshold",
-		);
+		await expect(save({ amountCents: 100 })).resolves.toEqual({
+			success: false,
+			message: expect.stringContaining("amount"),
+		});
+		await expect(save({ thresholdMicroCredits: 10 })).resolves.toEqual({
+			success: false,
+			message: expect.stringContaining("threshold"),
+		});
 		expect(mocks.sets).toHaveLength(0);
 	});
 

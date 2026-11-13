@@ -1,4 +1,5 @@
 import { serverEnv } from "@cap/env";
+import { readStreamBounded } from "@/lib/public-media-fetch";
 
 interface MediaServerError {
 	error: string;
@@ -103,7 +104,7 @@ export function isMediaServerConfigured(): boolean {
 
 export async function checkMediaServerHealth(): Promise<{
 	status: string;
-	ffmpeg: { available: boolean; version: string };
+	ffmpeg: { available: boolean; version?: string };
 }> {
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -230,6 +231,7 @@ export async function probeVideoViaMediaServer(
 
 export async function convertAudioToMp3ViaMediaServer(
 	audioUrl: string,
+	options: { maxBytes?: number } = {},
 ): Promise<Buffer> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
@@ -255,6 +257,10 @@ export async function convertAudioToMp3ViaMediaServer(
 		throw new Error(
 			errorData.details || errorData.error || "Audio conversion failed",
 		);
+	}
+
+	if (options.maxBytes !== undefined && response.body) {
+		return readStreamBounded(response.body, options.maxBytes);
 	}
 
 	const arrayBuffer = await response.arrayBuffer();
@@ -356,10 +362,68 @@ export async function startMediaServerVideoJob(
 	return { status: "rejected", message: await readErrorMessage(response) };
 }
 
+export const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
+
+export type MediaServerJobStatus =
+	| { status: "running" }
+	| { status: "finished"; progress: Record<string, unknown> }
+	| { status: "missing" }
+	| { status: "unreachable" };
+
+const JOB_STATUS_TIMEOUT_MS = 10_000;
+const TERMINAL_JOB_PHASES = new Set(["complete", "error", "cancelled"]);
+
+// Only the media server's own "job not found" counts as missing. A proxy or
+// a host that is still starting can answer 404 too, and the job may be alive
+// behind it.
+export async function readMediaServerVideoJob(
+	jobId: string,
+	videoId: string,
+): Promise<MediaServerJobStatus> {
+	const unreachable = { status: "unreachable" } as const;
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/status`,
+			{
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_STATUS_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (!body || typeof body !== "object") return unreachable;
+		if (response.status === 404) {
+			return "code" in body && body.code === "NOT_FOUND"
+				? { status: "missing" }
+				: unreachable;
+		}
+		if (
+			!response.ok ||
+			!("jobId" in body) ||
+			body.jobId !== jobId ||
+			!("videoId" in body) ||
+			body.videoId !== videoId ||
+			!("phase" in body) ||
+			typeof body.phase !== "string"
+		) {
+			return unreachable;
+		}
+		return TERMINAL_JOB_PHASES.has(body.phase)
+			? { status: "finished", progress: { ...body } }
+			: { status: "running" };
+	} catch {
+		return unreachable;
+	}
+}
+
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }
-	| { status: "rejected"; message: string };
+	| { status: "rejected"; message: string; unusable: boolean };
 
 export async function tryProbeVideoViaMediaServer(
 	videoUrl: string,
@@ -383,7 +447,11 @@ export async function tryProbeVideoViaMediaServer(
 		return { status: "unreachable" };
 	}
 	if (!response.ok) {
-		return { status: "rejected", message: await readErrorMessage(response) };
+		return {
+			status: "rejected",
+			message: await readErrorMessage(response),
+			unusable: response.status === 422,
+		};
 	}
 	const data = (await response.json()) as { metadata: MediaServerProbeResult };
 	return { status: "ok", metadata: data.metadata };

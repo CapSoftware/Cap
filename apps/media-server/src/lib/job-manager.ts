@@ -156,6 +156,9 @@ export interface Job {
 	webhookUrl?: string;
 	webhookSecret?: string;
 	abortController?: AbortController;
+	// A ladder for a Cap Infra video at the 1440p or 2160p tier, which keeps the
+	// GPU encoder busy on its own.
+	infraHeavyLadder?: boolean;
 }
 
 const jobs = new Map<string, Job>();
@@ -177,6 +180,9 @@ const WEBHOOK_TIMEOUT_MS = 5000;
 const RECORDING_HEARTBEAT_MS = 60_000;
 const MAX_RECORDING_WORKER_LEASE_MS = 5 * 60_000;
 const UNACKNOWLEDGED_TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
+// Finished jobs stay answerable until the sweeper removes them, so the count
+// is capped. A retained job is a few kilobytes; the oldest go first.
+export const MAX_RETAINED_TERMINAL_JOBS = 5_000;
 
 const configuredMaxProcesses =
 	Number.parseInt(
@@ -349,6 +355,55 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+// Cap Infra jobs share the workers with Cap's own recordings. They may not take
+// the last free slots, and only one Infra ladder at 1440p or 2160p runs on a
+// worker at a time: one already fills the GPU encoder, and a second one slows
+// both of them and every recording that lands beside them.
+const INFRA_RESERVED_SLOTS = Math.max(
+	0,
+	Number.parseInt(process.env.MEDIA_SERVER_INFRA_RESERVED_SLOTS ?? "1", 10) ||
+		0,
+);
+const MAX_INFRA_HEAVY_LADDERS = Math.max(
+	1,
+	Number.parseInt(
+		process.env.MEDIA_SERVER_MAX_INFRA_HEAVY_LADDERS ?? "1",
+		10,
+	) || 1,
+);
+
+export function getActiveInfraHeavyLadderCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.infraHeavyLadder && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function infraCapacityAllows(input: {
+	effectiveMax: number;
+	active: number;
+	activeHeavyLadders: number;
+	heavyLadder: boolean;
+	reservedSlots?: number;
+	maxHeavyLadders?: number;
+}): boolean {
+	const reservedSlots = input.reservedSlots ?? INFRA_RESERVED_SLOTS;
+	const maxHeavyLadders = input.maxHeavyLadders ?? MAX_INFRA_HEAVY_LADDERS;
+	const reserved = Math.min(reservedSlots, Math.max(0, input.effectiveMax - 1));
+	if (input.active >= input.effectiveMax - reserved) return false;
+	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
+}
+
+export function canAcceptNewInfraVideoProcess(heavyLadder: boolean): boolean {
+	return infraCapacityAllows({
+		effectiveMax: getSystemResources().effectiveMax,
+		active: getActiveVideoProcessCount(),
+		activeHeavyLadders: getActiveInfraHeavyLadderCount(),
+		heavyLadder,
+	});
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
@@ -360,6 +415,19 @@ export function canAcceptNewVideoProcess(
 			? Math.max(1, Math.floor(resources.effectiveMax / 2))
 			: resources.effectiveMax)
 	);
+}
+
+function evictExcessTerminalJobs(): void {
+	let excess = -MAX_RETAINED_TERMINAL_JOBS;
+	for (const job of jobs.values()) {
+		if (!isActivePhase(job.phase)) excess++;
+	}
+	for (const [jobId, job] of jobs) {
+		if (excess <= 0) return;
+		if (isActivePhase(job.phase)) continue;
+		deleteJob(jobId);
+		excess--;
+	}
 }
 
 export function generateJobId(): string {
@@ -387,6 +455,7 @@ export function createJob(
 	};
 	jobs.set(jobId, job);
 	jobTotals.created++;
+	evictExcessTerminalJobs();
 	return job;
 }
 

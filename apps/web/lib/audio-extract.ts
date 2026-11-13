@@ -79,13 +79,17 @@ export interface AudioExtractionResult {
 	cleanup: () => Promise<void>;
 }
 
-export async function extractAudioFromUrl(
-	videoUrl: string,
-): Promise<AudioExtractionResult> {
-	const ffmpeg = getFfmpegPath();
-	const outputPath = join(tmpdir(), `audio-${randomUUID()}.mp3`);
+export interface AudioExtractionLimits {
+	maxDurationSeconds?: number;
+	maxBytes?: number;
+}
 
-	const ffmpegArgs = [
+export function audioExtractionArgs(
+	videoUrl: string,
+	outputPath: string,
+	limits: AudioExtractionLimits = {},
+) {
+	return [
 		...REMOTE_INPUT_ARGS,
 		"-i",
 		videoUrl,
@@ -94,11 +98,52 @@ export async function extractAudioFromUrl(
 		"libmp3lame",
 		"-b:a",
 		"128k",
+		...(limits.maxDurationSeconds !== undefined
+			? ["-t", String(limits.maxDurationSeconds)]
+			: []),
+		...(limits.maxBytes !== undefined ? ["-fs", String(limits.maxBytes)] : []),
 		"-f",
 		"mp3",
 		"-y",
 		outputPath,
 	];
+}
+
+export function parseFfmpegDurationSeconds(stderr: string): number | null {
+	const match = stderr.match(/Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+	if (!match) return null;
+	const seconds =
+		Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+export async function probeMediaDurationSeconds(
+	videoUrl: string,
+): Promise<number | null> {
+	const ffmpeg = getFfmpegPath();
+	return new Promise((resolve) => {
+		const proc = spawn(
+			/*turbopackIgnore: true*/ ffmpeg,
+			[...REMOTE_INPUT_ARGS, "-i", videoUrl, "-hide_banner"],
+			{ stdio: ["pipe", "pipe", "pipe"], env: ffmpegChildEnv() },
+		);
+		let stderr = "";
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+		proc.on("error", () => resolve(null));
+		proc.on("close", () => resolve(parseFfmpegDurationSeconds(stderr)));
+	});
+}
+
+export async function extractAudioFromUrl(
+	videoUrl: string,
+	limits: AudioExtractionLimits = {},
+): Promise<AudioExtractionResult> {
+	const ffmpeg = getFfmpegPath();
+	const outputPath = join(tmpdir(), `audio-${randomUUID()}.mp3`);
+
+	const ffmpegArgs = audioExtractionArgs(videoUrl, outputPath, limits);
 
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {

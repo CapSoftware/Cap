@@ -1,9 +1,11 @@
 export const INFRA_BASE_PATH = "/dashboard/infra";
 export const INFRA_APP_COOKIE = "capInfraApp";
+export const INFRA_PATH_HEADER = "x-cap-infra-path";
 
 export const INFRA_SECTIONS = [
 	{ slug: "", name: "Overview" },
 	{ slug: "videos", name: "Videos" },
+	{ slug: "audio", name: "Audio" },
 	{ slug: "usage", name: "Usage" },
 	{ slug: "billing", name: "Billing" },
 	{ slug: "keys", name: "API keys" },
@@ -22,6 +24,27 @@ export function isInfraPathname(pathname: string) {
 	return (
 		pathname === INFRA_BASE_PATH || pathname.startsWith(`${INFRA_BASE_PATH}/`)
 	);
+}
+
+const LOCAL_ORIGIN = "http://local";
+
+export function infraLoginReturnPath(
+	requested: string | null | undefined,
+	fallback: string = INFRA_BASE_PATH,
+) {
+	if (!requested?.startsWith("/") || requested.includes("\\")) {
+		return fallback;
+	}
+	try {
+		const url = new URL(requested, LOCAL_ORIGIN);
+		if (url.origin !== LOCAL_ORIGIN || !isInfraPathname(url.pathname)) {
+			return fallback;
+		}
+		url.searchParams.delete("_rsc");
+		return `${url.pathname}${url.search}`;
+	} catch {
+		return fallback;
+	}
 }
 
 export function infraAppPath(appId: string, section: InfraSection = "") {
