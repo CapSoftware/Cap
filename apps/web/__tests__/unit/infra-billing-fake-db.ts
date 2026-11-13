@@ -117,7 +117,8 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			!(
 				account.autoTopUpEnabled &&
 				account.stripePaymentMethodId &&
-				account.balanceMicroCredits < account.autoTopUpThresholdMicroCredits
+				account.balanceMicroCredits <
+					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits
 			)
 		) {
 			return [];

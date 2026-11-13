@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
 	selects: [] as Record<string, unknown>[][],
 	getStorageUsageByApp: vi.fn(),
 	chargeStorageDay: vi.fn(),
-	latestStorageCharge: vi.fn(),
+	latestStorageCharges: vi.fn(),
 	runDueAutoTopUps: vi.fn(),
 	sendInfraOutOfCreditEmail: vi.fn(),
 }));
@@ -15,7 +15,12 @@ vi.mock("@cap/database", () => ({
 			select: () => chain,
 			from: () => chain,
 			innerJoin: () => chain,
-			where: async () => mocks.selects.shift() ?? [],
+			where: () => {
+				const rows = Promise.resolve(mocks.selects.shift() ?? []);
+				return Object.assign(rows, {
+					orderBy: () => ({ limit: () => rows }),
+				});
+			},
 		};
 		return chain;
 	},
@@ -31,6 +36,8 @@ vi.mock("@cap/database/schema", () => ({
 }));
 vi.mock("drizzle-orm", () => ({
 	and: (...args: unknown[]) => args,
+	asc: (a: unknown) => ({ asc: a }),
+	gt: (a: unknown, b: unknown) => ({ gt: [a, b] }),
 	eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
 	inArray: (a: unknown, b: unknown) => ({ inArray: [a, b] }),
 	isNull: (a: unknown) => ({ isNull: a }),
@@ -44,7 +51,7 @@ vi.mock("@/lib/infra-storage-billing", () => ({
 vi.mock("@/lib/infra-standing", () => ({
 	INFRA_GRACE_DAYS: 7,
 	STORAGE_DAY_REFERENCE_TYPE: "storage_day",
-	latestStorageCharge: mocks.latestStorageCharge,
+	latestStorageCharges: mocks.latestStorageCharges,
 }));
 vi.mock("@/lib/infra-auto-top-up", () => ({
 	runDueAutoTopUps: mocks.runDueAutoTopUps,
@@ -93,14 +100,14 @@ beforeEach(() => {
 	for (const mock of [
 		mocks.getStorageUsageByApp,
 		mocks.chargeStorageDay,
-		mocks.latestStorageCharge,
+		mocks.latestStorageCharges,
 		mocks.runDueAutoTopUps,
 		mocks.sendInfraOutOfCreditEmail,
 	]) {
 		mock.mockReset();
 	}
 	mocks.runDueAutoTopUps.mockResolvedValue(NO_TOP_UPS);
-	mocks.latestStorageCharge.mockResolvedValue(null);
+	mocks.latestStorageCharges.mockResolvedValue(new Map());
 	mocks.chargeStorageDay.mockResolvedValue(billed());
 });
 
@@ -193,19 +200,56 @@ describe("developer-storage cron job", () => {
 		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
 	});
 
+	it("looks up the last charge of every idle account in one read", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+				{ id: "account-3", appId: "app-3" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(0)],
+				["app-2", usage(28)],
+				["app-3", usage(0)],
+			]),
+		);
+
+		const { body } = await authorized();
+
+		expect(body).toMatchObject({ complete: true, appsProcessed: 1 });
+		expect(mocks.latestStorageCharges).toHaveBeenCalledTimes(1);
+		expect(mocks.latestStorageCharges).toHaveBeenCalledWith(expect.anything(), [
+			"account-1",
+			"account-3",
+		]);
+	});
+
 	it("still settles an app that stores nothing now but is short from before", async () => {
 		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
 		mocks.getStorageUsageByApp.mockResolvedValue(
 			new Map([["app-1", usage(0)]]),
 		);
-		mocks.latestStorageCharge.mockResolvedValue({
-			createdAt: new Date(),
-			owedMicroCredits: 28,
-			shortSince: new Date(),
-		});
+		mocks.latestStorageCharges.mockResolvedValue(
+			new Map([
+				[
+					"account-1",
+					{
+						createdAt: new Date(),
+						owedMicroCredits: 28,
+						shortSince: new Date(),
+					},
+				],
+			]),
+		);
 
 		await authorized();
 
+		expect(mocks.latestStorageCharges).toHaveBeenCalledWith(expect.anything(), [
+			"account-1",
+		]);
 		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
 	});
 

@@ -4,6 +4,7 @@ import {
 	developerTranscripts,
 } from "@cap/database/schema";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 export async function lockInfraAccount(
@@ -17,9 +18,9 @@ export async function lockInfraAccount(
 		.for("update");
 }
 
-const heldTranscriptsQuery = (
+export const heldTranscriptsQuery = (
 	executor: Pick<InfraDbExecutor, "select">,
-	appId: string,
+	appId: string | AnyMySqlColumn,
 	exceptTranscriptId: string | null,
 ) =>
 	executor

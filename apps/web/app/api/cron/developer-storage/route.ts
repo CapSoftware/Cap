@@ -5,13 +5,13 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
 import { sendInfraOutOfCreditEmail } from "@/lib/infra-billing-emails";
 import {
 	INFRA_GRACE_DAYS,
-	latestStorageCharge,
+	latestStorageCharges,
 	STORAGE_DAY_REFERENCE_TYPE,
 } from "@/lib/infra-standing";
 import { getStorageUsageByApp } from "@/lib/infra-storage";
@@ -19,7 +19,18 @@ import { chargeStorageDay } from "@/lib/infra-storage-billing";
 import { utcDateKey } from "@/lib/infra-usage";
 
 const BATCH_SIZE = 10;
+const PAGE_SIZE = 200;
 const GRACE_MS = INFRA_GRACE_DAYS * 24 * 60 * 60 * 1000;
+
+// The function is stopped at maxDuration. Each phase stops taking new work
+// once its share of that is used, so a run that cannot finish still answers
+// and the next run carries on: an account already charged for the day is
+// skipped, so nothing is charged twice.
+const TOP_UPS_BEFORE_UNTIL_MS = 60_000;
+const STORAGE_UNTIL_MS = 200_000;
+const TOP_UPS_AFTER_UNTIL_MS = 240_000;
+
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -40,27 +51,45 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const now = new Date();
+	const startedAt = Date.now();
+	const now = new Date(startedAt);
 	const today = utcDateKey(now);
+	const outOfTime = (untilMs: number) => Date.now() - startedAt >= untilMs;
 
-	const accounts = await db()
-		.select({
-			id: developerCreditAccounts.id,
-			appId: developerCreditAccounts.appId,
-		})
-		.from(developerCreditAccounts)
-		.innerJoin(
-			developerApps,
-			eq(developerCreditAccounts.appId, developerApps.id),
-		)
-		.where(isNull(developerApps.deletedAt));
-
-	const topUpsBefore = await runDueAutoTopUps(now);
+	const topUpsBefore = await runDueAutoTopUps(now, {
+		until: startedAt + TOP_UPS_BEFORE_UNTIL_MS,
+	});
 
 	let processed = 0;
 	let short = 0;
+	let complete = false;
+	let cursor: string | null = null;
 
-	if (accounts.length > 0) {
+	while (!complete && !outOfTime(STORAGE_UNTIL_MS)) {
+		const accounts: { id: string; appId: string }[] = await db()
+			.select({
+				id: developerCreditAccounts.id,
+				appId: developerCreditAccounts.appId,
+			})
+			.from(developerCreditAccounts)
+			.innerJoin(
+				developerApps,
+				eq(developerCreditAccounts.appId, developerApps.id),
+			)
+			.where(
+				and(
+					isNull(developerApps.deletedAt),
+					cursor ? gt(developerCreditAccounts.id, cursor) : undefined,
+				),
+			)
+			.orderBy(asc(developerCreditAccounts.id))
+			.limit(PAGE_SIZE);
+		const lastAccount = accounts.at(-1);
+		if (!lastAccount) {
+			complete = true;
+			break;
+		}
+
 		const billedToday = await db()
 			.select({ accountId: developerCreditTransactions.accountId })
 			.from(developerCreditTransactions)
@@ -84,15 +113,31 @@ export async function GET(request: Request) {
 		const usageByApp = await getStorageUsageByApp(
 			pending.map((account) => account.appId),
 		);
+		const lastCharges = await latestStorageCharges(
+			db(),
+			pending
+				.filter(
+					(account) =>
+						(usageByApp.get(account.appId)?.dailyMicroCredits ?? 1) <= 0,
+				)
+				.map((account) => account.id),
+		);
 
+		let cutOff = false;
 		for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+			if (outOfTime(STORAGE_UNTIL_MS)) {
+				cutOff = true;
+				break;
+			}
 			const results = await Promise.allSettled(
 				pending.slice(i, i + BATCH_SIZE).map(async (account) => {
 					const usage = usageByApp.get(account.appId);
 					if (!usage) return null;
-					if (usage.dailyMicroCredits <= 0) {
-						const lastCharge = await latestStorageCharge(db(), account.id);
-						if (!lastCharge?.shortSince) return null;
+					if (
+						usage.dailyMicroCredits <= 0 &&
+						!lastCharges.get(account.id)?.shortSince
+					) {
+						return null;
 					}
 					const result = await chargeStorageDay({
 						appId: account.appId,
@@ -127,9 +172,15 @@ export async function GET(request: Request) {
 				}
 			}
 		}
+		if (cutOff) break;
+
+		complete = accounts.length < PAGE_SIZE;
+		cursor = lastAccount.id;
 	}
 
-	const topUpsAfter = await runDueAutoTopUps(now);
+	const topUpsAfter = await runDueAutoTopUps(now, {
+		until: startedAt + TOP_UPS_AFTER_UNTIL_MS,
+	});
 	const autoTopUps = {
 		attempted: topUpsBefore.attempted + topUpsAfter.attempted,
 		succeeded: topUpsBefore.succeeded + topUpsAfter.succeeded,
@@ -139,6 +190,7 @@ export async function GET(request: Request) {
 	return NextResponse.json({
 		success: true,
 		date: today,
+		complete,
 		appsProcessed: processed,
 		appsShort: short,
 		autoTopUps,

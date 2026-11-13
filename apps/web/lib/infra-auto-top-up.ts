@@ -7,13 +7,23 @@ import {
 	users,
 } from "@cap/database/schema";
 import { stripe } from "@cap/utils";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	sql,
+} from "drizzle-orm";
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
-import { availableBalance } from "@/lib/infra-balance";
+import { availableBalance, heldTranscriptsQuery } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
 import { utcDateKey } from "@/lib/infra-usage";
 
@@ -29,6 +39,7 @@ export const AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS =
 	1_000 * MICRO_CREDITS_PER_DOLLAR;
 
 const ATTEMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const DUE_PAGE_SIZE = 200;
 
 export type AutoTopUpResult =
 	| {
@@ -436,8 +447,8 @@ export async function runAutoTopUp(
 	return { state: "failed", reason: paymentIntent.status };
 }
 
-export async function runDueAutoTopUps(now: Date = new Date()) {
-	const due = await db()
+function dueAutoTopUpsAfter(cursor: string | null) {
+	return db()
 		.select({ id: developerCreditAccounts.id })
 		.from(developerCreditAccounts)
 		.innerJoin(
@@ -449,25 +460,41 @@ export async function runDueAutoTopUps(now: Date = new Date()) {
 				eq(developerCreditAccounts.autoTopUpEnabled, true),
 				isNotNull(developerCreditAccounts.stripePaymentMethodId),
 				isNull(developerApps.deletedAt),
+				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + (${heldTranscriptsQuery(db(), developerCreditAccounts.appId, null)})`,
+				cursor ? gt(developerCreditAccounts.id, cursor) : undefined,
 			),
-		);
+		)
+		.orderBy(asc(developerCreditAccounts.id))
+		.limit(DUE_PAGE_SIZE);
+}
 
+export async function runDueAutoTopUps(
+	now: Date = new Date(),
+	{ until = Number.POSITIVE_INFINITY }: { until?: number } = {},
+) {
 	const summary = { attempted: 0, succeeded: 0, failed: 0 };
-	for (const account of due) {
-		try {
-			const result = await runAutoTopUp(account.id, now);
-			if (result.state === "skipped") continue;
-			summary.attempted += 1;
-			if (result.state === "succeeded") summary.succeeded += 1;
-			if (result.state === "failed") summary.failed += 1;
-		} catch (error) {
-			console.error("[infra-billing] Auto top-up failed", {
-				accountId: account.id,
-				error,
-			});
+	let cursor: string | null = null;
+	for (;;) {
+		const due = await dueAutoTopUpsAfter(cursor);
+		for (const account of due) {
+			if (Date.now() >= until) return summary;
+			try {
+				const result = await runAutoTopUp(account.id, now);
+				if (result.state === "skipped") continue;
+				summary.attempted += 1;
+				if (result.state === "succeeded") summary.succeeded += 1;
+				if (result.state === "failed") summary.failed += 1;
+			} catch (error) {
+				console.error("[infra-billing] Auto top-up failed", {
+					accountId: account.id,
+					error,
+				});
+			}
 		}
+		const last = due.at(-1);
+		if (!last || due.length < DUE_PAGE_SIZE) return summary;
+		cursor = last.id;
 	}
-	return summary;
 }
 
 export async function settleAutoTopUpPaymentIntent(
