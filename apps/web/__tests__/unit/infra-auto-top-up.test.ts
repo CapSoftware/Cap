@@ -187,16 +187,13 @@ describe("auto top-up settings", () => {
 		).toBe(null);
 	});
 
-	it("keys each charge by account, attempt and the exact request", () => {
-		const request = { amount: 500, customer: "cus_1" };
-		const key = autoTopUpIdempotencyKey("account-1", 3, request);
-
-		expect(key).toMatch(/^infra-auto-top-up:account-1:3:[0-9a-f]{24}$/);
-		expect(autoTopUpIdempotencyKey("account-1", 3, { ...request })).toBe(key);
-		expect(autoTopUpIdempotencyKey("account-1", 4, request)).not.toBe(key);
-		expect(
-			autoTopUpIdempotencyKey("account-1", 3, { ...request, amount: 600 }),
-		).not.toBe(key);
+	it("keys each charge by account and attempt, whatever the settings", () => {
+		expect(autoTopUpIdempotencyKey("account-1", 3)).toBe(
+			"infra-auto-top-up:account-1:3",
+		);
+		expect(autoTopUpIdempotencyKey("account-1", 4)).not.toBe(
+			autoTopUpIdempotencyKey("account-1", 3),
+		);
 	});
 
 	it("explains a decline in plain words", () => {
@@ -297,7 +294,7 @@ describe("auto top-up charge", () => {
 			},
 		});
 		expect(options).toEqual({
-			idempotencyKey: autoTopUpIdempotencyKey("account-1", 0, params),
+			idempotencyKey: autoTopUpIdempotencyKey("account-1", 0),
 			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
@@ -417,6 +414,36 @@ describe("auto top-up charge", () => {
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
+	it("cannot start a second payment when the settings change during an unresolved attempt", async () => {
+		mocks.createPaymentIntent.mockRejectedValueOnce(
+			Object.assign(new Error("Request aborted due to timeout"), {
+				type: "StripeConnectionError",
+			}),
+		);
+		vi.spyOn(console, "error").mockImplementationOnce(() => {});
+		expect(await runAutoTopUp("account-1", now())).toEqual({ state: "error" });
+
+		ledger.account.autoTopUpAmountCents = 2_500;
+		mocks.createPaymentIntent.mockRejectedValueOnce(
+			Object.assign(
+				new Error(
+					"Keys for idempotent requests can only be used with the same parameters they were first used with.",
+				),
+				{ type: "StripeIdempotencyError", statusCode: 400 },
+			),
+		);
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "in_progress",
+		});
+
+		const [first, changed] = mocks.createPaymentIntent.mock.calls;
+		expect(changed?.[0].amount).toBe(2_500);
+		expect(changed?.[1].idempotencyKey).toBe(first?.[1].idempotencyKey);
+		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.account.autoTopUpEnabled).toBe(true);
+	});
+
 	it(`stops at ${AUTO_TOP_UP_DAILY_LIMIT} automatic top-ups in any 24 hours, then waits`, async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		for (let i = 1; i <= AUTO_TOP_UP_DAILY_LIMIT; i++) {
@@ -480,7 +507,7 @@ describe("auto top-up charge", () => {
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
 	});
 
-	it("does not start a second payment after a processing one, even on the next UTC day", async () => {
+	it("does not start a second payment while one is still processing, however long it takes", async () => {
 		ledger.now = new Date("2026-11-11T23:50:00Z");
 		mocks.createPaymentIntent.mockResolvedValue(intent("pi_1", "processing"));
 		await runAutoTopUp("account-1", now());
@@ -493,6 +520,10 @@ describe("auto top-up charge", () => {
 			reason: "awaiting_payment",
 		});
 		later(23);
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			reason: "awaiting_payment",
+		});
+		later(48);
 		expect(await runAutoTopUp("account-1", now())).toMatchObject({
 			reason: "awaiting_payment",
 		});
@@ -697,7 +728,7 @@ describe("auto top-up after a charge", () => {
 			tasks.push(task);
 		});
 
-		scheduleAutoTopUp({ accountId: "account-1" });
+		await scheduleAutoTopUp({ accountId: "account-1" });
 		await settle();
 		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 
@@ -712,7 +743,7 @@ describe("auto top-up after a charge", () => {
 			tasks.push(task);
 		});
 
-		scheduleAutoTopUp({ appId: "app-1" });
+		await scheduleAutoTopUp({ appId: "app-1" });
 		await tasks[0]?.();
 
 		expect(mocks.createPaymentIntent.mock.calls[0]?.[0].metadata).toMatchObject(
@@ -720,11 +751,23 @@ describe("auto top-up after a charge", () => {
 		);
 	});
 
-	it("still tops up outside a request", async () => {
+	it("outside a request, finishes the top-up before it returns", async () => {
 		mocks.after.mockImplementation(outsideRequest);
 
-		scheduleAutoTopUp({ accountId: "account-1" });
-		await vi.waitFor(() => expect(topUps()).toHaveLength(1));
+		await scheduleAutoTopUp({ accountId: "account-1" });
+
+		expect(mocks.after).toHaveBeenCalledTimes(1);
+		expect(mocks.createPaymentIntent).toHaveBeenCalledTimes(1);
+		expect(topUps()).toHaveLength(1);
+	});
+
+	it("inside a request, returns at once and leaves the top-up to after()", async () => {
+		mocks.after.mockImplementation(() => {});
+
+		await scheduleAutoTopUp({ accountId: "account-1" });
+
+		expect(mocks.after).toHaveBeenCalledTimes(1);
+		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 	});
 
 	it("never throws into the caller and logs what went wrong", async () => {
@@ -738,12 +781,12 @@ describe("auto top-up after a charge", () => {
 		};
 		mocks.db = broken;
 
-		expect(() => scheduleAutoTopUp({ accountId: "account-1" })).not.toThrow();
-		await vi.waitFor(() =>
-			expect(errors).toHaveBeenCalledWith(
-				"[infra-billing] Auto top-up after a charge failed",
-				expect.objectContaining({ target: { accountId: "account-1" } }),
-			),
+		await expect(
+			scheduleAutoTopUp({ accountId: "account-1" }),
+		).resolves.toBeUndefined();
+		expect(errors).toHaveBeenCalledWith(
+			"[infra-billing] Auto top-up after a charge failed",
+			expect.objectContaining({ target: { accountId: "account-1" } }),
 		);
 		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
 		mocks.db = fakeDb;

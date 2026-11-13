@@ -175,6 +175,26 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					types.includes(row.referenceType) && row.createdAt.getTime() >= since,
 			);
 		}
+		if (keys === "pendingId") {
+			return ledger.rows
+				.filter(
+					(row) =>
+						row.type === "topup_pending" &&
+						row.referenceType === "auto_top_up_pending",
+				)
+				.map((row) => ({ pendingId: row.referenceId }));
+		}
+		if (keys === "settledId") {
+			const ids = rendered.params.slice(3);
+			return ledger.rows
+				.filter(
+					(row) =>
+						(row.referenceType === "auto_top_up" ||
+							row.referenceType === "auto_top_up_failed") &&
+						ids.includes(row.referenceId),
+				)
+				.map((row) => ({ settledId: row.referenceId }));
+		}
 		if (keys === "settledAttempts") {
 			const types = rendered.params.slice(1);
 			return [

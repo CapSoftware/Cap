@@ -16,7 +16,8 @@ const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
 	keys: new Map<
 		string,
-		{ state: "pending" } | { state: "done"; intent: FakeIntent }
+		| { state: "pending"; params: string }
+		| { state: "done"; params: string; intent: FakeIntent }
 	>(),
 	created: [] as FakeIntent[],
 	createdKeys: [] as string[],
@@ -47,6 +48,13 @@ vi.mock("@cap/utils", () => ({
 			) => {
 				const key = options.idempotencyKey;
 				const entry = fixture.keys.get(key);
+				const sent = JSON.stringify(params);
+				if (entry && entry.params !== sent) {
+					throw Object.assign(new Error("Keys must match parameters"), {
+						type: "StripeIdempotencyError",
+						statusCode: 400,
+					});
+				}
 				if (entry?.state === "pending") {
 					throw Object.assign(new Error("Key in use"), {
 						type: "StripeInvalidRequestError",
@@ -55,7 +63,7 @@ vi.mock("@cap/utils", () => ({
 					});
 				}
 				if (entry?.state === "done") return entry.intent;
-				fixture.keys.set(key, { state: "pending" });
+				fixture.keys.set(key, { state: "pending", params: sent });
 				await new Promise((resolve) => setTimeout(resolve, 40));
 				const intent: FakeIntent = {
 					id: `pi_${fixture.created.length + 1}`,
@@ -67,7 +75,7 @@ vi.mock("@cap/utils", () => ({
 				};
 				fixture.created.push(intent);
 				fixture.createdKeys.push(key);
-				fixture.keys.set(key, { state: "done", intent });
+				fixture.keys.set(key, { state: "done", params: sent, intent });
 				return intent;
 			},
 		},
@@ -168,6 +176,25 @@ describe.runIf(Boolean(databaseUrl))(
 			for (const result of results) {
 				expect(["succeeded", "skipped"]).toContain(result.state);
 			}
+		});
+
+		it("creates one charge when the amount changes while triggers race", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const { accountId } = await makeAccount(30_000);
+			const before = fixture.created.length;
+
+			const first = Array.from({ length: 4 }, () => runAutoTopUp(accountId));
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			await pool.query(
+				"UPDATE developer_credit_accounts SET autoTopUpAmountCents = 2500 WHERE id = ?",
+				[accountId],
+			);
+			const changed = Array.from({ length: 4 }, () => runAutoTopUp(accountId));
+			await Promise.all([...first, ...changed]);
+
+			expect(fixture.created.length - before).toBe(1);
+			expect(await topUpsOf(accountId)).toHaveLength(1);
+			expect(await balanceOf(accountId)).toBe(530_000);
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {

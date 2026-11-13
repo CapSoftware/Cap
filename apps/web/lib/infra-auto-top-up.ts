@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
@@ -95,16 +94,8 @@ export function autoTopUpSettingsError({
 	return null;
 }
 
-export function autoTopUpIdempotencyKey(
-	accountId: string,
-	sequence: number,
-	request: unknown,
-) {
-	const digest = createHash("sha256")
-		.update(JSON.stringify(request))
-		.digest("hex")
-		.slice(0, 24);
-	return `infra-auto-top-up:${accountId}:${sequence}:${digest}`;
+export function autoTopUpIdempotencyKey(accountId: string, sequence: number) {
+	return `infra-auto-top-up:${accountId}:${sequence}`;
 }
 
 export function autoTopUpFailureText(reason: string | null | undefined) {
@@ -120,10 +111,18 @@ export function autoTopUpFailureText(reason: string | null | undefined) {
 	}
 }
 
-function isKeyInUse(error: unknown) {
+function isUnresolvedAttempt(error: unknown) {
 	if (typeof error !== "object" || error === null) return false;
-	const fields = error as { code?: unknown; statusCode?: unknown };
-	return fields.code === "idempotency_key_in_use" || fields.statusCode === 409;
+	const fields = error as {
+		type?: unknown;
+		code?: unknown;
+		statusCode?: unknown;
+	};
+	return (
+		fields.code === "idempotency_key_in_use" ||
+		fields.statusCode === 409 ||
+		fields.type === "StripeIdempotencyError"
+	);
 }
 
 function declineFrom(error: unknown) {
@@ -201,7 +200,7 @@ async function attemptHistory(
 				eq(developerCreditTransactions.accountId, accountId),
 				inArray(
 					developerCreditTransactions.referenceType,
-					ATTEMPT_REFERENCE_TYPES,
+					SETTLED_REFERENCE_TYPES,
 				),
 				gte(
 					developerCreditTransactions.createdAt,
@@ -221,12 +220,39 @@ async function attemptHistory(
 				),
 			),
 		);
-
-	const settledIds = new Set(
-		recent
-			.filter((row) => row.type !== "topup_pending")
-			.map((row) => row.referenceId),
+	const pending = await executor
+		.select({ pendingId: developerCreditTransactions.referenceId })
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, "topup_pending"),
+				eq(
+					developerCreditTransactions.referenceType,
+					AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+				),
+			),
+		);
+	const pendingIds = pending.flatMap((row) =>
+		row.pendingId ? [row.pendingId] : [],
 	);
+	const resolved = pendingIds.length
+		? await executor
+				.select({ settledId: developerCreditTransactions.referenceId })
+				.from(developerCreditTransactions)
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						inArray(
+							developerCreditTransactions.referenceType,
+							SETTLED_REFERENCE_TYPES,
+						),
+						inArray(developerCreditTransactions.referenceId, pendingIds),
+					),
+				)
+		: [];
+	const resolvedIds = new Set(resolved.map((row) => row.settledId));
+
 	const latest = (type: string) =>
 		Math.max(
 			0,
@@ -237,9 +263,7 @@ async function attemptHistory(
 	const lastDecline = latest("topup_failed");
 	return {
 		sequence: Number(settled?.settledAttempts ?? 0),
-		awaitingPayment: recent.some(
-			(row) => row.type === "topup_pending" && !settledIds.has(row.referenceId),
-		),
+		awaitingPayment: pendingIds.some((id) => !resolvedIds.has(id)),
 		declinedRecently: lastDecline > 0 && lastDecline >= latest("topup"),
 		recentTopUps: recent.filter((row) => row.type === "topup").length,
 	};
@@ -501,15 +525,13 @@ export async function runAutoTopUp(
 	let paymentIntent: Stripe.PaymentIntent;
 	try {
 		paymentIntent = await stripe().paymentIntents.create(request, {
-			idempotencyKey: autoTopUpIdempotencyKey(
-				accountId,
-				snapshot.sequence,
-				request,
-			),
+			idempotencyKey: autoTopUpIdempotencyKey(accountId, snapshot.sequence),
 			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
 		});
 	} catch (error) {
-		if (isKeyInUse(error)) return { state: "skipped", reason: "in_progress" };
+		if (isUnresolvedAttempt(error)) {
+			return { state: "skipped", reason: "in_progress" };
+		}
 		const decline = declineFrom(error);
 		if (!decline) {
 			console.error("[infra-billing] Auto top-up could not be attempted", {
@@ -602,8 +624,10 @@ async function creditAccountOf(target: AutoTopUpTarget) {
 
 export type AutoTopUpTarget = { accountId: string } | { appId: string };
 
-export function scheduleAutoTopUp(target: AutoTopUpTarget) {
-	const task = async () => {
+export async function scheduleAutoTopUp(
+	target: AutoTopUpTarget,
+): Promise<void> {
+	const attempt = async () => {
 		try {
 			const accountId = await creditAccountOf(target);
 			if (!accountId) return;
@@ -622,9 +646,9 @@ export function scheduleAutoTopUp(target: AutoTopUpTarget) {
 		}
 	};
 	try {
-		after(task);
+		after(attempt);
 	} catch {
-		void task();
+		await attempt();
 	}
 }
 
