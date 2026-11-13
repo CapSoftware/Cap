@@ -92,11 +92,12 @@ export const BAA = "BAA available.";
 
 export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
-const DOCS = "/docs/api/rest-api";
+const REFERENCE = "/docs/api/rest-api";
 
 export const LINKS = {
-	docs: DOCS,
-	uploadDocs: `${DOCS}#multipart-upload`,
+	docs: "/docs/api/get-started",
+	reference: REFERENCE,
+	uploadDocs: `${REFERENCE}#multipart-upload`,
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -254,8 +255,7 @@ export const PLAYER: readonly CodeSample[] = [
   src="${SAMPLE_PLAYBACK.embed}"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
-  allowfullscreen
+  allow="fullscreen; picture-in-picture; autoplay; encrypted-media"
   loading="lazy"
 ></iframe>`,
 	},
