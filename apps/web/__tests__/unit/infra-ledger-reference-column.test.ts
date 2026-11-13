@@ -85,6 +85,40 @@ describe("ledger Reference column", () => {
 		expect(container.querySelector("ul")?.textContent).toContain("Reference –");
 	});
 
+	it("truncates a 66-character reference to one line, with the full value on hover", () => {
+		const session = `cs_test_${"a1B2c3D4E5".repeat(5)}a1B2c3D4`;
+		expect(session).toHaveLength(66);
+		act(() =>
+			root.render(
+				createElement(CreditTransactionTable, {
+					transactions: [
+						row({
+							type: "topup",
+							amountMicroCredits: 2_500_000,
+							referenceType: "stripe_checkout_session",
+							referenceId: session,
+						}),
+					],
+				}),
+			),
+		);
+
+		const cell = container.querySelectorAll("table tbody tr td")[2];
+		const reference = cell?.querySelector("[title]");
+		expect(reference?.className.split(" ")).toEqual([
+			"inline-block",
+			"max-w-[220px]",
+			"truncate",
+			"align-bottom",
+		]);
+		expect(reference?.getAttribute("title")).toContain(session);
+		expect(reference?.textContent).toContain(session);
+
+		const card = container.querySelector("ul li [title]");
+		expect(card?.getAttribute("title")).toContain(session);
+		expect(card?.parentElement?.className).toContain("block truncate");
+	});
+
 	it("shows the same reference on phones", () => {
 		act(() =>
 			root.render(

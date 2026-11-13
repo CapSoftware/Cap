@@ -26,11 +26,17 @@ function Note({ row }: { row: LedgerRow }) {
 	);
 }
 
-export function Reference({ row }: { row: LedgerRow }) {
+export function Reference({
+	row,
+	className,
+}: {
+	row: LedgerRow;
+	className?: string;
+}) {
 	const { reference } = describeLedgerRow(row);
 	if (!reference) return <>{NO_REFERENCE}</>;
 	return (
-		<span title={`${reference.kind} ${reference.value}`}>
+		<span title={`${reference.kind} ${reference.value}`} className={className}>
 			{reference.kind}{" "}
 			<span className={clsx(MONO, "text-[12px]")}>{reference.value}</span>
 		</span>
@@ -71,7 +77,10 @@ export function CreditTransactionTable({
 								<Note row={tx} />
 							</td>
 							<td className={clsx(TD, "text-[12.5px]")}>
-								<Reference row={tx} />
+								<Reference
+									row={tx}
+									className="inline-block max-w-[220px] truncate align-bottom"
+								/>
 							</td>
 							<td
 								className={clsx(
