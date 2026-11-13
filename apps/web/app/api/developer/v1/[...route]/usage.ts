@@ -35,6 +35,7 @@ app.get("/", async (c) => {
 
 	return c.json({
 		data: {
+			appId,
 			balanceMicroCredits,
 			balanceDollars: creditDollars(balanceMicroCredits),
 			totalVideos: stored.videoCount,

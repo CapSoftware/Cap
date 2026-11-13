@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { CONSOLE_PATH } from "./config";
+import { creditLinkFor } from "./credit-link";
 import { DOC_PAGES, type DocPage, type DocsSource } from "./docs";
 import { type ClientTuning, InfraClient } from "./http";
 import { createRedactor } from "./redact";
@@ -57,6 +58,7 @@ export type HostedTool = {
 export type HostedOptions = {
 	apiUrl: string;
 	secretKey: string;
+	appId?: string;
 	fetch: typeof fetch;
 	log: (line: string) => void;
 	client?: Partial<ClientTuning>;
@@ -74,24 +76,27 @@ export function createHostedTools(options: HostedOptions): HostedTool[] {
 		consoleUrl: `${apiUrl}${CONSOLE_PATH}`,
 	};
 	const redact = createRedactor(config.secretKey);
+	const client = new InfraClient(
+		config,
+		{ ...HOSTED_CLIENT_TUNING, ...options.client },
+		options.fetch,
+	);
+	const credit = creditLinkFor(config.consoleUrl, client, options.appId);
 	const run = createToolRunner({
-		consoleUrl: config.consoleUrl,
+		credit,
 		redact,
 		log: (line) => options.log(redact(`${SERVER_NAME}: ${line}`)),
 		budgetMs: options.budgetMs ?? HOSTED_TOOL_BUDGET_MS,
 	});
 	const tools = createTools({
 		config,
-		client: new InfraClient(
-			config,
-			{ ...HOSTED_CLIENT_TUNING, ...options.client },
-			options.fetch,
-		),
+		client,
 		upload: DEFAULT_UPLOAD_TUNING,
 		wait: { ...HOSTED_WAIT_TUNING, ...options.wait },
 		surface: "hosted",
 		maxWaitSeconds: HOSTED_MAX_WAIT_SECONDS,
 		docs: options.docs,
+		credit,
 	});
 	return tools.map((tool) => ({
 		name: tool.name,

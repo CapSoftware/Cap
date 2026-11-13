@@ -22,6 +22,7 @@ export const infraDocsSource: DocsSource = async (page) => {
 
 export function createInfraMcpServer(options: {
 	secretKey: string;
+	appId?: string;
 	fetch: typeof fetch;
 	budgetMs?: number;
 }) {
@@ -32,6 +33,7 @@ export function createInfraMcpServer(options: {
 	const tools = createHostedTools({
 		apiUrl: serverEnv().WEB_URL,
 		secretKey: options.secretKey,
+		appId: options.appId,
 		fetch: options.fetch,
 		log: (line) => console.info(line),
 		budgetMs: options.budgetMs,
@@ -64,6 +66,7 @@ export const infraMcpHandler = createMcpHandler(
 		if (!authInfo?.token) throw new Error("Missing Cap Infra secret key");
 		return createInfraMcpServer({
 			secretKey: authInfo.token,
+			appId: authInfo.clientId,
 			fetch: inProcessDeveloperFetch(requestInfo?.headers ?? new Headers()),
 		});
 	},

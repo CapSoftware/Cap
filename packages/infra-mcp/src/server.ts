@@ -5,6 +5,7 @@ import type {
 	ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "./config";
+import { creditLinkFor } from "./credit-link";
 import { type ClientTuning, DEFAULT_CLIENT_TUNING, InfraClient } from "./http";
 import { createRedactor } from "./redact";
 import { ANNOTATIONS, createToolRunner } from "./runner";
@@ -43,18 +44,21 @@ export function createInfraServer(config: Config, options: ServerOptions = {}) {
 		{ capabilities: { logging: {} }, instructions: INSTRUCTIONS },
 	);
 
+	const client = new InfraClient(config, {
+		...DEFAULT_CLIENT_TUNING,
+		...options.client,
+	});
+	const credit = creditLinkFor(config.consoleUrl, client);
 	const tools = createTools({
 		config,
-		client: new InfraClient(config, {
-			...DEFAULT_CLIENT_TUNING,
-			...options.client,
-		}),
+		client,
 		upload: { ...DEFAULT_UPLOAD_TUNING, ...options.upload },
 		wait: { ...DEFAULT_WAIT_TUNING, ...options.wait },
+		credit,
 	});
 
 	const run = createToolRunner({
-		consoleUrl: config.consoleUrl,
+		credit,
 		redact,
 		log,
 	});
