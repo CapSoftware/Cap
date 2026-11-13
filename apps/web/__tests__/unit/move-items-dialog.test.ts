@@ -128,8 +128,15 @@ function button(label: string) {
 	if (!element) throw new Error(`Button not found: ${label}`);
 	return element;
 }
+function destination(name: string) {
+	const element = [
+		...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+	].find((candidate) => candidate.textContent?.startsWith(name));
+	if (!element) throw new Error(`Destination not found: ${name}`);
+	return element;
+}
 async function chooseTeam() {
-	await act(async () => button("Acme").click());
+	await act(async () => destination("Acme").click());
 }
 async function type(input: HTMLInputElement, value: string) {
 	const setValue = Object.getOwnPropertyDescriptor(
@@ -147,7 +154,8 @@ describe("moving Caps from My Caps to a team location", () => {
 		await render();
 		expect(button("Move").disabled).toBe(true);
 		await chooseTeam();
-		expect(button("Acme").getAttribute("aria-pressed")).toBe("true");
+		expect(destination("Acme").getAttribute("aria-pressed")).toBe("true");
+		expect(destination("My Caps").getAttribute("aria-pressed")).toBe("false");
 		expect(document.body.textContent).toContain(
 			"People in Acme will be able to watch it",
 		);

@@ -14,6 +14,7 @@ export type MoveFolderDestination = {
 	id: Folder.FolderId;
 	name: string;
 	parentId: Folder.FolderId | null;
+	color?: Folder.FolderColor;
 };
 
 export type MoveDestinationGroup = {

@@ -326,6 +326,7 @@ describe("placing owned Caps in team folders", () => {
 			id: folderId,
 			name: "Team folder",
 			parentId: null,
+			color: undefined,
 		});
 		expect(filters[0]?.params).toEqual(["org"]);
 		expect(filters[1]?.params).toEqual(["org", "owner", "owner"]);

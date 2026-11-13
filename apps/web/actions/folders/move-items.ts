@@ -121,7 +121,12 @@ export async function getMoveFolderDestinations(
 	await requireMoveAccess(user, location);
 
 	return db()
-		.select({ id: folders.id, name: folders.name, parentId: folders.parentId })
+		.select({
+			id: folders.id,
+			name: folders.name,
+			parentId: folders.parentId,
+			color: folders.color,
+		})
 		.from(folders)
 		.where(getFolderScope(user, location))
 		.orderBy(asc(folders.name));
@@ -173,6 +178,7 @@ export async function getOwnedVideoMoveDestinations(
 			id: folders.id,
 			name: folders.name,
 			parentId: folders.parentId,
+			color: folders.color,
 			spaceId: folders.spaceId,
 		})
 		.from(folders)
@@ -198,7 +204,7 @@ export async function getOwnedVideoMoveDestinations(
 	): MoveFolderDestination[] =>
 		organizationFolders
 			.filter((folder) => folder.spaceId === spaceId)
-			.map(({ id, name, parentId }) => ({ id, name, parentId }));
+			.map(({ id, name, parentId, color }) => ({ id, name, parentId, color }));
 	return [
 		{
 			location: { type: "personal" },
