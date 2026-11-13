@@ -172,11 +172,6 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 		rates: PRICES.storagePer1000Minutes,
 	},
 	{
-		meter: "Speech to text",
-		unit: "per hour of audio",
-		price: usd(PRICES.speechPerHour),
-	},
-	{
 		meter: "Player",
 		price: "Included",
 		note: "a hosted page and an iframe embed",
