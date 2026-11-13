@@ -308,7 +308,7 @@ const playbackProperties = {
 		type: ["string", "null"],
 		format: "uri",
 		description:
-			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready.",
+			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready. Players built on hls.js can add ?segments=short for shorter playlists on long videos.",
 	},
 	mp4Url: {
 		type: ["string", "null"],
