@@ -939,7 +939,7 @@ describe("withShortPlaylists", () => {
 	});
 });
 
-describe("attachSource sharpening while the pointer rests on play", () => {
+describe("attachSource swapping the held segment for one that fits", () => {
 	type Hls = InstanceType<typeof hlsMock.FakeHls>;
 
 	// A line whose browser estimate starts the player on the lowest rendition.
@@ -985,13 +985,12 @@ describe("attachSource sharpening while the pointer rests on play", () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		const seeks = countSeeks(video);
-		const { hls, sharpen } = await started(video);
+		const { hls } = await started(video);
 
 		expect(hls.loadLevel).toBe(0);
 
 		hls.bandwidthEstimate = JUST_FAST_ENOUGH;
 		held(hls);
-		sharpen();
 
 		expect(hls.currentLevel).toBe(1);
 		expect(seeks()).toBe(0);
@@ -1004,56 +1003,49 @@ describe("attachSource sharpening while the pointer rests on play", () => {
 		held(hls, 1);
 
 		expect(seeks()).toBe(1);
+		expect(hls.currentLevel).toBe(1);
 	});
 
 	it("never swaps above the rendition that fits the player", async () => {
 		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video);
+		const { hls } = await started(new FakeVideo(false));
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
-		sharpen();
 
 		expect(hls.currentLevel).toBe(1);
 	});
 
-	it("keeps the held segment when a sharper one would arrive too late", async () => {
+	it("keeps the held segment when the line could not fetch a sharper one in time", async () => {
 		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video);
+		const { hls } = await started(new FakeVideo(false));
 
 		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
 		held(hls);
-		sharpen();
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("waits until a held segment has measured the line", async () => {
-		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video);
+	it("keeps a held segment that already fits", async () => {
+		chrome(true);
+		const { hls } = await started(new FakeVideo(false));
+
+		expect(hls.loadLevel).toBe(1);
 
 		hls.bandwidthEstimate = 1_000_000_000;
-		sharpen();
+		held(hls, 1);
 
 		expect(hls.currentLevel).toBe(-1);
-
-		held(hls);
-
-		expect(hls.currentLevel).toBe(1);
 	});
 
-	it("drops a waiting swap once play is pressed", async () => {
+	it("only measures video segments", async () => {
 		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video);
+		const { hls } = await started(new FakeVideo(false));
 
 		hls.bandwidthEstimate = 1_000_000_000;
-		sharpen();
-		void video.play();
-		held(hls);
+		hls.emit("fragBuffered", {
+			frag: { type: "audio", level: 0, duration: 4 },
+		});
 
 		expect(hls.currentLevel).toBe(-1);
 	});
@@ -1061,70 +1053,33 @@ describe("attachSource sharpening while the pointer rests on play", () => {
 	it("leaves a playing video alone", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video);
+		const { hls } = await started(video);
 
 		hls.bandwidthEstimate = 1_000_000_000;
-		held(hls);
 		void video.play();
-		sharpen();
+		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("leaves a quality the viewer picked alone", async () => {
 		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, setLevel, sharpen } = await started(video);
+		const { hls, setLevel } = await started(new FakeVideo(false));
 
 		hls.bandwidthEstimate = 1_000_000_000;
-		held(hls);
 		setLevel(3);
-		sharpen();
+		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("leaves the seek to a start time to hls.js", async () => {
 		lowEstimate();
-		const video = new FakeVideo(false);
-		const { hls, sharpen } = await started(video, { startAt: 45 });
+		const { hls } = await started(new FakeVideo(false), { startAt: 45 });
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
-		sharpen();
 
 		expect(hls.currentLevel).toBe(-1);
-	});
-
-	it("does nothing once stopped or after a fall back to the MP4", async () => {
-		lowEstimate();
-		const stopped = await started(new FakeVideo(false));
-		stopped.hls.bandwidthEstimate = 1_000_000_000;
-		held(stopped.hls);
-		stopped.stop();
-		stopped.sharpen();
-
-		expect(stopped.hls.currentLevel).toBe(-1);
-
-		const failed = attach(new FakeVideo(false), { hls: HLS, mp4: MP4 });
-		const hls = await hlsFor();
-		hls.emit("manifestParsed", LADDER_DATA);
-		hls.bandwidthEstimate = 1_000_000_000;
-		held(hls);
-		hls.emit("error", { fatal: true, type: "networkError" });
-		failed.sharpen();
-
-		expect(hls.currentLevel).toBe(-1);
-	});
-
-	it("does nothing in Safari's own player", () => {
-		iphone(true);
-		const video = new FakeVideo(true);
-
-		const { sharpen } = attach(video, { hls: HLS });
-		sharpen();
-
-		expect(video.src).toBe(HLS);
-		expect(video.preload).toBe("metadata");
 	});
 });

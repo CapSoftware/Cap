@@ -5,7 +5,10 @@
 	--cap-player-rail: rgba(244, 246, 250, 0.22);
 	--cap-player-buffered: rgba(244, 246, 250, 0.3);
 	--cap-player-scrim: rgba(0, 0, 0, 0.74);
-	--cap-player-surface: rgba(20, 21, 24, 0.94);
+	/* Opaque: Firefox lets its own Picture-in-Picture button take clicks
+	   through anything over the video it does not count as covering it, and
+	   it does not count a translucent menu. */
+	--cap-player-surface: rgb(20, 21, 24);
 	--cap-player-hover: rgba(244, 246, 250, 0.12);
 	--cap-player-radius: 0px;
 	--cap-player-control: 34px;
@@ -41,6 +44,11 @@
 	height: 100%;
 	object-fit: contain;
 	background: #000;
+}
+
+.video:focus-visible {
+	outline: 2px solid var(--cap-player-ink);
+	outline-offset: -2px;
 }
 
 .spinner {
@@ -85,6 +93,7 @@
 
 .start {
 	position: absolute;
+	z-index: 1;
 	left: 50%;
 	top: 50%;
 	display: grid;
@@ -118,7 +127,8 @@
 	pointer-events: none;
 }
 
-.player[data-waiting="true"] .start {
+.player[data-waiting="true"] .start,
+.player[data-menu] .start {
 	visibility: hidden;
 }
 
@@ -521,6 +531,16 @@
 @media (hover: none) {
 	.volumeTrack {
 		display: none;
+	}
+}
+
+@media (pointer: coarse) {
+	.player {
+		--cap-player-control: 44px;
+	}
+
+	.item {
+		height: 44px;
 	}
 }
 
