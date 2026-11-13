@@ -2,6 +2,8 @@ import { INFRA_SPEECH_DOLLARS_PER_HOUR } from "@/lib/infra-pricing";
 import { Calculator } from "./Calculator";
 import {
 	ANCHORS,
+	DELIVERED_MINUTE,
+	DELIVERY_RULE,
 	PRICE_ROWS,
 	STORAGE_RULE,
 	TIER_LABEL,
@@ -20,8 +22,8 @@ export const Pricing = () => (
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p>
-					Two things are charged: stored video and speech to text. Uploading and
-					encoding are free. Credits are prepaid.
+					Three things are charged: stored video, delivered video and speech to
+					text. Uploading and encoding are free. Credits are prepaid.
 				</p>
 			</SectionHeading>
 			<div className="min-w-0">
@@ -93,6 +95,9 @@ export const Pricing = () => (
 					{STORAGE_RULE} A video is billed by its length and resolution tier.
 					Videos are encoded up to 1080p by default, and 1440p and 4K are set
 					per upload.
+				</p>
+				<p className="m-0 mt-3 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
+					{DELIVERED_MINUTE} {DELIVERY_RULE}
 				</p>
 				<dl className="m-0 mt-8 flex items-baseline justify-between gap-4 border-y border-[rgba(222,230,246,0.08)] py-3.5">
 					<dt className="text-[14.5px] leading-[1.4] text-[#E8ECF4]">

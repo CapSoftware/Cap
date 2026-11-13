@@ -39,7 +39,7 @@ export const HOSTED_INSTRUCTIONS = [
 	"Video: videos_create_upload with the file size, upload the parts to the signed links it returns from the machine that holds the file, videos_complete_upload, then videos_wait until it is ready and use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
 	"Speech: transcripts_create from a public url or a ready videoId, transcripts_wait, then transcripts_text.",
 	`Wait tools return within ${HOSTED_MAX_WAIT_SECONDS} seconds; when a result has timedOut, call the same tool again.`,
-	"Stored video is billed one month when it becomes ready, then daily until deleted, and transcripts are billed per audio hour. Check account_usage before large jobs.",
+	"Stored video is billed one month when it becomes ready, then daily until deleted, video that viewers stream is billed per delivered minute, and transcripts are billed per audio hour. Check account_usage before large jobs.",
 	"Credit can only be added in the console by a signed-in person. When a tool reports out of credit, give them the addCreditAt link.",
 ].join(" ");
 

@@ -910,7 +910,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listTransactions",
 				summary: "List transactions",
 				description:
-					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
+					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, daily delivery, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
 				tags: ["Usage"],
 				security: secretAuth,
 				parameters: [
@@ -1472,12 +1472,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					type: {
 						type: "string",
 						description:
-							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), delivery_daily (one row per app per delivered day), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
 					},
 					description: {
 						type: "string",
 						description:
-							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment.",
+							'The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment. A delivery row reads Delivery and its day, such as "Delivery, Nov 13, 2026".',
 					},
 					note: {
 						type: ["string", "null"],
@@ -1509,6 +1509,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"manual",
 							"pro_monthly_credit",
 							"storage_day",
+							"delivery_day",
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
@@ -1521,7 +1522,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					referenceId: {
 						type: ["string", "null"],
 						description:
-							"The transcript ID, the UTC day a storage charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
+							"The transcript ID, the UTC day a storage or delivery charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
 					},
 					createdAt: { type: "string", format: "date-time" },
 				},
@@ -1626,7 +1627,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage or delivery charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],

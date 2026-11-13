@@ -106,7 +106,7 @@ export function UploadDrop({ creditsLink = true }: { creditsLink?: boolean }) {
 						{failures.length === 0 && (
 							<p className="m-0 mt-1 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
 								{INFRA_SUPPORTED_VIDEO_FORMATS}, one or several. Uploads are
-								free, and stored video is billed by the minute.
+								free. Stored and delivered video are billed by the minute.
 							</p>
 						)}
 					</div>

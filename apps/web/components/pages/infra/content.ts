@@ -1,5 +1,8 @@
 import { canUseInfra } from "@/lib/infra-access";
 import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_DELIVERY_PRICE,
+	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -8,6 +11,7 @@ import {
 
 export const PRICES = {
 	storagePer1000Minutes: INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+	deliveryPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 	speechPerHour: INFRA_SPEECH_DOLLARS_PER_HOUR,
 	proMonthlyCredit: 5,
 } as const;
@@ -16,6 +20,12 @@ export const TIERS = INFRA_RESOLUTION_TIERS;
 
 export const STORAGE_RULE =
 	"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
+
+export const DELIVERED_MINUTE =
+	"A delivered minute is a minute of video your viewers' players download. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.";
+
+export const DELIVERY_RULE =
+	"Delivery is billed per delivered minute and charged once a day from the app's balance, when the day's figures become final. The player is included: the hosted page and the iframe embed have no separate fee. The video it streams counts as delivery.";
 
 export const DEFAULT_TIER: InfraResolutionTier = "1080p";
 
@@ -53,7 +63,7 @@ export const infraSeo = {
 	path: "/infra",
 	url: "https://cap.so/infra",
 	title: "Cap Infra: cheap, fast & reliable video infrastructure",
-	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a poster and a hosted player. Uploading and encoding are free, storage is from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} per 1,000 minutes a month and speech to text is ${usd(PRICES.speechPerHour)} per audio hour.`,
+	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a poster and a hosted player. Uploading and encoding are free, storage is from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} per 1,000 minutes a month, delivery is billed per delivered minute and speech to text is ${usd(PRICES.speechPerHour)} per audio hour.`,
 	ogDescription: `${HEADLINE} Adaptive HLS up to 4K, an MP4 and a hosted player from one upload.`,
 	keywords: [
 		"video infrastructure",
@@ -174,6 +184,12 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 		meter: "Storage",
 		unit: "per 1,000 minutes, per month",
 		rates: PRICES.storagePer1000Minutes,
+	},
+	{
+		meter: "Delivery",
+		unit: INFRA_DELIVERY_PRICE_UNIT,
+		price: INFRA_DELIVERY_PRICE,
+		note: "at every resolution",
 	},
 	{
 		meter: "Player",
@@ -334,11 +350,15 @@ export const infraFaqs: readonly Faq[] = [
 	...PREVIEW_FAQ,
 	{
 		question: "What does Cap Infra charge for?",
-		answer: `Two things: stored video and speech to text. ${STORAGE_RULE}`,
+		answer: `Three things: stored video, delivered video and speech to text. ${STORAGE_RULE} ${DELIVERY_RULE}`,
+	},
+	{
+		question: "What is a delivered minute?",
+		answer: `${DELIVERED_MINUTE} Delivery is one flat rate at every resolution.`,
 	},
 	{
 		question: "How does resolution change the price?",
-		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. One month is charged when a video first becomes ready, then it is charged daily once that month is over. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload.`,
+		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. One month is charged when a video first becomes ready, then it is charged daily once that month is over. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload. Delivery is one flat rate at every resolution.`,
 	},
 	{
 		question: "How do I pay?",
@@ -383,7 +403,7 @@ export const infraSoftwareSchema = {
 		"@type": "Offer",
 		price: 0,
 		priceCurrency: "USD",
-		description: `Usage-based pricing. Uploading and encoding are free. Storage per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Speech to text: ${usd(PRICES.speechPerHour)} per audio hour.`,
+		description: `Usage-based pricing. Uploading and encoding are free. Storage per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Delivery: billed per delivered minute. Speech to text: ${usd(PRICES.speechPerHour)} per audio hour.`,
 	},
 	publisher: {
 		"@type": "Organization",

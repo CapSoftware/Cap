@@ -68,7 +68,7 @@ export function createHostedUploadTools(deps: ToolDeps): Tool[] {
 		tool({
 			name: "videos_create_upload",
 			title: "Create a video upload",
-			description: `Create a video and get signed links to upload its file directly to storage. Send the file size in bytes. Returns the video id, an uploadId and one link per part with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. Then call videos_complete_upload. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to start a failed upload again in the same video.`,
+			description: `Create a video and get signed links to upload its file directly to storage. Send the file size in bytes. Returns the video id, an uploadId and one link per part with the exact upload steps; links work for ${PART_LINK_SECONDS / 60} minutes. Then call videos_complete_upload. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to start a failed upload again in the same video.`,
 			kind: "write",
 			input: {
 				contentLength: z

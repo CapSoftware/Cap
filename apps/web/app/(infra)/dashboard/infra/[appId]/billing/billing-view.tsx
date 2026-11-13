@@ -2,6 +2,9 @@ import clsx from "clsx";
 import Link from "next/link";
 import type { LedgerRow } from "@/lib/infra-ledger";
 import {
+	INFRA_DELIVERY_BILLED_FROM_TEXT,
+	INFRA_DELIVERY_PRICE,
+	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -31,6 +34,11 @@ import { TopUp } from "./top-up";
 const dollars = (value: number) => `$${value.toFixed(2)}`;
 
 const flatRates = [
+	{
+		name: "Delivery",
+		unit: INFRA_DELIVERY_PRICE_UNIT,
+		price: INFRA_DELIVERY_PRICE,
+	},
 	{
 		name: "Speech to text",
 		unit: "per audio hour",
@@ -181,7 +189,8 @@ export function BillingView({
 					<p className="m-0 mt-4 max-w-[520px] text-pretty text-[13px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
 						Each video is charged one month of storage when it becomes ready,
 						then once a day at its resolution. Uploading needs a balance that
-						covers that first month.{" "}
+						covers that first month. Delivered video is charged once a day, when
+						the day's figures become final. {INFRA_DELIVERY_BILLED_FROM_TEXT}{" "}
 						<Link
 							href="/docs/api/billing"
 							className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}

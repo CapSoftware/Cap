@@ -27,7 +27,7 @@ export const INSTRUCTIONS = [
 	"Cap Infra hosts video and turns speech into text, billed from the app's prepaid credit.",
 	"Video: videos_upload a local file, videos_wait until it is ready, then use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
 	"Speech: transcripts_create from a url, a local path or a ready videoId, transcripts_wait, then transcripts_text.",
-	"Stored video is billed one month when it becomes ready, then daily until deleted, and transcripts are billed per audio hour. Check account_usage before large jobs.",
+	"Stored video is billed one month when it becomes ready, then daily until deleted, video that viewers stream is billed per delivered minute, and transcripts are billed per audio hour. Check account_usage before large jobs.",
 	"Credit can only be added in the console by a signed-in person. When a tool reports out of credit, give them the addCreditAt link.",
 ].join(" ");
 
