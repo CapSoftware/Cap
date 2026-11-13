@@ -430,6 +430,9 @@ describe("hosted Cap Infra MCP tools", () => {
 		for (const name of ["videos_wait", "transcripts_wait"]) {
 			const wait = tools.find((tool) => tool.name === name);
 			expect(wait?.inputSchema.properties.timeoutSeconds?.maximum).toBe(45);
+			expect(wait?.inputSchema.properties.timeoutSeconds?.description).toBe(
+				"Longest time to wait, in seconds (default and maximum 45). Checks are at least 3 seconds apart, so a timeout below 4 makes one check and returns at once",
+			);
 		}
 	});
 
