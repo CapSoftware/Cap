@@ -197,6 +197,23 @@ describe("webhooks in the OpenAPI description", () => {
 		}
 	});
 
+	it("promises retries for video events only", () => {
+		const outbound = spec.webhooks as Record<
+			string,
+			{ post: { description: string } }
+		>;
+		for (const type of WEBHOOK_EVENT_TYPES) {
+			expect(outbound[type]?.post.description).toContain(
+				`up to ${WEBHOOK_MAX_ATTEMPTS} attempts`,
+			);
+			expect(outbound[type]?.post.description).toContain("enabled endpoint");
+		}
+		const test = outbound[WEBHOOK_TEST_EVENT_TYPE]?.post.description ?? "";
+		expect(test).toContain("never retried");
+		expect(test).toContain("whether or not that endpoint is enabled");
+		expect(test).not.toContain("attempts");
+	});
+
 	it("describes the request Cap sends for each event", () => {
 		const outbound = spec.webhooks as Record<string, { post: object }>;
 		expect(Object.keys(outbound).sort()).toEqual(

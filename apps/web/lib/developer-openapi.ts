@@ -231,14 +231,25 @@ const webhookEventsProperty = {
 	description: "The event types sent to this endpoint.",
 };
 
-const webhookDelivery = (type: string, summary: string, data: object) => ({
+const WEBHOOK_VERIFY_NOTE =
+	"Verify Cap-Signature before trusting the body, and use the event id to ignore a delivery you have already handled.";
+
+const videoEventDescription = (type: string) =>
+	`Cap sends this request to every enabled endpoint subscribed to ${type}. Answer with any 2xx status within 10 seconds. Any other answer, a redirect or no answer is retried, up to ${WEBHOOK_MAX_ATTEMPTS} attempts over about a day. ${WEBHOOK_VERIFY_NOTE}`;
+
+const webhookDelivery = (
+	type: string,
+	summary: string,
+	data: object,
+	description: string = videoEventDescription(type),
+) => ({
 	post: {
 		operationId: `receive${type
 			.split(".")
 			.map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
 			.join("")}`,
 		summary,
-		description: `Cap sends this request to every enabled endpoint subscribed to ${type}. Answer with any 2xx status within 10 seconds. Any other answer, a redirect or no answer is retried, up to ${WEBHOOK_MAX_ATTEMPTS} attempts over about a day. Verify Cap-Signature before trusting the body, and use the event id to ignore a delivery you have already handled.`,
+		description,
 		tags: ["Webhooks"],
 		security: [],
 		parameters: [
@@ -541,6 +552,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: ["webhookId"],
 				properties: { webhookId: { type: "string" } },
 			},
+			`Cap sends this request once, to the one endpoint named in sendWebhookTestEvent, whether or not that endpoint is enabled. It is never retried: what the endpoint answers within 10 seconds is returned by sendWebhookTestEvent. ${WEBHOOK_VERIFY_NOTE}`,
 		),
 	},
 	paths: {
