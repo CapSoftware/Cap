@@ -85,14 +85,31 @@ describe("messenger launcher above the dashboard's mobile tab bar", () => {
 		},
 	);
 
+	const widgetCss = () =>
+		(
+			render("/dashboard/caps").parentElement?.querySelector("style")
+				?.textContent ?? ""
+		).replace(/\s+/g, " ");
+
+	it("lifts the panel by the tab bar's 64 px below the lg breakpoint", () => {
+		const css = widgetCss();
+		const block = css.match(
+			/@media \(max-width: 1023\.98px\) \{ \.cap-messenger-panel-dashboard \{ ([^}]*) \} \}/,
+		);
+		expect(block?.[1]).toContain("bottom: 152px;");
+		expect(block?.[1]).toContain("height: min(760px, calc(100dvh - 172px));");
+		expect(css).toContain("bottom: 88px;");
+		expect(css).toContain("height: min(760px, calc(100dvh - 108px));");
+	});
+
 	it("keeps the full screen panel on phones above the dashboard rule", () => {
-		const css =
-			render("/dashboard/caps").parentElement?.querySelector(
-				"style",
-			)?.textContent;
-		const dashboardRule = css?.indexOf(".cap-messenger-panel-dashboard") ?? -1;
-		const phoneRule = css?.indexOf("@media (max-width: 480px)") ?? -1;
+		const css = widgetCss();
+		const dashboardRule = css.indexOf(".cap-messenger-panel-dashboard");
+		const phoneRule = css.indexOf("@media (max-width: 480px)");
 		expect(dashboardRule).toBeGreaterThan(-1);
 		expect(phoneRule).toBeGreaterThan(dashboardRule);
+		expect(css.slice(phoneRule)).toMatch(
+			/\.cap-messenger-panel \{ width: 100vw; height: 100dvh; right: 0; bottom: 0;/,
+		);
 	});
 });
