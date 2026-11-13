@@ -22,7 +22,7 @@ export const STORAGE_RULE =
 	"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
 
 export const DELIVERED_MINUTE =
-	"A delivered minute is a minute of video your viewers' players download. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.";
+	"A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.";
 
 export const DELIVERY_RULE =
 	"Delivery is billed per delivered minute and charged once a day from the app's balance, when the day's figures become final. The player is included: the hosted page and the iframe embed have no separate fee. The video it streams counts as delivery.";
