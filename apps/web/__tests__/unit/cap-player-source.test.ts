@@ -221,22 +221,22 @@ describe("startingEstimate", () => {
 		expect(startingEstimate()).toBe(5_000_000);
 	});
 
-	it("ignores Chrome's low reading on a fast line", () => {
+	it("takes the browser's reading, never above the default", () => {
 		hint({ downlink: 1.6, effectiveType: "4g" });
-		expect(startingEstimate()).toBe(5_000_000);
+		expect(startingEstimate()).toBe(1_280_000);
+		hint({ downlink: 0.4 });
+		expect(startingEstimate()).toBe(320_000);
 		hint({ downlink: 10, effectiveType: "4g" });
+		expect(startingEstimate()).toBe(5_000_000);
+		hint({ effectiveType: "3g", downlink: 10 });
 		expect(startingEstimate()).toBe(5_000_000);
 	});
 
-	it("starts low on a line the browser calls slow", () => {
-		hint({ effectiveType: "3g", downlink: 1.6 });
-		expect(startingEstimate()).toBe(1_280_000);
-		hint({ effectiveType: "3g", downlink: 10 });
-		expect(startingEstimate()).toBe(5_000_000);
+	it("starts low on a slow line with no reading, and with data saver", () => {
 		hint({ effectiveType: "slow-2g" });
 		expect(startingEstimate()).toBe(500_000);
-		hint({ downlink: 0.4 });
-		expect(startingEstimate()).toBe(320_000);
+		hint({ effectiveType: "4g" });
+		expect(startingEstimate()).toBe(5_000_000);
 		hint({ saveData: true, downlink: 10 });
 		expect(startingEstimate()).toBe(500_000);
 	});
@@ -1046,13 +1046,14 @@ describe("withShortPlaylists", () => {
 describe("attachSource swapping the held segment for one that fits", () => {
 	type Hls = InstanceType<typeof hlsMock.FakeHls>;
 
-	// A line the browser calls slow, so the player holds the lowest rendition.
+	// Chrome's reading of about 1.6 Mbps, on a fast line or a slow one, so the
+	// player starts on the lowest rendition until it has measured the line.
 	const lowEstimate = () =>
 		page({
 			vendor: "Google Inc.",
 			mediaSource: true,
 			loaded: true,
-			effectiveType: "3g",
+			megabits: 1.6,
 		});
 
 	const countSeeks = (video: FakeVideo) => {
@@ -1154,13 +1155,32 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("leaves a playing video alone", async () => {
+	it("swaps while the first seconds play, then adapts again", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
+		const seeks = countSeeks(video);
 		const { hls } = await started(video);
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		void video.play();
+		held(hls);
+
+		expect(hls.currentLevel).toBe(1);
+
+		hls.loadLevel = 1;
+		held(hls, 1);
+
+		expect(seeks()).toBe(1);
+		expect(hls.loadLevel).toBe(-1);
+	});
+
+	it("measures the line once", async () => {
+		lowEstimate();
+		const { hls } = await started(new FakeVideo(false));
+
+		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
+		held(hls);
+		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
 
 		expect(hls.currentLevel).toBe(-1);

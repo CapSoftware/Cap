@@ -88,11 +88,11 @@ export const listLevels = (
 };
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
-// The line assumed before anything is measured: enough for the rendition
-// that fits a desktop player. Chrome's connection hint read about 1.6 Mbps on
-// a line measured at 190 Mbps, and Safari and Firefox give none, so the hint
-// only lowers this when it says the line is slow. A slow line the hint misses
-// is caught by the speed of the held segment once playing.
+// The line assumed before anything is measured. Chrome's connection hint
+// reads about 1.6 Mbps on a fast line as on a slow one, so it starts low, and
+// the first segment's measured speed then swaps a fast line up. Safari and
+// Firefox give no hint and assume enough for the rendition that fits a
+// desktop player.
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
 const SLOW_LINE_BITS_PER_SECOND = 500_000;
 const SLOW_LINE_TYPES = ["slow-2g", "2g", "3g"];
@@ -151,15 +151,12 @@ export const startingEstimate = () => {
 		.connection;
 	if (connection?.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
 	const megabits = connection?.downlink ?? 0;
-	const slow =
-		SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "") ||
-		(megabits > 0 && megabits < 1);
-	if (!slow) return DEFAULT_BITS_PER_SECOND;
-	// Chrome can call a fast line with a long round trip 3g, so a slow reading
-	// never starts the player above a line it does not call slow.
-	return megabits > 0
-		? Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND)
-		: SLOW_LINE_BITS_PER_SECOND;
+	if (megabits > 0) {
+		return Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND);
+	}
+	return SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "")
+		? SLOW_LINE_BITS_PER_SECOND
+		: DEFAULT_BITS_PER_SECOND;
 };
 
 // The smallest rendition that covers the player in either direction, or the
@@ -446,29 +443,35 @@ export const attachSource = (
 				if (!playRequested) hls.loadLevel = level;
 				hls.startLoad(startPending ? startAt : -1);
 			});
-			// The segment held before play measures the line. When the measured
-			// line can fetch a sharper rendition that fits the player in time,
-			// such as 4K for a large high density screen, the held segment is
-			// swapped for it before play.
+			// The first video segment measures the line. When the measured line
+			// can fetch a sharper rendition that fits the player in time, that
+			// segment is replaced at once, before play or while the first
+			// seconds play, rather than playing on soft until the next segment.
+			let measured = false;
 			let swappedTo = AUTO_LEVEL;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
-				// Chrome keeps showing frames it decoded from the old segment
-				// until the next keyframe. A seek in place decodes the new one.
 				if (data.frag.level === swappedTo) {
 					swappedTo = AUTO_LEVEL;
+					// Chrome keeps showing frames it decoded from the old segment
+					// until the next keyframe. A seek in place decodes the new one.
 					const at = video.currentTime;
 					video.currentTime = at;
+					// The switch fixed the level; adapting resumes from here.
+					if (playRequested && picked === AUTO_LEVEL) {
+						hls.loadLevel = AUTO_LEVEL;
+					}
 					return;
 				}
-				if (playRequested || startPending || picked !== AUTO_LEVEL) return;
-				if (swappedTo !== AUTO_LEVEL) return;
+				if (measured) return;
+				measured = true;
+				if (startPending || picked !== AUTO_LEVEL) return;
 				const level = pickStartingLevel(
 					hls.levels,
 					playerSize(),
 					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
 				);
-				if (!isSharper(hls.levels, level, hls.loadLevel)) return;
+				if (!isSharper(hls.levels, level, data.frag.level)) return;
 				swappedTo = level;
 				hls.currentLevel = level;
 			});
