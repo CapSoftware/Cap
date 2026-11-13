@@ -16,6 +16,8 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	or,
+	type SQL,
 	sql,
 } from "drizzle-orm";
 import { after } from "next/server";
@@ -56,8 +58,12 @@ type SkipReason = Extract<AutoTopUpResult, { state: "skipped" }>["reason"];
 
 type LockedAttempt =
 	| { kind: "skipped"; reason: SkipReason }
-	| { kind: "reconcile"; paymentIntentIds: string[] }
-	| { kind: "reserved"; key: string; attempt: AutoTopUpAttempt };
+	| {
+			kind: "reserved";
+			key: string;
+			attempt: AutoTopUpAttempt;
+			request: ReservedRequest;
+	  };
 
 export type AutoTopUpResult =
 	| {
@@ -289,6 +295,10 @@ export function autoTopUpWaits(now: Date) {
 		sql`${sql.identifier("owner_account")}.${sql.identifier(field.name)}`;
 	const ownerEntry = ledgerAlias("owner_entry");
 	const ownerSettled = ledgerAlias("owner_settled");
+	const ownReservation = ledgerAlias("own_reservation");
+	const reservedLike = `${RESERVATION_PREFIX}%`;
+	const jsonCents = (column: SQL) =>
+		sql`cast(json_unquote(json_extract(${column}, '$.amountCents')) as unsigned)`;
 	const pendingAttempt = ledgerAlias("pending_attempt");
 	const settledAttempt = ledgerAlias("settled_attempt");
 	const declinedAttempt = ledgerAlias("declined_attempt");
@@ -301,9 +311,19 @@ export function autoTopUpWaits(now: Date) {
 	return {
 		pending: sql<number>`exists (select 1 from ${pendingAttempt.from} where ${pendingAttempt.accountId} = ${accountRow} and ${pendingAttempt.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]} and ${pendingAttempt.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and ${pendingAttempt.createdAt} > ${reconcileFrom} and ${pendingAttempt.referenceId} not like ${`${RESERVATION_PREFIX}%`} and not exists (select 1 from ${settledAttempt.from} where ${settledAttempt.accountId} = ${pendingAttempt.accountId} and ${settledAttempt.referenceId} = ${pendingAttempt.referenceId} and ${settledAttempt.referenceType} in (${inList(SETTLED_REFERENCE_TYPES)})))`,
 		decline: sql<number>`exists (select 1 from ${declinedAttempt.from} where ${declinedAttempt.accountId} = ${accountRow} and ${declinedAttempt.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_FAILED_REFERENCE_TYPE]} and ${declinedAttempt.referenceType} = ${AUTO_TOP_UP_FAILED_REFERENCE_TYPE} and ${declinedAttempt.createdAt} > ${dayAgo} and not exists (select 1 from ${laterTopUp.from} where ${laterTopUp.accountId} = ${declinedAttempt.accountId} and ${laterTopUp.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} and ${laterTopUp.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} and ${laterTopUp.createdAt} > ${declinedAttempt.createdAt}))`,
-		owner: sql<number>`(select coalesce(sum(case when ${ownerEntry.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} then ${ownerEntry.amountMicroCredits} else cast(json_unquote(json_extract(${ownerEntry.metadata}, '$.amountCents')) as unsigned) * ${MICRO_CREDITS_PER_CENT} end), 0) from ${accounts} ${sql.identifier("owner_account")} join ${ownerEntry.from} on ${ownerEntry.accountId} = ${ownerAccount(developerCreditAccounts.id)} where ${ownerAccount(developerCreditAccounts.ownerId)} = ${accountColumn(developerCreditAccounts.ownerId)} and ${ownerEntry.type} in (${inList([ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE], ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]])}) and ${ownerEntry.createdAt} > ${dayAgo} and (${ownerEntry.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} or (${ownerEntry.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and not exists (select 1 from ${ownerSettled.from} where ${ownerSettled.accountId} = ${ownerEntry.accountId} and ${ownerSettled.referenceId} = ${ownerEntry.referenceId} and ${ownerSettled.referenceType} in (${inList(SETTLED_REFERENCE_TYPES)}))))) + ${accountColumn(developerCreditAccounts.autoTopUpAmountCents)} * ${MICRO_CREDITS_PER_CENT} > ${AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS * MICRO_CREDITS_PER_CENT}`,
+		owner: sql<number>`(select coalesce(sum(case when ${ownerEntry.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} then ${ownerEntry.amountMicroCredits} else ${jsonCents(ownerEntry.metadata)} * ${MICRO_CREDITS_PER_CENT} end), 0) from ${accounts} ${sql.identifier("owner_account")} join ${ownerEntry.from} on ${ownerEntry.accountId} = ${ownerAccount(developerCreditAccounts.id)} where ${ownerAccount(developerCreditAccounts.ownerId)} = ${accountColumn(developerCreditAccounts.ownerId)} and ${ownerEntry.type} in (${inList([ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE], ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]])}) and ${ownerEntry.createdAt} > ${dayAgo} and not (${ownerEntry.accountId} = ${accountRow} and ${ownerEntry.referenceId} like ${reservedLike}) and (${ownerEntry.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} or (${ownerEntry.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and not exists (select 1 from ${ownerSettled.from} where ${ownerSettled.accountId} = ${ownerEntry.accountId} and ${ownerSettled.referenceId} = ${ownerEntry.referenceId} and ${ownerSettled.referenceType} in (${inList(SETTLED_REFERENCE_TYPES)}))))) + coalesce((select ${jsonCents(ownReservation.metadata)} from ${ownReservation.from} where ${ownReservation.accountId} = ${accountRow} and ${ownReservation.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]} and ${ownReservation.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and ${ownReservation.referenceId} like ${reservedLike} limit 1), ${accountColumn(developerCreditAccounts.autoTopUpAmountCents)}) * ${MICRO_CREDITS_PER_CENT} > ${AUTO_TOP_UP_OWNER_DAILY_LIMIT_CENTS * MICRO_CREDITS_PER_CENT}`,
 		limit: sql<number>`(select count(*) from ${recentTopUp.from} where ${recentTopUp.accountId} = ${accountRow} and ${recentTopUp.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_REFERENCE_TYPE]} and ${recentTopUp.referenceType} = ${AUTO_TOP_UP_REFERENCE_TYPE} and ${recentTopUp.createdAt} > ${dayAgo}) >= ${AUTO_TOP_UP_DAILY_LIMIT}`,
 	};
+}
+
+export function autoTopUpNeedsReconcile(now: Date) {
+	const stale = ledgerAlias("stale_payment");
+	const staleSettled = ledgerAlias("stale_settled");
+	const accountRow = sql`${sql.identifier(getTableName(developerCreditAccounts))}.${sql.identifier(developerCreditAccounts.id.name)}`;
+	const reconcileFrom = sqlTime(
+		new Date(now.getTime() - AUTO_TOP_UP_PENDING_RECONCILE_MS),
+	);
+	return sql`exists (select 1 from ${stale.from} where ${stale.accountId} = ${accountRow} and ${stale.type} = ${ATTEMPT_LEDGER_TYPES[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]} and ${stale.referenceType} = ${AUTO_TOP_UP_PENDING_REFERENCE_TYPE} and ${stale.createdAt} <= ${reconcileFrom} and not exists (select 1 from ${staleSettled.from} where ${staleSettled.accountId} = ${stale.accountId} and ${staleSettled.referenceId} = ${stale.referenceId} and ${staleSettled.referenceType} in (${inList(SETTLED_REFERENCE_TYPES)})))`;
 }
 
 export function autoTopUpReleased(now: Date) {
@@ -367,8 +387,18 @@ async function attemptHistory(executor: InfraDbExecutor, accountId: string) {
 				),
 			),
 		);
-	const pending = await executor
-		.select({ pendingId: developerCreditTransactions.referenceId })
+	return {
+		topUps: Number(settled?.topUps ?? 0),
+		declines: Number(settled?.declines ?? 0),
+	};
+}
+
+async function unresolvedPayments(accountId: string) {
+	const pending = await db()
+		.select({
+			pendingId: developerCreditTransactions.referenceId,
+			pendingSince: developerCreditTransactions.createdAt,
+		})
 		.from(developerCreditTransactions)
 		.where(
 			and(
@@ -384,7 +414,7 @@ async function attemptHistory(executor: InfraDbExecutor, accountId: string) {
 		row.pendingId ? [row.pendingId] : [],
 	);
 	const resolved = pendingIds.length
-		? await executor
+		? await db()
 				.select({ settledId: developerCreditTransactions.referenceId })
 				.from(developerCreditTransactions)
 				.where(
@@ -399,15 +429,51 @@ async function attemptHistory(executor: InfraDbExecutor, accountId: string) {
 				)
 		: [];
 	const resolvedIds = new Set(resolved.map((row) => row.settledId));
-	return {
-		attempt: {
-			topUps: Number(settled?.topUps ?? 0),
-			declines: Number(settled?.declines ?? 0),
+	return pending.flatMap((row) =>
+		row.pendingId && !resolvedIds.has(row.pendingId)
+			? [{ referenceId: row.pendingId, since: new Date(row.pendingSince) }]
+			: [],
+	);
+}
+
+async function reconcileReservation(accountId: string, key: string) {
+	const attempt = key.slice(`${RESERVATION_PREFIX}${accountId}:`.length);
+	const found = await stripe().paymentIntents.search(
+		{
+			query: `metadata['accountId']:'${accountId}' AND metadata['attempt']:'${attempt}'`,
+			limit: 1,
 		},
-		unresolved: pendingIds.filter(
-			(id) => !resolvedIds.has(id) && !id.startsWith(RESERVATION_PREFIX),
-		),
-	};
+		{ timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS },
+	);
+	const [paymentIntent] = found.data;
+	if (!paymentIntent) {
+		await dropReservation(db(), accountId, key);
+		return;
+	}
+	if (paymentIntent.status === "processing") {
+		await linkReservation(accountId, key, paymentIntent.id);
+		return;
+	}
+	await settleAutoTopUpPaymentIntent(
+		paymentIntent,
+		paymentIntent.status === "succeeded" ? "succeeded" : "failed",
+	);
+}
+
+async function reconcileStalePayments(accountId: string, now: Date) {
+	const stale = (await unresolvedPayments(accountId)).filter(
+		(payment) =>
+			now.getTime() - payment.since.getTime() >=
+			AUTO_TOP_UP_PENDING_RECONCILE_MS,
+	);
+	for (const payment of stale) {
+		if (payment.referenceId.startsWith(RESERVATION_PREFIX)) {
+			await reconcileReservation(accountId, payment.referenceId);
+		} else {
+			await reconcilePendingAutoTopUp(accountId, payment.referenceId);
+		}
+	}
+	return stale.length > 0;
 }
 
 export async function getAutoTopUpFailure(accountId: string) {
@@ -537,6 +603,26 @@ async function reconcilePendingAutoTopUp(
 	);
 }
 
+const RESERVATION_REPLAY_MS = DAY_MS;
+const STRIPE_DESCRIPTION_LIMIT = 1_000;
+
+export function autoTopUpDescription(appName: string | null | undefined) {
+	const suffix = ", auto top-up";
+	const prefix = "Cap Infra credits for ";
+	const name = (appName ?? "").replace(/\s+/g, " ").trim();
+	if (!name) return `Cap Infra credits${suffix}`;
+	const room = STRIPE_DESCRIPTION_LIMIT - prefix.length - suffix.length;
+	return `${prefix}${name.slice(0, room).trim()}${suffix}`;
+}
+
+type ReservedRequest = {
+	amountCents: number;
+	customerId: string;
+	paymentMethodId: string;
+	receiptEmail: string;
+	description: string;
+};
+
 export async function runAutoTopUp(
 	accountId: string,
 	now: Date = new Date(),
@@ -544,13 +630,7 @@ export async function runAutoTopUp(
 	const [account] = await db()
 		.select({
 			appId: developerCreditAccounts.appId,
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-			stripeCustomerId: developerCreditAccounts.stripeCustomerId,
-			stripePaymentMethodId: developerCreditAccounts.stripePaymentMethodId,
-			autoTopUpEnabled: developerCreditAccounts.autoTopUpEnabled,
-			autoTopUpThresholdMicroCredits:
-				developerCreditAccounts.autoTopUpThresholdMicroCredits,
-			autoTopUpAmountCents: developerCreditAccounts.autoTopUpAmountCents,
+			appName: developerApps.name,
 			ownerId: developerCreditAccounts.ownerId,
 			email: users.email,
 		})
@@ -569,26 +649,11 @@ export async function runAutoTopUp(
 		.limit(1);
 
 	if (!account) return { state: "skipped", reason: "not_found" };
-	if (!account.autoTopUpEnabled)
-		return { state: "skipped", reason: "disabled" };
+	if (await reconcileStalePayments(accountId, now)) {
+		return { state: "skipped", reason: "reconciled" };
+	}
 	if (!canUseInfra(account.email)) {
 		return { state: "skipped", reason: "not_allowed" };
-	}
-	const customerId = account.stripeCustomerId;
-	const paymentMethodId = account.stripePaymentMethodId;
-	if (!customerId || !paymentMethodId) {
-		return { state: "skipped", reason: "no_card" };
-	}
-	const amountCents = account.autoTopUpAmountCents;
-	if (
-		autoTopUpSettingsError({
-			enabled: true,
-			thresholdMicroCredits: account.autoTopUpThresholdMicroCredits,
-			amountCents,
-			hasCard: true,
-		})
-	) {
-		return { state: "skipped", reason: "invalid_settings" };
 	}
 	const period = utcDateKey(now);
 	const outcome = await db().transaction(async (tx): Promise<LockedAttempt> => {
@@ -599,9 +664,16 @@ export async function runAutoTopUp(
 			.orderBy(asc(developerCreditAccounts.id))
 			.for("update");
 		const waits = autoTopUpWaits(now);
-		const [locked] = await tx
+		const [current] = await tx
 			.select({
 				id: developerCreditAccounts.id,
+				enabled: developerCreditAccounts.autoTopUpEnabled,
+				thresholdMicroCredits:
+					developerCreditAccounts.autoTopUpThresholdMicroCredits,
+				amountCents: developerCreditAccounts.autoTopUpAmountCents,
+				customerId: developerCreditAccounts.stripeCustomerId,
+				paymentMethodId: developerCreditAccounts.stripePaymentMethodId,
+				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 				pendingWait: waits.pending,
 				declineWait: waits.decline,
 				limitWait: waits.limit,
@@ -610,56 +682,79 @@ export async function runAutoTopUp(
 			.from(developerCreditAccounts)
 			.where(eq(developerCreditAccounts.id, accountId))
 			.limit(1);
-		if (!locked) return { kind: "skipped", reason: "not_found" };
+		if (!current) return { kind: "skipped", reason: "not_found" };
+		if (!current.enabled) return { kind: "skipped", reason: "disabled" };
+		if (!current.customerId || !current.paymentMethodId) {
+			return { kind: "skipped", reason: "no_card" };
+		}
+		if (
+			autoTopUpSettingsError({
+				enabled: true,
+				thresholdMicroCredits: current.thresholdMicroCredits,
+				amountCents: current.amountCents,
+				hasCard: true,
+			})
+		) {
+			return { kind: "skipped", reason: "invalid_settings" };
+		}
 		const available = (await availableBalance(account.appId, tx)) ?? 0;
-		if (available >= account.autoTopUpThresholdMicroCredits) {
+		if (available >= current.thresholdMicroCredits) {
 			return { kind: "skipped", reason: "above_threshold" };
 		}
 		if (await disputedSince(tx, accountId)) {
 			return { kind: "skipped", reason: "disputed" };
 		}
-		if (Number(locked.pendingWait)) {
+		if (Number(current.pendingWait)) {
 			return { kind: "skipped", reason: "awaiting_payment" };
 		}
-		if (Number(locked.declineWait)) {
+		if (Number(current.declineWait)) {
 			return { kind: "skipped", reason: "recent_decline" };
 		}
-		if (Number(locked.limitWait)) {
+		if (Number(current.limitWait)) {
 			return { kind: "skipped", reason: "daily_limit" };
 		}
-		if (Number(locked.ownerWait)) {
+		if (Number(current.ownerWait)) {
 			return { kind: "skipped", reason: "owner_daily_limit" };
 		}
-		const history = await attemptHistory(tx, accountId);
-		if (history.unresolved.length > 0) {
-			return { kind: "reconcile", paymentIntentIds: history.unresolved };
-		}
-		const key = autoTopUpIdempotencyKey(accountId, history.attempt);
+		const attempt = await attemptHistory(tx, accountId);
+		const key = autoTopUpIdempotencyKey(accountId, attempt);
 		const [reserved] = await tx
-			.select({ id: developerCreditTransactions.id })
+			.select({
+				reservedAt: developerCreditTransactions.createdAt,
+				reservation: developerCreditTransactions.metadata,
+			})
 			.from(developerCreditTransactions)
 			.where(reservationOf(accountId, key))
 			.limit(1);
-		if (!reserved) {
-			const [balance] = await tx
-				.select({
-					balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-				})
-				.from(developerCreditAccounts)
-				.where(eq(developerCreditAccounts.id, accountId))
-				.limit(1);
-			await tx.insert(developerCreditTransactions).values({
-				id: nanoId(),
-				accountId,
-				type: "topup_pending",
-				amountMicroCredits: 0,
-				balanceAfterMicroCredits: balance?.balanceMicroCredits ?? 0,
-				referenceId: key,
-				referenceType: AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
-				metadata: { amountCents, period },
-			});
+		if (reserved) {
+			if (
+				now.getTime() - new Date(reserved.reservedAt).getTime() >=
+				RESERVATION_REPLAY_MS
+			) {
+				return { kind: "skipped", reason: "awaiting_payment" };
+			}
+			const request = reservedRequestOf(reserved.reservation);
+			if (!request) return { kind: "skipped", reason: "in_progress" };
+			return { kind: "reserved", key, attempt, request };
 		}
-		return { kind: "reserved", key, attempt: history.attempt };
+		const request: ReservedRequest = {
+			amountCents: current.amountCents,
+			customerId: current.customerId,
+			paymentMethodId: current.paymentMethodId,
+			receiptEmail: account.email,
+			description: autoTopUpDescription(account.appName),
+		};
+		await tx.insert(developerCreditTransactions).values({
+			id: nanoId(),
+			accountId,
+			type: "topup_pending",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: current.balanceMicroCredits,
+			referenceId: key,
+			referenceType: AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+			metadata: { ...request, period },
+		});
+		return { kind: "reserved", key, attempt, request };
 	});
 
 	if (outcome.kind === "skipped") {
@@ -674,25 +769,20 @@ export async function runAutoTopUp(
 		}
 		return { state: "skipped", reason: outcome.reason };
 	}
-	if (outcome.kind === "reconcile") {
-		for (const paymentIntentId of outcome.paymentIntentIds) {
-			await reconcilePendingAutoTopUp(accountId, paymentIntentId);
-		}
-		return { state: "skipped", reason: "reconciled" };
-	}
 
-	const { key, attempt } = outcome;
+	const { key, attempt, request: reserved } = outcome;
+	const amountCents = reserved.amountCents;
 	const productId = developerCreditsProductId();
 	const request = {
 		amount: amountCents,
 		currency: "usd",
-		customer: customerId,
-		payment_method: paymentMethodId,
+		customer: reserved.customerId,
+		payment_method: reserved.paymentMethodId,
 		payment_method_types: ["card"],
 		off_session: true,
 		confirm: true,
-		description: "Cap Infra credits, auto top-up",
-		receipt_email: account.email,
+		description: reserved.description,
+		receipt_email: reserved.receiptEmail,
 		metadata: {
 			type: AUTO_TOP_UP_METADATA_TYPE,
 			accountId,
@@ -767,6 +857,42 @@ export async function runAutoTopUp(
 	return { state: "failed", reason: paymentIntent.status };
 }
 
+function reservedRequestOf(value: unknown): ReservedRequest | null {
+	let metadata: unknown = value;
+	if (typeof metadata === "string") {
+		try {
+			metadata = JSON.parse(metadata);
+		} catch {
+			return null;
+		}
+	}
+	if (typeof metadata !== "object" || metadata === null) return null;
+	const fields = metadata as Record<string, unknown>;
+	const {
+		amountCents,
+		customerId,
+		paymentMethodId,
+		receiptEmail,
+		description,
+	} = fields;
+	if (
+		typeof amountCents !== "number" ||
+		typeof customerId !== "string" ||
+		typeof paymentMethodId !== "string" ||
+		typeof receiptEmail !== "string" ||
+		typeof description !== "string"
+	) {
+		return null;
+	}
+	return {
+		amountCents,
+		customerId,
+		paymentMethodId,
+		receiptEmail,
+		description,
+	};
+}
+
 type DueCursor = { attemptKey: string; id: string };
 
 function dueAutoTopUpsAfter(now: Date, cursor: DueCursor | null) {
@@ -785,11 +911,16 @@ function dueAutoTopUpsAfter(now: Date, cursor: DueCursor | null) {
 		.leftJoin(held, eq(held.appId, developerCreditAccounts.appId))
 		.where(
 			and(
-				eq(developerCreditAccounts.autoTopUpEnabled, true),
-				isNotNull(developerCreditAccounts.stripePaymentMethodId),
 				isNull(developerApps.deletedAt),
-				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + coalesce(${held.heldMicroCredits}, 0)`,
-				autoTopUpReleased(now),
+				or(
+					and(
+						eq(developerCreditAccounts.autoTopUpEnabled, true),
+						isNotNull(developerCreditAccounts.stripePaymentMethodId),
+						sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + coalesce(${held.heldMicroCredits}, 0)`,
+						autoTopUpReleased(now),
+					),
+					autoTopUpNeedsReconcile(now),
+				),
 				cursor
 					? sql`(${attemptKey} > ${cursor.attemptKey} or (${attemptKey} = ${cursor.attemptKey} and ${developerCreditAccounts.id} > ${cursor.id}))`
 					: undefined,

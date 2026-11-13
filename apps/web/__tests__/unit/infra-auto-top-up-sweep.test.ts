@@ -65,7 +65,7 @@ vi.mock("@cap/database", async () => {
 					.map((account) => [account.id]),
 			};
 		}
-		if (sql.includes("`autoTopUpAmountCents`")) {
+		if (sql.includes("`developer_apps`.`name`")) {
 			state.reads.push(String(params[0]));
 			vi.setSystemTime(Date.now() + state.msPerAccount);
 			return { rows: [] };
@@ -172,6 +172,9 @@ describe("auto top-up sweep selection", () => {
 		expect(params).toContain(sqlTime(new Date(NOW.getTime() - 24 * HOUR_MS)));
 		expect(params).toContain(AUTO_TOP_UP_DAILY_LIMIT);
 		expect(params).toContain("infra-auto-top-up:%");
+		expect(sql).toContain(
+			"or exists (select 1 from `developer_credit_transactions` `stale_payment` where `stale_payment`.`accountId` = `developer_credit_accounts`.`id` and `stale_payment`.`type` = ? and `stale_payment`.`referenceType` = ? and `stale_payment`.`createdAt` <= ?",
+		);
 		expect(sql).toContain(
 			"from `developer_credit_accounts` `owner_account` join `developer_credit_transactions` `owner_entry` on `owner_entry`.`accountId` = `owner_account`.`id` where `owner_account`.`ownerId` = `developer_credit_accounts`.`ownerId`",
 		);

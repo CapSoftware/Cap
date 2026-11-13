@@ -159,6 +159,7 @@ function autoTopUpWaits() {
 				.filter(
 					(row) =>
 						row.createdAt.getTime() > now - 24 * HOUR_MS &&
+						!String(row.referenceId).startsWith("infra-auto-top-up:") &&
 						((row.type === "topup" && row.referenceType === "auto_top_up") ||
 							(row.type === "topup_pending" &&
 								row.referenceType === "auto_top_up_pending" &&
@@ -172,7 +173,14 @@ function autoTopUpWaits() {
 							: Number(row.metadata?.amountCents ?? 0) * 1000),
 					0,
 				) +
-				ledger.account.autoTopUpAmountCents * 1000 >
+				Number(
+					ledger.rows.find(
+						(row) =>
+							row.type === "topup_pending" &&
+							String(row.referenceId).startsWith("infra-auto-top-up:"),
+					)?.metadata?.amountCents ?? ledger.account.autoTopUpAmountCents,
+				) *
+					1000 >
 			100_000_000,
 	};
 }
@@ -186,12 +194,21 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditAccounts) {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
-		if (keys === "declineWait,id,limitWait,ownerWait,pendingWait") {
+		if (
+			keys ===
+			"amountCents,balanceMicroCredits,customerId,declineWait,enabled,id,limitWait,ownerWait,paymentMethodId,pendingWait,thresholdMicroCredits"
+		) {
 			if (rendered.params.at(-1) !== account.id) return [];
 			const waits = autoTopUpWaits();
 			return [
 				{
 					id: account.id,
+					enabled: account.autoTopUpEnabled,
+					thresholdMicroCredits: account.autoTopUpThresholdMicroCredits,
+					amountCents: account.autoTopUpAmountCents,
+					customerId: account.stripeCustomerId,
+					paymentMethodId: account.stripePaymentMethodId,
+					balanceMicroCredits: account.balanceMicroCredits,
 					pendingWait: Number(waits.pending),
 					declineWait: Number(waits.decline),
 					limitWait: Number(waits.limit),
@@ -296,14 +313,31 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				),
 			).slice(0, 1);
 		}
-		if (keys === "pendingId") {
+		if (keys === "pendingId,pendingSince") {
 			return ledger.rows
 				.filter(
 					(row) =>
 						row.type === "topup_pending" &&
 						row.referenceType === "auto_top_up_pending",
 				)
-				.map((row) => ({ pendingId: row.referenceId }));
+				.map((row) => ({
+					pendingId: row.referenceId,
+					pendingSince: row.createdAt,
+				}));
+		}
+		if (keys === "reservation,reservedAt") {
+			const [accountId, referenceId] = rendered.params;
+			return ledger.rows
+				.filter(
+					(row) =>
+						row.accountId === accountId &&
+						row.referenceId === referenceId &&
+						row.referenceType === "auto_top_up_pending",
+				)
+				.map((row) => ({
+					reservation: row.metadata,
+					reservedAt: row.createdAt,
+				}));
 		}
 		if (keys === "settledId") {
 			const ids = rendered.params.slice(3);
