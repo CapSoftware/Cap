@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	endpointQueries: 0,
 	failEndpointQuery: false,
 	hangEndpointQuery: false,
+	failTransactions: 0,
 	start: vi.fn(),
 	attempt: vi.fn(),
 	sleep: vi.fn(),
@@ -54,7 +55,13 @@ vi.mock("@cap/database", async () => {
 					: videos.select(fields).from(),
 		}),
 		transaction: (run: (tx: unknown) => Promise<unknown>) => {
-			const next = turn.then(() => run(database));
+			const next = turn.then(() => {
+				if (mocks.failTransactions > 0) {
+					mocks.failTransactions -= 1;
+					throw new Error("connection lost");
+				}
+				return run(database);
+			});
 			turn = next.catch(() => undefined);
 			return next;
 		},
@@ -205,6 +212,7 @@ beforeEach(() => {
 	mocks.endpointQueries = 0;
 	mocks.failEndpointQuery = false;
 	mocks.hangEndpointQuery = false;
+	mocks.failTransactions = 0;
 	mocks.start.mockResolvedValue({ runId: "run-1" });
 	mocks.sleep.mockResolvedValue(undefined);
 	mocks.head.mockResolvedValue({ bytes: 2_000, contentType: "video/mp4" });
@@ -392,6 +400,32 @@ describe("video.ready", () => {
 		expect(jobs().map((job) => job.eventType)).toEqual(["video.ready"]);
 		expect(readyData().hlsUrl).toContain("/master.m3u8");
 		expect(video().processing?.readyEventDueAt).toBeUndefined();
+	});
+
+	it("keeps the workflow polling when sending a due event fails", async () => {
+		mocks.store.video = developerVideo({
+			status: "ready",
+			processing: processingState({
+				mp4: { state: "complete", output: "m1" },
+				hls: { state: "complete", output: "h1" },
+				readyEventDueAt: Date.now() - 5_000,
+			}),
+		});
+		mocks.failTransactions = 1;
+		expect(await readDeveloperVideoParts("video-1", "encode-1")).toEqual({
+			hls: "wait",
+			mp4: "wait",
+		});
+		await settled();
+		expect(mocks.start).not.toHaveBeenCalled();
+		expect(video().processing?.readyEventDueAt).toEqual(expect.any(Number));
+
+		expect(await readDeveloperVideoParts("video-1", "encode-1")).toEqual({
+			hls: "done",
+			mp4: "done",
+		});
+		await settled();
+		expect(jobs().map((job) => job.eventType)).toEqual(["video.ready"]);
 	});
 
 	it("sends no second event for a video that was ready before this change", async () => {
@@ -604,26 +638,36 @@ describe("webhooks never hold up a video", () => {
 		const hanging = new Promise<never>(() => {});
 		mocks.start.mockReturnValue(hanging);
 
-		const started = Date.now();
-		const result = await mp4Done();
+		vi.useRealTimers();
+		const started = performance.now();
+		expect(await mp4Done()).toEqual({ success: true, applied: true });
+		expect(await hlsDone()).toEqual({ success: true, applied: true });
+		await settled();
 
-		expect(result).toEqual({ success: true, applied: true });
+		expect(mocks.start).toHaveBeenCalledTimes(1);
 		expect(video().status).toBe("ready");
-		expect(Date.now() - started).toBeLessThan(1_000);
+		expect(video().processing?.hls.state).toBe("complete");
+		expect(performance.now() - started).toBeLessThan(1_000);
 	});
 
-	it("marks the video ready when queueing the delivery fails", async () => {
+	it("records the outputs when queueing the delivery fails", async () => {
 		mocks.start.mockRejectedValue(new Error("queue is down"));
 		expect(await mp4Done()).toEqual({ success: true, applied: true });
+		expect(await hlsDone()).toEqual({ success: true, applied: true });
 		await settled();
+		expect(mocks.start).toHaveBeenCalledTimes(1);
 		expect(video().status).toBe("ready");
+		expect(video().processing?.hls.state).toBe("complete");
 	});
 
-	it("marks the video ready when the endpoint lookup fails", async () => {
+	it("records the outputs when the endpoint lookup fails", async () => {
 		mocks.failEndpointQuery = true;
 		expect(await mp4Done()).toEqual({ success: true, applied: true });
+		expect(await hlsDone()).toEqual({ success: true, applied: true });
 		await settled();
+		expect(mocks.endpointQueries).toBe(1);
 		expect(video().status).toBe("ready");
+		expect(video().processing?.hls.state).toBe("complete");
 		expect(mocks.start).not.toHaveBeenCalled();
 	});
 

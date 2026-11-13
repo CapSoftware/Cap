@@ -632,20 +632,26 @@ export async function readDeveloperVideoParts(
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode) return null;
 	const now = Date.now();
-	// Thrown out of this step, a failure here would fail the video's
-	// processing. The next poll tries again.
-	if (developerVideoReadyEventDue(encode.video, now)) {
-		await sendDueDeveloperVideoReady(videoId).catch((error) => {
-			console.error("[developer-webhook] Failed to send a due event", {
-				videoId,
-				message: error instanceof Error ? error.message : String(error),
-			});
-		});
-	}
-	return {
+	const parts: DeveloperVideoPartSnapshot = {
 		hls: developerVideoPartAction(encode.processing.hls, now),
 		mp4: developerVideoPartAction(encode.processing.mp4, now),
 	};
+	if (!developerVideoReadyEventDue(encode.video, now)) return parts;
+	// Thrown out of this step, a failure here would fail the video's
+	// processing. Finished parts are reported as waiting instead, so the
+	// workflow polls again rather than ending with the event unsent.
+	try {
+		await sendDueDeveloperVideoReady(videoId);
+		return parts;
+	} catch (error) {
+		console.error("[developer-webhook] Failed to send a due event", {
+			videoId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+		const waiting = (action: DeveloperVideoPartAction) =>
+			action === "done" ? "wait" : action;
+		return { hls: waiting(parts.hls), mp4: waiting(parts.mp4) };
+	}
 }
 
 function webhookUrl(part: DeveloperVideoPart, token: string): string {
