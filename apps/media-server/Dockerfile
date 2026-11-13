@@ -36,6 +36,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/live-transcribe.test.ts src/__tests__/routes/live-transcribe.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
+	&& bun test src/__tests__/lib/infra-poster.integration.test.ts \
 	&& bun test src/__tests__/lib/media-video.integration.test.ts \
 	&& bun test src/__tests__/lib/isolated-worker-pool.test.ts src/__tests__/lib/media-probe-hardening.test.ts src/__tests__/lib/process-hardening.test.ts src/__tests__/lib/legacy-codecs.integration.test.ts \
 	&& bun test src/__tests__/routes/thumbnail-remote.test.ts src/__tests__/routes/health.test.ts
