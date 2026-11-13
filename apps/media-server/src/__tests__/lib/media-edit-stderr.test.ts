@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readStreamTail, STDERR_TAIL_BYTES } from "../../lib/media-edit";
+import {
+	lineReader,
+	readStreamTail,
+	STDERR_TAIL_BYTES,
+} from "../../lib/media-edit";
 
 const encoder = new TextEncoder();
 
@@ -73,5 +77,54 @@ describe("readStreamTail", () => {
 			4,
 		);
 		expect(heard.join("")).toBe("one two three");
+	});
+
+	test("keeps the last bytes when two chunks together pass the limit", async () => {
+		const first = encoder.encode("a".repeat(100));
+		const second = encoder.encode("b".repeat(99));
+		const text = await readStreamTail(
+			streamOf([first, second]),
+			undefined,
+			100,
+		);
+		expect(text).toBe(`a${"b".repeat(99)}`);
+	});
+});
+
+describe("lineReader", () => {
+	test("joins lines that arrive in pieces and ends the last one", () => {
+		const seen: string[] = [];
+		const lines = lineReader((line) => seen.push(line));
+		lines.push("Error opening ");
+		lines.push("input\nframe=1\r\nlast");
+		expect(seen).toEqual(["Error opening input", "frame=1"]);
+		lines.end();
+		expect(seen).toEqual(["Error opening input", "frame=1", "last"]);
+	});
+
+	test("an early error line survives far more output than is kept", async () => {
+		const seen: string[] = [];
+		const lines = lineReader((line) => {
+			if (line.includes("Error")) seen.push(line);
+		});
+		function* output() {
+			yield encoder.encode("Error while opening encoder\n");
+			for (let index = 0; index < 20_000; index += 1) {
+				yield encoder.encode(`frame=${index} fps=30 bitrate=1000kbits/s\n`);
+			}
+		}
+		const text = await readStreamTail(streamOf(output()), lines.push);
+		lines.end();
+		expect(text.includes("Error while opening encoder")).toBe(false);
+		expect(seen).toEqual(["Error while opening encoder"]);
+	});
+
+	test("cuts off a line that never ends", () => {
+		const seen: string[] = [];
+		const lines = lineReader((line) => seen.push(line));
+		for (let index = 0; index < 100; index += 1) lines.push("x".repeat(1000));
+		lines.end();
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.length).toBeLessThanOrEqual(4096);
 	});
 });

@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { file } from "bun";
 import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
-import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import { redactLogText } from "./log-redaction";
 import { spawn } from "./media-spawn";
@@ -270,15 +270,21 @@ export async function readStreamTail(
 			const { done, value } = await reader.read();
 			if (done) break;
 			onText?.(live.decode(value, { stream: true }));
-			const kept =
-				value.length > maxBytes
-					? value.slice(value.length - maxBytes)
-					: value;
-			chunks.push(kept);
-			heldBytes += kept.length;
-			while (chunks[0] && heldBytes - chunks[0].length >= maxBytes) {
-				heldBytes -= chunks[0].length;
-				chunks.shift();
+			chunks.push(
+				value.length > maxBytes ? value.slice(value.length - maxBytes) : value,
+			);
+			heldBytes += Math.min(value.length, maxBytes);
+			while (heldBytes > maxBytes) {
+				const oldest = chunks[0];
+				if (!oldest) break;
+				const excess = heldBytes - maxBytes;
+				if (oldest.length <= excess) {
+					chunks.shift();
+					heldBytes -= oldest.length;
+				} else {
+					chunks[0] = oldest.slice(excess);
+					heldBytes -= excess;
+				}
 			}
 		}
 	} finally {
@@ -291,9 +297,26 @@ export async function readStreamTail(
 		held.set(chunk, offset);
 		offset += chunk.length;
 	}
-	return new TextDecoder().decode(
-		held.subarray(Math.max(0, heldBytes - maxBytes)),
-	);
+	return new TextDecoder().decode(held);
+}
+
+const MAX_PENDING_LINE_LENGTH = 4096;
+
+// Hands complete lines to a listener as text arrives in pieces. A line that
+// never ends is cut off rather than held.
+export function lineReader(onLine: (line: string) => void) {
+	let pending = "";
+	return {
+		push(text: string) {
+			const parts = (pending + text).split(/\r\n|\r|\n/);
+			pending = (parts.pop() ?? "").slice(0, MAX_PENDING_LINE_LENGTH);
+			for (const line of parts) onLine(line);
+		},
+		end() {
+			if (pending) onLine(pending);
+			pending = "";
+		},
+	};
 }
 
 async function withTimeout<T>(
@@ -357,20 +380,28 @@ export async function runFfmpegCommand(
 	try {
 		await withTimeout(
 			(async () => {
+				// The first error lines can come long before the exit, with more
+				// output than is kept after them, so they are picked out as
+				// they arrive.
+				const errorLines: string[] = [];
+				const lines = lineReader((line) =>
+					collectFfmpegErrorLine(errorLines, line),
+				);
 				const [stderrText, exitCode] = await Promise.all([
-					readStreamTail(
-						proc.stderr as ReadableStream<Uint8Array>,
-						progressWatch.observe,
-					),
+					readStreamTail(proc.stderr as ReadableStream<Uint8Array>, (text) => {
+						progressWatch.observe(text);
+						lines.push(text);
+					}),
 					drainStream(proc.stdout as ReadableStream<Uint8Array>).then(
 						() => proc.exited,
 					),
 				]);
 
+				lines.end();
 				if (exitCode !== 0) {
 					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${redactLogText(stderrText.slice(-2000))}`,
-						ffmpegErrorLines(stderrText),
+						errorLines,
 					);
 				}
 			})(),
