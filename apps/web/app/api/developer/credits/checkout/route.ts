@@ -6,9 +6,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import { z } from "zod";
-import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { ensureDeveloperStripeCustomer } from "@/lib/developer-stripe-customer";
 import { canUseInfra } from "@/lib/infra-access";
+import {
+	CREDIT_CHECKOUT_METADATA_TYPE,
+	creditCheckoutSessionParams,
+} from "@/lib/infra-credit-checkout";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { findCreditCode } from "@/lib/infra-credit-code-lookup";
 import { infraAppPath } from "@/lib/infra-routes";
@@ -115,36 +118,19 @@ app.post(
 			});
 
 			const checkoutSession = await stripe().checkout.sessions.create({
-				customer: customerId,
+				...creditCheckoutSessionParams({
+					customerId,
+					accountId: account.id,
+					amountCents,
+					receiptEmail: user.email,
+				}),
 				...(promotionCodeId
 					? { discounts: [{ promotion_code: promotionCodeId }] }
 					: {}),
-				line_items: [
-					{
-						price_data: {
-							currency: "usd",
-							product: developerCreditsProductId(),
-							unit_amount: amountCents,
-						},
-						quantity: 1,
-					},
-				],
-				mode: "payment",
-				invoice_creation: {
-					enabled: true,
-					invoice_data: { description: "Cap Infra credits" },
-				},
-				payment_intent_data: {
-					receipt_email: user.email,
-					metadata: { type: "developer_credits", accountId: account.id },
-				},
-				tax_id_collection: { enabled: true },
-				billing_address_collection: "auto",
-				customer_update: { name: "auto", address: "auto" },
 				success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?purchase=success`,
 				cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
 				metadata: {
-					type: "developer_credits",
+					type: CREDIT_CHECKOUT_METADATA_TYPE,
 					appId,
 					accountId: account.id,
 					amountCents: String(amountCents),
