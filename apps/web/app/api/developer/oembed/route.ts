@@ -44,16 +44,14 @@ export async function GET(request: NextRequest) {
 		if (!video || developerVideoIsTakenDown(video)) {
 			return json({ error: "Video not found" }, 404);
 		}
+		const { width, height } = video;
 		const measured =
-			video.width !== null &&
-			video.height !== null &&
-			video.width > 0 &&
-			video.height > 0;
+			width !== null && height !== null && width > 0 && height > 0;
 		return json(
 			developerVideoOEmbed({
 				name: video.name,
-				width: measured ? video.width : DEFAULT_WIDTH,
-				height: measured ? video.height : DEFAULT_HEIGHT,
+				width: measured ? width : DEFAULT_WIDTH,
+				height: measured ? height : DEFAULT_HEIGHT,
 				embedUrl: developerVideoPageUrls(playbackId, webUrl).embedUrl,
 				webUrl,
 				maxWidth: query.get("maxwidth"),
