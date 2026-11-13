@@ -174,7 +174,29 @@ const idempotencyConflict = (requestId: string) =>
 		code: "IDEMPOTENCY_CONFLICT",
 	});
 
-export const runAgentMutation = <A>(input: {
+const hasSavedMutation = async (
+	db: DbClient,
+	input: Pick<IdempotencyInput, "userId" | "operation" | "key">,
+) => {
+	const [record] = await db
+		.select({ expiresAt: Db.agentApiIdempotency.expiresAt })
+		.from(Db.agentApiIdempotency)
+		.where(
+			and(
+				eq(Db.agentApiIdempotency.userId, input.userId),
+				eq(Db.agentApiIdempotency.operation, input.operation),
+				eq(Db.agentApiIdempotency.keyHash, hash(input.key)),
+			),
+		)
+		.limit(1);
+	return !!record && record.expiresAt.getTime() > Date.now();
+};
+
+export const runAgentMutation = <
+	A,
+	AdmitError = never,
+	AdmitContext = never,
+>(input: {
 	principal: Agent.AgentPrincipal["Type"];
 	operation: string;
 	idempotencyKey: string;
@@ -183,6 +205,7 @@ export const runAgentMutation = <A>(input: {
 	decodeReplay: (value: unknown) => A;
 	execute: (tx: Transaction) => Promise<AgentMutationOutcome<NoInfer<A>>>;
 	notFound?: (requestId: string) => Agent.AgentNotFoundError;
+	admit?: Effect.Effect<void, AdmitError, AdmitContext>;
 }): Effect.Effect<
 	A,
 	| Agent.AgentBadRequestError
@@ -190,8 +213,9 @@ export const runAgentMutation = <A>(input: {
 	| Agent.AgentTemporaryUnavailableError
 	| Agent.AgentNotFoundError
 	| Agent.AgentForbiddenError
-	| DatabaseError,
-	Database
+	| DatabaseError
+	| AdmitError,
+	Database | AdmitContext
 > =>
 	Effect.gen(function* () {
 		if (!isAgentIdempotencyKey(input.idempotencyKey)) {
@@ -205,6 +229,16 @@ export const runAgentMutation = <A>(input: {
 			input.operation,
 			input.request,
 		);
+		if (input.admit) {
+			const saved = yield* database.use((db) =>
+				hasSavedMutation(db, {
+					userId: input.principal.id,
+					operation: input.operation,
+					key: input.idempotencyKey,
+				}),
+			);
+			if (!saved) yield* input.admit;
+		}
 		const result = yield* database.use((db) =>
 			db.transaction(async (tx) => {
 				const idempotency = await acquireIdempotency(tx, {

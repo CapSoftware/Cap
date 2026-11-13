@@ -557,6 +557,79 @@ describe("limits on creating developer apps", () => {
 			expect(database.apps[0]?.name).toBe(longest);
 		});
 	});
+	describe("a repeated agent request with the same idempotency key", () => {
+		const repeatable = (path: string, body: Record<string, unknown>) => {
+			const request = agentRequest("POST", path, body);
+			return () => POST(request.clone());
+		};
+
+		it("returns the saved app keys without spending the creation allowance", async () => {
+			const create = repeatable("/developer/apps", {
+				name: "Replayed",
+				environment: "development",
+			});
+
+			const first = await create();
+			expect(first.status).toBe(200);
+			const saved = await first.json();
+			expect(mocks.limitChecks).toHaveLength(1);
+
+			mocks.limited = true;
+			for (let attempt = 0; attempt < 12; attempt += 1) {
+				const replay = await create();
+				expect(replay.status).toBe(200);
+				expect(await replay.json()).toMatchObject({
+					appId: saved.appId,
+					secretKey: saved.secretKey,
+				});
+			}
+
+			expect(mocks.limitChecks).toHaveLength(1);
+			expect(database.liveApps()).toHaveLength(1);
+			expect((await agentCreate("Another")).status).toBe(429);
+			expect(mocks.limitChecks).toHaveLength(2);
+		});
+
+		it("returns the saved rotated keys without spending the rotation allowance", async () => {
+			database.seed(1);
+			const rotate = repeatable("/developer/apps/seeded_0/keys/rotate", {});
+
+			const first = await rotate();
+			expect(first.status).toBe(200);
+			const saved = await first.json();
+			expect(mocks.limitChecks).toHaveLength(1);
+
+			mocks.limited = true;
+			for (let attempt = 0; attempt < 12; attempt += 1) {
+				const replay = await rotate();
+				expect(replay.status).toBe(200);
+				expect(await replay.json()).toMatchObject({
+					secretKey: saved.secretKey,
+				});
+			}
+
+			expect(mocks.limitChecks).toHaveLength(1);
+			expect(database.keys).toHaveLength(2);
+			expect((await agentRotate("seeded_0")).status).toBe(429);
+		});
+
+		it("charges a request that was limited again when it is retried and runs", async () => {
+			const create = repeatable("/developer/apps", {
+				name: "Retried",
+				environment: "development",
+			});
+
+			mocks.limited = true;
+			expect((await create()).status).toBe(429);
+			expect(database.writes()).toBe(0);
+
+			mocks.limited = false;
+			expect((await create()).status).toBe(200);
+			expect(mocks.limitChecks).toHaveLength(2);
+			expect(database.liveApps()).toHaveLength(1);
+		});
+	});
+
 	describe("the rate limit on rotating keys", () => {
 		const rotationSentence =
 			"You are rotating keys too quickly. Try again in an hour.";

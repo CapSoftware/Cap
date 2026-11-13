@@ -3928,14 +3928,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (!named.ok) return yield* badRequest(requestId, named.message);
 						const name = named.name;
 						const headers = yield* requestHeaders;
-						if (
-							yield* Effect.promise(() =>
-								developerAppCreationLimited(principal.id, headers),
-							)
-						) {
-							return yield* rateLimited(requestId);
-						}
 						const result = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										developerAppCreationLimited(principal.id, headers),
+									)
+								) {
+									return yield* rateLimited(requestId);
+								}
+							}),
 							principal,
 							operation: "create_developer_app",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4280,14 +4282,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:secrets", requestId);
 						const headers = yield* requestHeaders;
-						if (
-							yield* Effect.promise(() =>
-								developerKeyRotationLimited(principal.id, headers),
-							)
-						) {
-							return yield* rateLimited(requestId);
-						}
 						const result = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										developerKeyRotationLimited(principal.id, headers),
+									)
+								) {
+									return yield* rateLimited(requestId);
+								}
+							}),
 							principal,
 							operation: "rotate_developer_keys",
 							idempotencyKey: yield* requestIdempotencyKey,
