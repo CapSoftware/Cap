@@ -43,6 +43,7 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { rejectOnFailure } from "@/lib/effect-react-query";
 import {
 	CAP_DRAG_TYPE,
 	type MoveLocation,
@@ -311,7 +312,7 @@ export const CapCard = ({
 	const handleDownload = async () => {
 		if (downloadMutation.isPending) return;
 
-		toast.promise(downloadMutation.mutateAsync(), {
+		toast.promise(downloadMutation.mutateAsync().then(rejectOnFailure), {
 			loading: "Preparing download...",
 			success: "Download started successfully",
 			error: (error) => {
@@ -554,11 +555,14 @@ export const CapCard = ({
 								<>
 									<DropdownMenuItem
 										onClick={() => {
-											toast.promise(duplicateMutation.mutateAsync(), {
-												loading: "Duplicating cap...",
-												success: "Cap duplicated successfully",
-												error: "Failed to duplicate cap",
-											});
+											toast.promise(
+												duplicateMutation.mutateAsync().then(rejectOnFailure),
+												{
+													loading: "Duplicating cap...",
+													success: "Cap duplicated successfully",
+													error: "Failed to duplicate cap",
+												},
+											);
 										}}
 										disabled={
 											duplicateMutation.isPending || cap.hasActiveUpload
