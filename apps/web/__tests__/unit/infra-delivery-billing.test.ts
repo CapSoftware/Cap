@@ -156,13 +156,20 @@ describe("delivery billing flag", () => {
 		}
 	});
 
-	it("settles the two days that ended two and three days ago, from the start day on", () => {
-		const now = new Date("2026-11-25T00:41:00Z");
+	it("settles the days that ended two to seven days ago, from the start day on", () => {
+		const now = new Date("2026-11-25T06:41:00Z");
 		expect(deliverySettleDays(now, "2026-01-01")).toEqual([
+			"2026-11-18",
+			"2026-11-19",
+			"2026-11-20",
+			"2026-11-21",
 			"2026-11-22",
 			"2026-11-23",
 		]);
-		expect(deliverySettleDays(now, "2026-11-23")).toEqual(["2026-11-23"]);
+		expect(deliverySettleDays(now, "2026-11-22")).toEqual([
+			"2026-11-22",
+			"2026-11-23",
+		]);
 		expect(deliverySettleDays(now, "2026-11-24")).toEqual([]);
 	});
 

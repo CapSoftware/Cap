@@ -65,8 +65,17 @@ const { getInfraAppStanding, getInfraBilling } = await import(
 	"@/lib/infra-standing"
 );
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
-const { chargeDeliveryDay, deliveryBillingStart, settleDeliveryDays } =
-	await import("@/lib/infra-delivery-billing");
+const {
+	markShortfallsNotified,
+	markStorageDayNotified,
+	shortfallsAwaitingNotice,
+} = await import("@/lib/infra-storage-minimum");
+const {
+	chargeDeliveryDay,
+	deliveryBillingStart,
+	markDeliveryDayNotified,
+	settleDeliveryDays,
+} = await import("@/lib/infra-delivery-billing");
 await import("@/lib/infra-auto-top-up");
 const { describeLedgerRow } = await import("@/lib/infra-ledger");
 
@@ -100,6 +109,7 @@ describe.runIf(Boolean(databaseUrl))(
 		let pool: Pool;
 
 		const fixtureApps: string[] = [];
+		const fixtureRowIds: string[] = [];
 		const makeApp = async (balanceMicroCredits: number) => {
 			const appId = id();
 			fixtureApps.push(appId);
@@ -207,6 +217,12 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		afterAll(async () => {
+			if (fixtureRowIds.length > 0) {
+				await pool?.query(
+					"delete from developer_credit_transactions where id in (?)",
+					[fixtureRowIds],
+				);
+			}
 			if (fixtureApps.length > 0) {
 				await pool?.query(
 					"delete from developer_delivery_daily where appId in (?)",
@@ -514,7 +530,7 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 		});
 
-		it("carries a storage shortfall's grace start through an unpaid delivery day, and latches it when the balance covers it", async () => {
+		it("settles a day the balance cannot pay at all with one unpaid row that keeps the storage grace start, and never charges it later", async () => {
 			const now = NOW;
 			const shortSince = new Date(now.getTime() - 3 * DAY_MS);
 			const { appId, accountId } = await makeApp(500);
@@ -533,8 +549,19 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 			await writeDay(appId, dayKey(2, now), FIXTURE_TIERS);
 
-			expect(await settle(now)).toMatchObject({ billed: 0, unpaid: 1 });
-			expect(await deliveryRows(accountId)).toEqual([]);
+			expect(await settle(now)).toMatchObject({ billed: 1, short: 1 });
+			const [unpaid] = await deliveryRows(accountId);
+			expect(unpaid).toMatchObject({
+				amountMicroCredits: 0,
+				balanceAfterMicroCredits: 0,
+			});
+			expect(unpaid?.metadata).toMatchObject({
+				owedMicroCredits: FIXTURE_MICRO_CREDITS,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+				fellShort: false,
+			});
+			expect(describeLedgerRow(unpaid as never).label).toBe("Delivery, unpaid");
 			expect((await getInfraBilling(appId)).standing).toEqual({
 				state: "grace",
 				pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
@@ -544,30 +571,227 @@ describe.runIf(Boolean(databaseUrl))(
 				.update(developerCreditAccounts)
 				.set({ balanceMicroCredits: 50_000 })
 				.where(eq(developerCreditAccounts.id, accountId));
-			expect(await settle(now)).toMatchObject({ billed: 1, short: 0 });
-
-			const [row] = await deliveryRows(accountId);
-			expect(row?.metadata).toMatchObject({
-				shortSince: null,
-				fellShort: false,
+			expect(await settle(now)).toMatchObject({ billed: 0 });
+			expect(await settle(new Date(now.getTime() + 3 * DAY_MS))).toMatchObject({
+				billed: 0,
 			});
-			const [storageRow] = await database()
+			expect(await balanceOf(accountId)).toBe(50_000);
+
+			const later = new Date(now.getTime() + 60_000);
+			await chargeStorageDay({
+				appId,
+				accountId,
+				usage: {
+					videoCount: 1,
+					totalMinutes: 1,
+					minutesByTier: emptyStorageMinutes(),
+					monthlyMicroCredits: 3_000,
+					dailyMicroCredits: 100,
+				},
+				dateKey: storageDay(0),
+				now: later,
+			});
+			const shortfallRows = await database()
 				.select({ metadata: developerCreditTransactions.metadata })
 				.from(developerCreditTransactions)
-				.where(
-					and(
-						eq(developerCreditTransactions.accountId, accountId),
-						eq(developerCreditTransactions.type, "storage_daily"),
-					),
-				);
-			expect(storageRow?.metadata).toMatchObject({
-				shortSince: shortSince.toISOString(),
-				resolvedAt: now.toISOString(),
-			});
+				.where(eq(developerCreditTransactions.accountId, accountId));
+			expect(
+				shortfallRows
+					.map(
+						(row) =>
+							row.metadata as { shortSince?: string; resolvedAt?: string },
+					)
+					.filter((fields) => fields.shortSince === shortSince.toISOString())
+					.map((fields) => fields.resolvedAt),
+			).toEqual([later.toISOString(), later.toISOString()]);
 			expect((await getInfraBilling(appId)).standing).toEqual({
 				state: "active",
 				pausesAt: null,
 			});
+		});
+
+		it("charges a day that goes final late, on the first run after it does, and only once", async () => {
+			const now = NOW;
+			const day = dayKey(5, now);
+			const { appId, accountId } = await makeApp(1_000_000);
+			await writeDay(appId, day, FIXTURE_TIERS, false);
+
+			for (const back of [3, 2, 1]) {
+				expect(
+					await settle(new Date(now.getTime() - back * DAY_MS)),
+				).toMatchObject({ billed: 0 });
+			}
+			expect(await deliveryRows(accountId)).toEqual([]);
+
+			await writeDay(appId, day, FIXTURE_TIERS);
+			expect(await settle(now)).toMatchObject({ billed: 1 });
+			expect(await settle(new Date(now.getTime() + DAY_MS))).toMatchObject({
+				billed: 0,
+			});
+			const rows = await deliveryRows(accountId);
+			expect(
+				rows.map((row) => [row.referenceId, row.amountMicroCredits]),
+			).toEqual([[day, -FIXTURE_MICRO_CREDITS]]);
+		});
+
+		it("counts a day still not final on the last day it can be charged, and leaves it alone after that", async () => {
+			const now = NOW;
+			const { appId, accountId } = await makeApp(1_000_000);
+			await writeDay(appId, dayKey(7, now), FIXTURE_TIERS, false);
+			await writeDay(appId, dayKey(8, now), FIXTURE_TIERS);
+
+			expect(await settle(now)).toMatchObject({
+				billed: 0,
+				waiting: 1,
+				notFinalAtWindowEnd: 1,
+			});
+			expect(await deliveryRows(accountId)).toEqual([]);
+		});
+
+		it("keeps the later short day as the standing when two days are posted in the same second, whatever their ids", async () => {
+			const now = NOW;
+			const { appId, accountId } = await makeApp(9_000);
+			await writeDay(appId, dayKey(3, now), FIXTURE_TIERS);
+			await writeDay(appId, dayKey(2, now), FIXTURE_TIERS);
+
+			await settle(now);
+
+			const rows = await deliveryRows(accountId);
+			const earlier = rows.find((row) => row.referenceId === dayKey(3, now));
+			const later = rows.find((row) => row.referenceId === dayKey(2, now));
+			expect(earlier?.amountMicroCredits).toBe(-FIXTURE_MICRO_CREDITS);
+			expect(later?.amountMicroCredits).toBe(-(9_000 - FIXTURE_MICRO_CREDITS));
+			const postedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+			for (const [row, rowId] of [
+				[earlier, "zzzzzzzzzzzzzzz"],
+				[later, "000000000000000"],
+			] as const) {
+				await database()
+					.update(developerCreditTransactions)
+					.set({ id: rowId, createdAt: postedAt })
+					.where(eq(developerCreditTransactions.id, row?.id ?? ""));
+			}
+			fixtureRowIds.push("zzzzzzzzzzzzzzz", "000000000000000");
+
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt: new Date(now.getTime() + 7 * DAY_MS),
+			});
+		});
+
+		it("keeps a short delivery day as the standing over a paid storage day posted in the same second", async () => {
+			const now = NOW;
+			const { appId, accountId } = await makeApp(1_000);
+			await chargeStorageDay({
+				appId,
+				accountId,
+				usage: {
+					videoCount: 1,
+					totalMinutes: 1,
+					minutesByTier: emptyStorageMinutes(),
+					monthlyMicroCredits: 3_000,
+					dailyMicroCredits: 100,
+				},
+				dateKey: storageDay(0),
+				now,
+			});
+			await writeDay(appId, dayKey(2, now), FIXTURE_TIERS);
+			await settle(now);
+			const postedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+			await database()
+				.update(developerCreditTransactions)
+				.set({ createdAt: postedAt })
+				.where(eq(developerCreditTransactions.accountId, accountId));
+
+			const [delivery] = await deliveryRows(accountId);
+			expect(delivery?.metadata).toMatchObject({
+				chargedMicroCredits: 900,
+				shortSince: now.toISOString(),
+				fellShort: true,
+			});
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt: new Date(now.getTime() + 7 * DAY_MS),
+			});
+		});
+
+		it("emails the owner once per shortfall: on the day it starts, never again on later runs, and not for a delivery day that falls short inside a storage shortfall", async () => {
+			const now = NOW;
+			const sent: string[] = [];
+			const email =
+				(accepted: boolean) =>
+				async ({
+					accountId,
+					dateKey,
+				}: {
+					accountId: string;
+					dateKey: string;
+					shortSince: Date;
+				}) => {
+					sent.push(`${accountId}:${dateKey}`);
+					if (accepted) await markDeliveryDayNotified(accountId, dateKey, now);
+				};
+			const awaiting = async (accountId: string) =>
+				(await shortfallsAwaitingNotice([accountId], new Date(0))).get(
+					accountId,
+				)?.ids ?? [];
+
+			const delivery = await makeApp(1_000);
+			await writeDay(delivery.appId, dayKey(3, now), FIXTURE_TIERS);
+			await writeDay(delivery.appId, dayKey(2, now), FIXTURE_TIERS);
+			await settleDeliveryDays({
+				now,
+				startDay: "2000-01-01",
+				onFellShort: email(true),
+			});
+			await settleDeliveryDays({
+				now: new Date(now.getTime() + DAY_MS),
+				startDay: "2000-01-01",
+				onFellShort: email(true),
+			});
+			expect(sent).toEqual([`${delivery.accountId}:${dayKey(3, now)}`]);
+			expect(await awaiting(delivery.accountId)).toEqual([]);
+
+			const rejected = await makeApp(0);
+			await writeDay(rejected.appId, dayKey(2, now), FIXTURE_TIERS);
+			await settleDeliveryDays({
+				now,
+				startDay: "2000-01-01",
+				onFellShort: email(false),
+			});
+			const [retry] = await awaiting(rejected.accountId);
+			expect(retry).toBeDefined();
+			await markShortfallsNotified([retry as string], now);
+			expect(await awaiting(rejected.accountId)).toEqual([]);
+
+			const storageFirst = await makeApp(500);
+			await chargeStorageDay({
+				appId: storageFirst.appId,
+				accountId: storageFirst.accountId,
+				usage: {
+					videoCount: 1,
+					totalMinutes: 1,
+					minutesByTier: emptyStorageMinutes(),
+					monthlyMicroCredits: 30_000,
+					dailyMicroCredits: 1_000,
+				},
+				dateKey: storageDay(3),
+				now: new Date(now.getTime() - DAY_MS),
+			});
+			await markStorageDayNotified(storageFirst.accountId, storageDay(3), now);
+			await database()
+				.update(developerCreditAccounts)
+				.set({ balanceMicroCredits: 300 })
+				.where(eq(developerCreditAccounts.id, storageFirst.accountId));
+			await writeDay(storageFirst.appId, dayKey(2, now), FIXTURE_TIERS);
+			sent.length = 0;
+			await settleDeliveryDays({
+				now,
+				startDay: "2000-01-01",
+				onFellShort: email(true),
+			});
+			expect(sent).toEqual([]);
+			expect(await awaiting(storageFirst.accountId)).toEqual([]);
 		});
 
 		it("carries an open storage shortfall's start into a delivery day it can only part pay, without a second email", async () => {
@@ -749,7 +973,11 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(fixture.scheduleAutoTopUp.mock.calls).toEqual([
 				[{ accountId: paying.accountId }],
 			]);
-			expect(await deliveryRows(empty.accountId)).toHaveLength(1);
+			expect(
+				(await deliveryRows(empty.accountId)).map(
+					(row) => row.amountMicroCredits,
+				),
+			).toEqual([0, 0]);
 		});
 
 		it("skips a deleted app and leaves a day with no video minutes alone", async () => {

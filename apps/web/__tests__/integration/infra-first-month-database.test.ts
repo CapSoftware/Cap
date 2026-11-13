@@ -1231,7 +1231,7 @@ describe.runIf(Boolean(databaseUrl))(
 						log[log.length - 1] += ` delivery owed=${owed} -> ${result.state}`;
 						if (result.state !== "billed") continue;
 						delivered.billed++;
-						const charged = Math.min(balance - held, owed);
+						const charged = Math.max(0, Math.min(balance - held, owed));
 						balance -= charged;
 						if (charged < owed) {
 							delivered.short++;
@@ -1418,9 +1418,9 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 
 			expect(failures).toEqual([]);
-			expect(delivered.billed).toBeGreaterThan(200);
-			expect(delivered.short).toBeGreaterThan(100);
-			expect(delivered.carried).toBeGreaterThan(0);
+			expect(delivered.billed).toBeGreaterThan(250);
+			expect(delivered.short).toBeGreaterThan(150);
+			expect(delivered.carried).toBeGreaterThan(50);
 			console.info("[seeded] delivery steps", delivered);
 		}, 600_000);
 

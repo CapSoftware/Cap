@@ -30,12 +30,14 @@ export { deliveryBillingStart };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 10;
 
-// The metering cron marks day D final in its first run at or after 02:00 UTC
-// on D+2, and never changes a final row. D is settled once, only when every
-// rollup row for the app and D is final, in the D+2 or D+3 runs so a missed
-// cron run is picked up.
+// The metering cron marks day D final once all of its logs are in, normally
+// in its first run after 02:00 UTC on D+2, and never changes a final row. D is
+// settled once, when every rollup row for the app and D is final, in any run
+// from D+2 to D+7, so a day that goes final late, or a missed cron run, is
+// still charged. Every settled day writes exactly one ledger row, even when
+// the balance pays nothing, so a day is never charged later.
 export const DELIVERY_FIRST_SETTLE_DAYS = 2;
-export const DELIVERY_LAST_SETTLE_DAYS = 3;
+export const DELIVERY_LAST_SETTLE_DAYS = 7;
 
 export type DeliveryLedgerRow = {
 	accountId: string;
@@ -56,7 +58,6 @@ export type DeliveryLedgerRow = {
 
 export type DeliveryDayResult =
 	| { state: "skipped" }
-	| { state: "unpaid"; shortSince: Date }
 	| {
 			state: "billed";
 			owedMicroCredits: number;
@@ -158,10 +159,6 @@ export async function chargeDeliveryDay({
 				? lastCharge.shortSince
 				: null;
 
-		if (unresolvedShortSince && available <= 0) {
-			return { state: "unpaid" as const, shortSince: unresolvedShortSince };
-		}
-
 		const settled = settleStorageDay({
 			balanceMicroCredits: account.balanceMicroCredits,
 			availableMicroCredits: available,
@@ -254,7 +251,7 @@ export type DeliverySweep = {
 	complete: boolean;
 	billed: number;
 	short: number;
-	unpaid: number;
+	notFinalAtWindowEnd: number;
 	failed: number;
 	waiting: number;
 	ms: number;
@@ -286,7 +283,7 @@ export async function settleDeliveryDays({
 		complete: true,
 		billed: 0,
 		short: 0,
-		unpaid: 0,
+		notFinalAtWindowEnd: 0,
 		failed: 0,
 		waiting: 0,
 		ms: 0,
@@ -310,14 +307,24 @@ export async function settleDeliveryDays({
 	if (!delivered) return finish();
 	sweep.tableReady = true;
 
+	const windowEnd = utcDateKey(
+		new Date(now.getTime() - DELIVERY_LAST_SETTLE_DAYS * DAY_MS),
+	);
 	const due = delivered.filter((day) => {
 		if (!days.includes(day.day)) return false;
 		if (!deliveryDayIsFinal(day, now)) {
 			sweep.waiting++;
+			if (day.day === windowEnd) sweep.notFinalAtWindowEnd++;
 			return false;
 		}
 		return deliveryMicroCredits(day.seconds) > 0;
 	});
+	if (sweep.notFinalAtWindowEnd > 0) {
+		console.warn(
+			"[infra-delivery] Delivery days still not final on the last day they can be charged",
+			{ day: windowEnd, apps: sweep.notFinalAtWindowEnd },
+		);
+	}
 	if (due.length === 0) return finish();
 
 	const appIds = [...new Set(due.map((day) => day.appId))];
@@ -428,8 +435,6 @@ export async function settleDeliveryDays({
 						});
 					sweep.billed++;
 					if (outcome.shortSince) sweep.short++;
-				} else if (outcome.state === "unpaid") {
-					sweep.unpaid++;
 				}
 			}
 		}
