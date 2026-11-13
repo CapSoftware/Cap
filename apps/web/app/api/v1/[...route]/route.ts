@@ -169,6 +169,11 @@ import {
 	creditCheckoutSessionParams,
 } from "@/lib/infra-credit-checkout";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
+import {
+	TOP_UP_MAX_CENTS,
+	TOP_UP_MIN_CENTS,
+	TOP_UP_RANGE_TEXT,
+} from "@/lib/infra-top-up";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -4534,12 +4539,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						}
 						if (
 							!Number.isSafeInteger(payload.amountCents) ||
-							payload.amountCents < 500 ||
-							payload.amountCents > 100_000
+							payload.amountCents < TOP_UP_MIN_CENTS ||
+							payload.amountCents > TOP_UP_MAX_CENTS
 						) {
 							return yield* badRequest(
 								requestId,
-								"Developer credit purchase must be between $5 and $1,000",
+								`Developer credit purchase must be from ${TOP_UP_RANGE_TEXT}`,
 							);
 						}
 						return yield* runAgentExternalMutation({

@@ -21,7 +21,7 @@ today: uploads, embeds and playback work from any origin. To limit a browser upl
 origin, set corsOrigin when your server creates the upload.
 
 Amounts: 100,000 micro-credits are $1. Credit purchases are in cents, from 500 ($5) to
-100000 ($1,000). Durations are in seconds.
+1000000 ($10,000). Durations are in seconds.
 
 A typical job:
   cap developers list --json
@@ -252,7 +252,7 @@ enum DeveloperCreditCommands {
 struct DeveloperCreditPurchaseArgs {
     /// App id from `cap developers list`
     app: String,
-    /// Amount in cents, from 500 ($5) to 100000 ($1,000)
+    /// Amount in cents, from 500 ($5) to 1000000 ($10,000)
     #[arg(long)]
     amount_cents: u32,
     /// Print the checkout link without opening a browser

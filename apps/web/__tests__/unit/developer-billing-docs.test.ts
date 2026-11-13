@@ -268,6 +268,11 @@ describe("the Billing page", () => {
 		expect(billing).toContain(
 			`One purchase is from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}`,
 		);
+		expect(
+			fs.readFileSync(path.join(process.cwd(), "public/llms-full.txt"), "utf8"),
+		).toContain(
+			`top-ups from ${wholeDollars(TOP_UP_MIN_CENTS)} to ${wholeDollars(TOP_UP_MAX_CENTS)}, codes`,
+		);
 		expect(billing).toContain(
 			`Cap Pro includes $${PRO_MONTHLY_CREDIT_DOLLARS} of credit every month`,
 		);
