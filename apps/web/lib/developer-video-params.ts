@@ -1,3 +1,5 @@
+import type { CapPlayerControl } from "@/components/cap-player/CapPlayer";
+
 export interface DeveloperVideoPlayback {
 	autoPlay: boolean;
 	muted: boolean;
@@ -5,11 +7,31 @@ export interface DeveloperVideoPlayback {
 	controls: boolean;
 	captions: boolean;
 	startAt: number;
+	accentColor: string | null;
+	radius: number;
+	maxQuality: number | null;
+	poster: boolean;
+	keyboard: boolean;
+	events: boolean;
+	hideControls: CapPlayerControl[];
 }
 
 export type DeveloperVideoQuery = Record<string, string | string[] | undefined>;
 
 const SECONDS_PATTERN = /^\d{1,6}(\.\d{1,3})?$/;
+const HEX_COLOR_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
+const RADIUS_PATTERN = /^\d{1,2}$/;
+const QUALITY_PATTERN = /^(\d{3,4})p?$/i;
+export const MAX_EMBED_RADIUS = 24;
+const LOWEST_QUALITY = 144;
+const HIGHEST_QUALITY = 4320;
+
+const HIDDEN_BY: readonly [string, CapPlayerControl][] = [
+	["quality_menu", "quality"],
+	["speed_menu", "speed"],
+	["pip", "pip"],
+	["fullscreen", "fullscreen"],
+];
 
 const first = (value: string | string[] | undefined) =>
 	Array.isArray(value) ? value[0] : value;
@@ -26,6 +48,25 @@ const seconds = (value: string | string[] | undefined) => {
 	return text && SECONDS_PATTERN.test(text) ? Number(text) : 0;
 };
 
+export const embedAccentColor = (value: string | string[] | undefined) => {
+	const hex = HEX_COLOR_PATTERN.exec(first(value) ?? "")?.[1]?.toLowerCase();
+	if (!hex) return null;
+	return hex.length === 3
+		? `#${[...hex].map((digit) => digit + digit).join("")}`
+		: `#${hex}`;
+};
+
+export const embedRadius = (value: string | string[] | undefined) => {
+	const text = first(value);
+	if (!text || !RADIUS_PATTERN.test(text)) return 0;
+	return Math.min(MAX_EMBED_RADIUS, Number(text));
+};
+
+export const embedMaxQuality = (value: string | string[] | undefined) => {
+	const height = Number(QUALITY_PATTERN.exec(first(value) ?? "")?.[1]);
+	return height >= LOWEST_QUALITY && height <= HIGHEST_QUALITY ? height : null;
+};
+
 export function developerVideoPlayback(
 	query: DeveloperVideoQuery,
 	variant: "share" | "embed",
@@ -38,5 +79,29 @@ export function developerVideoPlayback(
 		controls: !embed || flag(query.controls, true),
 		captions: embed && flag(query.captions, false),
 		startAt: seconds(query.t),
+		accentColor: embed ? embedAccentColor(query.color) : null,
+		radius: embed ? embedRadius(query.radius) : 0,
+		maxQuality: embed ? embedMaxQuality(query.quality) : null,
+		poster: !embed || flag(query.poster, true),
+		keyboard: !embed || flag(query.keyboard, true),
+		events: embed,
+		hideControls: embed
+			? HIDDEN_BY.filter(([name]) => !flag(query[name], true)).map(
+					([, control]) => control,
+				)
+			: [],
 	};
+}
+
+// Asks the playback route for a master playlist that lists no rendition
+// taller than the cap, so hls.js and Safari's own player both keep under it.
+export function cappedPlaylistUrl(hls: string, maxQuality: number | null) {
+	if (maxQuality === null) return hls;
+	try {
+		const url = new URL(hls);
+		url.searchParams.set("max", String(maxQuality));
+		return url.toString();
+	} catch {
+		return hls;
+	}
 }

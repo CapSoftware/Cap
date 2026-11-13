@@ -5,6 +5,7 @@ import { preload } from "react-dom";
 import { CapPlayer } from "@/components/cap-player/CapPlayer";
 import { Lockup } from "@/components/infra/Lockup";
 import {
+	cappedPlaylistUrl,
 	type DeveloperVideoPlayback,
 	type DeveloperVideoQuery,
 	developerVideoPlayback,
@@ -89,13 +90,18 @@ function Stage({
 	playback: DeveloperVideoPlayback;
 }) {
 	if (player.kind === "playing") {
-		if (player.poster) {
-			preload(player.poster, { as: "image", fetchPriority: "high" });
+		const poster = playback.poster ? player.poster : null;
+		if (poster) {
+			preload(poster, { as: "image", fetchPriority: "high" });
 		}
+		const { hls, mp4 } = player.source;
 		return (
 			<CapPlayer
-				source={player.source}
-				poster={player.poster ?? undefined}
+				source={{
+					hls: hls ? cappedPlaylistUrl(hls, playback.maxQuality) : undefined,
+					mp4,
+				}}
+				poster={poster ?? undefined}
 				title={player.name}
 				aspectRatio="auto"
 				className="h-full"
@@ -106,6 +112,10 @@ function Stage({
 				startAt={playback.startAt}
 				captions={player.captions ?? undefined}
 				showCaptions={playback.captions}
+				accentColor={playback.accentColor ?? undefined}
+				hideControls={playback.hideControls}
+				keyboard={playback.keyboard}
+				events={playback.events}
 			/>
 		);
 	}
@@ -173,9 +183,21 @@ export function DeveloperVideoView({
 	const reportHref = developerVideoReportHref(playbackId);
 
 	if (variant === "embed") {
+		const rounded = playback.radius > 0;
 		return (
-			<div className="group fixed inset-0 bg-black">
-				<style>{"html,body{background:#000}"}</style>
+			<div
+				className={
+					rounded
+						? "group fixed inset-0 overflow-hidden bg-black"
+						: "group fixed inset-0 bg-black"
+				}
+				style={rounded ? { borderRadius: playback.radius } : undefined}
+			>
+				<style>
+					{rounded
+						? "html,body{background:transparent}"
+						: "html,body{background:#000}"}
+				</style>
 				<h1 className="sr-only">{player.name}</h1>
 				<Stage player={player} playback={playback} />
 				<a

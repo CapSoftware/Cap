@@ -381,8 +381,59 @@ describe("developer video page parameters", () => {
 		).toContain('aria-pressed="false"');
 	});
 
+	it("colours the player with the embed's accent", () => {
+		expect(embed({ color: "3b82f6" })).toContain("--cap-player-accent:#3b82f6");
+		expect(embed({})).not.toContain("--cap-player-accent");
+	});
+
+	it.each([
+		"red;}</style><script>alert(1)</script>",
+		'#fff" onload="alert(1)',
+		"3b82f6;background:url(https://evil.example/x)",
+	])("keeps the hostile colour %j out of the page", (color) => {
+		const html = embed({ color });
+
+		expect(html).toBe(embed({}));
+		expect(html).not.toContain("evil.example");
+		expect(html).not.toContain("alert(1)");
+	});
+
+	it("rounds the embed's corners on a clear page", () => {
+		const html = embed({ radius: "12" });
+
+		expect(html).toContain("border-radius:12px");
+		expect(html).toContain("html,body{background:transparent}");
+		expect(embed({})).toContain("html,body{background:#000}");
+		expect(embed({})).not.toContain("border-radius:");
+		expect(embed({ radius: "12px;}</style>" })).toBe(embed({}));
+	});
+
+	it("leaves the poster out when asked", () => {
+		expect(embed({ poster: "0" })).not.toContain("poster=");
+		expect(embed({ poster: "1" })).toContain(`poster="${BASE}/poster.jpg"`);
+	});
+
+	it("hides the buttons the embed switches off", () => {
+		expect(embed({})).toContain('aria-label="Full screen"');
+		const html = embed({ fullscreen: "0", speed_menu: "0" });
+
+		expect(html).not.toContain('aria-label="Full screen"');
+		expect(html).not.toContain("Playback speed");
+		expect(html).toContain('aria-label="Play"');
+	});
+
 	it("keeps the embed-only switches off the share page", () => {
-		const query = { autoplay: "1", muted: "1", loop: "1", controls: "0" };
+		const query = {
+			autoplay: "1",
+			muted: "1",
+			loop: "1",
+			controls: "0",
+			color: "f00",
+			radius: "12",
+			poster: "0",
+			fullscreen: "0",
+			quality: "360",
+		};
 
 		expect(
 			render(playing, "share", developerVideoPlayback(query, "share")),
