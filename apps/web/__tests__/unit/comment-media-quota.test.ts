@@ -158,21 +158,23 @@ describe("comment media object quota", () => {
 		);
 	});
 
-	it("keeps counting uploads that can still land and frees them after", async () => {
+	it("keeps counting a reservation past its token across window boundaries", async () => {
+		const W = COMMENT_MEDIA_RESERVATION_WINDOW_MS;
+		const lastMomentOfWindow = new Date(2 * W - 1);
 		await Promise.all(
-			Array.from({ length: MAX_MEDIA_OBJECTS_PER_VIDEO }, () => reserve()),
+			Array.from({ length: MAX_MEDIA_OBJECTS_PER_VIDEO }, () =>
+				reserve({ now: lastMomentOfWindow }),
+			),
 		);
-		await expect(reserve()).resolves.toBe(false);
 
-		const nextWindow = new Date(
-			now.getTime() + COMMENT_MEDIA_RESERVATION_WINDOW_MS,
-		);
-		await expect(reserve({ now: nextWindow })).resolves.toBe(false);
+		for (const at of [
+			lastMomentOfWindow.getTime() + 1,
+			lastMomentOfWindow.getTime() + W + 60_000,
+			3 * W + W - 1,
+		])
+			await expect(reserve({ now: new Date(at) })).resolves.toBe(false);
 
-		const afterTokensExpire = new Date(
-			now.getTime() + 2 * COMMENT_MEDIA_RESERVATION_WINDOW_MS,
-		);
-		await expect(reserve({ now: afterTokensExpire })).resolves.toBe(true);
+		await expect(reserve({ now: new Date(4 * W) })).resolves.toBe(true);
 	});
 
 	it("keeps each video's reservations separate", async () => {
