@@ -1,11 +1,12 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { removeDeveloperDomain } from "@/actions/developers/remove-domain";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { runAction } from "./run-action";
 import { FOCUS, MONO } from "./ui";
 
 export function DomainRow({
@@ -18,8 +19,8 @@ export function DomainRow({
 	domain: string;
 }) {
 	const router = useRouter();
-	const removeMutation = useMutation({
-		mutationFn: () => removeDeveloperDomain(appId, domainId),
+	const removeMutation = useEffectMutation({
+		mutationFn: () => runAction(() => removeDeveloperDomain(appId, domainId)),
 		onSuccess: () => {
 			toast.success(`${domain} removed`);
 			router.refresh();
