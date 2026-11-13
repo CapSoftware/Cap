@@ -186,10 +186,14 @@ describe("GET /transactions", () => {
 		const publicKey = await get("/transactions", "cpk_public_key");
 		const unknown = await get("/transactions", "csk_not_a_key");
 
-		for (const response of [missing, publicKey, unknown]) {
-			expect(response.status).toBe(401);
+		for (const [response, status, code] of [
+			[missing, 401, "invalid_secret_key"],
+			[publicKey, 403, "public_key_not_allowed"],
+			[unknown, 401, "invalid_secret_key"],
+		] as const) {
+			expect(response.status).toBe(status);
 			expect(await response.json()).toMatchObject({
-				code: "invalid_secret_key",
+				code,
 				hint: expect.any(String),
 				docs: expect.any(String),
 			});
