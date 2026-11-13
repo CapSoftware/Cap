@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LocalError } from "./errors";
+import { timeLimit } from "./time";
 import { type Tool, tool } from "./tool";
 
 export const DOC_PAGES = [
@@ -253,21 +254,24 @@ export function fetchDocs(
 		const hit = cache.get(page);
 		if (hit && Date.now() - hit.at < DOCS_CACHE_MS) return hit.text;
 		const pageUrl = `${baseUrl}/docs/api/${page}`;
-		let response: Response;
+		const limit = timeLimit(DOCS_FETCH_TIMEOUT_MS, signal);
+		let text: string;
 		try {
-			response = await fetcher(`${pageUrl}.md`, {
+			const response = await fetcher(`${pageUrl}.md`, {
 				headers: { Accept: "text/markdown" },
-				signal: AbortSignal.any([
-					signal,
-					AbortSignal.timeout(DOCS_FETCH_TIMEOUT_MS),
-				]),
+				signal: limit.signal,
 			});
+			if (!response.ok) {
+				await response.body?.cancel().catch(() => {});
+				throw unavailable(pageUrl, response.status);
+			}
+			text = await response.text();
 		} catch (error) {
-			if (signal.aborted) throw error;
+			if (signal.aborted || error instanceof LocalError) throw error;
 			throw unavailable(pageUrl, null);
+		} finally {
+			limit.dispose();
 		}
-		if (!response.ok) throw unavailable(pageUrl, response.status);
-		const text = await response.text();
 		cache.set(page, { text, at: Date.now() });
 		return text;
 	};

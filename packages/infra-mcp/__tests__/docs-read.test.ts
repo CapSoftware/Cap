@@ -5,6 +5,7 @@ import {
 	DOC_PAGES,
 	DOCS_MAX_BYTES,
 	docAnchor,
+	fetchDocs,
 	readDoc,
 } from "../src/docs";
 import { INSTRUCTIONS } from "../src/server";
@@ -91,8 +92,8 @@ describe("docs_read", () => {
 				expect(reply.body.url).toBe(
 					`${stub.url}/docs/api/${page}#${docAnchor(heading)}`,
 				);
-				expect(String(reply.body.markdown)).toMatch(
-					new RegExp(`^## ${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+				expect(String(reply.body.markdown).startsWith(`## ${heading}\n`)).toBe(
+					true,
 				);
 				expect(bytes(String(reply.body.markdown))).toBeLessThanOrEqual(
 					DOCS_MAX_BYTES,
@@ -157,11 +158,11 @@ describe("docs_read", () => {
 		const markdown = String(reply.body.markdown);
 		expect(reply.body.truncated).toBe(true);
 		expect(bytes(markdown)).toBeLessThanOrEqual(DOCS_MAX_BYTES);
-		expect(markdown).toMatch(
-			new RegExp(
-				`\\n\\nMore at ${stub.url.replace(/[.:/]/g, "\\$&")}/docs/api/rest-api#rest-api-endpoints$`,
+		expect(
+			markdown.endsWith(
+				`\n\nMore at ${stub.url}/docs/api/rest-api#rest-api-endpoints`,
 			),
-		);
+		).toBe(true);
 	});
 
 	it("refuses unknown keys, unknown pages and both section and query", async () => {
@@ -205,6 +206,40 @@ describe("docs_read", () => {
 		expect(
 			String(failed.body.error && JSON.stringify(failed.body.error)),
 		).toContain(`${stub.url}/docs/api/webhooks`);
+	});
+});
+
+describe("fetchDocs", () => {
+	it("reports a body that fails mid-read as docs_unavailable with the page link", async () => {
+		const broken = new ReadableStream({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("# Billing\n"));
+				controller.error(new Error("connection reset"));
+			},
+		});
+		const source = fetchDocs(
+			"https://docs.test",
+			async () => new Response(broken),
+		);
+		await expect(
+			source("billing", new AbortController().signal),
+		).rejects.toMatchObject({
+			code: "docs_unavailable",
+			hint: "Try again, or read https://docs.test/docs/api/billing directly.",
+		});
+	});
+
+	it("passes a cancellation through instead of calling it unavailable", async () => {
+		const controller = new AbortController();
+		const source = fetchDocs("https://docs.test", (_input, init) => {
+			controller.abort();
+			return Promise.reject(init?.signal?.reason ?? new Error("aborted"));
+		});
+		await expect(
+			source("billing", controller.signal),
+		).rejects.not.toMatchObject({
+			code: "docs_unavailable",
+		});
 	});
 });
 
