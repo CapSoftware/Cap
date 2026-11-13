@@ -122,37 +122,7 @@ function compile(condition: SQL | undefined, outer: Row = {}): Predicate {
 		return (row) => field(row) === null || field(row) === undefined;
 	};
 
-	const coalescedJsonComparison = (): Predicate => {
-		expect("coalesce");
-		expect("(");
-		expect("cast");
-		expect("(");
-		expect("json_extract");
-		expect("(");
-		const column = columnName();
-		expect(",");
-		const field = String(param()).replace(/^\$\./, "");
-		expect(")");
-		expect("as");
-		expect("signed");
-		expect(")");
-		expect(",");
-		const fallback = columnName();
-		expect(")");
-		const operator = take();
-		const value = param();
-		return (row) => {
-			const found = metadataOf(row[column])[field];
-			return compare(
-				found === null || found === undefined ? row[fallback] : Number(found),
-				operator,
-				value,
-			);
-		};
-	};
-
 	const comparison = (): Predicate => {
-		if (peek() === "coalesce") return coalescedJsonComparison();
 		if (peek() === "cast") return binaryComparison();
 		if (peek() === "json_unquote" || peek() === "json_extract") {
 			return jsonComparison();
@@ -241,10 +211,6 @@ const isAggregate = (value: unknown) =>
 
 function rowExpression(row: Row, field: SQL) {
 	const text = dialect.sqlToQuery(field).sql;
-	if (/^CASE WHEN /.test(text) && / THEN 1 ELSE 0 END$/.test(text)) {
-		const condition = field.queryChunks.find(isSql);
-		if (condition) return compile(condition)(row) ? 1 : 0;
-	}
 	const filled = text.match(
 		/^\((?:`[^`]+`\.)?`([^`]+)` IS NOT NULL AND (?:`[^`]+`\.)?`\1` <> ''\)$/i,
 	);

@@ -12,10 +12,6 @@ import { and, count, eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import {
-	AVAILABLE_AFTER_FIELD,
-	heldTranscriptMicroCredits,
-} from "@/lib/infra-balance";
-import {
 	PAID_PRO_STATUSES,
 	PRO_CREDIT_TRIAL_MESSAGE,
 } from "@/lib/infra-pro-credit-eligibility";
@@ -234,7 +230,6 @@ export async function claimProMonthlyCredit({
 
 		const [updated] = await tx
 			.select({
-				appId: developerCreditAccounts.appId,
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 			})
 			.from(developerCreditAccounts)
@@ -256,18 +251,9 @@ export async function claimProMonthlyCredit({
 			balanceAfterMicroCredits: updated.balanceMicroCredits,
 			referenceId: period,
 			referenceType: REFERENCE_TYPE,
-			metadata: {
-				...(subscription
-					? {
-							period,
-							subscriptionId: subscription.id,
-							seats: subscription.seats,
-						}
-					: { period }),
-				[AVAILABLE_AFTER_FIELD]:
-					updated.balanceMicroCredits -
-					(await heldTranscriptMicroCredits(tx, updated.appId)),
-			},
+			metadata: subscription
+				? { period, subscriptionId: subscription.id, seats: subscription.seats }
+				: { period },
 		});
 
 		return {

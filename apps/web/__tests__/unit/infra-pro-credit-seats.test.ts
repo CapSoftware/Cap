@@ -141,7 +141,6 @@ function makeDatabase(people: Member[]) {
 								row.referenceId === period,
 						);
 					}
-					if (table === Db.developerTranscripts) return [{ total: 0 }];
 					throw new Error("Unexpected select");
 				};
 				const settle = () =>

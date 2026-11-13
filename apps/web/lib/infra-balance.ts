@@ -17,8 +17,6 @@ export async function lockInfraAccount(
 		.for("update");
 }
 
-export const AVAILABLE_AFTER_FIELD = "availableAfterMicroCredits";
-
 export const heldTranscriptsQuery = (
 	executor: Pick<InfraDbExecutor, "select">,
 	appId: string,

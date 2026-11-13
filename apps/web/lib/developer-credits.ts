@@ -8,10 +8,7 @@ import {
 } from "@cap/database/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
-import {
-	AVAILABLE_AFTER_FIELD,
-	heldTranscriptMicroCredits,
-} from "@/lib/infra-balance";
+import { heldTranscriptMicroCredits } from "@/lib/infra-balance";
 
 export async function addCreditsToAccount({
 	accountId,
@@ -69,7 +66,6 @@ export async function addCreditsToAccount({
 
 		const [updated] = await tx
 			.select({
-				appId: developerCreditAccounts.appId,
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 			})
 			.from(developerCreditAccounts)
@@ -88,12 +84,7 @@ export async function addCreditsToAccount({
 			balanceAfterMicroCredits: updated.balanceMicroCredits,
 			referenceId,
 			referenceType,
-			metadata: {
-				...(metadata ?? { amountCents }),
-				[AVAILABLE_AFTER_FIELD]:
-					updated.balanceMicroCredits -
-					(await heldTranscriptMicroCredits(tx, updated.appId)),
-			},
+			metadata: metadata ?? { amountCents },
 		});
 
 		return updated.balanceMicroCredits;

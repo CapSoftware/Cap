@@ -50,11 +50,6 @@ vi.mock("@cap/database/crypto", () => ({
 	encrypt: vi.fn(async (value: string) => `encrypted:${value}`),
 }));
 
-vi.mock("@/lib/infra-balance", async (original) => ({
-	...(await original<typeof import("@/lib/infra-balance")>()),
-	heldTranscriptMicroCredits: async () => 0,
-}));
-
 vi.mock("@cap/database/schema", () => ({
 	developerApps: {
 		id: "id",
