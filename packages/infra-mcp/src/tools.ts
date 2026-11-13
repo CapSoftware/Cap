@@ -532,7 +532,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			title: "Create a transcript",
 			description: local
 				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
-				: "Turn speech into text from exactly one source: url (a public audio or video link) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
+				: "Turn speech into text from exactly one source: url (a public audio or video link) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
 			kind: "write",
 			input: {
 				url: z
@@ -615,6 +615,23 @@ export function createTools(deps: ToolDeps): Tool[] {
 						)),
 						next,
 					};
+				}
+
+				if (!local && args.videoId !== undefined) {
+					const created = dataOf(
+						await client.call("createTranscript", {
+							body: {
+								videoId: args.videoId,
+								...options,
+								...(args.metadata === undefined
+									? {}
+									: { metadata: args.metadata }),
+							},
+							headers,
+							signal: call.signal,
+						}),
+					);
+					return { ...transcript(created), next };
 				}
 
 				const fromVideo =

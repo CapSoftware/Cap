@@ -402,6 +402,15 @@ describe("hosted Cap Infra MCP tools", () => {
 		});
 	});
 
+	it("transcribes a stored video by id through the REST videoId field", async () => {
+		const created = await callTool(newKey(), "transcripts_create", {
+			videoId: "video-1",
+		});
+		expect(created.isError).toBe(false);
+		expect(state.rest).toHaveLength(1);
+		expect(await state.rest[0]?.json()).toEqual({ videoId: "video-1" });
+	});
+
 	it("refuses a local path for a transcript", async () => {
 		const result = await callTool(newKey(), "transcripts_create", {
 			path: "/etc/passwd",
