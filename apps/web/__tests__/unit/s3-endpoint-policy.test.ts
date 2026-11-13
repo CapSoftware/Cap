@@ -127,6 +127,43 @@ describe("isBlockedS3Endpoint", () => {
 		).resolves.toBe(true);
 	});
 
+	// Main refused a name when any address in its answer was private. That
+	// stays true for those ranges. The ranges added for webhooks only drop
+	// their own addresses, so the public one is still used.
+	it.each([
+		["a 6to4 AAAA", ["52.216.1.1", "2002:a00:1::1"]],
+		["a Teredo AAAA", ["52.216.1.1", "2001:0:4136:e378::1"]],
+		["a local-use NAT64 AAAA", ["52.216.1.1", "64:ff9b:1::a00:1"]],
+		["a documentation address", ["203.0.113.9", "52.216.1.1"]],
+		["a discard prefix AAAA", ["2600:1f18::1", "100::1"]],
+	])("allows a public address next to %s", async (_label, addresses) => {
+		await expect(
+			isBlockedS3Endpoint("https://s3.example.com", resolveTo(addresses)),
+		).resolves.toBe(false);
+	});
+
+	it.each([
+		["loopback", ["52.216.1.1", "127.0.0.1"]],
+		["a private v4", ["52.216.1.1", "192.168.0.7"]],
+		["unique local v6", ["2600:1f18::1", "fd00::1"]],
+		["NAT64 of a private v4", ["52.216.1.1", "64:ff9b::a00:1"]],
+		["a mapped private v4", ["52.216.1.1", "::ffff:10.0.0.1"]],
+		["a reserved and a private address", ["2002:a00:1::1", "10.0.0.1"]],
+	])("still blocks a public address next to %s", async (_label, addresses) => {
+		await expect(
+			isBlockedS3Endpoint("https://s3.example.com", resolveTo(addresses)),
+		).resolves.toBe(true);
+	});
+
+	it("blocks a name whose only addresses are reserved", async () => {
+		await expect(
+			isBlockedS3Endpoint(
+				"https://s3.example.com",
+				resolveTo(["2002:a00:1::1", "192.0.2.1"]),
+			),
+		).resolves.toBe(true);
+	});
+
 	it("blocks hostnames that do not resolve", async () => {
 		await expect(
 			isBlockedS3Endpoint("https://s3.example.com", async () => {

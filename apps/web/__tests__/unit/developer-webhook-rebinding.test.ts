@@ -169,6 +169,54 @@ describe("a name that changes to a private address between check and connect", (
 		expect(hits).toBe(1);
 	});
 
+	it.each([
+		["a 6to4 AAAA", ["93.184.216.34", "2002:a00:1::1"]],
+		["a Teredo AAAA", ["2001:0:4136:e378::1", "93.184.216.34"]],
+		["a documentation address", ["203.0.113.9", "2606:4700::1111"]],
+	])(
+		"hands the connection only the public address next to %s",
+		async (_label, answers) => {
+			dns.connectAnswers = answers;
+			const result = await new Promise<{
+				error: NodeJS.ErrnoException | null;
+				address: unknown;
+			}>((resolve) =>
+				publicOnlyLookup("rebind.example", { all: true }, (error, address) =>
+					resolve({ error, address }),
+				),
+			);
+			expect(result.error).toBeNull();
+			const dialled = (result.address as { address: string }[]).map(
+				(entry) => entry.address,
+			);
+			expect(dialled).toEqual(
+				answers.filter((address) =>
+					["93.184.216.34", "2606:4700::1111"].includes(address),
+				),
+			);
+		},
+	);
+
+	it("refuses a name whose only addresses are reserved", async () => {
+		dns.connectAnswers = ["2002:a00:1::1", "192.0.2.1"];
+		const error = await new Promise<NodeJS.ErrnoException | null>((resolve) =>
+			publicOnlyLookup("rebind.example", { all: true }, (lookupError) =>
+				resolve(lookupError),
+			),
+		);
+		expect(error?.code).toBe("ECONNREFUSED");
+	});
+
+	it("still refuses a public address next to a NAT64 form of a private one", async () => {
+		dns.connectAnswers = ["93.184.216.34", "64:ff9b::a00:1"];
+		const error = await new Promise<NodeJS.ErrnoException | null>((resolve) =>
+			publicOnlyLookup("rebind.example", { all: true }, (lookupError) =>
+				resolve(lookupError),
+			),
+		);
+		expect(error?.code).toBe("ECONNREFUSED");
+	});
+
 	it("checks every address the lookup returns, not only the first", async () => {
 		dns.connectAnswers = ["93.184.216.34", "127.0.0.1"];
 		const error = await new Promise<NodeJS.ErrnoException | null>((resolve) =>

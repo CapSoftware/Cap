@@ -15,32 +15,35 @@ for (const [network, prefix] of [
 	["169.254.0.0", 16],
 	["172.16.0.0", 12],
 	["192.0.0.0", 24],
-	["192.0.2.0", 24],
-	["192.88.99.0", 24],
 	["192.168.0.0", 16],
 	["198.18.0.0", 15],
-	["198.51.100.0", 24],
-	["203.0.113.0", 24],
 	["224.0.0.0", 4],
 	["240.0.0.0", 4],
 ] as const) {
 	privateRanges.addSubnet(network, prefix, "ipv4");
 }
 
+// Never dialled, but unlike the ranges above they do not condemn the whole
+// name: a host with a public address and one of these (a 6to4 or Teredo
+// AAAA, say) connects to the public one, as it did before these were added.
+const reservedRanges = new BlockList();
+
+for (const [network, prefix] of [
+	["192.0.2.0", 24],
+	["192.88.99.0", 24],
+	["198.51.100.0", 24],
+	["203.0.113.0", 24],
+] as const) {
+	reservedRanges.addSubnet(network, prefix, "ipv4");
+}
+
 // BlockList already applies the IPv4 rules to IPv4-mapped addresses
 // (::ffff:a.b.c.d and ::ffff:7f00:1). Adding ::ffff:0:0/96 here would also
 // match every plain IPv4 address, so only the IPv4-compatible (::/96) and NAT64
-// (64:ff9b::/96) forms are blocked outright. 6to4 (2002::/16) and Teredo
-// (2001::/32) carry an IPv4 address inside them, so a relay could deliver the
-// request to a private IPv4 host that the IPv4 rules never saw.
+// (64:ff9b::/96) forms are blocked outright.
 for (const [network, prefix] of [
 	["::", 96],
 	["64:ff9b::", 96],
-	["64:ff9b:1::", 48],
-	["100::", 64],
-	["2001::", 32],
-	["2001:db8::", 32],
-	["2002::", 16],
 	["fc00::", 7],
 	["fe80::", 10],
 	["fec0::", 10],
@@ -49,11 +52,44 @@ for (const [network, prefix] of [
 	privateRanges.addSubnet(network, prefix, "ipv6");
 }
 
-export function isPrivateAddress(address: string) {
+// 6to4 (2002::/16) and Teredo (2001::/32) carry an IPv4 address inside them,
+// so a relay could deliver the request to a private IPv4 host that the IPv4
+// rules never saw.
+for (const [network, prefix] of [
+	["64:ff9b:1::", 48],
+	["100::", 64],
+	["2001::", 32],
+	["2001:db8::", 32],
+	["2002::", 16],
+] as const) {
+	reservedRanges.addSubnet(network, prefix, "ipv6");
+}
+
+const inRanges = (ranges: BlockList, address: string) => {
 	const family = isIP(address);
-	if (family === 4) return privateRanges.check(address, "ipv4");
-	if (family === 6) return privateRanges.check(address, "ipv6");
+	if (family === 4) return ranges.check(address, "ipv4");
+	if (family === 6) return ranges.check(address, "ipv6");
 	return true;
+};
+
+// True for any address that is never dialled.
+export function isPrivateAddress(address: string) {
+	return inRanges(privateRanges, address) || inRanges(reservedRanges, address);
+}
+
+// The addresses of a DNS answer that may be dialled, or null when the name is
+// refused. One private address anywhere refuses the whole name. Reserved
+// addresses are dropped, and the name is refused only when nothing is left.
+export function dialableAddresses<T>(
+	entries: readonly T[],
+	addressOf: (entry: T) => string,
+): T[] | null {
+	if (entries.some((entry) => inRanges(privateRanges, addressOf(entry))))
+		return null;
+	const usable = entries.filter(
+		(entry) => !inRanges(reservedRanges, addressOf(entry)),
+	);
+	return usable.length === 0 ? null : usable;
 }
 
 export function shouldBlockPrivateS3Endpoints() {
@@ -94,7 +130,7 @@ export async function isBlockedS3Endpoint(
 
 	try {
 		const addresses = await resolve(hostname);
-		return addresses.length === 0 || addresses.some(isPrivateAddress);
+		return dialableAddresses(addresses, (address) => address) === null;
 	} catch {
 		return true;
 	}
@@ -114,17 +150,22 @@ export const publicOnlyLookup: LookupFunction = (
 		const addresses: LookupAddress[] = Array.isArray(address)
 			? address
 			: [{ address, family }];
-		const blocked = addresses.find((entry) => isPrivateAddress(entry.address));
-		if (blocked) {
+		const usable = dialableAddresses(addresses, (entry) => entry.address);
+		if (!usable) {
+			const blocked =
+				addresses.find((entry) => isPrivateAddress(entry.address)) ??
+				addresses[0];
 			const blockedError: NodeJS.ErrnoException = new Error(
-				`Refused to connect to private address ${blocked.address}`,
+				`Refused to connect to private address ${blocked?.address ?? hostname}`,
 			);
 			blockedError.code = "ECONNREFUSED";
 			callback(blockedError, address, family);
 			return;
 		}
 
-		callback(null, address, family);
+		// Only the addresses that passed are handed to the connection.
+		if (Array.isArray(address)) callback(null, usable, family);
+		else callback(null, address, family);
 	});
 };
 
