@@ -8,7 +8,6 @@ import styles from "@/components/pages/infra/scene.module.css";
 import { MONO } from "@/components/pages/infra/theme";
 import { InfraStage, MUTED } from "./Stage";
 
-/** The landing page's "fast to first play" measurement, on its own plate. */
 export function InfraSpeed() {
 	return (
 		<InfraStage

@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import { ogImageUrl } from "@/lib/og/url";
 import { getBlogPosts } from "@/utils/blog";
 
-/** Page metadata for a blog post, shared by every route that renders one. */
 export function blogPostMetadata(slug: string): Metadata | undefined {
 	const post = getBlogPosts().find((post) => post.slug === slug);
 	if (!post) {

@@ -4,7 +4,6 @@ import { H_SECTION, TEXT_LINK } from "@/components/pages/infra/theme";
 
 const TEXT = "text-[17px] leading-[1.75] text-[rgba(232,236,244,0.7)]";
 
-/** Post typography for the night theme, in place of the light `.prose` styles. */
 export const infraProse: MDXComponents = {
 	h2: (props) => (
 		<h2

@@ -2,7 +2,6 @@ import { VIDEO_OUTPUTS } from "@/components/pages/infra/content";
 import { PlatesArt } from "@/components/pages/infra/Plain";
 import { HAIRLINE, InfraStage } from "./Stage";
 
-/** The landing page's rendition plates, and the five things an upload gives you. */
 export function InfraLadder() {
 	return (
 		<InfraStage caption="One upload. Every rendition is encoded at the same time, and none is ever bigger than the source.">

@@ -19,11 +19,7 @@ export function generateMetadata(): Metadata | undefined {
 	return blogPostMetadata(SLUG);
 }
 
-/**
- * The Cap Infra launch post, rendered on the /infra page's night theme
- * instead of the light blog layout. This static route takes precedence over
- * (site)/blog/[slug] for this one slug.
- */
+// A static route, so it wins over (site)/blog/[slug] for this slug.
 export default function InfraPostPage() {
 	const post = getBlogPosts().find((post) => post.slug === SLUG);
 	if (!post) {

@@ -32,7 +32,6 @@ const STEPS = [
 const NODE =
 	"relative z-10 block size-[9px] shrink-0 rounded-[2px] border border-[#E8ECF4] bg-[#050506] shadow-[0_0_8px_1px_rgba(214,228,255,0.55)]";
 
-/** The path every Cap Infra video takes, the same one every Cap recording takes. */
 export function InfraPipeline() {
 	return (
 		<InfraStage

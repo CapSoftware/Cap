@@ -15,7 +15,6 @@ import {
 } from "@/components/pages/infra/theme";
 import { InfraStage } from "./Stage";
 
-/** The landing page's closing scene. */
 export function InfraCta() {
 	return (
 		<InfraStage>

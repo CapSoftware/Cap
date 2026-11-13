@@ -19,13 +19,12 @@ const ROW = `border-b ${HAIRLINE}`;
  */
 const DELIVERY_PER_1000_MINUTES = 0.95;
 
-/** The landing page's rows, with delivery and speech in the same table. */
 const ROWS = [
 	...PRICE_ROWS.slice(0, 2),
 	{
 		meter: "Delivery",
 		price: usd(DELIVERY_PER_1000_MINUTES),
-		note: "per 1,000 minutes watched, any resolution",
+		note: "per 1,000 delivered minutes, any resolution",
 	},
 	{
 		meter: "Speech to text",
@@ -37,7 +36,6 @@ const ROWS = [
 
 const FIGURE = `${MONO} text-[13.5px] tabular-nums text-[#E8ECF4]`;
 
-/** The landing page's price card, straight from the same constants. */
 export function InfraPrices() {
 	return (
 		<InfraStage
@@ -142,17 +140,16 @@ const COMPARE = [
 	},
 	{
 		what: "Delivering 1080p",
-		unit: "1,000 minutes watched",
+		unit: "1,000 delivered minutes",
 		prices: [usd(DELIVERY_PER_1000_MINUTES), usd(1), usd(1)],
 	},
 	{
 		what: "Delivering 4K",
-		unit: "1,000 minutes watched",
+		unit: "1,000 delivered minutes",
 		prices: [usd(DELIVERY_PER_1000_MINUTES), usd(3.2), usd(1)],
 	},
 ] as const;
 
-/** Cap Infra next to the other video APIs, on list prices. */
 export function InfraCompare() {
 	return (
 		<InfraStage

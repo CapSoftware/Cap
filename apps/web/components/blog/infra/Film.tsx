@@ -5,7 +5,6 @@ import { FadeIn } from "../native/shared";
 
 const FILES = filmFiles(buildEnv.NEXT_PUBLIC_INFRA_FILM_URL);
 
-/** The launch film, inline in the text column, played straight from Cap Infra. */
 export function InfraFilm() {
 	return (
 		<FadeIn className="my-10 sm:my-12">

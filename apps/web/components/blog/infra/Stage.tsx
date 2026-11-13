@@ -4,11 +4,6 @@ import { FadeIn } from "../native/shared";
 
 const NOISE = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1.1 -0.2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")`;
 
-/**
- * Every figure in the Cap Infra post is a plate on the night page, with the
- * same hairline, grain and Geist type as /infra, breaking out of the text
- * column like the other posts' figures.
- */
 export function InfraStage({
 	caption,
 	children,

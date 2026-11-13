@@ -20,7 +20,6 @@ const Block = ({ label, code }: { label: string; code: string }) => (
 	</div>
 );
 
-/** The whole video API in two requests, with the answer you get back. */
 export function InfraCode() {
 	return (
 		<InfraStage caption="Create an upload, send the file in parts with the upload token, then check the status until it's ready.">
