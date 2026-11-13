@@ -335,6 +335,24 @@ const playbackProperties = {
 		format: "uri",
 		description: "Poster image. Null until ready.",
 	},
+	outputs: {
+		type: "object",
+		required: ["hls", "mp4"],
+		description:
+			"Whether each output is still coming. ready means its URL is set. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
+		properties: {
+			hls: {
+				type: "string",
+				enum: ["processing", "ready", "failed", "none"],
+				description: "State of hlsUrl.",
+			},
+			mp4: {
+				type: "string",
+				enum: ["processing", "ready", "failed", "none"],
+				description: "State of mp4Url.",
+			},
+		},
+	},
 };
 
 const developerVideoSchema = {
@@ -351,7 +369,7 @@ const developerVideoSchema = {
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing.",
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
 		},
 		width: {
 			type: ["integer", "null"],

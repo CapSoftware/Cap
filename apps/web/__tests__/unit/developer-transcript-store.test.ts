@@ -1498,3 +1498,32 @@ describe("input validation", () => {
 		expect(isTranscriptIdempotencyKey(undefined)).toBe(false);
 	});
 });
+
+describe("deleting a transcript that is still running", () => {
+	it("leaves its files for the run to settle and clean up, and removes them otherwise", async () => {
+		for (const [status, kept] of [
+			["processing", true],
+			["queued", false],
+			["complete", false],
+			["error", false],
+		] as const) {
+			context.deleted = [];
+			const id = `tr-${status}`;
+			fake().seed(developerTranscripts, {
+				id,
+				appId: "app-1",
+				status,
+				sourceType: "upload",
+			});
+
+			expect(await deleteTranscript("app-1", id)).toEqual({ ok: true });
+
+			expect(context.deleted.length > 0).toBe(!kept);
+			expect(
+				fake()
+					.rows(developerTranscripts)
+					.find((row) => row.id === id)?.deletedAt,
+			).toBeInstanceOf(Date);
+		}
+	});
+});
