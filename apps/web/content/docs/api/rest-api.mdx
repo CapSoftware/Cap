@@ -643,7 +643,7 @@ A transcript request can be refused. The response carries a `code` and a `messag
 | `400` | `invalid_idempotency_key` | The `Idempotency-Key` is not 8 to 128 characters of letters, digits, dot, dash and underscore |
 | `400` | `invalid_status` | The status filter is not one of the transcript statuses |
 | `400` | `invalid_include` | `include` has a value other than `words` or `segments`. The message names it |
-| `402` | `out_of_credit` | The app is in `grace` or `paused` because a daily storage charge could not be paid. The message says how much to add |
+| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage charge could not be paid. The message says how much to add |
 | `402` | `insufficient_credits` | The available balance is under $0.01. The message says how much to add |
 | `403` | `infra_not_available` | Cap Infra is not enabled for this account |
 | `404` | `transcript_not_found` | No transcript with this ID belongs to the app |

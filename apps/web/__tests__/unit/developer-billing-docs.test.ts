@@ -24,6 +24,7 @@ vi.mock("@/lib/developer-credits-product", () => ({
 	developerCreditsProductId: () => "prod_test",
 }));
 
+import { developerOpenApiSpec } from "@/lib/developer-openapi";
 import {
 	dailyStorageMicroCredits,
 	emptyStorageMinutes,
@@ -281,6 +282,22 @@ describe("the Billing page", () => {
 		expect(billing).toContain(deleted);
 		expect(rest).toContain(deleted);
 		expect(rest).not.toMatch(/\b(before|from) today\b/i);
+	});
+
+	it("says grace can follow any storage charge, first month or daily", () => {
+		const outOfCredit =
+			"| `402` | `out_of_credit` | The app is in `grace` or `paused` because a storage charge could not be paid. The message says how much to add |";
+		const graceStanding =
+			"grace: a storage charge was more than the balance, uploads are blocked";
+		const specText = JSON.stringify(developerOpenApiSpec("https://cap.so"));
+
+		expect(rest).toContain(outOfCredit);
+		expect(specText).toContain(graceStanding);
+		for (const text of [rest, billing, specText]) {
+			expect(text).not.toMatch(
+				/daily storage charge (could not be paid|was more than)/,
+			);
+		}
 	});
 
 	it("works every speech example out from the pricing functions", () => {

@@ -1605,7 +1605,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a daily storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],
