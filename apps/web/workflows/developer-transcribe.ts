@@ -372,6 +372,13 @@ async function prepareTranscriptSource(
 ): Promise<{ ok: true } | StepFailure | HoldWait> {
 	"use step";
 
+	return prepareSource(transcriptId, known);
+}
+
+async function prepareSource(
+	transcriptId: string,
+	known: KnownSource | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
 	const transcript = await loadTranscript(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
@@ -538,6 +545,19 @@ async function extractTranscriptAudio(
 ): Promise<{ ok: true } | StepFailure | HoldRaise> {
 	"use step";
 
+	const extracted = await extractAudio(transcriptId);
+	return extracted.ok ? { ok: true } : extracted;
+}
+
+type ExtractedAudio = {
+	ok: true;
+	audio: Buffer | null;
+	durationSeconds: number;
+};
+
+async function extractAudio(
+	transcriptId: string,
+): Promise<ExtractedAudio | StepFailure | HoldRaise> {
 	const transcript = await loadTranscript(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
@@ -553,7 +573,11 @@ async function extractTranscriptAudio(
 		transcript.durationSeconds !== null &&
 		((await developerObjectSize(keys.audio)) ?? 0) > 0
 	) {
-		return { ok: true };
+		return {
+			ok: true,
+			audio: null,
+			durationSeconds: transcript.durationSeconds,
+		};
 	}
 	if (transcript.sourceType === "video" && !transcript.s3Key) {
 		return failure("source_missing", FAILURE_MESSAGES.video_missing);
@@ -605,7 +629,7 @@ async function extractTranscriptAudio(
 	if (reservation.state === "skipped") {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
-	return { ok: true };
+	return { ok: true, audio, durationSeconds };
 }
 
 type TranscriptionSummary = {
@@ -620,6 +644,21 @@ async function transcribeTranscriptAudio(
 ): Promise<TranscriptionSummary | StepFailure> {
 	"use step";
 
+	return transcribeAudio(transcriptId, null);
+}
+
+async function readExtractedAudio(key: string) {
+	const audioResponse = await fetchStorageUrl(await developerObjectUrl(key));
+	if (!audioResponse.ok || !audioResponse.body) {
+		throw new Error(`Extracted audio is not readable: ${audioResponse.status}`);
+	}
+	return readStreamBounded(audioResponse.body, TRANSCRIPT_AUDIO_MAX_BYTES);
+}
+
+async function transcribeAudio(
+	transcriptId: string,
+	extracted: Buffer | null,
+): Promise<TranscriptionSummary | StepFailure> {
 	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
@@ -640,18 +679,9 @@ async function transcribeTranscriptAudio(
 		return failure("source_missing", FAILURE_MESSAGES.deleted);
 	}
 
-	const audioResponse = await fetchStorageUrl(
-		await developerObjectUrl(keys.audio),
-	);
-	if (!audioResponse.ok || !audioResponse.body) {
-		throw new Error(`Extracted audio is not readable: ${audioResponse.status}`);
-	}
 	let audio: Buffer;
 	try {
-		audio = await readStreamBounded(
-			audioResponse.body,
-			TRANSCRIPT_AUDIO_MAX_BYTES,
-		);
+		audio = extracted ?? (await readExtractedAudio(keys.audio));
 	} catch (error) {
 		if (error instanceof StreamTooLargeError) {
 			return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
@@ -697,9 +727,18 @@ async function transcribeTranscriptAudio(
 async function settleTranscriptStep(
 	transcriptId: string,
 	summary: TranscriptionSummary,
-): Promise<"complete" | "insufficient_credits" | "skipped"> {
+): Promise<Settlement> {
 	"use step";
 
+	return settleSummary(transcriptId, summary);
+}
+
+type Settlement = "complete" | "insufficient_credits" | "skipped";
+
+async function settleSummary(
+	transcriptId: string,
+	summary: TranscriptionSummary,
+): Promise<Settlement> {
 	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) return "skipped";
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
