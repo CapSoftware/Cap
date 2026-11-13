@@ -82,6 +82,12 @@ export type InfraVideoSize = {
 	bytes: number;
 };
 
+export type InfraVideoCaption = {
+	language: string;
+	label: string;
+	url: string;
+};
+
 export type InfraVideoDetail = InfraVideoListItem & {
 	width: number | null;
 	height: number | null;
@@ -94,6 +100,7 @@ export type InfraVideoDetail = InfraVideoListItem & {
 	shareUrl: string | null;
 	embedCode: string | null;
 	stillEncoding: boolean;
+	captions: InfraVideoCaption[];
 };
 
 type StateInput = {
@@ -228,6 +235,7 @@ export function toInfraVideoDetail(
 			[row.processing.hls, row.processing.mp4].some((part) =>
 				UNFINISHED_PARTS.has(part.state),
 			),
+		captions: [],
 	};
 }
 

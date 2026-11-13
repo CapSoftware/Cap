@@ -166,6 +166,45 @@
 	display: none;
 }
 
+.video::cue {
+	background: var(--cap-player-scrim);
+	color: var(--cap-player-ink);
+	font-family: var(--cap-player-font);
+}
+
+.captions {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 5%;
+	display: flex;
+	justify-content: center;
+	padding: 0 6%;
+	pointer-events: none;
+	transition: bottom 0.25s;
+}
+
+.player[data-controls="true"][data-idle="false"] .captions {
+	bottom: calc(var(--cap-player-control) + 34px);
+}
+
+.cue {
+	max-width: 100%;
+	padding: 0.12em 0.45em;
+	border-radius: 6px;
+	background: var(--cap-player-scrim);
+	color: var(--cap-player-ink);
+	font-size: clamp(14px, 3.4cqw, 30px);
+	font-weight: 500;
+	line-height: 1.4;
+	letter-spacing: -0.005em;
+	text-align: center;
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+
 .chrome {
 	position: absolute;
 	left: 0;
@@ -312,6 +351,23 @@
 	background: var(--cap-player-hover);
 }
 
+.control[aria-pressed],
+.control[data-on] {
+	position: relative;
+}
+
+.control[aria-pressed="true"]::after,
+.control[data-on="true"]::after {
+	content: "";
+	position: absolute;
+	left: 10px;
+	right: 10px;
+	bottom: 5px;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--cap-player-accent);
+}
+
 .control:focus-visible,
 .cover:focus-visible,
 .track:focus-visible,
@@ -344,7 +400,11 @@
 }
 
 .time {
+	flex: 0 1 auto;
+	min-width: 0;
 	padding: 0 8px;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .quality {
@@ -492,6 +552,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.captions,
 	.chrome,
 	.cover,
 	.spinner,

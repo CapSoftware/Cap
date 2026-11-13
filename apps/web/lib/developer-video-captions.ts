@@ -10,6 +10,7 @@ import {
 } from "@/lib/developer-transcript-storage";
 import { buildWebVtt } from "@/lib/developer-transcript-vtt";
 import type { TranscriptResultObject } from "@/lib/developer-transcripts";
+import { developerPlaybackBaseUrl } from "@/lib/developer-video-api";
 import { developerVideoKeys } from "@/lib/developer-video-plan";
 
 export const CAPTIONS_CONTENT_TYPE = "text/vtt; charset=utf-8";
@@ -49,6 +50,16 @@ export function videoCaptionsKey(video: VideoRef, language: string) {
 	return `developer/${video.appId}/${video.id}/captions/${captionLanguage(language)}.vtt`;
 }
 
+const CAPTIONS_FILE_PATTERN = /^captions-([a-z]{2,3}(?:-[a-z0-9]{2,8})*)\.vtt$/;
+
+export function captionsFileName(language: string) {
+	return `captions-${captionLanguage(language)}.vtt`;
+}
+
+export function captionsFileLanguage(file: string): string | null {
+	return file.match(CAPTIONS_FILE_PATTERN)?.[1] ?? null;
+}
+
 const captionSources = (video: VideoRef) =>
 	and(
 		eq(developerTranscripts.appId, video.appId),
@@ -79,6 +90,31 @@ export async function developerVideoCaptions(
 				? a.language.localeCompare(b.language)
 				: a.label.localeCompare(b.label),
 		);
+}
+
+export type DeveloperVideoCaptionTrack = {
+	language: string;
+	label: string;
+	url: string;
+};
+
+// Captions are extra to playback, so a failed lookup leaves the video playing
+// without them instead of failing the page.
+export async function developerVideoCaptionTracks(
+	video: VideoRef & { playbackId: string | null },
+): Promise<DeveloperVideoCaptionTrack[]> {
+	if (!video.playbackId) return [];
+	try {
+		const base = `${developerPlaybackBaseUrl()}/${video.playbackId}`;
+		return (await developerVideoCaptions(video)).map(({ language, label }) => ({
+			language,
+			label,
+			url: `${base}/${captionsFileName(language)}`,
+		}));
+	} catch (error) {
+		console.error("[developer-video-captions] Failed to list captions", error);
+		return [];
+	}
 }
 
 async function newestCaptionSource(video: VideoRef, language: string) {
