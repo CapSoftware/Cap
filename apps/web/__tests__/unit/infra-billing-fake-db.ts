@@ -353,16 +353,27 @@ function update(table: unknown) {
 			return {
 				async where(condition?: SQL) {
 					if (table === developerCreditTransactions && values.metadata) {
-						const [id] = condition ? dialect.sqlToQuery(condition).params : [];
+						const params = condition
+							? dialect.sqlToQuery(condition).params
+							: [];
 						const resolvedAt = dialect
 							.sqlToQuery(values.metadata as SQL)
 							.params.find((param) => typeof param === "string");
-						const row = ledger.rows.find((entry) => entry.id === id);
-						if (!row || row.metadata?.resolvedAt !== undefined) {
-							return [{ affectedRows: 0 }];
+						const [first, type, shortSince] = params;
+						const rows = ledger.rows.filter((entry) =>
+							type === "video_create"
+								? entry.accountId === first &&
+									entry.type === type &&
+									entry.metadata?.shortSince === shortSince
+								: entry.id === first,
+						);
+						let affectedRows = 0;
+						for (const row of rows) {
+							if (row.metadata?.resolvedAt !== undefined) continue;
+							row.metadata = { ...row.metadata, resolvedAt };
+							affectedRows++;
 						}
-						row.metadata = { ...row.metadata, resolvedAt };
-						return [{ affectedRows: 1 }];
+						return [{ affectedRows }];
 					}
 					if (table !== developerCreditAccounts) return [{ affectedRows: 0 }];
 					const { balanceMicroCredits, ...rest } = values;

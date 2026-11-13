@@ -171,7 +171,13 @@ export async function chargeStorageDay({
 		const usage = measure ? await measure(tx) : measuredBefore;
 		const lastCharge = await latestStorageCharge(tx, accountId);
 		const available = (await availableBalance(appId, tx)) ?? 0;
-		const latched = await latchCoveredShortfall(tx, lastCharge, available, now);
+		const latched = await latchCoveredShortfall(
+			tx,
+			lastCharge,
+			available,
+			now,
+			accountId,
+		);
 		const unresolvedShortSince =
 			!latched &&
 			lastCharge?.shortSince &&

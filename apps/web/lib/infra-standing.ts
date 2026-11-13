@@ -218,6 +218,7 @@ export async function latchCoveredShortfall(
 	charge: StorageCharge | null,
 	availableMicroCredits: number,
 	now: Date,
+	accountId: string,
 ) {
 	if (
 		!charge?.id ||
@@ -227,6 +228,13 @@ export async function latchCoveredShortfall(
 	) {
 		return false;
 	}
+	const sameShortfall = charge.firstMonth
+		? and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
+			)
+		: eq(developerCreditTransactions.id, charge.id);
 	await tx
 		.update(developerCreditTransactions)
 		.set({
@@ -234,7 +242,7 @@ export async function latchCoveredShortfall(
 		})
 		.where(
 			and(
-				eq(developerCreditTransactions.id, charge.id),
+				sameShortfall,
 				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
 			),
 		);

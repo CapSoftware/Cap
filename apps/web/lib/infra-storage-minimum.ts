@@ -232,7 +232,13 @@ async function settleFirstMonth(
 	const lastCharge = await latestStorageCharge(tx, account.id);
 	const available =
 		(await availableBalance(appId, tx)) ?? account.balanceMicroCredits;
-	const latched = await latchCoveredShortfall(tx, lastCharge, available, now);
+	const latched = await latchCoveredShortfall(
+		tx,
+		lastCharge,
+		available,
+		now,
+		account.id,
+	);
 	const unresolvedShortSince =
 		!latched &&
 		lastCharge?.shortSince &&

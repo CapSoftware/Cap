@@ -770,6 +770,134 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(await openFirstMonthShortfalls([accountId])).toEqual(new Set());
 		});
 
+		it("resolves every copy of a covered first month shortfall together, and no other shortfall", async () => {
+			const { appId, accountId } = await makeApp(900);
+			const transcriptId = id();
+			await database().insert(developerTranscripts).values({
+				id: transcriptId,
+				appId,
+				status: "processing",
+				sourceType: "upload",
+				reservedMicroCredits: 900,
+			});
+			const fourK = {
+				duration: 3_600,
+				width: 3840,
+				height: 2160,
+				maxResolutionTier: "2160p" as const,
+			};
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, fourK),
+				deletedAt: null,
+			});
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, fourK),
+				deletedAt: null,
+			});
+			const copies = await firstMonthRows(accountId);
+			expect(copies).toHaveLength(2);
+			const shortSince = (copies[0]?.metadata as { shortSince: string })
+				.shortSince;
+			for (const copy of copies) {
+				expect(copy.amountMicroCredits).toBe(0);
+				expect(copy.metadata).toMatchObject({
+					owedMicroCredits: 16_800,
+					shortSince,
+				});
+			}
+			const second = new Date(Math.floor(Date.now() / 1000) * 1000 - 5_000);
+			await database()
+				.update(developerCreditTransactions)
+				.set({ createdAt: second })
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						eq(developerCreditTransactions.type, "video_create"),
+					),
+				);
+			const otherShortSince = new Date(
+				Date.parse(shortSince) + 60_000,
+			).toISOString();
+			const otherId = id();
+			await database()
+				.insert(developerCreditTransactions)
+				.values({
+					id: otherId,
+					accountId,
+					type: "video_create",
+					amountMicroCredits: 0,
+					balanceAfterMicroCredits: 0,
+					referenceId: id(),
+					referenceType: "developer_video",
+					metadata: {
+						owedMicroCredits: 850,
+						chargedMicroCredits: 0,
+						shortSince: otherShortSince,
+						fellShort: true,
+					},
+					createdAt: new Date(second.getTime() - 60_000),
+				});
+			expect((await getInfraBilling(appId)).standing.state).toBe("grace");
+
+			await makeVideo(appId, { createdAt: new Date("2026-10-01T00:00:00Z") });
+			await database()
+				.update(developerTranscripts)
+				.set({ status: "complete", reservedMicroCredits: 0 })
+				.where(eq(developerTranscripts.id, transcriptId));
+			await database()
+				.update(developerCreditAccounts)
+				.set({ balanceMicroCredits: 16_800 })
+				.where(eq(developerCreditAccounts.id, accountId));
+			const today = new Date().toISOString().slice(0, 10);
+			const usage = (
+				await getStorageUsageByApp([appId], undefined, undefined, {
+					dailyChargeAt: new Date(`${today}T00:00:00.000Z`),
+				})
+			).get(appId);
+			if (!usage) throw new Error("no usage");
+			expect(
+				await chargeStorageDay({
+					appId,
+					accountId,
+					usage,
+					dateKey: today,
+					now: new Date(),
+				}),
+			).toMatchObject({ state: "billed", chargedMicroCredits: 28 });
+			expect(await balanceOf(accountId)).toBe(16_772);
+
+			const resolved = new Map(
+				(await firstMonthRows(accountId)).map((row) => [
+					row.id,
+					(row.metadata as { resolvedAt?: string }).resolvedAt,
+				]),
+			);
+			for (const copy of copies) {
+				expect(resolved.get(copy.id)).toEqual(expect.any(String));
+			}
+			expect(resolved.get(copies[0]?.id ?? "")).toBe(
+				resolved.get(copies[1]?.id ?? ""),
+			);
+			expect(resolved.get(otherId)).toBeUndefined();
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+
+			const nextVideo = await makeVideo(appId);
+			await settleFirstMonthAtReady({ id: nextVideo, deletedAt: null });
+			const next = (await firstMonthRows(accountId)).find(
+				(row) => row.referenceId === nextVideo,
+			);
+			expect(next).toMatchObject({ amountMicroCredits: -850 });
+			expect(next?.metadata).toMatchObject({ shortSince: null });
+			expect(await balanceOf(accountId)).toBe(15_922);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+		});
+
 		describe("a video deleted while it encodes", () => {
 			const encoding = (): DeveloperVideoProcessingState => ({
 				...processing(),
