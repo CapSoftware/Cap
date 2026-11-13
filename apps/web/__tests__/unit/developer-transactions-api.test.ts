@@ -129,6 +129,7 @@ vi.mock("@/lib/infra-video-upload", () => ({
 
 import * as rest from "@/app/api/developer/v1/[...route]/route";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
+import { DEVELOPER_KEY_REQUESTS_PER_MINUTE } from "@/lib/developer-rate-limits";
 import { readAppLedger } from "@/lib/infra-ledger-store";
 
 let serial = 0;
@@ -351,9 +352,15 @@ describe("GET /transactions", () => {
 		const first = await get("/transactions", key);
 		const usageAfter = await get("/usage/nope", key);
 
-		expect(first.headers.get("X-RateLimit-Limit")).toBe("60");
-		expect(first.headers.get("X-RateLimit-Remaining")).toBe("59");
-		expect(usageAfter.headers.get("X-RateLimit-Remaining")).toBe("58");
+		expect(first.headers.get("X-RateLimit-Limit")).toBe(
+			String(DEVELOPER_KEY_REQUESTS_PER_MINUTE),
+		);
+		expect(first.headers.get("X-RateLimit-Remaining")).toBe(
+			String(DEVELOPER_KEY_REQUESTS_PER_MINUTE - 1),
+		);
+		expect(usageAfter.headers.get("X-RateLimit-Remaining")).toBe(
+			String(DEVELOPER_KEY_REQUESTS_PER_MINUTE - 2),
+		);
 	});
 
 	it("answers 405 for a method the path does not take", async () => {

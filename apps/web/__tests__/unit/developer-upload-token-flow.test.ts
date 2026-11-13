@@ -42,6 +42,9 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 
 const sdk = await import("@/app/api/developer/sdk/v1/[...route]/route");
 const rest = await import("@/app/api/developer/v1/[...route]/route");
+const { DEVELOPER_KEY_REQUESTS_PER_MINUTE: KEY_LIMIT } = await import(
+	"@/lib/developer-rate-limits"
+);
 const { createDeveloperUploadToken } = await import(
 	"@/lib/developer-upload-token"
 );
@@ -329,14 +332,16 @@ describe("creating an upload with the secret key", () => {
 		const send = () => post(rest, "/api/developer/v1/uploads", key, {});
 
 		const first = await send();
-		expect(first.headers.get("X-RateLimit-Limit")).toBe("60");
-		expect(first.headers.get("X-RateLimit-Remaining")).toBe("59");
-		for (let request = 2; request <= 60; request++) await send();
+		expect(first.headers.get("X-RateLimit-Limit")).toBe(String(KEY_LIMIT));
+		expect(first.headers.get("X-RateLimit-Remaining")).toBe(
+			String(KEY_LIMIT - 1),
+		);
+		for (let request = 2; request <= KEY_LIMIT; request++) await send();
 		const limited = await send();
 
 		expect(limited.status).toBe(429);
 		expect(await limited.json()).toMatchObject({ code: "rate_limited" });
-		expect(inserts()).toHaveLength(60);
+		expect(inserts()).toHaveLength(KEY_LIMIT);
 	});
 });
 

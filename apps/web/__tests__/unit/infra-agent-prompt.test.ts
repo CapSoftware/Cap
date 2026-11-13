@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
+import { DEVELOPER_KEY_REQUESTS_PER_MINUTE } from "@/lib/developer-rate-limits";
 
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
 
@@ -57,7 +58,9 @@ describe("Cap Infra agent prompt", () => {
 		}
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("every 2 seconds");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("Retry-After");
-		expect(CAP_INFRA_AGENT_PROMPT).toContain("60 requests a minute");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			`${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests a minute`,
+		);
 	});
 
 	it("links only to the API reference", () => {

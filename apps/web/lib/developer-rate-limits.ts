@@ -1,10 +1,10 @@
 export const DEVELOPER_RATE_LIMIT_WINDOW_SECONDS = 60;
 
-export const DEVELOPER_KEY_REQUESTS_PER_MINUTE = 60;
+export const DEVELOPER_KEY_REQUESTS_PER_MINUTE = 300;
 
 // One account can hold many apps, each with its own key. Their requests also
 // count together, so more apps do not mean an ever larger total.
-export const DEVELOPER_OWNER_REQUESTS_PER_MINUTE = 300;
+export const DEVELOPER_OWNER_REQUESTS_PER_MINUTE = 1200;
 
 export const DEVELOPER_AUTH_FAILURES_PER_MINUTE = 30;
 

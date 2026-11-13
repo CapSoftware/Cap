@@ -117,6 +117,11 @@ import {
 } from "@/lib/infra-pricing";
 import { getAppStorage } from "@/lib/infra-storage";
 
+const KEY_LIMIT = DEVELOPER_KEY_REQUESTS_PER_MINUTE;
+const OWNER_LIMIT = DEVELOPER_OWNER_REQUESTS_PER_MINUTE;
+// What X-RateLimit-Remaining reads after this many requests on one key.
+const keyLeft = (sent: number) => String(KEY_LIMIT - sent);
+
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 const ORIGIN = "https://cap.so";
@@ -223,22 +228,25 @@ describe("rate limit headers", () => {
 		const first = await getUsage(key);
 		expect(first.status).toBe(200);
 		expect(rateLimit(first)).toEqual({
-			limit: "60",
-			remaining: "59",
+			limit: String(KEY_LIMIT),
+			remaining: keyLeft(1),
 			reset: "60",
 			retryAfter: null,
 		});
 
 		vi.advanceTimersByTime(20_500);
 		const second = await getUsage(key);
-		expect(rateLimit(second)).toMatchObject({ remaining: "58", reset: "40" });
+		expect(rateLimit(second)).toMatchObject({
+			remaining: keyLeft(2),
+			reset: "40",
+		});
 
-		for (let request = 3; request <= 60; request++) await getUsage(key);
+		for (let request = 3; request <= KEY_LIMIT; request++) await getUsage(key);
 		vi.advanceTimersByTime(4_500);
 		const limited = await getUsage(key);
 		expect(limited.status).toBe(429);
 		expect(rateLimit(limited)).toEqual({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			reset: "35",
 			retryAfter: "35",
@@ -252,7 +260,7 @@ describe("rate limit headers", () => {
 		const afterWait = await getUsage(key);
 		expect(afterWait.status).toBe(200);
 		expect(rateLimit(afterWait)).toMatchObject({
-			remaining: "59",
+			remaining: keyLeft(1),
 			reset: "60",
 		});
 	});
@@ -261,7 +269,7 @@ describe("rate limit headers", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
 		const key = freshKey("csk");
-		for (let request = 1; request <= 60; request++) await getUsage(key);
+		for (let request = 1; request <= KEY_LIMIT; request++) await getUsage(key);
 
 		for (const [elapsed, expected] of [
 			[0, "60"],
@@ -289,10 +297,10 @@ describe("rate limit headers", () => {
 		});
 		const other = await getUsage(freshKey("csk"));
 
-		expect(rateLimit(upper).remaining).toBe("59");
-		expect(rateLimit(lower).remaining).toBe("58");
-		expect(rateLimit(spaced).remaining).toBe("57");
-		expect(rateLimit(other).remaining).toBe("59");
+		expect(rateLimit(upper).remaining).toBe(keyLeft(1));
+		expect(rateLimit(lower).remaining).toBe(keyLeft(2));
+		expect(rateLimit(spaced).remaining).toBe(keyLeft(3));
+		expect(rateLimit(other).remaining).toBe(keyLeft(1));
 	});
 
 	it("carries the headers on errors too, and spends none of a key's budget on a key that was not accepted", async () => {
@@ -316,9 +324,9 @@ describe("rate limit headers", () => {
 			]),
 		).toEqual([
 			[401, null],
-			[404, "59"],
-			[405, "58"],
-			[500, "57"],
+			[404, keyLeft(1)],
+			[405, keyLeft(2)],
+			[500, keyLeft(3)],
 		]);
 	});
 
@@ -381,7 +389,7 @@ describe("rate limit shared across servers", () => {
 
 		expect(limited.status).toBe(429);
 		expect(rateLimit(limited)).toEqual({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			reset: "60",
 			retryAfter: "60",
@@ -389,7 +397,7 @@ describe("rate limit shared across servers", () => {
 		expect(await limited.json()).toMatchObject({
 			error: "Rate limit exceeded",
 			code: "rate_limited",
-			hint: "Wait for the Retry-After seconds, then retry. Each key allows 60 requests per minute.",
+			hint: `Wait for the Retry-After seconds, then retry. Each key allows ${KEY_LIMIT} requests per minute.`,
 		});
 		expect(mocks.billing).not.toHaveBeenCalled();
 	});
@@ -421,13 +429,13 @@ describe("rate limit shared across servers", () => {
 
 	it("lets the shared rule overrule a count this server kept alone", async () => {
 		const key = freshKey("csk");
-		for (let request = 1; request <= 60; request++) await getUsage(key);
+		for (let request = 1; request <= KEY_LIMIT; request++) await getUsage(key);
 
 		const allowed = await getUsage(key);
 
 		expect(allowed.status).toBe(200);
 		expect(rateLimit(allowed)).toMatchObject({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			retryAfter: null,
 		});
@@ -480,12 +488,12 @@ describe("rate limit shared across servers", () => {
 
 		const first = await getUsage(key);
 		expect(rateLimit(first)).toEqual({
-			limit: "60",
-			remaining: "59",
+			limit: String(KEY_LIMIT),
+			remaining: keyLeft(1),
 			reset: "60",
 			retryAfter: null,
 		});
-		for (let request = 2; request <= 60; request++) {
+		for (let request = 2; request <= KEY_LIMIT; request++) {
 			expect((await getUsage(key)).status).toBe(200);
 		}
 		vi.advanceTimersByTime(25_000);
@@ -493,7 +501,7 @@ describe("rate limit shared across servers", () => {
 
 		expect(limited.status).toBe(429);
 		expect(rateLimit(limited)).toEqual({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			reset: "35",
 			retryAfter: "35",
@@ -506,14 +514,21 @@ describe("one account's keys share a budget", () => {
 		mocks.keyRows = [{ appId: "app-1", ownerId }];
 	};
 
-	it("allows 300 requests a minute across every key of an account, then answers 429", async () => {
+	it("allows the account budget across every key of an account, then answers 429", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
 		ownedBy("owner-shared");
-		const keys = Array.from({ length: 6 }, () => freshKey("csk"));
+		// Every key stays under its own limit, so only the account budget can
+		// refuse the request after them.
+		const perKey = Math.min(KEY_LIMIT - 1, OWNER_LIMIT);
+		const keys = Array.from({ length: Math.ceil(OWNER_LIMIT / perKey) }, () =>
+			freshKey("csk"),
+		);
+		expect(keys.length).toBeGreaterThan(1);
 
-		for (const key of keys) {
-			for (let request = 1; request <= 50; request++) {
+		for (const [index, key] of keys.entries()) {
+			const sends = Math.min(perKey, OWNER_LIMIT - index * perKey);
+			for (let request = 1; request <= sends; request++) {
 				expect((await getUsage(key)).status).toBe(200);
 			}
 		}
@@ -522,16 +537,16 @@ describe("one account's keys share a budget", () => {
 
 		expect(limited.status).toBe(429);
 		expect(rateLimit(limited)).toEqual({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			reset: "40",
 			retryAfter: "40",
 		});
 		expect(await limited.json()).toMatchObject({
 			code: "rate_limited",
-			hint: "Wait for the Retry-After seconds, then retry. Each account, across all of its keys, allows 300 requests per minute.",
+			hint: `Wait for the Retry-After seconds, then retry. Each account, across all of its keys, allows ${OWNER_LIMIT} requests per minute.`,
 		});
-		expect(mocks.billing).toHaveBeenCalledTimes(300);
+		expect(mocks.billing).toHaveBeenCalledTimes(OWNER_LIMIT);
 
 		ownedBy("owner-other");
 		expect((await getUsage(freshKey("csk"))).status).toBe(200);
@@ -580,7 +595,7 @@ describe("one account's keys share a budget", () => {
 
 		expect(limited.status).toBe(429);
 		expect(rateLimit(limited)).toMatchObject({
-			limit: "60",
+			limit: String(KEY_LIMIT),
 			remaining: "0",
 			retryAfter: "60",
 		});
@@ -836,8 +851,8 @@ describe("upload tokens have their own budget", () => {
 		expect(rateLimit(await initiate(freshKey("cut"))).remaining).toBe("1199");
 	});
 
-	it("keeps the secret key at 60 a minute", async () => {
-		expect(rateLimit(await getUsage(freshKey("csk"))).limit).toBe("60");
+	it("keeps the secret key at 300 a minute", async () => {
+		expect(rateLimit(await getUsage(freshKey("csk"))).limit).toBe("300");
 	});
 
 	it("documents the limits the limiter applies", async () => {
@@ -862,7 +877,7 @@ describe("upload tokens have their own budget", () => {
 			`each upload token to ${token} requests per minute`,
 		);
 		expect(docs).toContain(
-			`All the keys of one account together allow ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE} requests per minute`,
+			`All the keys of one account together allow ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE.toLocaleString("en-US")} requests per minute`,
 		);
 		expect(spec.info.description).toContain(
 			`all the keys of one account together to ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE}`,
@@ -899,7 +914,7 @@ describe("browser access", () => {
 			await from("POST", "/api/developer/v1/usage"),
 		];
 		const sentWithKey = answers.length - 1;
-		for (let request = sentWithKey; request < 60; request++) {
+		for (let request = sentWithKey; request < KEY_LIMIT; request++) {
 			await from("GET", "/api/developer/v1/usage");
 		}
 		answers.push(await from("GET", "/api/developer/v1/usage"));
