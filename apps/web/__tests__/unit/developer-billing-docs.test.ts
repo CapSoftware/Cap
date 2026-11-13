@@ -89,7 +89,7 @@ const POLICY_SENTENCES = [
 ];
 
 const DELIVERY_SENTENCE =
-	"**Delivery.** `delivery` is the minutes of video delivered to your viewers in the same calendar month as `speech`, in total and for each rendition tier, and it is `null` until delivery has been measured for the app. For HLS it counts the exact seconds of the segments served, and for MP4 downloads the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. A day's figures are final from 02:00 UTC two days later, and `finalThrough` is the latest final day in the period, so today and yesterday may still change.";
+	"**Delivery.** `delivery` is the minutes of video delivered to your viewers in the same calendar month as `speech`, in total and for each rendition tier, and it is `null` until delivery has been measured for the app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, and `finalThrough` is the latest final day in the period, so today and yesterday may still change.";
 
 const DELIVERY_EXAMPLE =
 	/"delivery": \{[\s\S]*?"finalThrough": "\d{4}-\d{2}-\d{2}"\n {4}\},/;

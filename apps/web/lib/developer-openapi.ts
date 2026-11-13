@@ -1672,7 +1672,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					delivery: {
 						type: ["object", "null"],
 						description:
-							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech. HLS counts the exact seconds of the segments served and MP4 downloads count the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted. null until delivery has been measured for this app.",
+							"Minutes of video delivered to your viewers in the current calendar month (UTC), the same period as speech, and null until delivery has been measured for this app. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.",
 						required: ["minutes", "minutesByTier", "finalThrough"],
 						properties: {
 							minutes: {
@@ -1695,7 +1695,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: ["string", "null"],
 								format: "date",
 								description:
-									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day becomes final from 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
+									"The latest UTC day in the period whose figures are final, as YYYY-MM-DD. A day's figures become final once all of its delivery logs are in, normally in the first update after 02:00 UTC two days later, so today and yesterday may still change. null when no day in the period is final yet.",
 							},
 						},
 					},
