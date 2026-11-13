@@ -1032,6 +1032,8 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 | `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
 | `transcription` | Transcription | `developer_transcript` | The transcript ID |
 | `adjustment` | Adjustment | `manual` | A note, when there is one |
+| `refund` | Payment reversed | `stripe_refund` | The refund |
+| `adjustment` | Payment disputed | `stripe_dispute` | The dispute |
 
 A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
 
