@@ -125,33 +125,17 @@ const metadata = z
 const waitAgain = (toolName: string) =>
 	`Still in progress when the wait ended. Call ${toolName} again to keep waiting.`;
 
-const SURFACE_TEXT = {
-	local: {
-		noMp4Hint:
-			"Transcribe the original file with path, or a public link to it with url.",
-		erroredHint:
-			"The video failed to encode, so it has no MP4. Transcribe the original file with path instead.",
-		uploadingHint:
-			"The video has no file yet. Upload it with videos_upload, or transcribe the original file with path instead.",
-		uploadingNext:
-			"This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",
-	},
-	hosted: {
-		noMp4Hint: "Transcribe a public link to the original file with url.",
-		erroredHint:
-			"The video failed to encode, so it has no MP4. Transcribe a public link to the original file with url instead.",
-		uploadingHint:
-			"The video has no file yet. Upload it with videos_create_upload, or transcribe a public link to the original file with url instead.",
-		uploadingNext:
-			"This video has no file yet. Upload one with videos_create_upload and this videoId, or remove it with videos_delete.",
-	},
+const UPLOADING_NEXT = {
+	local:
+		"This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",
+	hosted:
+		"This video has no file yet. Upload one with videos_create_upload and this videoId, or remove it with videos_delete.",
 } as const;
 
 export function createTools(deps: ToolDeps): Tool[] {
 	const { client, config } = deps;
 	const surface = deps.surface ?? "local";
 	const local = surface === "local";
-	const words = SURFACE_TEXT[surface];
 	const maxWaitSeconds = deps.maxWaitSeconds ?? MAX_WAIT_SECONDS;
 	const timeoutSeconds = waitSeconds(maxWaitSeconds);
 	const transcript = (fields: Record<string, unknown>, text = false) =>
@@ -290,7 +274,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					new LocalError(
 						"video_has_no_mp4",
 						"This video has no MP4",
-						words.noMp4Hint,
+						"Transcribe the original file with path, or a public link to it with url.",
 					),
 					context,
 				);
@@ -300,9 +284,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 					"video_not_ready",
 					"This video has no MP4 to transcribe yet",
 					video.status === "errored"
-						? words.erroredHint
+						? "The video failed to encode, so it has no MP4. Transcribe the original file with path instead."
 						: video.status === "uploading"
-							? words.uploadingHint
+							? "The video has no file yet. Upload it with videos_upload, or transcribe the original file with path instead."
 							: "Call videos_wait until the video is ready, then create the transcript again.",
 				),
 				context,
@@ -476,7 +460,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 							}),
 					...(last.status === "uploading"
 						? {
-								next: words.uploadingNext,
+								next: UPLOADING_NEXT[surface],
 							}
 						: {}),
 				};
