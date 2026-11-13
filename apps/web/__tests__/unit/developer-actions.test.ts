@@ -78,6 +78,13 @@ vi.mock("@cap/database/schema", () => ({
 	developerCreditTransactions: {},
 }));
 
+vi.mock("@/lib/developer-app-limits", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/developer-app-limits")>()),
+	developerAppCreationLimited: async () => false,
+	developerKeyRotationLimited: async () => false,
+	reserveDeveloperAppSlot: async () => true,
+}));
+
 vi.mock("@/lib/developer-key-hash", () => ({
 	hashKey: vi.fn(() => Promise.resolve("mocked-hash-value")),
 }));
@@ -608,10 +615,16 @@ describe("regenerateDeveloperKeys", () => {
 		);
 	});
 
+	const rotate = async () => {
+		const result = await regenerateDeveloperKeys("app-456");
+		if ("success" in result) throw new Error(result.message);
+		return result;
+	};
+
 	it("creates new public and secret keys", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await regenerateDeveloperKeys("app-456");
+		const result = await rotate();
 
 		expect(result.publicKey).toMatch(/^cpk_/);
 		expect(result.secretKey).toMatch(/^csk_/);
@@ -620,7 +633,7 @@ describe("regenerateDeveloperKeys", () => {
 	it("returns new publicKey and secretKey", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await regenerateDeveloperKeys("app-456");
+		const result = await rotate();
 
 		expect(result).toHaveProperty("publicKey");
 		expect(result).toHaveProperty("secretKey");

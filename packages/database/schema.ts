@@ -2004,6 +2004,20 @@ export const developerTranscripts = mysqlTable(
 			table.status,
 			table.updatedAt,
 		),
+		index("dev_transcripts_app_completed_idx").on(
+			table.appId,
+			table.status,
+			table.completedAt,
+			table.durationSeconds,
+			table.billedMicroCredits,
+		),
+		index("dev_transcripts_app_status_held_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+			table.deletedAt,
+			table.reservedMicroCredits,
+		),
 		index("dev_transcripts_app_video_idx").on(
 			table.appId,
 			table.videoId,
@@ -2043,6 +2057,7 @@ export const developerCreditAccounts = mysqlTable(
 	(table) => [
 		uniqueIndex("app_id_unique").on(table.appId),
 		index("owner_idx").on(table.ownerId),
+		index("auto_top_up_idx").on(table.autoTopUpEnabled),
 	],
 );
 
@@ -2067,7 +2082,9 @@ export type DeveloperCreditReferenceType =
 	| "storage_day"
 	| "auto_top_up"
 	| "auto_top_up_failed"
-	| "auto_top_up_pending";
+	| "auto_top_up_pending"
+	| "stripe_refund"
+	| "stripe_dispute";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -2111,6 +2128,8 @@ export const developerCreditTransactions = mysqlTable(
 				"auto_top_up",
 				"auto_top_up_failed",
 				"auto_top_up_pending",
+				"stripe_refund",
+				"stripe_dispute",
 			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),
@@ -2133,6 +2152,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.referenceId,
 			table.referenceType,
 		),
+		index("reference_type_id_idx").on(table.referenceType, table.referenceId),
 	],
 );
 

@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "c0df94ec-9eca-475a-8bc2-e4b6fac32aea",
+	"id": "7568082e-2748-491f-897f-16005b895884",
 	"prevId": "2773f4a4-e037-4a2a-9537-3e419186570c",
 	"tables": {
 		"accounts": {
@@ -1068,6 +1068,11 @@
 					"name": "owner_idx",
 					"columns": ["ownerId"],
 					"isUnique": false
+				},
+				"auto_top_up_idx": {
+					"name": "auto_top_up_idx",
+					"columns": ["autoTopUpEnabled"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1172,6 +1177,11 @@
 				"account_ref_dedup_idx": {
 					"name": "account_ref_dedup_idx",
 					"columns": ["accountId", "referenceId", "referenceType"],
+					"isUnique": false
+				},
+				"reference_type_id_idx": {
+					"name": "reference_type_id_idx",
+					"columns": ["referenceType", "referenceId"],
 					"isUnique": false
 				}
 			},
@@ -1334,20 +1344,6 @@
 				"sourceUrl": {
 					"name": "sourceUrl",
 					"type": "varchar(2048)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"videoId": {
-					"name": "videoId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"requestedAt": {
-					"name": "requestedAt",
-					"type": "timestamp(3)",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
@@ -1519,9 +1515,26 @@
 					"columns": ["status", "updatedAt"],
 					"isUnique": false
 				},
-				"dev_transcripts_app_video_idx": {
-					"name": "dev_transcripts_app_video_idx",
-					"columns": ["appId", "videoId", "requestedAt", "id"],
+				"dev_transcripts_app_completed_idx": {
+					"name": "dev_transcripts_app_completed_idx",
+					"columns": [
+						"appId",
+						"status",
+						"completedAt",
+						"durationSeconds",
+						"billedMicroCredits"
+					],
+					"isUnique": false
+				},
+				"dev_transcripts_app_status_held_idx": {
+					"name": "dev_transcripts_app_status_held_idx",
+					"columns": [
+						"appId",
+						"status",
+						"createdAt",
+						"deletedAt",
+						"reservedMicroCredits"
+					],
 					"isUnique": false
 				}
 			},

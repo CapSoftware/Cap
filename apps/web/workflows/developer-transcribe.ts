@@ -62,7 +62,11 @@ import {
 	findVideoForTranscript,
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
-import { urlIsSelfContainedMedia } from "@/lib/media-container";
+import {
+	MEDIA_CONTAINER_SNIFF_BYTES,
+	sniffMedia,
+	urlIsSelfContainedMedia,
+} from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
 import {
 	fetchPublicMedia,
@@ -452,6 +456,47 @@ async function spoolToFile(
 	return size;
 }
 
+async function readSourceHead(body: ReadableStream<Uint8Array>) {
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	let finished = false;
+	for (; length < MEDIA_CONTAINER_SNIFF_BYTES; ) {
+		const { done, value } = await reader.read();
+		if (done) {
+			finished = true;
+			break;
+		}
+		chunks.push(value);
+		length += value.length;
+	}
+	const read = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		read.set(chunk, offset);
+		offset += chunk.length;
+	}
+	let sentHead = false;
+	return {
+		head: read.subarray(0, MEDIA_CONTAINER_SNIFF_BYTES),
+		cancel: () => reader.cancel().catch(() => {}),
+		body: new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				if (!sentHead) {
+					sentHead = true;
+					if (read.length > 0) controller.enqueue(read);
+					if (finished) controller.close();
+					return;
+				}
+				const { done, value } = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			cancel: (reason) => reader.cancel(reason),
+		}),
+	};
+}
+
 async function holdForSource(
 	transcriptId: string,
 	known: KnownSource,
@@ -573,12 +618,19 @@ async function prepareSource(
 				await response.body.cancel().catch(() => {});
 				return stop(refused);
 			}
+			const source = await readSourceHead(response.body);
+			if (source.head.length > 0 && sniffMedia(source.head) !== "media") {
+				await source.cancel();
+				return stop(
+					failure("unsupported_format", FAILURE_MESSAGES.unsupported_format),
+				);
+			}
 			const contentType =
 				response.headers.get("content-type") ?? "application/octet-stream";
 			if (declared !== null && declared > TRANSCRIPT_MAX_SPOOLED_URL_BYTES) {
 				await putDeveloperObjectStream(
 					keys.source,
-					limitStreamBytes(response.body, declared),
+					limitStreamBytes(source.body, declared),
 					declared,
 					contentType,
 				);
@@ -586,7 +638,7 @@ async function prepareSource(
 			} else {
 				const bytes = await spoolToFile(
 					spoolPath,
-					response.body,
+					source.body,
 					declared ?? TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
 				);
 				if (bytes === 0 || (declared !== null && bytes < declared)) {

@@ -182,13 +182,17 @@ describe("transcribing a stored video", () => {
 			"It costs the transcript price only, $0.10 per audio hour.",
 		);
 		expect(transcriptDocs).toContain(
-			"Captions for the hosted player are generated from the newest completed transcript of a video in each language.",
+			"When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.",
 		);
 		expect(transcriptDocs).toContain("`videoId`, `contentLength`, `name`");
 	});
 
-	it("leaves the captions file and the player to the playback docs", () => {
-		expect(transcriptDocs).not.toMatch(/\.vtt|WebVTT|captions\//i);
+	it("says only what ships: no player captions and no captions URL", () => {
+		for (const text of [transcriptDocs, specText]) {
+			expect(text).not.toMatch(/captions for the hosted player/i);
+			expect(text).not.toMatch(/\.vtt|captions\//i);
+		}
+		expect(transcriptDocs).not.toMatch(/player/i);
 	});
 });
 

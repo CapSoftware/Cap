@@ -169,7 +169,7 @@ const transcriptSchema = {
 		videoId: {
 			type: ["string", "null"],
 			description:
-				"The video this transcript was created from with videoId. null for every other transcript. Captions for the hosted player are generated from the newest completed transcript of a video in each language.",
+				"The video this transcript was created from with videoId. null for every other transcript. When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.",
 		},
 		durationSeconds: {
 			type: ["number", "null"],
@@ -308,7 +308,7 @@ const playbackProperties = {
 		type: ["string", "null"],
 		format: "uri",
 		description:
-			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready.",
+			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready. Players built on hls.js can add ?segments=short for shorter playlists on long videos.",
 	},
 	mp4Url: {
 		type: ["string", "null"],
@@ -750,7 +750,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createUpload",
 				summary: "Create an upload",
 				description:
-					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes or the video is deleted. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
+					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
 				tags: ["Uploads"],
 				security: secretAuth,
 				requestBody: jsonBody("CreateUploadRequest"),
@@ -768,7 +768,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "renewUploadToken",
 				summary: "Renew an upload token",
 				description:
-					"Returns a new upload token for a video whose upload has not completed. Call this from your server when an upload operation answers 401 with code upload_token_expired, then give the new token to the browser. The upload continues where it stopped: keep the uploadId and the ETags already collected, sign the remaining parts and call completeSdkUpload with the new token. A browser that lost its uploadId calls initiateSdkUpload, which returns the open upload again when it was opened in the last 6 hours. The new token carries only the options sent with this request, so send corsOrigin and maxBytes again if the first token had them. Earlier tokens keep working until their own expiresAt. Returns 404 with code video_not_found when the video is deleted or belongs to another app, and 409 with code upload_already_completed once the upload completed.",
+					"Returns a new upload token for a video whose upload has not completed. Call this from your server when an upload operation answers 401 with code upload_token_expired, or with invalid_upload_token after the secret key was regenerated, then give the new token to the browser. The upload continues where it stopped: keep the uploadId and the ETags already collected, sign the remaining parts and call completeSdkUpload with the new token. A browser that lost its uploadId calls initiateSdkUpload, which returns the open upload again when it was opened in the last 6 hours. The new token carries only the options sent with this request, so send corsOrigin and maxBytes again if the first token had them. Earlier tokens keep working until their own expiresAt. Returns 404 with code video_not_found when the video is deleted or belongs to another app, and 409 with code upload_already_completed once the upload completed.",
 				tags: ["Uploads"],
 				security: secretAuth,
 				parameters: [videoIdParam],
@@ -807,7 +807,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "presignSdkUploadPart",
 				summary: "Presign upload parts",
 				description:
-					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count.",
+					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count. A part number above the last one the upload's size limit allows (maxBytes divided by 5,242,880 and rounded up, or 6,867 with no maxBytes) returns 400 with code part_number_too_large and signs nothing, so number the parts from 1 with no gaps.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("PresignPartRequest"),
@@ -1184,6 +1184,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
+							"stripe_refund",
+							"stripe_dispute",
 							null,
 						],
 						description: "What referenceId identifies.",
@@ -1701,7 +1703,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			Unauthorized: json(
 				ref("Error"),
-				"The API key is missing, invalid or revoked. On the upload operations the code is invalid_upload_token when the upload token is missing, malformed or altered, and upload_token_expired once it has expired.",
+				"The API key is missing, invalid or revoked. On the upload operations the code is invalid_upload_token when the upload token is missing, malformed or altered, or when the secret key that created it was revoked (the hint says so, and renewUploadToken with the current key continues the upload), and upload_token_expired once it has expired.",
 			),
 			PaymentRequired: json(
 				ref("Error"),
