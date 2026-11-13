@@ -9,6 +9,7 @@ import { stripe } from "@cap/utils";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import { AUTO_TOP_UP_METADATA_TYPE } from "@/lib/infra-auto-top-up";
+import { CREDIT_CHECKOUT_METADATA_TYPE } from "@/lib/infra-credit-checkout";
 import { STRIPE_DISPUTE_REFERENCE_TYPE } from "@/lib/infra-standing";
 
 export const STRIPE_REFUND_REFERENCE_TYPE = "stripe_refund" as const;
@@ -24,8 +25,6 @@ const REVERSAL_REFERENCE_TYPES = [
 ] as const satisfies readonly DeveloperCreditReferenceType[];
 
 const REFUNDS_THAT_MOVED_NO_MONEY = new Set(["failed", "canceled"]);
-
-const CREDIT_CHECKOUT_METADATA_TYPE = "developer_credits";
 
 export type CreditReversalResult =
 	| { state: "ignored"; reason: "no_payment" | "not_a_credit_payment" }
@@ -72,8 +71,9 @@ type PaymentHints = {
 	metadata?: Stripe.Metadata | null;
 };
 
-const autoTopUpAccount = (metadata: Stripe.Metadata | null | undefined) =>
-	metadata?.type === AUTO_TOP_UP_METADATA_TYPE
+const taggedCreditAccount = (metadata: Stripe.Metadata | null | undefined) =>
+	metadata?.type === AUTO_TOP_UP_METADATA_TYPE ||
+	metadata?.type === CREDIT_CHECKOUT_METADATA_TYPE
 		? (metadata.accountId ?? null)
 		: undefined;
 
@@ -81,14 +81,14 @@ async function creditAccountOfPayment(
 	paymentIntentId: string,
 	hints: PaymentHints = {},
 ) {
-	if (hints.invoice) return null;
-	const hinted = autoTopUpAccount(hints.metadata);
+	const hinted = taggedCreditAccount(hints.metadata);
 	if (hinted !== undefined) return hinted;
+	if (hints.invoice) return null;
 
 	const paymentIntent = await stripe().paymentIntents.retrieve(paymentIntentId);
+	const tagged = taggedCreditAccount(paymentIntent.metadata);
+	if (tagged !== undefined) return tagged;
 	if (paymentIntent.invoice) return null;
-	const topUp = autoTopUpAccount(paymentIntent.metadata);
-	if (topUp !== undefined) return topUp;
 
 	const sessions = await stripe().checkout.sessions.list({
 		payment_intent: paymentIntentId,

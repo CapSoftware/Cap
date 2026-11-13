@@ -384,6 +384,7 @@ export async function runAutoTopUp(
 				off_session: true,
 				confirm: true,
 				description: "Cap Infra credits, auto top-up",
+				receipt_email: account.email,
 				metadata: {
 					type: AUTO_TOP_UP_METADATA_TYPE,
 					accountId,
