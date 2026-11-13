@@ -1620,6 +1620,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"availableMicroCredits",
 					"heldMicroCredits",
 					"speech",
+					"delivery",
 					"totalVideos",
 					"uploadingVideos",
 					"totalDurationMinutes",
@@ -1666,6 +1667,32 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "integer",
 								description: "How many transcripts completed.",
 							},
+						},
+					},
+					delivery: {
+						type: ["object", "null"],
+						description:
+							"Minutes of video your viewers watched in the current calendar month (UTC), the same period as speech. Measured, not billed. null until delivery has been measured for this app.",
+						required: ["minutes", "minutesByTier", "measured", "billed"],
+						properties: {
+							minutes: {
+								type: "number",
+								description: "Delivered minutes across every resolution.",
+							},
+							minutesByTier: {
+								type: "object",
+								description: "Delivered minutes for each resolution.",
+								required: ["360p", "720p", "1080p", "1440p", "2160p"],
+								properties: {
+									"360p": { type: "number" },
+									"720p": { type: "number" },
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							measured: { type: "boolean", enum: [true] },
+							billed: { type: "boolean", enum: [false] },
 						},
 					},
 					balanceDollars: {
