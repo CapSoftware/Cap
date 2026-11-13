@@ -212,7 +212,7 @@ export function DeveloperVideoView({
 	const reportHref = developerVideoReportHref(playbackId);
 
 	if (variant === "embed") {
-		const rounded = playback.radius > 0;
+		const rounded = playback.radius > 0 && player.kind === "playing";
 		return (
 			<div
 				className={

@@ -378,14 +378,17 @@ export const attachSource = (
 		if (!next || next === nativeSrc) return;
 		const resumeAt = switchingFrom ?? video.currentTime;
 		const wasPlaying = !video.paused;
+		const speed = video.playbackRate;
 		dropResume();
 		nativeSrc = next;
 		video.src = next;
+		video.playbackRate = speed;
 		switchingFrom = resumeAt;
 		const resume = () => {
 			const at = switchingFrom ?? resumeAt;
 			resumeAfterSwitch = null;
 			switchingFrom = null;
+			video.playbackRate = speed;
 			if (at > 0) video.currentTime = at;
 		};
 		resumeAfterSwitch = resume;

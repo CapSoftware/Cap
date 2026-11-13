@@ -300,6 +300,7 @@ describe("pickPlaybackMode", () => {
 });
 
 class FakeVideo extends EventTarget {
+	playbackRate = 1;
 	preload = "none";
 	src = "";
 	paused = true;
@@ -1533,6 +1534,28 @@ describe("native HLS renditions", () => {
 		expect(video.src).toBe(MP4);
 		expect(video.currentTime).toBe(18);
 		expect(seekDuringSwitch(5)).toBe(false);
+	});
+
+	it("keeps the playback speed across a quality switch", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		video.playbackRate = 1.5;
+		const reset = Object.getOwnPropertyDescriptor(video, "src");
+		let src = video.src;
+		Object.defineProperty(video, "src", {
+			get: () => src,
+			set: (value: string) => {
+				src = value;
+				video.playbackRate = 1;
+			},
+			configurable: true,
+		});
+
+		setLevel(index("360p"));
+		expect(video.playbackRate).toBe(1.5);
+		video.playbackRate = 1;
+		video.reach(30);
+		expect(video.playbackRate).toBe(1.5);
+		if (reset) Object.defineProperty(video, "src", reset);
 	});
 
 	it("ignores a pick it has no rendition for", async () => {

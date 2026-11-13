@@ -446,6 +446,23 @@ describe("developer video page parameters", () => {
 		expect(embed({ radius: "12px;}</style>" })).toBe(embed({}));
 	});
 
+	it.each([
+		["failed", failed],
+		["paused", paused],
+	])(
+		"keeps the %s embed square and opaque whatever the radius",
+		(_, player) => {
+			const html = render(
+				player,
+				"embed",
+				developerVideoPlayback({ radius: "12" }, "embed"),
+			);
+
+			expect(html).not.toContain("border-radius");
+			expect(html).not.toContain("background:transparent");
+		},
+	);
+
 	it("leaves the poster out when asked", () => {
 		expect(embed({ poster: "0" })).not.toContain("poster=");
 		expect(embed({ poster: "1" })).toContain(`poster="${BASE}/poster.jpg"`);
