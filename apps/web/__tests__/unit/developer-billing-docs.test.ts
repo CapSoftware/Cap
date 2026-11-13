@@ -80,7 +80,6 @@ const rest = getDocBySlug("api/rest-api")?.content ?? "";
 const POLICY_SENTENCES = [
 	"Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account.",
 	"A purchase also comes with a paid invoice, which shows any tax ID you add at checkout.",
-	"For a larger amount, email hello@cap.so and we will send an invoice.",
 	"Credit does not expire.",
 	"If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.",
 ];
