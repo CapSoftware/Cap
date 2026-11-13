@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import {
 	createInfraWebhook,
@@ -14,6 +14,7 @@ import {
 	sendInfraWebhookTest,
 	setInfraWebhookEnabled,
 } from "@/actions/developers/webhooks";
+import { infraWebhookLocks } from "@/lib/infra-webhook-console";
 import { CopyTextButton, KeyRow } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
 import {
@@ -133,8 +134,14 @@ export function WebhooksClient({
 }) {
 	const router = useRouter();
 	const [adding, setAdding] = useState(false);
+	const [creating, setCreating] = useState(false);
 	const [revealed, setRevealed] = useState<Revealed | null>(null);
 	const full = endpoints.length >= limit;
+	const locks = infraWebhookLocks({
+		adding,
+		creating,
+		secretShown: revealed !== null,
+	});
 
 	const startAdding = () => setAdding(true);
 
@@ -153,7 +160,7 @@ export function WebhooksClient({
 					</>
 				}
 				action={
-					endpoints.length > 0 && !adding && !revealed && !full ? (
+					endpoints.length > 0 && locks.canAdd && !full ? (
 						<Button onClick={startAdding}>Add endpoint</Button>
 					) : undefined
 				}
@@ -182,8 +189,10 @@ export function WebhooksClient({
 								appId={appId}
 								eventTypes={eventTypes}
 								onCancel={() => setAdding(false)}
+								onPendingChange={setCreating}
 								onCreated={(endpointId, url, secret) => {
 									setAdding(false);
+									setCreating(false);
 									setRevealed({ endpointId, url, secret, rotated: false });
 									router.refresh();
 								}}
@@ -220,7 +229,8 @@ export function WebhooksClient({
 									key={endpoint.id}
 									appId={appId}
 									endpoint={endpoint}
-									canRotate={!adding && !revealed}
+									canRotate={locks.canRotate}
+									canDelete={locks.canDelete}
 									onDeleted={() =>
 										setRevealed((current) =>
 											current?.endpointId === endpoint.id ? null : current,
@@ -293,11 +303,13 @@ function AddEndpointForm({
 	appId,
 	eventTypes,
 	onCancel,
+	onPendingChange,
 	onCreated,
 }: {
 	appId: string;
 	eventTypes: readonly string[];
 	onCancel: () => void;
+	onPendingChange: (pending: boolean) => void;
 	onCreated: (endpointId: string, url: string, secret: string) => void;
 }) {
 	const urlId = useId();
@@ -321,6 +333,10 @@ function AddEndpointForm({
 	});
 
 	const ready = url.trim().length > 0 && !create.isPending;
+
+	useEffect(() => {
+		onPendingChange(create.isPending);
+	}, [create.isPending, onPendingChange]);
 
 	return (
 		<form
@@ -439,12 +455,14 @@ function EndpointRow({
 	appId,
 	endpoint,
 	canRotate,
+	canDelete,
 	onRotated,
 	onDeleted,
 }: {
 	appId: string;
 	endpoint: InfraWebhookEndpoint;
 	canRotate: boolean;
+	canDelete: boolean;
 	onRotated: (secret: string) => void;
 	onDeleted: () => void;
 }) {
@@ -584,7 +602,7 @@ function EndpointRow({
 				<Button
 					variant="danger"
 					size="sm"
-					disabled={busy}
+					disabled={busy || !canDelete}
 					onClick={() => setConfirm("delete")}
 				>
 					Delete
