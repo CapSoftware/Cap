@@ -228,13 +228,6 @@ export async function latchCoveredShortfall(
 	) {
 		return false;
 	}
-	const sameShortfall = charge.firstMonth
-		? and(
-				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
-			)
-		: eq(developerCreditTransactions.id, charge.id);
 	await tx
 		.update(developerCreditTransactions)
 		.set({
@@ -242,7 +235,12 @@ export async function latchCoveredShortfall(
 		})
 		.where(
 			and(
-				sameShortfall,
+				eq(developerCreditTransactions.accountId, accountId),
+				inArray(developerCreditTransactions.type, [
+					FIRST_MONTH_TRANSACTION_TYPE,
+					"storage_daily",
+				]),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
 				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
 			),
 		);

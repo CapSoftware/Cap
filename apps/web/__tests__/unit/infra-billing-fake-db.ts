@@ -388,11 +388,13 @@ function update(table: unknown) {
 						const resolvedAt = dialect
 							.sqlToQuery(values.metadata as SQL)
 							.params.find((param) => typeof param === "string");
-						const [first, type, shortSince] = params;
+						const [first, ...rest] = params;
+						const types = rest.slice(0, -1);
+						const shortSince = rest.at(-1);
 						const rows = ledger.rows.filter((entry) =>
-							type === "video_create"
+							types.includes("video_create")
 								? entry.accountId === first &&
-									entry.type === type &&
+									types.includes(entry.type) &&
 									entry.metadata?.shortSince === shortSince
 								: entry.id === first,
 						);
