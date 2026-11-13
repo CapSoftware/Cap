@@ -782,7 +782,7 @@ describe.runIf(Boolean(databaseUrl))(
 					duringShortfall: true,
 				});
 				expect((await getInfraBilling(appId)).standing).toEqual(grace);
-				expect(await shortfallOwed(database(), accountId, NOW)).toBe(
+				expect(await shortfallOwed(database() as never, accountId, NOW)).toBe(
 					SHORT_OWED,
 				);
 			});
@@ -803,7 +803,7 @@ describe.runIf(Boolean(databaseUrl))(
 					duringShortfall: true,
 				});
 				expect((await getInfraBilling(appId)).standing).toEqual(grace);
-				expect(await shortfallOwed(database(), accountId, NOW)).toBe(
+				expect(await shortfallOwed(database() as never, accountId, NOW)).toBe(
 					SHORT_OWED,
 				);
 
