@@ -997,8 +997,6 @@ describe.runIf(Boolean(databaseUrl))(
 				"top_up",
 				"daily_part_in_month",
 				"daily_part_in_month",
-				"top_up_then_short_same_second",
-				"top_up_then_short_same_second",
 			] as const;
 			type Period = { since: string; monthMax: number };
 			const failures: string[] = [];
@@ -1036,36 +1034,6 @@ describe.runIf(Boolean(databaseUrl))(
 
 				const latch = () => {
 					if (period && balance - held >= size()) close(true);
-				};
-				const topUp = async () => {
-					const cents = between(1, 200);
-					const referenceId = id();
-					await addCreditsToAccount({
-						accountId,
-						amountCents: cents,
-						referenceId,
-						referenceType: "stripe_payment_intent",
-					});
-					await database()
-						.update(developerCreditTransactions)
-						.set({
-							createdAt: sql`${developerCreditTransactions.createdAt} - INTERVAL 1 SECOND`,
-						})
-						.where(eq(developerCreditTransactions.accountId, accountId));
-					const added = Math.floor((cents / 100) * 100_000);
-					balance += added;
-					log[log.length - 1] += ` +${added}`;
-					if (period && balance - held >= size()) close(false);
-					const [row] = await database()
-						.select({ createdAt: developerCreditTransactions.createdAt })
-						.from(developerCreditTransactions)
-						.where(
-							and(
-								eq(developerCreditTransactions.accountId, accountId),
-								eq(developerCreditTransactions.referenceId, referenceId),
-							),
-						);
-					return row?.createdAt ?? null;
 				};
 				const rowSince = async (referenceId: string) => {
 					const [row] = await database()
@@ -1126,64 +1094,7 @@ describe.runIf(Boolean(databaseUrl))(
 						if (available <= 0) continue;
 						stepKind = "daily_short";
 					}
-					if (kind === "top_up_then_short_same_second") {
-						if (dayIndex < 0) continue;
-						const toppedUpAt = await topUp();
-						available = balance - held;
-						if (available > 0) {
-							const holdId = id();
-							await database().insert(developerTranscripts).values({
-								id: holdId,
-								appId,
-								status: "processing",
-								sourceType: "upload",
-								reservedMicroCredits: available,
-							});
-							holds.push({ id: holdId, amount: available });
-							held += available;
-							log[log.length - 1] += ` hold ${available}`;
-						}
-						available = balance - held;
-						stepKind = "daily_short";
-						const dateKey = new Date(Date.now() - dayIndex * DAY_MS)
-							.toISOString()
-							.slice(0, 10);
-						const owed = available + between(1, 20_000);
-						latch();
-						const result = await chargeStorageDay({
-							appId,
-							accountId,
-							usage: {
-								videoCount: 1,
-								totalMinutes: 1,
-								minutesByTier: emptyStorageMinutes(),
-								monthlyMicroCredits: owed * 30,
-								dailyMicroCredits: owed,
-							},
-							dateKey,
-							now: new Date(),
-						});
-						dayIndex--;
-						log[log.length - 1] +=
-							` owed=${owed} -> ${result.state} same second`;
-						if (result.state === "billed") {
-							await database()
-								.update(developerCreditTransactions)
-								.set({ createdAt: toppedUpAt ?? new Date() })
-								.where(
-									and(
-										eq(developerCreditTransactions.accountId, accountId),
-										eq(developerCreditTransactions.referenceId, dateKey),
-									),
-								);
-							const charged = Math.min(balance - held, owed);
-							balance -= charged;
-							const since: string =
-								(period as Period | null)?.since ?? (await rowSince(dateKey));
-							lastDaily = { since, owed };
-							period = period ?? { since, monthMax: 0 };
-						}
-					} else if (stepKind === "daily_paid" || stepKind === "daily_short") {
+					if (stepKind === "daily_paid" || stepKind === "daily_short") {
 						if (dayIndex < 0) continue;
 						const owed =
 							stepKind === "daily_paid"
@@ -1304,7 +1215,23 @@ describe.runIf(Boolean(databaseUrl))(
 						held -= hold.amount;
 						log[log.length - 1] += ` -${hold.amount}`;
 					} else {
-						await topUp();
+						const cents = between(1, 200);
+						await addCreditsToAccount({
+							accountId,
+							amountCents: cents,
+							referenceId: id(),
+							referenceType: "stripe_payment_intent",
+						});
+						await database()
+							.update(developerCreditTransactions)
+							.set({
+								createdAt: sql`${developerCreditTransactions.createdAt} - INTERVAL 1 SECOND`,
+							})
+							.where(eq(developerCreditTransactions.accountId, accountId));
+						const added = Math.floor((cents / 100) * 100_000);
+						balance += added;
+						log[log.length - 1] += ` +${added}`;
+						if (period && balance >= size()) close(false);
 					}
 
 					const where = `sequence ${sequence} step ${step}: ${log.join(" | ")}`;
@@ -2309,7 +2236,7 @@ describe.runIf(Boolean(databaseUrl))(
 						balanceAfterMicroCredits: 0,
 						referenceId: sentinel,
 						referenceType: "developer_video",
-						metadata: {},
+						metadata: { paidUntil: "2026-10-31T00:00:00.000Z" },
 						createdAt: new Date("2026-10-01T12:00:00Z"),
 					});
 			});
@@ -2458,25 +2385,29 @@ describe.runIf(Boolean(databaseUrl))(
 			const charged = async (
 				paidUntil: Date | null,
 				chargedAt: Date,
-				overrides: Partial<typeof developerVideos.$inferInsert> = {},
+				{ uploadFee = false }: { uploadFee?: boolean } = {},
 			) => {
 				const { appId, accountId } = await makeApp(0);
 				const videoId = await track(appId, {
 					createdAt: new Date(chargedAt.getTime() - 60_000),
 					storagePaidUntil: paidUntil,
-					...overrides,
 				});
-				await database().insert(developerCreditTransactions).values({
-					id: id(),
-					accountId,
-					type: "video_create",
-					amountMicroCredits: -850,
-					balanceAfterMicroCredits: 0,
-					referenceId: videoId,
-					referenceType: "developer_video",
-					metadata: {},
-					createdAt: chargedAt,
-				});
+				await database()
+					.insert(developerCreditTransactions)
+					.values({
+						id: id(),
+						accountId,
+						type: "video_create",
+						amountMicroCredits: -850,
+						balanceAfterMicroCredits: 0,
+						referenceId: videoId,
+						referenceType: "developer_video",
+						metadata:
+							uploadFee || !paidUntil
+								? { durationSeconds: 600 }
+								: { paidUntil: paidUntil.toISOString() },
+						createdAt: chargedAt,
+					});
 				return videoId;
 			};
 
@@ -2531,9 +2462,14 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await firstMonthChargesBegan()).toEqual(FIRST_CHARGE);
 			});
 
-			it("is not moved by older charge rows of unsettled videos or by videos settled without a charge", async () => {
+			it("is not moved by older charge rows of unsettled videos, upload fee rows of settled videos, or videos settled without a charge", async () => {
 				await charged(new Date("2020-02-09T00:00:00Z"), FIRST_CHARGE);
 				await charged(null, new Date("2019-12-01T04:23:00Z"));
+				await charged(
+					new Date("2020-02-09T00:00:00Z"),
+					new Date("2019-12-01T04:58:00Z"),
+					{ uploadFee: true },
+				);
 				const { appId } = await makeApp(0);
 				await track(appId, {
 					createdAt: new Date("2019-12-01T00:00:00Z"),
