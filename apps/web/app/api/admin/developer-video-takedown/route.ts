@@ -1,5 +1,8 @@
 import { requireAdmin } from "@/lib/admin-access";
-import { setDeveloperVideoTakedown } from "@/lib/developer-video-takedown-store";
+import {
+	setDeveloperVideoTakedown,
+	staffDeleteDeveloperVideo,
+} from "@/lib/developer-video-takedown-store";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -35,10 +38,26 @@ export async function POST(request: Request) {
 	} catch {
 		return answer(400, { error: "The body is not JSON." });
 	}
-	const { video, takenDown } = (body ?? {}) as {
+	const {
+		video,
+		takenDown,
+		delete: remove,
+	} = (body ?? {}) as {
 		video?: unknown;
 		takenDown?: unknown;
+		delete?: unknown;
 	};
+	if (remove === true && typeof video === "string") {
+		const deleted = await staffDeleteDeveloperVideo(video);
+		if (!deleted) return answer(404, { error: "No video matches that." });
+		console.info("[developer-video] Deleted by staff", {
+			by: admin.id,
+			videoId: deleted.videoId,
+			alreadyDeleted: deleted.alreadyDeleted,
+			filesPurged: deleted.filesPurged,
+		});
+		return answer(200, { data: deleted });
+	}
 	if (typeof video !== "string" || typeof takenDown !== "boolean") {
 		return answer(400, {
 			error:
