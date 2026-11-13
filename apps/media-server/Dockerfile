@@ -16,9 +16,6 @@ COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
 COPY apps/media-server/capcodec.md ./capcodec.md
 
-# The suites run as the user the server runs as.
-USER bun
-
 RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \
 	&& bun test src/__tests__/lib/audio-levels.integration.test.ts \
@@ -49,8 +46,6 @@ RUN MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 bun test \
 RUN MEDIA_SERVER_TRANSFER_PERFORMANCE_TESTS=1 bun test \
 	src/__tests__/lib/media-transfer.integration.test.ts \
 	src/__tests__/lib/drive-resumable-upload.test.ts
-
-USER root
 
 ENV PORT=3456
 EXPOSE 3456
