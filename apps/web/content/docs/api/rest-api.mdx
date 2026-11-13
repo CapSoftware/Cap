@@ -1415,6 +1415,10 @@ A ready video has three playback URLs, and a hosted player for when you do not w
 
 The playback URLs need no API key and answer any origin, so there is no CORS setup to do.
 
+When a video has captions, `hlsUrl` lists them as WebVTT subtitle tracks, so hls.js, Safari and other HLS players can offer them with no extra setup.
+
+FFmpeg 9.x reads only the first segment of byte-range HLS playlists (a known FFmpeg issue). Use the MP4 URL, FFmpeg 8, or a tool with its own HLS downloader.
+
 ### Play with hls.js
 
 Safari plays HLS by itself. Every other browser needs [hls.js](https://github.com/video-dev/hls.js). This page plays the video everywhere, with the MP4 as the fallback:

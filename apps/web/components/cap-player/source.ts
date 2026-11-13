@@ -244,6 +244,19 @@ export const withShortPlaylists = (hls: string) => {
 	}
 };
 
+// The player draws the captions it is given. Subtitles listed in the master
+// as well would show twice in Safari's own captions menu, and could be drawn
+// over the player's own.
+export const withoutPlaylistSubtitles = (hls: string) => {
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("subtitles", "none");
+		return url.toString();
+	} catch {
+		return hls;
+	}
+};
+
 export const startWithin = (startAt: number, duration: number) =>
 	Number.isFinite(duration) && startAt > 0 && startAt < duration ? startAt : 0;
 
@@ -282,9 +295,12 @@ const afterDocumentLoad = (run: () => void) => {
 
 export const attachSource = (
 	video: HTMLVideoElement,
-	source: CapPlayerSource,
+	given: CapPlayerSource,
 	options: AttachOptions,
 ): Attachment => {
+	const source: CapPlayerSource = given.hls
+		? { ...given, hls: withoutPlaylistSubtitles(given.hls) }
+		: given;
 	const { autoPlay, onFatal, onLevels } = options;
 	const startAt = options.startAt ?? 0;
 	const mode = pickPlaybackMode(video, source);

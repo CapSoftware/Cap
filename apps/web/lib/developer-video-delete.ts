@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { purgeDeveloperPlaybackCache } from "./developer-video-cache";
 import { cancelDeveloperVideoEncodes } from "./developer-video-cancel";
 import { settleFirstMonthAtDelete } from "./infra-storage-minimum";
 
@@ -14,6 +15,7 @@ export async function markDeveloperVideoDeleted(
 		.update(developerVideos)
 		.set({ deletedAt: now })
 		.where(eq(developerVideos.id, video.videoId));
+	await purgeDeveloperPlaybackCache({ videoId: video.videoId });
 	await settleFirstMonthAtDelete(video.videoId);
 	await cancelDeveloperVideoEncodes(video);
 }
