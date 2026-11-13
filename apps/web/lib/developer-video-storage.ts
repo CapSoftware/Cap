@@ -103,6 +103,18 @@ export function readDeveloperVideoText(key: string): Promise<string | null> {
 	);
 }
 
+export async function writeDeveloperVideoText(
+	key: string,
+	text: string,
+	contentType: string,
+): Promise<void> {
+	await StorageRuntime.runPromise(
+		bucket.pipe(
+			Effect.flatMap((access) => access.putObject(key, text, { contentType })),
+		),
+	);
+}
+
 export async function headDeveloperVideoObject(
 	key: string,
 ): Promise<{ bytes: number; contentType: string | null } | null> {

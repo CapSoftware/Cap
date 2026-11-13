@@ -10,6 +10,10 @@ import {
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
 import {
+	slicedHlsPlayback,
+	slicedHlsPlaylistText,
+} from "./developer-video-slices";
+import {
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
@@ -25,6 +29,11 @@ const SIGNED_URL_SECONDS = 12 * 60 * 60;
 // for playback after a top-up.
 const CACHE_SECONDS = 60;
 
+// A ladder still being encoded in slices gains segments every few seconds and
+// players ask for its playlists again about once per segment, so those answers
+// are shared only for a moment.
+const GROWING_CACHE_SECONDS = 2;
+
 const START_MAX_BANDWIDTH = 2_600_000;
 const START_MAX_SHORT_SIDE = 1080;
 
@@ -38,6 +47,10 @@ export const PLAYBACK_CORS_HEADERS = {
 
 const CACHEABLE = {
 	"Cache-Control": `public, max-age=${CACHE_SECONDS}, s-maxage=${CACHE_SECONDS}`,
+};
+
+const GROWING = {
+	"Cache-Control": `public, max-age=${GROWING_CACHE_SECONDS}, s-maxage=${GROWING_CACHE_SECONDS}`,
 };
 
 function notFound(): Response {
@@ -168,11 +181,14 @@ export function leadWithStartRendition(master: string): string {
 // Sent as it is. The platform does not compress this content type, and a body
 // compressed here reaches the viewer without its Content-Encoding header, so a
 // player cannot read it.
-function playlistResponse(playlist: string): Response {
+function playlistResponse(
+	playlist: string,
+	cache: Record<string, string> = CACHEABLE,
+): Response {
 	return new Response(playlist, {
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
-			...CACHEABLE,
+			...cache,
 			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
 		},
 	});
@@ -227,19 +243,29 @@ export async function developerPlaybackResponse(
 			? redirectTo(keysFor(processing.poster.output).poster, request)
 			: notFound();
 	}
-	if (
-		!outputs.hls ||
-		processing.hls.state !== "complete" ||
-		!HLS_FILE_PATTERN.test(file)
-	) {
+	// While a ladder is encoded in slices its playlists are built from the
+	// slices that are in. Once it is whole they are read from storage like any
+	// other ladder's.
+	const slices = slicedHlsPlayback(processing);
+	const hlsOutput =
+		processing.hls.state === "complete"
+			? processing.hls.output
+			: slices?.output;
+	if (!outputs.hls || !hlsOutput || !HLS_FILE_PATTERN.test(file)) {
 		return notFound();
 	}
-	const keys = keysFor(processing.hls.output);
+	const keys = keysFor(hlsOutput);
 	if (MEDIA_FILE_PATTERN.test(file)) {
 		return redirectTo(`${keys.hlsPrefix}${file}`, request);
 	}
 
-	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
+	const playlist = slices
+		? await slicedHlsPlaylistText(
+				{ video, encodeId: processing.encodeId, ...slices },
+				file,
+				readDeveloperVideoText,
+			)
+		: await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
 	if (!playlist) return notFound();
 	return playlistResponse(
 		file === DEVELOPER_VIDEO_MASTER_PLAYLIST
@@ -251,5 +277,6 @@ export async function developerPlaybackResponse(
 						request,
 					),
 				),
+		slices && !slices.ended ? GROWING : CACHEABLE,
 	);
 }

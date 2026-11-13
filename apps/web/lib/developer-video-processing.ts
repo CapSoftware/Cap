@@ -5,6 +5,7 @@ import type {
 	DeveloperVideoPart,
 	DeveloperVideoProcessingState,
 	DeveloperVideoRendition,
+	DeveloperVideoSlicedHls,
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
@@ -22,32 +23,62 @@ import {
 	DEVELOPER_VIDEO_MASTER_PLAYLIST,
 	developerVideoKeys,
 	developerVideoSourceExtension,
+	HLS_PLAYLIST_CONTENT_TYPE,
 	hlsPlaylistDuration,
 	ladderMatchesMaster,
 	parseDeveloperVideoLadder,
 	planDeveloperVideoEncode,
 } from "./developer-video-plan";
+import { HLS_AUDIO_NAME } from "./developer-video-sliced-playlist";
 import {
+	createSlicedHls,
+	parseDeveloperVideoSliceLadder,
+	planDeveloperVideoSlices,
+	playableSlices,
+	readStoredSlicePlaylist,
+	SLICED_HLS,
+	slicedFileName,
+	slicedHlsKeys,
+	slicedHlsMediaFiles,
+	slicedHlsPlaylistFiles,
+	slicedHlsPlaylistText,
+	slicedHlsRenditions,
+} from "./developer-video-slices";
+import {
+	abandonSlicedHls,
 	beginPart,
+	beginSlices,
+	completeSlicedHls,
 	createDeveloperVideoProcessingState,
 	DEVELOPER_VIDEO_PARTS,
 	type DeveloperVideoPartAction,
 	type DeveloperVideoPartOutcome,
 	type DeveloperVideoRedrive,
+	type DeveloperVideoSliceOutcome,
 	developerVideoFailureReason,
 	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
+	findRunningSlice,
 	lostJobConfirmed,
 	markPartChecked,
 	markPartDispatched,
 	markPartNotFound,
+	markSliceChecked,
+	markSliceDispatched,
+	markSliceNotFound,
 	releasePart,
+	releaseSlice,
 	requeueLostPart,
+	requeueLostSlice,
 	resolveDeveloperVideoStatus,
 	retryUnavailableHls,
 	settlePart,
+	settleSlice,
+	slicedHlsAction,
+	slicedHlsEncoding,
+	slicedHlsStep,
 } from "./developer-video-state";
 import {
 	deleteDeveloperVideoObjects,
@@ -56,6 +87,7 @@ import {
 	headDeveloperVideoObject,
 	internalDeveloperVideoUrl,
 	readDeveloperVideoText,
+	writeDeveloperVideoText,
 } from "./developer-video-storage";
 import {
 	MEDIA_SERVER_SHUTDOWN_MESSAGE,
@@ -194,6 +226,50 @@ function processingUpdate(
 	};
 }
 
+// Every result of an encode job is written here, whether it is for a whole
+// output or for one slice, so this is the one place a video first becomes
+// ready or becomes errored: compare the row's status with the update's.
+async function commitEncodeState(
+	videoId: string,
+	encodeId: string,
+	change: (
+		processing: DeveloperVideoProcessingState,
+		video: DeveloperVideoRow,
+	) => {
+		processing: DeveloperVideoProcessingState;
+		renditions?: DeveloperVideoRendition[];
+	} | null,
+	executor?: InfraDbExecutor,
+): Promise<DeveloperVideoRow | null> {
+	return mutateEncode(
+		videoId,
+		encodeId,
+		(processing, video) => {
+			const next = change(processing, video);
+			if (!next) return null;
+			// Slices that were given up and could not be replaced leave no
+			// adaptive stream, so the renditions they listed go with them.
+			const withdrawn =
+				next.processing.sliced?.state === "abandoned" &&
+				(next.processing.hls.state === "failed" ||
+					next.processing.hls.state === "unavailable");
+			return {
+				...processingUpdate(video, next.processing),
+				...(next.renditions
+					? { renditions: next.renditions }
+					: withdrawn
+						? { renditions: null }
+						: {}),
+			};
+		},
+		executor,
+	);
+}
+
+function slicedHlsEnabled(): boolean {
+	return serverEnv().INFRA_SLICED_HLS !== "off";
+}
+
 async function findDeveloperVideo(
 	videoId: string,
 ): Promise<DeveloperVideoRow | null> {
@@ -256,7 +332,9 @@ export async function releaseDeveloperVideoClaim(
 				? { status: "uploading", processing: null }
 				: null;
 		}
-		if (processing.hls.state !== "pending") return null;
+		if (processing.hls.state !== "pending" || slicedHlsEncoding(processing)) {
+			return null;
+		}
 		const token = newAttemptToken();
 		const now = Date.now();
 		const running = beginPart(processing, "hls", { token, now });
@@ -546,6 +624,9 @@ export async function prepareDeveloperVideoProcessing(
 			Number.isFinite(metadata.duration) && metadata.duration > 0
 				? metadata.duration
 				: null;
+		const slices = slicedHlsEnabled()
+			? planDeveloperVideoSlices(probedDuration)
+			: null;
 		const updated = await underAccountLock(video.appId, async (tx) => {
 			await chargeForProbedDuration(
 				video,
@@ -559,6 +640,9 @@ export async function prepareDeveloperVideoProcessing(
 				({ probing: _probing, ...processing }, current) =>
 					processingUpdate(current, {
 						...processing,
+						...(slices
+							? { sliced: createSlicedHls(slices, newAttemptToken()) }
+							: {}),
 						probe: {
 							duration: probedDuration,
 							width: metadata.width,
@@ -587,8 +671,11 @@ export async function readDeveloperVideoParts(
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode) return null;
 	const now = Date.now();
+	const sliced = slicedHlsEncoding(encode.processing);
 	return {
-		hls: developerVideoPartAction(encode.processing.hls, now),
+		hls: sliced
+			? slicedHlsAction(sliced, now)
+			: developerVideoPartAction(encode.processing.hls, now),
 		mp4: developerVideoPartAction(encode.processing.mp4, now),
 	};
 }
@@ -683,16 +770,12 @@ async function settleDeveloperVideoPart(
 	renditions?: DeveloperVideoRendition[],
 	executor?: InfraDbExecutor,
 ): Promise<boolean> {
-	const updated = await mutateEncode(
+	const updated = await commitEncodeState(
 		videoId,
 		encodeId,
-		(processing, video) => {
+		(processing) => {
 			const settled = settlePart(processing, part, token, outcome);
-			if (!settled) return null;
-			return {
-				...processingUpdate(video, settled),
-				...(renditions ? { renditions } : {}),
-			};
+			return settled && { processing: settled, renditions };
 		},
 		executor,
 	);
@@ -704,8 +787,13 @@ export async function dispatchDeveloperVideoPart(
 	encodeId: string,
 	part: DeveloperVideoPart,
 ): Promise<DeveloperVideoDispatch> {
+	if (part === "hls") {
+		const sliced = await advanceSlicedHls(videoId, encodeId);
+		if (sliced !== null) return sliced;
+	}
 	const token = newAttemptToken();
 	const video = await mutateEncode(videoId, encodeId, (processing) => {
+		if (part === "hls" && slicedHlsEncoding(processing)) return null;
 		const started = beginPart(processing, part, { token, now: Date.now() });
 		return started ? { processing: started } : null;
 	});
@@ -778,6 +866,9 @@ export async function checkDeveloperVideoPart(
 	encodeId: string,
 	part: DeveloperVideoPart,
 ): Promise<DeveloperVideoJobCheck> {
+	if (part === "hls" && (await advanceSlicedHls(videoId, encodeId)) !== null) {
+		return "waiting";
+	}
 	const encode = await findEncode(videoId, encodeId);
 	const current = encode?.processing[part];
 	if (
@@ -831,9 +922,9 @@ export async function failDeveloperVideoProcessing(
 	encodeId: string,
 	reason: string,
 ): Promise<void> {
-	await mutateEncode(videoId, encodeId, (processing, video) =>
-		processingUpdate(video, failUnfinishedParts(processing, reason)),
-	);
+	await commitEncodeState(videoId, encodeId, (processing) => ({
+		processing: failUnfinishedParts(processing, reason),
+	}));
 }
 
 interface DeveloperVideoProgressPayload {
@@ -932,11 +1023,37 @@ async function completedOutcome(
 	};
 }
 
+// A slice that has just been settled frees a place for the next one, and the
+// last one in is the cue to write the whole ladder. Doing that here, and not
+// at the workflow's next look, keeps the workers busy between slices.
 export async function applyDeveloperVideoProgress(
 	payload: DeveloperVideoProgressPayload,
 	partParam: string,
 	token: string | null,
 ): Promise<{ success: true; applied: boolean }> {
+	const result = await applyEncodeProgress(payload, partParam, token);
+	if (result.slice && result.applied && typeof payload.videoId === "string") {
+		try {
+			await advanceSlicedHls(payload.videoId, result.slice.encodeId);
+		} catch (error) {
+			console.error("[developer-video] Failed to move the slices on", {
+				videoId: payload.videoId,
+				error,
+			});
+		}
+	}
+	return { success: true, applied: result.applied };
+}
+
+async function applyEncodeProgress(
+	payload: DeveloperVideoProgressPayload,
+	partParam: string,
+	token: string | null,
+): Promise<{
+	success: true;
+	applied: boolean;
+	slice?: { encodeId: string };
+}> {
 	const ignored = { success: true as const, applied: false };
 	if (
 		(partParam !== "hls" && partParam !== "mp4") ||
@@ -949,15 +1066,14 @@ export async function applyDeveloperVideoProgress(
 
 	const video = await findDeveloperVideo(payload.videoId);
 	const processing = video?.processing;
-	const current = processing?.[part];
-	if (
-		!video ||
-		!processing ||
-		current?.state !== "running" ||
-		current.token !== token
-	) {
-		return ignored;
-	}
+	const whole = processing?.[part];
+	const slice =
+		part === "hls" && processing ? findRunningSlice(processing, token) : null;
+	const current =
+		whole?.state === "running" && whole.token === token
+			? whole
+			: (slice?.job ?? null);
+	if (!video || !processing || !current) return ignored;
 	const { encodeId } = processing;
 
 	if (
@@ -968,11 +1084,24 @@ export async function applyDeveloperVideoProgress(
 		const jobId = payload.jobId;
 		if (current.jobId === null && typeof jobId === "string" && jobId) {
 			await mutateEncode(video.id, encodeId, (latest) => {
-				const confirmed = markPartDispatched(latest, part, { token, jobId });
+				const confirmed = slice
+					? markSliceDispatched(latest, { token, jobId })
+					: markPartDispatched(latest, part, { token, jobId });
 				return confirmed ? { processing: confirmed } : null;
 			});
 		}
 		return ignored;
+	}
+
+	if (slice) {
+		const settled = await applySliceResult(
+			video,
+			processing,
+			slice,
+			token,
+			payload,
+		);
+		return { ...settled, slice: { encodeId } };
 	}
 
 	if (
@@ -1060,10 +1189,513 @@ export async function sweepSupersededDeveloperVideoOutputs(
 		return 0;
 	}
 	const encodePrefix = `${developerVideoPrefix(video)}${encodeId}/`;
-	const kept = parts.flatMap((part) =>
-		part.state === "complete" ? [`${encodePrefix}${part.output}/`] : [],
+	// A ladder made of slices keeps its playlists and the media of the attempt
+	// each slice settled on. The slices' own playlists and anything a second
+	// attempt left in the folder go.
+	const { sliced, hls } = processing;
+	const slicedOutput =
+		sliced?.state === "complete" &&
+		hls.state === "complete" &&
+		hls.output === sliced.output
+			? sliced
+			: null;
+	const slicedFiles = new Set<string>();
+	if (slicedOutput) {
+		const source = {
+			video,
+			encodeId,
+			output: slicedOutput.output,
+			slices: playableSlices(slicedOutput),
+			hasAudio: slicedOutput.hasAudio,
+			ended: true,
+		};
+		const { hlsPrefix } = slicedHlsKeys(video, encodeId, slicedOutput.output);
+		for (const file of [
+			...slicedHlsPlaylistFiles(source),
+			...slicedHlsMediaFiles(source),
+		]) {
+			slicedFiles.add(`${hlsPrefix}${file}`);
+		}
+	}
+	const kept = [
+		...parts.flatMap((part) =>
+			part.state === "complete" && part.output !== slicedOutput?.output
+				? [part.output]
+				: [],
+		),
+		...(processing.poster ? [processing.poster.output] : []),
+	].map((output) => `${encodePrefix}${output}/`);
+	return deleteDeveloperVideoObjects(
+		encodePrefix,
+		(key) =>
+			slicedFiles.has(key) || kept.some((prefix) => key.startsWith(prefix)),
 	);
-	return deleteDeveloperVideoObjects(encodePrefix, (key) =>
-		kept.some((prefix) => key.startsWith(prefix)),
+}
+
+function isAudioUpload(name: string): boolean {
+	return name.startsWith(`${HLS_AUDIO_NAME}.`);
+}
+
+async function buildSliceJobRequest(
+	video: DeveloperVideoRow,
+	processing: DeveloperVideoProcessingState,
+	sliced: DeveloperVideoSlicedHls,
+	index: number,
+	token: string,
+): Promise<Record<string, unknown>> {
+	const slice = sliced.slices[index];
+	if (!video.s3Key || !processing.probe || !slice) {
+		throw new Error("Video is missing its source or dimensions");
+	}
+	const plan = planDeveloperVideoEncode(
+		{ width: processing.probe.width, height: processing.probe.height },
+		video.maxResolutionTier,
 	);
+	const keys = slicedHlsKeys(video, processing.encodeId, sliced.output);
+	const expiresIn = MEDIA_SERVER_URL_EXPIRES_SECONDS;
+	const source = await headDeveloperVideoObject(video.s3Key);
+	const inputExtension = developerVideoSourceExtension(source?.contentType);
+	// The first slice carries the audio for the whole video and the poster.
+	const first = index === 0;
+	const uploads = Object.fromEntries(
+		await Promise.all(
+			plan.uploads
+				.filter((upload) => first || !isAudioUpload(upload.name))
+				.map(async (upload) => {
+					const stored = slicedFileName(upload.name, index, token);
+					const prefix =
+						upload.contentType === HLS_PLAYLIST_CONTENT_TYPE
+							? keys.slicePrefix
+							: keys.hlsPrefix;
+					return [
+						upload.name,
+						await developerVideoUploadUrl(
+							`${prefix}${stored}`,
+							upload.contentType,
+							expiresIn,
+						),
+					] as const;
+				}),
+		),
+	);
+	return {
+		videoId: video.id,
+		userId: video.appId,
+		videoUrl: await internalDeveloperVideoUrl(video.s3Key, expiresIn),
+		...(first
+			? {
+					thumbnailPresignedUrl: await developerVideoUploadUrl(
+						developerVideoKeys(video, processing.encodeId, token).poster,
+						"image/jpeg",
+						expiresIn,
+					),
+				}
+			: {}),
+		webhookUrl: webhookUrl("hls", token),
+		...(inputExtension ? { inputExtension } : {}),
+		maxTier: plan.ladderMaxTier,
+		range: {
+			startSeconds: slice.startSeconds,
+			...(slice.durationSeconds === null
+				? {}
+				: { durationSeconds: slice.durationSeconds }),
+		},
+		includeAudio: first,
+		uploads,
+	};
+}
+
+async function settleDeveloperVideoSlice(
+	videoId: string,
+	encodeId: string,
+	token: string,
+	outcome: DeveloperVideoSliceOutcome,
+): Promise<boolean> {
+	const updated = await commitEncodeState(videoId, encodeId, (processing) => {
+		const settled = settleSlice(processing, token, outcome);
+		if (!settled) return null;
+		const sliced = settled.sliced;
+		return {
+			processing: settled,
+			...(sliced?.state === "encoding" && sliced.exposed === true
+				? { renditions: slicedHlsRenditions(sliced) }
+				: {}),
+		};
+	});
+	return updated !== null;
+}
+
+// A slice is sent through the load balancer, so a worker that is full can be
+// answered by asking again: the next request lands on another worker.
+const SLICE_START_TRIES = 2;
+
+async function startSlice(
+	video: DeveloperVideoRow,
+	processing: DeveloperVideoProcessingState,
+	sliced: DeveloperVideoSlicedHls,
+	pick: { index: number; token: string },
+): Promise<DeveloperVideoDispatch> {
+	const { encodeId } = processing;
+	const release = async () => {
+		await mutateEncode(video.id, encodeId, (latest) => {
+			const released = releaseSlice(latest, pick.token);
+			return released ? { processing: released } : null;
+		});
+		return "busy" as const;
+	};
+	let started: Awaited<ReturnType<typeof startMediaServerVideoJob>>;
+	try {
+		const body = await buildSliceJobRequest(
+			video,
+			processing,
+			sliced,
+			pick.index,
+			pick.token,
+		);
+		started = await startMediaServerVideoJob("/video/ladder", body);
+		for (
+			let tries = 1;
+			started.status === "busy" && tries < SLICE_START_TRIES;
+			tries++
+		) {
+			started = await startMediaServerVideoJob("/video/ladder", body);
+		}
+	} catch (error) {
+		console.error("[developer-video] Failed to send a slice to the encoder", {
+			videoId: video.id,
+			slice: pick.index,
+			error,
+		});
+		return release();
+	}
+
+	if (started.status === "started") {
+		const { jobId } = started;
+		await mutateEncode(video.id, encodeId, (latest) => {
+			const dispatched = markSliceDispatched(latest, {
+				token: pick.token,
+				jobId,
+			});
+			return dispatched ? { processing: dispatched } : null;
+		});
+		return "dispatched";
+	}
+	if (started.status === "unconfirmed") return "unconfirmed";
+	if (started.status === "busy" || started.status === "unreachable") {
+		return release();
+	}
+	if (started.status === "unavailable") {
+		await commitEncodeState(video.id, encodeId, (latest) => ({
+			processing: abandonSlicedHls(latest, LADDER_UNAVAILABLE_REASON),
+		}));
+		return "unavailable";
+	}
+	console.warn("[developer-video] Slice start rejected", {
+		videoId: video.id,
+		slice: pick.index,
+		detail: developerVideoFailureReason(started.message),
+	});
+	await settleDeveloperVideoSlice(video.id, encodeId, pick.token, {
+		type: "failed",
+		reason: fileProblem(started.message, UNENCODABLE_FILE),
+	});
+	return "failed";
+}
+
+async function dispatchDueSlices(
+	videoId: string,
+	encodeId: string,
+): Promise<DeveloperVideoDispatch> {
+	const tokens = Array.from({ length: SLICED_HLS.maxInFlight }, () =>
+		newAttemptToken(),
+	);
+	let begun: { index: number; token: string }[] = [];
+	const video = await mutateEncode(videoId, encodeId, (processing) => {
+		const started = beginSlices(processing, { tokens, now: Date.now() });
+		if (!started) return null;
+		begun = started.begun;
+		return { processing: started.state };
+	});
+	const processing = video?.processing;
+	const sliced = processing?.sliced;
+	if (!video || !processing || !sliced || begun.length === 0) return "skipped";
+
+	const results = await Promise.all(
+		begun.map((pick) => startSlice(video, processing, sliced, pick)),
+	);
+	return (
+		(
+			["busy", "dispatched", "unconfirmed", "unavailable", "failed"] as const
+		).find((result) => results.includes(result)) ?? "skipped"
+	);
+}
+
+async function checkSlice(
+	videoId: string,
+	encodeId: string,
+	index: number,
+): Promise<void> {
+	const encode = await findEncode(videoId, encodeId);
+	const sliced = encode ? slicedHlsEncoding(encode.processing) : null;
+	const job = sliced?.slices[index]?.job;
+	if (
+		job?.state !== "running" ||
+		job.jobId === null ||
+		developerVideoPartAction(job, Date.now()) !== "check"
+	) {
+		return;
+	}
+	const { token } = job;
+
+	const status = await readMediaServerVideoJob(job.jobId, videoId);
+	if (status.status === "unreachable") return;
+	if (status.status === "finished") {
+		await applyEncodeProgress(status.progress, "hls", token);
+		return;
+	}
+	const now = Date.now();
+	let requeued = false;
+	await commitEncodeState(videoId, encodeId, (processing) => {
+		const latest = findRunningSlice(processing, token);
+		if (!latest) return null;
+		if (status.status === "missing" && !lostJobConfirmed(latest.job, now)) {
+			const marked = markSliceNotFound(processing, { token, now });
+			return marked ? { processing: marked } : null;
+		}
+		const next =
+			status.status === "missing"
+				? requeueLostSlice(processing, token)
+				: markSliceChecked(processing, { token, now });
+		requeued = status.status === "missing" && next !== null;
+		return next ? { processing: next } : null;
+	});
+	if (requeued) {
+		console.warn("[developer-video] Slice job was lost, sending it again", {
+			videoId,
+			slice: index,
+		});
+	}
+}
+
+// Writes the whole ladder next to the slices' media once every slice is in:
+// a master playlist and one playlist per rendition that list each slice's
+// file in order. From here the video's adaptive stream is stored and served
+// like one made by a single job.
+async function finalizeSlicedHls(
+	videoId: string,
+	encodeId: string,
+): Promise<boolean> {
+	const encode = await findEncode(videoId, encodeId);
+	const sliced = encode ? slicedHlsEncoding(encode.processing) : null;
+	if (!encode || !sliced) return false;
+	const slices = playableSlices(sliced);
+	if (slices.length !== sliced.slices.length) return false;
+	const source = {
+		video: encode.video,
+		encodeId,
+		output: sliced.output,
+		slices,
+		hasAudio: sliced.hasAudio,
+		ended: true,
+	};
+	const { hlsPrefix } = slicedHlsKeys(encode.video, encodeId, sliced.output);
+	await Promise.all(
+		slicedHlsPlaylistFiles(source).map(async (file) => {
+			const text = await slicedHlsPlaylistText(
+				source,
+				file,
+				readDeveloperVideoText,
+			);
+			if (!text) throw new Error(`Sliced ladder has no ${file}`);
+			await writeDeveloperVideoText(
+				`${hlsPrefix}${file}`,
+				text,
+				HLS_PLAYLIST_CONTENT_TYPE,
+			);
+		}),
+	);
+	const completed = await commitEncodeState(videoId, encodeId, (processing) => {
+		const next = completeSlicedHls(processing);
+		return next?.sliced
+			? { processing: next, renditions: slicedHlsRenditions(next.sliced) }
+			: null;
+	});
+	return completed !== null;
+}
+
+// Moves a sliced encode on: sends the slices that are due, asks about the
+// quiet ones, and writes the finished ladder once all are in. Null when the
+// video's adaptive stream is not being made in slices.
+export async function advanceSlicedHls(
+	videoId: string,
+	encodeId: string,
+): Promise<DeveloperVideoDispatch | null> {
+	const encode = await findEncode(videoId, encodeId);
+	const sliced = encode ? slicedHlsEncoding(encode.processing) : null;
+	if (!sliced) return null;
+	const step = slicedHlsStep(sliced, Date.now());
+	if (step.finalize) {
+		try {
+			return (await finalizeSlicedHls(videoId, encodeId))
+				? "dispatched"
+				: "skipped";
+		} catch (error) {
+			console.error("[developer-video] Failed to write the sliced ladder", {
+				videoId,
+				error,
+			});
+			return "busy";
+		}
+	}
+	const [dispatched] = await Promise.all([
+		step.dispatch.length > 0
+			? dispatchDueSlices(videoId, encodeId)
+			: Promise.resolve<DeveloperVideoDispatch>("skipped"),
+		...step.check.map((index) =>
+			checkSlice(videoId, encodeId, index).catch((error) => {
+				console.error("[developer-video] Failed to check a quiet slice job", {
+					videoId,
+					slice: index,
+					error,
+				});
+			}),
+		),
+	]);
+	return dispatched;
+}
+
+const SLICE_NOT_STORED = {
+	type: "failed" as const,
+	reason: "Encoded slice was not stored as expected",
+};
+
+async function completedSliceOutcome(
+	video: DeveloperVideoRow,
+	processing: DeveloperVideoProcessingState,
+	found: NonNullable<ReturnType<typeof findRunningSlice>>,
+	token: string,
+	payload: DeveloperVideoProgressPayload,
+): Promise<DeveloperVideoSliceOutcome> {
+	const ladder = parseDeveloperVideoSliceLadder(payload.ladder);
+	if (!ladder) {
+		return { type: "failed", reason: "Encoder reported no renditions" };
+	}
+	const { sliced, index, slice } = found;
+	const stored = {
+		video,
+		encodeId: processing.encodeId,
+		output: sliced.output,
+	};
+	const { slicePrefix } = slicedHlsKeys(
+		video,
+		processing.encodeId,
+		sliced.output,
+	);
+	const master = await readDeveloperVideoText(
+		`${slicePrefix}${slicedFileName(DEVELOPER_VIDEO_MASTER_PLAYLIST, index, token)}`,
+	);
+	if (!master || !ladderMatchesMaster(ladder.renditions, master)) {
+		return SLICE_NOT_STORED;
+	}
+	const streams = [
+		...ladder.renditions.map((rendition) => rendition.name),
+		...(index === 0 && ladder.audioBytes > 0 ? [HLS_AUDIO_NAME] : []),
+	];
+	const playlists = await Promise.all(
+		streams.map((stream) =>
+			readStoredSlicePlaylist(
+				stored,
+				{ index, token },
+				stream,
+				readDeveloperVideoText,
+			).catch(() => null),
+		),
+	);
+	const [top] = playlists;
+	if (!top || playlists.some((playlist) => playlist === null)) {
+		return SLICE_NOT_STORED;
+	}
+	if (
+		slice.durationSeconds !== null &&
+		Math.abs(top.seconds - slice.durationSeconds) >
+			SLICED_HLS.lengthToleranceSeconds
+	) {
+		return {
+			type: "failed",
+			reason: "Encoded slice does not cover its part of the video",
+		};
+	}
+	const poster =
+		index === 0
+			? await headDeveloperVideoObject(
+					developerVideoKeys(video, processing.encodeId, token).poster,
+				)
+			: null;
+	return {
+		type: "complete",
+		result: {
+			seconds: top.seconds,
+			renditions: ladder.renditions,
+			audioBytes: index === 0 ? ladder.audioBytes : 0,
+		},
+		posterBytes: poster?.bytes ?? 0,
+	};
+}
+
+async function applySliceResult(
+	video: DeveloperVideoRow,
+	processing: DeveloperVideoProcessingState,
+	found: NonNullable<ReturnType<typeof findRunningSlice>>,
+	token: string,
+	payload: DeveloperVideoProgressPayload,
+): Promise<{ success: true; applied: boolean }> {
+	const { encodeId } = processing;
+	if (
+		payload.phase === "cancelled" &&
+		payload.message === MEDIA_SERVER_SHUTDOWN_MESSAGE
+	) {
+		const requeued = await commitEncodeState(video.id, encodeId, (latest) => {
+			const next = requeueLostSlice(latest, token);
+			return next ? { processing: next } : null;
+		});
+		return { success: true, applied: requeued !== null };
+	}
+	if (payload.phase !== "complete") {
+		const detail =
+			(typeof payload.error === "string" && payload.error) ||
+			(typeof payload.message === "string" && payload.message) ||
+			"";
+		console.warn("[developer-video] Slice encode failed", {
+			videoId: video.id,
+			slice: found.index,
+			phase: payload.phase,
+			detail: developerVideoFailureReason(detail),
+		});
+		const applied = await settleDeveloperVideoSlice(video.id, encodeId, token, {
+			type: "failed",
+			reason: fileProblem(detail, UNENCODABLE_FILE),
+		});
+		return { success: true, applied };
+	}
+	const outcome = await completedSliceOutcome(
+		video,
+		processing,
+		found,
+		token,
+		payload,
+	);
+	if (outcome.type === "failed") {
+		console.warn("[developer-video] Slice result refused", {
+			videoId: video.id,
+			slice: found.index,
+			reason: outcome.reason,
+		});
+	}
+	const applied = await settleDeveloperVideoSlice(
+		video.id,
+		encodeId,
+		token,
+		outcome,
+	);
+	return { success: true, applied };
 }
