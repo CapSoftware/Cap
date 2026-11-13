@@ -22,6 +22,8 @@ const fixture = vi.hoisted(() => ({
 	created: [] as FakeIntent[],
 	createdKeys: [] as string[],
 	loseNextResponse: false,
+	delayMs: 40,
+	calledAt: [] as number[],
 	stored: new Map<string, FakeIntent>(),
 	retrieved: [] as string[],
 }));
@@ -73,7 +75,8 @@ vi.mock("@cap/utils", () => ({
 				}
 				if (entry?.state === "done") return entry.intent;
 				fixture.keys.set(key, { state: "pending", params: sent });
-				await new Promise((resolve) => setTimeout(resolve, 40));
+				fixture.calledAt.push(Date.now());
+				await new Promise((resolve) => setTimeout(resolve, fixture.delayMs));
 				const intent: FakeIntent = {
 					id: `pi_${fixture.created.length + 1}`,
 					status: "succeeded",
@@ -463,6 +466,86 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 
 			expect((await runAutoTopUp(automatic.accountId)).state).toBe("succeeded");
+		});
+
+		it("holds the owner lock only while reserving, not through a slow Stripe call", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const { lockInfraAccount } = await import("@/lib/infra-balance");
+			const ownerId = await makeOwner();
+			const slow = await makeAccount(30_000, { ownerId });
+			const other = await makeAccount(30_000, { ownerId });
+			fixture.delayMs = 2_000;
+			try {
+				const startedAt = Date.now();
+				const before = fixture.calledAt.length;
+				const topUp = runAutoTopUp(slow.accountId);
+				while (fixture.calledAt.length === before) {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				}
+				const lockHeldMs = (fixture.calledAt.at(-1) ?? 0) - startedAt;
+
+				const waitStarted = Date.now();
+				await (fixture.database as MySql2Database).transaction(async (tx) => {
+					await lockInfraAccount(tx, other.appId);
+				});
+				const otherAppWaitedMs = Date.now() - waitStarted;
+
+				expect((await topUp).state).toBe("succeeded");
+				const stripeCallMs = Date.now() - (fixture.calledAt.at(-1) ?? 0);
+				console.log(
+					JSON.stringify({ lockHeldMs, otherAppWaitedMs, stripeCallMs }),
+				);
+				expect(stripeCallMs).toBeGreaterThanOrEqual(1_900);
+				expect(otherAppWaitedMs).toBeLessThan(200);
+			} finally {
+				fixture.delayMs = 40;
+			}
+		});
+
+		it("recovers a reservation left by a crash before Stripe was called, with one charge", async () => {
+			const { autoTopUpIdempotencyKey, runAutoTopUp } = await import(
+				"@/lib/infra-auto-top-up"
+			);
+			const { accountId } = await makeAccount(30_000);
+			const key = autoTopUpIdempotencyKey(accountId, {
+				topUps: 0,
+				declines: 0,
+			});
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":500}')`,
+				[id(), accountId, key],
+			);
+			const before = fixture.createdKeys.length;
+
+			expect((await runAutoTopUp(accountId)).state).toBe("succeeded");
+			expect((await runAutoTopUp(accountId)).state).toBe("skipped");
+
+			expect(fixture.createdKeys.slice(before)).toEqual([key]);
+			expect(await topUpsOf(accountId)).toHaveLength(1);
+			const [rows] = await pool.query(
+				"SELECT COUNT(*) AS n FROM developer_credit_transactions WHERE accountId = ? AND type = 'topup_pending'",
+				[accountId],
+			);
+			expect(Number((rows as { n: number }[])[0]?.n)).toBe(0);
+		});
+
+		it("recovers a reservation whose payment Stripe made before a crash, with one charge", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { accountId } = await makeAccount(30_000);
+			const before = fixture.created.length;
+
+			fixture.loseNextResponse = true;
+			expect(await runAutoTopUp(accountId)).toEqual({ state: "error" });
+			expect(await topUpsOf(accountId)).toHaveLength(0);
+			expect((await runAutoTopUp(accountId)).state).toBe("succeeded");
+
+			expect(fixture.created.length - before).toBe(1);
+			expect(await topUpsOf(accountId)).toHaveLength(1);
+			expect(await balanceOf(accountId)).toBe(530_000);
+			errors.mockRestore();
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {
