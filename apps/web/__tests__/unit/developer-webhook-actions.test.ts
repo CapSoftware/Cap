@@ -9,6 +9,7 @@ const context = vi.hoisted(() => ({
 	},
 	user: null as null | { id: string; email: string },
 	limited: false,
+	budgetOwners: [] as string[],
 	resolved: ["93.184.216.34"] as string[],
 	request: null as
 		| null
@@ -39,13 +40,14 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ DATABASE_ENCRYPTION_KEY: "ab".repeat(32) }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("@/lib/developer-app-limits", async (importOriginal) => ({
-	...(await importOriginal<typeof import("@/lib/developer-app-limits")>()),
-	developerConsoleRequestLimited: async () => context.limited,
-}));
+vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
+		developerOwnerRequestLimited: async (ownerId: string) => {
+			context.budgetOwners.push(ownerId);
+			return context.limited;
+		},
 		withDeveloperSecretAuth: createMiddleware(async (c, next) => {
 			c.set("developerAppId", "app-a");
 			await next();
@@ -130,6 +132,7 @@ beforeEach(() => {
 	});
 	context.user = OWNER_A;
 	context.limited = false;
+	context.budgetOwners = [];
 	context.resolved = ["93.184.216.34"];
 	context.request = null;
 });
@@ -395,6 +398,7 @@ describe("console webhook actions: secrets and the rest", () => {
 		});
 		expect(result).toMatchObject({ status: 429, code: "rate_limited" });
 		expect(endpoints()).toHaveLength(0);
+		expect(context.budgetOwners).toEqual([OWNER_A.id]);
 	});
 });
 

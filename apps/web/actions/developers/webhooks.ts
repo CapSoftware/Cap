@@ -5,10 +5,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import {
-	DEVELOPER_CONSOLE_RATE_MESSAGE,
-	developerConsoleRequestLimited,
-} from "@/lib/developer-app-limits";
+import { headers } from "next/headers";
+import { developerOwnerRequestLimited } from "@/app/api/utils";
 import {
 	createWebhookEndpointInput,
 	updateWebhookEndpointInput,
@@ -85,10 +83,15 @@ async function ownedApp(appId: unknown): Promise<Access> {
 		.limit(1);
 	if (!app) return { ok: false, failure: appNotFound() };
 
-	if (await developerConsoleRequestLimited(user.id)) {
+	if (await developerOwnerRequestLimited(user.id, await headers())) {
 		return {
 			ok: false,
-			failure: refuse(429, "rate_limited", DEVELOPER_CONSOLE_RATE_MESSAGE),
+			failure: refuse(
+				429,
+				"rate_limited",
+				"Too many requests at once",
+				"Your account's API requests count here too. Try again in a minute.",
+			),
 		};
 	}
 	return { ok: true, appId: app.id };
