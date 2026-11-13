@@ -316,9 +316,26 @@ export async function chargeDeveloperVideoFirstMonth(
 		.where(eq(developerVideos.id, videoId))
 		.limit(1);
 	if (!found) return skipped("missing");
-	return executor.transaction((tx) =>
+	const result = await executor.transaction((tx) =>
 		settleFirstMonth(tx, videoId, found.appId, options),
 	);
+	if (result.state === "charged" && result.chargedMicroCredits > 0) {
+		const scheduled = scheduleTopUpAfterCharge(result.accountId);
+		if (!options.executor) await scheduled;
+	}
+	return result;
+}
+
+async function scheduleTopUpAfterCharge(accountId: string) {
+	try {
+		const { scheduleAutoTopUp } = await import("@/lib/infra-auto-top-up");
+		await scheduleAutoTopUp({ accountId });
+	} catch (error) {
+		console.error("[infra-storage] Auto top-up after a first month failed", {
+			accountId,
+			error,
+		});
+	}
 }
 
 export async function settleFirstMonthAtDelete(
