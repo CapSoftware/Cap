@@ -187,6 +187,8 @@ POST /api/developer/v1/uploads
 
 The body is optional. A request with no body creates an upload with the defaults.
 
+**Supported formats.** Cap Infra accepts MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video. Other files are refused when processing starts, and the video's `errorReason` says why.
+
 Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
 A field this list does not have returns `400` with the code `invalid_request`, and the error names the field. Field names are case-sensitive, so `user_id` in place of `userId` is refused instead of creating a video with no user:
@@ -1120,7 +1122,7 @@ POST /api/developer/sdk/v1/upload/multipart/initiate
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `videoId` | string | No | The token's video ID |
-| `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska`, `video/avi` or `application/octet-stream`. Any other value is stored as `video/mp4` |
+| `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska` or `application/octet-stream`. `video/avi` and `video/x-msvideo` are refused with `400` and the code `unsupported_content_type`, before anything is uploaded. Any other value is stored as `video/mp4` |
 | `contentLength` | integer | No | Size of the whole file in bytes. A file over the token's `maxBytes` or over 36 GB is refused here with `400` and the code `file_too_large`, before anything is uploaded |
 
 **Example request:**
