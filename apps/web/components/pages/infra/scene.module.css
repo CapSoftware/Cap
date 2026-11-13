@@ -8,7 +8,7 @@
 	position: relative;
 	isolation: isolate;
 	overflow: hidden;
-	padding: 112px 0 468px;
+	padding: 140px 0 468px;
 }
 
 .art,
@@ -254,7 +254,7 @@
 @media (min-width: 1024px) {
 	.hero {
 		height: clamp(700px, 100svh, 940px);
-		padding: 0;
+		padding: 28px 0 0;
 	}
 
 	.art,
