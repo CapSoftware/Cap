@@ -8,6 +8,7 @@ import type { User } from "@cap/web-domain";
 import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
+import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import { developerVideoPageUrls } from "@/lib/developer-video-api";
 import {
 	admitDeveloperVideoUpload,
@@ -23,6 +24,10 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
+import {
+	developerVideoPublicMetadata,
+	withoutReservedMetadata,
+} from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
@@ -320,18 +325,114 @@ export async function ownsInfraApp(
 	return !!app;
 }
 
+const canonicalJson = (value: unknown): string => {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value && typeof value === "object") {
+		return `{${Object.keys(value)
+			.sort()
+			.map(
+				(key) =>
+					`${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+			)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value ?? null);
+};
+
+const storedJson = (value: unknown) => {
+	if (typeof value !== "string") return value ?? null;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return value;
+	}
+};
+
+const idempotencyConflict = (message: string) =>
+	fail(
+		409,
+		"idempotency_conflict",
+		message,
+		"Send the same request to repeat it, or use a new Idempotency-Key for a new video.",
+	);
+
+type VideoRequest = {
+	name: string;
+	externalUserId: string | null;
+	metadata: Record<string, unknown> | null;
+	maxResolutionTier: DeveloperVideoResolutionTier;
+};
+
+async function replayKeyedVideo(
+	appId: string,
+	videoId: string,
+	request: VideoRequest,
+) {
+	const [video] = await db()
+		.select({
+			appId: developerVideos.appId,
+			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
+			metadata: developerVideos.metadata,
+			maxResolutionTier: developerVideos.maxResolutionTier,
+			playbackId: developerVideos.playbackId,
+			deletedAt: developerVideos.deletedAt,
+		})
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId))
+		.limit(1);
+	if (!video) return null;
+	if (video.appId !== appId) {
+		return idempotencyConflict(
+			"Idempotency key was already used for a different request",
+		);
+	}
+	const differs =
+		video.name !== request.name
+			? "name"
+			: (video.externalUserId ?? null) !== request.externalUserId
+				? "userId"
+				: video.maxResolutionTier !== request.maxResolutionTier
+					? "maxResolutionTier"
+					: canonicalJson(
+								developerVideoPublicMetadata(storedJson(video.metadata)),
+							) !== canonicalJson(request.metadata)
+						? "metadata"
+						: null;
+	if (differs) {
+		return idempotencyConflict(
+			`Idempotency key was already used with a different ${differs}`,
+		);
+	}
+	if (video.deletedAt) {
+		return idempotencyConflict(
+			"Idempotency key belongs to a video that was deleted",
+		);
+	}
+	const upload = await openUpload(appId, videoId);
+	if (upload.status !== 200) return upload;
+	if (!video.playbackId) return videoNotUploadable();
+	return ok({
+		videoId,
+		playbackId: video.playbackId,
+		...developerVideoPageUrls(video.playbackId, buildEnv.NEXT_PUBLIC_WEB_URL),
+	});
+}
+
 export async function createInfraVideo({
 	appId,
 	name,
 	userId,
 	metadata,
 	maxResolutionTier,
+	idempotencyKey,
 }: {
 	appId: string;
 	name?: string;
 	userId?: string;
 	metadata?: Record<string, unknown>;
 	maxResolutionTier?: DeveloperVideoResolutionTier;
+	idempotencyKey?: string;
 }): Promise<
 	UploadResult<{
 		videoId: string;
@@ -345,23 +446,42 @@ export async function createInfraVideo({
 		return { status: 402, body: uploadAdmissionError(admission) };
 	}
 
-	const videoId = nanoId();
-	const playbackId = createDeveloperPlaybackId();
-	const s3Key = `developer/${appId}/${videoId}/video`;
+	const request: VideoRequest = {
+		name: name ?? "Untitled",
+		externalUserId: userId?.trim() || null,
+		// The takedown marker key is Cap's own, so a client cannot set it.
+		metadata: withoutReservedMetadata(metadata) ?? null,
+		maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
+	};
+	const videoId = idempotencyKey
+		? developerVideoIdForIdempotencyKey(appId, idempotencyKey)
+		: nanoId();
 
-	await db()
+	if (idempotencyKey) {
+		const replayed = await replayKeyedVideo(appId, videoId, request);
+		if (replayed) return replayed;
+	}
+
+	const playbackId = createDeveloperPlaybackId();
+	const insert = db()
 		.insert(developerVideos)
 		.values({
 			id: videoId,
 			appId,
-			externalUserId: userId?.trim() || null,
-			name: name ?? "Untitled",
-			s3Key,
-			metadata,
+			externalUserId: request.externalUserId,
+			name: request.name,
+			s3Key: `developer/${appId}/${videoId}/video`,
+			metadata: request.metadata,
 			playbackId,
-			maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
+			maxResolutionTier: request.maxResolutionTier,
 		});
 
+	if (idempotencyKey) {
+		await insert.onDuplicateKeyUpdate({ set: { id: videoId } });
+		return (await replayKeyedVideo(appId, videoId, request)) ?? videoNotFound();
+	}
+
+	await insert;
 	return ok({
 		videoId,
 		playbackId,
@@ -441,11 +561,13 @@ export async function presignInfraUploadParts({
 	videoId,
 	uploadId,
 	partNumbers,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
 	uploadId: string;
 	partNumbers: readonly number[];
+	maxBytes?: number | null;
 }): Promise<
 	UploadResult<{ parts: { partNumber: number; presignedUrl: string }[] }>
 > {
@@ -455,6 +577,25 @@ export async function presignInfraUploadParts({
 			"invalid_part_count",
 			`Ask for 1 to ${MAX_PRESIGN_BATCH} parts at a time`,
 			"Split the part numbers across several presign requests.",
+		);
+	}
+	const byteLimit = uploadByteLimit(maxBytes);
+	const highestPart = Math.max(1, Math.ceil(byteLimit / MIN_PART_BYTES));
+	const overPart = partNumbers.find((partNumber) => partNumber > highestPart);
+	if (overPart !== undefined) {
+		return fail(
+			400,
+			"part_number_too_large",
+			`Part number ${overPart} is over ${highestPart}, the highest part number this upload can use`,
+			[
+				byteLimit < MAX_UPLOAD_BYTES
+					? `Every part except the last is at least 5 MB, so a file within the ${byteLimit} byte limit set for this upload never needs a part number above ${highestPart}.`
+					: `Every part except the last is at least 5 MB, so a file within the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit never needs a part number above ${highestPart}.`,
+				"No part in this request was signed. Number the parts from 1 with no gaps",
+				byteLimit < MAX_UPLOAD_BYTES
+					? "and ask again, or get a token with a larger maxBytes from your server."
+					: "and ask again.",
+			].join(" "),
 		);
 	}
 	const upload = await openUpload(appId, videoId);
@@ -931,11 +1072,8 @@ export async function abortInfraUpload({
 
 		return ok({ success: true });
 	} catch (error) {
-		if (storageErrorCode(error) === "NoSuchUpload") {
-			return uploadNotFound(
-				"Nothing was aborted. The upload was already aborted or completed, or the uploadId is wrong.",
-			);
-		}
+		if (storageErrorCode(error) === "NoSuchUpload")
+			return ok({ success: true });
 		console.error("Error aborting multipart upload:", error);
 		return storageFailure("Failed to abort upload");
 	}

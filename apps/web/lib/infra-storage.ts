@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
-import { and, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
@@ -24,12 +24,14 @@ const APP_ID_CHUNK = 500;
 export type StorageUsageOptions = {
 	includeProcessing?: boolean;
 	excludeVideoId?: string;
+	createdBefore?: Date;
 };
 
 async function storedVideoGroups(
 	appIds: readonly string[],
 	executor: InfraDbExecutor,
 	excludeVideoId?: string,
+	createdBefore?: Date,
 ) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
@@ -55,6 +57,9 @@ async function storedVideoGroups(
 					isNull(developerVideos.deletedAt),
 					isNotNull(developerVideos.duration),
 					excludeVideoId ? ne(developerVideos.id, excludeVideoId) : undefined,
+					createdBefore
+						? lt(developerVideos.createdAt, createdBefore)
+						: undefined,
 				),
 			)
 			.groupBy(
@@ -85,6 +90,7 @@ export async function getStorageUsageByApp(
 			appIds,
 			executor,
 			options.excludeVideoId,
+			options.createdBefore,
 		)) {
 			entriesByApp.get(group.appId)?.push({
 				video: billableVideo({
@@ -122,4 +128,35 @@ export async function getAppStorageUsage(
 		options,
 	);
 	return usageByApp.get(appId) ?? storageUsage([]);
+}
+
+export type AppStorage = { stored: StorageUsage; counted: StorageUsage };
+
+export async function getAppStorage(
+	appId: string,
+	newVideo?: BillableVideo | null,
+	executor: InfraDbExecutor = db(),
+	options: Pick<StorageUsageOptions, "excludeVideoId"> = {},
+): Promise<AppStorage> {
+	const groups = await storedVideoGroups(
+		[appId],
+		executor,
+		options.excludeVideoId,
+	);
+	const usage = (includeProcessing: boolean) =>
+		storageUsage([
+			...groups.map((group) => ({
+				video: billableVideo({
+					duration: Number(group.seconds),
+					width: group.width,
+					height: group.height,
+					status: group.status,
+					maxResolutionTier: group.maxResolutionTier,
+					includeProcessing,
+				}),
+				count: Number(group.count) || 0,
+			})),
+			...(newVideo ? [{ video: newVideo, count: 1 }] : []),
+		]);
+	return { stored: usage(false), counted: usage(true) };
 }

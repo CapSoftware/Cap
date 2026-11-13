@@ -22,6 +22,7 @@ const payloadSchema = z
 		exp: z.number().int().positive().safe(),
 		origin: z.string().min(1).max(253).nullable(),
 		max: z.number().int().positive().safe().optional(),
+		key: z.string().min(1).max(255).optional(),
 	})
 	.strict();
 
@@ -31,6 +32,7 @@ export type DeveloperUploadToken = {
 	expiresAt: number;
 	corsOrigin: string | null;
 	maxBytes?: number;
+	keyId?: string;
 };
 
 export type DeveloperUploadTokenCheck =
@@ -54,6 +56,7 @@ export function createDeveloperUploadToken(token: DeveloperUploadToken) {
 				exp: token.expiresAt,
 				origin: token.corsOrigin,
 				max: token.maxBytes,
+				key: token.keyId,
 			}),
 		),
 	).toString("base64url");
@@ -103,6 +106,7 @@ export function verifyDeveloperUploadToken(
 			expiresAt: parsed.data.exp,
 			corsOrigin: parsed.data.origin,
 			...(parsed.data.max === undefined ? {} : { maxBytes: parsed.data.max }),
+			...(parsed.data.key === undefined ? {} : { keyId: parsed.data.key }),
 		},
 	};
 }
@@ -128,7 +132,11 @@ export function missingUploadTokenRefusal(credential: string | undefined) {
 	return apiErrorBody("invalid_upload_token", sent, CREATE_UPLOAD_HINT);
 }
 
-export const uploadTokenRefusal = (reason: "invalid" | "expired") =>
+const ROTATED_KEY_HINT = `The secret key that created this token was rotated or revoked, and its upload tokens stopped working with it. Get a new token for the same video from your server with POST ${RENEW_UPLOAD_TOKEN_PATH} and the current secret key, then continue the upload with it.`;
+
+export const uploadTokenRefusal = (
+	reason: "invalid" | "expired" | "rotated",
+) =>
 	reason === "expired"
 		? apiErrorBody(
 				"upload_token_expired",
@@ -138,5 +146,5 @@ export const uploadTokenRefusal = (reason: "invalid" | "expired") =>
 		: apiErrorBody(
 				"invalid_upload_token",
 				"Upload token is not valid",
-				CREATE_UPLOAD_HINT,
+				reason === "rotated" ? ROTATED_KEY_HINT : CREATE_UPLOAD_HINT,
 			);

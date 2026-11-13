@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
@@ -12,8 +12,8 @@ import {
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
-import { getAppStorageUsage } from "@/lib/infra-storage";
-import { formatCredits, formatNeed } from "@/lib/infra-usage";
+import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
+import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
@@ -111,6 +111,18 @@ export function resolveStanding({
 	};
 }
 
+const storageDayCeiling = () =>
+	utcDateKey(new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+const storageDayRows = () =>
+	and(
+		eq(developerCreditTransactions.type, "storage_daily"),
+		eq(developerCreditTransactions.referenceType, STORAGE_DAY_REFERENCE_TYPE),
+	);
+
+const latestStorageDay = (accountId: string, ceiling: string) =>
+	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
+
 export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
@@ -124,12 +136,48 @@ export async function latestStorageCharge(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "storage_daily"),
+				storageDayRows(),
+				lte(developerCreditTransactions.referenceId, storageDayCeiling()),
 			),
 		)
-		.orderBy(desc(developerCreditTransactions.createdAt))
+		.orderBy(
+			desc(developerCreditTransactions.referenceId),
+			desc(developerCreditTransactions.id),
+		)
 		.limit(1);
 	return row ? parseStorageCharge(row) : null;
+}
+
+export async function latestStorageCharges(
+	executor: InfraDbExecutor,
+	accountIds: readonly string[],
+) {
+	const charges = new Map<string, StorageCharge>();
+	if (accountIds.length === 0) return charges;
+	const ceiling = storageDayCeiling();
+	const rows = await executor
+		.select({
+			id: developerCreditTransactions.id,
+			accountId: developerCreditTransactions.accountId,
+			createdAt: developerCreditTransactions.createdAt,
+			metadata: developerCreditTransactions.metadata,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				storageDayRows(),
+				sql`(${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId}) in (select latest.accountId, latest.referenceId from (${sql.join(
+					accountIds.map((accountId) => latestStorageDay(accountId, ceiling)),
+					sql` union all `,
+				)}) latest)`,
+			),
+		);
+	for (const row of [...rows].sort((a, b) => (a.id < b.id ? 1 : -1))) {
+		if (!charges.has(row.accountId)) {
+			charges.set(row.accountId, parseStorageCharge(row));
+		}
+	}
+	return charges;
 }
 
 export async function restoredSinceCharge(
@@ -315,18 +363,19 @@ export async function getInfraBilling(
 	newVideo?: BillableVideo | null,
 	now: Date = new Date(),
 	executor?: InfraDbExecutor,
-	options: { excludeVideoId?: string } = {},
+	options: { excludeVideoId?: string; storage?: AppStorage } = {},
 ) {
-	const counted = { ...options, includeProcessing: true };
-	const [{ account, lastCharge, standing }, usage] = executor
+	const [{ account, lastCharge, standing }, storage] = executor
 		? [
 				await appStanding(appId, now, executor),
-				await getAppStorageUsage(appId, newVideo, executor, counted),
+				options.storage ??
+					(await getAppStorage(appId, newVideo, executor, options)),
 			]
 		: await Promise.all([
 				appStanding(appId, now),
-				getAppStorageUsage(appId, newVideo, undefined, counted),
+				options.storage ?? getAppStorage(appId, newVideo, undefined, options),
 			]);
+	const usage = storage.counted;
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,
 		standing,
@@ -336,6 +385,7 @@ export async function getInfraBilling(
 	return {
 		standing,
 		usage,
+		stored: storage.stored,
 		admission: account
 			? admission
 			: {
@@ -351,7 +401,7 @@ export async function getInfraUploadAdmission(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	executor?: InfraDbExecutor,
-	options: { excludeVideoId?: string } = {},
+	options: { excludeVideoId?: string; storage?: AppStorage } = {},
 ): Promise<InfraUploadAdmission> {
 	return (await getInfraBilling(appId, newVideo, new Date(), executor, options))
 		.admission;

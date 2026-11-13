@@ -38,7 +38,11 @@ vi.mock("@cap/database", async () => {
 					limit: async () => rowsFor(table, fields),
 					groupBy: async () => rowsFor(table, fields),
 				});
-			const query = { innerJoin: () => query, where };
+			const query = {
+				innerJoin: () => query,
+				leftJoin: () => query,
+				where,
+			};
 			return query;
 		},
 	});
@@ -115,6 +119,7 @@ import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
+import { getAppStorage } from "@/lib/infra-storage";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
@@ -127,6 +132,7 @@ const freshKey = (prefix: "csk" | "cpk" | "cut") =>
 				videoId: `video-${++keySerial}`,
 				expiresAt: Date.now() + 60_000,
 				corsOrigin: null,
+				keyId: "key-contract",
 			})
 		: `${prefix}_key_${++keySerial}`;
 
@@ -157,6 +163,11 @@ const rateLimit = (response: Response) => ({
 	retryAfter: response.headers.get("Retry-After"),
 });
 
+const billingOf = async (billing: Record<string, unknown>) => ({
+	...billing,
+	stored: (await getAppStorage("app-1")).stored,
+});
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
@@ -183,7 +194,9 @@ beforeEach(() => {
 		},
 	];
 	mocks.selected = [];
-	mocks.billing.mockResolvedValue({ standing: { state: "active" } });
+	mocks.billing.mockImplementation(() =>
+		billingOf({ standing: { state: "active" } }),
+	);
 	mocks.createVideo.mockResolvedValue({
 		status: 200,
 		body: { videoId: "video-1" },
@@ -335,6 +348,7 @@ describe("rate limit headers", () => {
 			"X-RateLimit-Limit",
 			"X-RateLimit-Remaining",
 			"X-RateLimit-Reset",
+			"X-Request-Id",
 		]);
 	});
 });
@@ -626,10 +640,32 @@ describe("browser access", () => {
 			"access-control-allow-methods": "GET,POST,OPTIONS",
 			"access-control-allow-headers": "Content-Type,Authorization",
 			"access-control-expose-headers":
-				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,X-Request-Id",
+			"access-control-max-age": "7200",
+			"cache-control": "private, no-store",
 			vary: "Access-Control-Request-Headers",
 		});
 	});
+
+	it.each([
+		"/api/developer/sdk/v1/upload/multipart/initiate",
+		"/api/developer/sdk/v1/upload/multipart/presign-part",
+		"/api/developer/sdk/v1/upload/multipart/complete",
+		"/api/developer/sdk/v1/upload/multipart/abort",
+	])(
+		"lets a browser cache the preflight for %s for two hours",
+		async (path) => {
+			const preflight = await call(sdk, "OPTIONS", path, {
+				headers: {
+					...PREFLIGHT_HEADERS,
+					"Access-Control-Request-Method": "POST",
+				},
+			});
+
+			expect(preflight.status).toBe(204);
+			expect(preflight.headers.get("Access-Control-Max-Age")).toBe("7200");
+		},
+	);
 
 	it("still lets a page read an upload route's answer", async () => {
 		const response = await call(
@@ -645,6 +681,48 @@ describe("browser access", () => {
 
 		expect(response.status).toBe(200);
 		expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+});
+
+describe("the credential sent to the REST API", () => {
+	it("says the key is missing when no Authorization header is sent", async () => {
+		const response = await getUsage("");
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Missing secret key",
+			hint: expect.stringContaining("No Authorization header was sent"),
+		});
+	});
+
+	it("refuses a public key with its own code", async () => {
+		const response = await getUsage(freshKey("cpk"));
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			code: "public_key_not_allowed",
+			error: "Public keys cannot call the REST API",
+			hint: expect.stringContaining("csk_"),
+		});
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+
+	it("keeps the answers for any other credential and for a wrong secret key", async () => {
+		const other = await getUsage("not_a_key");
+		mocks.keyRows = [];
+		const wrong = await getUsage(freshKey("csk"));
+
+		expect(other.status).toBe(401);
+		expect(await other.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Invalid secret key",
+		});
+		expect(wrong.status).toBe(401);
+		expect(await wrong.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Invalid or revoked secret key",
+		});
 	});
 });
 
@@ -898,7 +976,9 @@ describe("usage", () => {
 	});
 
 	it("returns the fields the OpenAPI description requires", async () => {
-		mocks.billing.mockResolvedValue({ standing: {}, upload: {}, storage: {} });
+		mocks.billing.mockImplementation(() =>
+			billingOf({ standing: {}, upload: {}, storage: {} }),
+		);
 		const schema = developerOpenApiSpec(ORIGIN).components.schemas.Usage;
 
 		const data = await usage();
@@ -907,5 +987,134 @@ describe("usage", () => {
 		expect(Object.keys(data.rates).sort()).toEqual(
 			[...schema.properties.rates.required].sort(),
 		);
+	});
+});
+
+describe("Idempotency-Key on create upload", () => {
+	const create = (headers: Record<string, string>) =>
+		call(rest, "POST", "/api/developer/v1/uploads", {
+			key: freshKey("csk"),
+			headers: { "Content-Type": "application/json", ...headers },
+			body: JSON.stringify({ name: "Demo" }),
+		});
+
+	it("passes a valid key to the store", async () => {
+		const response = await create({ "Idempotency-Key": "retry-upload-0001" });
+
+		expect(response.status).toBe(200);
+		expect(mocks.createVideo).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-1",
+			name: "Demo",
+			idempotencyKey: "retry-upload-0001",
+		});
+	});
+
+	it.each([
+		["too short", "short"],
+		["a colon", "retry:upload:0001"],
+		["a space", "retry upload 0001"],
+		["too long", "k".repeat(129)],
+	])("refuses a key with %s before creating anything", async (_label, key) => {
+		const response = await create({ "Idempotency-Key": key });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_idempotency_key",
+			error: "Idempotency-Key is not valid",
+		});
+		expect(mocks.createVideo).not.toHaveBeenCalled();
+	});
+});
+
+describe("response headers on the developer APIs", () => {
+	const PRIVATE = "private, no-store";
+
+	it("marks every secret-key API answer private, errors and limits included", async () => {
+		const key = freshKey("csk");
+		const answers = [
+			await call(rest, "GET", "/api/developer/v1/usage", { key }),
+			await call(rest, "GET", "/api/developer/v1/usage"),
+			await call(rest, "GET", "/api/developer/v1/nope", { key }),
+			await call(rest, "POST", "/api/developer/v1/usage", { key }),
+		];
+		for (
+			let request = 3;
+			request < DEVELOPER_KEY_REQUESTS_PER_MINUTE;
+			request++
+		) {
+			await call(rest, "GET", "/api/developer/v1/usage", { key });
+		}
+		answers.push(await call(rest, "GET", "/api/developer/v1/usage", { key }));
+
+		expect(answers.map((response) => response.status)).toEqual([
+			200, 401, 404, 405, 429,
+		]);
+		for (const response of answers) {
+			expect(response.headers.get("Cache-Control")).toBe(PRIVATE);
+		}
+	});
+
+	it("marks the upload token API answers private too", async () => {
+		const answers = [
+			await call(
+				sdk,
+				"POST",
+				"/api/developer/sdk/v1/upload/multipart/initiate",
+				{
+					key: freshKey("cut"),
+					headers: { "Content-Type": "application/json" },
+					body: "{}",
+				},
+			),
+			await call(
+				sdk,
+				"POST",
+				"/api/developer/sdk/v1/upload/multipart/initiate",
+				{
+					headers: { "Content-Type": "application/json" },
+					body: "{}",
+				},
+			),
+		];
+
+		expect(answers.map((response) => response.status)).toEqual([200, 401]);
+		for (const response of answers) {
+			expect(response.headers.get("Cache-Control")).toBe(PRIVATE);
+		}
+	});
+
+	it("echoes the platform request id and lets a page read it", async () => {
+		const requestId = "fra1::iad1::abcde-1763031000000-0123456789ab";
+		const rested = await call(rest, "GET", "/api/developer/v1/usage", {
+			key: freshKey("csk"),
+			headers: { "x-vercel-id": requestId },
+		});
+		const sdked = await call(
+			sdk,
+			"POST",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
+			{
+				key: freshKey("cut"),
+				headers: {
+					Origin: "https://app.example",
+					"Content-Type": "application/json",
+					"x-vercel-id": requestId,
+				},
+				body: "{}",
+			},
+		);
+
+		expect(rested.headers.get("X-Request-Id")).toBe(requestId);
+		expect(sdked.headers.get("X-Request-Id")).toBe(requestId);
+		expect(
+			sdked.headers
+				.get("Access-Control-Expose-Headers")
+				?.split(",")
+				.map((name) => name.trim()),
+		).toContain("X-Request-Id");
+		const withoutId = await call(rest, "GET", "/api/developer/v1/usage", {
+			key: freshKey("csk"),
+		});
+		expect(withoutId.headers.get("X-Request-Id")).toBeNull();
 	});
 });
