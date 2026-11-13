@@ -563,7 +563,7 @@ On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that ou
 
 ### Delete Video
 
-Delete a video. It is excluded from every query straight away, and its playback URLs stop answering new viewers within about a minute. Its files (the upload and every encoded output) are removed within about five minutes, and links that were already handed out stop working within about ten minutes of the delete. That includes signed media URLs, however long they still have before they expire. If the video was still being encoded when it was deleted, anything the encoder writes afterwards is removed within four hours.
+Delete a video. It is excluded from every query straight away, and its playback URLs stop answering new viewers within about a minute. Its files (the upload and every encoded output) are removed within about five minutes, and links that were already handed out stop working within about ten minutes of the delete. That includes signed media URLs, however long they still have before they expire. If the video was still being encoded when it was deleted, anything the encoder writes afterwards is removed within four hours. A video deleted while it is being processed is charged its first month too, as [Billing](/docs/api/billing) explains.
 
 Deleting a video this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 

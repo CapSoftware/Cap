@@ -17,6 +17,9 @@ export const TIERS = INFRA_RESOLUTION_TIERS;
 export const STORAGE_RULE =
 	"Each video is charged one month of storage when it first becomes ready, then daily after that. Uploading and encoding stay free.";
 
+export const DELETED_WHILE_PROCESSING_RULE =
+	"A video deleted while it is being processed is charged its first month too.";
+
 export const DEFAULT_TIER: InfraResolutionTier = "1080p";
 
 export const TIER_LABEL: Record<InfraResolutionTier, string> = {
@@ -336,7 +339,7 @@ export const infraFaqs: readonly Faq[] = [
 	...PREVIEW_FAQ,
 	{
 		question: "What does Cap Infra charge for?",
-		answer: `Two things: stored video and speech to text. ${STORAGE_RULE}`,
+		answer: `Two things: stored video and speech to text. ${STORAGE_RULE} ${DELETED_WHILE_PROCESSING_RULE}`,
 	},
 	{
 		question: "How does resolution change the price?",
