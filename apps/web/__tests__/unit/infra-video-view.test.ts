@@ -300,18 +300,21 @@ describe("console video payload", () => {
 			).toBe(`${PAGE}/embed?captions=1`);
 		});
 
-		it("lets autoplay through the iframe only when the snippet autoplays", () => {
+		it("keeps the iframe's attributes whatever the options", () => {
 			const video = { name: "Demo", width: 1920, height: 1080 };
+			const attributes = (code: string) => code.replace(/ src="[^"]*"/, "");
 
 			expect(
-				infraVideoEmbedCode(`${PAGE}/embed`, video, {
-					...DEFAULT_EMBED_OPTIONS,
-					autoplay: true,
-				}),
-			).toContain('allow="autoplay; fullscreen; picture-in-picture"');
-			expect(infraVideoEmbedCode(`${PAGE}/embed`, video)).toContain(
-				'allow="fullscreen; picture-in-picture"',
-			);
+				attributes(
+					infraVideoEmbedCode(`${PAGE}/embed`, video, {
+						color: "#f97316",
+						controls: false,
+						autoplay: true,
+						captions: true,
+						qualityMenu: false,
+					}),
+				),
+			).toBe(attributes(infraVideoEmbedCode(`${PAGE}/embed`, video)));
 		});
 
 		it.each([

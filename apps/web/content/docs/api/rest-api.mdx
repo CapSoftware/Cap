@@ -1533,7 +1533,7 @@ The player has no title of its own, so there is nothing to hide. The quality men
   src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed?color=f97316&radius=12&quality=1080&speed_menu=0&pip=0"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
   allowfullscreen
   loading="lazy"
 ></iframe>
@@ -1567,7 +1567,7 @@ Commands are sent to the iframe's `contentWindow` as `{ type: "cap-player", comm
 | `setQuality` | `quality` | `"auto"`, or a rendition such as `"720p"`, `720` or `"4k"`. A rendition the video does not have is ignored |
 
 ```html
-<iframe id="demo" src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed" title="Product Demo" style="width: 100%; aspect-ratio: 16 / 9; border: 0" allow="fullscreen; picture-in-picture"></iframe>
+<iframe id="demo" src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed" title="Product Demo" style="width: 100%; aspect-ratio: 16 / 9; border: 0" allow="autoplay" allowfullscreen></iframe>
 <script>
   const player = document.getElementById("demo");
   const send = (message) => player.contentWindow.postMessage({ type: "cap-player", ...message }, "https://cap.so");
