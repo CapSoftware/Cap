@@ -966,9 +966,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
-	// The npm package lists its tools in a README that changes only with a
-	// release, so the stdio server gets videos_import in its next release.
-	if (local) return tools.filter((entry) => entry.name !== "videos_import");
+	if (local) return tools;
 	return [
 		...createHostedUploadTools(deps),
 		...tools.filter((entry) => entry.name !== "videos_upload"),

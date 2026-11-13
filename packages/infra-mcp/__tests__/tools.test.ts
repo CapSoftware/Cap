@@ -30,6 +30,7 @@ const EM_DASH = String.fromCharCode(0x2014);
 
 const TOOL_KINDS: Record<string, "read" | "write" | "delete"> = {
 	videos_upload: "write",
+	videos_import: "write",
 	videos_get: "read",
 	videos_wait: "read",
 	videos_list: "read",
