@@ -437,7 +437,9 @@ describe("delivery pricing", () => {
 		expect(consoleText(null, "2026-11-20")).toContain(
 			"Delivery is billed from 20 November 2026. Earlier days are not charged.",
 		);
-		expect(consoleText(null, null)).not.toContain("Delivery is billed from");
+		expect(
+			occurrences(consoleText(null, null), INFRA_DELIVERY_BILLED_FROM_TEXT),
+		).toBe(1);
 
 		for (const source of sourceSurfaces()) {
 			if (source.file.endsWith(".css")) continue;

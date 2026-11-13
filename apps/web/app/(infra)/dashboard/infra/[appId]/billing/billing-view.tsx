@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { LedgerRow } from "@/lib/infra-ledger";
 import {
 	deliveryBilledFromText,
+	INFRA_DELIVERY_BILLED_FROM,
 	INFRA_DELIVERY_PRICE,
 	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
@@ -193,9 +194,7 @@ export function BillingView({
 						then once a day at its resolution. Uploading needs a balance that
 						covers that first month. Delivered video is charged once a day, when
 						the day's figures become final.{" "}
-						{deliveryBilledFrom
-							? `${deliveryBilledFromText(deliveryBilledFrom)} `
-							: null}
+						{`${deliveryBilledFromText(deliveryBilledFrom ?? INFRA_DELIVERY_BILLED_FROM)} `}
 						<Link
 							href="/docs/api/billing"
 							className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
