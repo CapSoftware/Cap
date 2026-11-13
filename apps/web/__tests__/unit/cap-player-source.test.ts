@@ -1165,6 +1165,34 @@ describe("native HLS renditions", () => {
 		).toEqual(["1080p", "720p", "360p"]);
 	});
 
+	it("orders the menu by height when bandwidth does not rise with it", () => {
+		iphone(true);
+		const uneven = [
+			"#EXTM3U",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=3840x2160,AUDIO="aud"',
+			"2160p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1920x1080,AUDIO="aud"',
+			"1080p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1900000,RESOLUTION=1280x720,AUDIO="aud"',
+			"720p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO="aud"',
+			"360p.m3u8",
+		].join("\n");
+		const levels = parseMasterLevels(uneven);
+		const menu = listLevels(levels);
+
+		expect(menu.map((level) => level.label)).toEqual([
+			"4K",
+			"1080p",
+			"720p",
+			"360p",
+		]);
+		const picked = menu.find((level) => level.label === "1080p");
+		expect(renditionSource(HLS, levels[picked?.index ?? -1]?.uri)).toBe(
+			`${HLS}?rendition=1080p`,
+		);
+	});
+
 	it("skips variants that are not Cap renditions", () => {
 		const odd = [
 			"#EXTM3U",

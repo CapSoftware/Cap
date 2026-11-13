@@ -591,6 +591,43 @@ describe("developer video playback route", () => {
 			]);
 		});
 
+		describe("on a constant quality ladder, where bandwidth does not rise with height", () => {
+			const uneven = ladder(
+				variant("2160p", 1_600_000, "3840x2160"),
+				variant("1080p", 800_000, "1920x1080"),
+				variant("720p", 1_900_000, "1280x720"),
+				variant("360p", 900_000, "640x360"),
+			);
+			const names = (body: string) => order(body).sort();
+
+			beforeEach(() => {
+				mocks.readText.mockResolvedValue(uneven);
+			});
+
+			it("caps by height, not bandwidth", async () => {
+				expect(names(await served("?max=1080"))).toEqual([
+					"1080p.m3u8",
+					"360p.m3u8",
+					"720p.m3u8",
+				]);
+				expect(names(await served("?max=720"))).toEqual([
+					"360p.m3u8",
+					"720p.m3u8",
+				]);
+			});
+
+			it("falls back to the shortest rendition, not the cheapest", async () => {
+				expect(order(await served("?max=240"))).toEqual(["360p.m3u8"]);
+			});
+
+			it("picks a rendition by its name whatever its bandwidth", async () => {
+				expect(order(await served("?rendition=1080p"))).toEqual(["1080p.m3u8"]);
+				expect(names(await served("?rendition=2160p&max=1080"))).toEqual(
+					names(await served("?max=1080")),
+				);
+			});
+		});
+
 		it.each([
 			"?rendition=480p",
 			"?rendition=audio",

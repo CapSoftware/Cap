@@ -221,8 +221,10 @@ export function renditionChoice(request: Request): {
 // player offers no way to pick a rendition, so the hosted player picks one by
 // loading a master that lists only it; the audio rendition stays listed, which
 // a rendition's own playlist would leave out. A cap keeps every rendition no
-// taller than it, or the smallest when none is. A choice that matches nothing
-// leaves the master as it is.
+// taller than it, or the shortest when none is, and a pick is made only among
+// those. Height comes from the rendition's name, never from its bandwidth: the
+// ladder is constant quality, so a taller rendition can need less. A choice
+// that matches nothing leaves the master as it is.
 export function selectRenditions(
 	master: string,
 	choice: { rendition: string | null; max: number | null },
@@ -252,23 +254,23 @@ export function selectRenditions(
 	if (variants.length === 0) return master;
 
 	let kept = variants;
-	if (choice.rendition !== null) {
-		const named = variants.filter(
-			(variant) => variant.uri === `${choice.rendition}.m3u8`,
-		);
-		if (named.length > 0) kept = named;
-	}
 	if (choice.max !== null) {
 		const max = choice.max;
-		const below = kept.filter((variant) => variant.height <= max);
+		const below = variants.filter((variant) => variant.height <= max);
 		kept =
 			below.length > 0
 				? below
 				: [
-						kept.reduce((low, variant) =>
+						variants.reduce((low, variant) =>
 							variant.height < low.height ? variant : low,
 						),
 					];
+	}
+	if (choice.rendition !== null) {
+		const named = kept.filter(
+			(variant) => variant.uri === `${choice.rendition}.m3u8`,
+		);
+		if (named.length > 0) kept = named;
 	}
 	if (kept.length === variants.length) return master;
 	return `${[...others, ...kept.flatMap((variant) => variant.lines)].join("\n")}\n`;
