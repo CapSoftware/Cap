@@ -420,6 +420,36 @@ async function replayKeyedVideo(
 	});
 }
 
+const videoRequest = (input: {
+	name?: string;
+	userId?: string;
+	metadata?: Record<string, unknown>;
+	maxResolutionTier?: DeveloperVideoResolutionTier;
+}): VideoRequest => ({
+	name: input.name ?? "Untitled",
+	externalUserId: input.userId?.trim() || null,
+	// The takedown marker key is Cap's own, so a client cannot set it.
+	metadata: withoutReservedMetadata(input.metadata) ?? null,
+	maxResolutionTier: input.maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
+});
+
+// The repeat of a keyed request whose video already exists. Nothing new is
+// stored, so no credit is asked for.
+export async function replayKeyedInfraVideo(input: {
+	appId: string;
+	idempotencyKey: string;
+	name?: string;
+	userId?: string;
+	metadata?: Record<string, unknown>;
+	maxResolutionTier?: DeveloperVideoResolutionTier;
+}) {
+	return replayKeyedVideo(
+		input.appId,
+		developerVideoIdForIdempotencyKey(input.appId, input.idempotencyKey),
+		videoRequest(input),
+	);
+}
+
 export async function createInfraVideo({
 	appId,
 	name,
@@ -427,6 +457,7 @@ export async function createInfraVideo({
 	metadata,
 	maxResolutionTier,
 	idempotencyKey,
+	videoId: reservedVideoId,
 }: {
 	appId: string;
 	name?: string;
@@ -434,6 +465,7 @@ export async function createInfraVideo({
 	metadata?: Record<string, unknown>;
 	maxResolutionTier?: DeveloperVideoResolutionTier;
 	idempotencyKey?: string;
+	videoId?: string;
 }): Promise<
 	UploadResult<{
 		videoId: string;
@@ -448,16 +480,10 @@ export async function createInfraVideo({
 		return { status: 402, body: uploadAdmissionError(admission) };
 	}
 
-	const request: VideoRequest = {
-		name: name ?? "Untitled",
-		externalUserId: userId?.trim() || null,
-		// The takedown marker key is Cap's own, so a client cannot set it.
-		metadata: withoutReservedMetadata(metadata) ?? null,
-		maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
-	};
+	const request = videoRequest({ name, userId, metadata, maxResolutionTier });
 	const videoId = idempotencyKey
 		? developerVideoIdForIdempotencyKey(appId, idempotencyKey)
-		: nanoId();
+		: (reservedVideoId ?? nanoId());
 
 	if (idempotencyKey) {
 		const replayed = await replayKeyedVideo(appId, videoId, request);

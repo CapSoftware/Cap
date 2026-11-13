@@ -23,6 +23,19 @@ const VIDEO_LINKS = [
 
 export const videoLinks = (video: Fields) => pick(video, VIDEO_LINKS);
 
+// A signed source link carries its credentials in the query, which stays out
+// of what the model sees, as for a transcript's source.
+export const videoImport = (video: Fields) => {
+	if (video.import === undefined || video.import === null) return {};
+	const imported = asRecord(video.import);
+	return {
+		import: {
+			...pick(imported, ["state", "errorCode"]),
+			sourceUrl: withoutQuery(imported.sourceUrl),
+		},
+	};
+};
+
 export const videoRow = (video: Fields) => ({
 	...pick(video, ["id", "name", "status", "duration"]),
 	userId: video.externalUserId ?? null,
@@ -43,6 +56,7 @@ export const videoDetail = (video: Fields) => ({
 	...pick(video, ["maxResolutionTier", "metadata", "createdAt"]),
 	...videoLinks(video),
 	...pick(video, ["captions"]),
+	...videoImport(video),
 });
 
 export function transcriptView(
