@@ -1051,7 +1051,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							words: {
 								type: ["array", "null"],
 								description:
-									"Each word with its start and end in seconds. Timings are in steps of 0.08 seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
+									"Each word with its start and end in seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
 								items: {
 									type: "object",
 									required: ["text", "start", "end"],
