@@ -24,10 +24,14 @@ vi.mock("@cap/utils", () => ({
 		checkout: { sessions: { list: mocks.listSessions } },
 	}),
 }));
+vi.mock("@/lib/developer-credits-product", () => ({
+	developerCreditsProductId: () => "prod_credits",
+}));
 
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
+import { creditCheckoutSessionParams } from "@/lib/infra-credit-checkout";
 import {
 	awaitsCreditGrant,
 	refundedShareMicroCredits,
@@ -128,6 +132,12 @@ const creditCheckout = (accountId = "account-1") => ({
 	accountId,
 });
 const autoTopUp = { type: "developer_auto_top_up", accountId: "account-1" };
+const checkoutPaymentTag = creditCheckoutSessionParams({
+	customerId: "cus_1",
+	accountId: "account-1",
+	amountCents: 2500,
+	receiptEmail: "owner@example.com",
+}).payment_intent_data.metadata;
 
 const payments: Record<
 	string,
@@ -144,6 +154,11 @@ const payments: Record<
 	pi_auto: { metadata: autoTopUp },
 	pi_pending: { metadata: autoTopUp },
 	pi_subscription: { invoice: "in_1" },
+	pi_invoiced: {
+		invoice: "in_2",
+		metadata: checkoutPaymentTag,
+		session: creditCheckout(),
+	},
 	pi_pro_checkout: { session: { type: "pro", userId: "user-1" } },
 	pi_unknown: {},
 };
@@ -368,6 +383,40 @@ describe("a refunded top-up", () => {
 		expect(reversals()).toHaveLength(1);
 		expect(mocks.retrievePaymentIntent).not.toHaveBeenCalled();
 		expect(mocks.listSessions).not.toHaveBeenCalled();
+	});
+
+	it("reverses a purchase whose checkout attached an invoice, by the same grant", async () => {
+		await topUp("pi_invoiced");
+
+		const refunded = await reverseRefundedCharge(
+			charge("pi_invoiced", [refund("re_1", 1000)], {
+				invoice: "in_2",
+				metadata: checkoutPaymentTag,
+			} as Partial<Stripe.Charge>),
+		);
+		const disputed = await reverseDisputedPayment(
+			dispute("dp_1", "pi_invoiced"),
+		);
+
+		expect(refunded).toEqual([
+			expect.objectContaining({
+				state: "reversed",
+				deductedMicroCredits: 1_000_000,
+			}),
+		]);
+		expect(disputed).toEqual(
+			expect.objectContaining({
+				state: "reversed",
+				deductedMicroCredits: 1_500_000,
+			}),
+		);
+		expect(reversals().map((row) => row.metadata?.paymentIntentId)).toEqual([
+			"pi_invoiced",
+			"pi_invoiced",
+		]);
+		expect(ledger.account.balanceMicroCredits).toBe(0);
+		expect(mocks.listSessions).not.toHaveBeenCalled();
+		addsUp();
 	});
 
 	it("reverses an auto top-up whose charge carries no metadata", async () => {
