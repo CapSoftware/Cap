@@ -53,6 +53,34 @@ export function settleStorageDay({
 	};
 }
 
+export async function recordStorageDayVisits({
+	appIds,
+	dateKey,
+	now,
+}: {
+	appIds: readonly string[];
+	dateKey: string;
+	now: Date;
+}) {
+	if (appIds.length === 0) return;
+	await db()
+		.insert(developerDailyStorageSnapshots)
+		.values(
+			appIds.map((appId) => ({
+				id: nanoId(),
+				appId,
+				snapshotDate: dateKey,
+				totalDurationMinutes: 0,
+				videoCount: 0,
+				microCreditsCharged: 0,
+				processedAt: now,
+			})),
+		)
+		.onDuplicateKeyUpdate({
+			set: { appId: sql`${developerDailyStorageSnapshots.appId}` },
+		});
+}
+
 export async function chargeStorageDay({
 	appId,
 	accountId,

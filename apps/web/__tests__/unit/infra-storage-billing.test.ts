@@ -311,6 +311,34 @@ describe("daily storage charge", () => {
 		).toHaveLength(1);
 	});
 
+	it("charges a day over an idle visit marker and replaces it", async () => {
+		credit(500_000);
+		ledger.snapshots = [
+			{
+				snapshotDate: dateKey(),
+				totalDurationMinutes: 0,
+				videoCount: 0,
+				microCreditsCharged: 0,
+				processedAt: new Date(ledger.now),
+			},
+		];
+
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+		});
+
+		expect(storageRows()).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([
+			expect.objectContaining({
+				snapshotDate: dateKey(),
+				videoCount: 3,
+				microCreditsCharged: 144,
+			}),
+		]);
+		expect(ledger.snapshots[0]?.totalDurationMinutes).toBeGreaterThan(0);
+	});
+
 	it("does not bill an app that stores nothing", async () => {
 		ledger.videos = [];
 		ledger.account.balanceMicroCredits = 1_000_000;

@@ -13,7 +13,7 @@ import {
 	organizations,
 } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
-import { and, count, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -316,6 +316,7 @@ export async function getInfraStorageSnapshots(
 			and(
 				eq(developerDailyStorageSnapshots.appId, appId),
 				gte(developerDailyStorageSnapshots.snapshotDate, sinceDateKey),
+				gt(developerDailyStorageSnapshots.totalDurationMinutes, 0),
 			),
 		)
 		.orderBy(desc(developerDailyStorageSnapshots.snapshotDate));
