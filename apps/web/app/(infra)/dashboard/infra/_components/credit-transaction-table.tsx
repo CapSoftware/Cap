@@ -16,7 +16,7 @@ function amountText(microCredits: number) {
 
 export const NO_REFERENCE = "–";
 
-export const LEDGER_TYPE_CELL = "w-full min-w-[140px] whitespace-normal";
+export const LEDGER_TYPE_CELL = "w-full min-w-[140px] !whitespace-normal";
 
 export const LEDGER_REFERENCE_CELL =
 	"block max-w-[124px] xl:inline-block xl:max-w-[220px] xl:truncate xl:align-bottom";

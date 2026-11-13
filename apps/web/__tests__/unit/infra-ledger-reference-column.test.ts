@@ -136,9 +136,25 @@ describe("ledger Reference column", () => {
 		const typeCell = container.querySelectorAll("table tbody tr td")[1];
 		const classes = typeCell?.className.split(" ") ?? [];
 		expect(classes).toEqual(
-			expect.arrayContaining(["w-full", "min-w-[140px]", "whitespace-normal"]),
+			expect.arrayContaining(["w-full", "min-w-[140px]", "!whitespace-normal"]),
 		);
 		expect(classes).not.toContain("max-w-0");
+	});
+
+	it("uses the important wrap so the table cell's nowrap cannot win over it", () => {
+		act(() =>
+			root.render(
+				createElement(CreditTransactionTable, { transactions: [row({})] }),
+			),
+		);
+
+		const classes =
+			container
+				.querySelectorAll("table tbody tr td")[1]
+				?.className.split(" ") ?? [];
+		expect(classes).toContain("whitespace-nowrap");
+		expect(classes).toContain("!whitespace-normal");
+		expect(classes).not.toContain("whitespace-normal");
 	});
 
 	it("keeps the phone card reference on one line", () => {
