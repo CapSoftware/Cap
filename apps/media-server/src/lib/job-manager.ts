@@ -399,12 +399,28 @@ export function infraCapacityAllows(input: {
 	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
 }
 
-export function canAcceptNewInfraVideoProcess(heavyLadder: boolean): boolean {
+// The slices of one long Infra video arrive several at a time, so a slice
+// leaves at least half of the worker's slots free instead of only the
+// reserved ones. A slice turned away is sent again by its caller and reaches
+// another worker through the load balancer.
+export function infraSliceReservedSlots(
+	effectiveMax: number,
+	reservedSlots = INFRA_RESERVED_SLOTS,
+): number {
+	return Math.max(reservedSlots, Math.ceil(effectiveMax / 2));
+}
+
+export function canAcceptNewInfraVideoProcess(
+	heavyLadder: boolean,
+	slice = false,
+): boolean {
+	const { effectiveMax } = getSystemResources();
 	return infraCapacityAllows({
-		effectiveMax: getSystemResources().effectiveMax,
+		effectiveMax,
 		active: getActiveVideoProcessCount(),
 		activeHeavyLadders: getActiveInfraHeavyLadderCount(),
 		heavyLadder,
+		...(slice ? { reservedSlots: infraSliceReservedSlots(effectiveMax) } : {}),
 	});
 }
 

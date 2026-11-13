@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	copyFileSync,
@@ -26,6 +26,7 @@ import {
 	registerMediaOperation,
 	unregisterMediaOperation,
 } from "../../lib/media-operations";
+import * as mediaProbe from "../../lib/media-probe";
 import { probeVideoFile } from "../../lib/media-probe";
 import { generateThumbnail } from "../../lib/media-video";
 import { getActiveSubprocessCount } from "../../lib/subprocess";
@@ -354,6 +355,29 @@ describe("HLS ladder encode", () => {
 			for (const operation of running) unregisterMediaOperation(operation);
 		}
 	}, 60_000);
+
+	test("fails a slice instead of guessing the frame rate when its frame timing cannot be read", async () => {
+		const metadata = await probeVideoFile(source);
+		const timing = spyOn(mediaProbe, "probeFastestFrameRate").mockRejectedValue(
+			new Error("frame timing could not be read"),
+		);
+		try {
+			await expect(
+				encodeHlsLadder(source, metadata, {
+					range: { startSeconds: 4, durationSeconds: 4 },
+				}),
+			).rejects.toThrow("frame timing could not be read");
+
+			const whole = await encodeHlsLadder(source, metadata);
+			try {
+				expect(whole.result.renditions.length).toBeGreaterThan(0);
+			} finally {
+				await whole.cleanup();
+			}
+		} finally {
+			timing.mockRestore();
+		}
+	}, 120_000);
 
 	test("starts a slice on time when it begins inside a still stretch", async () => {
 		const still = join(directory, "still.mp4");
