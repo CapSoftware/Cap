@@ -240,6 +240,30 @@ describe("developer video API", () => {
 			});
 		});
 
+		it("reports no duration for a video that failed before it was measured", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				errorReason: "This file could not be read as a video.",
+				duration: 0.02,
+				processing: processingState({
+					...base.processing,
+					probe: null,
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("keeps the measured duration of a video that failed after it was measured", async () => {
+			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBe(12);
+			}
+		});
+
 		it("says none for a video uploaded before encoding existed", async () => {
 			mocks.store.video = {
 				...ready(),

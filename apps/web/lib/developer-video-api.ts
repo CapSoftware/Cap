@@ -64,6 +64,16 @@ export function developerVideoOutputStates(
 	return { hls: state("hls"), mp4: state("mp4") };
 }
 
+// Until a video is measured, its stored duration is only the length the
+// upload declared, held to what its size allows. A video that failed before
+// it could be measured never gets a real one, so it reports none.
+export function developerVideoReportedDuration(
+	video: Pick<DeveloperVideoRow, "status" | "processing" | "duration">,
+): number | null {
+	if (video.status === "errored" && !video.processing?.probe) return null;
+	return video.duration;
+}
+
 export function developerPlaybackBaseUrl(): string {
 	const configured = serverEnv().INFRA_PLAYBACK_URL;
 	const base = configured || `${serverEnv().WEB_URL}/api/developer/playback`;
@@ -121,7 +131,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		status,
 		errorReason: status === "errored" ? video.errorReason : null,
 		playbackId: video.playbackId,
-		durationSeconds: video.duration,
+		durationSeconds: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		fps: video.fps,
@@ -146,6 +156,7 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	} = video;
 	return {
 		...fields,
+		duration: developerVideoReportedDuration(video),
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
 		outputs: developerVideoOutputStates(video),
@@ -173,7 +184,7 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 	return {
 		id: video.id,
 		externalUserId: video.externalUserId,
-		duration: video.duration,
+		duration: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		transcriptionStatus: video.transcriptionStatus,
