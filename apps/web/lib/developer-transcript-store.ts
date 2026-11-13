@@ -9,7 +9,10 @@ import {
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
 import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { start } from "workflow/api";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import {
+	developerIdFromKey,
+	isDeveloperIdempotencyKey,
+} from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -164,12 +167,7 @@ export function transcriptIdForIdempotencyKey(appId: string, key: string) {
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 128 &&
-		/^[A-Za-z0-9._-]+$/.test(value)
-	);
+	return isDeveloperIdempotencyKey(value);
 }
 
 export type TranscriptOptionsInput = {
@@ -863,7 +861,12 @@ export async function deleteTranscript(
 	transcriptId: string,
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
-	if (!transcript) return NOT_FOUND;
+	if (!transcript) {
+		const deleted = await findTranscriptAnyState(appId, transcriptId);
+		if (!deleted?.deletedAt) return NOT_FOUND;
+		await deleteTranscriptObjects(appId, deleted.id);
+		return { ok: true };
+	}
 
 	await db()
 		.update(developerTranscripts)
