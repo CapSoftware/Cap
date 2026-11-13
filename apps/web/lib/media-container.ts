@@ -21,8 +21,49 @@ const M2TS_SYNC_OFFSET = 4;
 
 export const MEDIA_CONTAINER_SNIFF_BYTES = 4096;
 
+const ID3_HEADER_BYTES = 10;
+const ID3_FOOTER_FLAG = 0x10;
+const MAX_ID3_TAGS = 4;
+const MIN_BYTES_AFTER_ID3 = 512;
+
+function id3TagBytes(bytes: Uint8Array, offset: number) {
+	if (
+		bytes.length < offset + ID3_HEADER_BYTES ||
+		!ascii(bytes, offset, "ID3") ||
+		bytes[offset + 3] === 0xff ||
+		bytes[offset + 4] === 0xff
+	) {
+		return null;
+	}
+	let size = 0;
+	for (let index = offset + 6; index < offset + ID3_HEADER_BYTES; index++) {
+		const value = bytes[index] ?? 0;
+		if (value & 0x80) return null;
+		size = size * 128 + value;
+	}
+	const footer =
+		(bytes[offset + 5] ?? 0) & ID3_FOOTER_FLAG ? ID3_HEADER_BYTES : 0;
+	return ID3_HEADER_BYTES + size + footer;
+}
+
+function id3TagsEnd(bytes: Uint8Array) {
+	let end = 0;
+	for (let tags = 0; tags < MAX_ID3_TAGS && end < bytes.length; tags++) {
+		const tagBytes = id3TagBytes(bytes, end);
+		if (tagBytes === null) break;
+		end += tagBytes;
+	}
+	return end;
+}
+
 export function isSelfContainedMedia(bytes: Uint8Array) {
 	if (bytes.length < 4) return false;
+	const tagsEnd = id3TagsEnd(bytes);
+	if (tagsEnd > 0) {
+		return (
+			tagsEnd >= bytes.length || !looksLikePlaylist(bytes.subarray(tagsEnd))
+		);
+	}
 	if (ISO_BOX_TYPES.some((type) => ascii(bytes, 4, type))) return true;
 	if (startsWith(bytes, [0x1a, 0x45, 0xdf, 0xa3])) return true;
 	if (ascii(bytes, 0, "RIFF")) {
@@ -79,7 +120,11 @@ const PLAYLIST_MARKERS = [
 const UTF8_BOM = [0xef, 0xbb, 0xbf];
 const PLAYLIST_MARKER_BYTES = 64;
 
-export function looksLikePlaylist(bytes: Uint8Array) {
+export function looksLikePlaylist(bytes: Uint8Array): boolean {
+	const tagsEnd = id3TagsEnd(bytes);
+	if (tagsEnd > 0) {
+		return tagsEnd < bytes.length && looksLikePlaylist(bytes.subarray(tagsEnd));
+	}
 	let start = startsWith(bytes, UTF8_BOM) ? UTF8_BOM.length : 0;
 	while (
 		start < bytes.length &&
@@ -110,30 +155,59 @@ export async function urlIsSelfContainedMedia(url: string) {
 	return (await sniffMediaUrl(url)) === "media";
 }
 
-export async function sniffMediaUrl(
+async function readSniffWindow(
 	url: string,
-	timeoutMs: number = SNIFF_TIMEOUT_MS,
-): Promise<MediaSniff> {
+	start: number,
+	signal: AbortSignal,
+) {
 	const response = await fetch(url, {
-		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
-		signal: AbortSignal.timeout(timeoutMs),
+		headers: {
+			Range: `bytes=${start}-${start + MEDIA_CONTAINER_SNIFF_BYTES - 1}`,
+		},
+		signal,
 	});
+	if (start > 0 && (response.status === 200 || response.status === 416)) {
+		await response.body?.cancel().catch(() => {});
+		return null;
+	}
 	if (!response.ok || !response.body) {
 		throw new Error(`Could not read the stored file (${response.status})`);
 	}
 	const reader = response.body.getReader();
-	const head = new Uint8Array(MEDIA_CONTAINER_SNIFF_BYTES);
+	const window = new Uint8Array(MEDIA_CONTAINER_SNIFF_BYTES);
 	let filled = 0;
 	try {
-		while (filled < head.length) {
+		while (filled < window.length) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			const take = Math.min(value.length, head.length - filled);
-			head.set(value.subarray(0, take), filled);
+			const take = Math.min(value.length, window.length - filled);
+			window.set(value.subarray(0, take), filled);
 			filled += take;
 		}
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
-	return sniffMedia(head.subarray(0, filled));
+	return window.subarray(0, filled);
+}
+
+export async function sniffMediaUrl(
+	url: string,
+	timeoutMs: number = SNIFF_TIMEOUT_MS,
+): Promise<MediaSniff> {
+	const signal = AbortSignal.timeout(timeoutMs);
+	let start = 0;
+	let window = await readSniffWindow(url, start, signal);
+	for (let reads = 1; window && reads < MAX_ID3_TAGS; reads++) {
+		const tagsEnd = id3TagsEnd(window);
+		if (
+			tagsEnd === 0 ||
+			window.length < MEDIA_CONTAINER_SNIFF_BYTES ||
+			window.length - tagsEnd >= MIN_BYTES_AFTER_ID3
+		) {
+			break;
+		}
+		start += tagsEnd;
+		window = await readSniffWindow(url, start, signal);
+	}
+	return window ? sniffMedia(window) : "media";
 }
