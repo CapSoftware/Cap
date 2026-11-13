@@ -100,10 +100,15 @@ export interface MessageTarget {
 // Events go to any embedding page: they carry only the playback state, never
 // the video's links. Commands are taken only from the embedding page's window,
 // whatever its origin, and only in the shapes parseCommand allows.
+export interface PlayerActions {
+	setQuality: (quality: string) => void;
+	seekDuringSwitch?: (time: number) => boolean;
+}
+
 export const connectMessages = (
 	target: MessageTarget,
 	video: HTMLVideoElement,
-	setQuality: (quality: string) => void,
+	actions: PlayerActions,
 ) => {
 	const send = (
 		event: PlayerEventName,
@@ -118,6 +123,10 @@ export const connectMessages = (
 			? video.duration
 			: null;
 	const seek = (time: number) => {
+		if (actions.seekDuringSwitch?.(time)) {
+			pendingSeek = null;
+			return;
+		}
 		const end = knownDuration();
 		pendingSeek = end === null ? time : null;
 		if (end !== null) video.currentTime = Math.min(end, time);
@@ -125,26 +134,45 @@ export const connectMessages = (
 	const seekWhenKnown = () => {
 		if (pendingSeek !== null && knownDuration() !== null) seek(pendingSeek);
 	};
+	// hls.js attaches its source only after it has loaded, and attaching a
+	// source cancels a play asked for before it. A play sent on ready waits
+	// for the source.
+	let pendingPlay = false;
+	const play = () => {
+		if (!video.currentSrc && !video.getAttribute("src")) {
+			pendingPlay = true;
+			return;
+		}
+		pendingPlay = false;
+		void video.play().catch((error: unknown) => {
+			if (error instanceof Error && error.name === "NotAllowedError") {
+				send("error", { code: "play_refused" });
+			}
+		});
+	};
+	const playWhenAttached = () => {
+		if (pendingPlay) play();
+	};
 
 	const onMessage = (message: MessageEvent) => {
 		if (message.source !== target.parent) return;
 		const parsed = parseCommand(message.data);
 		if (!parsed) return;
-		if (parsed.command === "play") {
-			void video.play().catch((error: unknown) => {
-				if (error instanceof Error && error.name === "NotAllowedError") {
-					send("error", { code: "play_refused" });
-				}
-			});
-		} else if (parsed.command === "pause") video.pause();
-		else if (parsed.command === "mute") video.muted = true;
+		if (parsed.command === "play") play();
+		else if (parsed.command === "pause") {
+			pendingPlay = false;
+			video.pause();
+		} else if (parsed.command === "mute") video.muted = true;
 		else if (parsed.command === "unmute") video.muted = false;
 		else if (parsed.command === "seek") seek(parsed.time);
-		else if (parsed.command === "setQuality") setQuality(parsed.quality);
+		else if (parsed.command === "setQuality") {
+			actions.setQuality(parsed.quality);
+		}
 	};
 
 	const relayed: [string, () => void][] = [
 		["loadedmetadata", seekWhenKnown],
+		["loadedmetadata", playWhenAttached],
 		["durationchange", seekWhenKnown],
 		["play", () => send("play")],
 		["pause", () => send("pause")],

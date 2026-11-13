@@ -1505,6 +1505,21 @@ describe("native HLS renditions", () => {
 		expect(video.paused).toBe(true);
 	});
 
+	it("resumes a switch at a seek asked for while it loads", async () => {
+		const { video, setLevel, index, seekDuringSwitch } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		expect(seekDuringSwitch(3)).toBe(false);
+		setLevel(index("360p"));
+		expect(seekDuringSwitch(18)).toBe(true);
+		video.currentTime = 0;
+		video.reach(30);
+
+		expect(video.currentTime).toBe(18);
+		expect(seekDuringSwitch(5)).toBe(false);
+	});
+
 	it("ignores a pick it has no rendition for", async () => {
 		const { video, setLevel } = await nativePlayer();
 

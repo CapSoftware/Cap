@@ -17,6 +17,7 @@ export interface Attachment {
 	stop: () => void;
 	warm: () => void;
 	setLevel: (index: number) => void;
+	seekDuringSwitch: (time: number) => boolean;
 }
 
 export interface AttachOptions {
@@ -381,9 +382,10 @@ export const attachSource = (
 		video.src = next;
 		switchingFrom = resumeAt;
 		const resume = () => {
+			const at = switchingFrom ?? resumeAt;
 			resumeAfterSwitch = null;
 			switchingFrom = null;
-			if (resumeAt > 0) video.currentTime = resumeAt;
+			if (at > 0) video.currentTime = at;
 		};
 		resumeAfterSwitch = resume;
 		video.addEventListener("loadedmetadata", resume, { once: true });
@@ -463,10 +465,19 @@ export const attachSource = (
 		}
 	};
 
+	// A seek asked for while a quality switch loads becomes the place the
+	// switch resumes at, instead of being overwritten by the old one.
+	const seekDuringSwitch = (time: number) => {
+		if (resumeAfterSwitch === null) return false;
+		switchingFrom = time;
+		return true;
+	};
+
 	const attachment: Attachment = {
 		stop,
 		warm,
 		setLevel: (index) => setLevel(index),
+		seekDuringSwitch,
 	};
 
 	if (mode === "none") {
@@ -475,6 +486,7 @@ export const attachSource = (
 			stop: () => undefined,
 			warm: () => undefined,
 			setLevel: () => undefined,
+			seekDuringSwitch: () => false,
 		};
 	}
 

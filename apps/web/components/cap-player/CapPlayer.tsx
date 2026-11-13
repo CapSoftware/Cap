@@ -1104,9 +1104,11 @@ export const CapPlayer = ({
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!events || !video || window.parent === window) return;
-		const connection = connectMessages(window, video, (name) =>
-			live.current.setQuality(name),
-		);
+		const connection = connectMessages(window, video, {
+			setQuality: (name) => live.current.setQuality(name),
+			seekDuringSwitch: (time) =>
+				attachmentRef.current?.seekDuringSwitch(time) ?? false,
+		});
 		messages.current = connection;
 		return () => {
 			messages.current = null;

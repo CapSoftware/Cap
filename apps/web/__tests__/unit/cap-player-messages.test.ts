@@ -15,6 +15,11 @@ class FakeVideo extends EventTarget {
 	muted = false;
 	plays = 0;
 	refuse = false;
+	currentSrc = "blob:attached";
+
+	getAttribute() {
+		return null;
+	}
 
 	play() {
 		this.plays++;
@@ -32,7 +37,9 @@ class FakeVideo extends EventTarget {
 	}
 }
 
-const embedded = () => {
+const embedded = (
+	options: { seekDuringSwitch?: (time: number) => boolean } = {},
+) => {
 	const posted: { message: Record<string, unknown>; origin: string }[] = [];
 	const parent = {
 		postMessage: (message: unknown, origin: string) => {
@@ -46,7 +53,7 @@ const embedded = () => {
 	const connection = connectMessages(
 		target,
 		video as unknown as HTMLVideoElement,
-		setQuality,
+		{ setQuality, seekDuringSwitch: options.seekDuringSwitch },
 	);
 	const command = (data: unknown, source: unknown = parent) =>
 		view.dispatchEvent(
@@ -268,6 +275,49 @@ describe("connectMessages", () => {
 		video.dispatchEvent(new Event("durationchange"));
 
 		expect(video.currentTime).toBe(30);
+	});
+
+	it("holds a play sent before the source is attached until it is", async () => {
+		const { video, command, events } = embedded();
+		video.currentSrc = "";
+
+		command({ type: "cap-player", command: "play" });
+		await Promise.resolve();
+		expect(video.plays).toBe(0);
+
+		video.currentSrc = "blob:attached";
+		video.dispatchEvent(new Event("loadedmetadata"));
+		await Promise.resolve();
+
+		expect(video.plays).toBe(1);
+		expect(video.paused).toBe(false);
+		expect(events()).toEqual(["ready"]);
+	});
+
+	it("drops a held play when a pause follows it", async () => {
+		const { video, command } = embedded();
+		video.currentSrc = "";
+
+		command({ type: "cap-player", command: "play" });
+		command({ type: "cap-player", command: "pause" });
+		video.currentSrc = "blob:attached";
+		video.dispatchEvent(new Event("loadedmetadata"));
+		await Promise.resolve();
+
+		expect(video.plays).toBe(0);
+	});
+
+	it("hands a seek to a quality switch that is loading", () => {
+		const seekDuringSwitch = vi.fn(() => true);
+		const { video, command } = embedded({ seekDuringSwitch });
+		video.duration = Number.NaN;
+
+		command({ type: "cap-player", command: "seek", time: 8 });
+		video.duration = 30;
+		video.dispatchEvent(new Event("loadedmetadata"));
+
+		expect(seekDuringSwitch).toHaveBeenCalledWith(8);
+		expect(video.currentTime).toBe(0);
 	});
 
 	it("ignores messages from any window but the embedding page", async () => {
