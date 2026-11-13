@@ -1,7 +1,8 @@
 import { db } from "@cap/database";
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gte, lt, ne, sql } from "drizzle-orm";
 import {
 	bigint,
+	boolean,
 	date,
 	int,
 	mysqlTable,
@@ -20,10 +21,14 @@ export const developerDeliveryDaily = mysqlTable(
 		seconds: bigint("seconds", { mode: "number" }).notNull(),
 		bytes: bigint("bytes", { mode: "number" }).notNull(),
 		requests: int("requests").notNull(),
+		final: boolean("final").notNull().default(false),
+		finalizedAt: timestamp("finalizedAt"),
 		updatedAt: timestamp("updatedAt").notNull(),
 	},
 	(table) => [primaryKey({ columns: [table.appId, table.day, table.tier] })],
 );
+
+export const DELIVERY_AUDIO_TIER = "audio";
 
 export const DELIVERY_TIERS = [
 	"360p",
@@ -38,13 +43,19 @@ export type DeliveryTier = (typeof DELIVERY_TIERS)[number];
 export type DeliveredUsage = {
 	seconds: number;
 	secondsByTier: Record<DeliveryTier, number>;
+	finalThrough: string | null;
 };
 
 export type DeliveryJson = {
 	minutes: number;
 	minutesByTier: Record<DeliveryTier, number>;
-	measured: true;
-	billed: false;
+	finalThrough: string | null;
+};
+
+export type DeliveryRow = {
+	tier: string;
+	seconds: unknown;
+	finalThrough: unknown;
 };
 
 const isDeliveryTier = (tier: string): tier is DeliveryTier =>
@@ -58,6 +69,8 @@ const emptyTiers = (): Record<DeliveryTier, number> => ({
 	"2160p": 0,
 });
 
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
 export function deliveryPeriod(now: Date) {
 	const start = utcMonthStart(now);
 	const end = new Date(
@@ -66,32 +79,44 @@ export function deliveryPeriod(now: Date) {
 	return { start, startDay: utcDateKey(start), endDay: utcDateKey(end) };
 }
 
-export function isMissingTableError(error: unknown) {
+const NOT_READY_ERRORS = new Set<unknown>([
+	"ER_NO_SUCH_TABLE",
+	"ER_BAD_FIELD_ERROR",
+	1146,
+	1054,
+]);
+
+export function isDeliveryNotReadyError(error: unknown) {
 	for (
 		let current: unknown = error, depth = 0;
 		current && typeof current === "object" && depth < 5;
 		current = (current as { cause?: unknown }).cause, depth++
 	) {
 		const { code, errno } = current as { code?: unknown; errno?: unknown };
-		if (code === "ER_NO_SUCH_TABLE" || errno === 1146) return true;
+		if (NOT_READY_ERRORS.has(code) || NOT_READY_ERRORS.has(errno)) return true;
 	}
 	return false;
 }
 
 export function sumDeliveryRows(
-	rows: readonly { tier: string; seconds: unknown }[],
+	rows: readonly DeliveryRow[],
 ): DeliveredUsage | null {
 	const secondsByTier = emptyTiers();
 	let seconds = 0;
 	let measured = false;
+	let finalThrough: string | null = null;
 	for (const row of rows) {
 		if (!isDeliveryTier(row.tier)) continue;
 		const value = Math.max(0, Number(row.seconds) || 0);
 		secondsByTier[row.tier] += value;
 		seconds += value;
 		measured = true;
+		const day = typeof row.finalThrough === "string" ? row.finalThrough : null;
+		if (day && DAY_KEY.test(day) && (!finalThrough || day > finalThrough)) {
+			finalThrough = day;
+		}
 	}
-	return measured ? { seconds, secondsByTier } : null;
+	return measured ? { seconds, secondsByTier, finalThrough } : null;
 }
 
 export async function getDeliveredUsage(
@@ -99,24 +124,29 @@ export async function getDeliveredUsage(
 	now: Date = new Date(),
 ): Promise<DeliveredUsage | null> {
 	const { startDay, endDay } = deliveryPeriod(now);
+	const table = developerDeliveryDaily;
 	try {
 		const rows = await db()
 			.select({
-				tier: developerDeliveryDaily.tier,
-				seconds: sql<string>`sum(${developerDeliveryDaily.seconds})`,
+				tier: table.tier,
+				seconds: sql<string>`sum(${table.seconds})`,
+				finalThrough: sql<
+					string | null
+				>`date_format(max(case when ${table.final} then ${table.day} end), '%Y-%m-%d')`,
 			})
-			.from(developerDeliveryDaily)
+			.from(table)
 			.where(
 				and(
-					eq(developerDeliveryDaily.appId, appId),
-					gte(developerDeliveryDaily.day, startDay),
-					lt(developerDeliveryDaily.day, endDay),
+					eq(table.appId, appId),
+					gte(table.day, startDay),
+					lt(table.day, endDay),
+					ne(table.tier, DELIVERY_AUDIO_TIER),
 				),
 			)
-			.groupBy(developerDeliveryDaily.tier);
+			.groupBy(table.tier);
 		return sumDeliveryRows(rows);
 	} catch (error) {
-		if (isMissingTableError(error)) return null;
+		if (isDeliveryNotReadyError(error)) return null;
 		throw error;
 	}
 }
@@ -134,7 +164,6 @@ export function deliveryJson(
 	return {
 		minutes: toMinutes(usage.seconds),
 		minutesByTier,
-		measured: true,
-		billed: false,
+		finalThrough: usage.finalThrough,
 	};
 }

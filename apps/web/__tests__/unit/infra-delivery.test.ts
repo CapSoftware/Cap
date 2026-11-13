@@ -3,7 +3,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	rows: [] as { tier: string; seconds: unknown }[],
+	rows: [] as { tier: string; seconds: unknown; finalThrough: unknown }[],
 	failure: null as unknown,
 	where: [] as unknown[],
 	groupBy: 0,
@@ -33,7 +33,7 @@ import {
 	deliveryJson,
 	deliveryPeriod,
 	getDeliveredUsage,
-	isMissingTableError,
+	isDeliveryNotReadyError,
 	sumDeliveryRows,
 } from "@/lib/infra-delivery";
 
@@ -59,6 +59,17 @@ describe("getDeliveredUsage", () => {
 		await expect(getDeliveredUsage("app-1")).resolves.toBeNull();
 	});
 
+	it("returns null while the table has no final column yet", async () => {
+		mocks.failure = Object.assign(new Error("Failed query"), {
+			cause: Object.assign(new Error("Unknown column 'final'"), {
+				code: "ER_BAD_FIELD_ERROR",
+				errno: 1054,
+			}),
+		});
+
+		await expect(getDeliveredUsage("app-1")).resolves.toBeNull();
+	});
+
 	it("throws any other database error", async () => {
 		mocks.failure = Object.assign(new Error("Failed query"), {
 			cause: Object.assign(new Error("Lock wait timeout"), {
@@ -76,9 +87,9 @@ describe("getDeliveredUsage", () => {
 
 	it("sums seconds for each tier", async () => {
 		mocks.rows = [
-			{ tier: "720p", seconds: "20160" },
-			{ tier: "1080p", seconds: "54000" },
-			{ tier: "360p", seconds: 750 },
+			{ tier: "720p", seconds: "20160", finalThrough: "2026-11-17" },
+			{ tier: "1080p", seconds: "54000", finalThrough: "2026-11-18" },
+			{ tier: "360p", seconds: 750, finalThrough: null },
 		];
 
 		await expect(getDeliveredUsage("app-1")).resolves.toEqual({
@@ -90,17 +101,18 @@ describe("getDeliveredUsage", () => {
 				"1440p": 0,
 				"2160p": 0,
 			},
+			finalThrough: "2026-11-18",
 		});
 	});
 
-	it("reads one app over the UTC calendar month, on the primary key prefix", async () => {
+	it("reads one app over the UTC calendar month, on the primary key prefix, without the audio tier", async () => {
 		await getDeliveredUsage("app-1", new Date("2026-11-30T23:59:59.999Z"));
 
 		const { sql, params } = query(mocks.where[0]);
 		expect(sql).toBe(
-			"(`developer_delivery_daily`.`appId` = ? and `developer_delivery_daily`.`day` >= ? and `developer_delivery_daily`.`day` < ?)",
+			"(`developer_delivery_daily`.`appId` = ? and `developer_delivery_daily`.`day` >= ? and `developer_delivery_daily`.`day` < ? and `developer_delivery_daily`.`tier` <> ?)",
 		);
-		expect(params).toEqual(["app-1", "2026-11-01", "2026-12-01"]);
+		expect(params).toEqual(["app-1", "2026-11-01", "2026-12-01", "audio"]);
 		expect(mocks.groupBy).toBe(1);
 	});
 });
@@ -126,8 +138,9 @@ describe("delivery rows", () => {
 	it("ignores tiers it does not know and empty values", () => {
 		expect(
 			sumDeliveryRows([
-				{ tier: "480p", seconds: 600 },
-				{ tier: "1080p", seconds: null },
+				{ tier: "480p", seconds: 600, finalThrough: "2026-11-19" },
+				{ tier: "audio", seconds: 0, finalThrough: "2026-11-19" },
+				{ tier: "1080p", seconds: null, finalThrough: "not a day" },
 			]),
 		).toEqual({
 			seconds: 0,
@@ -138,23 +151,26 @@ describe("delivery rows", () => {
 				"1440p": 0,
 				"2160p": 0,
 			},
+			finalThrough: null,
 		});
-		expect(sumDeliveryRows([{ tier: "480p", seconds: 600 }])).toBeNull();
+		expect(
+			sumDeliveryRows([{ tier: "audio", seconds: 0, finalThrough: null }]),
+		).toBeNull();
 	});
 
-	it("reports minutes, measured and not billed", () => {
-		expect(
-			deliveryJson({
-				seconds: 90,
-				secondsByTier: {
-					"360p": 0,
-					"720p": 0,
-					"1080p": 90,
-					"1440p": 0,
-					"2160p": 0,
-				},
-			}),
-		).toEqual({
+	it("reports minutes for each tier and the last final day, with no audio tier", () => {
+		const json = deliveryJson({
+			seconds: 90,
+			secondsByTier: {
+				"360p": 0,
+				"720p": 0,
+				"1080p": 90,
+				"1440p": 0,
+				"2160p": 0,
+			},
+			finalThrough: "2026-11-18",
+		});
+		expect(json).toEqual({
 			minutes: 1.5,
 			minutesByTier: {
 				"360p": 0,
@@ -163,19 +179,21 @@ describe("delivery rows", () => {
 				"1440p": 0,
 				"2160p": 0,
 			},
-			measured: true,
-			billed: false,
+			finalThrough: "2026-11-18",
 		});
+		expect(Object.keys(json?.minutesByTier ?? {})).not.toContain("audio");
 		expect(deliveryJson(null)).toBeNull();
 	});
 
-	it("recognises the missing table code at any depth", () => {
-		expect(isMissingTableError({ errno: 1146 })).toBe(true);
-		expect(isMissingTableError({ code: "ER_NO_SUCH_TABLE" })).toBe(true);
-		expect(isMissingTableError({ cause: { cause: { errno: 1146 } } })).toBe(
+	it("recognises a missing table or column at any depth", () => {
+		expect(isDeliveryNotReadyError({ errno: 1146 })).toBe(true);
+		expect(isDeliveryNotReadyError({ code: "ER_NO_SUCH_TABLE" })).toBe(true);
+		expect(isDeliveryNotReadyError({ errno: 1054 })).toBe(true);
+		expect(isDeliveryNotReadyError({ code: "ER_BAD_FIELD_ERROR" })).toBe(true);
+		expect(isDeliveryNotReadyError({ cause: { cause: { errno: 1146 } } })).toBe(
 			true,
 		);
-		expect(isMissingTableError({ errno: 1205 })).toBe(false);
-		expect(isMissingTableError(null)).toBe(false);
+		expect(isDeliveryNotReadyError({ errno: 1205 })).toBe(false);
+		expect(isDeliveryNotReadyError(null)).toBe(false);
 	});
 });
