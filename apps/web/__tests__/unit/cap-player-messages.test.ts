@@ -242,6 +242,34 @@ describe("connectMessages", () => {
 		expect(setQuality).toHaveBeenCalledWith("720p");
 	});
 
+	it("keeps a seek sent before the duration is known until the metadata arrives", () => {
+		const { video, command } = embedded();
+		video.duration = Number.NaN;
+
+		command({ type: "cap-player", command: "seek", time: 12 });
+		expect(video.currentTime).toBe(0);
+
+		video.duration = 30;
+		video.dispatchEvent(new Event("loadedmetadata"));
+		expect(video.currentTime).toBe(12);
+
+		video.currentTime = 20;
+		video.dispatchEvent(new Event("durationchange"));
+		expect(video.currentTime).toBe(20);
+	});
+
+	it("keeps only the last early seek, and drops it once a seek lands", () => {
+		const { video, command } = embedded();
+		video.duration = Number.NaN;
+
+		command({ type: "cap-player", command: "seek", time: 12 });
+		command({ type: "cap-player", command: "seek", time: 50 });
+		video.duration = 30;
+		video.dispatchEvent(new Event("durationchange"));
+
+		expect(video.currentTime).toBe(30);
+	});
+
 	it("ignores messages from any window but the embedding page", async () => {
 		const { video, command } = embedded();
 

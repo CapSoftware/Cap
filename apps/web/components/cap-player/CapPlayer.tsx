@@ -358,6 +358,7 @@ export const CapPlayer = ({
 		setQuality: (_quality: string): void => undefined,
 	});
 	const messages = useRef<ReturnType<typeof connectMessages> | null>(null);
+	const pendingQuality = useRef<string | null>(null);
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
@@ -1033,6 +1034,11 @@ export const CapPlayer = ({
 	};
 
 	const setQualityByName = (name: string) => {
+		if (levels.length === 0) {
+			pendingQuality.current = name;
+			return;
+		}
+		pendingQuality.current = null;
 		const value =
 			name === "auto"
 				? AUTO_LEVEL
@@ -1107,6 +1113,11 @@ export const CapPlayer = ({
 			connection.stop();
 		};
 	}, [events]);
+
+	useEffect(() => {
+		const pending = pendingQuality.current;
+		if (pending !== null && levels.length > 0) live.current.setQuality(pending);
+	}, [levels]);
 
 	useEffect(() => {
 		if (quality) {

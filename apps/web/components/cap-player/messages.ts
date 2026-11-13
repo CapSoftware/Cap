@@ -110,6 +110,21 @@ export const connectMessages = (
 		extra?: Record<string, string | boolean>,
 	) => target.parent.postMessage(playerEvent(event, video, extra), "*");
 	const throttle = createThrottle(TIMEUPDATE_GAP_MS);
+	// A parent may seek on ready, before the duration is known. The time is
+	// kept until the metadata arrives rather than clamped to nothing.
+	let pendingSeek: number | null = null;
+	const knownDuration = () =>
+		Number.isFinite(video.duration) && video.duration > 0
+			? video.duration
+			: null;
+	const seek = (time: number) => {
+		const end = knownDuration();
+		pendingSeek = end === null ? time : null;
+		if (end !== null) video.currentTime = Math.min(end, time);
+	};
+	const seekWhenKnown = () => {
+		if (pendingSeek !== null && knownDuration() !== null) seek(pendingSeek);
+	};
 
 	const onMessage = (message: MessageEvent) => {
 		if (message.source !== target.parent) return;
@@ -124,13 +139,13 @@ export const connectMessages = (
 		} else if (parsed.command === "pause") video.pause();
 		else if (parsed.command === "mute") video.muted = true;
 		else if (parsed.command === "unmute") video.muted = false;
-		else if (parsed.command === "seek") {
-			const end = Number.isFinite(video.duration) ? video.duration : 0;
-			video.currentTime = Math.min(end, parsed.time);
-		} else if (parsed.command === "setQuality") setQuality(parsed.quality);
+		else if (parsed.command === "seek") seek(parsed.time);
+		else if (parsed.command === "setQuality") setQuality(parsed.quality);
 	};
 
 	const relayed: [string, () => void][] = [
+		["loadedmetadata", seekWhenKnown],
+		["durationchange", seekWhenKnown],
 		["play", () => send("play")],
 		["pause", () => send("pause")],
 		["ended", () => send("ended")],
