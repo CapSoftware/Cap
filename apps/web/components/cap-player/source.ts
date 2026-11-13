@@ -323,6 +323,7 @@ export const attachSource = (
 				playRequested = true;
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
 				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
+				else hls.nextLevel = picked;
 			};
 			// hls.js seeks to the start time itself. The time stays pending
 			// until that seek lands, so a fallback to the MP4 before then
@@ -375,9 +376,10 @@ export const attachSource = (
 			});
 			// A pick changes rendition at the next segment. Switching at once
 			// flushes the whole buffer and freezes the picture on a slow line.
+			// Before play a pick is only remembered, so it downloads nothing.
 			setLevel = (index) => {
 				picked = index;
-				hls.nextLevel = index;
+				if (playRequested) hls.nextLevel = index;
 			};
 			video.preload = "auto";
 			hls.loadSource(source.hls);

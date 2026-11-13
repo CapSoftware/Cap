@@ -865,6 +865,8 @@ export const CapPlayer = ({
 	}));
 
 	const canPickQuality = levels.length > 1;
+	const pickedLabel = levels.find((level) => level.index === picked)?.label;
+	const quality = pickedLabel ?? resolution;
 
 	return (
 		<div
@@ -1015,10 +1017,10 @@ export const CapPlayer = ({
 									className={`${styles.control} ${styles.text}`}
 									aria-haspopup="menu"
 									aria-expanded={menu === "quality"}
-									aria-label={`Quality, ${picked === AUTO_LEVEL ? "auto, " : ""}${resolution}`}
+									aria-label={`Quality, ${picked === AUTO_LEVEL ? "auto, " : ""}${quality}`}
 									onClick={() => setMenu(menu === "quality" ? null : "quality")}
 								>
-									{resolution}
+									{quality}
 								</button>
 								{menu === "quality" ? (
 									<Menu
