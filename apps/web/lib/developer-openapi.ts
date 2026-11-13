@@ -1608,7 +1608,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"video/webm",
 							"video/quicktime",
 							"video/x-matroska",
-							"video/avi",
 							"application/octet-stream",
 						],
 						default: "video/mp4",

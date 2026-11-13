@@ -31,6 +31,11 @@ import {
 	uploadAdmissionError,
 } from "@/lib/infra-standing";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
+import {
+	INFRA_UPLOAD_CONTENT_TYPES,
+	isRefusedUploadContentType,
+	UNSUPPORTED_CONTENT_TYPE_HINT,
+} from "@/lib/infra-video-formats";
 import { runPromise } from "@/lib/server";
 
 export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
@@ -43,14 +48,7 @@ const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 export const MAX_UPLOAD_BYTES =
 	MAX_UPLOAD_DURATION_SECS * STORED_BYTES_PER_SECOND;
 
-const ALLOWED_CONTENT_TYPES = [
-	"video/mp4",
-	"video/webm",
-	"video/quicktime",
-	"video/x-matroska",
-	"video/avi",
-	"application/octet-stream",
-];
+const ALLOWED_CONTENT_TYPES: readonly string[] = INFRA_UPLOAD_CONTENT_TYPES;
 
 export type UploadStatus = 200 | 400 | 402 | 404 | 409 | 500;
 
@@ -496,6 +494,14 @@ export async function initiateInfraUpload({
 	contentLength?: number;
 	maxBytes?: number | null;
 }): Promise<UploadResult<{ uploadId: string }>> {
+	if (isRefusedUploadContentType(contentType)) {
+		return fail(
+			400,
+			"unsupported_content_type",
+			`${contentType} files are not supported`,
+			UNSUPPORTED_CONTENT_TYPE_HINT,
+		);
+	}
 	const upload = await openUpload(appId, videoId);
 	if (upload.status !== 200) return upload;
 	const { s3Key } = upload;
