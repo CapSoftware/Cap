@@ -2109,6 +2109,79 @@ pub fn insert_scene_segment(timeline: &mut TimelineConfiguration, segment: Scene
     index
 }
 
+/// How long a caption added at the playhead runs.
+pub const NEW_CAPTION_LENGTH: f64 = 2.0;
+
+/// The shortest caption [`add_caption_segment`] will place.
+pub const MIN_ADDED_CAPTION: f64 = 0.25;
+
+/// Adds a caption with no word timings over `output`, in edited-timeline
+/// seconds, to the source-time captions, and switches captions on. Returns
+/// its index in `captions.segments`.
+///
+/// It is written in recording time like every other caption, so it stays on
+/// its moment as clips are trimmed, cut or moved. It ends where its clip does:
+/// past that point the recording jumps, and the caption would land on footage
+/// it was never placed over. `None` when the clip leaves less than
+/// [`MIN_ADDED_CAPTION`] of room, as inside a fullscreen text hold, or when
+/// legacy captions cannot be moved to recording time yet.
+pub fn add_caption_segment(
+    project: &mut ProjectConfiguration,
+    output: std::ops::Range<f64>,
+    id: String,
+    text: &str,
+    recording_durations: &[f64],
+) -> Option<usize> {
+    let timeline = project.timeline.as_ref()?;
+    let holds = timeline.hold_windows();
+    let effective = |time: f64| time - held_time_before(&holds, time);
+    let (start, end) = (effective(output.start), effective(output.end));
+    let mappings = crate::transcript::model::build_mappings(timeline, recording_durations);
+    let mapping = mappings
+        [..mappings.partition_point(|mapping| mapping.effective_start <= start + 1e-9)]
+        .last()?;
+    let start = start.max(mapping.effective_start);
+    let end = end.min(mapping.effective_end());
+    if !start.is_finite() || !end.is_finite() || end - start < MIN_ADDED_CAPTION {
+        return None;
+    }
+    let source = |time: f64| {
+        (mapping.source_start + (time - mapping.effective_start) * mapping.timescale) as f32
+    };
+    let (source_start, source_end) = (source(start), source(end));
+    if project
+        .captions
+        .as_ref()
+        .is_some_and(|captions| !captions.source_timed)
+    {
+        cap_project::synchronize_captions(project, recording_durations);
+    }
+    let captions = project
+        .captions
+        .get_or_insert_with(|| cap_project::CaptionsData {
+            source_timed: true,
+            ..Default::default()
+        });
+    if !captions.source_timed {
+        return None;
+    }
+    captions.settings.enabled = true;
+    let index = captions
+        .segments
+        .partition_point(|segment| segment.start <= source_start);
+    captions.segments.insert(
+        index,
+        cap_project::CaptionSegment {
+            id,
+            start: source_start,
+            end: source_end,
+            text: text.to_string(),
+            words: Vec::new(),
+        },
+    );
+    Some(index)
+}
+
 pub fn find_placement<T: TrackSegmentOps>(
     segments: &[T],
     time: f64,
@@ -5785,6 +5858,143 @@ mod style_image_replacement_tests {
         assert_eq!(
             serde_json::to_value(history.redo().unwrap()).unwrap(),
             expected
+        );
+    }
+}
+
+#[cfg(test)]
+mod add_caption_tests {
+    use super::*;
+
+    fn project(timeline: serde_json::Value) -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({ "timeline": timeline })).unwrap()
+    }
+
+    fn add(project: &mut ProjectConfiguration, output: std::ops::Range<f64>) -> Option<usize> {
+        add_caption_segment(project, output, "caption-test".into(), "Hello", &[10.0])
+    }
+
+    fn source(project: &ProjectConfiguration) -> Vec<(String, f32, f32)> {
+        project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| (segment.text.clone(), segment.start, segment.end))
+            .collect()
+    }
+
+    fn track(project: &mut ProjectConfiguration) -> Vec<(String, f64, f64)> {
+        cap_project::synchronize_captions(project, &[10.0]);
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), segment.start, segment.end))
+            .collect()
+    }
+
+    #[test]
+    fn a_caption_with_no_transcript_turns_captions_on_in_recording_time() {
+        let mut project = project(serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+            "zoomSegments": []
+        }));
+        assert_eq!(add(&mut project, 1.0..3.0), Some(0));
+        let captions = project.captions.as_ref().unwrap();
+        assert!(captions.settings.enabled && captions.source_timed);
+        assert!(captions.segments[0].words.is_empty());
+        assert_eq!(captions.segments[0].id, "caption-test");
+        assert_eq!(track(&mut project), [("Hello".to_string(), 1.0, 3.0)]);
+    }
+
+    #[test]
+    fn a_caption_follows_clip_speed_and_stops_at_its_clip_edge() {
+        let mut project = project(serde_json::json!({
+            "segments": [
+                { "start": 0.0, "end": 4.0, "timescale": 2.0 },
+                { "start": 6.0, "end": 10.0, "timescale": 1.0 }
+            ],
+            "zoomSegments": []
+        }));
+        assert_eq!(add(&mut project, 0.5..1.5), Some(0));
+        assert_eq!(add(&mut project, 1.5..3.5), Some(1));
+        assert_eq!(add(&mut project, 4.0..6.0), Some(2));
+        assert_eq!(
+            source(&project),
+            [
+                ("Hello".to_string(), 1.0, 3.0),
+                ("Hello".to_string(), 3.0, 4.0),
+                ("Hello".to_string(), 8.0, 10.0),
+            ]
+        );
+        assert_eq!(
+            track(&mut project),
+            [
+                ("Hello".to_string(), 0.5, 1.5),
+                ("Hello".to_string(), 1.5, 2.0),
+                ("Hello".to_string(), 4.0, 6.0),
+            ]
+        );
+        assert_eq!(add(&mut project, 1.9..3.0), None);
+    }
+
+    #[test]
+    fn a_caption_under_a_fullscreen_hold_is_refused() {
+        let mut project = project(serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+            "zoomSegments": [],
+            "textSegments": [{ "start": 2.0, "end": 4.0, "layout": "fullscreen" }]
+        }));
+        assert_eq!(add(&mut project, 2.5..3.5), None);
+        assert!(project.captions.is_none());
+        assert_eq!(add(&mut project, 4.0..6.0), Some(0));
+        assert_eq!(source(&project), [("Hello".to_string(), 2.0, 4.0)]);
+        assert_eq!(track(&mut project), [("Hello".to_string(), 4.0, 6.0)]);
+    }
+
+    #[test]
+    fn a_caption_inside_a_later_cut_leaves_with_it_and_comes_back_on_restore() {
+        let mut project = project(serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+            "zoomSegments": []
+        }));
+        assert_eq!(add(&mut project, 4.0..5.0), Some(0));
+        let uncut = project.clone();
+        let timeline = project.timeline.as_mut().unwrap();
+        crate::transcript::cuts::apply_source_cuts(timeline, &[10.0], &[3.5..5.5]);
+        assert!(track(&mut project).is_empty());
+        assert_eq!(source(&project), [("Hello".to_string(), 4.0, 5.0)]);
+        let mut restored = uncut;
+        assert_eq!(track(&mut restored), [("Hello".to_string(), 4.0, 5.0)]);
+    }
+
+    #[test]
+    fn legacy_output_time_captions_move_to_recording_time_first() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "start": 0.0, "end": 4.0, "timescale": 1.0 },
+                    { "start": 6.0, "end": 10.0, "timescale": 1.0 }
+                ],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{ "id": "segment-0", "start": 5.0, "end": 6.0, "text": "old" }],
+                "settings": {}
+            }
+        }))
+        .unwrap();
+        assert_eq!(add(&mut project, 1.0..2.0), Some(0));
+        assert_eq!(
+            source(&project),
+            [
+                ("Hello".to_string(), 1.0, 2.0),
+                ("old".to_string(), 7.0, 8.0),
+            ]
         );
     }
 }
