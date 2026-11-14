@@ -75,6 +75,8 @@ const Top = () => {
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
+		"/dashboard/apps": "Apps",
+		[`/dashboard/apps/${params.appId}`]: "Apps",
 		[`/dashboard/folder/${params.id}`]: "Caps",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
 	};

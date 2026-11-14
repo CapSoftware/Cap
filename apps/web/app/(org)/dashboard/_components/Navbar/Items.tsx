@@ -54,6 +54,7 @@ import {
 } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../Contexts";
 import {
+	AppsIcon,
 	CapIcon,
 	ChartLineIcon,
 	CodeIcon,
@@ -107,6 +108,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			href: loomImportPageHref(loomImportDestinationFromPathname(pathname)),
 			matchChildren: true,
 			icon: <ImportIcon />,
+			subNav: [],
+		},
+		{
+			name: "Apps",
+			href: "/dashboard/apps",
+			matchChildren: true,
+			icon: <AppsIcon />,
 			subNav: [],
 		},
 		{

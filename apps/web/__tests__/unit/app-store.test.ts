@@ -235,7 +235,10 @@ describe("Discord connection", () => {
 	});
 
 	it("posts on the action and reports the result", async () => {
-		const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+		const fetchMock = vi.fn(
+			async (_url: string, _init?: RequestInit) =>
+				new Response(null, { status: 204 }),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		const response = await discordConnection(
 			signedRequest("actions/post", {
@@ -256,7 +259,10 @@ describe("Discord connection", () => {
 	});
 
 	it("only posts new Caps when the setting is on, and asks Cap to retry when Discord is busy", async () => {
-		const fetchMock = vi.fn(async () => new Response(null, { status: 429 }));
+		const fetchMock = vi.fn(
+			async (_url: string, _init?: RequestInit) =>
+				new Response(null, { status: 429 }),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		const event = (postNewCaps: boolean) =>
 			signedRequest("events", {
@@ -277,7 +283,10 @@ describe("Discord connection", () => {
 	});
 
 	it("is reached in process through the signed connection protocol", async () => {
-		const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+		const fetchMock = vi.fn(
+			async (_url: string, _init?: RequestInit) =>
+				new Response(null, { status: 204 }),
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		const result = await sendConnectionRequest(
 			{ appId: "discord", url: "/api/app-store/first-party/discord" },

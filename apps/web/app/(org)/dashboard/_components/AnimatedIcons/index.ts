@@ -1,3 +1,4 @@
+import AppsIcon from "./Apps";
 import ArrowUpIcon from "./ArrowUp";
 import CapIcon from "./Cap";
 import ChartLineIcon from "./ChartLine";
@@ -16,6 +17,7 @@ import RecordIcon from "./Record";
 import ReferIcon from "./Refer";
 import SettingsGearIcon from "./Settings";
 export {
+	AppsIcon,
 	ArrowUpIcon,
 	CapIcon,
 	MessageCircleMoreIcon,

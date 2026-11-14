@@ -61,6 +61,7 @@ import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
+import { CapAppActionItems } from "./CapAppActionItems";
 import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
@@ -620,6 +621,7 @@ export const CapCard = ({
 									)}
 								</>
 							)}
+							<CapAppActionItems videoId={cap.id} />
 						</DropdownMenuContent>
 					</DropdownMenu>
 
