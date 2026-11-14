@@ -1,4 +1,7 @@
-use crate::screenshot::mask_filter;
+use crate::{
+    mask_style::{MaskStyle, styled_mask},
+    screenshot::blit_over,
+};
 use std::{collections::HashSet, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,19 +18,27 @@ pub struct MaskRequest {
     pub id: String,
     pub frame: MaskFrame,
     pub region: (u32, u32, u32, u32),
-    pub pixelate: bool,
-    pub level: u64,
+    pub shape: (u32, u32, u32, u32),
+    pub style: MaskStyle,
+    pub redactions: Vec<MaskRequest>,
 }
 
 impl MaskRequest {
     pub fn filter(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
-        mask_filter(
+        if self.redactions.is_empty() {
+            return self.filter_source(rgba);
+        }
+        self.filter_source(&redact(rgba, self.frame.size, &self.redactions))
+    }
+
+    pub fn filter_source(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
+        styled_mask(
             rgba,
             self.frame.size.0,
             self.frame.size.1,
             self.region,
-            self.pixelate,
-            f64::from_bits(self.level),
+            self.shape,
+            &self.style,
         )
     }
 }
@@ -175,6 +186,65 @@ pub fn update_masks<T: Clone>(
         .collect()
 }
 
+/// A highlight paints over the whole content area, so it must sample a frame
+/// whose sensitive regions are already hidden, or its filter would put the
+/// hidden pixels back (or bleed them past the redaction's edge).
+pub fn redact(rgba: &[u8], size: (u32, u32), redactions: &[MaskRequest]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for redaction in redactions {
+        if let Some(image) = redaction.filter_source(rgba) {
+            blit_over(
+                &mut out,
+                size,
+                &image,
+                (redaction.region.0, redaction.region.1),
+            );
+        }
+    }
+    out
+}
+
+#[derive(Default)]
+pub struct MaskSources {
+    redacted: Option<(Vec<MaskRequest>, Vec<u8>)>,
+}
+
+impl MaskSources {
+    pub fn filter(&mut self, request: &MaskRequest, rgba: &[u8]) -> Option<image::RgbaImage> {
+        if request.redactions.is_empty() {
+            return request.filter_source(rgba);
+        }
+        if self
+            .redacted
+            .as_ref()
+            .is_none_or(|(redactions, _)| *redactions != request.redactions)
+        {
+            self.redacted = Some((
+                request.redactions.clone(),
+                redact(rgba, request.frame.size, &request.redactions),
+            ));
+        }
+        request.filter_source(&self.redacted.as_ref()?.1)
+    }
+}
+
+/// Every highlight first, sampling the redacted frame, then every sensitive
+/// mask on top, so no highlight can uncover or soften a redaction whatever
+/// order the masks were drawn in.
+pub fn order_masks(requests: Vec<MaskRequest>) -> Vec<MaskRequest> {
+    let (highlights, redactions): (Vec<_>, Vec<_>) = requests
+        .into_iter()
+        .partition(|request| request.style.invert);
+    highlights
+        .into_iter()
+        .map(|highlight| MaskRequest {
+            redactions: redactions.clone(),
+            ..highlight
+        })
+        .chain(redactions.iter().cloned())
+        .collect()
+}
+
 pub fn mask_region(
     mask: [f64; 4],
     content: [f64; 4],
@@ -199,6 +269,8 @@ pub fn mask_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mask_style::MaskEffect;
+    use crate::screenshot::mask_filter;
     use std::sync::Arc;
 
     fn requests(count: usize) -> Vec<MaskRequest> {
@@ -213,8 +285,9 @@ mod tests {
                     crop: None,
                 },
                 region: (index as u32 * 4, 4, 32, 24),
-                pixelate: false,
-                level: 16_f64.to_bits(),
+                shape: (index as u32 * 4, 4, 32, 24),
+                style: MaskStyle::plain(false, 16.),
+                redactions: Vec::new(),
             })
             .collect()
     }
@@ -230,8 +303,8 @@ mod tests {
             let mut next = original.clone();
             match change {
                 0 => next[0].region.0 += 1,
-                1 => next[0].level = 20_f64.to_bits(),
-                2 => next[0].pixelate = true,
+                1 => next[0].style.level = 20_f64.to_bits(),
+                2 => next[0].style.effect = MaskEffect::Pixelate,
                 3 => next.push(requests(4).pop().unwrap()),
                 _ => next.reverse(),
             }
@@ -387,8 +460,8 @@ mod tests {
     fn new_and_changed_styles_are_computed() {
         let mut requests = requests(4);
         let previous = cached(&requests[..3]);
-        requests[0].pixelate = true;
-        requests[1].level = 20_f64.to_bits();
+        requests[0].style.effect = MaskEffect::Pixelate;
+        requests[1].style.level = 20_f64.to_bits();
         assert_eq!(
             plan_masks(&previous, &requests),
             vec![None, None, Some(2), None]
@@ -491,11 +564,12 @@ mod tests {
     fn overlapping_masks_always_sample_the_unmodified_frame() {
         let rgba: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 37 % 251) as u8).collect();
         let mut requests = requests(4);
-        requests[1].pixelate = true;
+        requests[1].style.effect = MaskEffect::Pixelate;
         let previous = update_masks(&[], &requests, |request| {
             request.filter(&rgba).map(Arc::new)
         });
         requests[1].region.0 += 1;
+        requests[1].shape.0 += 1;
         requests.reverse();
         let mut calls = 0;
         let next = update_masks(&previous, &requests, |request| {
@@ -509,7 +583,7 @@ mod tests {
                 64,
                 48,
                 entry.request.region,
-                entry.request.pixelate,
+                entry.request.style.effect == MaskEffect::Pixelate,
                 16.,
             )
             .unwrap();
