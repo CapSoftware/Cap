@@ -11,59 +11,18 @@
 //! Known deviations from that command: no native notification and no `ScreenshotTaken`
 //! automations (no automation runner here).
 
-use std::{
-    path::PathBuf,
-    rc::{Rc, Weak},
-    time::Duration,
-};
+use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use anyhow::{Context as _, anyhow};
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
-use gpui::{App, Global};
+use gpui::App;
 
 use crate::app_windows;
 
-#[derive(Default)]
-struct ScreenshotInFlight(Weak<()>);
-
-impl Global for ScreenshotInFlight {}
-
-impl ScreenshotInFlight {
-    fn begin(cx: &mut App) -> Rc<()> {
-        let active = cx.default_global::<Self>();
-        active.0.upgrade().unwrap_or_else(|| {
-            let capture = Rc::new(());
-            active.0 = Rc::downgrade(&capture);
-            capture
-        })
-    }
-}
-
-pub(crate) fn capture_in_flight(cx: &App) -> bool {
-    cx.try_global::<ScreenshotInFlight>()
-        .is_some_and(|active| active.0.strong_count() != 0)
-}
-
-#[cfg(all(test, target_os = "linux"))]
-#[gpui::test]
-fn overlapping_screenshots_keep_capture_in_flight(cx: &mut gpui::TestAppContext) {
-    cx.update(|cx| {
-        assert!(!capture_in_flight(cx));
-        let first = ScreenshotInFlight::begin(cx);
-        let second = ScreenshotInFlight::begin(cx);
-        assert!(capture_in_flight(cx));
-        drop(first);
-        assert!(capture_in_flight(cx));
-        drop(second);
-        assert!(!capture_in_flight(cx));
-        let next = ScreenshotInFlight::begin(cx);
-        assert!(capture_in_flight(cx));
-        drop(next);
-        assert!(!capture_in_flight(cx));
-    });
-}
-
 pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
+    if crate::updates::dialog_open(cx) {
+        return;
+    }
     if matches!(target, ScreenCaptureTarget::CameraOnly) {
         // `capture_screenshot` rejects it too; failing here keeps the pickers
         // up instead of tearing them down for nothing.
@@ -71,7 +30,7 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
         return;
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
-    let in_flight = ScreenshotInFlight::begin(cx);
+    let in_flight = app_windows::CaptureRequest::begin(cx);
 
     #[cfg(target_os = "linux")]
     if cap_recording::screenshot::uses_wayland_portal()

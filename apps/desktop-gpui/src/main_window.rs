@@ -1964,6 +1964,10 @@ impl MainWindow {
     /// the Tauri main window, which each call `openTargetSelectOverlays` (or
     /// `closeTargetSelectOverlays`) right after setting the mode.
     fn sync_overlays(&mut self, cx: &mut Context<Self>) {
+        if crate::updates::dialog_open(cx) {
+            self.clear_target(cx);
+            return;
+        }
         self.cancel_deep_link_start();
         let Some(mode) = self.target else {
             // Toggling the armed tile off is a dismissal ("cancelled" in the
@@ -2553,6 +2557,9 @@ impl MainWindow {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Result<RecordingStartPermit, String> {
+        if crate::updates::dialog_open(cx) {
+            return Err("Close the update dialog before starting a recording".into());
+        }
         if self.device_format_pending.is_some() {
             return Err("Wait for the device format change to finish before recording".into());
         }
