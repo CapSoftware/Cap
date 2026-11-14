@@ -5771,6 +5771,7 @@ fn load_editor_project_candidate(
                     crate::library::recover_interrupted_for_editing(
                         &recover_path,
                         active.as_deref(),
+                        |path| editor_window::preflight(path).is_ok(),
                     )
                 })
                 .await;
