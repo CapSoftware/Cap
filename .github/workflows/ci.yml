@@ -100,9 +100,6 @@ jobs:
         run: |
           node --test scripts/bun-scripts.test.mjs
 
-      # Every rule a reviewer could check by machine (schema, ids, sizes,
-      # files, connection URLs, version bumps against main) runs here, so an
-      # App Store pull request only needs a human for taste and trust.
       - name: Validate App Store apps
         run: |
           git fetch --no-tags --depth=1 origin main

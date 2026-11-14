@@ -66,7 +66,7 @@ Presets in the editor's caption panel. Every field is required so a style always
 
 ### Color looks
 
-Presets in the editor's Color tab. Leave out any value you do not want to change.
+Presets in the editor's Color tab. Applying a look sets the whole grade, like Cap's built-in looks, so any value you leave out goes back to neutral.
 
 ```json
 "colorLooks": [
