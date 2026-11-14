@@ -162,7 +162,51 @@ test("platform resources point at the shared native dependencies", () => {
 	const windows = gpuiPlatformConfig("win32").bundle.resources;
 	assert.equal(windows["../../target/ffmpeg/bin/*.dll"], "./");
 	assert.equal(windows["../../target/native-deps/onnxruntime/lib/*.dll"], "./");
+	assert.equal(windows["../../target/native-deps/vcruntime/*.dll"], "./");
 	assert.equal(gpuiPlatformConfig("linux"), null);
+});
+
+test("the Windows installer copies nothing while a CLI from this install runs", () => {
+	const hooks = readFileSync(
+		path.join(gpuiDirectory, gpuiConfig.bundle.windows.nsis.installerHooks),
+		"utf8",
+	);
+	const macro = (name) =>
+		hooks.match(
+			new RegExp(`!macro ${name}(?: [A-Z_]+)?\\r?\\n([\\s\\S]*?)!macroend`),
+		)?.[1] ?? "";
+	for (const hook of ["NSIS_HOOK_PREINSTALL", "NSIS_HOOK_PREUNINSTALL"]) {
+		const body = macro(hook);
+		assert.match(body, /!insertmacro WaitForCapCommandLineTools "/, hook);
+		assert.ok(
+			body.indexOf("EndCapMcpServers") <
+				body.indexOf("WaitForCapCommandLineTools"),
+			hook,
+		);
+	}
+	const wait = macro("WaitForCapCommandLineTools");
+	assert.match(
+		wait,
+		/\$\$_\.Name -eq 'cap-cli\.exe' -or \$\$_\.Name -eq 'cap-muxer\.exe'/,
+	);
+	assert.match(wait, /GetDirectoryName\(\$\$_\.ExecutablePath\) -eq \$\$dir/);
+	assert.match(wait, /exit 2 \} catch \{ exit 0 \}/);
+	assert.match(wait, /\$\{If\} \$0 == 2/);
+	assert.match(
+		wait,
+		/MB_RETRYCANCEL[^\n]*\/SD IDCANCEL IDRETRY \$\{CapToolsCheck\}/,
+	);
+	assert.match(wait, /Abort "\$\{ABORT_TEXT\}"/);
+	const lines = wait
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	assert.deepEqual(lines.slice(1, 3), ["Push $0", "Push $1"]);
+	assert.deepEqual(lines.slice(-3), [
+		"Pop $1",
+		"Pop $0",
+		"!undef CapToolsCheck",
+	]);
 });
 
 test("tauri bundle runs against the GPUI crate with its pinned toolchain", () => {
