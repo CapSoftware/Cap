@@ -188,6 +188,14 @@ label = "क्लिक पर ऑटो ज़ूम"
 description = "नए बनाए गए और अपने-आप बने ज़ूम सेगमेंट का ज़ूम स्तर।"
 label = "डिफ़ॉल्ट ज़ूम स्तर"
 
+[settings.general.recording.auto_zoom_hold]
+description = "हर क्लिक के बाद अपने-आप बने ज़ूम सेगमेंट कितनी देर तक ज़ूम रहते हैं।"
+label = "क्लिक के बाद ज़ूम होल्ड"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "इस अंतर से कम दूरी वाले लगातार क्लिक ज़ूम को मिलाएँ। अंतर कभी न मिलाने के लिए 0s पर सेट करें।"
+label = "पास के क्लिक मिलाने का अंतर"
+
 [settings.general.recording.capture_keyboard]
 description = "की प्रेस रिकॉर्ड करें, ताकि आप एडिटर में कीबोर्ड ओवरले जोड़ सकें।"
 label = "कीबोर्ड प्रेस कैप्चर करें"

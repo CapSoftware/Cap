@@ -188,6 +188,14 @@ label = "点击时自动缩放"
 description = "新建和自动生成的缩放片段所用的缩放倍数。"
 label = "默认缩放倍数"
 
+[settings.general.recording.auto_zoom_hold]
+description = "每次点击后自动生成的缩放片段保持放大的时长。"
+label = "点击后缩放保持时长"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "合并间隔小于此值的连续点击缩放。设为 0s 则不合并间隔。"
+label = "合并相近点击间隔"
+
 [settings.general.recording.capture_keyboard]
 description = "记录按键，以便在编辑器中添加键盘按键显示。"
 label = "记录键盘按键"

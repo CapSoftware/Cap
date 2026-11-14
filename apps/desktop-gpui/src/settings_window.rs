@@ -711,6 +711,13 @@ async fn fetch_profile_image() -> Result<Arc<RenderImage>, crate::auth::AuthApiE
     Ok(library::rgba_to_render_image(image.into_rgba8()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordingSlider {
+    ZoomAmount,
+    ZoomHoldDuration,
+    ZoomMergeGap,
+}
+
 pub struct SettingsWindow {
     pub(crate) theme: Theme,
     pub(crate) page: Page,
@@ -751,7 +758,10 @@ pub struct SettingsWindow {
     /// The zoom slider's track rect, captured during prepaint -- the row is
     /// inside a resizable pane, so it cannot be computed.
     slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
+    zoom_hold_slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
+    zoom_merge_gap_slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
     slider_dragging: bool,
+    active_slider: Option<RecordingSlider>,
     /// `commands.listCaptureWindows()`, for the excluded-windows menu.
     windows: Vec<WindowOption>,
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
@@ -894,7 +904,10 @@ impl SettingsWindow {
             placeholders: ui::CollapsibleState::new(false),
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
+            zoom_hold_slider_track: Rc::new(Cell::new(None)),
+            zoom_merge_gap_slider_track: Rc::new(Cell::new(None)),
             slider_dragging: false,
+            active_slider: None,
             windows: Vec::new(),
             focus: cx.focus_handle(),
             _sign_in_subscriptions: sign_in_subscriptions,
@@ -3709,6 +3722,8 @@ impl SettingsWindow {
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
+        let zoom_hold = settings.auto_zoom_hold_seconds();
+        let zoom_merge_gap = settings.auto_zoom_merge_gap_seconds();
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3888,6 +3903,60 @@ impl SettingsWindow {
                                     .text_size(px(12.))
                                     .text_color(theme.settings_muted())
                                     .child(format!("{zoom:.1}x")),
+                            )
+                            .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::recording::auto_zoom_hold::label(),
+                        Some(tr::settings::general::recording::auto_zoom_hold::description()),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .w(px(208.))
+                            .child(self.render_recording_slider(
+                                "auto-zoom-hold-slider",
+                                RecordingSlider::ZoomHoldDuration,
+                                zoom_hold,
+                                ZOOM_HOLD_MIN,
+                                ZOOM_HOLD_MAX,
+                                self.zoom_hold_slider_track.clone(),
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .w(px(36.))
+                                    .text_size(px(12.))
+                                    .text_color(theme.settings_muted())
+                                    .child(format!("{zoom_hold:.1}s")),
+                            )
+                            .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::recording::auto_zoom_merge_gap::label(),
+                        Some(tr::settings::general::recording::auto_zoom_merge_gap::description()),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .w(px(208.))
+                            .child(self.render_recording_slider(
+                                "auto-zoom-merge-gap-slider",
+                                RecordingSlider::ZoomMergeGap,
+                                zoom_merge_gap,
+                                ZOOM_MERGE_GAP_MIN,
+                                ZOOM_MERGE_GAP_MAX,
+                                self.zoom_merge_gap_slider_track.clone(),
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .w(px(36.))
+                                    .text_size(px(12.))
+                                    .text_color(theme.settings_muted())
+                                    .child(format!("{zoom_merge_gap:.1}s")),
                             )
                             .into_any_element(),
                     ),
@@ -4952,10 +5021,31 @@ impl SettingsWindow {
     /// `<Slider minValue={1} maxValue={4.5} step={0.1}>`: a `h-[0.3rem]`
     /// `bg-gray-4` track with a `bg-blue-9` fill and a `size-4` thumb.
     fn render_zoom_slider(&self, value: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let fraction = ((value - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)).clamp(0., 1.);
+        self.render_recording_slider(
+            "zoom-slider",
+            RecordingSlider::ZoomAmount,
+            value,
+            ZOOM_MIN,
+            ZOOM_MAX,
+            self.slider_track.clone(),
+            cx,
+        )
+    }
 
-        ui::Slider::new("zoom-slider", fraction, self.slider_track.clone())
+    fn render_recording_slider(
+        &self,
+        id: &'static str,
+        slider: RecordingSlider,
+        value: f32,
+        min: f32,
+        max: f32,
+        track: Rc<Cell<Option<Bounds<Pixels>>>>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let fraction = ((value - min) / (max - min)).clamp(0., 1.);
+
+        ui::Slider::new(id, fraction, track)
             .flex()
             .track(px(5.), theme.settings_fill())
             .fill(Hsla::from(theme.blue_9))
@@ -4972,9 +5062,10 @@ impl SettingsWindow {
             // centre over the 5px track.
             .thumb_top(px(-6.))
             .on_drag_start(
-                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
                     this.slider_dragging = true;
-                    this.set_zoom_from(event.position, cx);
+                    this.active_slider = Some(slider);
+                    this.set_slider_from(slider, event.position, cx);
                 }),
             )
     }
@@ -4986,38 +5077,111 @@ impl SettingsWindow {
         if !self.slider_dragging {
             return None;
         }
+        let slider = self.active_slider.unwrap_or(RecordingSlider::ZoomAmount);
         Some(
             ui::Slider::drag_layer(
                 "zoom-slider-drag",
-                cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
-                    this.set_zoom_from(event.position, cx);
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                    this.set_slider_from(slider, event.position, cx);
                 }),
-                cx.listener(|this, _, _window, cx| {
+                cx.listener(move |this, _, _window, cx| {
                     this.slider_dragging = false;
+                    this.active_slider = None;
                     // `onChangeEnd` -- the store write happens once, at the
                     // end of the drag.
-                    let value = this.settings.new_zoom_amount();
-                    this.write(
-                        "defaultZoomAmount",
-                        Value::from(f64::from(ui::snap_to_step(value, ZOOM_MIN, ZOOM_MAX, 0.1))),
-                        cx,
-                    );
+                    match slider {
+                        RecordingSlider::ZoomAmount => {
+                            let value = this.settings.new_zoom_amount();
+                            this.write(
+                                "defaultZoomAmount",
+                                Value::from(f64::from(ui::snap_to_step(
+                                    value, ZOOM_MIN, ZOOM_MAX, 0.1,
+                                ))),
+                                cx,
+                            );
+                        }
+                        RecordingSlider::ZoomHoldDuration => {
+                            let value = this.settings.auto_zoom_hold_seconds();
+                            this.write(
+                                "autoZoomHoldDuration",
+                                Value::from(f64::from(ui::snap_to_step(
+                                    value,
+                                    ZOOM_HOLD_MIN,
+                                    ZOOM_HOLD_MAX,
+                                    0.1,
+                                ))),
+                                cx,
+                            );
+                        }
+                        RecordingSlider::ZoomMergeGap => {
+                            let value = this.settings.auto_zoom_merge_gap_seconds();
+                            this.write(
+                                "autoZoomMergeGap",
+                                Value::from(f64::from(ui::snap_to_step(
+                                    value,
+                                    ZOOM_MERGE_GAP_MIN,
+                                    ZOOM_MERGE_GAP_MAX,
+                                    0.1,
+                                ))),
+                                cx,
+                            );
+                        }
+                    }
                 }),
             )
             .into_any_element(),
         )
     }
 
-    fn set_zoom_from(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        // `step={0.1}`
-        let Some(value) =
-            ui::slider_value_at(&self.slider_track, position, ZOOM_MIN, ZOOM_MAX, 0.1)
-        else {
-            return;
-        };
-        if self.settings.default_zoom_amount != Some(value) {
-            self.settings.default_zoom_amount = Some(value);
-            cx.notify();
+    fn set_slider_from(
+        &mut self,
+        slider: RecordingSlider,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        match slider {
+            RecordingSlider::ZoomAmount => {
+                // `step={0.1}`
+                let Some(value) =
+                    ui::slider_value_at(&self.slider_track, position, ZOOM_MIN, ZOOM_MAX, 0.1)
+                else {
+                    return;
+                };
+                if self.settings.default_zoom_amount != Some(value) {
+                    self.settings.default_zoom_amount = Some(value);
+                    cx.notify();
+                }
+            }
+            RecordingSlider::ZoomHoldDuration => {
+                let Some(value) = ui::slider_value_at(
+                    &self.zoom_hold_slider_track,
+                    position,
+                    ZOOM_HOLD_MIN,
+                    ZOOM_HOLD_MAX,
+                    0.1,
+                ) else {
+                    return;
+                };
+                if self.settings.auto_zoom_hold_duration != Some(value) {
+                    self.settings.auto_zoom_hold_duration = Some(value);
+                    cx.notify();
+                }
+            }
+            RecordingSlider::ZoomMergeGap => {
+                let Some(value) = ui::slider_value_at(
+                    &self.zoom_merge_gap_slider_track,
+                    position,
+                    ZOOM_MERGE_GAP_MIN,
+                    ZOOM_MERGE_GAP_MAX,
+                    0.1,
+                ) else {
+                    return;
+                };
+                if self.settings.auto_zoom_merge_gap != Some(value) {
+                    self.settings.auto_zoom_merge_gap = Some(value);
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -5045,6 +5209,10 @@ impl SettingsWindow {
 /// `minValue={1} maxValue={4.5}` on the zoom slider.
 const ZOOM_MIN: f32 = 1.;
 const ZOOM_MAX: f32 = 4.5;
+const ZOOM_HOLD_MIN: f32 = 0.5;
+const ZOOM_HOLD_MAX: f32 = 5.0;
+const ZOOM_MERGE_GAP_MIN: f32 = 0.0;
+const ZOOM_MERGE_GAP_MAX: f32 = 5.0;
 
 /// `new URL(v).origin` -- the Tauri handler normalises the typed URL to its
 /// origin before storing it, and throws (leaving the setting alone) when it

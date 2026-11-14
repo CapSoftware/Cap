@@ -188,6 +188,14 @@ label = "Automatisch auf Klicks zoomen"
 description = "Zoomstufe für neu erstellte und automatisch erzeugte Zoom-Segmente."
 label = "Standard-Zoomstufe"
 
+[settings.general.recording.auto_zoom_hold]
+description = "Wie lange automatisch erzeugte Zoom-Segmente nach jedem Klick gezoomt bleiben."
+label = "Zoom-Haltedauer nach Klick"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "Aufeinanderfolgende Klick-Zooms mit kleinerem Abstand zusammenführen. Auf 0s setzen, um Lücken nie zusammenzuführen."
+label = "Abstand zum Zusammenführen naher Klicks"
+
 [settings.general.recording.capture_keyboard]
 description = "Tastenanschläge aufzeichnen, damit Sie im Editor Tastatur-Overlays hinzufügen können."
 label = "Tastenanschläge aufzeichnen"
