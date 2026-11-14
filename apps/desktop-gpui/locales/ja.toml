@@ -3204,6 +3204,13 @@ quit_anyway = "それでも終了"
 still_open = "Capはまだ開いています"
 unconfirmed = "録画の停止を確認できなかったため、終了をキャンセルしました。Capは開いたままになります。「停止」を使ってから、もう一度終了してください。"
 
+[dialog.startup]
+failed = "{error}\n\n詳細は{folder}に保存されました。"
+failed_title = "Capを起動できませんでした"
+quit_and_reopen = "終了して再度開く"
+unresponsive = "Capはすでに起動していますが、応答していません。そのCapを終了して、もう一度開きますか？"
+unresponsive_title = "Capが応答していません"
+
 [dialog.update]
 already_getting = "Capはすでにバージョン{version}を準備しています。"
 available = "Capのバージョン{version}が利用可能です。バックグラウンドでダウンロードし、インストールの準備ができたらお知らせします。"

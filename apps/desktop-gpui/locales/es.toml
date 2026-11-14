@@ -3204,6 +3204,13 @@ quit_anyway = "Salir de todos modos"
 still_open = "Cap sigue abierto"
 unconfirmed = "Se canceló la salida porque no se pudo confirmar que la grabación se detuviera. Cap seguirá abierto. Usa Detener y vuelve a intentar salir."
 
+[dialog.startup]
+failed = "{error}\n\nLos detalles se guardaron en {folder}."
+failed_title = "Cap no pudo iniciarse"
+quit_and_reopen = "Salir y volver a abrir"
+unresponsive = "Cap ya se está ejecutando, pero no responde. ¿Quieres cerrar esa copia y volver a abrir Cap?"
+unresponsive_title = "Cap no responde"
+
 [dialog.update]
 already_getting = "Cap ya está preparando la versión {version}."
 available = "La versión {version} de Cap está disponible. Cap la descargará en segundo plano y te avisará cuando esté lista para instalarse."

@@ -99,6 +99,7 @@ mod sign_in;
 mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
+mod startup;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -337,6 +338,7 @@ fn main() {
     }
 
     let _log_guard = init_logging();
+    startup::begin();
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
@@ -477,11 +479,10 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
-        let Ok(window_handle) = window_handle else {
-            cx.quit();
-            return;
-        };
+            .unwrap_or_else(|error| {
+                startup::fail(format!("The main window could not be opened: {error:#}"))
+            });
+        startup::finished();
 
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();

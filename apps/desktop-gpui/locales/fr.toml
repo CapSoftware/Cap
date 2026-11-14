@@ -3204,6 +3204,13 @@ quit_anyway = "Quitter quand même"
 still_open = "Cap est toujours ouvert"
 unconfirmed = "Fermeture annulée, car l'arrêt de l'enregistrement n'a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
 
+[dialog.startup]
+failed = "{error}\n\nLes détails ont été enregistrés dans {folder}."
+failed_title = "Cap n'a pas pu démarrer"
+quit_and_reopen = "Quitter et rouvrir"
+unresponsive = "Cap est déjà ouvert mais ne répond pas. Quitter cette instance et rouvrir Cap ?"
+unresponsive_title = "Cap ne répond pas"
+
 [dialog.update]
 already_getting = "Cap prépare déjà la version {version}."
 available = "La version {version} de Cap est disponible. Cap la télécharge en arrière-plan et vous prévient quand elle est prête à être installée."
