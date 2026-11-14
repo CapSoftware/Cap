@@ -5,6 +5,7 @@ import {
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
+	streamAudioViaMediaServer,
 } from "@/lib/media-client";
 
 vi.mock("@cap/env", () => ({
@@ -222,6 +223,70 @@ describe("media-client", () => {
 			await expect(
 				extractAudioViaMediaServer("https://example.com/video.mp4"),
 			).rejects.toThrow("FFmpeg process exited with code 1");
+		});
+	});
+
+	describe("streamAudioViaMediaServer", () => {
+		beforeEach(async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
+		});
+
+		it("hands back the response body without buffering it", async () => {
+			const body = new ReadableStream<Uint8Array>();
+			const signal = new AbortController().signal;
+			mockFetch.mockResolvedValueOnce({ ok: true, body });
+
+			const result = await streamAudioViaMediaServer(
+				"https://example.com/video.mp4",
+				signal,
+			);
+
+			expect(result).toEqual({ status: "ok", body });
+			expect(mockFetch).toHaveBeenCalledWith(
+				"http://localhost:3456/audio/extract",
+				{
+					method: "POST",
+					headers: mediaServerHeaders,
+					body: JSON.stringify({
+						videoUrl: "https://example.com/video.mp4",
+						stream: true,
+					}),
+					signal,
+				},
+			);
+		});
+
+		it("reports a video without an audio track", async () => {
+			mockFetch.mockResolvedValueOnce({
+				ok: false,
+				status: 422,
+				json: async () => ({
+					error: "Video has no audio track",
+					code: "NO_AUDIO_TRACK",
+				}),
+			});
+
+			expect(
+				await streamAudioViaMediaServer("https://example.com/video.mp4"),
+			).toEqual({ status: "no-audio" });
+		});
+
+		it("throws the media server error for other failures", async () => {
+			mockFetch.mockResolvedValueOnce({
+				ok: false,
+				status: 500,
+				statusText: "Internal Server Error",
+				json: async () => {
+					throw new Error("not json");
+				},
+			});
+
+			await expect(
+				streamAudioViaMediaServer("https://example.com/video.mp4"),
+			).rejects.toThrow("Audio extraction failed: 500 Internal Server Error");
 		});
 	});
 

@@ -7,11 +7,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	getVideoDownloadInfo: vi.fn(),
+	getVideoAudioDownloadInfo: vi.fn(),
 	toastPromise: vi.fn(),
 }));
 
 vi.mock("@/actions/videos/download", () => ({
 	getVideoDownloadInfo: mocks.getVideoDownloadInfo,
+	getVideoAudioDownloadInfo: mocks.getVideoAudioDownloadInfo,
 }));
 vi.mock("sonner", () => ({ toast: { promise: mocks.toastPromise } }));
 
@@ -23,9 +25,13 @@ const signedUrl =
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 let download: ReturnType<typeof useVideoDownload>["download"] | null = null;
+let downloadAudio: ReturnType<typeof useVideoDownload>["downloadAudio"] | null =
+	null;
 
 function Harness() {
-	download = useVideoDownload(Video.VideoId.make("video")).download;
+	const hook = useVideoDownload(Video.VideoId.make("video"));
+	download = hook.download;
+	downloadAudio = hook.downloadAudio;
 	return null;
 }
 
@@ -52,6 +58,7 @@ afterEach(async () => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 	mocks.getVideoDownloadInfo.mockReset();
+	mocks.getVideoAudioDownloadInfo.mockReset();
 	mocks.toastPromise.mockReset();
 });
 
@@ -126,5 +133,44 @@ it("reports the server error without starting a download", async () => {
 		"Video is still processing",
 	);
 	expect(click).not.toHaveBeenCalled();
+	expect(downloadFrames()).toHaveLength(0);
+});
+
+it("downloads the audio through the audio route", async () => {
+	mocks.getVideoAudioDownloadInfo.mockResolvedValue({
+		success: true,
+		downloadUrl: "/api/videos/video/audio",
+		filename: "Two hour recording.mp3",
+	});
+
+	await act(async () => {
+		downloadAudio?.();
+		await mocks.toastPromise.mock.calls[0]?.[0];
+	});
+
+	expect(mocks.getVideoAudioDownloadInfo).toHaveBeenCalledWith("video");
+	expect(mocks.getVideoDownloadInfo).not.toHaveBeenCalled();
+	expect(mocks.toastPromise.mock.calls[0]?.[1]).toMatchObject({
+		loading: "Preparing audio...",
+	});
+	expect(downloadFrames().map((frame) => new URL(frame.src).pathname)).toEqual([
+		"/api/videos/video/audio",
+	]);
+});
+
+it("tells the viewer when a video has no audio", async () => {
+	mocks.getVideoAudioDownloadInfo.mockResolvedValue({
+		success: false,
+		error: "This video has no audio to download.",
+	});
+
+	await act(async () => {
+		downloadAudio?.();
+		await mocks.toastPromise.mock.calls[0]?.[0].catch(() => undefined);
+	});
+
+	await expect(mocks.toastPromise.mock.calls[0]?.[0]).rejects.toThrow(
+		"This video has no audio to download.",
+	);
 	expect(downloadFrames()).toHaveLength(0);
 });

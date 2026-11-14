@@ -22,6 +22,7 @@ import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
+	AudioLines,
 	Check,
 	Clock,
 	Copy,
@@ -311,7 +312,7 @@ export const ShareHeader = ({
 	const isOwner = user && user.id === data.owner.id;
 
 	const { webUrl } = usePublicEnv();
-	const { download, isDownloading } = useVideoDownload(data.id);
+	const { download, downloadAudio, isDownloading } = useVideoDownload(data.id);
 
 	const resolvedTitle = videoStatus?.name ?? data.name;
 	const effectivePasswordProtected =
@@ -1340,6 +1341,18 @@ export const ShareHeader = ({
 																	</p>
 																</DropdownMenuItem>
 															)}
+															{!data.isScreenshot && (
+																<DropdownMenuItem
+																	onClick={() => downloadAudio()}
+																	disabled={isDownloading}
+																	className="flex items-center gap-2 rounded-lg"
+																>
+																	<AudioLines className="size-3.5" />
+																	<p className="text-sm text-gray-12">
+																		Download audio
+																	</p>
+																</DropdownMenuItem>
+															)}
 														</>
 													)}
 													<DropdownMenuSeparator />
@@ -1362,10 +1375,11 @@ export const ShareHeader = ({
 									    has to stand on its own for them. */}
 									{!isOwner &&
 										canDownload &&
-										(hasEdits ? (
+										(hasEdits || !data.isScreenshot ? (
 											<VideoDownloadMenu
 												videoId={data.id}
-												hasEdits
+												hasEdits={hasEdits}
+												showAudio={!data.isScreenshot}
 												triggerLabel="Download"
 												triggerClassName={clsx(
 													ACTION_BAR_BUTTON_CLASS,

@@ -16,6 +16,7 @@ import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
 import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faFileAudio } from "@fortawesome/free-solid-svg-icons/faFileAudio";
 import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
@@ -36,6 +37,7 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { useVideoDownload } from "@/app/s/[videoId]/_components/use-video-download";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
@@ -186,6 +188,9 @@ export const CapCard = ({
 
 	const router = useRouter();
 	const rpc = useRpcClient();
+	const { downloadAudio, isDownloading: isDownloadingAudio } = useVideoDownload(
+		cap.id,
+	);
 
 	const downloadMutation = useEffectMutation({
 		mutationFn: () =>
@@ -536,6 +541,19 @@ export const CapCard = ({
 								<FontAwesomeIcon icon={faDownload} />
 								<p className="text-sm text-gray-12">Download</p>
 							</DropdownMenuItem>
+							{cap.isScreenshot !== true && (
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										downloadAudio();
+									}}
+									disabled={isDownloadingAudio}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon icon={faFileAudio} />
+									<p className="text-sm text-gray-12">Download audio</p>
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onClick={(e) => {
 									e.stopPropagation();
