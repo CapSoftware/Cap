@@ -30,7 +30,7 @@ export const CapCardButton = ({
 				disabled={disabled}
 				asChild={asChild}
 				className={clsx(
-					`!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0`,
+					"!size-7 !p-0 min-w-fit rounded-lg bg-gray-1 border-gray-4 text-gray-12 shadow-[0_1px_3px_rgba(0,0,0,0.12)] hover:bg-gray-2 hover:border-gray-6",
 					className,
 				)}
 				variant="white"

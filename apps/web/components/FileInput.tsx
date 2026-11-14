@@ -294,9 +294,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 							/>
 						)}
 						<p className="truncate text-[13px] text-gray-11">
-							{isLoading
-								? "Uploading..."
-								: "Choose a file or drag & drop it here"}
+							{isLoading ? "Uploading..." : "Upload or drop an image"}
 						</p>
 					</div>
 				)}

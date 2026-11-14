@@ -1,7 +1,5 @@
 import { Button } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
-import { faCheckCircle } from "@fortawesome/free-solid-svg-icons/faCheckCircle";
-import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
 import { faX } from "@fortawesome/free-solid-svg-icons/faX";
 import { useMutation } from "@tanstack/react-query";
@@ -15,6 +13,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
 import { useDashboardContext } from "../../../Contexts";
+import { SettingsRow, StatusChip } from "../_components/settings-ui";
 import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
 
 export function CustomDomain() {
@@ -79,91 +78,62 @@ export function CustomDomain() {
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
 			/>
-			<div className="flex flex-col flex-1 gap-3 justify-between w-full md:flex-row md:items-center h-fit">
-				<div className="space-y-4 w-full">
-					<div
-						className={clsx(
-							"flex flex-col md:flex-row gap-3 md:items-center",
-							(isVerified && orgCustomDomain) ||
-								(!isVerified && orgCustomDomain)
-								? "mb-3"
-								: "mb-0",
-						)}
-					>
-						<div className="flex flex-col gap-1">
-							<h1 className="text-sm font-medium text-gray-12">
-								Custom Domain
-							</h1>
-							<p className="w-full text-sm text-gray-10">
-								Setup a custom domain for your organization's shared caps.
-							</p>
-						</div>
-					</div>
-					<div className="flex flex-1 gap-2 justify-between items-center w-full">
-						<div className="flex gap-2 justify-between items-center px-3 flex-1 h-[44px] rounded-xl border bg-gray-2 border-gray-3">
-							<p className="text-[13px] text-gray-8">
-								{orgCustomDomain || "No custom domain has been setup"}
-							</p>
-							<div className="flex items-center">
-								{orgCustomDomain && isVerified ? (
-									<Tooltip content="Verified">
-										<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
-											<FontAwesomeIcon
-												className="text-green-500 size-5"
-												icon={faCheckCircle}
-											/>
-										</div>
-									</Tooltip>
-								) : (
-									orgCustomDomain &&
-									!isVerified && (
-										<Tooltip content="Setup not complete">
-											<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
-												<FontAwesomeIcon
-													className="text-red-500 size-5"
-													icon={faExclamationCircle}
-												/>
-											</div>
-										</Tooltip>
-									)
+			<SettingsRow
+				title="Custom domain"
+				meta={
+					orgCustomDomain ? (
+						isVerified ? (
+							<StatusChip tone="positive">Verified</StatusChip>
+						) : (
+							<StatusChip tone="warning">Setup not complete</StatusChip>
+						)
+					) : null
+				}
+				description="Set up a custom domain for your organization's shared caps."
+				control={
+					<div className="flex gap-2 items-center w-full sm:w-auto">
+						<div className="flex flex-1 gap-2 justify-between items-center pr-1.5 pl-3 h-9 rounded-lg border sm:flex-none sm:w-60 bg-gray-2 border-gray-3">
+							<p
+								className={clsx(
+									"text-[13px] truncate",
+									orgCustomDomain ? "text-gray-12" : "text-gray-9",
 								)}
-
-								{orgCustomDomain && (
-									<Tooltip content="Remove custom domain">
-										<div
-											onClick={(e) => {
-												e.preventDefault();
-												setConfirmOpen(true);
-											}}
-											className="flex justify-center items-center text-xs rounded-full border transition-colors duration-200 cursor-pointer hover:bg-gray-8 hover:border-gray-9 size-5 bg-gray-6 border-gray-7"
-										>
-											<FontAwesomeIcon
-												icon={faX}
-												className="text-gray-12 size-[10px]"
-											/>
-										</div>
-									</Tooltip>
-								)}
-							</div>
+							>
+								{orgCustomDomain || "No custom domain"}
+							</p>
+							{orgCustomDomain && (
+								<Tooltip content="Remove custom domain">
+									<button
+										type="button"
+										aria-label="Remove custom domain"
+										onClick={(e) => {
+											e.preventDefault();
+											setConfirmOpen(true);
+										}}
+										className="flex justify-center items-center rounded-md transition-colors shrink-0 size-6 text-gray-10 hover:bg-gray-4 hover:text-gray-12"
+									>
+										<FontAwesomeIcon icon={faX} className="size-2.5" />
+									</button>
+								</Tooltip>
+							)}
 						</div>
-
 						{!isVerified && (
 							<Button
 								type="submit"
 								size="sm"
-								className="min-w-fit"
+								className="px-4 h-9 min-w-fit"
 								variant="dark"
 								onClick={(e) => {
 									e.preventDefault();
 									setShowCustomDomainDialog(true);
 								}}
 							>
-								Setup
+								Set up
 							</Button>
 						)}
 					</div>
-				</div>
-			</div>
+				}
+			/>
 
 			{showUpgradeModal && (
 				<UpgradeModal

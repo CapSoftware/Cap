@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, CardDescription, CardHeader, CardTitle, Switch } from "@cap/ui";
+import { Switch } from "@cap/ui";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	AI_GENERATION_LANGUAGES,
@@ -11,13 +11,19 @@ import {
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
-import { ChevronDown, Gauge, Globe } from "lucide-react";
+import { Check, ChevronDown, Gauge, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../../Contexts";
 import type { OrganizationSettings } from "../../../dashboard-data";
+import {
+	ProChip,
+	SettingsCard,
+	SettingsRow,
+	SettingsSection,
+} from "../_components/settings-ui";
 
 const defaultSettings: OrganizationSettings = {
 	disableComments: false,
@@ -274,132 +280,115 @@ const OrganizationCapSettings = ({
 	};
 
 	return (
-		<Card className="flex relative flex-col flex-1 gap-6 w-full min-h-fit">
-			<CardHeader>
-				<CardTitle>Cap Settings</CardTitle>
-				<CardDescription>
-					Enable or disable specific settings for your organization. These
-					settings will be applied as defaults for new caps.
-				</CardDescription>
-			</CardHeader>
+		<div className="flex flex-col gap-10">
+			<SettingsSection title="Defaults for new caps">
+				<SettingsCard>
+					{options.map((option) => (
+						<SettingsRow
+							key={option.value}
+							title={option.label}
+							meta={option.pro ? <ProChip /> : null}
+							description={option.description}
+							control={
+								<Switch
+									aria-label={option.label}
+									disabled={
+										(option.pro && !user.isPro) ||
+										((option.value === "disableSummary" ||
+											option.value === "disableChapters") &&
+											settings?.disableTranscript)
+									}
+									onCheckedChange={() => {
+										handleToggle(option.value);
+									}}
+									checked={!settings?.[option.value]}
+								/>
+							}
+						/>
+					))}
+				</SettingsCard>
+			</SettingsSection>
 
-			<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-				{options.map((option) => (
-					<div
-						key={option.value}
-						className="flex gap-10 justify-between items-center p-4 text-left rounded-xl border transition-colors bg-gray-2 min-w-fit border-gray-3"
-					>
-						<div
-							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
-						>
-							<div className="flex gap-1.5 items-center">
-								<p className="text-sm text-gray-12">{option.label}</p>
-								{option.pro && (
-									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-										Pro
-									</p>
+			<SettingsSection title="Playback and AI">
+				<SettingsCard>
+					<SettingsRow
+						title={
+							<span className="flex gap-1.5 items-center">
+								<Gauge className="size-3.5 text-gray-9" />
+								Default playback speed
+							</span>
+						}
+						description="The speed caps start playing at on shareable links. Viewers can still change it."
+						control={
+							<div className="flex flex-wrap gap-0.5 items-center p-0.5 rounded-lg bg-gray-3">
+								{PLAYBACK_SPEEDS.map((speed) => (
+									<button
+										key={speed}
+										type="button"
+										onClick={() => handleSpeedChange(speed)}
+										aria-pressed={selectedSpeed === speed}
+										className={clsx(
+											"px-2 h-7 text-xs font-medium tabular-nums rounded-md transition-colors min-w-9",
+											selectedSpeed === speed
+												? "bg-gray-1 text-gray-12 shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+												: "text-gray-10 hover:text-gray-12",
+										)}
+									>
+										{speed}×
+									</button>
+								))}
+							</div>
+						}
+					/>
+					<SettingsRow
+						title="AI generation language"
+						meta={<ProChip />}
+						description="Set the language used for transcripts, titles, summaries, and chapters."
+						control={
+							<div className="relative" ref={languageMenuRef}>
+								<button
+									onClick={() => setShowLanguageMenu((value) => !value)}
+									disabled={!user.isPro}
+									aria-expanded={showLanguageMenu}
+									className="flex gap-1.5 items-center px-3 h-8 text-[13px] font-medium rounded-full border shadow-xs transition-colors border-gray-4 bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed"
+									type="button"
+								>
+									<Globe className="size-3.5 text-gray-9" />
+									{getAiGenerationLanguageName(selectedLanguage)}
+									<ChevronDown className="size-3.5 text-gray-9" />
+								</button>
+								{showLanguageMenu && (
+									<div className="overflow-y-auto absolute right-0 top-full z-50 p-1 mt-1.5 w-56 max-h-64 rounded-xl border shadow-lg bg-gray-1 border-gray-3">
+										{languageOptions.map(([code, name], index) => (
+											<div key={code}>
+												{index === 1 && (
+													<div className="my-1 border-t border-gray-3" />
+												)}
+												<button
+													onClick={() => handleLanguageChange(code)}
+													className={clsx(
+														"flex justify-between items-center px-2.5 w-full h-8 text-[13px] text-left rounded-lg transition-colors text-gray-12",
+														selectedLanguage === code
+															? "bg-gray-3"
+															: "hover:bg-gray-2",
+													)}
+													type="button"
+												>
+													{name}
+													{selectedLanguage === code && (
+														<Check className="size-3.5 text-gray-12" />
+													)}
+												</button>
+											</div>
+										))}
+									</div>
 								)}
 							</div>
-							<p className="text-xs text-gray-10">{option.description}</p>
-						</div>
-						<Switch
-							disabled={
-								(option.pro && !user.isPro) ||
-								((option.value === "disableSummary" ||
-									option.value === "disableChapters") &&
-									settings?.disableTranscript)
-							}
-							onCheckedChange={() => {
-								handleToggle(option.value);
-							}}
-							checked={!settings?.[option.value]}
-						/>
-					</div>
-				))}
-			</div>
-
-			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
-				<div className="flex flex-col flex-1 gap-1">
-					<div className="flex gap-1.5 items-center">
-						<Gauge className="w-3.5 h-3.5 text-gray-9" />
-						<p className="text-sm text-gray-12">Default playback speed</p>
-					</div>
-					<p className="text-xs text-gray-10">
-						The speed caps start playing at on shareable links. Viewers can
-						still change it.
-					</p>
-				</div>
-				<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
-					{PLAYBACK_SPEEDS.map((speed) => (
-						<button
-							key={speed}
-							type="button"
-							onClick={() => handleSpeedChange(speed)}
-							aria-pressed={selectedSpeed === speed}
-							className={clsx(
-								"min-w-10 rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
-								selectedSpeed === speed
-									? "text-white bg-blue-11"
-									: "text-gray-11 hover:bg-gray-3",
-							)}
-						>
-							{speed}×
-						</button>
-					))}
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
-				<div className="flex flex-col flex-1 gap-1">
-					<div className="flex gap-1.5 items-center">
-						<p className="text-sm text-gray-12">AI generation language</p>
-						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-							Pro
-						</p>
-					</div>
-					<p className="text-xs text-gray-10">
-						Set the language used for transcripts, titles, summaries, and
-						chapters.
-					</p>
-				</div>
-				<div className="relative w-full sm:w-auto" ref={languageMenuRef}>
-					<button
-						onClick={() => setShowLanguageMenu((value) => !value)}
-						disabled={!user.isPro}
-						className="flex items-center gap-1.5 px-2.5 py-1.5 w-full justify-between text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:min-w-40"
-						type="button"
-					>
-						<span className="flex items-center gap-1.5 text-gray-12">
-							<Globe className="w-3 h-3 text-gray-9" />
-							{getAiGenerationLanguageName(selectedLanguage)}
-						</span>
-						<ChevronDown className="w-3 h-3 text-gray-9" />
-					</button>
-					{showLanguageMenu && (
-						<div className="absolute right-0 top-full mt-1 z-50 w-full py-1 bg-gray-1 border border-gray-3 rounded-lg shadow-lg max-h-64 overflow-y-auto sm:w-56">
-							{languageOptions.map(([code, name], index) => (
-								<div key={code}>
-									{index === 1 && (
-										<div className="my-1 border-t border-gray-3" />
-									)}
-									<button
-										onClick={() => handleLanguageChange(code)}
-										className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
-											selectedLanguage === code
-												? "text-blue-500 font-medium"
-												: "text-gray-12"
-										}`}
-										type="button"
-									>
-										{name}
-									</button>
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-			</div>
-		</Card>
+						}
+					/>
+				</SettingsCard>
+			</SettingsSection>
+		</div>
 	);
 };
 

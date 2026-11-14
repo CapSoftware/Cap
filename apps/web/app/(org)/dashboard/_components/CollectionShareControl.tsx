@@ -180,7 +180,7 @@ export const CollectionShareControl = ({
 					<button
 						type="button"
 						onClick={copy}
-						className="group flex gap-2.5 items-center pr-2.5 pl-3 h-10 text-sm rounded-xl border transition-colors border-gray-4 bg-gray-2 hover:bg-gray-3 hover:border-gray-5"
+						className="group flex gap-2 items-center pr-1.5 pl-3.5 h-9 text-sm rounded-full border shadow-[0_1px_2px_rgba(0,0,0,0.05)] transition-colors border-gray-4 bg-gray-1 hover:bg-gray-2 hover:border-gray-5"
 					>
 						<FontAwesomeIcon icon={faGlobe} className="text-blue-9 size-3" />
 						<span className="max-w-[140px] truncate text-gray-11 sm:max-w-[220px]">
@@ -197,12 +197,13 @@ export const CollectionShareControl = ({
 				{canManage && (
 					<Button
 						type="button"
-						variant="gray"
+						variant="secondary"
 						size="sm"
+						className="gap-2 px-4 h-9"
 						disabled={isPending}
 						onClick={() => setOpen(true)}
 					>
-						<FontAwesomeIcon icon={faSliders} className="size-3" />
+						<FontAwesomeIcon icon={faSliders} className="size-3 text-gray-10" />
 						Customize
 					</Button>
 				)}
@@ -215,12 +216,13 @@ export const CollectionShareControl = ({
 		<>
 			<Button
 				type="button"
-				variant="gray"
+				variant="secondary"
 				size="sm"
+				className="gap-2 px-4 h-9"
 				disabled={isPending}
 				onClick={() => setOpen(true)}
 			>
-				<FontAwesomeIcon icon={faGlobe} className="size-3" />
+				<FontAwesomeIcon icon={faGlobe} className="size-3 text-gray-10" />
 				Share
 			</Button>
 			{dialog}

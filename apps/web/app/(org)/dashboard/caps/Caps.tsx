@@ -269,21 +269,29 @@ export const Caps = ({
 				open={openNewFolderDialog}
 				onOpenChange={setOpenNewFolderDialog}
 			/>
-			<div className="flex flex-wrap gap-3 items-center mb-10 w-full">
-				<Button
-					onClick={() => setOpenNewFolderDialog(true)}
-					size="sm"
-					variant="dark"
-					className="flex gap-2 items-center w-fit"
-				>
-					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
-				</Button>
-				<UploadCapButton size="sm" />
-				<WebRecorderDialog />
-				<ChromeRecorderButton
-					className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
-				/>
+			<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-10 w-full">
+				<h1 className="text-2xl font-semibold tracking-tight text-gray-12">
+					My Caps
+				</h1>
+				<div className="flex flex-wrap gap-2 items-center">
+					<Button
+						onClick={() => setOpenNewFolderDialog(true)}
+						size="sm"
+						variant="secondary"
+						className="flex gap-2 items-center px-4 h-9 w-fit"
+					>
+						<FontAwesomeIcon
+							className="size-3.5 text-gray-10"
+							icon={faFolderPlus}
+						/>
+						New folder
+					</Button>
+					<UploadCapButton size="sm" />
+					<ChromeRecorderButton
+						className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium h-9 px-4`}
+					/>
+					<WebRecorderDialog />
+				</div>
 			</div>
 			<FoldersSection
 				title="Folders"
@@ -294,14 +302,15 @@ export const Caps = ({
 			/>
 			{visibleVideos.length > 0 && (
 				<>
-					<div className="flex justify-between items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">
+					<div className="flex gap-2.5 items-baseline mb-5 w-full">
+						<h2 className="text-lg font-semibold tracking-tight text-gray-12">
 							Videos and screenshots
-						</h1>
+						</h2>
+						<span className="text-sm tabular-nums text-gray-10">{count}</span>
 					</div>
 
 					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 							{isUploading && (
 								<UploadPlaceholderCard key={"upload-placeholder"} />
 							)}
