@@ -2749,6 +2749,7 @@ font_weight = "字重"
 generate = "生成键盘分段"
 generating = "正在生成键盘分段..."
 grouping_threshold = "分组阈值"
+keycap_design = "键帽设计"
 linger_duration = "停留时长"
 load_failed = "无法加载录制数据：{error}"
 no_presses = "未找到录制的按键。"
@@ -2757,11 +2758,21 @@ regenerate = "重新生成键盘分段"
 show_modifiers = "显示修饰键"
 show_special_keys = "显示特殊键"
 size_label = "大小"
+style = "样式"
 text_color = "文字颜色"
+theme = "主题"
 timeline_unavailable = "项目时间线不可用。"
 timeline_unreadable = "无法读取项目时间线。"
 title = "显示键盘"
 uppercase = "大写"
+
+[editor.tabs.keyboard_style]
+keycaps = "键帽"
+plain = "文本"
+
+[editor.tabs.keycap_theme]
+black = "黑色"
+white = "白色"
 
 [editor.tabs.position]
 bottom_center = "底部居中"

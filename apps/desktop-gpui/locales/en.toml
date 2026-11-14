@@ -2751,6 +2751,7 @@ font_weight = "Font Weight"
 generate = "Generate Keyboard Segments"
 generating = "Generating Keyboard Segments..."
 grouping_threshold = "Grouping Threshold"
+keycap_design = "Keycap Design"
 linger_duration = "Linger Duration"
 load_failed = "Failed to load recording data: {error}"
 no_presses = "No recorded keyboard presses were found."
@@ -2759,11 +2760,21 @@ regenerate = "Regenerate Keyboard Segments"
 show_modifiers = "Show Modifiers"
 show_special_keys = "Show Special Keys"
 size_label = "Size"
+style = "Style"
 text_color = "Text Color"
+theme = "Theme"
 timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
 uppercase = "Uppercase"
+
+[editor.tabs.keyboard_style]
+keycaps = "Keycaps"
+plain = "Text"
+
+[editor.tabs.keycap_theme]
+black = "Black"
+white = "White"
 
 [editor.tabs.position]
 bottom_center = "Bottom Center"

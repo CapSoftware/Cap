@@ -24,8 +24,9 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    KeyboardData, KeyboardSettings, KeyboardStyle, KeycapTheme, ProjectConfiguration,
+    RecordingMeta, ShadowConfiguration, StereoMode, transcription_ranges_cover,
+    transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -138,6 +139,19 @@ pub const TEXT_WEIGHTS: [(u32, Label); 3] = [
 ];
 
 /// `KEYBOARD_POSITION_OPTIONS` (`text-style.tsx:28-35`).
+pub const KEYBOARD_STYLES: [(KeyboardStyle, Label); 2] = [
+    (KeyboardStyle::Text, tr::editor::tabs::keyboard_style::plain),
+    (
+        KeyboardStyle::Keycaps,
+        tr::editor::tabs::keyboard_style::keycaps,
+    ),
+];
+
+pub const KEYCAP_THEMES: [(KeycapTheme, Label); 2] = [
+    (KeycapTheme::Black, tr::editor::tabs::keycap_theme::black),
+    (KeycapTheme::White, tr::editor::tabs::keycap_theme::white),
+];
+
 pub const KEYBOARD_POSITIONS: [(&str, Label); 6] = [
     ("top-left", tr::editor::tabs::position::top_left),
     ("top-center", tr::editor::tabs::position::top_center),
@@ -794,6 +808,8 @@ pub enum SidebarMenu {
     KeyboardFont,
     KeyboardPosition,
     KeyboardWeight,
+    KeyboardStyle,
+    KeyboardKeycapTheme,
     /// The segment panels' own selects carry their segment index.
     ///
     /// `TextFontFamily` is `FontPicker` (`FontPicker.tsx`), which is the one
@@ -908,6 +924,14 @@ impl EditorWindow {
             SidebarMenu::KeyboardWeight => TEXT_WEIGHTS
                 .iter()
                 .map(|(weight, label)| ui::MenuItem::new(label(), *weight == keyboard.font_weight))
+                .collect(),
+            SidebarMenu::KeyboardStyle => KEYBOARD_STYLES
+                .iter()
+                .map(|(style, label)| ui::MenuItem::new(label(), *style == keyboard.style))
+                .collect(),
+            SidebarMenu::KeyboardKeycapTheme => KEYCAP_THEMES
+                .iter()
+                .map(|(theme, label)| ui::MenuItem::new(label(), *theme == keyboard.keycap_theme))
                 .collect(),
             SidebarMenu::TextFontFamily(index)
             | SidebarMenu::TextWeight(index)
@@ -1162,6 +1186,24 @@ impl EditorWindow {
                 let weight = *weight;
                 self.set_keyboard_setting("keyboard-weight", window, cx, move |settings| {
                     settings.font_weight = weight
+                });
+            }
+            SidebarMenu::KeyboardStyle => {
+                let Some((style, _)) = KEYBOARD_STYLES.get(index) else {
+                    return;
+                };
+                let style = *style;
+                self.set_keyboard_setting("keyboard-style", window, cx, move |settings| {
+                    settings.style = style
+                });
+            }
+            SidebarMenu::KeyboardKeycapTheme => {
+                let Some((theme, _)) = KEYCAP_THEMES.get(index) else {
+                    return;
+                };
+                let theme = *theme;
+                self.set_keyboard_setting("keyboard-keycap-theme", window, cx, move |settings| {
+                    settings.keycap_theme = theme
                 });
             }
             SidebarMenu::TextFontFamily(segment)
@@ -2452,6 +2494,19 @@ impl EditorWindow {
             .iter()
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or(tr::editor::tabs::weight::normal(), |(_, label)| label());
+        let style_label = KEYBOARD_STYLES
+            .iter()
+            .find(|(style, _)| *style == settings.style)
+            .map_or(tr::editor::tabs::keyboard_style::plain(), |(_, label)| {
+                label()
+            });
+        let keycap_theme_label = KEYCAP_THEMES
+            .iter()
+            .find(|(theme, _)| *theme == settings.keycap_theme)
+            .map_or(tr::editor::tabs::keycap_theme::black(), |(_, label)| {
+                label()
+            });
+        let keycaps = settings.style == KeyboardStyle::Keycaps;
 
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
@@ -2459,6 +2514,34 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
+            .child(
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::keycap_design()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_inline(
+                            tr::editor::tabs::keyboard::style(),
+                            self.menu_select(
+                                SidebarMenu::KeyboardStyle,
+                                "keyboard-style",
+                                style_label,
+                                cx,
+                            ),
+                        ))
+                        .when(keycaps, |this| {
+                            this.child(self.labelled_inline(
+                                tr::editor::tabs::keyboard::theme(),
+                                self.menu_select(
+                                    SidebarMenu::KeyboardKeycapTheme,
+                                    "keyboard-keycap-theme",
+                                    keycap_theme_label,
+                                    cx,
+                                ),
+                            ))
+                        }),
+                ),
+            )
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::font_settings()).child(
                     div()
@@ -2483,42 +2566,46 @@ impl EditorWindow {
                             )
                             .into_any_element(),
                         )
-                        .child(self.labelled(
-                            tr::editor::tabs::keyboard::text_color(),
-                            self.render_hex_field(
-                                crate::editor_panels::FieldKey::KeyboardColor,
-                                &settings.color,
-                                cx,
-                            ),
-                        )),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                tr::editor::tabs::keyboard::background_color(),
+                        .when(!keycaps, |this| {
+                            this.child(self.labelled(
+                                tr::editor::tabs::keyboard::text_color(),
                                 self.render_hex_field(
-                                    crate::editor_panels::FieldKey::KeyboardBackground,
-                                    &settings.background_color,
+                                    crate::editor_panels::FieldKey::KeyboardColor,
+                                    &settings.color,
                                     cx,
                                 ),
                             ))
-                            .child(
-                                self.slider_field(
-                                    tr::editor::tabs::keyboard::background_opacity(),
-                                    SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                    ),
+                        }),
+                ),
             )
+            .when(!keycaps, |this| {
+                this.child(
+                    ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.))
+                                .child(self.labelled(
+                                    tr::editor::tabs::keyboard::background_color(),
+                                    self.render_hex_field(
+                                        crate::editor_panels::FieldKey::KeyboardBackground,
+                                        &settings.background_color,
+                                        cx,
+                                    ),
+                                ))
+                                .child(
+                                    self.slider_field(
+                                        tr::editor::tabs::keyboard::background_opacity(),
+                                        SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                        ),
+                )
+            })
             .child(
                 ui::Field::inline(&theme, tr::editor::tabs::keyboard::position()).child(
                     self.menu_select(

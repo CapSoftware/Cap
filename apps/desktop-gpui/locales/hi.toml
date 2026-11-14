@@ -2749,6 +2749,7 @@ font_weight = "फ़ॉन्ट वेट"
 generate = "कीबोर्ड सेगमेंट बनाएँ"
 generating = "कीबोर्ड सेगमेंट बनाए जा रहे हैं..."
 grouping_threshold = "ग्रुपिंग सीमा"
+keycap_design = "की-कैप डिज़ाइन"
 linger_duration = "दिखने की अवधि"
 load_failed = "रिकॉर्डिंग डेटा लोड नहीं हो सका: {error}"
 no_presses = "कोई रिकॉर्ड किया गया की-प्रेस नहीं मिला।"
@@ -2757,11 +2758,21 @@ regenerate = "कीबोर्ड सेगमेंट दोबारा ब
 show_modifiers = "मॉडिफ़ायर दिखाएँ"
 show_special_keys = "विशेष कुंजियाँ दिखाएँ"
 size_label = "आकार"
+style = "स्टाइल"
 text_color = "टेक्स्ट रंग"
+theme = "थीम"
 timeline_unavailable = "प्रोजेक्ट टाइमलाइन उपलब्ध नहीं है।"
 timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
 title = "कीबोर्ड दिखाएँ"
 uppercase = "बड़े अक्षर"
+
+[editor.tabs.keyboard_style]
+keycaps = "की-कैप"
+plain = "टेक्स्ट"
+
+[editor.tabs.keycap_theme]
+black = "काला"
+white = "सफ़ेद"
 
 [editor.tabs.position]
 bottom_center = "नीचे बीच में"
