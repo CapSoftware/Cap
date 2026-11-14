@@ -107,7 +107,27 @@ fn english_matches_the_literals_it_replaced() {
         (tr::settings::nav::experimental(), "Experimental".into()),
         (tr::settings::nav::feedback(), "Feedback".into()),
         (tr::settings::nav::general(), "General".into()),
+        (tr::settings::nav::apps(), "Apps".into()),
         (tr::settings::nav::integrations(), "Integrations".into()),
+        (tr::settings::apps::available_title(), "Available".into()),
+        (tr::settings::apps::browse_web(), "Open on the web".into()),
+        (tr::settings::apps::description(), "Add backgrounds, caption styles, color looks and connections. Apps you install follow your account to the web and every device.".into()),
+        (tr::settings::apps::empty(), "No apps are available right now.".into()),
+        (tr::settings::apps::failed(), "Could not load the App Store. Check your connection and try again.".into()),
+        (tr::settings::apps::install(), "Install".into()),
+        (tr::settings::apps::installed(), "Installed".into()),
+        (tr::settings::apps::installed_title(), "Installed".into()),
+        (tr::settings::apps::loading(), "Loading apps…".into()),
+        (tr::settings::apps::paused(), "Paused".into()),
+        (tr::settings::apps::platform_desktop(), "Desktop".into()),
+        (tr::settings::apps::platform_web(), "Web".into()),
+        (tr::settings::apps::remove(), "Remove".into()),
+        (tr::settings::apps::retry(), "Try again".into()),
+        (tr::settings::apps::review(), "Asks for more access".into()),
+        (tr::settings::apps::set_up(), "Set up on the web".into()),
+        (tr::settings::apps::sign_in_hint(), "Sign in to keep your apps in sync across devices and to use apps that connect to other services.".into()),
+        (tr::settings::apps::title(), "Apps".into()),
+        (tr::editor::app_store::from_apps(), "From your apps".into()),
         (tr::settings::nav::license(), "Plan & license".into()),
         (tr::settings::nav::quality(), "Recording quality".into()),
         (tr::settings::nav::recordings(), "Recordings".into()),
@@ -517,8 +537,9 @@ fn english_matches_the_literals_it_replaced() {
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
-        // `menu.update.badge_progress` and `menu.update.badge_version` take arguments.
-        - 5;
+        // `menu.update.badge_progress`, `menu.update.badge_version` and
+        // `settings.apps.managed_by_org` take arguments.
+        - 6;
     assert_eq!(
         pairs.len(),
         plain_keys,

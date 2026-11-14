@@ -481,6 +481,7 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::source::animated(), "Animated"),
         (tr::editor::sidebar::source::none(), "None"),
         (tr::editor::sidebar::wallpaper_theme::dark(), "Dark"),
+        (tr::editor::sidebar::wallpaper_theme::apps(), "Apps"),
         (tr::editor::sidebar::wallpaper_theme::blue(), "Blue"),
         (tr::editor::sidebar::wallpaper_theme::cities(), "Cities"),
         (tr::editor::sidebar::wallpaper_theme::purple(), "Purple"),
