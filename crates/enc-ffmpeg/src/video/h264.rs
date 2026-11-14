@@ -2288,6 +2288,26 @@ mod self_test_tests {
                 })
                 .unwrap();
             assert!(packets >= 10, "{width}x{height}: {packets} packets");
+
+            if std::env::var_os("CAP_H264_SELF_TEST_FAULT").is_some() {
+                let (codec, options) = get_codec_and_options(
+                    &config,
+                    H264Preset::Ultrafast,
+                    Some(&["h264_mf"]),
+                    false,
+                    None,
+                )
+                .into_iter()
+                .next()
+                .expect("FFmpeg build has h264_mf");
+                let reason =
+                    cached_hardware_self_test(codec, &options, &config, width, height, 0.3, None)
+                        .unwrap_err();
+                assert!(
+                    reason.starts_with("encoder crashed its isolated self-test process"),
+                    "{width}x{height}: {reason}"
+                );
+            }
         }
     }
 

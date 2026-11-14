@@ -72,12 +72,12 @@ jobs:
       - name: Media Foundation self-test fault falls back (access violation)
         env:
           CAP_H264_SELF_TEST_FAULT: access_violation
-        run: cargo test --locked -p cap-enc-ffmpeg --lib media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
+        run: cargo test --locked -p cap-enc-ffmpeg --lib video::h264::self_test_tests::media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
 
       - name: Media Foundation self-test fault falls back (fast fail 0xc0000409)
         env:
           CAP_H264_SELF_TEST_FAULT: abort
-        run: cargo test --locked -p cap-enc-ffmpeg --lib media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
+        run: cargo test --locked -p cap-enc-ffmpeg --lib video::h264::self_test_tests::media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
 
       - name: Odd size export with a faulting Media Foundation self-test
         env:
