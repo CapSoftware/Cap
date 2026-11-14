@@ -1178,6 +1178,14 @@ starting = "शुरू हो रहा"
 [controls.marker]
 add = "मार्कर जोड़ें"
 
+[controls.settings]
+locked = "इस रिकॉर्डिंग में बदला नहीं जा सकता"
+not_in_recording = "इस रिकॉर्डिंग में नहीं"
+open = "रिकॉर्डिंग सेटिंग्स"
+show_camera_preview = "कैमरा प्रीव्यू दिखाएँ"
+switch_failed = "{device} पर स्विच नहीं हो सका। रिकॉर्डिंग जारी है।"
+switching = "बदला जा रहा है…"
+
 [camera]
 waiting_title = "कैमरा एक्सेस का इंतज़ार है"
 

@@ -1178,6 +1178,14 @@ starting = "開始中"
 [controls.marker]
 add = "マーカーを追加"
 
+[controls.settings]
+locked = "この録画では変更できません"
+not_in_recording = "この録画では未使用"
+open = "録画設定"
+show_camera_preview = "カメラプレビューを表示"
+switch_failed = "{device} に切り替えられませんでした。録画は続行中です。"
+switching = "切り替え中…"
+
 [camera]
 waiting_title = "カメラへのアクセスを待っています"
 
