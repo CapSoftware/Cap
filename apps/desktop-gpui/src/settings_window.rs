@@ -5133,11 +5133,12 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 13);
+        assert_eq!(Page::ALL.len(), 14);
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }
         assert_eq!(Page::Shortcuts.slug(), "hotkeys");
+        assert_eq!(Page::from_slug("apps"), Some(Page::Apps));
         assert_eq!(Page::from_slug("nope"), None);
     }
 
