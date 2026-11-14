@@ -62,7 +62,7 @@ Each app folder has a `manifest.json`. The schema lives in `packages/app-store/s
 	"license": "MIT",
 	"categories": ["communication"],
 	"connection": {
-		"url": "https://cap.so/api/app-store/first-party/discord",
+		"url": "/api/app-store/first-party/discord",
 		"permissions": ["cap.transcript"],
 		"events": ["cap.ready"],
 		"settings": [
@@ -107,13 +107,13 @@ A connection is a server the app's author runs. Cap calls it, and it never calls
 | Events | `POST {url}/events` | A subscribed Cap event happened |
 | Actions | `POST {url}/actions/{actionId}` | Someone ran an action from a Cap menu |
 
-Every request is signed with Ed25519, the way Discord signs interactions. Cap derives the signing key from its server secret, publishes the public key at `/.well-known/cap-app-store-keys.json`, and sends `Cap-Signature`, `Cap-Timestamp` and `Cap-Request-Id` headers. Apps verify with the public key, so no secret has to reach an author before the first request. `@cap/app-store` exports `verifyCapRequest` for apps written in TypeScript.
+Every request is signed with Ed25519, the way Discord signs interactions. Cap derives the signing key from its server secret, publishes the public key at `/.well-known/cap-app-store-keys.json`, and sends `Cap-Signature`, `Cap-Timestamp` and `Cap-Request-Id` headers. Apps verify with the public key, so no secret has to reach an author before the first request. `packages/app-store/src/signing.ts` has `verifyCapRequest`, which only needs Node's `crypto`, for authors to copy into a TypeScript server.
 
 Payloads carry only what the install was granted. Every Cap event includes the basics (id, title, share link, owner name, creation time, duration). `cap.transcript` adds the transcript text, `cap.summary` adds the AI title, summary and chapters, and `cap.comments` adds comment text.
 
 Delivery reuses the Infra webhook machinery: the same URL rules (https only, default port, public addresses only, no redirects), a 10 second timeout, retries with backoff over about a day on Vercel Workflow, and switching a connection off after sustained failures. Actions are synchronous with the same 10 second limit and return one of a fixed set of results (`toast` with a message, or `open` with an https URL) that Cap renders natively.
 
-First-party connections use exactly the same protocol, served from Cap's own domain, so the public protocol is the one Cap depends on.
+First-party connections declare a relative URL and use exactly the same signed requests, dispatched in process by the Cap server that sends them, so a self-hosted Cap serves its own and nothing listens publicly for them.
 
 ## Built-in apps
 
