@@ -1602,9 +1602,14 @@ async function dispatchDueSlices(
 
 	const start = (pick: { index: number; token: string }) =>
 		startSlice(video, processing, sliced, pick);
-	const first = begun.filter((pick) => pick.index === 0);
+	const first = await Promise.all(
+		begun.filter((pick) => pick.index === 0).map(start),
+	);
+	// No ladder route on the encoder: the video falls back to one whole job,
+	// so the rest of this pass is not sent.
+	if (first.includes("unavailable")) return "unavailable";
 	const results = [
-		...(await Promise.all(first.map(start))),
+		...first,
 		...(await Promise.all(begun.filter((pick) => pick.index !== 0).map(start))),
 	];
 	// The workflow takes a busy answer while nothing of the video encodes as

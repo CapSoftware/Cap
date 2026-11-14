@@ -467,6 +467,7 @@ describe("sending slices", () => {
 
 		expect(state().sliced?.state).toBe("abandoned");
 		expect(state().hls).toEqual({ state: "pending" });
+		expect(sent().map((entry) => entry.index)).toEqual([0]);
 	});
 
 	it("does not start a slice for a video that was deleted", async () => {
