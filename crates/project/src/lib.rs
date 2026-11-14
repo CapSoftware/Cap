@@ -7,6 +7,7 @@ mod configuration;
 pub mod cursor;
 pub mod disfluency;
 pub mod keyboard;
+mod mask_tracking;
 mod meta;
 mod shapes;
 

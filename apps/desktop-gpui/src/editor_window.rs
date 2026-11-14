@@ -1409,9 +1409,9 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
-    /// Held from the window opening until it gives up its engine, so the
-    /// library refuses to delete the project from under an open editor.
-    open_project: Option<crate::library::ProjectOpenInEditor>,
+    pub(crate) mask_tracking: Option<crate::editor_mask_tracking::MaskTrackingJob>,
+    pub(crate) mask_tracking_points: Option<crate::editor_mask_tracking::MaskTrackingPoints>,
+    pub(crate) show_mask_tracking: bool,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2203,6 +2203,9 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            mask_tracking: None,
+            mask_tracking_points: None,
+            show_mask_tracking: true,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -2456,7 +2459,7 @@ impl EditorWindow {
     /// Re-derive the drawn model from the live config. Runs after every edit;
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
-    fn rebuild_timeline(&mut self) {
+    pub(crate) fn rebuild_timeline(&mut self) {
         self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
@@ -2902,7 +2905,13 @@ impl EditorWindow {
         let Some(instance) = &self.instance else {
             return;
         };
-        instance.project_config.0.send(self.project.clone()).ok();
+        let mut preview = self.project.clone();
+        if !self.show_mask_tracking
+            && let Some(timeline) = preview.timeline.as_mut()
+        {
+            timeline.mask_segments.clear();
+        }
+        instance.project_config.0.send(preview).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
             request_frame(
@@ -3507,6 +3516,7 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        self.mask_tracking_points = None;
         let Some(transport) = &self.transport else {
             return;
         };
@@ -3700,6 +3710,7 @@ impl EditorWindow {
     /// `seek_to_time` minus the invalidation. False when the seek went to the
     /// preparing transport, which redraws through its own events.
     fn apply_seek(&mut self, time: f64) -> bool {
+        self.mask_tracking_points = None;
         // Moving the playhead by hand ends any shot audition.
         self.play_until = None;
         if self.preparing_transport_active() {
@@ -3933,6 +3944,12 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.mask_tracking_points.is_some() && event.keystroke.key == "escape" {
+            self.mask_tracking_points = None;
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if self.frame_controls.is_open() && event.keystroke.key == "escape" {
             self.close_frame_controls(window, cx);
             cx.stop_propagation();
@@ -4708,6 +4725,7 @@ impl EditorWindow {
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         self.follow_selection_to_style(selection.as_ref(), cx);
         if self.selection != selection {
+            self.mask_tracking_points = None;
             self.text_menu = None;
             self.style_presets.close_menu();
             self.dismiss_frame_controls(cx);
@@ -13171,6 +13189,26 @@ impl Render for EditorWindow {
                 )
                 .cursor(gpui::CursorStyle::Crosshair)
             }))
+            .children(
+                self.mask_tracking_points
+                    .as_ref()
+                    .and_then(|points| points.dragging)
+                    .map(|_| {
+                        ui::Slider::drag_layer(
+                            "mask-point-drag",
+                            cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                                this.move_mask_tracking_point(event, cx);
+                            }),
+                            cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                                if let Some(picking) = this.mask_tracking_points.as_mut() {
+                                    picking.dragging = None;
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .cursor(gpui::CursorStyle::ClosedHand)
+                    }),
+            )
             // The canvas display drag: the source installs `mousemove` /
             // `mouseup` on `window` for the duration (`CEO.tsx:611-618`), so
             // a drag that leaves the letterboxed rect keeps tracking and the
