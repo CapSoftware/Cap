@@ -343,11 +343,25 @@ fn rules_choose_the_screenshot_editor_and_skip_wins() {
     );
     assert_eq!(
         editor_choice(
-            &store(vec![open, disabled_skip]),
+            &store(vec![open.clone(), disabled_skip]),
             Trigger::ScreenshotTaken,
             &ctx
         ),
         Some(true)
+    );
+    let deletes = rule(
+        "compress",
+        Trigger::StudioRecordingFinished,
+        true,
+        vec![export_action(), Action::DeleteLocalFiles],
+    );
+    assert_eq!(
+        editor_choice(
+            &store(vec![deletes]),
+            Trigger::StudioRecordingFinished,
+            &TriggerContext::new()
+        ),
+        Some(false)
     );
 }
 

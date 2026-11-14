@@ -479,10 +479,19 @@ pub fn screenshot_editor_choice(
     )
 }
 
+/// A rule that deletes the capture keeps the editor closed too: the delete
+/// is refused while an editor has the capture open, so a saved
+/// "export, then delete" rule would otherwise never delete.
 fn editor_choice(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContext) -> Option<bool> {
-    if cap_automation::has_skip_editor(store, &trigger, ctx) {
+    let matched = cap_automation::evaluate(store, &trigger, ctx);
+    let any = |wanted: fn(&Action) -> bool| {
+        matched
+            .iter()
+            .any(|(_, actions)| actions.iter().any(wanted))
+    };
+    if any(|action| matches!(action, Action::SkipEditor | Action::DeleteLocalFiles)) {
         Some(false)
-    } else if cap_automation::has_open_editor(store, &trigger, ctx) {
+    } else if any(|action| matches!(action, Action::OpenEditor)) {
         Some(true)
     } else {
         None

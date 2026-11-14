@@ -1022,9 +1022,11 @@ fn video_seconds(path: &Path) -> f64 {
     input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
 }
 
-/// The flow a user reported broken after the update: a Studio recording is
-/// compressed into another folder and the original removed. A second rule on
-/// the same trigger runs too, and a disabled one does not.
+/// The flow a user reported broken after the update, saved as they had it
+/// (Export, then Delete local files, with the editor left to its default): a
+/// Studio recording is compressed into another folder and the original
+/// removed. A second rule on the same trigger runs too, and a disabled one
+/// does not.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_automation_compresses_then_deletes_a_studio_recording() {
@@ -1043,7 +1045,6 @@ async fn real_app_automation_compresses_then_deletes_a_studio_recording() {
         "automations",
         json!({ "version": 1, "rules": [
             automation_rule("compress", "studioRecordingFinished", json!([
-                { "type": "skipEditor" },
                 export_action(json!({ "customPath": { "dir": compressed } })),
                 { "type": "deleteLocalFiles" }
             ])),
