@@ -367,7 +367,7 @@ screen_region = "画面の範囲"
 [settings.options.post_studio]
 do_nothing = "何もしない"
 open_editor = "エディタを開く"
-show_cap = "Capを表示"
+show_overlay = "オーバーレイで表示"
 
 [settings.options.post_screenshot]
 copy = "クリップボードにコピー"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "先に注釈を付ける"
 studio_do_nothing = "何もしない"
 studio_open_editor = "エディタを開く"
 studio_open_editor_hint = "すぐに編集"
-studio_show_cap = "Capを表示"
-studio_show_cap_hint = "レコーダーに戻る"
+studio_show_overlay = "オーバーレイを表示"
+studio_show_overlay_hint = "コピー、共有、書き出し"
 
 [settings.shortcuts.label]
 add_marker = "マーカーを追加"
@@ -1146,6 +1146,33 @@ no_matching_displays = "一致するディスプレイはありません"
 no_matching_windows = "一致するウィンドウはありません"
 no_windows = "ウィンドウが見つかりません"
 window = "ウィンドウ"
+
+[recordings_overlay]
+close = "閉じる"
+copy = "クリップボードにコピー"
+copy_link = "共有リンクをコピー"
+create_link = "共有リンクを作成"
+edit = "編集"
+export = "書き出し"
+open = "開く"
+retry = "再試行"
+
+[recordings_overlay.progress]
+choose_image = "画像の保存先を選択"
+choose_video = "動画の書き出し先を選択"
+copied = "クリップボードにコピーしました"
+copy_failed = "コピーできませんでした"
+copying = "クリップボードにコピー中"
+creating_link = "共有リンクを作成中"
+link_copied = "共有リンクをコピーしました"
+preparing = "準備中"
+rendering_video = "動画をレンダリング中"
+save_failed = "保存できませんでした"
+saved_image = "画像を保存しました"
+saved_video = "動画を保存しました"
+saving_image = "画像を保存中"
+saving_video = "動画を保存中"
+share_failed = "リンクを作成できませんでした"
 
 [controls]
 disk_full_resume = "再開するための空き容量が足りません。空きを確保してもう一度試すか、停止を押して保存してください。"

@@ -367,7 +367,7 @@ screen_region = "屏幕区域"
 [settings.options.post_studio]
 do_nothing = "不执行任何操作"
 open_editor = "打开编辑器"
-show_cap = "显示 Cap"
+show_overlay = "在浮层中显示"
 
 [settings.options.post_screenshot]
 copy = "复制到剪贴板"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "先添加标注"
 studio_do_nothing = "不执行任何操作"
 studio_open_editor = "打开编辑器"
 studio_open_editor_hint = "立即编辑"
-studio_show_cap = "显示 Cap"
-studio_show_cap_hint = "回到录制器"
+studio_show_overlay = "显示浮层"
+studio_show_overlay_hint = "复制、分享或导出"
 
 [settings.shortcuts.label]
 add_marker = "添加标记"
@@ -1146,6 +1146,33 @@ no_matching_displays = "没有匹配的屏幕"
 no_matching_windows = "没有匹配的窗口"
 no_windows = "未找到窗口"
 window = "窗口"
+
+[recordings_overlay]
+close = "关闭"
+copy = "复制到剪贴板"
+copy_link = "复制分享链接"
+create_link = "创建分享链接"
+edit = "编辑"
+export = "导出"
+open = "打开"
+retry = "重试"
+
+[recordings_overlay.progress]
+choose_image = "选择图片的保存位置"
+choose_video = "选择视频的导出位置"
+copied = "已复制到剪贴板"
+copy_failed = "无法复制"
+copying = "正在复制到剪贴板"
+creating_link = "正在创建分享链接"
+link_copied = "已复制分享链接"
+preparing = "正在准备"
+rendering_video = "正在渲染视频"
+save_failed = "无法保存"
+saved_image = "图片已保存"
+saved_video = "视频已保存"
+saving_image = "正在保存图片"
+saving_video = "正在保存视频"
+share_failed = "无法创建链接"
 
 [controls]
 disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"

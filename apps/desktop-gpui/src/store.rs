@@ -747,7 +747,7 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
-        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_overlay();
         DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
@@ -3547,6 +3547,59 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// 0.6.0 (Tauri) wrote the whole `general_settings` object with
+    /// `"showOverlay"` for its overlay; 0.6.1 to 0.6.3 wrote only this key,
+    /// with the same value, for the option labelled "Show Cap". Both read
+    /// back as the overlay, labelled as the Tauri app labelled it, and the
+    /// value written for it stays one 0.6.0 can read after a downgrade.
+    #[test]
+    fn post_studio_overlay_reads_tauri_and_gpui_stores() {
+        let tauri: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "uploadIndividualFiles": false,
+                "hideDockIcon": false,
+                "autoCreateShareableLink": false,
+                "enableNotifications": true,
+                "disableAutoOpenLinks": false,
+                "hasCompletedStartup": true,
+                "theme": "system",
+                "recordingCountdown": 3,
+                "mainWindowRecordingStartBehaviour": "close",
+                "postStudioRecordingBehaviour": "showOverlay",
+                "postDeletionBehaviour": "doNothing"
+            }"#,
+        )
+        .unwrap();
+        let gpui: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showOverlay" }"#).unwrap();
+        for general in [&tauri, &gpui] {
+            let settings = GeneralSettings::from_sections(general, &Map::new(), &Map::new());
+            assert_eq!(
+                settings.post_studio_recording_behaviour,
+                PostStudioBehaviour::ShowOverlay
+            );
+        }
+        assert_eq!(PostStudioBehaviour::ShowOverlay.as_json(), "showOverlay");
+        assert_eq!(PostStudioBehaviour::ShowOverlay.label(), "Show in overlay");
+        assert_eq!(
+            PostStudioBehaviour::from_json("showOverlay"),
+            Some(PostStudioBehaviour::ShowOverlay)
+        );
+
+        let unknown: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showCap" }"#).unwrap();
+        assert_eq!(
+            GeneralSettings::from_sections(&unknown, &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
+        assert_eq!(
+            GeneralSettings::from_sections(&Map::new(), &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
     }
 
     /// A store written before `showMainWindowAfterInstantRecording` keeps

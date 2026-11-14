@@ -367,7 +367,7 @@ screen_region = "Zone de l'écran"
 [settings.options.post_studio]
 do_nothing = "Ne rien faire"
 open_editor = "Ouvrir l'éditeur"
-show_cap = "Afficher Cap"
+show_overlay = "Afficher en superposition"
 
 [settings.options.post_screenshot]
 copy = "Copier dans le presse-papiers"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "Annoter d'abord"
 studio_do_nothing = "Ne rien faire"
 studio_open_editor = "Ouvrir l'éditeur"
 studio_open_editor_hint = "Modifier tout de suite"
-studio_show_cap = "Afficher Cap"
-studio_show_cap_hint = "Retour à l'enregistreur"
+studio_show_overlay = "Superposition"
+studio_show_overlay_hint = "Copier, partager, exporter"
 
 [settings.shortcuts.label]
 add_marker = "Ajouter un repère"
@@ -1146,6 +1146,33 @@ no_matching_displays = "Aucun écran correspondant"
 no_matching_windows = "Aucune fenêtre correspondante"
 no_windows = "Aucune fenêtre trouvée"
 window = "Fenêtre"
+
+[recordings_overlay]
+close = "Fermer"
+copy = "Copier dans le presse-papiers"
+copy_link = "Copier le lien de partage"
+create_link = "Créer un lien de partage"
+edit = "Modifier"
+export = "Exporter"
+open = "Ouvrir"
+retry = "Réessayer"
+
+[recordings_overlay.progress]
+choose_image = "Choisissez où enregistrer l'image"
+choose_video = "Choisissez où exporter la vidéo"
+copied = "Copié dans le presse-papiers"
+copy_failed = "Copie impossible"
+copying = "Copie dans le presse-papiers"
+creating_link = "Création du lien de partage"
+link_copied = "Lien de partage copié"
+preparing = "Préparation"
+rendering_video = "Rendu de la vidéo"
+save_failed = "Enregistrement impossible"
+saved_image = "Image enregistrée"
+saved_video = "Vidéo enregistrée"
+saving_image = "Enregistrement de l'image"
+saving_video = "Enregistrement de la vidéo"
+share_failed = "Impossible de créer le lien"
 
 [controls]
 disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."

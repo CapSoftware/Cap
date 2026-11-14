@@ -369,7 +369,7 @@ screen_region = { text = "Screen region", max_px = 180, size = 12 }
 [settings.options.post_studio]
 do_nothing = "Do nothing"
 open_editor = "Open editor"
-show_cap = "Show Cap"
+show_overlay = "Show in overlay"
 
 [settings.options.post_screenshot]
 copy = "Copy to clipboard"
@@ -453,8 +453,8 @@ screenshot_open_editor_hint = "Annotate first"
 studio_do_nothing = "Do nothing"
 studio_open_editor = "Open editor"
 studio_open_editor_hint = "Edit right away"
-studio_show_cap = "Show Cap"
-studio_show_cap_hint = "Back to the recorder"
+studio_show_overlay = "Show overlay"
+studio_show_overlay_hint = "Copy, share or export"
 
 [settings.shortcuts.label]
 add_marker = "Add marker"
@@ -1148,6 +1148,33 @@ no_matching_displays = "No matching displays"
 no_matching_windows = "No matching windows"
 no_windows = "No windows found"
 window = { text = "Window", max_px = 100, size = 12 }
+
+[recordings_overlay]
+close = "Close"
+copy = "Copy to clipboard"
+copy_link = "Copy shareable link"
+create_link = "Create shareable link"
+edit = "Edit"
+export = "Export"
+open = "Open"
+retry = "Retry"
+
+[recordings_overlay.progress]
+choose_image = "Choose where to save the image"
+choose_video = "Choose where to export the video"
+copied = "Copied to clipboard"
+copy_failed = "Couldn't copy"
+copying = "Copying to clipboard"
+creating_link = "Creating shareable link"
+link_copied = "Shareable link copied"
+preparing = "Preparing"
+rendering_video = "Rendering video"
+save_failed = "Couldn't save"
+saved_image = "Image saved"
+saved_video = "Video saved"
+saving_image = "Saving image"
+saving_video = "Saving video"
+share_failed = "Couldn't create the link"
 
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."

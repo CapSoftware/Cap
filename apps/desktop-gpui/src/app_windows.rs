@@ -150,7 +150,10 @@ fn platform_display_for_capture(
     found
 }
 
-fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
+pub(crate) fn gpui_display_id(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<gpui::DisplayId> {
     #[cfg(target_os = "windows")]
     {
         target
@@ -498,7 +501,7 @@ impl CameraPark {
 
 impl Global for AppWindows {}
 
-fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
+pub(crate) fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
     let Some(native) = native else {
         return;
     };
@@ -623,6 +626,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }
+        if phase != Phase::Idle && last_phase == Phase::Idle {
+            crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Recording, cx);
+        }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             #[cfg(target_os = "linux")]
             if !session.read(cx).instant_cleanup_safe() {
@@ -679,8 +685,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // to the editor, main window staying hidden --
                 // `editor_closed` brings it back once the last editor goes
                 // away. `doNothing` leaves it in the library with Cap out of
-                // the way. Every other path (instant, failures, `showOverlay`
-                // until an overlay exists) reshows the main window as before.
+                // the way, and `showOverlay` puts the recording in the
+                // floating overlay with Cap kept out of the way the same.
+                // Every other path (instant, failures) reshows the main window
+                // as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
                 // the completion and Cap stays out of the way. A recording
@@ -719,6 +727,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
+                    (Some(project_dir), crate::store::PostStudioBehaviour::ShowOverlay) => {
+                        crate::recordings_overlay::show_studio_recording(project_dir, cx);
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
                     (None, _) if keep_hidden_after_instant => {
                         tracing::info!("main window kept hidden after the Instant recording");
                         park_idle_camera_preview(cx);
@@ -748,6 +761,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // net effect too, where `restart_recording` clears it and the
             // immediately-following `start_recording` puts it straight back.)
             restore_content_protection(cx);
+            crate::recordings_overlay::show_after(
+                crate::recordings_overlay::Capture::Recording,
+                cx,
+            );
         }
         last_phase = phase;
     })
@@ -7418,8 +7435,10 @@ fn open_controls(
 /// an overlay still on screen would be in the shot. Returns whether anything
 /// was up -- the caller's cue to wait the same 150ms the Tauri command waits.
 pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
+    let overlay_was_visible =
+        crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Screenshot, cx);
     if cx.global::<AppWindows>().overlays.is_empty() {
-        return false;
+        return overlay_was_visible;
     }
     // The screenshot branch of `onRecordingStart` nulls the saved camera bounds
     // just like the recording branch does, so a parked bubble stays parked.
@@ -7446,10 +7465,11 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
         .iter()
         .map(|(_, handle)| *handle)
         .collect();
-    if overlays.is_empty() {
+    let recordings = crate::recordings_overlay::empty_for_screenshot(cx);
+    if overlays.is_empty() && recordings.is_none() {
         return None;
     }
-    let mut shown = Vec::new();
+    let mut shown: Vec<_> = recordings.into_iter().collect();
     for handle in overlays {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let scheduled = handle.update(cx, |view, window, cx| {
@@ -7498,6 +7518,7 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// window if the picker had hidden it, since nothing else will.
 pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     let Some(png) = captured else {
+        crate::recordings_overlay::screenshot_captured(None, cx);
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
             show_main_window(cx);
@@ -7505,6 +7526,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         return;
     };
 
+    crate::recordings_overlay::screenshot_captured(Some(&png), cx);
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
         settings
