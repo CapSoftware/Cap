@@ -331,6 +331,7 @@ pub(crate) struct PagesState {
     diagnostic: DiagnosticStatus,
     diagnostic_mode: diagnostics::SyncMode,
     diagnostic_mic: bool,
+    diagnostic_duration_secs: u64,
     /// Set for the length of a run; the Cancel button flips it and the runner's
     /// watchdog kills the self-test subprocess. It stays readable after Cancel
     /// so the run's later stages can still see it.
@@ -434,6 +435,7 @@ impl PagesState {
             diagnostic: DiagnosticStatus::Idle,
             diagnostic_mode: diagnostics::SyncMode::Both,
             diagnostic_mic: false,
+            diagnostic_duration_secs: diagnostics::DEFAULT_DURATION_SECS,
             diagnostic_cancel: None,
             diagnostic_cancelling: false,
             diagnostic_payload: None,
@@ -2971,7 +2973,7 @@ impl SettingsWindow {
         // A stray click costs a couple of minutes of hijacked screen and loud
         // beeps, so it is confirmed the way the Tauri app confirms it.
         let message =
-            tr::settings::feedback::diagnostic::confirm_body(diagnostics::DEFAULT_DURATION_SECS);
+            tr::settings::feedback::diagnostic::confirm_body(self.pages.diagnostic_duration_secs);
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(
                 tr::settings::feedback::diagnostic::confirm_title(),
@@ -3005,7 +3007,7 @@ impl SettingsWindow {
         let options = diagnostics::SyncTestOptions {
             mode: self.pages.diagnostic_mode,
             microphone: self.pages.diagnostic_mic,
-            duration_secs: diagnostics::DEFAULT_DURATION_SECS,
+            duration_secs: self.pages.diagnostic_duration_secs,
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.pages.diagnostic_cancel = Some(cancel.clone());
@@ -3302,11 +3304,38 @@ impl SettingsWindow {
             }
         }));
 
+        let duration = self.pages.diagnostic_duration_secs;
+        let duration_control = ui::SegmentedControl::settings(
+            &theme,
+            "diagnostic-duration",
+            diagnostics::DURATION_CHOICES_SECS
+                .iter()
+                .map(|seconds| {
+                    ui::SegmentOption::new(
+                        tr::settings::feedback::diagnostic::duration_option(*seconds),
+                        *seconds == duration,
+                    )
+                    .disabled(running)
+                })
+                .collect(),
+        )
+        .on_select(cx.listener(|this, index: &usize, _window, cx| {
+            if let Some(seconds) = ui::option_at(diagnostics::DURATION_CHOICES_SECS, *index) {
+                this.pages.diagnostic_duration_secs = seconds;
+                cx.notify();
+            }
+        }));
+
         let options = self.rows(vec![
             self.setting_row(
                 tr::settings::feedback::diagnostic::mode_label(),
                 Some(tr::settings::feedback::diagnostic::mode_description()),
                 mode_control.into_any_element(),
+            ),
+            self.setting_row(
+                tr::settings::feedback::diagnostic::duration_label(),
+                Some(tr::settings::feedback::diagnostic::duration_description()),
+                duration_control.into_any_element(),
             ),
             self.setting_row(
                 tr::settings::feedback::diagnostic::mic_label(),
