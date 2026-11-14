@@ -16,7 +16,8 @@ async function emit(
 		const { emitAppStoreEvent } = await import("./events");
 		await emitAppStoreEvent(type, videoId, options);
 	} catch (error) {
-		console.error(`[app-store] ${type} failed`, {
+		console.error("[app-store] Event failed", {
+			type,
 			videoId,
 			message: error instanceof Error ? error.message : String(error),
 		});

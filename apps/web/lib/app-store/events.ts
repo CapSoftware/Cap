@@ -50,6 +50,40 @@ async function startJobs(jobs: AppStoreDeliveryJob[]) {
 	return jobs.length - failed.length;
 }
 
+export const appStoreDeliveryKey = (eventId: string, installationId: string) =>
+	`dlv_${createHash("sha256")
+		.update(`${eventId}:${installationId}`)
+		.digest("hex")
+		.slice(0, 40)}`;
+
+// The marker is per installation and removed again when the workflow cannot
+// be started, so a failed enqueue is retried by the next emission of the same
+// event instead of being suppressed forever.
+async function queueEventDelivery(
+	job: Extract<AppStoreDeliveryJob, { kind: "event" }>,
+): Promise<boolean> {
+	const key = appStoreDeliveryKey(job.eventId, job.installationId);
+	const [inserted] = await db()
+		.insert(appStoreEvents)
+		.ignore()
+		.values({ id: key, type: job.type, videoId: job.videoId as Video.VideoId });
+	if (inserted.affectedRows === 0) return false;
+	try {
+		await start(deliverAppStoreRequestWorkflow, [job]);
+		return true;
+	} catch (error) {
+		await db()
+			.delete(appStoreEvents)
+			.where(eq(appStoreEvents.id, key))
+			.catch(() => undefined);
+		console.error("[app-store] Failed to queue a delivery", {
+			installationId: job.installationId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+		return false;
+	}
+}
+
 export async function emitAppStoreEvent(
 	type: CapEventType,
 	videoId: Video.VideoId,
@@ -99,29 +133,27 @@ export async function emitAppStoreEvent(
 	if (installations.length === 0) return 0;
 
 	const eventId = appStoreEventId(type, videoId, options.commentId);
-	const [inserted] = await db()
-		.insert(appStoreEvents)
-		.ignore()
-		.values({ id: eventId, type, videoId });
-	if (inserted.affectedRows === 0) return 0;
-
 	const createdAt = new Date().toISOString();
-	return startJobs(
-		installations.map((row) => ({
-			kind: "event" as const,
-			installationId: row.id,
-			eventId,
-			type,
-			videoId,
-			commentId: options.commentId,
-			createdAt,
-		})),
+	const queued = await Promise.all(
+		installations.map((row) =>
+			queueEventDelivery({
+				kind: "event",
+				installationId: row.id,
+				eventId,
+				type,
+				videoId,
+				commentId: options.commentId,
+				createdAt,
+			}),
+		),
 	);
+	return queued.filter(Boolean).length;
 }
 
 function runInBackground(label: string, work: Promise<unknown>) {
 	const guarded = work.catch((error: unknown) => {
-		console.error(`[app-store] ${label} failed`, {
+		console.error("[app-store] Background task failed", {
+			task: label,
 			message: error instanceof Error ? error.message : String(error),
 		});
 	});
