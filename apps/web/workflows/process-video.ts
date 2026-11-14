@@ -420,6 +420,7 @@ async function queueProcessedVideoTranscription(
 ): Promise<void> {
 	"use step";
 
+	await emitCapReadySafely(Video.VideoId.make(videoId));
 	if (!serverEnv().ASSEMBLY_API_KEY) return;
 	try {
 		const [owner] = await db()
@@ -433,8 +434,6 @@ async function queueProcessedVideoTranscription(
 			.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 		if (!owner) return;
-
-		await emitCapReadySafely(Video.VideoId.make(videoId));
 
 		const result = await transcribeVideo(
 			Video.VideoId.make(videoId),

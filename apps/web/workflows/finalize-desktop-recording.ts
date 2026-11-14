@@ -935,6 +935,7 @@ async function queueFinalizedRecordingTranscription(
 ): Promise<boolean> {
 	"use step";
 
+	await emitCapReadySafely(Video.VideoId.make(videoId));
 	if (!serverEnv().ASSEMBLY_API_KEY) return true;
 	try {
 		const [[owner], [video]] = await Promise.all([
@@ -957,7 +958,6 @@ async function queueFinalizedRecordingTranscription(
 				),
 		]);
 		if (!owner || !video) return true;
-		await emitCapReadySafely(Video.VideoId.make(videoId));
 		const result = await transcribeVideo(
 			Video.VideoId.make(videoId),
 			userId,
