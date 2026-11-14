@@ -1498,6 +1498,10 @@ async function settleDeveloperVideoSlice(
 // A slice is sent through the load balancer, so a worker that is full can be
 // answered by asking again: the next request lands on another worker.
 const SLICE_START_TRIES = 2;
+// The first slice is what makes the video playable. It is sent on its own
+// ahead of the others and asks more workers before it waits, since the MP4's
+// worker turns it away and a full answer would hold it for the next pass.
+const FIRST_SLICE_START_TRIES = 4;
 
 async function startSlice(
 	video: DeveloperVideoRow,
@@ -1527,7 +1531,8 @@ async function startSlice(
 		started = await startMediaServerVideoJob("/video/ladder", body);
 		for (
 			let tries = 1;
-			started.status === "busy" && tries < SLICE_START_TRIES;
+			started.status === "busy" &&
+			tries < (pick.index === 0 ? FIRST_SLICE_START_TRIES : SLICE_START_TRIES);
 			tries++
 		) {
 			started = await startMediaServerVideoJob("/video/ladder", body);
@@ -1595,9 +1600,13 @@ async function dispatchDueSlices(
 	const sliced = processing?.sliced;
 	if (!video || !processing || !sliced || begun.length === 0) return "skipped";
 
-	const results = await Promise.all(
-		begun.map((pick) => startSlice(video, processing, sliced, pick)),
-	);
+	const start = (pick: { index: number; token: string }) =>
+		startSlice(video, processing, sliced, pick);
+	const first = begun.filter((pick) => pick.index === 0);
+	const results = [
+		...(await Promise.all(first.map(start))),
+		...(await Promise.all(begun.filter((pick) => pick.index !== 0).map(start))),
+	];
 	// The workflow takes a busy answer while nothing of the video encodes as
 	// time spent waiting for room and restarts its deadline. Slices of this
 	// video that are encoding are processing time, so a slice turned away

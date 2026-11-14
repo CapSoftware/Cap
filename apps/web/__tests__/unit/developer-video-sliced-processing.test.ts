@@ -404,6 +404,43 @@ describe("sending slices", () => {
 		expect(new Set(sent().map((entry) => entry.token)).size).toBe(3);
 	});
 
+	it("sends the first slice on its own before the others", async () => {
+		let answerFirst: (value: { status: "started"; jobId: string }) => void =
+			() => undefined;
+		mocks.startJob.mockImplementation(async (_path, body) =>
+			(body as { range: { startSeconds: number } }).range.startSeconds === 0
+				? new Promise((resolve) => {
+						answerFirst = resolve;
+					})
+				: { status: "started", jobId: "job" },
+		);
+
+		const dispatched = dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+		await vi.waitFor(() => expect(mocks.startJob).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(sentInOrder().map((entry) => entry.index)).toEqual([0]);
+
+		answerFirst({ status: "started", jobId: "slice-job-0" });
+		expect(await dispatched).toBe("dispatched");
+		expect(sentInOrder().map((entry) => entry.index)).toEqual([0, 1, 2]);
+	});
+
+	it("asks four workers for the first slice before it waits", async () => {
+		mocks.startJob.mockResolvedValue({ status: "busy" });
+
+		expect(await dispatchDeveloperVideoPart("video-1", "encode-1", "hls")).toBe(
+			"busy",
+		);
+
+		expect(sent().filter((entry) => entry.index === 0)).toHaveLength(4);
+		expect(sent().filter((entry) => entry.index === 1)).toHaveLength(2);
+		expect(sent().filter((entry) => entry.index === 2)).toHaveLength(2);
+		expect(state().sliced?.slices[0]).toMatchObject({
+			job: { state: "pending" },
+			attempts: 0,
+		});
+	});
+
 	it("asks again at once when a worker is full, then waits for the next pass", async () => {
 		mocks.startJob.mockImplementation(async (_path, body) =>
 			(body as { range: { startSeconds: number } }).range.startSeconds === 20
