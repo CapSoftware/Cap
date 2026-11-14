@@ -2433,6 +2433,7 @@ file = "ファイル"
 link = "共有リンク"
 
 [editor.export.done]
+copy_file = "ファイルをコピー"
 copy_link = "リンクをコピー"
 instant_hint = "停止した瞬間にリンクが欲しい場合は、次の録画でInstantモードを使ってください。"
 link_copied = "リンクをコピーしました"
@@ -2440,6 +2441,7 @@ open_file = "ファイルを開く"
 open_link = "リンクを開く"
 retry_copy = "コピーを再試行"
 reuploaded = "最新の編集内容が同じリンクで利用できます"
+saved_copy = "コピーを{name}として保存しました"
 uploaded = "録画のアップロードが完了しました"
 
 [editor.export.estimate]

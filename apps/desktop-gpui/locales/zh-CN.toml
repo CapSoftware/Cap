@@ -2433,6 +2433,7 @@ file = "文件"
 link = "分享链接"
 
 [editor.export.done]
+copy_file = "复制文件"
 copy_link = "复制链接"
 instant_hint = "如果想在停止录制时立即获得链接，下次录制请使用 Instant 模式。"
 link_copied = "链接已复制"
@@ -2440,6 +2441,7 @@ open_file = "打开文件"
 open_link = "打开链接"
 retry_copy = "重新复制"
 reuploaded = "你最新的编辑已在同一链接上就绪"
+saved_copy = "已将副本保存为 {name}"
 uploaded = "你的录制已成功上传"
 
 [editor.export.estimate]
