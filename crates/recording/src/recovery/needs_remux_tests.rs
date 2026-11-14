@@ -17,24 +17,23 @@ fn encode_display(display: &Path, fragments: usize) {
             width: 320,
             height: 240,
             time_base: ffmpeg::Rational(1, 1_000_000),
-            frame_rate: ffmpeg::Rational(10, 1),
+            frame_rate: ffmpeg::Rational(1, 1),
         },
         SegmentedVideoEncoderConfig {
-            segment_duration: Duration::from_millis(300),
+            segment_duration: Duration::from_secs(2),
             ..Default::default()
         },
     )
     .unwrap();
-    // Three frames per fragment, each fragment opening on a keyframe.
-    for index in 0..fragments * 3 {
+    // Every encoder keeps its GOP at two seconds of frames, and hardware
+    // encoders ignore a requested keyframe, so at one frame per second each
+    // fragment holds exactly two frames on every platform.
+    for index in 0..fragments * 2 {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
         frame.data_mut(0).fill(16 + (index % 200) as u8);
         frame.data_mut(1).fill(128);
-        if index % 3 == 0 {
-            frame.set_kind(ffmpeg::picture::Type::I);
-        }
         encoder
-            .queue_frame(frame, Duration::from_millis(index as u64 * 100))
+            .queue_frame(frame, Duration::from_secs(index as u64))
             .unwrap();
     }
     encoder.finish().unwrap();
@@ -59,7 +58,7 @@ fn needs_remux_project(parent: &Path, name: &str, fragments: usize) -> PathBuf {
                 segments: vec![MultipleSegment {
                     display: VideoMeta {
                         path: DISPLAY.into(),
-                        fps: 10,
+                        fps: 1,
                         start_time: None,
                         device_id: None,
                     },
