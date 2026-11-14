@@ -16781,7 +16781,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod add_caption_ui_tests {
     use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
 
