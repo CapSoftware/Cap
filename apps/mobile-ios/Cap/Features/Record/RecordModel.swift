@@ -32,7 +32,6 @@ final class RecordModel {
     @ObservationIgnored private var limitTask: Task<Void, Never>?
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var wantsCamera = true
-    /// Studio Mode keeps the recording on the phone for editing instead of uploading it as it's made.
     var captureMode: CaptureMode = .instant
     @ObservationIgnored private var studio: (writer: StudioTrackWriter, projectId: String)?
 
@@ -269,9 +268,12 @@ final class RecordModel {
         do {
             let directory = store.directory(for: projectId)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            writer = try StudioTrackWriter(url: directory.appending(path: "camera.mp4"), settings: .init(kind: .camera, audio: hasMicrophone), clock: capture.captureClock) { hostStart in
-                // Noted on the first frame, so a recording cut short by a crash can still be recovered.
-                try? StudioTrackInfo(file: "camera.mp4", hostStart: hostStart, duration: 0).save(as: "camera", in: directory)
+            writer = try StudioTrackWriter(url: directory.appending(path: "camera.mp4"), settings: .init(kind: .camera, audio: hasMicrophone), clock: capture.captureClock) { started in
+                // Noted as soon as picture or sound starts, so a recording cut short by a crash can still be recovered.
+                var pending = started
+                pending.duration = 0
+                pending.audio?.duration = 0
+                try? pending.save(as: "camera", in: directory)
             }
         } catch {
             session.toasts.show(error: error)

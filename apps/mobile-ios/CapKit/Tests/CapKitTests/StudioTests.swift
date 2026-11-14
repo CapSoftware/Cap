@@ -165,12 +165,31 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = StudioStore(root: root)
         let now = Date()
-        StudioScreenRequest.set(.init(projectId: "p1", requestedAt: now), in: store)
+        StudioScreenRequest.set(.init(projectId: "p1", ownerId: "user_a", requestedAt: now), in: store)
         #expect(StudioScreenRequest.peek(in: store, now: now.addingTimeInterval(5))?.projectId == "p1")
-        #expect(StudioScreenRequest.take(in: store, now: now.addingTimeInterval(5))?.projectId == "p1")
+        let taken = StudioScreenRequest.take(in: store, now: now.addingTimeInterval(5))
+        #expect(taken?.projectId == "p1")
+        #expect(taken?.ownerId == "user_a")
         #expect(StudioScreenRequest.take(in: store, now: now.addingTimeInterval(5)) == nil)
-        StudioScreenRequest.set(.init(projectId: "p2", requestedAt: now), in: store)
+        StudioScreenRequest.set(.init(projectId: "p2", ownerId: "user_a", requestedAt: now), in: store)
         #expect(StudioScreenRequest.take(in: store, now: now.addingTimeInterval(StudioScreenRequest.lifetime + 1)) == nil)
+    }
+
+    @Test func draftsBelongToOneAccount() throws {
+        let group = "test.studio.\(UUID().uuidString)"
+        let first = StudioStore.shared(owner: "user_a", appGroup: group)
+        let second = StudioStore.shared(owner: "user_b", appGroup: group)
+        defer {
+            try? FileManager.default.removeItem(at: first.root)
+            try? FileManager.default.removeItem(at: second.root)
+        }
+        try first.save(StudioProject(title: "Mine", camera: .init(file: "camera.mp4", offset: 0, duration: 3)))
+        #expect(first.all().map(\.title) == ["Mine"])
+        #expect(second.all().isEmpty)
+        #expect(first.root != StudioStore.requests(appGroup: group).root)
+        #expect(StudioStore.folderName(for: "../../etc") == "etc")
+        #expect(StudioStore.folderName(for: "") == "unknown")
+        #expect(StudioStore.folderName(for: "user_9x-Q") == "user_9x-Q")
     }
 
     @Test func lookDecodesFromEveryBackgroundKind() throws {

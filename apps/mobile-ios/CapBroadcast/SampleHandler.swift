@@ -42,8 +42,8 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var repeatedFrames = 0
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        let store = StudioStore.shared()
-        if let request = StudioScreenRequest.take(in: store) {
+        if let request = StudioScreenRequest.take(in: StudioStore.requests()) {
+            let store = StudioStore.shared(owner: request.ownerId)
             queue.sync { studio = (store, request.projectId) }
             startIdleTimer()
             listenForStop()
@@ -153,9 +153,12 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
             do {
                 let directory = studio.store.directory(for: studio.projectId)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                writer = try StudioTrackWriter(url: directory.appending(path: Self.studioScreenFile), settings: .init(kind: .screen, audio: true)) { hostStart in
-                    // Noted on the first frame: if this process is ended mid-recording, Cap can still recover it.
-                    try? StudioTrackInfo(file: Self.studioScreenFile, hostStart: hostStart, duration: 0).save(as: "screen", in: directory)
+                writer = try StudioTrackWriter(url: directory.appending(path: Self.studioScreenFile), settings: .init(kind: .screen, audio: true)) { started in
+                    // Noted as soon as picture or sound starts: if this process is ended mid-recording, Cap can still recover it.
+                    var pending = started
+                    pending.duration = 0
+                    pending.audio?.duration = 0
+                    try? pending.save(as: "screen", in: directory)
                 }
                 return true
             } catch {

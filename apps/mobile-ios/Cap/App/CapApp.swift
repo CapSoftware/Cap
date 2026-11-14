@@ -206,6 +206,7 @@ struct MainTabView: View {
         }
         .onAppear {
             RecordingCoordinator.shared.session = session
+            studio.attach(session)
             let coordinator = RecordingCoordinator.shared
             coordinator.collectFinishedScreenRecording(showHome: false)
             // A fresh launch after a recording stopped while Cap was away.
@@ -260,7 +261,7 @@ struct MainTabView: View {
             if let capId = CapID(id) { homePath = [.capAnalytics(capId, title: "Walkthrough: the new Cap 0.6.2 editor")] }
         case ("studio", let directory?):
             // A folder with screen.mp4 and/or camera.mp4, opened as a Studio project for tests and measurements.
-            studio.session = session
+            studio.attach(session)
             StudioDebug.openFixture(URL(fileURLWithPath: directory))
         default:
             break

@@ -58,7 +58,7 @@ struct RecordView: View {
             if !captureMode.isAvailable { captureMode = .instant }
             if !RecordMode.offered(for: captureMode).contains(mode) { mode = .screen }
             model.captureMode = captureMode
-            studio.session = session
+            studio.attach(session)
             studio.reload()
         }
         .onChange(of: captureMode) { _, capture in

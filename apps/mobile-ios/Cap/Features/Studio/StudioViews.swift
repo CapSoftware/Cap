@@ -1,7 +1,6 @@
 import CapKit
 import SwiftUI
 
-/// The editor for a Studio project. Edits save as they're made, so closing never loses anything.
 struct StudioEditorCover: View {
     let project: StudioProject
     let session: SessionModel
@@ -22,7 +21,6 @@ struct StudioEditorCover: View {
     }
 }
 
-/// Recordings kept on the phone, newest first, in the recorder's Studio Mode.
 struct StudioDrafts: View {
     let studio: StudioSession
     @State private var deleting: StudioProject?

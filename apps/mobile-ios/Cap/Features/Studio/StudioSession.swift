@@ -12,11 +12,11 @@ final class StudioSession {
     static let shared = StudioSession()
     private static let log = Logger(subsystem: "so.cap.mobile", category: "studio")
 
-    let store = StudioStore.shared()
+    @ObservationIgnored private(set) var store = StudioStore.shared(owner: "signed-out")
+    @ObservationIgnored private var owner: String?
+    private let requests = StudioStore.requests()
     private(set) var projects: [StudioProject] = []
-    /// The editor to show next, wherever Cap is.
     var editing: StudioProject?
-    /// A screen recording has stopped and its file is being closed.
     private(set) var isFinishingScreen = false
 
     /// The project the next screen recording goes into, set before the system sheet can start it.
@@ -24,13 +24,41 @@ final class StudioSession {
     @ObservationIgnored private var armedAt: Date = .distantPast
     @ObservationIgnored private var screenCamera: (writer: StudioTrackWriter, projectId: String)?
     @ObservationIgnored private var recordingProjectId: String?
-    @ObservationIgnored weak var session: SessionModel?
+    @ObservationIgnored private(set) weak var session: SessionModel?
+    @ObservationIgnored private var pendingOpen: String?
 
     private init() {}
 
+    func attach(_ session: SessionModel) {
+        self.session = session
+        let userId = session.credentials.userId
+        guard owner != userId else { return }
+        owner = userId
+        store = StudioStore.shared(owner: userId)
+        thumbnails = [:]
+        lastRecovery = .distantPast
+        reload()
+        if let pendingOpen {
+            self.pendingOpen = nil
+            Task { await open(projectId: pendingOpen) }
+        }
+    }
+
+    func signedOut() {
+        disarmScreenRecording()
+        editing = nil
+        projects = []
+        thumbnails = [:]
+        owner = nil
+        session = nil
+        pendingOpen = nil
+        store = StudioStore.shared(owner: "signed-out")
+    }
+
     func reload() {
+        guard owner != nil else { return }
         projects = store.all()
-        if !recovered { Task { await recoverInterrupted() } }
+        Task { await recoverInterrupted() }
     }
 
     // MARK: Screen
@@ -43,22 +71,22 @@ final class StudioSession {
             armedProjectId = UUID().uuidString.lowercased()
             armedAt = .now
         }
-        guard let armedProjectId else { return }
-        StudioScreenRequest.set(.init(projectId: armedProjectId, requestedAt: armedAt), in: store)
+        guard let armedProjectId, let owner else { return }
+        StudioScreenRequest.set(.init(projectId: armedProjectId, ownerId: owner, requestedAt: armedAt), in: requests)
     }
 
     /// Instant Mode's screen recordings must never land in Studio.
     func disarmScreenRecording() {
         guard recordingProjectId == nil else { return }
         armedProjectId = nil
-        StudioScreenRequest.set(nil, in: store)
+        StudioScreenRequest.set(nil, in: requests)
     }
 
     var isRecordingScreen: Bool { recordingProjectId != nil }
 
     /// The broadcast started. Whether it took the request is only known from the request being gone.
     func screenRecordingBegan(withCamera: Bool, bubble: CameraBubble) {
-        guard let projectId = armedProjectId, StudioScreenRequest.peek(in: store) == nil else { return }
+        guard let projectId = armedProjectId, StudioScreenRequest.peek(in: requests) == nil else { return }
         recordingProjectId = projectId
         armedProjectId = nil
         Usage.track("recording_started", ["mode": "studio_screen", "camera": .bool(withCamera)])
@@ -66,8 +94,10 @@ final class StudioSession {
         do {
             let directory = store.directory(for: projectId)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let writer = try StudioTrackWriter(url: directory.appending(path: "camera.mp4"), settings: .init(kind: .camera, audio: false), clock: bubble.captureClock) { hostStart in
-                try? StudioTrackInfo(file: "camera.mp4", hostStart: hostStart, duration: 0).save(as: "camera", in: directory)
+            let writer = try StudioTrackWriter(url: directory.appending(path: "camera.mp4"), settings: .init(kind: .camera, audio: false), clock: bubble.captureClock) { started in
+                var pending = started
+                pending.duration = 0
+                try? pending.save(as: "camera", in: directory)
             }
             screenCamera = (writer, projectId)
             bubble.beginStudioRecording(writer)
@@ -101,7 +131,6 @@ final class StudioSession {
 
     // MARK: Camera
 
-    /// Saves a finished camera-only recording as a project and opens it.
     func cameraRecordingFinished(projectId: String, camera: StudioTrackInfo) async {
         try? camera.save(as: "camera", in: store.directory(for: projectId))
         await assemble(projectId: projectId, screen: nil, camera: camera, title: Self.title(for: .now, screen: false))
@@ -114,6 +143,15 @@ final class StudioSession {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         if info.duration <= 0 {
             info.duration = (try? await AVURLAsset(url: url).load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
+        }
+        if var audio = info.audio {
+            let audioURL = directory.appending(path: audio.file)
+            if !FileManager.default.fileExists(atPath: audioURL.path) {
+                info.audio = nil
+            } else if audio.duration <= 0 {
+                audio.duration = (try? await AVURLAsset(url: audioURL).load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
+                info.audio = audio.duration > 0 ? audio : nil
+            }
         }
         return info.duration > 0 ? info : nil
     }
@@ -140,7 +178,7 @@ final class StudioSession {
             return
         }
         Usage.track("recording_stopped", ["mode": "studio", "duration_seconds": .int(Int(project.duration.rounded())), "screen": .bool(project.screen != nil), "camera": .bool(project.camera != nil)])
-        reload()
+        projects = store.all()
         guard opens else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         editing = project
@@ -148,13 +186,17 @@ final class StudioSession {
 
     // MARK: Recovery
 
-    @ObservationIgnored private var recovered = false
+    @ObservationIgnored private var lastRecovery: Date = .distantPast
+    @ObservationIgnored private var recovering = false
 
     /// Recordings whose app or extension was killed before the project was saved. Their files are fragmented MP4s,
-    /// so everything up to the last couple of seconds plays; they come back as drafts.
+    /// so everything up to the last second plays; they come back as drafts. A folder still being written is left for
+    /// a later pass, which runs again whenever the drafts are next shown.
     func recoverInterrupted(now: Date = .now) async {
-        guard !recovered else { return }
-        recovered = true
+        guard !recovering, now.timeIntervalSince(lastRecovery) > 15 else { return }
+        recovering = true
+        lastRecovery = now
+        defer { recovering = false }
         let fileManager = FileManager.default
         let ids = (try? fileManager.contentsOfDirectory(atPath: store.root.path)) ?? []
         for id in ids where id != recordingProjectId && id != armedProjectId {
@@ -194,9 +236,22 @@ final class StudioSession {
         Usage.track("studio_deleted")
     }
 
-    func open(projectId: String) {
-        guard let project = store.load(projectId) else { return }
-        editing = project
+    /// From a notification. Cap may have been closed when the recording stopped, so the project can still be just
+    /// the extension's tracks; they're put together first.
+    func open(projectId: String) async {
+        guard owner != nil else {
+            pendingOpen = projectId
+            return
+        }
+        if let project = store.load(projectId) {
+            editing = project
+            return
+        }
+        let directory = store.directory(for: projectId)
+        let screen = StudioTrackInfo.load("screen", in: directory)
+        let camera = StudioTrackInfo.load("camera", in: directory)
+        guard screen != nil || camera != nil else { return }
+        await assemble(projectId: projectId, screen: screen, camera: camera, title: Self.title(for: .now, screen: screen != nil))
     }
 
     static func title(for date: Date, screen: Bool) -> String {
@@ -220,7 +275,6 @@ final class StudioSession {
     }
 }
 
-/// What Studio ships with: Cap desktop's wallpapers and music.
 enum StudioAssets {
     struct Track: Identifiable, Hashable {
         let id: String

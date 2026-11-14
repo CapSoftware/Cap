@@ -32,7 +32,6 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         static let bubble = Configuration(preset: .vga640x480, mirrored: true, multitasking: true)
     }
 
-    /// Studio Mode records the floating camera too, so it asks for more than the bubble alone needs.
     func usePreset(_ preset: AVCaptureSession.Preset) {
         sessionQueue.async { [self] in
             presetOverride = preset
