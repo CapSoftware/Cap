@@ -1175,6 +1175,10 @@ resuming = "Weiter…"
 saving = "Sichert…"
 starting = "Startet"
 
+[controls.disconnected]
+camera = "Kamera getrennt. Die Aufnahme läuft ohne Kamera-Overlay weiter."
+microphone = "Mikrofon getrennt. Bis zur Wiederverbindung wird Stille aufgenommen."
+
 [controls.marker]
 add = "Marker hinzufügen"
 
@@ -1200,6 +1204,8 @@ mirror_title = "Spiegeln nicht verfügbar"
 [camera.issue]
 access_message = "Klicken Sie hier, um Cap in den Systemeinstellungen den Zugriff auf Ihre Kamera zu erlauben."
 access_title = "Kamerazugriff erforderlich"
+disconnected_message = "Die ausgewählte Kamera sendet kein Video mehr."
+disconnected_title = "Kamera getrennt"
 generic = "Die ausgewählte Kamera konnte nicht gestartet werden. Wählen Sie eine andere Kamera oder verbinden Sie diese erneut."
 invalid_format = "Diese Kamera hat kein nutzbares Aufnahmeformat gemeldet."
 not_found = "Diese Kamera ist nicht mehr verfügbar. Prüfen Sie, ob sie verbunden ist und in den Systemberechtigungen erlaubt ist."

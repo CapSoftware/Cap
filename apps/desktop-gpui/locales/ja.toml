@@ -1175,6 +1175,10 @@ resuming = "再開中…"
 saving = "保存中…"
 starting = "開始中"
 
+[controls.disconnected]
+camera = "カメラが切断されました。カメラのオーバーレイなしで録画を続けます。"
+microphone = "マイクが切断されました。再接続されるまで無音で録音します。"
+
 [controls.marker]
 add = "マーカーを追加"
 
@@ -1200,6 +1204,8 @@ mirror_title = "反転を使用できません"
 [camera.issue]
 access_message = "クリックして、システム設定でCapにカメラの使用を許可してください。"
 access_title = "カメラへのアクセスが必要です"
+disconnected_message = "選択したカメラから映像が届かなくなりました。"
+disconnected_title = "カメラが切断されました"
 generic = "選択したカメラを起動できませんでした。別のカメラを選ぶか、このカメラを接続し直してください。"
 invalid_format = "このカメラから使用可能なキャプチャフォーマットを取得できませんでした。"
 not_found = "このカメラは使用できなくなりました。接続されていて、システムの権限で許可されているか確認してください。"

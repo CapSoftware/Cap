@@ -326,6 +326,22 @@ fn main_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::camera::issue::unavailable_title(), "Camera unavailable"),
         (
+            tr::camera::issue::disconnected_title(),
+            "Camera disconnected",
+        ),
+        (
+            tr::camera::issue::disconnected_message(),
+            "The selected camera stopped sending video.",
+        ),
+        (
+            tr::controls::disconnected::microphone(),
+            "Microphone disconnected. Silence will be used until it reconnects.",
+        ),
+        (
+            tr::controls::disconnected::camera(),
+            "Camera disconnected. Recording continues without camera overlay.",
+        ),
+        (
             tr::camera::issue::not_found(),
             "This camera is no longer available. Check that it is connected and allowed by system permissions.",
         ),

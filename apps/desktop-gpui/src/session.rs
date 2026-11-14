@@ -19,7 +19,9 @@ use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 mod input_switch;
+mod input_watch;
 pub use input_switch::{InputKind, InputRequest};
+pub use input_watch::DisconnectedInputs;
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
 /// `Recording`, matching the `recording`/`paused` variants of the Tauri bar.
@@ -484,6 +486,7 @@ pub struct RecordingSession {
     marker_added_at: Option<Instant>,
     pub paused_for_sleep: bool,
     input_switch: input_switch::InputSwitchState,
+    input_watch: input_watch::InputWatchState,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -537,6 +540,7 @@ impl RecordingSession {
             marker_added_at: None,
             paused_for_sleep: false,
             input_switch: input_switch::InputSwitchState::default(),
+            input_watch: input_watch::InputWatchState::default(),
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -555,6 +559,11 @@ impl RecordingSession {
 
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<SessionGlobal>().0.clone()
+    }
+
+    pub fn try_global(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<SessionGlobal>()
+            .map(|session| session.0.clone())
     }
 
     /// True while a recording is in flight. Tolerates the global not being
@@ -1062,6 +1071,7 @@ impl RecordingSession {
         }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
+        self.start_input_watch(cx);
         #[cfg(target_os = "linux")]
         if self.stop_requested {
             self.stop(cx);
