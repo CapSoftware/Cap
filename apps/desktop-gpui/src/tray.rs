@@ -16,12 +16,13 @@
 //! Labels mirror `build_tray_menu`, except on macOS where the mode group
 //! names the current mode and its section header follows the palette's
 //! highlight in italic; the grouping is [`build_menu`]'s own.
-//! "Upload Logs" renders disabled because the log-upload path does not exist
-//! here.
+//! "Upload Logs" sends what Settings > Feedback sends, and reads "Uploading..."
+//! until the result alert.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use gpui::{App, Global};
@@ -78,6 +79,7 @@ pub enum TrayItem {
     ViewAllRecordings,
     ViewAllScreenshots,
     OpenSettings,
+    UploadLogs,
     RequestPermissions,
     Quit,
     PreviousItem(PathBuf),
@@ -625,9 +627,7 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
         TrayItem::OpenSettings,
         "settings",
     ));
-    // `logging::upload_log_file` needs the auth token and the HTTP client,
-    // neither of which this app has.
-    entries.push(Entry::disabled(tr::tray::upload_logs()));
+    entries.push(Entry::item(tr::tray::upload_logs(), TrayItem::UploadLogs));
     entries.push(Entry::Separator);
 
     if cfg!(target_os = "macos") {
@@ -693,8 +693,68 @@ fn current_menu_entries(cx: &App, mode: Mode, previous: &[PreviousItem]) -> Vec<
         return build_onboarding_menu(crate::menus::app_version());
     }
     let mut entries = build_menu(mode, previous, crate::menus::app_version());
+    if LOGS_UPLOADING.load(Ordering::Acquire) {
+        mark_logs_uploading(&mut entries);
+    }
     decorate_accelerators(&mut entries, cx);
     entries
+}
+
+static LOGS_UPLOADING: AtomicBool = AtomicBool::new(false);
+
+/// One upload at a time: the row reads "Uploading..." and does nothing until
+/// the result alert.
+fn mark_logs_uploading(entries: &mut [Entry]) {
+    for entry in entries {
+        if let Entry::Item { item, .. } = entry
+            && *item == Some(TrayItem::UploadLogs)
+        {
+            *entry = Entry::disabled(tr::settings::feedback::uploading());
+        }
+    }
+}
+
+/// `TrayItem::UploadLogs` (`src-tauri/src/tray.rs:988-1004`), through the
+/// upload Settings > Feedback uses, with the result in an alert.
+fn upload_logs(cx: &mut App) {
+    if LOGS_UPLOADING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    refresh_menu(cx);
+    let server = crate::store::GeneralSettings::load().server_url;
+    let token = crate::store::auth_snapshot().token;
+    cx.spawn(async move |cx| {
+        let (log, diagnostics_json) = cx
+            .background_executor()
+            .spawn(async { crate::diagnostics::log_upload_payload() })
+            .await;
+        let task = cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(
+                cx,
+                crate::diagnostics::upload_report(server, token, log, None, diagnostics_json),
+            )
+        });
+        let result = task
+            .await
+            .unwrap_or_else(|_| Err(tr::settings::feedback::upload_interrupted().to_string()));
+        if let Err(error) = &result {
+            tracing::error!("Failed to upload logs: {error}");
+        }
+        LOGS_UPLOADING.store(false, Ordering::Release);
+        cx.update(refresh_menu);
+        crate::platform::activate_app();
+        match result {
+            Ok(()) => crate::platform::alert_dialog(
+                tr::tray::upload_logs(),
+                tr::settings::feedback::upload_sent(),
+            ),
+            Err(error) => crate::platform::alert_dialog(
+                tr::tray::upload_logs(),
+                &tr::diagnostics::error::upload_logs(error),
+            ),
+        }
+    })
+    .detach();
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +802,7 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
             app_windows::open_settings(Page::General, cx);
             cx.activate(true);
         }
+        TrayItem::UploadLogs => upload_logs(cx),
         TrayItem::RequestPermissions => {
             app_windows::open_onboarding(cx);
             cx.activate(true);
@@ -951,6 +1012,7 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
         "recordings" => TrayItem::ViewAllRecordings,
         "screenshots" => TrayItem::ViewAllScreenshots,
         "settings" => TrayItem::OpenSettings,
+        "upload_logs" => TrayItem::UploadLogs,
         "quit" => TrayItem::Quit,
         "mode_studio" => TrayItem::ModeStudio,
         "mode_instant" => TrayItem::ModeInstant,
@@ -2341,11 +2403,44 @@ mod tests {
         assert_eq!(
             disabled,
             if cfg!(target_os = "macos") {
-                vec!["Upload Logs"]
+                Vec::<String>::new()
             } else {
-                vec!["Upload Logs", "Cap v0.1.0"]
+                vec!["Cap v0.1.0".to_string()]
             }
         );
+        assert!(menu.iter().any(|entry| matches!(
+            entry,
+            Entry::Item {
+                title,
+                item: Some(TrayItem::UploadLogs),
+                enabled: true,
+                ..
+            } if title == "Upload Logs"
+        )));
+    }
+
+    #[test]
+    fn upload_logs_reads_uploading_and_does_nothing_while_one_runs() {
+        let mut menu = build_menu(Mode::Studio, &[], "0.1.0");
+        let before = menu.len();
+        mark_logs_uploading(&mut menu);
+        assert_eq!(menu.len(), before);
+        assert!(!menu.iter().any(|entry| matches!(
+            entry,
+            Entry::Item {
+                item: Some(TrayItem::UploadLogs),
+                ..
+            }
+        )));
+        assert!(menu.iter().any(|entry| matches!(
+            entry,
+            Entry::Item {
+                title,
+                item: None,
+                enabled: false,
+                ..
+            } if title == "Uploading..."
+        )));
     }
     #[test]
     fn capture_rows_have_one_entry_per_action() {

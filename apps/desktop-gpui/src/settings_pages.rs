@@ -3195,16 +3195,14 @@ impl SettingsWindow {
             let (log, report, diagnostics_json) = cx
                 .background_executor()
                 .spawn(async move {
-                    let log = diagnostics::log_tail();
                     match payload {
                         Some(payload) => (
-                            log,
+                            diagnostics::log_tail(),
                             Some(payload.report_json),
                             Some(payload.diagnostics_json),
                         ),
                         None => {
-                            let diagnostics_json =
-                                serde_json::to_string(&diagnostics::collect_log_diagnostics()).ok();
+                            let (log, diagnostics_json) = diagnostics::log_upload_payload();
                             (log, None, diagnostics_json)
                         }
                     }

@@ -96,6 +96,15 @@ pub fn log_tail() -> cap_utils::log_upload::LogBundle {
     cap_utils::log_upload::collect(&logs_dir(), LOG_FILE_PREFIX)
 }
 
+/// What "Upload Logs" sends from Settings > Feedback and the tray alike: the
+/// log tail and a device snapshot. Blocking, so read it off the main thread.
+pub fn log_upload_payload() -> (cap_utils::log_upload::LogBundle, Option<String>) {
+    (
+        log_tail(),
+        serde_json::to_string(&collect_log_diagnostics()).ok(),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // The self-test sidecar
 // ---------------------------------------------------------------------------
