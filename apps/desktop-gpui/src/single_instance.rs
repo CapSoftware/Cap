@@ -100,8 +100,14 @@ pub fn acquire() {
 /// An instance that exited between the pidfile read and the reopen is simply
 /// gone. One that is still alive and did not answer is hung, and the user
 /// decides whether to end it; exiting quietly left them with no Cap at all.
+/// The pidfd is taken before the prompt, so however long the prompt stays up
+/// a reused pid can never receive the signal.
 #[cfg(target_os = "linux")]
 fn take_over_from_unresponsive_linux_instance(pid: i32) {
+    let Ok(process) = LinuxProcess::open(pid) else {
+        tracing::info!(pid, "the previous Cap GPUI exited; starting a new one");
+        return;
+    };
     if !is_cap_gpui(pid) {
         tracing::info!(pid, "the previous Cap GPUI exited; starting a new one");
         return;
@@ -109,7 +115,7 @@ fn take_over_from_unresponsive_linux_instance(pid: i32) {
     if !crate::startup::confirm_quit_unresponsive() {
         crate::startup::exit(0);
     }
-    if !end_linux_instance(pid, || is_cap_gpui(pid)) {
+    if !end_linux_instance(&process) {
         crate::startup::fail(format!(
             "The copy of Cap that isn't responding (process {pid}) could not be quit."
         ));
@@ -118,25 +124,68 @@ fn take_over_from_unresponsive_linux_instance(pid: i32) {
 }
 
 #[cfg(target_os = "linux")]
-fn end_linux_instance(pid: i32, alive: impl Fn() -> bool) -> bool {
-    let exited_within = |limit: std::time::Duration| {
-        let started = std::time::Instant::now();
-        loop {
-            if !alive() {
-                return true;
-            }
-            if started.elapsed() >= limit {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+struct LinuxProcess(std::os::fd::OwnedFd);
+
+#[cfg(target_os = "linux")]
+impl LinuxProcess {
+    fn open(pid: i32) -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd;
+
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
         }
-    };
-    unsafe { libc::kill(pid, libc::SIGTERM) };
-    if exited_within(std::time::Duration::from_secs(3)) {
-        return true;
+        Ok(Self(unsafe {
+            std::os::fd::OwnedFd::from_raw_fd(fd as i32)
+        }))
     }
-    unsafe { libc::kill(pid, libc::SIGKILL) };
-    exited_within(std::time::Duration::from_secs(3))
+
+    fn signal(&self, signal: libc::c_int) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        let sent = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if sent == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    fn exited_within(&self, timeout: std::time::Duration) -> bool {
+        use std::os::fd::AsRawFd;
+
+        let mut poll = libc::pollfd {
+            fd: self.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut poll, 1, timeout.as_millis() as libc::c_int) };
+        ready > 0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn end_linux_instance(process: &LinuxProcess) -> bool {
+    let limit = std::time::Duration::from_secs(3);
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        match process.signal(signal) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return true,
+            Err(_) => return false,
+        }
+        if process.exited_within(limit) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Linux zombies retain their comm name but lose their exe link.
@@ -1087,7 +1136,8 @@ fn acquire_windows_instance(path: &Path) {
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
 
-    let mut ended_unresponsive = false;
+    let mut confirmed = None;
+    let mut ended = None;
     let mutex = loop {
         let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
         let last_error = unsafe { GetLastError() };
@@ -1102,35 +1152,34 @@ fn acquire_windows_instance(path: &Path) {
 
         let handed_off = hand_off_to_windows_instance(path);
         let _ = unsafe { CloseHandle(mutex) };
-        let unresponsive = match handed_off {
+        let pid = match handed_off {
             Ok(()) => crate::startup::exit(0),
-            Err(pid) => pid,
+            Err(Some(pid)) => pid,
+            Err(None) => crate::startup::fail(
+                "Another copy of Cap is running but could not be reached. End Cap in Task Manager, then open it again.",
+            ),
         };
-        if ended_unresponsive {
-            crate::startup::fail(
-                "Another copy of Cap is still running and could not be quit. Restart your computer, then open Cap again.",
-            );
-        }
-        tracing::warn!(
-            pid = ?unresponsive,
-            "the running Cap GPUI did not answer the reopen request"
-        );
-        if !crate::startup::confirm_quit_unresponsive() {
-            crate::startup::exit(0);
-        }
-        let pids = match unresponsive {
-            Some(pid) => vec![pid],
-            None => other_windows_instances(),
-        };
-        for pid in pids {
-            match end_windows_process(pid) {
-                Ok(()) => tracing::info!(pid, "ended the unresponsive Cap GPUI"),
-                Err(error) => {
-                    tracing::warn!(pid, %error, "could not end the unresponsive Cap GPUI")
+        match takeover_step(pid, confirmed, ended) {
+            TakeoverStep::Ask => {
+                tracing::warn!(pid, "the running Cap GPUI is not responding");
+                if !crate::startup::confirm_quit_unresponsive() {
+                    crate::startup::exit(0);
                 }
+                confirmed = Some(pid);
             }
+            TakeoverStep::End => {
+                match end_windows_process(pid) {
+                    Ok(()) => tracing::info!(pid, "ended the unresponsive Cap GPUI"),
+                    Err(error) => {
+                        tracing::warn!(pid, %error, "could not end the unresponsive Cap GPUI")
+                    }
+                }
+                ended = Some(pid);
+            }
+            TakeoverStep::GiveUp => crate::startup::fail(format!(
+                "The copy of Cap that isn't responding (process {pid}) could not be quit. Restart your computer, then open Cap again."
+            )),
         }
-        ended_unresponsive = true;
     };
 
     if INSTANCE_MUTEX.set(mutex as usize).is_err() {
@@ -1143,13 +1192,41 @@ fn acquire_windows_instance(path: &Path) {
     }
 }
 
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum TakeoverStep {
+    Ask,
+    End,
+    GiveUp,
+}
+
+/// Every pass re-takes the lock and repeats the hand-off, so a copy that
+/// recovered or exited while the prompt was open is never ended, and only the
+/// exact process the user confirmed is.
+#[cfg(any(windows, test))]
+fn takeover_step(pid: u32, confirmed: Option<u32>, ended: Option<u32>) -> TakeoverStep {
+    if ended == Some(pid) {
+        TakeoverStep::GiveUp
+    } else if confirmed == Some(pid) {
+        TakeoverStep::End
+    } else {
+        TakeoverStep::Ask
+    }
+}
+
+/// How long a window may go without handling messages before it counts as
+/// frozen: the same five seconds after which Windows itself marks a window
+/// "Not Responding".
+#[cfg(windows)]
+const WINDOW_RESPONSE_TIMEOUT_MS: u32 = 5000;
+
 /// `Err` carries the running instance's pid when one was identified. A
-/// responsive instance acknowledges a reopen from its listener thread within
-/// milliseconds, so a failed reopen means its process is stuck; activating
+/// failed reopen means the instance's listener thread is stuck; activating
 /// its window then showed nothing and the new launch exited without a trace.
-/// A Cap whose window still answers messages (a build without the reopen
-/// endpoint, or one whose pidfile could not be written) is activated as
-/// before, so a working instance is never offered for quitting.
+/// The listener acknowledges from its own thread, so an acknowledged reopen
+/// still needs a window that answers messages: a frozen main thread would
+/// otherwise swallow the request just as silently. A Cap whose window answers
+/// (including a build without the reopen endpoint) is activated as before.
 #[cfg(windows)]
 fn hand_off_to_windows_instance(path: &Path) -> Result<(), Option<u32>> {
     let mut identified = None;
@@ -1160,30 +1237,28 @@ fn hand_off_to_windows_instance(path: &Path) -> Result<(), Option<u32>> {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    if let Some(pid) = identified {
-        tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
-        if forward_windows_deep_links(path, pid) {
-            activate_windows_instance(pid);
-            return Ok(());
-        }
-        match reopen_windows_instance(path, pid) {
-            Ok(()) => return Ok(()),
-            Err(error) => tracing::warn!(%error, "could not reopen the running Cap GPUI"),
-        }
-    }
-    let candidates = match identified {
-        Some(pid) => vec![pid],
-        None => other_windows_instances(),
+    let Some(pid) = identified else {
+        return Err(None);
     };
-    for pid in candidates {
-        if let Some(window) = windows_instance_window(pid)
-            && windows_window_responds(window)
-        {
-            activate_windows_window(window);
-            return Ok(());
-        }
+    tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
+    if forward_windows_deep_links(path, pid) {
+        activate_windows_instance(pid);
+        return Ok(());
     }
-    Err(identified)
+    let reopened = reopen_windows_instance(path, pid)
+        .inspect_err(|error| tracing::warn!(%error, "could not reopen the running Cap GPUI"))
+        .is_ok();
+    match windows_instance_window(pid) {
+        Some(window) if windows_window_responds(window) => {
+            if !reopened {
+                activate_windows_window(window);
+            }
+            Ok(())
+        }
+        Some(_) => Err(Some(pid)),
+        None if reopened => Ok(()),
+        None => Err(Some(pid)),
+    }
 }
 
 #[cfg(windows)]
@@ -1193,53 +1268,17 @@ fn windows_window_responds(window: windows_sys::Win32::Foundation::HWND) -> bool
     };
 
     let mut result = 0;
-    unsafe { SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 2000, &mut result) != 0 }
-}
-
-/// Every other Cap process in this logon session: the mutex is per session,
-/// and an instance whose pidfile was lost still holds it.
-#[cfg(windows)]
-fn other_windows_instances() -> Vec<u32> {
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-        System::{
-            Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-                TH32CS_SNAPPROCESS,
-            },
-            RemoteDesktop::ProcessIdToSessionId,
-        },
-    };
-
-    let own_pid = std::process::id();
-    let mut own_session = 0;
-    if unsafe { ProcessIdToSessionId(own_pid, &mut own_session) } == 0 {
-        return Vec::new();
+    unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_NULL,
+            0,
+            0,
+            SMTO_ABORTIFHUNG,
+            WINDOW_RESPONSE_TIMEOUT_MS,
+            &mut result,
+        ) != 0
     }
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Vec::new();
-    }
-    let mut pids = Vec::new();
-    let mut entry = PROCESSENTRY32W {
-        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
-    while more {
-        let pid = entry.th32ProcessID;
-        let mut session = 0;
-        if pid != own_pid
-            && unsafe { ProcessIdToSessionId(pid, &mut session) } != 0
-            && session == own_session
-            && windows_process_is_cap(pid)
-        {
-            pids.push(pid);
-        }
-        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
-    }
-    let _ = unsafe { CloseHandle(snapshot) };
-    pids
 }
 
 #[cfg(windows)]
@@ -1252,12 +1291,13 @@ fn end_windows_process(pid: u32) -> std::io::Result<()> {
         },
     };
 
-    if !windows_process_is_cap(pid) {
-        return Ok(());
-    }
     let process = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
     if process.is_null() {
         return Err(std::io::Error::last_os_error());
+    }
+    if !windows_process_is_cap(pid) {
+        let _ = unsafe { CloseHandle(process) };
+        return Ok(());
     }
     let result = if unsafe { TerminateProcess(process, 1) } == 0 {
         Err(std::io::Error::last_os_error())
@@ -1513,10 +1553,23 @@ fn read_forwarded_request(
     Ok(ForwardedRequest::DeepLink(url))
 }
 
+/// The pidfile, else the pid in the deep-link endpoint beside it: both live in
+/// this profile's app-data folder, the one the instance mutex is named after,
+/// so neither can name a Cap running for another profile.
 #[cfg(windows)]
 fn windows_instance_pid(path: &Path) -> Option<u32> {
-    let pid = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
-    windows_process_is_cap(pid).then_some(pid)
+    let from_pidfile = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse().ok());
+    let from_endpoint = || {
+        std::fs::read_to_string(path.with_extension("ipc"))
+            .ok()
+            .and_then(|contents| parse_forwarding_endpoint(&contents))
+            .map(|endpoint| endpoint.pid)
+    };
+    from_pidfile
+        .filter(|pid| windows_process_is_cap(*pid))
+        .or_else(|| from_endpoint().filter(|pid| windows_process_is_cap(*pid)))
 }
 
 #[cfg(windows)]
@@ -3329,11 +3382,28 @@ mod windows_takeover_tests {
     }
 
     #[test]
+    fn the_endpoint_identifies_an_instance_whose_pidfile_is_missing() {
+        let fake = FakeCap::start();
+        let path = fake.directory.path().join("cap-gpui.pid");
+        assert_eq!(windows_instance_pid(&path), None);
+        write_forwarding_endpoint(
+            &path.with_extension("ipc"),
+            ForwardingEndpoint {
+                pid: fake.pid(),
+                port: 1,
+                secret: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(windows_instance_pid(&path), Some(fake.pid()));
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+        assert_eq!(windows_instance_pid(&path), Some(fake.pid()));
+    }
+
+    #[test]
     fn ending_an_unresponsive_instance_waits_for_it_to_exit() {
         let mut fake = FakeCap::start();
         assert!(windows_process_is_cap(fake.pid()));
-        assert!(other_windows_instances().contains(&fake.pid()));
-        assert!(!other_windows_instances().contains(&std::process::id()));
         end_windows_process(fake.pid()).unwrap();
         assert!(exited(&mut fake.child));
         assert!(!windows_process_is_cap(fake.pid()));
@@ -3346,7 +3416,6 @@ mod windows_takeover_tests {
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        assert!(!other_windows_instances().contains(&other.id()));
         end_windows_process(other.id()).unwrap();
         assert!(!exited(&mut other));
         other.kill().unwrap();
@@ -3359,38 +3428,44 @@ mod linux_takeover_tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn alive(child: &std::sync::Mutex<std::process::Child>) -> bool {
-        child.lock().unwrap().try_wait().unwrap().is_none()
-    }
-
     #[test]
     fn a_hung_instance_is_ended_with_sigterm() {
-        let child = std::sync::Mutex::new(
-            std::process::Command::new("sleep")
-                .arg("60")
-                .spawn()
-                .unwrap(),
-        );
-        let pid = child.lock().unwrap().id() as i32;
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
         let started = Instant::now();
-        assert!(end_linux_instance(pid, || alive(&child)));
+        assert!(end_linux_instance(&process));
         assert!(started.elapsed() < Duration::from_secs(3));
+        child.wait().unwrap();
     }
 
     #[test]
     fn an_instance_that_ignores_sigterm_is_killed() {
-        let child = std::sync::Mutex::new(
-            std::process::Command::new("sh")
-                .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
-                .spawn()
-                .unwrap(),
-        );
-        let pid = child.lock().unwrap().id() as i32;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+            .spawn()
+            .unwrap();
         std::thread::sleep(Duration::from_millis(200));
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
         let started = Instant::now();
-        assert!(end_linux_instance(pid, || alive(&child)));
+        assert!(end_linux_instance(&process));
         assert!(started.elapsed() >= Duration::from_secs(3));
         assert!(started.elapsed() < Duration::from_secs(6));
+        child.wait().unwrap();
+    }
+
+    /// The pidfd keeps naming the original process: once it has exited, no
+    /// signal can reach whatever later receives its pid.
+    #[test]
+    fn a_process_that_exits_during_the_prompt_is_never_signalled_again() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
+        child.wait().unwrap();
+        let error = process.signal(libc::SIGTERM).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+        assert!(end_linux_instance(&process));
     }
 
     #[test]
@@ -3399,5 +3474,19 @@ mod linux_takeover_tests {
         let pid = child.id() as i32;
         child.wait().unwrap();
         take_over_from_unresponsive_linux_instance(pid);
+    }
+}
+
+#[cfg(test)]
+mod takeover_step_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_confirmed_process_is_ended_and_only_once() {
+        assert_eq!(takeover_step(7, None, None), TakeoverStep::Ask);
+        assert_eq!(takeover_step(7, Some(7), None), TakeoverStep::End);
+        assert_eq!(takeover_step(8, Some(7), None), TakeoverStep::Ask);
+        assert_eq!(takeover_step(7, Some(7), Some(7)), TakeoverStep::GiveUp);
+        assert_eq!(takeover_step(8, Some(8), Some(7)), TakeoverStep::End);
     }
 }
