@@ -3649,7 +3649,6 @@ mod tests {
 
     #[test]
     fn a_double_click_inside_a_fade_resets_that_fade() {
-        // A 10 s clip with a 2 s fade in and a 1 s fade out.
         let at = |time: f64| fade_reset_at(10., 20., 2., 1., time, 0.1);
         assert_eq!(at(10.), Some(true));
         assert_eq!(at(11.9), Some(true));
@@ -3657,11 +3656,8 @@ mod tests {
         assert_eq!(at(19.2), Some(false));
         assert_eq!(at(20.), Some(false));
         assert_eq!(at(21.), None);
-        // No fade, nothing to reset, however wide the slop.
         assert_eq!(fade_reset_at(10., 20., 0., 0., 10., 5.), None);
-        // A very short fade is still hittable across the minimum span.
         assert_eq!(fade_reset_at(10., 20., 0.01, 0., 10.4, 0.5), Some(true));
-        // Fades that cover the whole clip overlap: the nearer edge wins.
         assert_eq!(fade_reset_at(10., 20., 10., 10., 12., 0.1), Some(true));
         assert_eq!(fade_reset_at(10., 20., 10., 10., 18., 0.1), Some(false));
     }
