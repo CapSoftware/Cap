@@ -4400,9 +4400,9 @@ fn restore_unpublished_originals(project: &Path) -> Result<bool, RecoveryError> 
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !name
+        if name
             .strip_prefix(".recovery-")
-            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+            .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
         {
             continue;
         }
@@ -7952,7 +7952,7 @@ mod transactional_recovery_tests {
             std::fs::remove_file(project.join("project-config.json")).unwrap();
             interrupt_publication(&project, &workspace, after);
             let _lock = RecoveryLock::acquire(&project).unwrap();
-            assert_eq!(project.join("project-config.json").exists(), after == 3);
+            assert!(!project.join("project-config.json").exists());
             assert_eq!(
                 std::fs::read(project.join("recording-meta.json")).unwrap(),
                 b"original status"

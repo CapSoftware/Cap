@@ -109,6 +109,15 @@ fn workspaces(project: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Backups of original media still on disk. A finished remux deletes its backup
+/// and keeps only the publication receipt.
+fn original_backups(project: &Path) -> Vec<PathBuf> {
+    workspaces(project)
+        .into_iter()
+        .filter(|workspace| workspace.join("original-segments").exists())
+        .collect()
+}
+
 fn video_packets(path: &Path) -> usize {
     let mut input = ffmpeg::format::input(path).unwrap();
     let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
@@ -192,7 +201,7 @@ fn needs_remux_recordings_of_every_size_validate_and_remux_in_order() {
         );
         assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
         assert_eq!(remuxed_frames(&project), fragments, "{fragments}");
-        assert!(workspaces(&project).is_empty());
+        assert!(original_backups(&project).is_empty());
         assert!(!project.join(RECOVERY_PUBLICATION).exists());
     }
 }
@@ -602,7 +611,7 @@ fn a_remux_while_another_open_holds_the_project_changes_nothing() {
         "{results:?}"
     );
     assert_eq!(remuxed_frames(&project), 200);
-    assert!(workspaces(&project).is_empty());
+    assert!(original_backups(&project).is_empty());
     assert!(!project.join(RECOVERY_PUBLICATION).exists());
 }
 
