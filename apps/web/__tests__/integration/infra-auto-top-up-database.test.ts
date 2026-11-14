@@ -246,9 +246,16 @@ describe.runIf(Boolean(databaseUrl))(
 			const changed = Array.from({ length: 4 }, () => runAutoTopUp(accountId));
 			await Promise.all([...first, ...changed]);
 
-			expect(fixture.created.length - before).toBe(1);
+			const amounts = fixture.created
+				.slice(before)
+				.map((intent) => intent.amount);
+			expect(amounts).toHaveLength(1);
+			// On a slow runner the update can land before any first-batch trigger
+			// takes the lock, so the one charge may use either amount.
+			const [amount = 0] = amounts;
+			expect([500, 2500]).toContain(amount);
 			expect(await topUpsOf(accountId)).toHaveLength(1);
-			expect(await balanceOf(accountId)).toBe(530_000);
+			expect(await balanceOf(accountId)).toBe(30_000 + amount * 1_000);
 		});
 
 		it("makes no second payment when the amount changes after a lost response", async () => {
