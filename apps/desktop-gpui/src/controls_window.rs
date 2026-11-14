@@ -60,16 +60,33 @@ const SETTINGS_PANEL_PADDING: f32 = 4.;
 const SETTINGS_PANEL_MAX_HEIGHT: f32 = 360.;
 /// The card above the bar keeps this gap to it, like the issue card.
 const SETTINGS_PANEL_GAP: f32 = 8.;
+const SETTINGS_LINUX_SCREEN_MARGIN: f32 = 8.;
 
 /// The panel's height for its rows: the camera preview switch, then each
 /// heading with its rows, the dividers between them, padding and border.
 /// Longer lists scroll inside the cap.
-fn settings_panel_height(microphone_rows: usize, camera_rows: usize) -> f32 {
+fn settings_panel_height(microphone_rows: usize, camera_rows: usize, cap: f32) -> f32 {
     let divider = 1. + 2. * SETTINGS_DIVIDER_MARGIN;
     let content = SETTINGS_ROW_HEIGHT
         + 2. * (divider + SETTINGS_HEADING_HEIGHT)
         + (microphone_rows + camera_rows) as f32 * SETTINGS_ROW_HEIGHT;
-    (content + 2. * (SETTINGS_PANEL_PADDING + 1.)).min(SETTINGS_PANEL_MAX_HEIGHT)
+    (content + 2. * (SETTINGS_PANEL_PADDING + 1.)).min(cap)
+}
+
+/// Linux cannot keep the bar's bottom edge in place while the window grows
+/// (X11 resizes from the top-left; Wayland clients cannot place themselves),
+/// so there the bar moves down as the panel opens. It opens
+/// `CONTROLS_BOTTOM_OFFSET` above the display's bottom, so growth stays
+/// within that and the panel scrolls instead of pushing Stop off screen.
+fn settings_panel_cap(issue: bool) -> f32 {
+    if cfg!(target_os = "linux") {
+        let window = crate::app_windows::CONTROLS_HEIGHT
+            + crate::app_windows::CONTROLS_BOTTOM_OFFSET as f32
+            - SETTINGS_LINUX_SCREEN_MARGIN;
+        (window - controls_height(issue, None) - SETTINGS_PANEL_GAP).min(SETTINGS_PANEL_MAX_HEIGHT)
+    } else {
+        SETTINGS_PANEL_MAX_HEIGHT
+    }
 }
 
 /// The bar window's height: the bar, the issue card when one is up, and the
@@ -182,11 +199,12 @@ impl ControlsWindow {
     }
 
     fn fit_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let issue = self.issue(cx).is_some();
         let panel = self.settings_open.then(|| {
             let (microphones, cameras) = self.settings_rows(cx);
-            settings_panel_height(microphones, cameras)
+            settings_panel_height(microphones, cameras, settings_panel_cap(issue))
         });
-        let height = controls_height(self.issue(cx).is_some(), panel);
+        let height = controls_height(issue, panel);
         if height == self.fitted_height {
             return;
         }
@@ -857,7 +875,7 @@ impl ControlsWindow {
         let mut panel = div()
             .id("settings-panel")
             .w_full()
-            .max_h(px(SETTINGS_PANEL_MAX_HEIGHT))
+            .max_h(px(settings_panel_cap(self.issue(cx).is_some())))
             .mb(px(8.))
             .flex()
             .flex_col()
@@ -1241,17 +1259,32 @@ mod repaint_tests {
         let with_issue = crate::app_windows::CONTROLS_HEIGHT;
         assert_eq!(controls_height(false, None), bar);
         assert_eq!(controls_height(true, None), with_issue);
-        let panel = settings_panel_height(3, 2);
+        let panel = settings_panel_height(3, 2, SETTINGS_PANEL_MAX_HEIGHT);
         assert_eq!(controls_height(false, Some(panel)), bar + panel + 8.);
         assert_eq!(controls_height(true, Some(panel)), with_issue + panel + 8.);
     }
 
     #[test]
     fn the_settings_panel_fits_its_rows_and_scrolls_past_the_cap() {
-        let empty = settings_panel_height(0, 0);
+        let cap = SETTINGS_PANEL_MAX_HEIGHT;
+        let empty = settings_panel_height(0, 0, cap);
         assert_eq!(empty, 30. + 2. * (9. + 26.) + 10.);
-        assert_eq!(settings_panel_height(2, 1), empty + 3. * 30.);
-        assert_eq!(settings_panel_height(40, 40), 360.);
+        assert_eq!(settings_panel_height(2, 1, cap), empty + 3. * 30.);
+        assert_eq!(settings_panel_height(40, 40, cap), 360.);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_bar_never_grows_past_the_room_below_it() {
+        for issue in [false, true] {
+            let panel = settings_panel_height(40, 40, settings_panel_cap(issue));
+            let window =
+                controls_height(issue, Some(panel)).max(crate::app_windows::CONTROLS_HEIGHT);
+            assert!(
+                window - crate::app_windows::CONTROLS_HEIGHT
+                    <= crate::app_windows::CONTROLS_BOTTOM_OFFSET as f32
+            );
+        }
     }
 
     #[test]

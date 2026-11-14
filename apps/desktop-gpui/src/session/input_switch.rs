@@ -194,6 +194,7 @@ impl RecordingSession {
     ) {
         match request {
             InputRequest::Camera(selection) => {
+                self.remember_input(&InputRequest::Camera(selection.clone()));
                 Feeds::global(cx).update(cx, |feeds, cx| {
                     let selected = selection.is_some();
                     feeds.set_camera(selection, cx);
@@ -248,6 +249,9 @@ impl RecordingSession {
                                     feeds.adopt_recording_microphone(label.clone(), cx);
                                 });
                                 this.set_instant_microphone_muted(false);
+                                this.remember_input(&InputRequest::Microphone(Some(
+                                    label.clone(),
+                                )));
                                 this.input_switch.error = None;
                                 tracing::info!(microphone = %label, "instant recording switched microphone");
                             }
@@ -313,6 +317,7 @@ impl RecordingSession {
             self.paused_since = Some(now);
             self.input_switch.timer_frozen_at = Some(now);
         }
+        let requested = request.clone();
         cx.spawn(async move |this, cx| {
             let outcome =
                 studio_switch(&this, cx, handle, request, previous, was_paused, generation).await;
@@ -328,12 +333,41 @@ impl RecordingSession {
                     this.phase = Phase::Recording { paused: true };
                     this.input_switch.timer_frozen_at = None;
                 }
+                if outcome.error.is_none() {
+                    this.remember_input(&requested);
+                }
                 this.input_switch.error = outcome.error;
                 this.finish_input_switch(generation, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Restart reuses the config the recording started with, so a switched
+    /// input must replace the one recorded there, or the restarted recording
+    /// asks the feed for the device it no longer has.
+    fn remember_input(&mut self, request: &InputRequest) {
+        let Some(config) = self.last_config.as_mut() else {
+            return;
+        };
+        match request {
+            InputRequest::Microphone(label) => {
+                config.device_settings.microphone = label
+                    .as_deref()
+                    .and_then(crate::store::RecordingDeviceSettings::for_microphone);
+                config.microphone = label.clone();
+            }
+            InputRequest::Camera(camera) => {
+                config.device_settings.camera = camera.as_ref().and_then(|camera| {
+                    crate::store::RecordingDeviceSettings::for_camera(
+                        &camera.device_id,
+                        camera.model_id.as_ref(),
+                    )
+                });
+                config.camera = camera.as_ref().map(|camera| camera.id.clone());
+            }
+        }
     }
 
     fn still_switching(&self, generation: u64) -> bool {

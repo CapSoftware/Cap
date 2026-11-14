@@ -47,7 +47,7 @@ pub const CONTROLS_HEIGHT: f32 = 150.;
 /// tall and the app under the empty space above the bar stays clickable.
 pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
 const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
-const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
+pub(crate) const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
 #[cfg(any(target_os = "macos", test))]
