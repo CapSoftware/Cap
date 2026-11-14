@@ -23,6 +23,7 @@ on:
       - "crates/enc-mediafoundation/**"
       - "crates/timestamp/**"
       - "crates/rendering/**"
+      - "vendor/wgpu-hal/**"
       - "crates/render-farm/**"
       - "crates/editor/**"
       - "crates/export/**"
