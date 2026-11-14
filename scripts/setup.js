@@ -153,10 +153,13 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await exec(
+			const diag = await exec(
 				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
 				{ shell: "powershell.exe" },
 			);
+			console.log("DIAG expand stdout", JSON.stringify(diag.stdout).slice(0, 3000));
+			console.log("DIAG expand stderr", JSON.stringify(diag.stderr).slice(0, 6000));
+			console.log("DIAG target", await fs.readdir(targetDir));
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
