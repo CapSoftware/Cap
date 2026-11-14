@@ -2910,10 +2910,15 @@ video = { text = "Video", context = "Timeline gutter label of the recording's vi
 zoom = "Zoom"
 
 [editor.transcript]
+captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
+captions_saved = "Captions saved"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
 delete_matches_tooltip = "Cut every match from the video"
+download_captions = "Download captions"
+download_srt = { text = "SubRip (.srt)", context = "Menu item that saves captions as an SRT subtitle file. SubRip is a format name; keep it." }
+download_vtt = { text = "WebVTT (.vtt)", context = "Menu item that saves captions as a WebVTT subtitle file. WebVTT is a format name; keep it." }
 empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
 empty_title = "No transcript yet"
 hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
