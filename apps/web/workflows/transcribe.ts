@@ -21,7 +21,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
-import { emitAppStoreEventSafely } from "@/lib/app-store/events";
+import { emitAppStoreEventSafely } from "@/lib/app-store/announce";
 import {
 	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,

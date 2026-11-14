@@ -1,5 +1,3 @@
-import "server-only";
-
 import { createHash } from "node:crypto";
 import type { CapEventType } from "@cap/app-store";
 import { db } from "@cap/database";
@@ -134,17 +132,6 @@ function runInBackground(label: string, work: Promise<unknown>) {
 	}
 }
 
-export function announceAppStoreEvent(
-	type: CapEventType,
-	videoId: Video.VideoId,
-	options: { commentId?: string } = {},
-): void {
-	runInBackground(
-		`${type} for ${videoId}`,
-		emitAppStoreEvent(type, videoId, options),
-	);
-}
-
 export function announceLifecycle(
 	installationId: string,
 	type: "installed" | "settings.updated",
@@ -158,21 +145,3 @@ export function announceLifecycle(
 export function announceInBackground(label: string, work: Promise<unknown>) {
 	runInBackground(label, work);
 }
-
-export async function emitAppStoreEventSafely(
-	type: CapEventType,
-	videoId: Video.VideoId,
-	options: { commentId?: string } = {},
-) {
-	try {
-		await emitAppStoreEvent(type, videoId, options);
-	} catch (error) {
-		console.error(`[app-store] ${type} failed`, {
-			videoId,
-			message: error instanceof Error ? error.message : String(error),
-		});
-	}
-}
-
-export const emitCapReadySafely = (videoId: Video.VideoId) =>
-	emitAppStoreEventSafely("cap.ready", videoId);

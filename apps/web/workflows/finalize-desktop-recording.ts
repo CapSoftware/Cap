@@ -9,7 +9,7 @@ import { Option } from "effect";
 import { getStepMetadata, sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
-import { emitCapReadySafely } from "@/lib/app-store/events";
+import { emitCapReadySafely } from "@/lib/app-store/announce";
 import { observeDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
 import {
 	attachRemoteJob,

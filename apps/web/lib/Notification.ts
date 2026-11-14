@@ -10,7 +10,7 @@ import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
-import { announceAppStoreEvent } from "@/lib/app-store/events";
+import { announceAppStoreEvent } from "@/lib/app-store/announce";
 import { queueNotificationPush } from "@/lib/mobile-push";
 
 export type NotificationType = Notification["type"];

@@ -4,7 +4,7 @@ import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
-import { announceAppStoreEvent } from "@/lib/app-store/events";
+import { announceAppStoreEvent } from "@/lib/app-store/announce";
 import { transcribeVideo } from "@/lib/transcribe";
 
 type VideoSourceType = (typeof videos.$inferSelect)["source"]["type"];

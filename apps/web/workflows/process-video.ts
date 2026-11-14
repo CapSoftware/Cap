@@ -6,7 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
-import { emitCapReadySafely } from "@/lib/app-store/events";
+import { emitCapReadySafely } from "@/lib/app-store/announce";
 import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
