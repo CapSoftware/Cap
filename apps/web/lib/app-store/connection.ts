@@ -104,6 +104,14 @@ export async function sendConnectionRequest(
 		timedOut = true;
 		abort.abort();
 	}, options.timeoutMs ?? CONNECTION_TIMEOUT_MS);
+	const deadline = new Promise<never>((_, reject) => {
+		abort.signal.addEventListener(
+			"abort",
+			() => reject(new Error("Connection request timed out")),
+			{ once: true },
+		);
+	});
+	deadline.catch(() => {});
 
 	try {
 		let response: Response;
@@ -117,16 +125,21 @@ export async function sendConnectionRequest(
 					durationMs: elapsed(),
 				};
 			}
-			response = await handler(
-				new Request(url, {
-					method: "POST",
-					headers,
-					body,
-					signal: abort.signal,
-				}),
-			);
+			response = await Promise.race([
+				handler(
+					new Request(url, {
+						method: "POST",
+						headers,
+						body,
+						signal: abort.signal,
+					}),
+				),
+				deadline,
+			]);
 		} else {
-			const problem = await checkWebhookUrl(url);
+			const check = checkWebhookUrl(url);
+			check.catch(() => {});
+			const problem = await Promise.race([check, deadline]);
 			if (problem) {
 				return {
 					ok: false,
