@@ -2109,10 +2109,8 @@ pub fn insert_scene_segment(timeline: &mut TimelineConfiguration, segment: Scene
     index
 }
 
-/// How long a caption added at the playhead runs.
 pub const NEW_CAPTION_LENGTH: f64 = 2.0;
 
-/// The shortest caption [`add_caption_segment`] will place.
 pub const MIN_ADDED_CAPTION: f64 = 0.25;
 
 /// Adds a caption with no word timings over `output`, in edited-timeline
@@ -2134,6 +2132,12 @@ pub fn add_caption_segment(
 ) -> Option<usize> {
     let timeline = project.timeline.as_ref()?;
     let holds = timeline.hold_windows();
+    if holds
+        .iter()
+        .any(|(start, end)| output.start >= *start && output.start < *end)
+    {
+        return None;
+    }
     let effective = |time: f64| time - held_time_before(&holds, time);
     let (start, end) = (effective(output.start), effective(output.end));
     let mappings = crate::transcript::model::build_mappings(timeline, recording_durations);
@@ -5950,6 +5954,8 @@ mod add_caption_tests {
             "textSegments": [{ "start": 2.0, "end": 4.0, "layout": "fullscreen" }]
         }));
         assert_eq!(add(&mut project, 2.5..3.5), None);
+        assert_eq!(add(&mut project, 3.0..5.0), None);
+        assert_eq!(add(&mut project, 2.0..4.5), None);
         assert!(project.captions.is_none());
         assert_eq!(add(&mut project, 4.0..6.0), Some(0));
         assert_eq!(source(&project), [("Hello".to_string(), 2.0, 4.0)]);

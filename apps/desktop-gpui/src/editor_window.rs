@@ -6002,7 +6002,12 @@ fn split_caption_segment(
     if split_source <= f64::from(source.start) || split_source >= f64::from(source.end) {
         return false;
     }
-    let tail_id = fresh_caption_source_id(project, "cap-split");
+    let tail_prefix = if crate::transcription::is_manual_caption(&source) {
+        crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-')
+    } else {
+        "cap-split"
+    };
+    let tail_id = fresh_caption_source_id(project, tail_prefix);
     let Some(timeline) = project.timeline.as_mut() else {
         return false;
     };
@@ -6522,10 +6527,6 @@ impl EditorWindow {
         self.note_edit("add-track", Some(kind));
     }
 
-    /// Adds a caption to the caption track, `length` seconds long: starting
-    /// at `time` (the playhead), or around it when `centered` (a click on the
-    /// empty lane). Like the other lanes it takes the nearest free gap, and it
-    /// is selected so its text can be typed straight away.
     pub(crate) fn add_caption_at(
         &mut self,
         time: f64,
@@ -14985,6 +14986,38 @@ mod tests {
         cap_project::synchronize_captions(&mut project, &[10.0]);
         assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
+    }
+
+    #[test]
+    fn both_halves_of_a_split_hand_added_caption_survive_a_new_transcript() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{ "id": "caption-1-a", "start": 4.0, "end": 6.0, "text": "Chapter two" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+
+        assert!(split_caption_segment(&mut project, 0, 1.0, &[10.0]));
+        let ids: Vec<String> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|id| id.starts_with("caption-")), "{ids:?}");
+
+        crate::transcription::apply_caption_result(&mut project, Vec::new(), "en", &[10.0], 10.0);
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 2);
     }
 
     #[test]
