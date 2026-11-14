@@ -150,7 +150,8 @@ export function BreadcrumbItem({
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
-			className={clsx(`relative px-2`, {
+			title={name}
+			className={clsx("relative px-2 min-w-0", {
 				"rounded-lg bg-gray-5": isDragOver,
 				"opacity-70": isMoving,
 			})}
@@ -161,12 +162,12 @@ export function BreadcrumbItem({
 						? `/dashboard/spaces/${linkSpaceId}/folder/${id}`
 						: `/dashboard/folder/${id}`
 				}
-				className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"
+				className="flex relative z-10 gap-1.5 items-center min-w-0 transition-colors duration-200"
 			>
-				<AllFolders color={color} className="size-5" />
+				<AllFolders color={color} className="size-5 shrink-0" />
 				<p
 					className={clsx(
-						"text-lg whitespace-nowrap transition-colors duration-200 hover:text-gray-11",
+						"text-lg truncate transition-colors duration-200 hover:text-gray-11",
 						isDragOver ? "text-gray-12" : "text-gray-9",
 					)}
 				>

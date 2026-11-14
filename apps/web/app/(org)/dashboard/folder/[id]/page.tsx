@@ -68,8 +68,8 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 		return (
 			<div>
 				<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-10 w-full">
-					<div className="flex-1 min-w-0">
-						<div className="flex items-center min-w-0 font-medium">
+					<div className="flex-1 min-w-[min(100%,280px)]">
+						<div className="flex overflow-x-auto items-center min-w-0 font-medium [scrollbar-width:none]">
 							<ClientMyCapsLink />
 
 							{breadcrumb.map((folder, index) => (
@@ -77,8 +77,8 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 									key={folder.id}
 									className={
 										index === breadcrumb.length - 1
-											? "flex items-center min-w-0"
-											: "flex items-center shrink-0"
+											? "flex items-center min-w-[min(45%,220px)]"
+											: "flex items-center min-w-[88px] max-w-[200px]"
 									}
 								>
 									<p className="mx-2 text-gray-10">/</p>
