@@ -815,31 +815,34 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
     assert_eq!(mock.created().len(), 1);
 }
 
-/// The display sleeping mid-recording makes ScreenCaptureKit report that it
-/// has nothing to capture. That ends the screen track with its media on disk
-/// instead of failing it and leaving Stop and Quit waiting on a capture that
-/// can never confirm cleanup. The app then stops and saves the recording in
-/// both modes, well before the auto-record driver would press Stop. Sleeping
-/// the display disturbs whoever is at the machine, so this runs only with
-/// `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+/// Records in both modes, takes the capture source away with `lose`, and
+/// checks that ScreenCaptureKit's "nothing to capture" ends the screen track
+/// with its media on disk instead of failing it and leaving Stop and Quit
+/// waiting on a capture that can never confirm cleanup. The app then stops
+/// and saves the recording itself, well before the auto-record driver would
+/// press Stop.
 #[cfg(target_os = "macos")]
-#[ignore]
-#[tokio::test(flavor = "multi_thread")]
-async fn real_app_display_sleep_ends_the_recording_with_its_media() {
-    if std::env::var_os("CAP_GPUI_REAL_APP_DISPLAY_SLEEP").is_none() {
-        eprintln!("set CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1 to sleep the display");
-        return;
-    }
+async fn losing_the_capture_source_stops_and_saves(
+    case: &str,
+    env: impl Fn(&str) -> Vec<(String, String)>,
+    lose: impl Fn(&str),
+) {
     for mode in ["instant", "studio"] {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
-        let name = format!("display-sleep-{mode}");
+        let name = format!("{case}-{mode}");
         let auto = if mode == "studio" {
             "studio:30"
         } else {
             "instant:90"
         };
-        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", auto)]);
+        let mut vars = env(mode);
+        vars.push(("CAP_GPUI_AUTO_RECORD".into(), auto.into()));
+        let vars = vars
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let app = sandbox.launch(&name, &vars);
         wait_for_app(
             &sandbox,
             &app,
@@ -849,15 +852,7 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         )
         .await;
         tokio::time::sleep(Duration::from_secs(6)).await;
-        assert!(
-            Command::new("pmset")
-                .arg("displaysleepnow")
-                .status()
-                .unwrap()
-                .success()
-        );
-        tokio::time::sleep(Duration::from_secs(8)).await;
-        let _ = Command::new("caffeinate").args(["-u", "-t", "2"]).status();
+        lose(mode);
         let ended = |log: &str| {
             log.contains("Capture cleanup is unconfirmed")
                 || log.contains("recording failed to stop cleanly")
@@ -877,22 +872,20 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         let log = without_ansi(&sandbox.log(&name));
         assert!(
             log.contains("Screen capture source disappeared"),
-            "{mode}: the display sleep never reached the capture source:\n{log}"
+            "{case} {mode}: losing the source never reached the capture source:\n{log}"
         );
         assert!(
             !log.contains("Capture cleanup is unconfirmed"),
-            "{mode}: Stop was left waiting on a dead capture:\n{log}"
+            "{case} {mode}: Stop was left waiting on a dead capture:\n{log}"
         );
-        // The app stops the recording itself and saves it, instead of
-        // counting on while nothing is captured or reporting a failure.
         assert!(
             log.contains("capture source went away; stopping and saving the recording")
                 && log.contains("recording finished")
                 && !log.contains("recording pipeline failed"),
-            "{mode}: the recording was not stopped and saved when its source went away:\n{log}"
+            "{case} {mode}: the recording was not stopped and saved when its source went away:\n{log}"
         );
         let projects = sandbox.projects();
-        assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
+        assert_eq!(projects.len(), 1, "{case} {mode}: {projects:?}");
         let project = &projects[0];
         // Raw fragments alone are what the failure left behind, so only
         // sealed output counts: finished Instant segments, and Studio segments
@@ -900,7 +893,7 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         if mode == "instant" {
             assert!(
                 finished_segments(project) > 0,
-                "instant: no finished display segments in {}",
+                "{case} instant: no finished display segments in {}",
                 project.display()
             );
         } else {
@@ -909,12 +902,77 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
                 .unwrap_or(0);
             assert!(
                 saved > 0,
-                "studio: no saved segments in {}: {:?}",
+                "{case} studio: no saved segments in {}: {:?}",
                 project.display(),
                 meta(project)
             );
         }
     }
+}
+
+/// The display sleeping mid-recording. Sleeping the display disturbs whoever
+/// is at the machine, so this runs only with `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_display_sleep_ends_the_recording_with_its_media() {
+    if std::env::var_os("CAP_GPUI_REAL_APP_DISPLAY_SLEEP").is_none() {
+        eprintln!("set CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1 to sleep the display");
+        return;
+    }
+    losing_the_capture_source_stops_and_saves(
+        "display-sleep",
+        |_| Vec::new(),
+        |_| {
+            assert!(
+                Command::new("pmset")
+                    .arg("displaysleepnow")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::thread::sleep(Duration::from_secs(8));
+            let _ = Command::new("caffeinate").args(["-u", "-t", "2"]).status();
+        },
+    )
+    .await;
+}
+
+/// The recorded window goes away because the app that owns it quits.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
+    let title = |mode: &str| format!("Cap capture target {mode} {}", std::process::id());
+    let owners = std::sync::Mutex::new(Vec::<Child>::new());
+    losing_the_capture_source_stops_and_saves(
+        "window-closed",
+        |mode| {
+            let title = title(mode);
+            let owner = Command::new("osascript")
+                .args([
+                    "-e",
+                    &format!(
+                        "display dialog \"{title}\" with title \"{title}\" giving up after 120"
+                    ),
+                ])
+                .spawn()
+                .unwrap();
+            owners.lock().unwrap().push(owner);
+            std::thread::sleep(Duration::from_secs(2));
+            vec![
+                ("CAP_GPUI_AUTO_OVERLAY".into(), "window".into()),
+                ("CAP_GPUI_AUTO_WINDOW".into(), title),
+            ]
+        },
+        |_| {
+            for mut owner in owners.lock().unwrap().drain(..) {
+                let _ = owner.kill();
+                let _ = owner.wait();
+            }
+        },
+    )
+    .await;
 }
 
 /// A recording whose pipeline fails mid-capture (in the field an encoder or
