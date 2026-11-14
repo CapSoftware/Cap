@@ -52,9 +52,7 @@ final class EditorModel {
     private(set) var detailThumbnails: [Int: UIImage] = [:]
     private static let detailCount = thumbnailCount * Int(TrimTrack.zoomFactor)
     private var detailTask: Task<Void, Never>?
-    /// Shape of the composed frame, which the look can change.
     private(set) var videoAspect: CGFloat = 9.0 / 16
-    /// Shape of the main recording, for the filmstrip.
     private(set) var sourceAspect: CGFloat = 9.0 / 16
 
     // MARK: Look
@@ -67,7 +65,6 @@ final class EditorModel {
     private(set) var stillGeneration = 0
     private(set) var renderSize: CGSize = .zero
     private(set) var musicWaveform: [Float] = []
-    /// The look a Cap opened with, so unchanged Caps can still save as cuts on Cap's servers.
     let scene: StudioScene
 
     private var screenSource: StudioTrackSource?
@@ -85,7 +82,6 @@ final class EditorModel {
     private var prewarm: Task<Void, Never>?
     let metrics = EditorMetrics()
 
-    /// Everything an undo step restores.
     struct Snapshot: Equatable {
         var timeline: EditTimeline
         var look: StudioLook
@@ -138,7 +134,6 @@ final class EditorModel {
     var hasCamera: Bool { cameraSource != nil }
     var hasScreen: Bool { screenSource != nil }
 
-    /// What a render produces with the current look.
     var exportSize: CGSize {
         StudioLayout.canvasSize(look: look, primary: screenSource?.info.displaySize, camera: cameraSource?.info.displaySize, longEdge: StudioLayout.exportLongEdge)
     }
@@ -150,7 +145,6 @@ final class EditorModel {
         isStudio || !look.isIdentity(hasCamera: false) || music != nil || voiceVolume != 1
     }
 
-    /// Where photos and imported music for this edit are kept.
     var workDirectory: URL {
         switch document {
         case let .studio(project):
@@ -232,7 +226,7 @@ final class EditorModel {
 
     nonisolated private static func loadTrack(_ track: StudioProject.Track?, url: (String) -> URL) async throws -> StudioTrackSource? {
         guard let track else { return nil }
-        return try await StudioTrackSource.load(url: url(track.file), offset: track.offset, gaps: track.gaps ?? [])
+        return try await StudioTrackSource.load(url: url(track.file), offset: track.offset, gaps: track.gaps ?? [], audio: track.audio.map { (url($0.file), $0.offset, $0.duration) })
     }
 
     /// Playback is an MP4 for every editable Cap; the download link covers anything else.
@@ -696,7 +690,7 @@ final class EditorModel {
         music = target.music
         voiceVolume = target.voiceVolume
         Task {
-            if audioChanged { await loadMusic() }
+            if audioChanged, !(await loadMusic()) { return }
             show(look: target.look, timelineFrom: current.timeline, forceRebuild: audioChanged, seekTo: target.timeline.outputTime(forSource: source))
         }
         changed()
@@ -706,7 +700,6 @@ final class EditorModel {
 
     private var lookGesture = false
 
-    /// One undo step for a whole slider drag.
     func beginLookGesture() {
         guard !lookGesture else { return }
         lookGesture = true
@@ -717,7 +710,6 @@ final class EditorModel {
         lookGesture = false
     }
 
-    /// A tap: one undo step.
     func setLook(_ change: (inout StudioLook) -> Void) {
         var next = look
         change(&next)
@@ -783,6 +775,8 @@ final class EditorModel {
 
     /// Wallpapers and photos are decoded off the main thread at the size they're drawn, then the frame is redrawn.
     private func loadBackgroundImage() async {
+        beginMedia()
+        defer { endMedia() }
         let background = look.background
         guard background != backgroundLoaded else { return }
         let url: URL? = switch background {
@@ -806,9 +800,9 @@ final class EditorModel {
         guard next != music else { return }
         pushUndo()
         music = next
-        await loadMusic()
-        show(look: look, timelineFrom: timeline, forceRebuild: true, seekTo: outputTime)
         changed()
+        guard await loadMusic() else { return }
+        show(look: look, timelineFrom: timeline, forceRebuild: true, seekTo: outputTime)
     }
 
     func beginAudioGesture() {
@@ -826,7 +820,7 @@ final class EditorModel {
         if let voice { voiceVolume = voice }
         if !lookGesture { pushUndo() }
         Task {
-            await loadMusic()
+            guard await loadMusic() else { return }
             show(look: look, timelineFrom: timeline, forceRebuild: true, seekTo: outputTime)
         }
         changed()
@@ -841,21 +835,49 @@ final class EditorModel {
         }
     }
 
-    private func loadMusic() async {
-        guard let music, let url = musicURL(music.source) else {
+    /// False when a newer choice was made while this one loaded; that choice's own load applies it.
+    @discardableResult
+    private func loadMusic() async -> Bool {
+        let wanted = music
+        guard let wanted, let url = musicURL(wanted.source) else {
             musicSource = nil
             musicWaveform = []
-            return
+            return true
         }
-        do {
-            musicSource = try await StudioMusicSource.load(url: url, volume: music.volume, offset: music.offset)
-        } catch {
-            musicSource = nil
-        }
+        beginMedia()
+        defer { endMedia() }
+        let source = try? await StudioMusicSource.load(url: url, volume: wanted.volume, offset: wanted.offset)
+        guard music == wanted else { return false }
+        musicSource = source
         if loadedMusic?.url != url {
-            loadedMusic = (music.source, url)
-            musicWaveform = await Task.detached(priority: .utility) { await StudioWaveform.peaks(url: url, count: 160) }.value
+            loadedMusic = (wanted.source, url)
+            let peaks = await Task.detached(priority: .utility) { await StudioWaveform.peaks(url: url, count: 160) }.value
+            if music == wanted { musicWaveform = peaks }
         }
+        return music == wanted
+    }
+
+    // MARK: Pending media
+
+    private var mediaInFlight = 0
+    private var mediaWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func beginMedia() {
+        mediaInFlight += 1
+    }
+
+    private func endMedia() {
+        mediaInFlight -= 1
+        guard mediaInFlight == 0 else { return }
+        let waiters = mediaWaiters
+        mediaWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// A wallpaper or song picked a moment ago may still be loading; a render made now would leave it out.
+    func waitForMedia() async {
+        guard mediaInFlight > 0 else { return }
+        await withCheckedContinuation { mediaWaiters.append($0) }
     }
 
     func pauseForExport() {

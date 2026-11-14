@@ -36,7 +36,6 @@ enum EditorTool: String, CaseIterable, Identifiable {
 }
 
 enum EditorPanels {
-    /// Each tool takes only the height it needs; the preview gets the rest.
     static func height(for tool: EditorTool) -> CGFloat {
         switch tool {
         case .trim: 56
@@ -47,7 +46,6 @@ enum EditorPanels {
     }
 }
 
-/// Like the Photos editor's tool row: icons with a label, the chosen one lit.
 struct EditorToolBar: View {
     let tools: [EditorTool]
     @Binding var selection: EditorTool
@@ -82,7 +80,6 @@ struct EditorToolBar: View {
 
 // MARK: - Preview
 
-/// The composed preview, the redrawn paused frame over it, and the camera bubble you can drag between corners.
 struct EditorPreview: View {
     let model: EditorModel
     /// While the camera tool is open, the bubble's place is outlined even where the camera isn't recording.
@@ -726,6 +723,7 @@ final class EditorExport {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         do {
+            await model.waitForMedia()
             let built = try model.exportComposition()
             let url = try UploadCenter.stagingURL(extension: "mp4")
             UIApplication.shared.isIdleTimerDisabled = true
@@ -784,6 +782,6 @@ final class EditorExport {
     }
 }
 
-private final class LeftScreen: @unchecked Sendable {
+nonisolated private final class LeftScreen: @unchecked Sendable {
     var value = false
 }

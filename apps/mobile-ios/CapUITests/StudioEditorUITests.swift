@@ -133,7 +133,9 @@ final class StudioEditorUITests: XCTestCase {
         save("s21-studio-recording")
         app.buttons["Stop recording"].tap()
         // The editor opens on the recording.
-        XCTAssertTrue(app.buttons["Split"].waitForExistence(timeout: 20))
+        let opened = app.buttons["Split"].waitForExistence(timeout: 20)
+        if !opened { save("s21b-after-stop") }
+        XCTAssertTrue(opened)
         XCTAssertTrue(app.navigationBars["Studio"].exists)
         sleep(2)
         save("s22-studio-recorded")
@@ -153,6 +155,7 @@ final class StudioEditorUITests: XCTestCase {
         let app = openStudio(script: true)
         // The script closes the editor when it's done.
         let closed = app.buttons["Split"].waitForNonExistence(timeout: 120)
+        if !closed { save("s30-script-stuck") }
         XCTAssertTrue(closed)
         sleep(1)
     }
