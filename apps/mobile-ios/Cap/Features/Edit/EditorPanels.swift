@@ -698,9 +698,13 @@ final class EditorExport {
     private(set) var title = "Rendering"
     var errorMessage: String?
     @ObservationIgnored private var exporter: StudioExporter?
+    @ObservationIgnored private weak var rendering: EditorModel?
+    @ObservationIgnored private var cancelRequested = false
 
     func cancel() {
+        cancelRequested = true
         exporter?.cancel()
+        rendering?.stopWaitingForMedia()
     }
 
     private func render(_ model: EditorModel, title: String) async -> StudioExporter.Result? {
@@ -708,9 +712,12 @@ final class EditorExport {
         isRunning = true
         progress = 0
         self.title = title
+        cancelRequested = false
+        rendering = model
         defer {
             isRunning = false
             exporter = nil
+            rendering = nil
         }
         model.pauseForExport()
         let exporter = StudioExporter()
@@ -724,6 +731,7 @@ final class EditorExport {
         defer { NotificationCenter.default.removeObserver(observer) }
         do {
             await model.waitForMedia()
+            guard !cancelRequested else { return nil }
             let built = try model.exportComposition()
             let url = try UploadCenter.stagingURL(extension: "mp4")
             UIApplication.shared.isIdleTimerDisabled = true

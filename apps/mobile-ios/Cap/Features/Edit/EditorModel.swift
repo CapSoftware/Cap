@@ -850,9 +850,12 @@ final class EditorModel {
         guard music == wanted else { return false }
         musicSource = source
         if loadedMusic?.url != url {
-            loadedMusic = (wanted.source, url)
             let peaks = await Task.detached(priority: .utility) { await StudioWaveform.peaks(url: url, count: 160) }.value
-            if music == wanted { musicWaveform = peaks }
+            // A new volume for the same song still wants this song's waveform.
+            if music?.source == wanted.source {
+                musicWaveform = peaks
+                loadedMusic = (wanted.source, url)
+            }
         }
         return music == wanted
     }
@@ -878,6 +881,13 @@ final class EditorModel {
     func waitForMedia() async {
         guard mediaInFlight > 0 else { return }
         await withCheckedContinuation { mediaWaiters.append($0) }
+    }
+
+    /// Lets a cancelled render stop waiting, however long the media takes.
+    func stopWaitingForMedia() {
+        let waiters = mediaWaiters
+        mediaWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     func pauseForExport() {

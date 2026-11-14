@@ -248,7 +248,11 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
         let length = CMSampleBufferGetDuration(buffer)
         guard time.isValid else { return }
         if audioStarted == nil {
-            guard audioWriter.startWriting() else { return }
+            // A sound file that can't be written stops the recording like a picture that can't, keeping what's saved.
+            guard audioWriter.startWriting() else {
+                markFailed()
+                return
+            }
             audioWriter.startSession(atSourceTime: time)
             audioStarted = time
             audioEnd = time
@@ -256,13 +260,20 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
             state.withLock { $0.audioHostStart = hostStart }
             reportStart()
         }
-        guard audioWriter.status == .writing else { return }
+        guard audioWriter.status == .writing else {
+            if audioWriter.status == .failed { markFailed() }
+            return
+        }
         // Overlapping or repeated sound would push everything after it later.
         if audioEnd.isValid, length.isValid, CMTimeAdd(time, length) <= audioEnd { return }
         if audioEnd.isValid, CMTimeSubtract(time, audioEnd).seconds > Self.audioGapThreshold {
             fillSilence(from: audioEnd, to: time, like: buffer)
         }
-        guard audio.isReadyForMoreMediaData, audio.append(buffer) else { return }
+        guard audio.isReadyForMoreMediaData else { return }
+        guard audio.append(buffer) else {
+            if audioWriter.status == .failed { markFailed() }
+            return
+        }
         audioEnd = length.isValid ? CMTimeAdd(time, length) : time
         if let audioStarted {
             let duration = CMTimeSubtract(audioEnd, audioStarted).seconds
@@ -302,13 +313,13 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
     public func finish(at stop: CMTime? = nil, _ completion: @escaping @Sendable (Result<Double, any Error>) -> Void) {
         guard !finished else {
             // A writer that failed mid-recording keeps its fragments; report what reached the disk.
-            finishAudio { completion(.success(self.duration)) }
+            finishAudio { _ in completion(.success(self.duration)) }
             return
         }
         finished = true
         guard started != nil, let video, writer.status == .writing else {
             writer.cancelWriting()
-            finishAudio { completion(.success(0)) }
+            finishAudio { _ in completion(.success(0)) }
             return
         }
         if let stop, let lastSample, lastVideo.isValid, CMTimeSubtract(stop, lastVideo).seconds > frameDuration.seconds * 2,
@@ -323,26 +334,28 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
         writer.finishWriting { [self] in
             let status = writer.status
             let error = writer.error
-            finishAudio {
-                if status == .completed {
+            finishAudio { audioError in
+                if status == .completed, audioError == nil {
                     completion(.success(self.duration))
                 } else {
-                    completion(.failure(error ?? Failure.cantWrite))
+                    completion(.failure(error ?? audioError ?? Failure.cantWrite))
                 }
             }
         }
     }
 
-    private func finishAudio(_ done: @escaping @Sendable () -> Void) {
+    /// Reports the sound file's error, if closing it failed. Its fragments up to then still play.
+    private func finishAudio(_ done: @escaping @Sendable ((any Error)?) -> Void) {
         guard let audioWriter, let audio, audioStarted != nil, audioWriter.status == .writing else {
             if let audioWriter, audioWriter.status == .writing { audioWriter.cancelWriting() }
-            done()
+            let failed = audioWriter?.status == .failed
+            done(failed ? (audioWriter?.error ?? Failure.cantWrite) : nil)
             return
         }
         audio.markAsFinished()
         if audioEnd.isValid { audioWriter.endSession(atSourceTime: audioEnd) }
         nonisolated(unsafe) let closing = audioWriter
-        closing.finishWriting { done() }
+        closing.finishWriting { done(closing.status == .completed ? nil : (closing.error ?? Failure.cantWrite)) }
     }
 
     public func cancel() {
