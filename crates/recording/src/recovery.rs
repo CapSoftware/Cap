@@ -4445,9 +4445,20 @@ fn restore_unpublished_originals(project: &Path) -> Result<bool, RecoveryError> 
     warn!(project = %project.display(), workspace = %workspace.display(), "Restoring original media an interrupted recovery left in its backup");
     if current_meta != original_meta {
         let temporary = project.join(format!(".recording-meta-{}.json", uuid::Uuid::new_v4()));
-        std::fs::write(&temporary, &original_meta)?;
-        std::fs::File::open(&temporary)?.sync_all()?;
-        rename_recovery_path(&temporary, &project.join("recording-meta.json"))?;
+        {
+            use std::io::Write;
+            // Windows only flushes a file through a handle that can write it.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(&original_meta)?;
+            file.sync_all()?;
+        }
+        if let Err(error) = rename_recovery_path(&temporary, &project.join("recording-meta.json")) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.into());
+        }
     }
     let backup_config = workspace.join("original-project-config.json");
     if !workspace.join("staged/project-config.json").try_exists()? && backup_config.is_file() {
