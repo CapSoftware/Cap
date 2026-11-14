@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { assemblyAIEditResponse } from "../fixtures/assemblyai-edit-response";
+import { whisperCppVerboseResponse } from "../fixtures/whisper-cpp-verbose-response";
 
 const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
@@ -50,12 +51,14 @@ const videoRow = vi.hoisted(() => ({
 const state = vi.hoisted(() => ({
 	editRows: [] as unknown[],
 	fakeAudioPath: "",
+	sttBaseUrl: undefined as string | undefined,
 }));
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
-		ASSEMBLY_API_KEY: "test-assembly-api-key",
+		ASSEMBLY_API_KEY: state.sttBaseUrl ? undefined : "test-assembly-api-key",
 		NEXTAUTH_SECRET: "test-secret-with-enough-entropy",
+		STT_BASE_URL: state.sttBaseUrl,
 	}),
 }));
 
@@ -192,6 +195,7 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 	beforeEach(async () => {
 		mocks.updates.length = 0;
 		state.editRows = [];
+		state.sttBaseUrl = undefined;
 		videoRow.duration = null;
 		videoRow.source = { type: "desktopSegments" };
 		mocks.transcribe.mockReset();
@@ -288,6 +292,44 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		expect(mocks.deleteObject.mock.calls.map((call) => call[0])).toContain(
 			"user-456/video-123/transcription.live.json",
 		);
+	});
+
+	it("sends early segment audio to the STT endpoint as m4a", async () => {
+		state.sttBaseUrl = "http://whisper:9000/v1";
+		const fetchMock = vi.fn(
+			async (input: string | URL | Request, _init?: RequestInit) => {
+				const url = String(input);
+				if (url.startsWith("http://whisper:9000")) {
+					return new Response(JSON.stringify(whisperCppVerboseResponse));
+				}
+				const key = url.replace("https://storage.test/", "");
+				const contentType = mocks.putObject.mock.calls.find(
+					(call) => call[0] === key,
+				)?.[2]?.contentType;
+				return new Response(new TextEncoder().encode("seg"), {
+					headers: contentType ? { "content-type": contentType } : {},
+				});
+			},
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+			earlyFromSegments: true,
+		});
+
+		expect(result.success).toBe(true);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		const sttCall = fetchMock.mock.calls.find(([input]) =>
+			String(input).startsWith("http://whisper:9000"),
+		);
+		const file = (sttCall?.[1]?.body as FormData).get("file") as File;
+		expect(file.name).toBe("audio.m4a");
+		expect(file.type).toBe("audio/mp4");
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "COMPLETE" });
 	});
 
 	it("defers back to the post-mux queue when the manifest is missing", async () => {
