@@ -187,8 +187,8 @@ pub static CAPTION_MODELS: &[CaptionModel] = &[
     CaptionModel {
         name: "best",
         label: tr::editor::tabs::captions::model::recommended,
-        model_name: "parakeet-tdt-0.6b-v3 int8",
-        size: "~640MB",
+        model_name: "parakeet-tdt-0.6b-v3 8-bit",
+        size: "~870MB",
         description: tr::editor::tabs::captions::model::recommended_description,
     },
     CaptionModel {
@@ -1895,6 +1895,7 @@ impl EditorWindow {
                 ),
             )
             .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
+            .children(has_microphone.then(|| self.render_voice_eq_card(cx)))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     tr::editor::tabs::audio::mic_volume(),
@@ -2971,6 +2972,14 @@ impl EditorWindow {
                         .text_color(error_color)
                         .child(error),
                 );
+            } else if snapshot.no_speech {
+                column = column.child(
+                    div()
+                        .id("caption-no-speech")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(tr::editor::transcript::no_speech())),
+                );
             } else if snapshot.refining {
                 column = column.child(
                     div()
@@ -3006,7 +3015,30 @@ impl EditorWindow {
                     .label(tr::editor::tabs::captions::download((model.label)()))
             };
 
-            let mut column = div().flex().flex_col().gap(px(8.)).child(download_button);
+            let mut column = div().flex().flex_col().gap(px(8.));
+            if model.name == "best" && snapshot.recommended_outdated {
+                column = column.child(
+                    div()
+                        .id("caption-model-updated")
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(tr::editor::tabs::captions::model_updated()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(tr::editor::tabs::captions::model_updated_description()),
+                        ),
+                );
+            }
+            column = column.child(download_button);
             if is_downloading {
                 column = column
                     .child(
@@ -3729,6 +3761,11 @@ impl EditorWindow {
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.refine_caption_timings(window, cx);
                     });
+                }
+                Err(error) if error == transcription::NO_SPEECH => {
+                    tracing::info!("caption generation heard no speech");
+                    transcription::finish_generation_without_speech(&project_path);
+                    let _ = this.update(cx, |_, cx| cx.notify());
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");

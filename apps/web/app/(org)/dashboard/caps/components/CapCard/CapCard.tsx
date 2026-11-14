@@ -2,7 +2,6 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV } from "@cap/env";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -12,24 +11,20 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { HttpClient } from "@effect/platform";
-import {
-	faChartSimple,
-	faCheck,
-	faCopy,
-	faDownload,
-	faEllipsis,
-	faGear,
-	faImage,
-	faLink,
-	faLock,
-	faScissors,
-	faShare,
-	faTrash,
-	faUnlock,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faScissors } from "@fortawesome/free-solid-svg-icons/faScissors";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
@@ -41,24 +36,32 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import type { MoveLocation } from "@/lib/move-items";
+import { rejectOnFailure } from "@/lib/effect-react-query";
+import {
+	CAP_DRAG_TYPE,
+	type MoveLocation,
+	serializeCapDrag,
+} from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { startBrowserDownload } from "@/lib/start-browser-download";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
-import { CapCardAnalytics } from "./CapCardAnalytics";
+import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
 
@@ -119,6 +122,7 @@ export interface CapCardProps extends PropsWithChildren {
 			disableChapters?: boolean;
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
+			linkAccess?: "anyone";
 		} | null;
 	};
 	analytics: number;
@@ -128,6 +132,7 @@ export interface CapCardProps extends PropsWithChildren {
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
 	onSelectToggle?: () => void;
+	selectedIds?: Video.VideoId[];
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
 	isDeleting?: boolean;
@@ -150,6 +155,7 @@ export const CapCard = ({
 	hideSharedStatus = false,
 	isSelected = false,
 	onSelectToggle,
+	selectedIds,
 	anyCapSelected = false,
 	isDeleting = false,
 	canMove = false,
@@ -158,8 +164,6 @@ export const CapCard = ({
 	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
-	const customDomain = activeOrganization?.organization.customDomain;
-	const domainVerified = activeOrganization?.organization.domainVerified;
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -187,21 +191,8 @@ export const CapCard = ({
 		mutationFn: () =>
 			Effect.gen(function* () {
 				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
-				const httpClient = yield* HttpClient.HttpClient;
 				if (Option.isSome(result)) {
-					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
-					const blob = yield* fetchResponse.arrayBuffer;
-
-					const blobUrl = window.URL.createObjectURL(new Blob([blob]));
-					const link = document.createElement("a");
-					link.href = blobUrl;
-					link.download = result.value.fileName;
-					link.style.display = "none";
-					document.body.appendChild(link);
-					link.click();
-					document.body.removeChild(link);
-
-					window.URL.revokeObjectURL(blobUrl);
+					startBrowserDownload(result.value.downloadUrl);
 				} else {
 					throw new Error("Failed to get download URL");
 				}
@@ -241,6 +232,7 @@ export const CapCard = ({
 
 	const isOwner = userId === cap.ownerId;
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
+	const dragEnabled = moveEnabled && (!anyCapSelected || isSelected);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
@@ -275,49 +267,25 @@ export const CapCard = ({
 		prevUploadProgressRef.current = uploadProgress;
 	}, [uploadProgress, queryClient, cap.id]);
 
-	// Helper function to create a drag preview element
-	const createDragPreview = (text: string): HTMLElement => {
-		// Create the element
-		const element = document.createElement("div");
-
-		// Add text content
-		element.textContent = text;
-
-		// Apply Tailwind-like styles directly
-		element.className =
-			"px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
-
-		// Position off-screen
-		element.style.position = "absolute";
-		element.style.top = "-9999px";
-		element.style.left = "-9999px";
-
-		return element;
-	};
-
 	const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
-		if (anyCapSelected || !moveEnabled) return;
+		if (!dragEnabled) return;
 
-		// Set the data transfer
-		e.dataTransfer.setData(
-			"application/cap",
-			JSON.stringify({
-				id: cap.id,
-				name: cap.name,
-			}),
-		);
-
-		// Set drag effect to 'move' to avoid showing the + icon
+		const draggedIds = isSelected ? (selectedIds ?? []) : [];
+		e.dataTransfer.setData(CAP_DRAG_TYPE, serializeCapDrag(cap, draggedIds));
 		e.dataTransfer.effectAllowed = "move";
 
-		// Set the drag image using the helper function
 		try {
-			const dragPreview = createDragPreview(cap.name);
+			const dragPreview = document.createElement("div");
+			dragPreview.textContent =
+				draggedIds.length > 1 ? `${draggedIds.length} Caps` : cap.name;
+			dragPreview.className =
+				"px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
+			dragPreview.style.position = "absolute";
+			dragPreview.style.top = "-9999px";
+			dragPreview.style.left = "-9999px";
 			document.body.appendChild(dragPreview);
 			e.dataTransfer.setDragImage(dragPreview, 10, 10);
-
-			// Clean up after a short delay
-			setTimeout(() => document.body.removeChild(dragPreview), 100);
+			setTimeout(() => dragPreview.remove(), 100);
 		} catch (error) {
 			console.error("Error setting drag image:", error);
 		}
@@ -329,12 +297,19 @@ export const CapCard = ({
 		setIsDragging(false);
 	};
 
-	const handleCopy = (text: string) => {
-		copyRichVideoLink({
-			url: text,
-			title: cap.name || "Cap Recording",
-			previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
-		});
+	const handleCopy = async (text: string) => {
+		try {
+			await copyRichVideoLink({
+				url: text,
+				title: cap.name || "Cap Recording",
+				previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+			});
+		} catch (error) {
+			console.error("Failed to copy link:", error);
+			toast.error("Couldn't copy the link. Please try again.");
+			return;
+		}
+		toast.success("Link copied to clipboard");
 		setCopyPressed(true);
 		setTimeout(() => {
 			setCopyPressed(false);
@@ -344,7 +319,7 @@ export const CapCard = ({
 	const handleDownload = async () => {
 		if (downloadMutation.isPending) return;
 
-		toast.promise(downloadMutation.mutateAsync(), {
+		toast.promise(downloadMutation.mutateAsync().then(rejectOnFailure), {
 			loading: "Preparing download...",
 			success: "Download started successfully",
 			error: (error) => {
@@ -365,12 +340,8 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(
-			NODE_ENV === "development"
-				? `${webUrl}/s/${cap.id}`
-				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
-					? `https://${customDomain}/s/${cap.id}`
-					: `${webUrl}/s/${cap.id}`,
+		void handleCopy(
+			videoShareUrl(webUrl, cap.id, activeOrganization?.organization),
 		);
 	};
 	const canEditVideo =
@@ -403,6 +374,7 @@ export const CapCard = ({
 				sharedSpaces={cap.sharedSpaces || []}
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
+				linkOpenToAnyone={cap.settings?.linkAccess === "anyone"}
 				hasPassword={passwordProtected}
 				inheritedPasswordSources={cap.inheritedPasswordSources}
 				onPasswordUpdated={handlePasswordUpdated}
@@ -413,6 +385,7 @@ export const CapCard = ({
 				inheritedSpaceSettings={cap.inheritedSpaceSettings}
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
+				onSaved={() => router.refresh()}
 			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}
@@ -436,7 +409,7 @@ export const CapCard = ({
 			)}
 			<fieldset
 				aria-label={cap.name}
-				draggable={moveEnabled && !anyCapSelected}
+				draggable={dragEnabled}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
@@ -447,9 +420,7 @@ export const CapCard = ({
 							? "border-blue-10 hover:border-blue-10"
 							: "hover:border-blue-10",
 					isDragging && "opacity-50",
-					moveEnabled &&
-						!anyCapSelected &&
-						"cursor-grab active:cursor-grabbing",
+					dragEnabled && "cursor-grab active:cursor-grabbing",
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
@@ -477,7 +448,6 @@ export const CapCard = ({
 						onClick={(e) => {
 							e.stopPropagation();
 							copyLinkHandler();
-							toast.success("Link copied to clipboard");
 						}}
 						className="delay-0"
 						icon={
@@ -547,7 +517,7 @@ export const CapCard = ({
 									<DropdownMenuItem
 										onClick={(e) => {
 											e.stopPropagation();
-											router.push(`/dashboard/analytics/s/${cap.id}`);
+											router.push(capAnalyticsHref(cap.id));
 										}}
 										className="flex gap-2 items-center rounded-lg"
 									>
@@ -570,7 +540,6 @@ export const CapCard = ({
 								onClick={(e) => {
 									e.stopPropagation();
 									copyLinkHandler();
-									toast.success("Link copied to clipboard");
 								}}
 								className="flex gap-2 items-center rounded-lg"
 							>
@@ -593,11 +562,14 @@ export const CapCard = ({
 								<>
 									<DropdownMenuItem
 										onClick={() => {
-											toast.promise(duplicateMutation.mutateAsync(), {
-												loading: "Duplicating cap...",
-												success: "Cap duplicated successfully",
-												error: "Failed to duplicate cap",
-											});
+											toast.promise(
+												duplicateMutation.mutateAsync().then(rejectOnFailure),
+												{
+													loading: "Duplicating cap...",
+													success: "Cap duplicated successfully",
+													error: "Failed to duplicate cap",
+												},
+											);
 										}}
 										disabled={
 											duplicateMutation.isPending || cap.hasActiveUpload
@@ -634,16 +606,18 @@ export const CapCard = ({
 											{passwordProtected ? "Edit password" : "Add password"}
 										</p>
 									</DropdownMenuItem>
-									<DropdownMenuItem
-										onClick={(e) => {
-											e.stopPropagation();
-											setConfirmOpen(true);
-										}}
-										className="flex gap-2 items-center rounded-lg"
-									>
-										<FontAwesomeIcon className="size-3" icon={faTrash} />
-										<p className="text-sm text-gray-12">Delete Cap</p>
-									</DropdownMenuItem>
+									{onDelete && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												setConfirmOpen(true);
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faTrash} />
+											<p className="text-sm text-gray-12">Delete Cap</p>
+										</DropdownMenuItem>
+									)}
 								</>
 							)}
 						</DropdownMenuContent>

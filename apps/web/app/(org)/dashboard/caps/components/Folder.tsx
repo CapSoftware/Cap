@@ -1,22 +1,38 @@
 "use client";
 import type { Folder, Space } from "@cap/web-domain";
-import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import {
+	moveFolderToFolder,
+	moveVideosToFolder,
+	moveVideoToFolder,
+} from "@/actions/folders/moveVideoToFolder";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { resolveMoveLocation } from "@/lib/move-items";
+import {
+	CAP_DRAG_TYPE,
+	describeDraggedCaps,
+	FOLDER_DRAG_TYPE,
+	moveLocationKey,
+	parseCapDrag,
+	parseFolderDrag,
+	resolveMoveLocation,
+	serializeFolderDrag,
+} from "@/lib/move-items";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
+import { libraryDoodleStyles } from "../../_components/library-doodles";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { FoldersDropdown } from "./FoldersDropdown";
 import { MoveItemsDialog } from "./MoveItemsDialog";
+import { notifyCapsMoved } from "./useCapsMoved";
 
 export type FolderLayout = "grid" | "list";
 
@@ -59,6 +75,7 @@ const FolderCard = ({
 	const folderRef = useRef<HTMLFieldSetElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
+	const [isDraggingSelf, setIsDraggingSelf] = useState(false);
 	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
 	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
 	const ownerIsPro = Boolean(activeOrganization?.ownerIsPro);
@@ -119,12 +136,27 @@ const FolderCard = ({
 			toast.success("Folder updated successfully");
 			router.refresh();
 		},
-		onError: () => {
+		onError: (_error, variables) => {
 			setPublicEnabled(isPublic);
+			const failedName = variables.name;
+			// Only undo the rename that failed, not one typed since.
+			if (failedName !== undefined)
+				setUpdateName((current) => (current === failedName ? name : current));
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
 	});
+
+	const commitRename = () => {
+		setIsRenaming(false);
+		const nextName = updateName.trim();
+		if (!nextName) {
+			setUpdateName(name);
+			return;
+		}
+		setUpdateName(nextName);
+		if (nextName !== name) updateFolder.mutate({ id, name: nextName });
+	};
 
 	useEffect(() => {
 		if (isRenaming && nameRef.current) {
@@ -222,28 +254,58 @@ const FolderCard = ({
 		};
 	}, [id, name, rive, isDragOver, spaceId, moveEnabled, router]);
 
+	const handleDragStart = (e: React.DragEvent<HTMLFieldSetElement>) => {
+		if (!moveEnabled || isRenaming) return;
+
+		e.dataTransfer.setData(
+			FOLDER_DRAG_TYPE,
+			serializeFolderDrag({
+				id,
+				name: updateName,
+				locationKey: moveLocationKey(moveLocation),
+			}),
+		);
+		e.dataTransfer.effectAllowed = "move";
+
+		try {
+			const dragPreview = document.createElement("div");
+			dragPreview.textContent = updateName;
+			dragPreview.className =
+				"px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
+			dragPreview.style.position = "absolute";
+			dragPreview.style.top = "-9999px";
+			dragPreview.style.left = "-9999px";
+			document.body.appendChild(dragPreview);
+			e.dataTransfer.setDragImage(dragPreview, 10, 10);
+			setTimeout(() => dragPreview.remove(), 100);
+		} catch (error) {
+			console.error("Error setting drag image:", error);
+		}
+
+		setIsDraggingSelf(true);
+	};
+
 	const handleDragOver = (e: React.DragEvent<HTMLFieldSetElement>) => {
-		if (!moveEnabled) return;
+		if (!moveEnabled || isDraggingSelf) return;
+		const types = e.dataTransfer.types;
+		if (!types.includes(CAP_DRAG_TYPE) && !types.includes(FOLDER_DRAG_TYPE))
+			return;
+
 		e.preventDefault();
 		e.stopPropagation();
+		e.dataTransfer.dropEffect = "move";
 
-		// Check if the dragged item is a CapCard
-		if (e.dataTransfer.types.includes("application/cap")) {
-			if (!isDragOver) {
-				setIsDragOver(true);
-				dragStateRef.current.isDragging = true;
-				e.dataTransfer.dropEffect = "move";
+		if (!isDragOver) {
+			setIsDragOver(true);
+			dragStateRef.current.isDragging = true;
 
-				// Clear any pending animation timer
-				if (animationTimerRef.current) {
-					clearTimeout(animationTimerRef.current);
-					animationTimerRef.current = null;
-				}
-				// Play the folder-open animation when first dragging over
-				if (rive) {
-					rive.stop();
-					rive.play("folder-open");
-				}
+			if (animationTimerRef.current) {
+				clearTimeout(animationTimerRef.current);
+				animationTimerRef.current = null;
+			}
+			if (rive) {
+				rive.stop();
+				rive.play("folder-open");
 			}
 		}
 	};
@@ -289,20 +351,56 @@ const FolderCard = ({
 			rive.play("folder-close");
 		}
 
+		const folderPayload = parseFolderDrag(
+			e.dataTransfer.getData(FOLDER_DRAG_TYPE),
+		);
+		if (folderPayload) {
+			if (
+				folderPayload.id === id ||
+				folderPayload.locationKey !== moveLocationKey(moveLocation)
+			)
+				return;
+
+			try {
+				setIsMovingVideo(true);
+				await moveFolderToFolder({
+					folderId: folderPayload.id,
+					parentId: id,
+					spaceId,
+				});
+				toast.success(`"${folderPayload.name}" moved into "${name}"`);
+				router.refresh();
+			} catch (error) {
+				console.error("Error moving folder:", error);
+				toast.error("Failed to move folder");
+			} finally {
+				setIsMovingVideo(false);
+			}
+			return;
+		}
+
+		const capPayload = parseCapDrag(e.dataTransfer.getData(CAP_DRAG_TYPE));
+		if (!capPayload) return;
+
 		try {
-			const data = e.dataTransfer.getData("application/cap");
-			if (!data) return;
-
-			const capData = JSON.parse(data);
-			if (!capData.id) return;
-
 			setIsMovingVideo(true);
-			await moveVideoToFolder({ videoId: capData.id, folderId: id, spaceId });
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			await moveVideosToFolder({
+				videoIds: capPayload.ids,
+				folderId: id,
+				spaceId,
+			});
+			toast.success(
+				`${describeDraggedCaps(capPayload)} moved to "${name}" folder`,
+			);
+			notifyCapsMoved(capPayload.ids);
 			router.refresh();
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
-			toast.error("Failed to move video to folder");
+			toast.error(
+				capPayload.ids.length > 1
+					? "Failed to move Caps to folder"
+					: "Failed to move video to folder",
+			);
 		} finally {
 			setIsMovingVideo(false);
 		}
@@ -339,16 +437,34 @@ const FolderCard = ({
 					rive.play("folder-close");
 				}, 50);
 			}}
+			draggable={moveEnabled && !isRenaming}
+			onDragStart={handleDragStart}
+			onDragEnd={() => setIsDraggingSelf(false)}
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			className={clsx(
 				"flex relative justify-between items-center w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
 				isList ? "gap-3 px-3 py-2" : "px-4 py-4",
-				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
+				isDragOver ? "border-transparent bg-gray-4" : "border-gray-5",
 				isMovingVideo && "opacity-70",
+				isDraggingSelf && "opacity-50",
 			)}
 		>
+			{isDragOver && (
+				<svg className={libraryDoodleStyles.dropZone} aria-hidden="true">
+					<rect
+						x="1"
+						y="1"
+						rx="8"
+						className={clsx(
+							libraryDoodleStyles.accent,
+							libraryDoodleStyles.march,
+						)}
+						strokeWidth={2}
+					/>
+				</svg>
+			)}
 			{!isRenaming && (
 				<Link
 					href={folderHref}
@@ -393,23 +509,9 @@ const FolderCard = ({
 								e.stopPropagation();
 							}}
 							onChange={(e) => setUpdateName(e.target.value)}
-							onBlur={() => {
-								setIsRenaming(false);
-								if (updateName.trim() !== name)
-									updateFolder.mutate({
-										id,
-										name: updateName.trim(),
-									});
-							}}
+							onBlur={commitRename}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") {
-									setIsRenaming(false);
-									if (updateName.trim() !== name)
-										updateFolder.mutate({
-											id,
-											name: updateName.trim(),
-										});
-								}
+								if (e.key === "Enter") commitRename();
 							}}
 							className={clsx(
 								"relative z-10 flex-1 w-full min-w-0 resize-none bg-transparent border-none focus:outline-none focus:ring-0 focus:border-none text-gray-12 truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal",
@@ -496,6 +598,7 @@ const FolderCard = ({
 					onCopyPublicLink={async () => {
 						await copyPublicLink();
 					}}
+					canEdit={moveEnabled}
 					canMove={moveEnabled}
 					onMove={() => setIsMoveDialogOpen(true)}
 				/>

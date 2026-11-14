@@ -2970,6 +2970,7 @@ async fn stop_recording(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -3849,7 +3850,7 @@ fn persist_final_recording_meta(
     };
 
     recording_meta
-        .save_for_project()
+        .save_for_project_with_retry()
         .context("persist final recording metadata")?;
     Ok(recording_meta)
 }

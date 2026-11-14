@@ -29,7 +29,7 @@ use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
     ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
     MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment,
-    TextSegment, TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment,
+    TextSegment, TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomMode, ZoomSegment,
     mask_effect_contract,
 };
 
@@ -712,6 +712,13 @@ impl TrackSegmentOps for CaptionTrackSegment {
 }
 
 impl TrackSegmentOps for KeyboardTrackSegment {
+    fn trim_start_to(&mut self, value: f64) {
+        let shift = (self.start - value) * 1000.0;
+        for key in &mut self.keys {
+            key.time_offset += shift;
+        }
+        self.start = value;
+    }
     fn start(&self) -> f64 {
         self.start
     }
@@ -2164,6 +2171,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
             .collect(),
@@ -2928,6 +2936,24 @@ pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volum
     true
 }
 
+pub fn set_clip_voice_eq(
+    timeline: &mut TimelineConfiguration,
+    indices: &[usize],
+    voice_eq: Option<VoiceEq>,
+) -> bool {
+    let voice_eq = voice_eq.map(|voice_eq| voice_eq.sanitized());
+    let mut changed = false;
+    for index in indices {
+        if let Some(segment) = timeline.segments.get_mut(*index)
+            && segment.voice_eq != voice_eq
+        {
+            segment.voice_eq = voice_eq;
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn set_clip_muted(timeline: &mut TimelineConfiguration, index: usize, muted: bool) -> bool {
     let Some(segment) = timeline.segments.get_mut(index) else {
         return false;
@@ -3086,6 +3112,7 @@ pub fn merge_clip_segments(
     left.speed_audio_mode = settings.speed_audio_mode;
     left.volume = settings.volume;
     left.hide_cursor = settings.hide_cursor;
+    left.voice_eq = settings.voice_eq;
 
     // `transitionsAfterClipMerge`: the merged boundary's transition is gone,
     // everything past it shifts down one.
@@ -3458,6 +3485,7 @@ mod tests {
                 timescale: 1.,
                 muted: false,
                 cursor_hidden: false,
+                voice_eq: false,
                 volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
@@ -3989,6 +4017,42 @@ mod tests {
             (timeline.segments[2].start, timeline.segments[2].end),
             (0., 8.)
         );
+    }
+
+    #[test]
+    fn trimming_keyboard_start_preserves_keypress_times() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "keyboardSegments": [{
+                    "id": "typed", "start": 2.0, "end": 6.0, "displayText": "ab",
+                    "keys": [
+                        { "key": "a", "timeOffset": 0.0 },
+                        { "key": "b", "timeOffset": 2000.0 }
+                    ]
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let original = serde_json::to_value(&timeline.keyboard_segments[0]).unwrap();
+        for start in [3.0, 1.0, 2.0] {
+            assert!(set_segment_start(timeline, TrackKind::Keyboard, 0, start));
+            let segment = &timeline.keyboard_segments[0];
+            assert_eq!(segment.start + segment.keys[0].time_offset / 1000.0, 2.0);
+            assert_eq!(segment.start + segment.keys[1].time_offset / 1000.0, 4.0);
+            assert_eq!(segment.end, 6.0);
+            assert_eq!(segment.display_text, "ab");
+        }
+        assert_eq!(
+            serde_json::to_value(&timeline.keyboard_segments[0]).unwrap(),
+            original
+        );
+        assert!(!set_segment_start(timeline, TrackKind::Keyboard, 0, 2.0));
+        assert!(move_segment(timeline, TrackKind::Keyboard, 0, 5.0, 9.0));
+        let segment = &timeline.keyboard_segments[0];
+        assert_eq!(segment.keys[0].time_offset, 0.0);
+        assert_eq!(segment.keys[1].time_offset, 2000.0);
     }
 
     #[test]

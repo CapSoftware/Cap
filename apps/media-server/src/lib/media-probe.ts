@@ -1,127 +1,262 @@
-import type {
-	AudioCodec,
-	InputTrack,
-	MediaCodec,
-	VideoCodec,
-} from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
+import { createGuardedMediaFetch, normalizeLocalPath } from "./media-common";
 import {
-	createMediaInput,
-	getSourceSize,
-	normalizeLocalPath,
-	withTimeout,
-} from "./media-common";
+	isAllowedVideoCodec,
+	isDecoderRejectedMessage,
+	UNSUPPORTED_FORMAT_MESSAGE,
+} from "./media-input-policy";
 import {
 	canAcceptNewProbeOperation,
 	getActiveProbeOperationCount,
 	withMediaOperation,
 } from "./media-operations";
+import { runProbe } from "./media-probe-pool";
+import {
+	NO_VIDEO_STREAM_MESSAGE,
+	type ProbedMedia,
+	type TrackSpans,
+	UnreadableMediaInputError,
+} from "./media-probe-read";
+import { spawn } from "./media-spawn";
 import { materializeMedia } from "./media-transfer";
+import { registerSubprocess, terminateProcess } from "./subprocess";
+
+export {
+	assertRemotePlaylistStaysOnHost,
+	FRAME_TOO_LARGE_MESSAGE,
+	fastestFrameRate,
+	isUnreadableMediaInput,
+	MediaInputNotAccessibleError,
+	playlistReferences,
+	type TrackSpans,
+	UNFINISHED_RECORDING_MESSAGE,
+	UnreadableMediaInputError,
+} from "./media-probe-read";
 
 const PROBE_TIMEOUT_MS = 30_000;
-const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+const FFPROBE_TIMEOUT_MS = 10_000;
+const FFPROBE_OUTPUT_LIMIT = 256 * 1024;
 
 export { canAcceptNewProbeOperation, getActiveProbeOperationCount };
 
 export const canAcceptNewProbeProcess = canAcceptNewProbeOperation;
 export const getActiveProbeProcessCount = getActiveProbeOperationCount;
 
-function mapVideoCodec(codec: VideoCodec | MediaCodec | null): string {
-	if (codec === "avc") return "h264";
-	if (codec === "hevc") return "hevc";
-	return codec ?? "unknown";
-}
-
-function mapAudioCodec(codec: AudioCodec | MediaCodec | null): string | null {
-	if (!codec) return null;
-	return codec;
-}
-
-function roundFps(fps: number): number {
-	if (!Number.isFinite(fps) || fps <= 0) return 0;
-	return Math.round(fps * 100) / 100;
-}
-
-function isHttpUrl(path: string): boolean {
+async function readLimited(
+	stream: ReadableStream<Uint8Array>,
+	limit: number,
+): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
 	try {
-		const url = new URL(path);
-		return url.protocol === "http:" || url.protocol === "https:";
+		while (text.length < limit) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	return text;
+}
+
+// Null when ffprobe could not be run to an answer in time.
+async function runFfprobe(
+	args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
+	const proc = registerSubprocess(
+		spawn({ cmd: ["ffprobe", ...args], stdout: "pipe", stderr: "pipe" }),
+	);
+	const timer = setTimeout(() => {
+		void terminateProcess(proc);
+	}, FFPROBE_TIMEOUT_MS);
+	try {
+		const [stdout, stderr] = await Promise.all([
+			readLimited(
+				proc.stdout as ReadableStream<Uint8Array>,
+				FFPROBE_OUTPUT_LIMIT,
+			),
+			readLimited(proc.stderr as ReadableStream<Uint8Array>, 8192),
+		]);
+		if (stdout.length >= FFPROBE_OUTPUT_LIMIT) {
+			await terminateProcess(proc);
+			return { exitCode: 0, stdout, stderr };
+		}
+		const exitCode = await proc.exited;
+		return { exitCode, stdout, stderr };
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+		await terminateProcess(proc);
+	}
+}
+
+// The parser names the codecs browsers play. A track in any other codec is
+// named by ffprobe, which is held to the decoders this server allows: a file
+// whose video codec is not on the list, or cannot be named at all, is
+// refused here with a reason, before any job is queued.
+async function assertSupportedCodecs(
+	path: string,
+	metadata: VideoMetadata,
+): Promise<void> {
+	const unnamedVideo = metadata.videoCodec === "unknown";
+	const unnamedAudio =
+		metadata.audioCodec === null && metadata.audioChannels !== null;
+	if (!unnamedVideo && !unnamedAudio) return;
+	const result = await runFfprobe([
+		"-v",
+		"error",
+		"-show_entries",
+		"stream=codec_type,codec_name",
+		"-of",
+		"json",
+		path,
+	]);
+	if (result === null) {
+		if (!unnamedVideo) return;
+		throw new Error("Could not read the video codec of the source in time");
+	}
+	if (result.exitCode !== 0) {
+		if (isDecoderRejectedMessage(result.stderr)) {
+			throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+		}
+		// Anything else (a source that failed to fetch, a probe stopped at its
+		// deadline) says nothing about the format, so it can be asked again.
+		if (unnamedVideo) {
+			throw new Error("Could not read the video codec of the source");
+		}
+		return;
+	}
+	if (!unnamedVideo) return;
+	let streams: { codec_type?: string; codec_name?: string }[] = [];
+	try {
+		streams =
+			(JSON.parse(result.stdout) as { streams?: typeof streams }).streams ?? [];
+	} catch {}
+	const video = streams.find((stream) => stream.codec_type === "video");
+	if (!video || !isAllowedVideoCodec(video.codec_name ?? "")) {
+		throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+	}
+}
+
+const DURATION_TOLERANCE_SECONDS = 1;
+const DURATION_TOLERANCE_RATIO = 0.01;
+
+export function durationTolerance(declared: number): number {
+	return Math.max(
+		DURATION_TOLERANCE_SECONDS,
+		declared * DURATION_TOLERANCE_RATIO,
+	);
+}
+
+const PACKETS_READ_PAST_DECLARED_END = 2000;
+
+// Whether FFmpeg finds video to decode past the declared end. An edit list
+// hides the part of a file that was trimmed away, and FFmpeg honours it, so
+// such a file really is as short as it declares. The read starts at the
+// keyframe before the declared end and stops after a bounded number of
+// packets. Null when unknown.
+async function hasPacketsBeyond(
+	path: string,
+	declaredEnd: number,
+): Promise<boolean | null> {
+	const result = await runFfprobe([
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-read_intervals",
+		`${declaredEnd}%+#${PACKETS_READ_PAST_DECLARED_END}`,
+		"-show_entries",
+		"packet=pts_time",
+		"-of",
+		"csv=p=0",
+		path,
+	]);
+	if (result === null || (result.exitCode !== 0 && result.stdout === "")) {
+		return null;
+	}
+	for (const line of result.stdout.split("\n")) {
+		const time = Number.parseFloat(line);
+		if (Number.isFinite(time) && time >= declaredEnd) return true;
+	}
+	return false;
+}
+
+// A header can declare a shorter length than the file plays for. The length
+// reported is what the encoder will be held to and what is billed, so when
+// the timestamps run past the declared end, and FFmpeg agrees there is video
+// there, the measured length is the one reported.
+async function withTrueDuration(
+	path: string,
+	probed: ProbedMedia,
+): Promise<VideoMetadata> {
+	const { metadata, declaredDuration, measuredDuration } = probed;
+	if (declaredDuration === null || measuredDuration === null) return metadata;
+	const declaredEnd = declaredDuration + durationTolerance(declaredDuration);
+	if (measuredDuration <= declaredEnd) return metadata;
+	if (probed.mayTrim && (await hasPacketsBeyond(path, declaredEnd)) === false) {
+		return metadata;
+	}
+	return {
+		...metadata,
+		duration: measuredDuration,
+		bitrate:
+			probed.trackBitrate ||
+			(metadata.fileSize > 0
+				? Math.round((metadata.fileSize * 8) / measuredDuration)
+				: 0),
+	};
+}
+
+// Whether a file the parser found no video in has a video stream in a codec
+// this server does not take (MPEG-2 in a transport stream, for one), as
+// opposed to having none. Cover art does not count.
+async function hasUnsupportedVideoStream(path: string): Promise<boolean> {
+	const result = await runFfprobe([
+		"-v",
+		"error",
+		"-show_entries",
+		"stream=codec_type,codec_name:stream_disposition=attached_pic",
+		"-of",
+		"json",
+		path,
+	]);
+	if (result === null) return false;
+	if (result.exitCode !== 0) return isDecoderRejectedMessage(result.stderr);
+	try {
+		const { streams = [] } = JSON.parse(result.stdout) as {
+			streams?: {
+				codec_type?: string;
+				disposition?: { attached_pic?: number };
+			}[];
+		};
+		return streams.some(
+			(stream) =>
+				stream.codec_type === "video" && stream.disposition?.attached_pic !== 1,
+		);
 	} catch {
 		return false;
 	}
 }
 
-async function hasHttpNetworkFailure(path: string): Promise<boolean> {
-	try {
-		const response = await probeFetch(path, {
-			headers: { Range: "bytes=0-0" },
-			signal: AbortSignal.timeout(10_000),
-		});
-		await response.body?.cancel();
-		return !response.ok;
-	} catch {
-		return true;
-	}
-}
-
-async function probeMedia(path: string): Promise<VideoMetadata> {
-	if (isHttpUrl(path) && (await hasHttpNetworkFailure(path))) {
-		throw new Error("Media input is not accessible");
-	}
-
-	const input = createMediaInput(path);
-
-	try {
-		const canRead = await input.canRead();
-		if (!canRead) {
-			throw new Error("Media input could not be read");
-		}
-
-		const videoTrack = await input.getPrimaryVideoTrack();
-		if (!videoTrack) {
-			throw new Error("No video stream found");
-		}
-
-		const audioTrack = await input.getPrimaryAudioTrack();
-		const duration =
-			(await input.getDurationFromMetadata(undefined, {
-				skipLiveWait: true,
-			})) ??
-			(await input.computeDuration(undefined, {
-				skipLiveWait: true,
-			}));
-		const packetStats = await videoTrack
-			.computePacketStats(120, { skipLiveWait: true })
-			.catch(() => null);
-		const videoBitrate =
-			(await videoTrack.getAverageBitrate()) ??
-			(await videoTrack.getBitrate()) ??
-			packetStats?.averageBitrate ??
-			0;
-		const audioBitrate = audioTrack
-			? ((await audioTrack.getAverageBitrate()) ??
-				(await audioTrack.getBitrate()) ??
-				0)
-			: 0;
-		const fileSize = await getSourceSize(path);
-		const bitrateFromSize =
-			duration > 0 && fileSize > 0 ? Math.round((fileSize * 8) / duration) : 0;
-
-		return {
-			duration,
-			width: await videoTrack.getDisplayWidth(),
-			height: await videoTrack.getDisplayHeight(),
-			fps: roundFps(packetStats?.averagePacketRate ?? 0),
-			videoCodec: mapVideoCodec(await videoTrack.getCodec()),
-			audioCodec: mapAudioCodec((await audioTrack?.getCodec()) ?? null),
-			audioChannels: audioTrack ? await audioTrack.getNumberOfChannels() : null,
-			sampleRate: audioTrack ? await audioTrack.getSampleRate() : null,
-			bitrate: Math.round(videoBitrate + audioBitrate) || bitrateFromSize,
-			fileSize,
-		};
-	} finally {
-		input.dispose();
-	}
+async function probeMetadata(path: string): Promise<VideoMetadata> {
+	const probed = await runProbe("metadata", path, PROBE_TIMEOUT_MS).catch(
+		async (error: unknown) => {
+			if (
+				error instanceof UnreadableMediaInputError &&
+				error.message === NO_VIDEO_STREAM_MESSAGE &&
+				(await hasUnsupportedVideoStream(path))
+			) {
+				throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+			}
+			throw error;
+		},
+	);
+	await assertSupportedCodecs(path, probed.metadata);
+	return await withTrueDuration(path, probed);
 }
 
 export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
@@ -131,9 +266,7 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 		throw new Error("Server is busy, please try again later");
 	}
 
-	return await withMediaOperation("probe", () =>
-		withTimeout(probeMedia(videoUrl), PROBE_TIMEOUT_MS),
-	);
+	return await withMediaOperation("probe", () => probeMetadata(videoUrl));
 }
 
 export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
@@ -142,35 +275,8 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 	}
 
 	return await withMediaOperation("probe", () =>
-		withTimeout(probeMedia(normalizeLocalPath(filePath)), PROBE_TIMEOUT_MS),
+		probeMetadata(normalizeLocalPath(filePath)),
 	);
-}
-
-export type TrackSpans = { video: number; audio: number | null };
-
-async function computeTrackSpans(path: string): Promise<TrackSpans> {
-	const input = createMediaInput(path);
-	try {
-		const videoTrack = await input.getPrimaryVideoTrack();
-		if (!videoTrack) {
-			throw new Error("No video stream found");
-		}
-		const audioTrack = await input.getPrimaryAudioTrack();
-		const span = async (track: InputTrack) => {
-			const [start, end] = await Promise.all([
-				track.getFirstTimestamp(),
-				track.computeDuration({ skipLiveWait: true }),
-			]);
-			return end - start;
-		};
-		const [video, audio] = await Promise.all([
-			span(videoTrack),
-			audioTrack ? span(audioTrack) : null,
-		]);
-		return { video, audio };
-	} finally {
-		input.dispose();
-	}
 }
 
 export async function probeTrackSpans(filePath: string): Promise<TrackSpans> {
@@ -179,16 +285,39 @@ export async function probeTrackSpans(filePath: string): Promise<TrackSpans> {
 	}
 
 	return await withMediaOperation("probe", () =>
-		withTimeout(
-			computeTrackSpans(normalizeLocalPath(filePath)),
+		runProbe("trackSpans", normalizeLocalPath(filePath), PROBE_TIMEOUT_MS),
+	);
+}
+
+export class ProbeBusyError extends Error {
+	override name = "ProbeBusyError";
+
+	constructor() {
+		super("Server is busy, please try again later");
+	}
+}
+
+// Reads the timestamp of every video frame in a local file, where the probe's
+// own frame rate looks at the opening packets only. Null when the container
+// is not one that can be timed cheaply.
+export async function probeFastestFrameRate(
+	filePath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	if (!canAcceptNewProbeOperation()) throw new ProbeBusyError();
+	return await withMediaOperation("probe", () =>
+		runProbe(
+			"fastestFrameRate",
+			normalizeLocalPath(filePath),
 			PROBE_TIMEOUT_MS,
+			abortSignal,
 		),
 	);
 }
 
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(videoUrl, {
+		const response = await createGuardedMediaFetch(videoUrl)(videoUrl, {
 			method: "HEAD",
 			signal: AbortSignal.timeout(10_000),
 		});

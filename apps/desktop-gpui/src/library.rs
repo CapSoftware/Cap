@@ -686,6 +686,173 @@ fn recover_interrupted_for_editing_in(
     recover_incomplete_recording_in(dirs, project_path).map(|_| true)
 }
 
+struct HeldProject {
+    id: u64,
+    path: PathBuf,
+    resolved: Option<PathBuf>,
+}
+
+/// A project folder's real location: its parent resolved through symlinks,
+/// plus its own name. A recording registers its folder before creating it, so
+/// this cannot canonicalize the folder itself.
+fn resolved_project_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?.canonicalize().ok()?;
+    Some(parent.join(path.file_name()?))
+}
+
+/// Project folders that something in the app owns for a while.
+struct HeldProjects(std::sync::Mutex<Vec<HeldProject>>);
+
+impl HeldProjects {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(Vec::new()))
+    }
+
+    fn projects(&self) -> std::sync::MutexGuard<'_, Vec<HeldProject>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn hold(&self, project_dir: &Path) -> u64 {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let resolved = resolved_project_path(project_dir);
+        self.projects().push(HeldProject {
+            id,
+            path: project_dir.to_path_buf(),
+            resolved,
+        });
+        id
+    }
+
+    fn release(&self, id: u64) {
+        self.projects().retain(|project| project.id != id);
+    }
+
+    /// Compares `path` with the spelling the folder was held under and with
+    /// its resolved location, without touching the filesystem.
+    fn holds(&self, path: &Path) -> bool {
+        self.projects()
+            .iter()
+            .any(|project| project.path == path || project.resolved.as_deref() == Some(path))
+    }
+
+    /// Whether the folder is held under any path that leads to it.
+    fn holds_resolved(&self, path: &Path) -> bool {
+        self.holds(path)
+            || [path.canonicalize().ok(), resolved_project_path(path)]
+                .iter()
+                .flatten()
+                .any(|resolved| self.holds(resolved))
+    }
+}
+
+static IN_PROGRESS_PROJECTS: HeldProjects = HeldProjects::new();
+static EDITOR_PROJECTS: HeldProjects = HeldProjects::new();
+static DELETING_PROJECTS: HeldProjects = HeldProjects::new();
+
+/// Held while an editor or a delete looks for the other and registers itself,
+/// so one of the two always sees the other.
+static EDITOR_OR_DELETE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn editor_or_delete() -> std::sync::MutexGuard<'static, ()> {
+    EDITOR_OR_DELETE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Marks a project folder as owned by a live recording until dropped. The
+/// recording holds it from start until its stop, including Studio
+/// finalization, has finished, so the library cannot delete the folder out
+/// from under the capture or the finalizer.
+pub struct RecordingInProgress(u64);
+
+impl RecordingInProgress {
+    pub fn begin(project_dir: &Path) -> Self {
+        Self(IN_PROGRESS_PROJECTS.hold(project_dir))
+    }
+}
+
+impl Drop for RecordingInProgress {
+    fn drop(&mut self) {
+        IN_PROGRESS_PROJECTS.release(self.0);
+    }
+}
+
+/// Whether a live recording (or its stop) still owns `path`. Compares `path`
+/// with the spelling the recording started under and with its resolved
+/// location, without touching the filesystem, so it is cheap enough for a
+/// render. [`ensure_not_recording_in_progress`] resolves `path` as well.
+pub fn is_recording_in_progress(path: &Path) -> bool {
+    IN_PROGRESS_PROJECTS.holds(path)
+}
+
+/// Refuses a project folder a live recording still owns, under any path that
+/// leads to it.
+pub fn ensure_not_recording_in_progress(path: &Path) -> Result<(), String> {
+    if IN_PROGRESS_PROJECTS.holds_resolved(path) {
+        return Err(tr::dialog::delete_recording::recording_active().to_string());
+    }
+    Ok(())
+}
+
+/// Marks a project folder as open in an editor window until dropped. The
+/// editor keeps the project's media open and writes its edits back into the
+/// folder, so the library refuses to delete it from under the window. The
+/// editor's own Delete and a delete from the Settings recordings row or a
+/// library card close the window, which lets go, before they delete.
+pub struct ProjectOpenInEditor(u64);
+
+impl ProjectOpenInEditor {
+    /// `None` while the library is deleting the folder: the editor must not
+    /// open on a project that is on its way out.
+    pub fn begin(project_dir: &Path) -> Option<Self> {
+        let _claim = editor_or_delete();
+        (!DELETING_PROJECTS.holds_resolved(project_dir))
+            .then(|| Self(EDITOR_PROJECTS.hold(project_dir)))
+    }
+}
+
+impl Drop for ProjectOpenInEditor {
+    fn drop(&mut self) {
+        EDITOR_PROJECTS.release(self.0);
+    }
+}
+
+/// Refuses a project folder an editor window has open, under any path that
+/// leads to it.
+pub fn ensure_not_open_in_editor(path: &Path) -> Result<(), String> {
+    if EDITOR_PROJECTS.holds_resolved(path) {
+        return Err(tr::dialog::delete_recording::open_in_editor().to_string());
+    }
+    Ok(())
+}
+
+/// Reserves a project folder for a delete until dropped. It is refused while
+/// an editor window has the folder open, and no editor can open the folder
+/// while it is held, so a delete that waits (on an upload to cancel, on a
+/// thumbnail still being written) cannot pull the folder from under an editor
+/// that opened in the meantime.
+pub struct ProjectBeingDeleted(u64);
+
+impl ProjectBeingDeleted {
+    pub fn begin(path: &Path) -> Result<Self, String> {
+        let _claim = editor_or_delete();
+        ensure_not_open_in_editor(path)?;
+        let resolved = path.canonicalize();
+        Ok(Self(
+            DELETING_PROJECTS.hold(resolved.as_deref().unwrap_or(path)),
+        ))
+    }
+}
+
+impl Drop for ProjectBeingDeleted {
+    fn drop(&mut self) {
+        DELETING_PROJECTS.release(self.0);
+    }
+}
+
 /// Existing targets and roots are canonicalized before containment is checked.
 /// This keeps symlink escapes outside the allow-list while accepting Windows
 /// editor paths whose canonical form has a `\\?\` prefix. A missing strict child
@@ -697,6 +864,8 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     {
         return Err("Invalid path".to_string());
     }
+    ensure_not_recording_in_progress(path)?;
+    let _deleting = ProjectBeingDeleted::begin(path)?;
 
     let canonical_dirs: Vec<_> = dirs
         .iter()
@@ -742,24 +911,119 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     Ok(())
 }
 
-/// Windows will not delete a file that another handle still has open. A
-/// decoder thread closes its file a moment after its last handle is dropped,
-/// and antivirus or the search indexer can briefly open a file, so a sharing
-/// violation is retried for a few seconds before it is reported.
+const DELETING_DIR: &str = ".cap-deleting";
+
+/// Removes a recording folder as a unit: it is first moved into a holding
+/// folder beside it, which either moves every file or none, and only then
+/// removed. Removing it in place stops at the first file something still has
+/// open, which on Windows left a recording with half its files (the cursor
+/// data gone, the video and metadata still there).
 fn remove_recording_directory(path: &Path) -> std::io::Result<()> {
+    match move_recording_aside(path) {
+        Ok(aside) => {
+            discard_moved_recording(&aside);
+            Ok(())
+        }
+        Err(error) => remove_unmoved_recording(path, error),
+    }
+}
+
+fn move_recording_aside(path: &Path) -> std::io::Result<PathBuf> {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let holding = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("Recording has no parent directory"))?
+        .join(DELETING_DIR);
+    if let Err(error) = std::fs::create_dir(&holding)
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(error);
+    }
+    if !std::fs::symlink_metadata(&holding)?.file_type().is_dir() {
+        return Err(std::io::Error::other(
+            "The recordings directory's deleting folder is not a directory",
+        ));
+    }
+    let aside = holding.join(format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos()),
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    debug_assert!(aside.file_name().is_some_and(is_staged_recording));
+    match std::fs::rename(path, &aside) {
+        Ok(()) => Ok(aside),
+        Err(error) => {
+            let _ = std::fs::remove_dir(&holding);
+            Err(error)
+        }
+    }
+}
+
+/// Whether a holding folder entry has the name [`move_recording_aside`] gives
+/// (`<process id>-<nanoseconds>-<counter>`). Nothing else in a holding folder
+/// is this code's to remove.
+fn is_staged_recording(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        let parts: Vec<&str> = name.split('-').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
+/// The recording has left the library by now, so files that cannot be removed
+/// are reported in the log instead of failing this delete. A later delete
+/// removes what an earlier one staged and left, and the holding folder goes
+/// once it is empty.
+fn discard_moved_recording(aside: &Path) {
+    if let Err(error) = retry_while_in_use(|| std::fs::remove_dir_all(aside)) {
+        tracing::warn!(path = %aside.display(), %error, "a deleted recording's files could not all be removed");
+    }
+    let Some(holding) = aside.parent() else {
+        return;
+    };
+    if let Ok(entries) = std::fs::read_dir(holding) {
+        for entry in entries.flatten() {
+            if is_staged_recording(&entry.file_name())
+                && entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(holding);
+}
+
+#[cfg(windows)]
+fn is_in_use(error: &std::io::Error) -> bool {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+    )
+}
+
+/// Shorter under test: a delete holds the thumbnail lock while it waits, the
+/// tests share that lock, and its other waiters give up after ten seconds.
+#[cfg(windows)]
+const IN_USE_RETRY: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 2 } else { 5 });
+
+/// Antivirus or the search indexer can briefly open a file, so on Windows an
+/// in-use error is retried for a few seconds before it is reported.
+fn retry_while_in_use<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     #[cfg(windows)]
     {
-        const ERROR_SHARING_VIOLATION: i32 = 32;
-        const ERROR_LOCK_VIOLATION: i32 = 33;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + IN_USE_RETRY;
         loop {
-            match std::fs::remove_dir_all(path) {
-                Err(error)
-                    if matches!(
-                        error.raw_os_error(),
-                        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
-                    ) && std::time::Instant::now() < deadline =>
-                {
+            match attempt() {
+                Err(error) if is_in_use(&error) && std::time::Instant::now() < deadline => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 result => return result,
@@ -767,7 +1031,77 @@ fn remove_recording_directory(path: &Path) -> std::io::Result<()> {
         }
     }
     #[cfg(not(windows))]
-    std::fs::remove_dir_all(path)
+    attempt()
+}
+
+/// Windows refuses to move a folder while any handle inside it is open, even
+/// one that allows deletion. Those were deletable in place before, so the
+/// folder is still removed in place, but only once every file and folder in
+/// it is known to be deletable. One that is not (a decoder closes its file a
+/// moment after its last handle is dropped) is waited on for a few seconds,
+/// and if it stays open nothing has been removed.
+#[cfg(windows)]
+fn remove_unmoved_recording(path: &Path, mut error: std::io::Error) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + IN_USE_RETRY;
+    loop {
+        if !is_in_use(&error) {
+            return Err(error);
+        }
+        match ensure_deletable(path) {
+            Ok(()) => return retry_while_in_use(|| std::fs::remove_dir_all(path)),
+            Err(busy) if !is_in_use(&busy) || std::time::Instant::now() >= deadline => {
+                return Err(busy);
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+        match move_recording_aside(path) {
+            Ok(aside) => {
+                discard_moved_recording(&aside);
+                return Ok(());
+            }
+            Err(next) => error = next,
+        }
+    }
+}
+
+/// Opens the folder at `path` and everything in it for deletion, which
+/// Windows refuses for a file or folder another handle holds without sharing
+/// deletion (a decoder's file, a terminal's current directory).
+#[cfg(windows)]
+fn ensure_deletable(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x7;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let open_for_delete = |path: &Path| {
+        std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    };
+    open_for_delete(path)?;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            ensure_deletable(&entry.path())?;
+        } else if file_type.is_file() {
+            open_for_delete(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// A folder cannot be moved off a mount point of its own. Open files do not
+/// block removal here, so it is removed in place as before.
+#[cfg(not(windows))]
+fn remove_unmoved_recording(path: &Path, error: std::io::Error) -> std::io::Result<()> {
+    if error.kind() == std::io::ErrorKind::CrossesDevices {
+        std::fs::remove_dir_all(path)
+    } else {
+        Err(error)
+    }
 }
 
 /// `delete_recording_directory` against the real library.
@@ -3341,6 +3675,365 @@ mod tests {
         }
         assert!(bundle_thumbnail_path(&recovered).is_file());
         assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The folder of a recording still being captured or finalized is not
+    /// deletable through any path that leads to it until the recording lets
+    /// go. The recording registers the folder before creating it, as
+    /// `start_attempt_with_upload` does.
+    #[test]
+    fn delete_refuses_the_recording_in_progress() {
+        let root = temp_dir("delete-active");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut dirs = vec![recordings.clone()];
+        let live = recordings.join("live.cap");
+        let other = write_studio_bundle(&recordings, "other", 1);
+
+        let recording = RecordingInProgress::begin(&live);
+        let media = live.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(media.parent().unwrap()).unwrap();
+        std::fs::write(&media, b"live").unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![live.clone(), live.canonicalize().unwrap()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("live.cap"));
+            dirs.push(alias);
+        }
+        assert!(is_recording_in_progress(&live));
+        for spelling in &spellings {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, spelling),
+                Err(tr::dialog::delete_recording::recording_active().to_string()),
+                "{}",
+                spelling.display()
+            );
+            assert!(media.is_file(), "{}", spelling.display());
+        }
+        assert_eq!(delete_recording_directory_in(&dirs, &other), Ok(()));
+        assert!(!other.exists(), "other recordings stay deletable");
+
+        drop(recording);
+        assert!(!is_recording_in_progress(&live));
+        assert_eq!(delete_recording_directory_in(&dirs, &live), Ok(()));
+        assert!(!live.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A studio bundle with the files a finished recording has around its
+    /// video, and their paths relative to the bundle.
+    fn write_recorded_bundle(dir: &Path, name: &str) -> (PathBuf, Vec<PathBuf>) {
+        let bundle = write_studio_bundle(dir, name, 1);
+        for file in [
+            "content/cursors/cursor_0.png",
+            "content/segments/segment-0/cursor.json",
+            "content/segments/segment-0/display.mp4",
+            "content/segments/segment-0/keyboard.bin",
+            "project-config.json",
+            "screenshots/display.jpg",
+        ] {
+            let path = bundle.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"recorded").unwrap();
+        }
+        let files = files_under(&bundle);
+        assert_eq!(files.len(), 7);
+        (bundle, files)
+    }
+
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        fn collect(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect(&path, root, files);
+                } else {
+                    files.push(path.strip_prefix(root).unwrap().to_path_buf());
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(dir, dir, &mut files);
+        files.sort();
+        files
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A recording an editor window has open is not deletable through any
+    /// path that leads to it, and none of its files are touched, until the
+    /// window lets go. The editor registers the canonical path it opened.
+    #[test]
+    fn delete_refuses_a_recording_open_in_the_editor() {
+        let root = temp_dir("delete-open-in-editor");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut dirs = vec![recordings.clone()];
+        let (open, files) = write_recorded_bundle(&recordings, "open");
+        let (other, _) = write_recorded_bundle(&recordings, "other");
+
+        let editor = ProjectOpenInEditor::begin(&open.canonicalize().unwrap()).unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![open.clone(), open.canonicalize().unwrap()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("open.cap"));
+            dirs.push(alias);
+        }
+        for spelling in &spellings {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, spelling),
+                Err(tr::dialog::delete_recording::open_in_editor().to_string()),
+                "{}",
+                spelling.display()
+            );
+            assert_eq!(files_under(&open), files, "{}", spelling.display());
+        }
+        assert_eq!(delete_recording_directory_in(&dirs, &other), Ok(()));
+        assert!(!other.exists(), "other recordings stay deletable");
+
+        drop(editor);
+        assert_eq!(delete_recording_directory_in(&dirs, &open), Ok(()));
+        assert!(!open.exists());
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// While a delete has a recording reserved, which covers its wait on a
+    /// thumbnail still being written, an editor cannot open that recording
+    /// under any path that leads to it. Other recordings still open.
+    #[test]
+    fn an_editor_cannot_open_a_recording_that_is_being_deleted() {
+        let root = temp_dir("delete-reserved");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let (doomed, _) = write_recorded_bundle(&recordings, "doomed");
+        let (other, _) = write_recorded_bundle(&recordings, "other");
+        let key = doomed.canonicalize().unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![doomed.clone(), key.clone()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("doomed.cap"));
+        }
+        for spelling in &spellings {
+            let deleting = ProjectBeingDeleted::begin(spelling).unwrap();
+            assert!(
+                ProjectOpenInEditor::begin(&key).is_none(),
+                "{}",
+                spelling.display()
+            );
+            assert!(ProjectOpenInEditor::begin(&other.canonicalize().unwrap()).is_some());
+            drop(deleting);
+            assert!(
+                ProjectOpenInEditor::begin(&key).is_some(),
+                "{}",
+                spelling.display()
+            );
+        }
+
+        let editor = ProjectOpenInEditor::begin(&key).unwrap();
+        assert_eq!(
+            ProjectBeingDeleted::begin(&doomed).err(),
+            Some(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        drop(editor);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A delete moves the recording into a holding folder beside it before
+    /// removing it. Nothing of that is left behind, and what an earlier delete
+    /// staged there and could not remove goes with it.
+    #[test]
+    fn delete_leaves_no_holding_folder_and_sweeps_an_earlier_one() {
+        let root = temp_dir("delete-holding");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (first, _) = write_recorded_bundle(&recordings, "first");
+        let (second, _) = write_recorded_bundle(&recordings, "second");
+
+        assert_eq!(delete_recording_directory_in(&dirs, &first), Ok(()));
+        assert_eq!(names_in(&recordings), ["second.cap"]);
+
+        let stale = recordings
+            .join(DELETING_DIR)
+            .join("4242-1700000000000000000-7/content");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("display.mp4"), b"left behind").unwrap();
+        assert_eq!(delete_recording_directory_in(&dirs, &second), Ok(()));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A folder that already has the holding folder's name is not Cap's to
+    /// empty. The delete goes through it and removes only what it staged.
+    #[test]
+    fn delete_keeps_what_it_did_not_stage_in_the_holding_folder() {
+        let root = temp_dir("delete-holding-unowned");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, _) = write_recorded_bundle(&recordings, "doomed");
+        let holding = recordings.join(DELETING_DIR);
+        for kept in [
+            "notes/todo.txt",
+            "1-2-3-4/display.mp4",
+            "12-ab-3/display.mp4",
+        ] {
+            let path = holding.join(kept);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"not staged by a delete").unwrap();
+        }
+        std::fs::write(holding.join("1-2-3"), b"a file, not a staged folder").unwrap();
+        let kept = files_under(&holding);
+
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        assert_eq!(names_in(&recordings), [DELETING_DIR]);
+        assert_eq!(files_under(&holding), kept);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The holding folder is created by the delete itself. Something else
+    /// under its name, here a link out of the library, is neither followed
+    /// nor removed, and the recording stays whole.
+    #[cfg(unix)]
+    #[test]
+    fn delete_refuses_a_holding_folder_that_is_a_link() {
+        let root = temp_dir("delete-holding-link");
+        let recordings = root.join("recordings");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, files) = write_recorded_bundle(&recordings, "linked");
+        std::os::unix::fs::symlink(&outside, recordings.join(DELETING_DIR)).unwrap();
+
+        let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+        assert!(error.starts_with("Failed to delete recording"), "{error}");
+        assert_eq!(files_under(&bundle), files);
+        assert_eq!(names_in(&outside), ["keep.txt"]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Windows will not delete a file or folder another handle has open
+    /// without sharing deletion, which is how a decoder or a media player
+    /// opens a file and how a terminal holds its current directory. Removing
+    /// the folder in place stopped there with the files before it already
+    /// gone: the recording was left with its video and metadata but no cursor
+    /// data.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_nothing_when_something_in_the_recording_is_held_open() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ_WRITE: u32 = 0x3;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        for held in ["content/segments/segment-0/display.mp4", "content/segments"] {
+            let root = temp_dir("delete-held-open");
+            let recordings = root.join("recordings");
+            std::fs::create_dir_all(&recordings).unwrap();
+            let dirs = vec![recordings.clone()];
+            let (bundle, files) = write_recorded_bundle(&recordings, "open");
+
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(bundle.join(held))
+                .unwrap();
+            let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+            assert!(error.contains("os error 32"), "{held}: {error}");
+            assert_eq!(files_under(&bundle), files, "{held}: {error}");
+            assert_eq!(names_in(&recordings), ["open.cap"], "{held}");
+
+            drop(handle);
+            assert_eq!(
+                delete_recording_directory_in(&dirs, &bundle),
+                Ok(()),
+                "{held}"
+            );
+            assert_eq!(names_in(&recordings), Vec::<String>::new(), "{held}");
+
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// A handle that shares deletion (an Explorer window on a folder inside,
+    /// a file this app opened) stops Windows moving the folder but not
+    /// deleting it. Such a recording was deletable before and still is.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_a_recording_with_handles_that_share_deletion() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let root = temp_dir("delete-shared-handles");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, _) = write_recorded_bundle(&recordings, "shared");
+
+        let file =
+            std::fs::File::open(bundle.join("content/segments/segment-0/display.mp4")).unwrap();
+        let folder = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(bundle.join("content"))
+            .unwrap();
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        drop((file, folder));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A recording started through a symlinked library folder is recognised
+    /// when the library lists it under the real folder, where the row decides
+    /// whether to offer Delete without resolving anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_recording_started_through_a_symlink_is_in_progress_under_its_real_path() {
+        let root = temp_dir("delete-active-alias");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+
+        let recording = RecordingInProgress::begin(&alias.join("live.cap"));
+        let real = recordings.canonicalize().unwrap().join("live.cap");
+        assert!(is_recording_in_progress(&alias.join("live.cap")));
+        assert!(is_recording_in_progress(&real));
+        assert!(!is_recording_in_progress(&real.with_file_name("other.cap")));
+        drop(recording);
+        assert!(!is_recording_in_progress(&real));
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -20,7 +20,7 @@ vi.mock("@cap/utils", () => ({
 	calculateStrokeDashoffset: () => 0,
 	getProgressCircleConfig: () => ({ circumference: 100 }),
 }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("lucide-react", () => ({

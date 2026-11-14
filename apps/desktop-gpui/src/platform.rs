@@ -285,6 +285,7 @@ fn portal_filters(filters: &[(&str, &[&str])]) -> Vec<ashpd::desktop::file_choos
 async fn linux_open_file_panel(
     filters: &[(&str, &[&str])],
     directory: Option<std::path::PathBuf>,
+    select_folder: bool,
     owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
     parent: Option<LinuxFileDialogParent>,
     cx: &mut gpui::AsyncApp,
@@ -294,6 +295,7 @@ async fn linux_open_file_panel(
         let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
             .identifier(identifier)
             .multiple(false)
+            .directory(select_folder.then_some(true))
             .filters(filters)
             .current_folder::<&std::path::PathBuf>(directory.as_ref())
             .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
@@ -390,7 +392,24 @@ pub(crate) async fn open_file_panel_async(
             )
         })
         .ok()?;
-    let result = linux_open_file_panel(filters, directory, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(filters, directory, false, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_folder_panel_async(
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    let (owner, parent) = cx
+        .update_root(|root, window, _| {
+            (
+                (window.window_handle(), root.entity_id()),
+                LinuxFileDialogParent::from_window(window),
+            )
+        })
+        .ok()?;
+    let result = linux_open_file_panel(&[], directory, true, Some(owner), parent, cx).await;
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
@@ -428,7 +447,7 @@ pub(crate) async fn open_file_panel_from_app_async(
             .ok()
     });
     let (owner, parent) = captured?;
-    let result = linux_open_file_panel(filters, None, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(filters, None, false, Some(owner), parent, cx).await;
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
@@ -1009,8 +1028,49 @@ mod mac {
         super::macos_exception_guard::install();
     }
 
+    const NATIVE_QUIT_DELEGATE_CLASS: &std::ffi::CStr = c"GPUIApplicationDelegate";
+    const NATIVE_QUIT_FOREIGN_DELEGATE: &str =
+        "Native Quit requires the owned GPUI application delegate";
+
+    // While AppKit key-value-observes the delegate (the Touch Bar finder does,
+    // because the delegate is a responder), the object's runtime class is a
+    // generated `NSKVONotifying_` subclass. Comparing that class's name failed
+    // on those launches and the app quit as soon as it opened, so the delegate
+    // is matched by kind and the method goes on the class GPUI registered: one
+    // added to the generated subclass would be lost when the observation ends.
+    fn native_quit_delegate_class(
+        delegate: &AnyObject,
+        class_name: &std::ffi::CStr,
+    ) -> Result<&'static objc2::runtime::AnyClass, String> {
+        let class =
+            objc2::runtime::AnyClass::get(class_name).ok_or(NATIVE_QUIT_FOREIGN_DELEGATE)?;
+        let owned: bool = unsafe { objc2::msg_send![delegate, isKindOfClass: class] };
+        if !owned {
+            return Err(NATIVE_QUIT_FOREIGN_DELEGATE.into());
+        }
+        Ok(class)
+    }
+
+    fn add_native_quit_method(class: &objc2::runtime::AnyClass) -> bool {
+        use objc2::{ffi, runtime::Imp, sel};
+
+        unsafe {
+            let implementation = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
+                Imp,
+            >(application_should_terminate);
+            ffi::class_addMethod(
+                class as *const _ as *mut _,
+                sel!(applicationShouldTerminate:),
+                implementation,
+                c"Q@:@".as_ptr(),
+            )
+            .as_bool()
+        }
+    }
+
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
-        use objc2::{class, ffi, msg_send, runtime::Imp, sel};
+        use objc2::{class, msg_send, sel};
         use objc2_foundation::MainThreadMarker;
 
         let _main_thread =
@@ -1022,33 +1082,132 @@ mod mac {
             let delegate = delegate
                 .as_ref()
                 .ok_or("Application delegate is unavailable")?;
-            let delegate_class = delegate.class();
-            if delegate_class.name() != c"GPUIApplicationDelegate" {
-                return Err("Native Quit requires the owned GPUI application delegate".into());
-            }
-            let selector = sel!(applicationShouldTerminate:);
-            if delegate_class.instance_method(selector).is_some() {
+            let delegate_class = native_quit_delegate_class(delegate, NATIVE_QUIT_DELEGATE_CLASS)?;
+            if delegate_class
+                .instance_method(sel!(applicationShouldTerminate:))
+                .is_some()
+            {
                 return Err("Application delegate already has a native Quit handler".into());
             }
             let (requests, receiver) = super::NativeQuitRequests::new();
             NATIVE_QUIT_REQUESTS
                 .set(requests)
                 .map_err(|_| "Native Quit request receiver was already installed")?;
-            let implementation = std::mem::transmute::<
-                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
-                Imp,
-            >(application_should_terminate);
-            if !ffi::class_addMethod(
-                delegate_class as *const _ as *mut _,
-                selector,
-                implementation,
-                c"Q@:@".as_ptr(),
-            )
-            .as_bool()
-            {
+            if !add_native_quit_method(delegate_class) {
                 return Err("Could not install the native Quit handler".into());
             }
             Ok(receiver)
+        }
+    }
+
+    #[cfg(test)]
+    mod native_quit_tests {
+        use std::{ffi::c_void, ptr};
+
+        use objc2::{
+            msg_send,
+            rc::Retained,
+            runtime::{AnyClass, AnyObject, ClassBuilder, Sel},
+            sel,
+        };
+        use objc2_foundation::NSString;
+
+        use super::{add_native_quit_method, native_quit_delegate_class};
+
+        const DELEGATE: &std::ffi::CStr = c"CapNativeQuitTestDelegate";
+
+        type ChangeHandler = unsafe extern "C-unwind" fn(
+            *mut AnyObject,
+            Sel,
+            *mut AnyObject,
+            *mut AnyObject,
+            *mut AnyObject,
+            *mut c_void,
+        );
+
+        unsafe extern "C-unwind" fn ignore_change(
+            _: *mut AnyObject,
+            _: Sel,
+            _: *mut AnyObject,
+            _: *mut AnyObject,
+            _: *mut AnyObject,
+            _: *mut c_void,
+        ) {
+        }
+
+        fn register(name: &std::ffi::CStr, superclass: &AnyClass) -> &'static AnyClass {
+            ClassBuilder::new(name, superclass).unwrap().register()
+        }
+
+        fn observer() -> Retained<AnyObject> {
+            let mut builder = ClassBuilder::new(
+                c"CapNativeQuitTestObserver",
+                AnyClass::get(c"NSObject").unwrap(),
+            )
+            .unwrap();
+            unsafe {
+                builder.add_method(
+                    sel!(observeValueForKeyPath:ofObject:change:context:),
+                    ignore_change as ChangeHandler,
+                );
+                msg_send![builder.register(), new]
+            }
+        }
+
+        fn responds_to_quit(object: &AnyObject) -> bool {
+            unsafe { msg_send![object, respondsToSelector: sel!(applicationShouldTerminate:)] }
+        }
+
+        #[test]
+        fn a_delegate_appkit_is_observing_still_gets_the_quit_handler() {
+            let responder = AnyClass::get(c"NSResponder").expect("AppKit is not loaded");
+            let class = register(DELEGATE, responder);
+            let delegate: Retained<AnyObject> = unsafe { msg_send![class, new] };
+            let observer = observer();
+            let key_path = NSString::from_str("nextResponder");
+
+            let _: () = unsafe {
+                msg_send![
+                    &*delegate,
+                    addObserver: &*observer,
+                    forKeyPath: &*key_path,
+                    options: 0usize,
+                    context: ptr::null_mut::<c_void>(),
+                ]
+            };
+            let runtime_class = delegate.class().name().to_string_lossy().into_owned();
+            assert_eq!(runtime_class, "NSKVONotifying_CapNativeQuitTestDelegate");
+
+            let resolved = native_quit_delegate_class(&delegate, DELEGATE).unwrap();
+            assert_eq!(resolved.name(), DELEGATE);
+            assert!(!responds_to_quit(&delegate));
+            assert!(add_native_quit_method(resolved));
+            assert!(responds_to_quit(&delegate));
+
+            let _: () = unsafe {
+                msg_send![&*delegate, removeObserver: &*observer, forKeyPath: &*key_path]
+            };
+            assert_eq!(delegate.class().name(), DELEGATE);
+            assert!(responds_to_quit(&delegate));
+            let reply: usize = unsafe {
+                msg_send![&*delegate, applicationShouldTerminate: ptr::null_mut::<AnyObject>()]
+            };
+            assert_eq!(reply, 0);
+
+            let subclass = register(c"CapNativeQuitTestDelegateSubclass", class);
+            let inherited: Retained<AnyObject> = unsafe { msg_send![subclass, new] };
+            assert_eq!(
+                native_quit_delegate_class(&inherited, DELEGATE).map(AnyClass::name),
+                Ok(DELEGATE)
+            );
+        }
+
+        #[test]
+        fn another_delegate_is_refused() {
+            let foreign: Retained<AnyObject> =
+                unsafe { msg_send![AnyClass::get(c"NSResponder").unwrap(), new] };
+            assert!(native_quit_delegate_class(&foreign, c"NSWindow").is_err());
+            assert!(native_quit_delegate_class(&foreign, c"CapNativeQuitNoSuchClass").is_err());
         }
     }
 

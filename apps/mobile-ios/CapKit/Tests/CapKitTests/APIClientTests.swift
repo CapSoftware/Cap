@@ -179,6 +179,39 @@ func bodyJSON(_ request: URLRequest) throws -> [String: Any] {
         #expect(transport.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
     }
 
+    @Test func registersAndRemovesPushTokens() async throws {
+        let (api, transport) = makeAPI { _ in (200, Data(#"{"success":true}"#.utf8)) }
+        try await api.registerPushToken("ab12", environment: .sandbox)
+        try await api.removePushToken("ab12")
+        let requests = transport.requests
+        #expect(requests.map { $0.url?.path() ?? "" } == ["/api/mobile/user/push-tokens", "/api/mobile/user/push-tokens/remove"])
+        #expect(requests.map { $0.httpMethod ?? "" } == ["POST", "POST"])
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer \(testCredentials.apiKey)" })
+        let bodies: [[String: Any]] = try requests.map { try bodyJSON($0) }
+        #expect(bodies[0]["token"] as? String == "ab12")
+        #expect(bodies[0]["environment"] as? String == "sandbox")
+        #expect(bodies[1]["token"] as? String == "ab12")
+    }
+
+    @Test func sharingSendsLinkAccessOnlyWhenChosen() async throws {
+        let cap = #"{"id":"cap_1","shareUrl":"https://cap.so/s/cap_1","title":"Demo","createdAt":"2026-11-01T00:00:00.000Z","updatedAt":"2026-11-01T00:00:00.000Z","ownerName":"Owner","durationSeconds":null,"thumbnailUrl":null,"folderId":null,"public":true,"protected":false,"viewCount":0,"commentCount":0,"reactionCount":0,"upload":null,"linkAccess":"anyone"}"#
+        let (api, transport) = makeAPI { _ in (200, Data(cap.utf8)) }
+        let id = try #require(CapID("cap_1"))
+        _ = try await api.updateSharing(id, isPublic: false)
+        let opened = try await api.updateSharing(id, isPublic: true, linkAccess: .anyone)
+        _ = try await api.updateSharing(id, isPublic: true, linkAccess: .restricted)
+        let requests = transport.requests
+        #expect(requests.allSatisfy { $0.url?.path() == "/api/mobile/caps/cap_1/sharing" && $0.httpMethod == "PATCH" })
+        let bodies: [[String: Any]] = try requests.map { try bodyJSON($0) }
+        #expect(bodies[0]["public"] as? Bool == false)
+        #expect(bodies[0]["linkAccess"] == nil)
+        #expect(bodies[0].count == 1)
+        #expect(bodies[1]["public"] as? Bool == true)
+        #expect(bodies[1]["linkAccess"] as? String == "anyone")
+        #expect(bodies[2]["linkAccess"] as? String == "restricted")
+        #expect(opened.linkAccess == .anyone)
+    }
+
     @Test func rejectsImplausibleSessionsFromVerify() async {
         let (api, _) = makeAPI { _ in (200, Data(#"{"type":"api_key","apiKey":"x","userId":"user_123"}"#.utf8)) }
         await #expect(throws: CapAPIError.invalidResponse) {

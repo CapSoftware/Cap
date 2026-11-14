@@ -140,14 +140,29 @@ pub enum RecoveryError {
     Serialize(#[from] serde_json::Error),
     #[error("No recoverable segments found")]
     NoRecoverableSegments,
-    #[error("Meta save failed")]
-    MetaSave,
+    #[error("Meta save failed at {}: {source}", path.display())]
+    MetaSave {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("Requested recording track failed; partial media preserved: {0}")]
     RequiredTrackFailure(String),
     #[error("Recovery validation failed; original recording preserved: {0}")]
     Validation(String),
     #[error("Recovered video is not playable: {0}")]
     UnplayableVideo(String),
+}
+
+impl RecoveryError {
+    fn meta_save(
+        project_path: &Path,
+        error: either::Either<serde_json::Error, std::io::Error>,
+    ) -> Self {
+        Self::MetaSave {
+            path: project_path.join("recording-meta.json"),
+            source: error.either_into(),
+        }
+    }
 }
 
 pub struct RecoveryManager;
@@ -1065,7 +1080,7 @@ impl RecoveryManager {
             })
             .collect();
 
-        fragments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
         fragments
     }
 
@@ -2025,8 +2040,8 @@ impl RecoveryManager {
         let mut recording_meta = recording.meta.clone();
         recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
-            .save_for_project()
-            .map_err(|_| RecoveryError::MetaSave)?;
+            .save_for_project_with_retry()
+            .map_err(|error| RecoveryError::meta_save(&recording.project_path, error))?;
 
         Self::create_project_config(recording, &meta, purpose)?;
 
@@ -2855,6 +2870,7 @@ impl RecoveryManager {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 })
             })
@@ -2996,15 +3012,19 @@ impl RecoveryManager {
     }
 
     pub fn mark_needs_remux(project_path: &Path) -> Result<(), RecoveryError> {
-        let mut meta =
-            RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
+        let mut meta = RecordingMeta::load_for_project(project_path).map_err(|error| {
+            RecoveryError::meta_save(
+                project_path,
+                either::Either::Right(std::io::Error::other(error.to_string())),
+            )
+        })?;
 
         if let RecordingMetaInner::Studio(studio) = &mut meta.inner
             && let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut()
         {
             inner.status = Some(StudioRecordingStatus::NeedsRemux);
             meta.save_for_project()
-                .map_err(|_| RecoveryError::MetaSave)?;
+                .map_err(|error| RecoveryError::meta_save(project_path, error))?;
         }
 
         Ok(())
