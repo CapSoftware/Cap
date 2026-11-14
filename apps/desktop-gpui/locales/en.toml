@@ -2635,6 +2635,7 @@ model_downloaded = "{model} model downloaded"
 model_label = "Model"
 model_updated = "Recommended model updated"
 model_updated_description = "We recommend the new version. It is more accurate and catches short recordings the old one missed."
+new_caption = "New caption"
 position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
@@ -2910,6 +2911,7 @@ video = { text = "Video", context = "Timeline gutter label of the recording's vi
 zoom = "Zoom"
 
 [editor.transcript]
+add_caption = "Add caption at playhead"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
@@ -2969,6 +2971,7 @@ audio_segment_changed = "This audio segment changed. Select it and choose a repl
 crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
+no_room_for_caption = "No room for another caption here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"
