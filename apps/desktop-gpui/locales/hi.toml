@@ -36,6 +36,7 @@ title = "फ़ाइल"
 open_file = "फ़ाइल खोलें…"
 open_recent = "हालिया खोलें"
 import_media = "मीडिया इम्पोर्ट करें…"
+export = "एक्सपोर्ट करें…"
 
 [menu.edit]
 copy = "कॉपी"
