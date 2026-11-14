@@ -827,6 +827,7 @@ final class EditorModel {
     }
 
     @ObservationIgnored private var loadedMusic: (source: StudioMusic.Source, url: URL)?
+    @ObservationIgnored private var waveformLoad: (url: URL, task: Task<[Float], Never>)?
 
     private func musicURL(_ source: StudioMusic.Source) -> URL? {
         switch source {
@@ -850,7 +851,16 @@ final class EditorModel {
         guard music == wanted else { return false }
         musicSource = source
         if loadedMusic?.url != url {
-            let peaks = await Task.detached(priority: .utility) { await StudioWaveform.peaks(url: url, count: 160) }.value
+            // One read of the file per song, however many volume changes ask for it meanwhile.
+            let task: Task<[Float], Never>
+            if let pending = waveformLoad, pending.url == url {
+                task = pending.task
+            } else {
+                task = Task.detached(priority: .utility) { await StudioWaveform.peaks(url: url, count: 160) }
+                waveformLoad = (url, task)
+            }
+            let peaks = await task.value
+            if waveformLoad?.url == url { waveformLoad = nil }
             // A new volume for the same song still wants this song's waveform.
             if music?.source == wanted.source {
                 musicWaveform = peaks
@@ -1101,6 +1111,7 @@ extension EditorModel {
     /// a new frame shape, music, playback, then a render.
     func runLookScript(pause: (Double) async -> Void) async {
         func memory(_ stage: String) {
+            ProcessStats.note("Studio script stage \(stage)")
             let footprint = ProcessStats.footprint()
             metrics.record("memoryMB.\(stage)", footprint.current)
             metrics.record("peakMB.\(stage)", footprint.peak)
@@ -1143,6 +1154,7 @@ extension EditorModel {
         await pause(0.6)
         memory("afterLooks")
         await setMusic(StudioMusic(source: .builtIn("lofi-beats-mirostar"), title: "Lofi Beats"))
+        ProcessStats.note("Studio script stage music")
         await pause(0.4)
         seek(toOutput: 0)
         await pause(0.3)
@@ -1152,6 +1164,7 @@ extension EditorModel {
         memory("afterPlay")
         await pause(0.3)
         do {
+            ProcessStats.note("Studio script stage export")
             let built = try exportComposition()
             let url = FileManager.default.temporaryDirectory.appending(path: "studio-script-export.mp4")
             let result = try await StudioExporter().export(built, to: url)
