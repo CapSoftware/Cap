@@ -223,6 +223,7 @@ pub struct TeleprompterWindow {
     script_input: Entity<ui::TextInputState>,
     _script_events: gpui::Subscription,
     _recording_events: gpui::Subscription,
+    _quit_events: gpui::Subscription,
     /// Track rects, captured in prepaint: the window is resizable, so neither
     /// pill's width is known here.
     speed_track: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -237,6 +238,12 @@ pub struct TeleprompterWindow {
 
 impl TeleprompterWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, true);
+        Self::with_theme(theme, window, cx)
+    }
+
+    fn with_theme(theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = TeleprompterState::load();
         let save = Rc::new(RefCell::new(PendingSave {
             state: state.clone(),
@@ -251,6 +258,11 @@ impl TeleprompterWindow {
             closing.borrow_mut().flush();
             cx.defer(crate::app_windows::teleprompter_closed);
             true
+        });
+        let quit_events = cx.on_app_quit(|this, _| {
+            this.save_task = None;
+            this.save.borrow_mut().flush();
+            async {}
         });
 
         let script_input = cx.new(|cx| {
@@ -293,9 +305,8 @@ impl TeleprompterWindow {
             window.refresh();
         });
 
-        crate::theme::bind_window(window, cx);
         Self {
-            theme: Theme::for_window(window, cx, true),
+            theme,
             state,
             settings_open: false,
             playback_state,
@@ -305,6 +316,7 @@ impl TeleprompterWindow {
             script_input,
             _script_events: script_events,
             _recording_events: recording_events,
+            _quit_events: quit_events,
             speed_track: Rc::new(Cell::new(None)),
             opacity_track: Rc::new(Cell::new(None)),
             dragging: None,
@@ -1109,6 +1121,44 @@ impl TeleprompterWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn quitting_flushes_debounced_script_and_settings(cx: &mut gpui::TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("store");
+        std::fs::write(
+            &path,
+            r#"{"teleprompter":{"script":"Saved script.","futureSetting":true},"otherSection":{"keep":true}}"#,
+        )
+        .unwrap();
+        store::set_test_tauri_store_path(Some(path.clone()));
+        cx.update(|cx| {
+            RecordingSession::init(cx);
+        });
+        let view = {
+            let cx = cx.add_empty_window();
+            let view = cx.update(|window, cx| {
+                cx.new(|cx| TeleprompterWindow::with_theme(Theme::light(), window, cx))
+            });
+            view.update_in(cx, |view, window, cx| {
+                view.type_script(" New ending. 中文 👋", window, cx);
+                view.change_font_size(FONT_SIZE_STEP, window, cx);
+            });
+            view
+        };
+        cx.quit();
+        drop(view);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        store::set_test_tauri_store_path(None);
+        assert_eq!(
+            saved["teleprompter"]["script"],
+            "Saved script. New ending. 中文 👋"
+        );
+        assert_eq!(saved["teleprompter"]["fontSize"], 32.);
+        assert_eq!(saved["teleprompter"]["futureSetting"], true);
+        assert_eq!(saved["otherSection"]["keep"], true);
+    }
 
     #[test]
     fn recording_pause_preserves_manual_playback_intent() {
