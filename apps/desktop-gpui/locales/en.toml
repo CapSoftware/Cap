@@ -99,6 +99,7 @@ studio = { text = "Studio", context = "Recording mode name." }
 [settings.nav]
 # The sidebar is 227px; the label gets what the 10px padding, 6px item padding,
 # 16px icon and 8px gap leave.
+apps = { text = "Apps", max_px = 171, size = 13 }
 automations = { text = "Automations", max_px = 171, size = 13 }
 changelog = { text = "Changelog", max_px = 171, size = 13 }
 cli = { text = "CLI", max_px = 171, size = 13 }
@@ -973,6 +974,7 @@ description = "Send the share link to Slack, Discord, or your own webhook."
 name = "Tell Slack when you share something"
 
 [main]
+app_action_done = "Done"
 delete_recording_confirm = "Are you sure you want to delete this recording?"
 delete_screenshot_confirm = "Are you sure you want to delete this screenshot?"
 
@@ -2331,6 +2333,7 @@ cursor = "Cursor"
 keyboard = "Keyboard"
 
 [editor.sidebar.wallpaper_theme]
+apps = "Apps"
 blue = "Blue"
 cities = "Cities"
 dark = "Dark"
@@ -3286,3 +3289,27 @@ verification_failed = { text = "Recording verification failed: {status}", contex
 
 [message.cli]
 binary_missing = { text = "Bundled CLI binary not found at {path}", context = "{path} is a file path." }
+
+[settings.apps]
+available_title = "Available"
+browse_web = "Open on the web"
+description = "Add backgrounds, caption styles, color looks and connections. Apps you install follow your account to the web and every device."
+empty = "No apps are available right now."
+failed = "Could not load the App Store. Check your connection and try again."
+install = "Install"
+installed = "Installed"
+installed_title = "Installed"
+loading = "Loading apps…"
+managed_by_org = { text = "Installed for {organization}", context = "{organization} is the name of the user's organization." }
+paused = "Paused"
+platform_desktop = "Desktop"
+platform_web = "Web"
+remove = "Remove"
+retry = "Try again"
+review = "Asks for more access"
+set_up = "Set up on the web"
+sign_in_hint = "Sign in to keep your apps in sync across devices and to use apps that connect to other services."
+title = "Apps"
+
+[editor.app_store]
+from_apps = "From your apps"

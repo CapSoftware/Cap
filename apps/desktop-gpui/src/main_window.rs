@@ -945,6 +945,8 @@ pub struct MainWindow {
     mode: Mode,
     mode_hover: ModeHoverState,
     mode_hover_task: Option<Task<()>>,
+    app_action_notice: Option<(std::path::PathBuf, SharedString)>,
+    app_action_task: Option<Task<()>>,
     mode_hover_bounds: [Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>; 3],
     target: Option<TargetType>,
     devices: DeviceSnapshot,
@@ -1048,6 +1050,10 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::bind_window(window, cx);
+        if cx.has_global::<crate::app_store::AppStore>() {
+            cx.observe_global_in::<crate::app_store::AppStore>(window, |_, _, cx| cx.notify())
+                .detach();
+        }
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]
@@ -1246,6 +1252,8 @@ impl MainWindow {
             mode: Mode::from_store(),
             mode_hover: ModeHoverState::default(),
             mode_hover_task: None,
+            app_action_notice: None,
+            app_action_task: None,
             mode_hover_bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
             target: None,
             devices: DeviceSnapshot::default(),
@@ -4984,6 +4992,36 @@ impl MainWindow {
         let path = item.path.clone();
         let mode = item.mode;
         let sharing = item.sharing.clone();
+        if let Some((notice_path, message)) = &self.app_action_notice
+            && notice_path == &path
+        {
+            return div()
+                .h(px(26.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(px(6.))
+                .text_size(px(11.))
+                .text_color(self.theme.gray_11)
+                .overflow_hidden()
+                .child(message.clone());
+        }
+        let app_actions = sharing
+            .as_deref()
+            .and_then(crate::app_store::cap_id_from_share_url)
+            .and_then(|cap_id| {
+                let store = crate::app_store::try_get(cx)?;
+                if !store.has_cap_actions() {
+                    return None;
+                }
+                let Some(actions) = store.actions_for_cap(&cap_id).cloned() else {
+                    let pending = cap_id.clone();
+                    cx.defer(move |cx| crate::app_store::request_cap_actions(vec![pending], cx));
+                    return None;
+                };
+                let icons = crate::app_store::snapshot(cx).thumbnails;
+                Some((cap_id, actions, icons))
+            });
         let mut row = div()
             .flex()
             .flex_row()
@@ -5014,6 +5052,18 @@ impl MainWindow {
                 tr::settings::recordings::open_link(),
                 move |_, _, cx| cx.open_url(&url),
             ));
+        }
+        if let Some((cap_id, actions, icons)) = app_actions {
+            for action in actions {
+                let icon = icons.get(&action.icon_sha256).cloned();
+                row = row.child(self.app_action_button(
+                    path.clone(),
+                    cap_id.clone(),
+                    action,
+                    icon,
+                    cx,
+                ));
+            }
         }
         if item
             .upload
@@ -5066,6 +5116,106 @@ impl MainWindow {
                 this.delete_library_recording(path.clone(), window, cx);
             }),
         ))
+    }
+
+    fn app_action_button(
+        &self,
+        path: std::path::PathBuf,
+        cap_id: String,
+        action: crate::app_store::CapAction,
+        icon: Option<std::sync::Arc<gpui::RenderImage>>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let label = SharedString::from(action.title.clone());
+        div()
+            .id(SharedString::from(format!(
+                "lib-rec-app-{}-{}",
+                action.installation_id, action.action_id
+            )))
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, label.clone()).view(cx))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+            .flex_1()
+            .h(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .hover(move |style| style.bg(glass_hover(theme)))
+            .active(move |style| style.bg(glass_press(theme)))
+            .child(
+                div()
+                    .size(px(14.))
+                    .rounded(px(3.))
+                    .overflow_hidden()
+                    .bg(theme.gray_5)
+                    .children(icon.map(|icon| img(icon).size_full())),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_app_action(path.clone(), cap_id.clone(), action.clone(), window, cx);
+            }))
+    }
+
+    fn run_app_action(
+        &mut self,
+        path: std::path::PathBuf,
+        cap_id: String,
+        action: crate::app_store::CapAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let working = SharedString::from(format!("{}...", action.title));
+        self.app_action_notice = Some((path.clone(), working));
+        cx.notify();
+        self.app_action_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let Ok(task) = cx.update(|_, cx| {
+                gpui_tokio::Tokio::spawn(cx, crate::app_store::run_cap_action(action, cap_id))
+            }) else {
+                return;
+            };
+            let result = task.await.unwrap_or_else(|error| Err(error.to_string()));
+            let message: SharedString = match &result {
+                Ok(result) => result
+                    .message()
+                    .unwrap_or(tr::main::app_action_done())
+                    .to_string()
+                    .into(),
+                Err(error) => error.clone().into(),
+            };
+            let open = result
+                .as_ref()
+                .ok()
+                .and_then(|result| result.open_url().map(str::to_string));
+            if this
+                .update(cx, |this, cx| {
+                    this.app_action_notice = Some((path.clone(), message));
+                    if let Some(url) = &open {
+                        cx.open_url(url);
+                    }
+                    cx.notify();
+                })
+                .is_err()
+            {
+                return;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(4))
+                .await;
+            this.update(cx, |this, cx| {
+                if this
+                    .app_action_notice
+                    .as_ref()
+                    .is_some_and(|(notice_path, _)| notice_path == &path)
+                {
+                    this.app_action_notice = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     fn render_screenshot_card(

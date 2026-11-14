@@ -49,6 +49,7 @@ fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Se
         profile_image: None,
         keyboard_nav: false,
         _keyboard_nav: gpui::Subscription::new(|| {}),
+        _app_store: None,
     }
 }
 

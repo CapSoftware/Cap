@@ -97,6 +97,7 @@ screenshot = "स्क्रीनशॉट"
 studio = "Studio"
 
 [settings.nav]
+apps = "ऐप्स"
 automations = "ऑटोमेशन"
 changelog = "चेंजलॉग"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "शेयर लिंक Slack, Discord या अपने व�
 name = "कुछ शेयर करने पर Slack को बताएँ"
 
 [main]
+app_action_done = "हो गया"
 delete_recording_confirm = "क्या आप वाकई यह रिकॉर्डिंग हटाना चाहते हैं?"
 delete_screenshot_confirm = "क्या आप वाकई यह स्क्रीनशॉट हटाना चाहते हैं?"
 
@@ -2329,6 +2331,7 @@ cursor = "कर्सर"
 keyboard = "कीबोर्ड"
 
 [editor.sidebar.wallpaper_theme]
+apps = "ऐप्स"
 blue = "नीला"
 cities = "शहर"
 dark = "डार्क"
@@ -3284,3 +3287,27 @@ verification_failed = "रिकॉर्डिंग की जाँच वि
 
 [message.cli]
 binary_missing = "{path} पर बंडल की गई CLI नहीं मिली"
+
+[settings.apps]
+available_title = "उपलब्ध"
+browse_web = "वेब पर खोलें"
+description = "बैकग्राउंड, कैप्शन स्टाइल, कलर लुक और कनेक्शन जोड़ें। आपके इंस्टॉल किए ऐप्स आपके खाते के साथ वेब और हर डिवाइस पर चलते हैं।"
+empty = "अभी कोई ऐप उपलब्ध नहीं है।"
+failed = "App Store लोड नहीं हो सका। अपना कनेक्शन जाँचें और फिर से कोशिश करें।"
+install = "इंस्टॉल करें"
+installed = "इंस्टॉल है"
+installed_title = "इंस्टॉल किए गए"
+loading = "ऐप्स लोड हो रहे हैं…"
+managed_by_org = "{organization} के लिए इंस्टॉल किया गया"
+paused = "रुका हुआ"
+platform_desktop = "डेस्कटॉप"
+platform_web = "वेब"
+remove = "हटाएँ"
+retry = "फिर से कोशिश करें"
+review = "अधिक एक्सेस माँग रहा है"
+set_up = "वेब पर सेट अप करें"
+sign_in_hint = "अपने ऐप्स को सभी डिवाइस पर सिंक रखने और दूसरी सेवाओं से जुड़ने वाले ऐप्स इस्तेमाल करने के लिए साइन इन करें।"
+title = "ऐप्स"
+
+[editor.app_store]
+from_apps = "आपके ऐप्स से"

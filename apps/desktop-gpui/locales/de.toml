@@ -97,6 +97,7 @@ screenshot = "Bildschirmfoto"
 studio = "Studio"
 
 [settings.nav]
+apps = "Apps"
 automations = "Automatisierungen"
 changelog = "Änderungsprotokoll"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "Den Link zum Teilen an Slack, Discord oder Ihren eigenen Webhook 
 name = "Slack beim Teilen benachrichtigen"
 
 [main]
+app_action_done = "Fertig"
 delete_recording_confirm = "Möchten Sie diese Aufnahme wirklich löschen?"
 delete_screenshot_confirm = "Möchten Sie dieses Bildschirmfoto wirklich löschen?"
 
@@ -2329,6 +2331,7 @@ cursor = "Cursor"
 keyboard = "Tastatur"
 
 [editor.sidebar.wallpaper_theme]
+apps = "Apps"
 blue = "Blau"
 cities = "Städte"
 dark = "Dunkel"
@@ -3284,3 +3287,27 @@ verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
 
 [message.cli]
 binary_missing = "Mitgelieferte CLI unter {path} nicht gefunden"
+
+[settings.apps]
+available_title = "Verfügbar"
+browse_web = "Im Web öffnen"
+description = "Fügen Sie Hintergründe, Untertitelstile, Farblooks und Verbindungen hinzu. Installierte Apps folgen Ihrem Konto ins Web und auf jedes Gerät."
+empty = "Derzeit sind keine Apps verfügbar."
+failed = "Der App Store konnte nicht geladen werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+install = "Installieren"
+installed = "Installiert"
+installed_title = "Installiert"
+loading = "Apps werden geladen…"
+managed_by_org = "Installiert für {organization}"
+paused = "Pausiert"
+platform_desktop = "Desktop"
+platform_web = "Web"
+remove = "Entfernen"
+retry = "Erneut versuchen"
+review = "Fordert mehr Zugriff an"
+set_up = "Im Web einrichten"
+sign_in_hint = "Melden Sie sich an, um Ihre Apps auf allen Geräten synchron zu halten und Apps zu nutzen, die sich mit anderen Diensten verbinden."
+title = "Apps"
+
+[editor.app_store]
+from_apps = "Aus Ihren Apps"

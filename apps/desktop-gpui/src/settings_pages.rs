@@ -519,6 +519,7 @@ impl SettingsWindow {
                 let input = self.pages.license_input.clone();
                 input.update(cx, |input, cx| input.set_text("", cx));
             }
+            Page::Apps => crate::app_store::refresh(cx),
             Page::Integrations => {
                 self.pages.integrations_view = IntegrationsView::Index;
                 self.integrations_fetch_storage(false, window, cx);

@@ -9,6 +9,7 @@ import { Option } from "effect";
 import { getStepMetadata, sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { emitCapReadySafely } from "@/lib/app-store/announce";
 import { observeDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
 import {
 	attachRemoteJob,
@@ -934,6 +935,7 @@ async function queueFinalizedRecordingTranscription(
 ): Promise<boolean> {
 	"use step";
 
+	await emitCapReadySafely(Video.VideoId.make(videoId));
 	if (!serverEnv().ASSEMBLY_API_KEY) return true;
 	try {
 		const [[owner], [video]] = await Promise.all([

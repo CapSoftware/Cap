@@ -96,6 +96,7 @@ pub enum Page {
     Screenshots,
     Automations,
     Transcription,
+    Apps,
     Integrations,
     License,
     Experimental,
@@ -113,6 +114,7 @@ impl Page {
         Page::Screenshots,
         Page::Automations,
         Page::Transcription,
+        Page::Apps,
         Page::Integrations,
         Page::License,
         Page::Experimental,
@@ -132,6 +134,7 @@ impl Page {
             Self::Screenshots => tr::settings::nav::screenshots(),
             Self::Automations => tr::settings::nav::automations(),
             Self::Transcription => tr::settings::nav::transcription(),
+            Self::Apps => tr::settings::nav::apps(),
             Self::Integrations => tr::settings::nav::integrations(),
             Self::License => tr::settings::nav::license(),
             Self::Experimental => tr::settings::nav::experimental(),
@@ -151,6 +154,7 @@ impl Page {
             Self::Screenshots => "screenshots",
             Self::Automations => "automations",
             Self::Transcription => "transcription",
+            Self::Apps => "apps",
             Self::Integrations => "integrations",
             Self::License => "license",
             Self::Experimental => "experimental",
@@ -174,6 +178,7 @@ impl Page {
             Self::Screenshots => "icons/image.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
+            Self::Apps => "icons/grid.svg",
             Self::Integrations => "icons/unplug.svg",
             Self::License => "icons/gift.svg",
             Self::Feedback => "icons/message-square-plus.svg",
@@ -762,6 +767,7 @@ pub struct SettingsWindow {
     profile_image: Option<Arc<RenderImage>>,
     keyboard_nav: bool,
     _keyboard_nav: gpui::Subscription,
+    _app_store: Option<gpui::Subscription>,
 }
 
 impl SettingsWindow {
@@ -840,6 +846,15 @@ impl SettingsWindow {
             ),
         ];
 
+        let app_store = cx.has_global::<crate::app_store::AppStore>().then(|| {
+            cx.observe_global_in::<crate::app_store::AppStore>(window, |this, window, cx| {
+                if this.page == Page::Apps {
+                    cx.notify();
+                    window.refresh();
+                }
+            })
+        });
+
         let sign_in = SignIn::global(cx);
         let sign_in_subscriptions = [
             cx.observe_in(&sign_in, window, |_, _, window, cx| {
@@ -902,6 +917,7 @@ impl SettingsWindow {
             profile_image: None,
             keyboard_nav: false,
             _keyboard_nav: keyboard_nav,
+            _app_store: app_store,
         }
     }
 
@@ -2232,6 +2248,7 @@ impl SettingsWindow {
         }
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
+        crate::app_store::account_changed(cx);
         if !store::set_store_value("user_profile", Value::Null) {
             tracing::error!("failed to clear the cached user profile");
         }
@@ -2389,6 +2406,7 @@ impl SettingsWindow {
                         Page::Cli => self.render_cli(cx),
                         Page::Automations => self.render_automations(cx),
                         Page::Transcription => self.render_transcription(cx),
+                        Page::Apps => self.render_apps(cx),
                         Page::Integrations => self.render_integrations(cx),
                         Page::License => self.render_license(cx),
                         Page::Experimental => self.render_experimental(cx),
@@ -5116,11 +5134,12 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 13);
+        assert_eq!(Page::ALL.len(), 14);
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }
         assert_eq!(Page::Shortcuts.slug(), "hotkeys");
+        assert_eq!(Page::from_slug("apps"), Some(Page::Apps));
         assert_eq!(Page::from_slug("nope"), None);
     }
 

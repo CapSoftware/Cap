@@ -64,6 +64,7 @@ use crate::{
 };
 
 mod animated_gradient;
+mod app_backgrounds;
 mod cursor;
 
 // ---------------------------------------------------------------------------
@@ -2011,7 +2012,7 @@ impl EditorWindow {
 /// Decode an image for a thumbnail slot, at most `max` pixels on its longest
 /// side. The same rule as `library::decode_thumbnail`: the atlas would
 /// otherwise hold a multi-megapixel original per tile.
-fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
+pub(crate) fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
     let bytes = std::fs::read(path).ok()?;
     let format = image::guess_format(&bytes).ok()?;
     let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
@@ -2250,7 +2251,9 @@ impl EditorWindow {
     /// near-free, and a cold theme batch takes one image's latency instead of
     /// eighteen), landing in batches of whatever has finished per notify.
     fn ensure_wallpapers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0;
+        let Some((theme, _)) = BACKGROUND_THEMES.get(self.sidebar.wallpaper_theme) else {
+            return;
+        };
         let wanted: Vec<&'static str> = wallpapers_for_theme(theme)
             .into_iter()
             .filter(|id| !self.sidebar.wallpapers.contains_key(id))
@@ -3022,7 +3025,15 @@ impl EditorWindow {
 
     fn render_wallpaper_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let selected_theme = self.sidebar.wallpaper_theme;
+        let app_tiles = app_backgrounds::app_background_tiles(cx);
+        let selected_theme = if self.sidebar.wallpaper_theme == app_backgrounds::APPS_THEME
+            && app_tiles.is_empty()
+        {
+            0
+        } else {
+            self.sidebar.wallpaper_theme
+        };
+        let apps_selected = selected_theme == app_backgrounds::APPS_THEME;
         let selected_id = match &self.project.background.source {
             BackgroundSource::Wallpaper { path: Some(path) }
                 if !is_current_desktop_background_path(Some(path)) =>
@@ -3031,7 +3042,10 @@ impl EditorWindow {
             }
             _ => None,
         };
-        let ids = wallpapers_for_theme(BACKGROUND_THEMES[selected_theme].0);
+        let ids = BACKGROUND_THEMES
+            .get(selected_theme)
+            .map(|(id, _)| wallpapers_for_theme(id))
+            .unwrap_or_default();
         // Floored, with a pixel to spare: a cell that divides the pane exactly
         // wraps the last tile onto its own row.
         let cell = ((CONTENT_WIDTH - WALLPAPER_GAP * (WALLPAPER_COLUMNS - 1.)) / WALLPAPER_COLUMNS)
@@ -3086,9 +3100,39 @@ impl EditorWindow {
                                         this.ensure_wallpapers(window, cx);
                                         cx.notify();
                                     }))
-                            }),
+                            })
+                            .chain((!app_tiles.is_empty()).then(|| {
+                                div()
+                                    .id("wallpaper-theme-apps")
+                                    .flex()
+                                    .flex_1()
+                                    .justify_center()
+                                    .items_center()
+                                    .h(px(24.))
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .when(apps_selected, |this| {
+                                        this.bg(Hsla::from(theme.editor.ctl_hover))
+                                            .text_color(Hsla::from(theme.editor.text_1))
+                                    })
+                                    .when(!apps_selected, |this| {
+                                        this.text_color(Hsla::from(theme.editor.text_2))
+                                            .cursor_pointer()
+                                            .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
+                                    })
+                                    .child(tr::editor::sidebar::wallpaper_theme::apps())
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.sidebar.wallpaper_theme = app_backgrounds::APPS_THEME;
+                                        crate::app_store::refresh_if_stale(cx);
+                                        cx.notify();
+                                    }))
+                            })),
                     ),
             )
+            .when(apps_selected, |this| {
+                this.child(self.render_app_backgrounds(app_tiles, cell, cx))
+            })
             .child(
                 div()
                     .flex()

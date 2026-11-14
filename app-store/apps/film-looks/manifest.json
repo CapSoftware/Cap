@@ -1,0 +1,81 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "film-looks",
+	"name": "Film Looks",
+	"version": "1.0.0",
+	"description": "Six color looks inspired by film stock, from warm golden hour to cool night shoots.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["color"],
+	"keywords": ["grade", "lut", "cinematic"],
+	"colorLooks": [
+		{
+			"id": "golden-hour",
+			"name": "Golden Hour",
+			"description": "Warm highlights and soft contrast",
+			"values": {
+				"contrast": 0.08,
+				"saturation": 0.1,
+				"temperature": 0.32,
+				"tint": 0.04,
+				"fade": 0.06,
+				"vignette": 0.15
+			}
+		},
+		{
+			"id": "night-shoot",
+			"name": "Night Shoot",
+			"description": "Cool shadows with a teal cast",
+			"values": {
+				"exposure": -0.06,
+				"contrast": 0.16,
+				"saturation": -0.08,
+				"temperature": -0.3,
+				"splitTone": 0.35,
+				"vignette": 0.25
+			}
+		},
+		{
+			"id": "matte",
+			"name": "Matte",
+			"description": "Lifted blacks and muted color",
+			"values": {
+				"contrast": -0.1,
+				"saturation": -0.18,
+				"fade": 0.35,
+				"grain": 0.08
+			}
+		},
+		{
+			"id": "noir",
+			"name": "Noir",
+			"description": "High contrast black and white",
+			"values": {
+				"contrast": 0.3,
+				"saturation": -1,
+				"vignette": 0.3,
+				"grain": 0.18
+			}
+		},
+		{
+			"id": "pop",
+			"name": "Pop",
+			"description": "Clean, punchy and colorful",
+			"values": { "exposure": 0.04, "contrast": 0.14, "saturation": 0.28 }
+		},
+		{
+			"id": "super-8",
+			"name": "Super 8",
+			"description": "Faded warmth with visible grain",
+			"values": {
+				"contrast": -0.04,
+				"saturation": -0.1,
+				"temperature": 0.2,
+				"fade": 0.22,
+				"vignette": 0.35,
+				"grain": 0.4
+			}
+		}
+	]
+}

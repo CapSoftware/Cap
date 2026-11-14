@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app_sounds;
+mod app_store;
 mod app_windows;
 mod assets;
 mod auth;
@@ -407,6 +408,7 @@ fn main() {
         let session = RecordingSession::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
+        crate::app_store::AppStore::init(cx);
         crate::media_access::MediaAccess::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 

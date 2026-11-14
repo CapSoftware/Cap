@@ -174,6 +174,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
             tr::main::delete_recording_confirm(),
             "Are you sure you want to delete this recording?",
         ),
+        (tr::main::app_action_done(), "Done"),
         (
             tr::main::delete_screenshot_confirm(),
             "Are you sure you want to delete this screenshot?",

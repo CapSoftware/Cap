@@ -435,6 +435,13 @@
 			"when": 1794582375191,
 			"tag": "0061_developer_delivery_metering",
 			"breakpoints": true
+		},
+		{
+			"idx": 62,
+			"version": "5",
+			"when": 1794635053920,
+			"tag": "0062_app_store",
+			"breakpoints": true
 		}
 	]
 }

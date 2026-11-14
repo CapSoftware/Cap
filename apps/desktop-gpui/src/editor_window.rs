@@ -2018,6 +2018,14 @@ struct OpenTextMenu {
 impl EditorWindow {
     pub fn new(project_path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::theme::bind_window(window, cx);
+        if cx.has_global::<crate::app_store::AppStore>() {
+            cx.observe_global_in::<crate::app_store::AppStore>(window, |_, window, cx| {
+                cx.notify();
+                window.refresh();
+            })
+            .detach();
+            crate::app_store::refresh_if_stale(cx);
+        }
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 if let Some(crop) = this.crop.as_mut()

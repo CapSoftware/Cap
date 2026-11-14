@@ -1,0 +1,14 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "google-drive",
+	"name": "Google Drive",
+	"version": "1.0.0",
+	"description": "Save your recordings straight to a Google Drive folder you choose.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["storage"],
+	"keywords": ["drive", "google", "storage"],
+	"privacyPolicy": "https://cap.so/privacy",
+	"builtin": "google-drive"
+}
