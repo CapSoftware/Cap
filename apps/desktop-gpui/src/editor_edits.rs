@@ -2233,12 +2233,12 @@ fn clip_available_timeline_duration(
     let total: f64 = timeline
         .segments
         .iter()
-        .map(|segment| segment.duration())
+        .map(|segment| segment.end - segment.start)
         .sum();
     let own = timeline
         .segments
         .get(index)
-        .map_or(0., |segment| segment.duration());
+        .map_or(0., |segment| segment.end - segment.start);
     recording_duration - (total - own)
 }
 
@@ -2321,7 +2321,7 @@ pub fn clip_trim_end(
     let floor = (segment.start + min_recorded).min(segment.end);
     Some(
         new_end
-            .min(segment.end + available * segment.timescale)
+            .min(segment.start + available)
             .min(next_ceiling)
             .max(floor),
     )
@@ -3732,6 +3732,64 @@ mod tests {
             clip_trim_end(timeline, 0, 0.02, 0.001, &displays, recording),
             Some(0.1)
         );
+    }
+
+    #[test]
+    fn clip_trim_is_independent_of_other_clips_playback_speeds() {
+        for timescale in [0.25, 0.5, 1.0, 2.0, 8.0] {
+            let project = config(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": timescale, "start": 0.0, "end": 10.0 },
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 20.0 }
+                    ],
+                    "zoomSegments": []
+                }
+            }));
+            let timeline = project.timeline.as_ref().unwrap();
+            assert_eq!(
+                (
+                    clip_trim_start(timeline, 1, 12.0, 0.05, &[20.0], 20.0),
+                    clip_trim_end(timeline, 1, 18.0, 0.05, &[20.0], 20.0),
+                ),
+                (Some(12.0), Some(18.0)),
+                "previous clip at {timescale}x"
+            );
+            assert_eq!(
+                (
+                    clip_trim_start(timeline, 1, 0.0, 0.05, &[20.0], 20.0),
+                    clip_trim_end(timeline, 1, 30.0, 0.05, &[20.0], 20.0),
+                ),
+                (Some(10.0), Some(20.0)),
+                "source bounds with previous clip at {timescale}x"
+            );
+        }
+    }
+
+    #[test]
+    fn clip_trim_caps_extensions_at_the_remaining_source_budget() {
+        for timescale in [0.25, 0.5, 1.0, 2.0, 8.0] {
+            let project = config(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": timescale, "start": 5.0, "end": 10.0 },
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 13.0 }
+                    ],
+                    "zoomSegments": []
+                }
+            }));
+            let timeline = project.timeline.as_ref().unwrap();
+            assert_eq!(
+                clip_trim_start(timeline, 0, 0.0, 0.001, &[20.0], 20.0),
+                Some(3.0),
+                "start at {timescale}x"
+            );
+            assert_eq!(
+                clip_trim_end(timeline, 0, 20.0, 0.001, &[20.0], 20.0),
+                Some(12.0),
+                "end at {timescale}x"
+            );
+        }
     }
 
     /// Clips whose source ranges *overlap* their same-clip neighbours --
