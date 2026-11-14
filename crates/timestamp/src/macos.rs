@@ -1,14 +1,11 @@
+use cidre::mach::TimeBaseInfo;
 use std::{
     ops::{Add, Sub},
     sync::OnceLock,
     time::Duration,
 };
 
-use cidre::mach;
-use serde::{Deserialize, Serialize};
-
-// Raw mach_absolute_time ticks
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MachAbsoluteTimestamp(u64);
 
 static TIMEBASE_RATIO: OnceLock<(u128, u128)> = OnceLock::new();
@@ -16,66 +13,75 @@ static TIMEBASE_RATIO: OnceLock<(u128, u128)> = OnceLock::new();
 fn timebase_ratio() -> (u128, u128) {
     *TIMEBASE_RATIO.get_or_init(|| {
         let info = TimeBaseInfo::new();
-        (u128::from(info.0.numer), u128::from(info.0.denom.max(1)))
+        let numer = u128::from(info.numer.max(1));
+        let denom = u128::from(info.denom.max(1));
+        (numer, denom)
     })
 }
 
 fn ticks_to_nanos_with_ratio(ticks: u64, numer: u128, denom: u128) -> u128 {
-    let denom = denom.max(1);
     (u128::from(ticks) * numer + denom / 2) / denom
 }
 
 fn nanos_to_ticks_with_ratio(nanos: u128, numer: u128, denom: u128) -> u64 {
-    let numer = numer.max(1);
-    let ticks = (nanos * denom + numer / 2) / numer;
+    let scaled = nanos.saturating_mul(denom);
+    let ticks = scaled.saturating_add(numer / 2) / numer;
     u64::try_from(ticks).unwrap_or(u64::MAX)
 }
 
-fn ticks_to_nanos(ticks: u64) -> u128 {
-    let (numer, denom) = timebase_ratio();
-    ticks_to_nanos_with_ratio(ticks, numer, denom)
-}
-
-fn duration_to_ticks(duration: Duration) -> u64 {
-    let (numer, denom) = timebase_ratio();
-    nanos_to_ticks_with_ratio(duration.as_nanos(), numer, denom)
+fn duration_from_nanos_u128(nanos: u128) -> Duration {
+    let secs = u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX);
+    let subsec_nanos = (nanos % 1_000_000_000) as u32;
+    if secs == u64::MAX {
+        Duration::MAX
+    } else {
+        Duration::new(secs, subsec_nanos)
+    }
 }
 
 impl MachAbsoluteTimestamp {
-    pub fn now() -> Self {
-        Self(unsafe { mach::time::mach_absolute_time() })
-    }
-
     pub fn new(ticks: u64) -> Self {
         Self(ticks)
     }
 
+    pub fn now() -> Self {
+        Self(cidre::mach::abs_time())
+    }
+
     pub fn duration_since(&self, other: Self) -> Duration {
-        self.checked_duration_since(other)
-            .expect("supplied instant is later than self")
+        match self.checked_duration_since(other) {
+            Some(duration) => duration,
+            None => Duration::ZERO,
+        }
     }
 
-    pub fn duration_since_unix_epoch(&self) -> Duration {
-        let nanos = u64::try_from(ticks_to_nanos(self.0)).unwrap_or(u64::MAX);
-        Duration::from_nanos(nanos)
-    }
-
-    pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
-        let diff = self.0.checked_sub(earlier.0)?;
-        let nanos = u64::try_from(ticks_to_nanos(diff)).unwrap_or(u64::MAX);
-        Some(Duration::from_nanos(nanos))
+    pub fn checked_duration_since(&self, other: Self) -> Option<Duration> {
+        let diff = self.0.checked_sub(other.0)?;
+        let (numer, denom) = timebase_ratio();
+        let nanos = ticks_to_nanos_with_ratio(diff, numer, denom);
+        Some(duration_from_nanos_u128(nanos))
     }
 
     pub fn signed_duration_since_nanos(&self, other: Self) -> i128 {
+        let (numer, denom) = timebase_ratio();
         if self.0 >= other.0 {
-            ticks_to_nanos(self.0 - other.0) as i128
+            let nanos = ticks_to_nanos_with_ratio(self.0 - other.0, numer, denom);
+            i128::try_from(nanos).unwrap_or(i128::MAX)
         } else {
-            -(ticks_to_nanos(other.0 - self.0) as i128)
+            let nanos = ticks_to_nanos_with_ratio(other.0 - self.0, numer, denom);
+            let clamped = i128::try_from(nanos).unwrap_or(i128::MAX);
+            -clamped
         }
     }
 
     pub fn signed_duration_since_secs(&self, other: Self) -> f64 {
         self.signed_duration_since_nanos(other) as f64 / 1_000_000_000.0
+    }
+
+    pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
+        use cpal::host::coreaudio::StreamInstantExt;
+
+        Self(instant.as_host_time())
     }
 }
 
@@ -83,7 +89,11 @@ impl Add<Duration> for MachAbsoluteTimestamp {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        let ticks = duration_to_ticks(rhs);
+        // ns = ticks * numer / denom, so ticks = ns * denom / numer.
+        // On Apple Silicon (numer/denom = 125/3) multiplying by numer/denom
+        // instead would add ~1736x the intended duration.
+        let (numer, denom) = timebase_ratio();
+        let ticks = nanos_to_ticks_with_ratio(rhs.as_nanos(), numer, denom);
         Self(self.0.saturating_add(ticks))
     }
 }
@@ -92,18 +102,9 @@ impl Sub<Duration> for MachAbsoluteTimestamp {
     type Output = Self;
 
     fn sub(self, rhs: Duration) -> Self::Output {
-        let ticks = duration_to_ticks(rhs);
+        let (numer, denom) = timebase_ratio();
+        let ticks = nanos_to_ticks_with_ratio(rhs.as_nanos(), numer, denom);
         Self(self.0.saturating_sub(ticks))
-    }
-}
-
-struct TimeBaseInfo(mach::time::TimeBaseInfo);
-
-impl TimeBaseInfo {
-    pub fn new() -> Self {
-        let mut info = mach::time::TimeBaseInfo::default();
-        unsafe { mach::time::mach_timebase_info(&mut info) };
-        Self(info)
     }
 }
 
@@ -112,50 +113,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn high_uptime_zero_duration_roundtrip_is_exact() {
-        let base = MachAbsoluteTimestamp::new((1u64 << 53) + 1);
-        assert_eq!(base + Duration::ZERO, base);
-        assert_eq!(base - Duration::ZERO, base);
+    fn duration_since_returns_zero_when_earlier() {
+        let base = MachAbsoluteTimestamp::new(1_000);
+        let earlier = MachAbsoluteTimestamp::new(900);
+
+        assert_eq!(earlier.duration_since(base), Duration::ZERO);
+        assert_eq!(earlier.checked_duration_since(base), None);
     }
 
     #[test]
-    fn high_uptime_duration_arithmetic_avoids_f64_precision_loss() {
-        let base = MachAbsoluteTimestamp::new((1u64 << 53) + 1);
-        let delta = Duration::from_nanos(16_666_667);
+    fn add_duration_roundtrips_through_duration_since() {
+        let base = MachAbsoluteTimestamp::now();
+        let added = base + Duration::from_millis(35);
 
-        let advanced = base + delta;
-        let elapsed = advanced.duration_since(base);
-
-        let (numer, denom) = timebase_ratio();
-        let expected_ticks = nanos_to_ticks_with_ratio(delta.as_nanos(), numer, denom);
-        let expected_nanos = ticks_to_nanos_with_ratio(expected_ticks, numer, denom) as u64;
-
-        assert_eq!(elapsed, Duration::from_nanos(expected_nanos));
-        assert_eq!(advanced - delta, base);
-    }
-
-    #[test]
-    fn apple_silicon_ratio_rounds_nearest_tick_and_nanos() {
-        let numer = 125u128;
-        let denom = 3u128;
-        let ticks = nanos_to_ticks_with_ratio(1_000_000_000, numer, denom);
-        assert_eq!(ticks, 24_000_000);
-        let nanos = ticks_to_nanos_with_ratio(ticks, numer, denom);
-        assert_eq!(nanos, 1_000_000_000);
-    }
-
-    #[test]
-    fn signed_duration_since_nanos_and_secs_handle_both_directions() {
-        let earlier = MachAbsoluteTimestamp::new(24_000_000);
-        let delta = Duration::from_millis(250);
-        let later = earlier + delta;
-
-        assert!(later.signed_duration_since_nanos(earlier) > 0);
-        assert_eq!(
-            earlier.signed_duration_since_nanos(later),
-            -later.signed_duration_since_nanos(earlier)
+        let roundtrip = added.duration_since(base);
+        let error_us = (roundtrip.as_micros() as i128 - 35_000).abs();
+        assert!(
+            error_us < 10,
+            "35ms add must survive the tick conversion roundtrip, got {roundtrip:?}"
         );
-        assert!((later.signed_duration_since_secs(earlier) - 0.25).abs() < 1e-6);
-        assert!((earlier.signed_duration_since_secs(later) + 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sub_duration_roundtrips_through_duration_since() {
+        let base = MachAbsoluteTimestamp::now();
+        let subtracted = base - Duration::from_millis(120);
+
+        let roundtrip = base.duration_since(subtracted);
+        let error_us = (roundtrip.as_micros() as i128 - 120_000).abs();
+        assert!(
+            error_us < 10,
+            "120ms sub must survive the tick conversion roundtrip, got {roundtrip:?}"
+        );
+    }
+
+    #[test]
+    fn add_then_sub_is_identity() {
+        let base = MachAbsoluteTimestamp::now();
+        let d = Duration::from_millis(500);
+        let roundtrip = (base + d) - d;
+
+        let drift = roundtrip
+            .duration_since(base)
+            .max(base.duration_since(roundtrip));
+        assert!(
+            drift < Duration::from_micros(10),
+            "add/sub of the same duration must cancel out, drifted {drift:?}"
+        );
+    }
+
+    #[test]
+    fn high_uptime_arithmetic_avoids_f64_precision_loss() {
+        let high_uptime = MachAbsoluteTimestamp::new((1u64 << 53) + 7);
+        assert_eq!(high_uptime + Duration::ZERO, high_uptime);
+        assert_eq!(high_uptime - Duration::ZERO, high_uptime);
+
+        let step = Duration::from_millis(250);
+        let advanced = high_uptime + step;
+        assert!(advanced.0 > high_uptime.0);
+        assert_eq!(advanced - step, high_uptime);
+
+        let forward_ns = advanced.signed_duration_since_nanos(high_uptime);
+        let backward_ns = high_uptime.signed_duration_since_nanos(advanced);
+        assert_eq!(forward_ns, -backward_ns);
+        assert!((forward_ns - 250_000_000).abs() <= 50);
+
+        let ticks_6h = nanos_to_ticks_with_ratio(6 * 3_600 * 1_000_000_000, 125, 3);
+        assert_eq!(ticks_6h, 518_400_000_000);
+        let nanos_6h = ticks_to_nanos_with_ratio(ticks_6h, 125, 3);
+        assert_eq!(nanos_6h, 6 * 3_600 * 1_000_000_000);
     }
 }
