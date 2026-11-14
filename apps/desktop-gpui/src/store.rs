@@ -153,6 +153,8 @@ pub struct ExportPrefs {
     #[serde(default)]
     pub turbo: bool,
     #[serde(default)]
+    pub audio_source: String,
+    #[serde(default)]
     pub gif_quality: Option<String>,
 }
 

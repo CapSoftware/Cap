@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ExportSettings::Mp4(settings) => (settings.resolution_base, settings.effective_bpp()),
         ExportSettings::Gif(settings) => (settings.resolution_base, 0.3),
         ExportSettings::Mov(settings) => (settings.resolution_base, 0.3),
+        ExportSettings::Audio(_) => (cap_project::XY::new(1280, 720), 0.3),
     };
     let preview = cap_export::preview::render_preview_with_editor(
         &editor,
@@ -153,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ExportSettings::Mp4(settings) => settings.export(base, |_| true).await?,
         ExportSettings::Gif(settings) => settings.export(base, |_| true).await?,
         ExportSettings::Mov(settings) => settings.export(base, |_| true).await?,
+        ExportSettings::Audio(settings) => settings.export(base, |_| true).await?,
     };
     let actual_seconds = started.elapsed().as_secs_f64();
     let actual_mb = std::fs::metadata(path)?.len() as f64 / (1024.0 * 1024.0);

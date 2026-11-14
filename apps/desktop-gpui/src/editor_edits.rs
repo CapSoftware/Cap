@@ -427,6 +427,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
         TrackKind::Mask => (1., 80.),
         TrackKind::Shape => (0.5, 40.),
         TrackKind::Audio => (0.5, 60.),
+        TrackKind::MicAudio | TrackKind::SystemAudio => (0.5, 60.),
         TrackKind::Caption => (0.5, 40.),
         TrackKind::Keyboard => (0.3, 30.),
     };
@@ -960,7 +961,7 @@ macro_rules! with_track {
                 let $segments = &mut $timeline.keyboard_segments;
                 $body
             }
-            TrackKind::Clip => Default::default(),
+            TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio => Default::default(),
         }
     };
 }
@@ -969,7 +970,7 @@ macro_rules! with_track {
 /// (`TL/index.tsx:1029-1039`).
 pub fn segment_count(timeline: &TimelineConfiguration, kind: TrackKind) -> usize {
     match kind {
-        TrackKind::Clip => timeline.segments.len(),
+        TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio => timeline.segments.len(),
         TrackKind::Zoom => timeline.zoom_segments.len(),
         TrackKind::Scene => timeline.scene_segments.len(),
         TrackKind::ThreeD => timeline.camera3d_segments.len(),
@@ -1087,6 +1088,7 @@ pub fn delete_segments(
         // in reverse order to call it (`TL/index.tsx:1000-1007`), which is the
         // same thing this does.
         TrackKind::Clip => delete_clip_segments(timeline, indices),
+        TrackKind::MicAudio | TrackKind::SystemAudio => false,
         _ => with_track!(timeline, kind, |segments| delete_indices(segments, indices)),
     }
 }

@@ -484,6 +484,10 @@ impl PreparingRunner {
             elapsed_ms = self.control.started.elapsed().as_secs_f64() * 1000.0,
             "GPUI preparing adapter ready"
         );
+        let (has_microphone, has_system_audio) = input
+            .recording_meta
+            .studio_meta()
+            .map_or((false, false), crate::editor_window::audio_sources);
         let seed = Arc::new(PreparingTimelineSeed {
             project: input.project.clone(),
             pretty_name: input.recording_meta.pretty_name.clone(),
@@ -500,6 +504,8 @@ impl PreparingRunner {
                         .any(|segment| segment.camera.is_some()),
                 }),
             multiple_clips: input.segments.len() > 1,
+            has_microphone,
+            has_system_audio,
         });
         let total_duration = input
             .project

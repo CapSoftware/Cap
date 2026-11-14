@@ -180,6 +180,8 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 /// (`apps/desktop/src/styles/theme.css`).
 pub mod track_color {
     pub const CLIP: u32 = 0x3b82f6;
+    pub const MIC_AUDIO: u32 = 0x60a5fa;
+    pub const SYSTEM_AUDIO: u32 = 0xfb923c;
     pub const ZOOM: u32 = 0x64748b;
     pub const CAPTION: u32 = 0x0ea5e9;
     pub const KEYBOARD: u32 = 0xf97316;
@@ -971,6 +973,8 @@ pub enum TrackKind {
     Style,
     Image,
     Clip,
+    MicAudio,
+    SystemAudio,
     Caption,
     Keyboard,
     Text,
@@ -989,6 +993,8 @@ impl TrackKind {
             // The clip row's gutter label is "Video", not the definition's
             // "Clip" (`TL/index.tsx:1334`).
             Self::Clip => tr::editor::timeline::track::video(),
+            Self::MicAudio => tr::editor::timeline::track::mic(),
+            Self::SystemAudio => tr::editor::timeline::track::system_audio(),
             Self::Style => tr::editor::timeline::track::style(),
             Self::Image => tr::editor::timeline::track::image(),
             Self::Caption => tr::editor::timeline::track::captions(),
@@ -1006,6 +1012,8 @@ impl TrackKind {
     pub fn icon(self) -> &'static str {
         match self {
             Self::Clip => "icons/clapperboard.svg",
+            Self::MicAudio => "icons/microphone.svg",
+            Self::SystemAudio => "icons/music.svg",
             Self::Style => "icons/palette.svg",
             Self::Image => "icons/image.svg",
             Self::Caption => "icons/captions.svg",
@@ -1023,6 +1031,8 @@ impl TrackKind {
     pub fn color(self) -> Hsla {
         gpui::rgb(match self {
             Self::Clip => track_color::CLIP,
+            Self::MicAudio => track_color::MIC_AUDIO,
+            Self::SystemAudio => track_color::SYSTEM_AUDIO,
             Self::Style => track_color::STYLE,
             Self::Image => track_color::IMAGE,
             Self::Caption => track_color::CAPTION,
@@ -1048,6 +1058,8 @@ impl TrackKind {
     pub fn picker_description(self) -> &'static str {
         match self {
             Self::Clip => tr::editor::timeline::picker::clip(),
+            Self::MicAudio => tr::editor::timeline::picker::mic(),
+            Self::SystemAudio => tr::editor::timeline::picker::system_audio(),
             Self::Style => tr::editor::timeline::picker::style(),
             Self::Image => tr::editor::timeline::picker::image(),
             Self::Zoom => tr::editor::timeline::picker::zoom(),
@@ -1067,6 +1079,8 @@ impl TrackKind {
     pub fn picker_remove(self) -> &'static str {
         match self {
             Self::Clip => tr::editor::timeline::remove::clip(),
+            Self::MicAudio => tr::editor::timeline::remove::mic(),
+            Self::SystemAudio => tr::editor::timeline::remove::system_audio(),
             Self::Style => tr::editor::timeline::remove::style(),
             Self::Image => tr::editor::timeline::remove::image(),
             Self::Caption => tr::editor::timeline::remove::captions(),
@@ -1193,7 +1207,9 @@ impl TrackLanes {
             TrackKind::Shape => self.shape > 0,
             TrackKind::Mask => self.mask > 0,
             TrackKind::Audio => self.audio > 0,
-            TrackKind::Clip | TrackKind::Zoom => true,
+            TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio | TrackKind::Zoom => {
+                true
+            }
         }
     }
 
@@ -1315,11 +1331,34 @@ pub enum SegmentDetail {
     Keyboard {
         text: SharedString,
     },
+    MicAudio {
+        name: SharedString,
+        source_start: f64,
+        timescale: f64,
+        muted: bool,
+        volume: f64,
+        recording_clip: u32,
+        holds: Arc<[(f64, f64)]>,
+    },
+    SystemAudio {
+        name: SharedString,
+        source_start: f64,
+        timescale: f64,
+        muted: bool,
+        volume: f64,
+        recording_clip: u32,
+        holds: Arc<[(f64, f64)]>,
+    },
 }
 
 impl SegmentDetail {
     fn shows_waveform(&self) -> bool {
-        matches!(self, Self::Clip { muted: false, .. })
+        matches!(
+            self,
+            Self::Clip { muted: false, .. }
+                | Self::MicAudio { muted: false, .. }
+                | Self::SystemAudio { muted: false, .. }
+        )
     }
 }
 
@@ -1352,6 +1391,8 @@ pub struct TimelineModel {
     pub image: Vec<Segment>,
     pub rows: Vec<TrackRow>,
     pub clips: Vec<Segment>,
+    pub mic_clips: Vec<Segment>,
+    pub system_clips: Vec<Segment>,
     pub zoom: Vec<Segment>,
     pub scene: Vec<Segment>,
     pub three_d: Vec<Segment>,
@@ -1369,6 +1410,10 @@ pub struct TimelineModel {
     /// `gainToScale(project.audio.micVolumeDb)` inputs.
     pub mic_volume_db: f64,
     pub system_volume_db: f64,
+    pub mic_muted: bool,
+    pub system_muted: bool,
+    pub has_mic: bool,
+    pub has_system: bool,
     /// One peak table per recording clip, indexed by `recordingSegment`
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
@@ -1398,6 +1443,8 @@ impl TimelineModel {
             TrackKind::Style => &self.style,
             TrackKind::Image => &self.image,
             TrackKind::Clip => &self.clips,
+            TrackKind::MicAudio => &self.mic_clips,
+            TrackKind::SystemAudio => &self.system_clips,
             TrackKind::Caption => &self.caption,
             TrackKind::Keyboard => &self.keyboard,
             TrackKind::Text => &self.text,
@@ -1416,6 +1463,16 @@ impl TimelineModel {
     /// whether more than one recording clip exists (which decides `"Clip"` vs
     /// `"Clip N"`, `TL/ClipTrack.tsx:617-620`).
     pub fn build(config: &ProjectConfiguration, has_camera: bool, multiple_clips: bool) -> Self {
+        Self::build_with_audio(config, has_camera, multiple_clips, true, true)
+    }
+
+    pub fn build_with_audio(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        has_mic: bool,
+        has_system: bool,
+    ) -> Self {
         let Some(timeline) = config.timeline.as_ref() else {
             return Self::default();
         };
@@ -1425,6 +1482,13 @@ impl TimelineModel {
         let total_duration = timeline.duration();
 
         let clips = clip_rows(timeline, &offsets, &holds, multiple_clips);
+        let (mic_clips, system_clips) = mic_system_rows(
+            timeline,
+            &offsets,
+            &holds,
+            config.audio.mic_muted,
+            config.audio.system_muted,
+        );
 
         let zoom = timeline
             .zoom_segments
@@ -1613,6 +1677,8 @@ impl TimelineModel {
             image,
             rows: Vec::new(),
             clips,
+            mic_clips,
+            system_clips,
             zoom,
             scene,
             three_d,
@@ -1626,6 +1692,10 @@ impl TimelineModel {
             total_duration,
             mic_volume_db: config.audio.mic_volume_db as f64,
             system_volume_db: config.audio.system_volume_db as f64,
+            mic_muted: config.audio.mic_muted,
+            system_muted: config.audio.system_muted,
+            has_mic,
+            has_system,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
             imported_waveforms: Arc::default(),
@@ -1647,7 +1717,19 @@ impl TimelineModel {
         multiple_clips: bool,
         lanes: &TrackLanes,
     ) -> Self {
-        let mut model = Self::build(config, has_camera, multiple_clips);
+        Self::build_with_lanes_and_audio(config, has_camera, multiple_clips, lanes, true, true)
+    }
+
+    pub fn build_with_lanes_and_audio(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        lanes: &TrackLanes,
+        has_mic: bool,
+        has_system: bool,
+    ) -> Self {
+        let mut model =
+            Self::build_with_audio(config, has_camera, multiple_clips, has_mic, has_system);
         model.rows = build_rows(config, &model, has_camera, lanes);
         model
     }
@@ -1673,6 +1755,18 @@ fn build_rows(
         kind: TrackKind::Clip,
         lane: 0,
     }];
+    if model.has_mic {
+        rows.push(TrackRow {
+            kind: TrackKind::MicAudio,
+            lane: 0,
+        });
+    }
+    if model.has_system {
+        rows.push(TrackRow {
+            kind: TrackKind::SystemAudio,
+            lane: 0,
+        });
+    }
     if lanes.caption {
         rows.push(TrackRow {
             kind: TrackKind::Caption,
@@ -1837,6 +1931,57 @@ fn clip_rows(
             }
         })
         .collect()
+}
+
+fn mic_system_rows(
+    timeline: &TimelineConfiguration,
+    offsets: &[f64],
+    holds: &[(f64, f64)],
+    mic_muted: bool,
+    system_muted: bool,
+) -> (Vec<Segment>, Vec<Segment>) {
+    let mut mic = Vec::with_capacity(timeline.segments.len());
+    let mut system = Vec::with_capacity(timeline.segments.len());
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        let previous = offsets.get(index).copied().unwrap_or(0.);
+        let start = effective_to_output(holds, previous).max(0.);
+        let end = effective_to_output(holds, previous + segment.duration());
+        let inner_holds: Arc<[(f64, f64)]> = holds
+            .iter()
+            .map(|(hold_start, hold_end)| (hold_start.max(start), hold_end.min(end)))
+            .filter(|(hold_start, hold_end)| hold_end > hold_start)
+            .collect();
+        let muted = clip_is_muted(segment) || segment.volume() == 0.0;
+        mic.push(Segment {
+            start,
+            end,
+            lane: 0,
+            detail: SegmentDetail::MicAudio {
+                name: SharedString::new_static(tr::editor::timeline::segment::clip()),
+                source_start: segment.start,
+                timescale: segment.timescale,
+                muted: muted || mic_muted,
+                volume: segment.volume(),
+                recording_clip: segment.recording_clip,
+                holds: inner_holds.clone(),
+            },
+        });
+        system.push(Segment {
+            start,
+            end,
+            lane: 0,
+            detail: SegmentDetail::SystemAudio {
+                name: SharedString::new_static(tr::editor::timeline::segment::clip()),
+                source_start: segment.start,
+                timescale: segment.timescale,
+                muted: muted || system_muted,
+                volume: segment.volume(),
+                recording_clip: segment.recording_clip,
+                holds: inner_holds,
+            },
+        });
+    }
+    (mic, system)
 }
 
 /// `#rrggbb` / `#rgb`, the form every colour in the config takes.
@@ -2900,6 +3045,60 @@ fn render_segment(
         }
     }
 
+    if let SegmentDetail::MicAudio {
+        holds,
+        recording_clip,
+        ..
+    } = &segment.detail
+    {
+        if segment.detail.shows_waveform() {
+            fill = fill.child(render_single_waveform(
+                model,
+                index,
+                segment,
+                *recording_clip,
+                holds,
+                view,
+                width,
+                height,
+                color,
+                WaveformTrack::Mic,
+            ));
+        }
+        for (hold_start, hold_end) in holds.iter() {
+            let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
+            let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
+            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
+        }
+    }
+
+    if let SegmentDetail::SystemAudio {
+        holds,
+        recording_clip,
+        ..
+    } = &segment.detail
+    {
+        if segment.detail.shows_waveform() {
+            fill = fill.child(render_single_waveform(
+                model,
+                index,
+                segment,
+                *recording_clip,
+                holds,
+                view,
+                width,
+                height,
+                color,
+                WaveformTrack::System,
+            ));
+        }
+        for (hold_start, hold_end) in holds.iter() {
+            let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
+            let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
+            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
+        }
+    }
+
     if let SegmentDetail::Clip {
         transition_in: Some((seconds, _)),
         ..
@@ -3437,11 +3636,11 @@ fn render_waveform(
 ) -> impl IntoElement {
     // `micWaveform()` / `systemAudioWaveform()` (`TL/ClipTrack.tsx:713-730`):
     // a track muted below -30 dB draws nothing at all.
-    let mic = (model.mic_volume_db >= WAVEFORM_MUTE_DB)
+    let mic = (model.mic_volume_db > WAVEFORM_MUTE_DB)
         .then(|| model.mic_waveforms.get(recording_clip as usize).cloned())
         .flatten()
         .unwrap_or_default();
-    let system = (model.system_volume_db >= WAVEFORM_MUTE_DB)
+    let system = (model.system_volume_db > WAVEFORM_MUTE_DB)
         .then(|| model.system_waveforms.get(recording_clip as usize).cloned())
         .flatten()
         .unwrap_or_default();
@@ -3480,6 +3679,79 @@ fn render_waveform(
             timescale,
         })
         .collect(),
+        holds,
+        view,
+        width,
+        height,
+        color,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_single_waveform(
+    model: &TimelineModel,
+    index: usize,
+    segment: &Segment,
+    recording_clip: u32,
+    holds: &[(f64, f64)],
+    view: TimelineView,
+    width: f32,
+    height: f32,
+    color: Hsla,
+    track: WaveformTrack,
+) -> AnyElement {
+    let (peaks, volume_db, muted) = match track {
+        WaveformTrack::Mic => (
+            (model.mic_volume_db > WAVEFORM_MUTE_DB && !model.mic_muted)
+                .then(|| model.mic_waveforms.get(recording_clip as usize).cloned())
+                .flatten()
+                .unwrap_or_default(),
+            model.mic_volume_db,
+            model.mic_muted,
+        ),
+        WaveformTrack::System => (
+            (model.system_volume_db > WAVEFORM_MUTE_DB && !model.system_muted)
+                .then(|| model.system_waveforms.get(recording_clip as usize).cloned())
+                .flatten()
+                .unwrap_or_default(),
+            model.system_volume_db,
+            model.system_muted,
+        ),
+        WaveformTrack::Imported => return div().into_any_element(),
+    };
+    if peaks.is_empty() || muted {
+        return div().into_any_element();
+    }
+    let (segment_start, timescale, volume) = match &segment.detail {
+        SegmentDetail::MicAudio {
+            source_start,
+            timescale,
+            volume,
+            ..
+        }
+        | SegmentDetail::SystemAudio {
+            source_start,
+            timescale,
+            volume,
+            ..
+        } => (*source_start, *timescale, *volume),
+        _ => return div().into_any_element(),
+    };
+    let scale = gain_to_scale(volume_db) * volume;
+    let holds: Vec<(f64, f64)> = holds
+        .iter()
+        .map(|(start, end)| (start - segment.start, end - segment.start))
+        .collect();
+    waveform_canvas(
+        model,
+        segment,
+        vec![WaveformSource {
+            slot: (index, track),
+            peaks,
+            scale,
+            source_start: segment_start,
+            timescale,
+        }],
         holds,
         view,
         width,
@@ -3975,6 +4247,66 @@ fn label_body(
             .font_family("monospace")
             .child("\u{2328}")
             .into_any_element(),
+        (SegmentDetail::MicAudio { muted, .. }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::mic()))
+            .when(*muted, |this| {
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/volume-x.svg",
+                    tr::editor::timeline::segment::muted(),
+                ))
+            })
+            .into_any_element(),
+        (SegmentDetail::MicAudio { muted, .. }, LabelTier::Compact) => label_row()
+            .when(*muted, |this| {
+                this.child(
+                    svg()
+                        .path("icons/volume-x.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
+            })
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::mic()))
+            .into_any_element(),
+        (SegmentDetail::MicAudio { muted: true, .. }, LabelTier::Glyph) => label_glyph(
+            theme,
+            color,
+            "icons/volume-x.svg",
+            (visible_width - 8.).clamp(8., 14.) as f32,
+        ),
+        (SegmentDetail::MicAudio { .. }, LabelTier::Glyph) => return None,
+        (SegmentDetail::SystemAudio { muted, .. }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::system_audio()))
+            .when(*muted, |this| {
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/volume-x.svg",
+                    tr::editor::timeline::segment::muted(),
+                ))
+            })
+            .into_any_element(),
+        (SegmentDetail::SystemAudio { muted, .. }, LabelTier::Compact) => label_row()
+            .when(*muted, |this| {
+                this.child(
+                    svg()
+                        .path("icons/volume-x.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
+            })
+            .child(label_primary(theme, color).child(tr::editor::timeline::track::system_audio()))
+            .into_any_element(),
+        (SegmentDetail::SystemAudio { muted: true, .. }, LabelTier::Glyph) => label_glyph(
+            theme,
+            color,
+            "icons/volume-x.svg",
+            (visible_width - 8.).clamp(8., 14.) as f32,
+        ),
+        (SegmentDetail::SystemAudio { .. }, LabelTier::Glyph) => return None,
     })
 }
 
@@ -4592,6 +4924,8 @@ mod tests {
             rows,
             vec![
                 (TrackKind::Clip, 0),
+                (TrackKind::MicAudio, 0),
+                (TrackKind::SystemAudio, 0),
                 // Captions: no settings block, but the project has a caption
                 // segment, which is the fallback (`ED/context.ts:1414-1416`).
                 (TrackKind::Caption, 0),
@@ -4626,20 +4960,73 @@ mod tests {
         let with_camera = TimelineModel::build(&config, true, false);
         assert_eq!(
             with_camera.rows.len(),
-            3,
-            "clip + zoom + scene: {:?}",
+            5,
+            "clip + mic + system + zoom + scene: {:?}",
             with_camera.rows
         );
-        // Two rows means the roomier track height.
         let without_camera = TimelineModel::build(&config, false, false);
-        assert_eq!(without_camera.rows.len(), 2);
+        assert_eq!(without_camera.rows.len(), 4);
         assert_eq!(without_camera.track_height(), TRACK_HEIGHT);
 
         // `project.camera.hide` takes the row away again.
         let mut hidden = base;
         hidden["camera"] = serde_json::json!({ "hide": true });
         let hidden: ProjectConfiguration = serde_json::from_value(hidden).unwrap();
-        assert_eq!(TimelineModel::build(&hidden, true, false).rows.len(), 2);
+        assert_eq!(TimelineModel::build(&hidden, true, false).rows.len(), 4);
+    }
+
+    #[test]
+    fn mic_and_system_rows_are_gated_on_the_recording() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        let both = TimelineModel::build_with_audio(&config, false, false, true, true);
+        assert!(
+            both.rows.iter().any(|row| row.kind == TrackKind::MicAudio),
+            "{:?}",
+            both.rows
+        );
+        assert!(
+            both.rows
+                .iter()
+                .any(|row| row.kind == TrackKind::SystemAudio),
+            "{:?}",
+            both.rows
+        );
+
+        let none = TimelineModel::build_with_audio(&config, false, false, false, false);
+        assert!(
+            !none.rows.iter().any(|row| row.kind == TrackKind::MicAudio),
+            "{:?}",
+            none.rows
+        );
+        assert!(
+            !none
+                .rows
+                .iter()
+                .any(|row| row.kind == TrackKind::SystemAudio),
+            "{:?}",
+            none.rows
+        );
+
+        let mic_only = TimelineModel::build_with_audio(&config, false, false, true, false);
+        assert!(
+            mic_only
+                .rows
+                .iter()
+                .any(|row| row.kind == TrackKind::MicAudio)
+        );
+        assert!(
+            !mic_only
+                .rows
+                .iter()
+                .any(|row| row.kind == TrackKind::SystemAudio)
+        );
     }
 
     /// A fullscreen text segment pauses the recording clock, so the clip box
