@@ -237,7 +237,10 @@ describe.runIf(Boolean(databaseUrl))(
 			const { accountId } = await makeAccount(30_000);
 			const before = fixture.created.length;
 
-			const first = Array.from({ length: 4 }, () => runAutoTopUp(accountId));
+			const late = new Promise((resolve) => setTimeout(resolve, 200));
+			const first = Array.from({ length: 4 }, () =>
+				late.then(() => runAutoTopUp(accountId)),
+			);
 			await new Promise((resolve) => setTimeout(resolve, 10));
 			await pool.query(
 				"UPDATE developer_credit_accounts SET autoTopUpAmountCents = 2500 WHERE id = ?",
