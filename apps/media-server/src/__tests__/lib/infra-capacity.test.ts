@@ -162,6 +162,45 @@ describe("capacity for Cap Infra jobs", () => {
 		).toBe(false);
 	});
 
+	test("a slice stays off a worker that is making an Infra MP4", () => {
+		const sliceAllows = (activeInfraMp4s: number) =>
+			jobManager.infraCapacityAllows({
+				effectiveMax: 8,
+				active: 1,
+				activeHeavyLadders: 0,
+				heavyLadder: true,
+				reservedSlots: jobManager.infraSliceReservedSlots(8, 1),
+				maxHeavyLadders: 1,
+				slice: true,
+				activeInfraMp4s,
+			});
+		expect(sliceAllows(0)).toBe(true);
+		expect(sliceAllows(1)).toBe(false);
+	});
+
+	test("a whole-video ladder still runs beside an Infra MP4", () => {
+		expect(
+			jobManager.infraCapacityAllows({
+				effectiveMax: 8,
+				active: 1,
+				activeHeavyLadders: 0,
+				heavyLadder: true,
+				maxHeavyLadders: 1,
+				activeInfraMp4s: 1,
+			}),
+		).toBe(true);
+	});
+
+	test("counts only Infra MP4s that are still running", () => {
+		const before = jobManager.getActiveInfraMp4Count();
+		const mp4 = addActiveJob();
+		mp4.infraMp4 = true;
+		addActiveJob(true);
+		expect(jobManager.getActiveInfraMp4Count()).toBe(before + 1);
+		jobManager.updateJob(mp4.jobId, { phase: "complete", progress: 100 });
+		expect(jobManager.getActiveInfraMp4Count()).toBe(before);
+	});
+
 	test("counts only heavy ladders that are still running", () => {
 		const before = jobManager.getActiveInfraHeavyLadderCount();
 		const job = addActiveJob(true);
@@ -231,6 +270,25 @@ describe("routes", () => {
 		);
 		expect(response.status).toBe(503);
 		expect(infra).toHaveBeenCalledWith(false);
+	});
+
+	test("an Infra MP4 is marked so slices stay off its worker", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
+		spyOn(jobManager, "canAcceptNewInfraVideoProcess").mockReturnValue(true);
+		spyOn(jobManager, "getJob").mockReturnValue(undefined);
+		const create = spyOn(jobManager, "createJob");
+		const infra = await app.fetch(
+			request("/video/process", processBody({ infra: true })),
+		);
+		const own = await app.fetch(request("/video/process", processBody()));
+		expect(infra.status).toBe(200);
+		expect(own.status).toBe(200);
+		const [infraJob, ownJob] = create.mock.results.map(
+			(result) => result.value as jobManager.Job,
+		);
+		created.push(infraJob.jobId, ownJob.jobId);
+		expect(infraJob.infraMp4).toBe(true);
+		expect(ownJob.infraMp4).toBeUndefined();
 	});
 
 	test("Cap's own jobs never consult the Infra limits", async () => {

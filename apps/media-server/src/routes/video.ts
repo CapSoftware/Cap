@@ -984,6 +984,7 @@ video.on("POST", ["/process", "/import"], async (c) => {
 
 	const jobId = generateJobId();
 	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	if (result.data.infra === true) job.infraMp4 = true;
 
 	void trackBackgroundTask(
 		withMediaTransfers(32 * 1024 ** 3, () =>
