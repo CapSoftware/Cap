@@ -1,0 +1,34 @@
+name: ns diag ffmpeg extract
+on:
+  push:
+    branches: [scratch/ns-diag-ffmpeg-head]
+permissions:
+  contents: read
+jobs:
+  diag:
+    strategy:
+      matrix:
+        parent: [pwsh, bash, cmd]
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Setup like sync-tests
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        shell: ${{ matrix.parent }}
+        run: node scripts/setup.js
+      - name: Extracted files
+        shell: bash
+        run: ls target/ffmpeg/bin | head -5 && ls target | head -30
