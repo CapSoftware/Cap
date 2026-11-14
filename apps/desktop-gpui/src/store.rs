@@ -1703,6 +1703,7 @@ pub fn transcription_hints() -> Vec<String> {
 /// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
+    pub user_id: Option<String>,
     pub server_url: String,
     pub token: Option<String>,
     pub plan_upgraded: bool,
@@ -1743,6 +1744,11 @@ pub fn auth_snapshot() -> AuthSnapshot {
         "serverUrl",
         DEFAULT_SERVER_URL,
     );
+    let user_id = auth
+        .get("user_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
     let token = auth
         .get("secret")
         .and_then(Value::as_object)
@@ -1787,6 +1793,7 @@ pub fn auth_snapshot() -> AuthSnapshot {
         after_snapshot();
     }
     AuthSnapshot {
+        user_id,
         server_url,
         token,
         plan_upgraded,
