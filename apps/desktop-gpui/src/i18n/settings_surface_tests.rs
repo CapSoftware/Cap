@@ -996,7 +996,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::settings::automations::compatibility_unsupported(),
-            "Compatibility checked: notifications and text recognition don't run in Cap yet and will be skipped. The other actions run. No actions were run.",
+            "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
         (
             tr::settings::automations::condition_never_matches(),
