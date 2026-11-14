@@ -17,7 +17,9 @@ export function buildDeepLink(
 	return `${scheme}://action?value=${encodeURIComponent(value)}`;
 }
 
-export function buildStartDefaultRecordingAction(mode?: RecordingModeOverride): {
+export function buildStartDefaultRecordingAction(
+	mode?: RecordingModeOverride,
+): {
 	start_default_recording: { mode?: "instant" | "studio" };
 } {
 	if (mode === "instant" || mode === "studio") {
@@ -84,16 +86,31 @@ export function readStoredServerUrl(
 	return undefined;
 }
 
+export function normalizeServerOrigin(value?: string): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	try {
+		const url = new URL(trimmed);
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return undefined;
+		}
+		return url.origin;
+	} catch {
+		return undefined;
+	}
+}
+
 export function resolveDashboardUrl(
 	preferenceServerUrl?: string,
 	storedServerUrl?: string,
 ): string {
-	const candidate =
-		preferenceServerUrl?.trim() || storedServerUrl?.trim() || "https://cap.so";
-	const normalized = candidate.replace(/\/+$/, "");
-	return normalized.endsWith("/dashboard")
-		? normalized
-		: `${normalized}/dashboard`;
+	const origin =
+		normalizeServerOrigin(preferenceServerUrl) ??
+		normalizeServerOrigin(storedServerUrl) ??
+		"https://cap.so";
+	return `${origin}/dashboard`;
 }
 
 export function getConfiguredDashboardUrl(): string {
