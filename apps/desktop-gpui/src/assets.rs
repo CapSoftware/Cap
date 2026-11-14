@@ -228,6 +228,9 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "webhook.svg",
     "database.svg",
     "google-drive.svg",
+    // The editor header's organization dropdown (`OrganizationDropdown.tsx`),
+    // Lucide's 24x24 original like the `~icons/lucide/building-2` it imports.
+    "building-2.svg",
 );
 
 /// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The

@@ -3081,6 +3081,43 @@ no_segments = "Die Aufnahme hat keine Segmente. Möglicherweise muss sie zuerst 
 not_found = "Videopfad {path} nicht gefunden!"
 not_studio = "Nur Studio-Aufnahmen können bearbeitet werden"
 
+[editor.window.organization]
+brand_colours = "Markenfarben"
+brand_settings = "Markeneinstellungen"
+button = "Organisation"
+loading_description = "Ihre Organisationen werden von Cap Web geladen."
+loading_title = "Organisationen werden geladen"
+none = "Keine Organisationen"
+remove = "Entfernen"
+remove_colour = "Farbe entfernen"
+retry = "Erneut versuchen"
+saved = "Branding der Organisation aktualisiert"
+saving = "Wird gespeichert..."
+set = "Festlegen"
+sign_in = "Anmelden"
+signed_out_description = "Melden Sie sich an, um eine Organisation auszuwählen, ihre Markenfarben zu bearbeiten und sie in Studio zu verwenden."
+signed_out_title = "Für das Branding der Organisation ist eine Anmeldung erforderlich"
+unavailable_description = "Cap Web ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+unavailable_title = "Organisationen konnten nicht geladen werden"
+upload = "Hochladen"
+
+[editor.window.organization.color]
+accent = "Akzent"
+background = "Hintergrund"
+primary = "Primär"
+secondary = "Sekundär"
+
+[editor.window.organization.error]
+failed = "Das Branding der Organisation konnte nicht aktualisiert werden"
+forbidden = "Nur Admins und Inhaber der Organisation können das Branding bearbeiten"
+logo_empty = "Die Logodatei ist leer"
+logo_read_failed = "Diese Datei konnte nicht gelesen werden"
+logo_too_large = "Die Logodatei muss kleiner als 1 MB sein"
+logo_unsupported = "Dieser Dateityp wird für Logos nicht unterstützt"
+not_found = "Diese Organisation existiert nicht mehr"
+offline = "Cap Web ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+signed_out = "Melden Sie sich erneut an, um das Branding zu bearbeiten"
+
 [editor.window.presets]
 apply = "Anwenden"
 create = "Erstellen"

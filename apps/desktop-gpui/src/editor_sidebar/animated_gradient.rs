@@ -1191,7 +1191,13 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(12.))
                     .child(div().px(px(SELECTED_HANDLE_SIZE / 2.)).child(bar))
-                    .children(stop_row),
+                    .children(stop_row)
+                    .children(config.color_stops.get(selected).and_then(|_| {
+                        self.render_brand_colors_trigger(
+                            ColorTarget::AnimatedGradientStop(selected),
+                            cx,
+                        )
+                    })),
             )
             .into_any_element()
     }

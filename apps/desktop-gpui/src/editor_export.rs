@@ -306,10 +306,26 @@ impl ExportUi {
         {
             return;
         }
-        if let Some(org) = organizations.first() {
-            self.organization_id = Some(org.id.clone());
+        let stored = crate::organization::stored_selected_id();
+        let selected = stored
+            .as_deref()
+            .filter(|id| organizations.iter().any(|org| org.id == *id))
+            .map(str::to_string)
+            .or_else(|| organizations.first().map(|org| org.id.clone()));
+        if let Some(id) = selected {
+            self.organization_id = Some(id);
             self.persist();
         }
+    }
+
+    /// The editor's organization dropdown picked `id`: new shares go there,
+    /// as they did when the Tauri dropdown wrote the shared selection.
+    pub(crate) fn select_organization(&mut self, id: &str) {
+        if self.organization_id.as_deref() == Some(id) {
+            return;
+        }
+        self.organization_id = Some(id.to_string());
+        self.persist();
     }
 
     pub fn load() -> Self {
@@ -1215,10 +1231,10 @@ impl EditorWindow {
         let project_path = self.project_path.clone();
         let project = self.project.clone();
         let organization_id = ui.organization_id.clone().or_else(|| {
-            store::auth_snapshot()
-                .organizations
-                .first()
-                .map(|org| org.id.clone())
+            let organizations = store::auth_snapshot().organizations;
+            crate::organization::stored_selected_id()
+                .filter(|id| organizations.iter().any(|org| &org.id == id))
+                .or_else(|| organizations.first().map(|org| org.id.clone()))
         });
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
@@ -2081,6 +2097,9 @@ impl EditorWindow {
                                     .position(|org| Some(org.id.as_str()) == current)
                                     .unwrap_or(0);
                                 let next = orgs[(index + 1) % orgs.len()].id.clone();
+                                if !crate::organization::persist_selected_id(&next) {
+                                    tracing::warn!("the selected organization could not be saved");
+                                }
                                 ui.organization_id = Some(next);
                                 ui.persist();
                             }

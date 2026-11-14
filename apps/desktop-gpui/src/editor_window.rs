@@ -1657,6 +1657,9 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
+    /// The header's organization dropdown, its brand settings dialog and the
+    /// colour inputs' brand colour menus.
+    pub(crate) organization: crate::editor_organization::OrganizationUi,
     style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
@@ -2311,6 +2314,7 @@ impl EditorWindow {
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
+            organization: Default::default(),
             style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
             export: None,
@@ -4095,6 +4099,10 @@ impl EditorWindow {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key.as_str() == "escape" && self.dismiss_organization_overlay(cx) {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key.as_str() == "escape"
             && (self.presets_menu.is_some()
                 || self.preset_dialog.is_some()
@@ -4255,6 +4263,7 @@ impl EditorWindow {
                     || self.sidebar.color_picker.is_some()
                     || self.presets_menu.is_some()
                     || self.preset_dialog.is_some()
+                    || self.organization.has_open_overlay()
                     || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
@@ -7771,6 +7780,7 @@ impl EditorWindow {
             || self.sidebar.color_picker.is_some()
             || self.presets_menu.is_some()
             || self.preset_dialog.is_some()
+            || self.organization.has_open_overlay()
             || self.clips.has_open_menu()
             || self.audio_picker.is_some()
             || self.camera3d_picker
@@ -10798,6 +10808,7 @@ impl EditorWindow {
                     .child(self.history_button("editor-undo", "icons/undo.svg", true, cx))
                     .child(self.history_button("editor-redo", "icons/redo.svg", false, cx))
                     .child(self.header_divider())
+                    .child(self.render_organization_button(compact, cx))
                     .child(
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
@@ -12723,6 +12734,8 @@ impl Render for EditorWindow {
         self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
         self.sidebar.release_retired_images(window);
+        self.organization.release_retired_images(window);
+        self.start_organization_sync(cx);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -13248,7 +13261,10 @@ impl Render for EditorWindow {
                     }),
                 )
             }))
+            .children(self.render_brand_dialog(cx))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
+            .children(self.render_brand_colors_menu(cx))
+            .children(self.render_organization_menu(cx))
             .children(self.render_presets_menu(cx))
             .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
