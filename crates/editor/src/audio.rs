@@ -3909,6 +3909,9 @@ mod tests {
         for (timescale, mode, expected_frequency) in [
             (0.25, ClipSpeedAudioMode::MaintainPitch, 440.0),
             (0.25, ClipSpeedAudioMode::MatchSpeed, 110.0),
+            (1.2, ClipSpeedAudioMode::MaintainPitch, 440.0),
+            (1.2, ClipSpeedAudioMode::MatchSpeed, 528.0),
+            (1.23, ClipSpeedAudioMode::MatchSpeed, 541.2),
             (8.0, ClipSpeedAudioMode::MaintainPitch, 440.0),
             (8.0, ClipSpeedAudioMode::MatchSpeed, 3_520.0),
         ] {

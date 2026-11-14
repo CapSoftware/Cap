@@ -3010,6 +3010,8 @@ how_many = "ショットはいくつ？"
 prompt = "録画に映画のような3Dショットを追加"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "すべてのクリップに適用"
+custom_speed = "カスタム"
 audio = "音声"
 cursor = "カーソル"
 delete = "クリップを削除"

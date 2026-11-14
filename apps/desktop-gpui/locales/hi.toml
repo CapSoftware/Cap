@@ -3010,6 +3010,8 @@ how_many = "कितने शॉट?"
 prompt = "अपनी रिकॉर्डिंग में सिनेमैटिक 3D शॉट जोड़ें"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "सभी क्लिप पर लागू करें"
+custom_speed = "कस्टम"
 audio = "ऑडियो"
 cursor = "कर्सर"
 delete = "क्लिप हटाएँ"

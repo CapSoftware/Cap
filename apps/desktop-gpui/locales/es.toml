@@ -3010,6 +3010,8 @@ how_many = "¿Cuántas tomas?"
 prompt = "Añade tomas 3D cinematográficas a tu grabación"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "Aplicar a todos los clips"
+custom_speed = "Otra"
 audio = "AUDIO"
 cursor = "CURSOR"
 delete = "Eliminar clip"

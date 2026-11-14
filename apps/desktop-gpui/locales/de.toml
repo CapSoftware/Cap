@@ -3010,6 +3010,8 @@ how_many = "Wie viele Einstellungen?"
 prompt = "Fügen Sie Ihrer Aufnahme filmische 3D-Einstellungen hinzu"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "Auf alle Clips anwenden"
+custom_speed = "Eigenes"
 audio = "AUDIO"
 cursor = "CURSOR"
 delete = "Clip löschen"

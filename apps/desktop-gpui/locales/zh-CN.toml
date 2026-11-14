@@ -3010,6 +3010,8 @@ how_many = "要几个镜头？"
 prompt = "为你的录制添加电影感 3D 镜头"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "应用到所有片段"
+custom_speed = "自定义"
 audio = "音频"
 cursor = "光标"
 delete = "删除片段"

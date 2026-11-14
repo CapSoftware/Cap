@@ -3010,6 +3010,8 @@ how_many = "Combien de plans ?"
 prompt = "Ajoutez des plans 3D cinématiques à votre enregistrement"
 
 [editor.window.clip_menu]
+apply_speed_to_all = "Appliquer à tous les clips"
+custom_speed = "Autre"
 audio = "AUDIO"
 cursor = "CURSEUR"
 delete = "Supprimer le clip"
