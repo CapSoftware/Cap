@@ -1157,6 +1157,18 @@ impl EditorWindow {
         self.edit_project_with_rebuild(true, reason, window, cx, change);
     }
 
+    pub(crate) fn edit_global_project(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
+        self.commit_project_edit(true, reason, window, cx, move |editor| {
+            change(&mut editor.project)
+        });
+    }
+
     /// [`Self::edit_project`] for edits that cannot change the timeline model.
     pub(crate) fn edit_project_without_timeline(
         &mut self,
@@ -1179,11 +1191,24 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
     ) {
+        self.commit_project_edit(rebuild_timeline, reason, window, cx, move |editor| {
+            editor.apply_control_change(change)
+        });
+    }
+
+    fn commit_project_edit(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut Self) -> bool,
+    ) {
         if !self.project_ready() {
             return;
         }
         self.end_color_history();
-        if !self.apply_control_change(change) {
+        if !change(self) {
             return;
         }
         if rebuild_timeline {
