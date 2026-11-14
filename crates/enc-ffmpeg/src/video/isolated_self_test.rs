@@ -115,12 +115,12 @@ pub fn run_child_if_requested() {
     let mut stdout = std::io::stdout().lock();
     let code = match verdict {
         Ok(()) => {
-            let _ = writeln!(stdout, "{VERDICT_PREFIX}ok");
+            let _ = writeln!(stdout, "\n{VERDICT_PREFIX}ok");
             0
         }
         Err(reason) => {
             let reason = reason.replace(['\r', '\n'], " ");
-            let _ = writeln!(stdout, "{VERDICT_PREFIX}fail {reason}");
+            let _ = writeln!(stdout, "\n{VERDICT_PREFIX}fail {reason}");
             FAIL_EXIT_CODE
         }
     };
@@ -267,19 +267,28 @@ fn run_with(
 }
 
 fn verdict(status: ExitStatus, output: &str) -> Result<(), String> {
-    let line = output
-        .lines()
-        .rev()
-        .find_map(|line| line.trim().strip_prefix(VERDICT_PREFIX));
+    // A test harness child prints its test's name without a newline before
+    // the test runs, so the verdict can share a line with it.
+    let line = output.lines().rev().find_map(|line| {
+        line.find(VERDICT_PREFIX)
+            .map(|start| line[start + VERDICT_PREFIX.len()..].trim())
+    });
     match (status.code(), line) {
         (Some(0), Some("ok")) => Ok(()),
         (Some(FAIL_EXIT_CODE), Some(line)) => {
             Err(line.strip_prefix("fail ").unwrap_or(line).trim().to_owned())
         }
-        (code, _) => Err(format!(
-            "encoder crashed its isolated self-test process ({})",
-            describe_exit(status, code)
-        )),
+        (code, _) => {
+            let mut reason = format!(
+                "encoder crashed its isolated self-test process ({})",
+                describe_exit(status, code)
+            );
+            if let Some(last) = output.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+                reason.push_str(": ");
+                reason.extend(last.chars().take(200));
+            }
+            Err(reason)
+        }
     }
 }
 
