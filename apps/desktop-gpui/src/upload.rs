@@ -1377,16 +1377,20 @@ pub async fn upload_exported_video(
     ) else {
         return Ok(UploadResult::NotAuthenticated);
     };
-    context
+    let result = context
         .run(upload_exported_video_inner(
-            project_path,
+            project_path.clone(),
             organization_id,
             progress,
             cancel,
             false,
         ))
         .await
-        .map(|(result, _)| result)
+        .map(|(result, _)| result);
+    if matches!(result, Ok(UploadResult::Success(_))) {
+        crate::automation::upload_completed(&project_path, None);
+    }
+    result
 }
 
 async fn upload_exported_video_inner(
@@ -2620,6 +2624,7 @@ pub async fn upload_rendered_screenshot(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<ScreenshotShareOutcome, String> {
     let auth = crate::store::auth_snapshot();
     if !auth.signed_in() {
@@ -2631,7 +2636,7 @@ pub async fn upload_rendered_screenshot(
         return Ok(ScreenshotShareOutcome::UpgradeRequired);
     }
 
-    match upload_screenshot_bytes(image_bytes, content_type, video_id).await {
+    match upload_screenshot_bytes(image_bytes, content_type, video_id, organization_id).await {
         Ok(item) => Ok(ScreenshotShareOutcome::Uploaded(item)),
         Err(AuthApiError::InvalidAuthentication) => Ok(ScreenshotShareOutcome::NotAuthenticated),
         Err(AuthApiError::UpgradeRequired) => Ok(ScreenshotShareOutcome::UpgradeRequired),
@@ -2644,8 +2649,9 @@ async fn upload_screenshot_bytes(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthApiError> {
-    let created = create_or_get_video(true, video_id, None, None, None).await?;
+    let created = create_or_get_video(true, video_id, None, None, organization_id).await?;
     let link = created.link();
     let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);

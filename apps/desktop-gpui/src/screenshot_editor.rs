@@ -2323,7 +2323,8 @@ impl ScreenshotEditorWindow {
             let content_type = encoded.content_type();
             let bytes = encoded.into_bytes();
             let upload = gpui_tokio::Tokio::spawn(cx, async move {
-                crate::upload::upload_rendered_screenshot(bytes, content_type, existing_id).await
+                crate::upload::upload_rendered_screenshot(bytes, content_type, existing_id, None)
+                    .await
             });
             let outcome = match upload.await {
                 Ok(outcome) => outcome,
@@ -2372,6 +2373,10 @@ impl ScreenshotEditorWindow {
             //    flow's success -- a failure here surfaces as the error, and
             //    the sharing meta on disk stays what it was.
             let link = uploaded.link.clone();
+            let completed = (
+                meta.project_path.clone(),
+                (uploaded.link.clone(), uploaded.id.clone()),
+            );
             meta.sharing = Some(cap_project::SharingMeta {
                 id: uploaded.id,
                 link: uploaded.link,
@@ -2385,6 +2390,10 @@ impl ScreenshotEditorWindow {
                 })
                 .await;
 
+            if saved.is_ok() {
+                let (project, share) = completed;
+                crate::automation::upload_completed(&project, Some(share));
+            }
             this.update_in(cx, |this, window, cx| match saved {
                 Ok(()) => this.finish_share_success(toast, link, window, cx),
                 Err(error) => this.finish_share_error(toast, error, window, cx),

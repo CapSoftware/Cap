@@ -435,8 +435,6 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
-    /// `postStudioRecordingBehaviour` for the studio recording that is
-    /// stopping, after any `SkipEditor` or `OpenEditor` automation rule.
     pub studio_behaviour: Option<crate::store::PostStudioBehaviour>,
     /// An instant recording stopped cleanly and its share link was handed
     /// out. Taken by the phase observer, which brings the main window back

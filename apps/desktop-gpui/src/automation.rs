@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -13,7 +13,8 @@ use gpui::App;
 
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
-const REMEMBERED_EVENTS: usize = 256;
+const EDITOR_LOAD_WAIT: Duration = Duration::from_secs(60);
+pub(crate) const EDITOR_LOADING: &str = "The editor is still opening this recording";
 
 enum UiRequest {
     CopyImage(PathBuf),
@@ -24,6 +25,10 @@ enum UiRequest {
     OpenEditor(PathBuf),
     OpenScreenshotEditor(PathBuf),
     DeleteScreenshot(PathBuf),
+    ApplyPreset {
+        project: PathBuf,
+        config: serde_json::Value,
+    },
     LibraryChanged,
 }
 
@@ -98,6 +103,9 @@ fn handle_ui_request(request: UiRequest, cx: &mut App) -> UiOutcome {
         UiRequest::DeleteScreenshot(bundle) => UiOutcome::Done(
             crate::app_windows::delete_screenshot_for_automation(&bundle, cx),
         ),
+        UiRequest::ApplyPreset { project, config } => UiOutcome::Done(
+            crate::app_windows::apply_preset_for_automation(&project, &config, cx),
+        ),
         UiRequest::LibraryChanged => {
             crate::app_windows::refresh_library_after_delete(cx);
             UiOutcome::Done(Ok(()))
@@ -151,51 +159,73 @@ fn has_enabled_rule(store: &AutomationsStore, trigger: Trigger) -> bool {
         .any(|rule| rule.enabled && rule.trigger == trigger)
 }
 
-struct FiredEvents(Mutex<VecDeque<(Trigger, PathBuf)>>);
+/// The events whose rules are running right now. An event is held only
+/// while its run lasts, so a second report of the same event during the run
+/// (an upload finishing inside an Upload action, say) is dropped, and a later
+/// capture that reuses the path runs its rules again.
+struct RunningEvents(Mutex<HashSet<(Trigger, String)>>);
 
-impl FiredEvents {
-    const fn new() -> Self {
-        Self(Mutex::new(VecDeque::new()))
+impl RunningEvents {
+    fn new() -> Self {
+        Self(Mutex::new(HashSet::new()))
     }
 
-    fn claim(&self, trigger: Trigger, key: &Path) -> bool {
-        let mut fired = self
-            .0
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<(Trigger, String)>> {
+        self.0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if fired
-            .iter()
-            .any(|(seen, path)| *seen == trigger && path == key)
-        {
-            return false;
-        }
-        if fired.len() >= REMEMBERED_EVENTS {
-            fired.pop_front();
-        }
-        fired.push_back((trigger, key.to_path_buf()));
-        true
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn claim(&'static self, trigger: Trigger, key: String) -> Option<RunningEvent> {
+        self.lock()
+            .insert((trigger, key.clone()))
+            .then_some(RunningEvent {
+                events: self,
+                trigger,
+                key,
+            })
     }
 }
 
-static FIRED: FiredEvents = FiredEvents::new();
+struct RunningEvent {
+    events: &'static RunningEvents,
+    trigger: Trigger,
+    key: String,
+}
+
+impl Drop for RunningEvent {
+    fn drop(&mut self) {
+        self.events
+            .lock()
+            .remove(&(self.trigger, std::mem::take(&mut self.key)));
+    }
+}
+
+fn running_events() -> &'static RunningEvents {
+    static RUNNING: OnceLock<RunningEvents> = OnceLock::new();
+    RUNNING.get_or_init(RunningEvents::new)
+}
+
+fn event_key(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
 
 fn spawn_run(
     trigger: Trigger,
-    key: &Path,
+    key: String,
     build: impl FnOnce(&AutomationsStore) -> TriggerContext + Send + 'static,
-) {
-    let Some(store) = store_for(trigger) else {
-        return;
+) -> Option<tokio::task::JoinHandle<()>> {
+    let store = store_for(trigger)?;
+    let Some(running) = running_events().claim(trigger, key) else {
+        tracing::warn!(?trigger, "automations are already running for this event");
+        return None;
     };
-    if !FIRED.claim(trigger, key) {
-        tracing::warn!(?trigger, path = %key.display(), "automations already ran for this event");
-        return;
-    }
     let Some(runtime) = RUNTIME.get() else {
         tracing::warn!(?trigger, "automations are not ready; skipping");
-        return;
+        return None;
     };
-    runtime.handle.spawn(async move {
+    Some(runtime.handle.spawn(async move {
+        let _running = running;
         let store = Arc::new(store);
         let context_store = store.clone();
         let ctx = match tokio::task::spawn_blocking(move || build(&context_store)).await {
@@ -206,11 +236,11 @@ fn spawn_run(
             }
         };
         run_trigger(&store, trigger, ctx).await;
-    });
+    }))
 }
 
 async fn run_trigger(store: &AutomationsStore, trigger: Trigger, ctx: TriggerContext) {
-    let host = GpuiAutomationHost::default();
+    let host = GpuiAutomationHost::for_trigger(trigger);
     let results = cap_automation::run(&host, store, &trigger, &ctx).await;
     for result in &results {
         for action in &result.action_results {
@@ -251,16 +281,17 @@ fn action_name(action: &Action) -> &'static str {
 }
 
 pub fn recording_started(project_dir: &Path) {
-    spawn_run(Trigger::RecordingStarted, project_dir, |_| {
+    spawn_run(Trigger::RecordingStarted, event_key(project_dir), |_| {
         TriggerContext::new()
     });
 }
 
 pub fn studio_recording_finished(project_dir: PathBuf) {
-    let key = project_dir.clone();
-    spawn_run(Trigger::StudioRecordingFinished, &key, move |store| {
-        studio_context(project_dir, store)
-    });
+    spawn_run(
+        Trigger::StudioRecordingFinished,
+        event_key(&project_dir),
+        move |store| studio_context(project_dir, store),
+    );
 }
 
 fn studio_context(project_dir: PathBuf, store: &AutomationsStore) -> TriggerContext {
@@ -307,39 +338,61 @@ pub fn instant_recording_finished(
     share_link: Option<String>,
     share_id: Option<String>,
 ) {
-    let key = project_dir.clone();
-    spawn_run(Trigger::InstantRecordingFinished, &key, move |_| {
-        with_share(
-            TriggerContext::new()
-                .with_project_path(project_dir)
-                .with_recording_mode(AutomationRecordingMode::Instant),
-            share_link,
-            share_id,
-        )
-    });
+    spawn_run(
+        Trigger::InstantRecordingFinished,
+        event_key(&project_dir),
+        move |_| {
+            with_share(
+                TriggerContext::new()
+                    .with_project_path(project_dir)
+                    .with_recording_mode(AutomationRecordingMode::Instant),
+                share_link,
+                share_id,
+            )
+        },
+    );
 }
 
-/// Called before the upload's local cleanup may remove the folder, so the
-/// share link is read while the recording's metadata is still on disk.
-pub fn upload_completed(project_dir: &Path, video_id: &str) {
-    if store_for(Trigger::UploadCompleted).is_none() {
-        return;
-    }
-    let share_link = cap_project::RecordingMeta::load_for_project(project_dir)
+/// Every finished upload: the Instant queue once the upload is verified, a
+/// Studio share (from the editor or an Upload action) and a screenshot share.
+/// The queue calls it before its optional cleanup may remove the folder and
+/// keeps the folder until the returned run finishes.
+pub fn upload_completed(
+    project_dir: &Path,
+    share: Option<(String, String)>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    store_for(Trigger::UploadCompleted)?;
+    let (share_link, share_id) = match share {
+        Some((link, id)) => (Some(link), Some(id)),
+        None => cap_project::RecordingMeta::load_for_project(project_dir)
+            .ok()
+            .and_then(|meta| meta.sharing)
+            .map_or((None, None), |sharing| {
+                (Some(sharing.link), Some(sharing.id))
+            }),
+    };
+    let project_dir = project_dir.to_path_buf();
+    spawn_run(
+        Trigger::UploadCompleted,
+        event_key(&project_dir),
+        move |_| {
+            with_share(
+                TriggerContext::new().with_project_path(project_dir),
+                share_link,
+                share_id,
+            )
+        },
+    )
+}
+
+/// The Instant queue's share link for a verified upload, read from the
+/// recording's metadata while it is still on disk.
+pub fn instant_share(project_dir: &Path, video_id: &str) -> Option<(String, String)> {
+    cap_project::RecordingMeta::load_for_project(project_dir)
         .ok()
         .and_then(|meta| meta.sharing)
         .filter(|sharing| sharing.id == video_id)
-        .map(|sharing| sharing.link);
-    let project_dir = project_dir.to_path_buf();
-    let video_id = video_id.to_string();
-    let key = project_dir.clone();
-    spawn_run(Trigger::UploadCompleted, &key, move |_| {
-        with_share(
-            TriggerContext::new().with_project_path(project_dir),
-            share_link,
-            Some(video_id),
-        )
-    });
+        .map(|sharing| (sharing.link, sharing.id))
 }
 
 fn with_share(
@@ -357,17 +410,17 @@ fn with_share(
 }
 
 pub fn video_imported(project_dir: PathBuf) {
-    let key = project_dir.clone();
-    spawn_run(Trigger::VideoImported, &key, move |_| {
+    spawn_run(Trigger::VideoImported, event_key(&project_dir), move |_| {
         TriggerContext::new().with_project_path(project_dir)
     });
 }
 
 pub fn recording_deleted(project_dir: PathBuf) {
-    let key = project_dir.clone();
-    spawn_run(Trigger::RecordingDeleted, &key, move |_| {
-        TriggerContext::new().with_project_path(project_dir)
-    });
+    spawn_run(
+        Trigger::RecordingDeleted,
+        event_key(&project_dir),
+        move |_| TriggerContext::new().with_project_path(project_dir),
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -410,24 +463,39 @@ fn screenshot_context(image_path: PathBuf, target: &ScreenshotTarget) -> Trigger
     ctx
 }
 
-/// Whether a matching `SkipEditor` rule asks for the screenshot editor to
-/// stay closed (`should_open_screenshot_editor` in 0.6.0).
-pub fn screenshot_skips_editor(target: Option<&ScreenshotTarget>, image_path: &Path) -> bool {
-    let (Some(target), Some(store)) = (target, store_for(Trigger::ScreenshotTaken)) else {
-        return false;
-    };
-    cap_automation::has_skip_editor(
+/// The screenshot editor choice the matching rules make, decided once when
+/// the capture lands: `Some(false)` for a `SkipEditor` (it wins, as in
+/// 0.6.0), `Some(true)` for an `OpenEditor`, `None` to follow the setting.
+/// The rules' own Open editor action then leaves the editor alone, so the two
+/// can never disagree.
+pub fn screenshot_editor_choice(
+    target: Option<&ScreenshotTarget>,
+    image_path: &Path,
+) -> Option<bool> {
+    let (target, store) = (target?, store_for(Trigger::ScreenshotTaken)?);
+    editor_choice(
         &store,
-        &Trigger::ScreenshotTaken,
+        Trigger::ScreenshotTaken,
         &screenshot_context(image_path.to_path_buf(), target),
     )
 }
 
+fn editor_choice(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContext) -> Option<bool> {
+    if cap_automation::has_skip_editor(store, &trigger, ctx) {
+        Some(false)
+    } else if cap_automation::has_open_editor(store, &trigger, ctx) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 pub fn screenshot_taken(image_path: PathBuf, target: ScreenshotTarget) {
-    let key = image_path.clone();
-    spawn_run(Trigger::ScreenshotTaken, &key, move |_| {
-        screenshot_context(image_path, &target)
-    });
+    spawn_run(
+        Trigger::ScreenshotTaken,
+        event_key(&image_path),
+        move |_| screenshot_context(image_path, &target),
+    );
 }
 
 /// `studio_recording_editor_behaviour` in 0.6.0: a matching `SkipEditor`
@@ -456,26 +524,46 @@ fn studio_editor_behaviour_for(
     if !elapsed.is_zero() {
         ctx = ctx.with_duration(elapsed.as_secs_f64());
     }
-    if cap_automation::has_skip_editor(store, &Trigger::StudioRecordingFinished, &ctx) {
-        crate::store::PostStudioBehaviour::DoNothing
-    } else if cap_automation::has_open_editor(store, &Trigger::StudioRecordingFinished, &ctx) {
-        crate::store::PostStudioBehaviour::OpenEditor
-    } else {
-        default
+    match editor_choice(store, Trigger::StudioRecordingFinished, &ctx) {
+        Some(false) => crate::store::PostStudioBehaviour::DoNothing,
+        Some(true) => crate::store::PostStudioBehaviour::OpenEditor,
+        None => default,
     }
 }
 
 #[derive(Default)]
 struct GpuiAutomationHost {
+    trigger: Option<Trigger>,
     last_output: Mutex<Option<PathBuf>>,
 }
 
 impl GpuiAutomationHost {
-    fn remember_output(&self, path: PathBuf) {
+    fn for_trigger(trigger: Trigger) -> Self {
+        Self {
+            trigger: Some(trigger),
+            last_output: Mutex::new(None),
+        }
+    }
+
+    fn set_last_output(&self, path: Option<PathBuf>) {
         *self
             .last_output
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+    }
+
+    fn remember_output(&self, path: PathBuf) {
+        self.set_last_output(Some(path));
+    }
+
+    /// Whether the editor for this event was already chosen when the capture
+    /// or recording finished (`SkipEditor` and `OpenEditor` both feed that
+    /// choice), so an Open editor action must not reopen it.
+    fn editor_already_decided(&self) -> bool {
+        matches!(
+            self.trigger,
+            Some(Trigger::StudioRecordingFinished | Trigger::ScreenshotTaken)
+        )
     }
 
     fn last_output(&self) -> Option<PathBuf> {
@@ -497,6 +585,7 @@ impl AutomationHost for GpuiAutomationHost {
             Capability::OpenFile,
             Capability::RunCommand,
             Capability::Webhook,
+            Capability::Notify,
             Capability::OpenEditor,
             Capability::ApplyPreset,
             Capability::DeleteLocalFiles,
@@ -517,6 +606,7 @@ impl AutomationHost for GpuiAutomationHost {
         dir: &str,
         filename_template: Option<&str>,
     ) -> Result<(), String> {
+        self.set_last_output(None);
         let destination = save_to_location(ctx, dir, filename_template).await?;
         self.remember_output(destination);
         Ok(())
@@ -528,50 +618,9 @@ impl AutomationHost for GpuiAutomationHost {
         profile: &ExportProfile,
         destination: &ExportDestination,
     ) -> Result<(), String> {
-        let project_path = ctx
-            .project_path
-            .as_ref()
-            .ok_or("No project path available for export")?;
-        tracing::info!(project = %project_path.display(), format = ?profile.format, "automation: exporting");
-        let mut builder = cap_export::ExporterBase::builder(project_path.clone());
-        if let Some(output) = export_output_path(project_path, profile.format, destination) {
-            builder = builder.with_output_path(output);
-        }
-        let base = builder.build().await.map_err(|error| format!("{error}"))?;
-        let output = match profile.format {
-            ExportFormat::Mp4 => {
-                cap_export::mp4::Mp4ExportSettings {
-                    fps: profile.fps,
-                    resolution_base: profile.resolution_base,
-                    compression: export_compression(profile.compression),
-                    custom_bpp: None,
-                    force_ffmpeg_decoder: false,
-                    optimize_filesize: false,
-                }
-                .export(base, |_| true)
-                .await
-            }
-            ExportFormat::Gif => {
-                cap_export::gif::GifExportSettings {
-                    fps: profile.fps,
-                    resolution_base: profile.resolution_base,
-                    quality: None,
-                }
-                .export(base, |_| true)
-                .await
-            }
-            ExportFormat::Mov => {
-                cap_export::mov::MovExportSettings {
-                    fps: profile.fps,
-                    resolution_base: profile.resolution_base,
-                    cursor_only: false,
-                }
-                .export(base, |_| true)
-                .await
-            }
-        }
-        .map_err(|error| format!("Export failed: {error}"))?;
-        tracing::info!(output = %output.display(), "automation: export complete");
+        self.set_last_output(None);
+        let project_path = existing_project(ctx, "No project path available for export")?;
+        let output = render(project_path, profile, destination).await?;
         self.remember_output(output);
         Ok(())
     }
@@ -584,11 +633,24 @@ impl AutomationHost for GpuiAutomationHost {
         open_in_browser: bool,
     ) -> Result<(), String> {
         let link = if let Some(image_path) = ctx.image_path.as_ref() {
-            upload_screenshot(ctx, image_path).await?
+            let (project, uploaded) = upload_screenshot(ctx, image_path, organization_id).await?;
+            upload_completed(&project, Some((uploaded.link.clone(), uploaded.id)));
+            uploaded.link
         } else if let Some(existing) = ctx.share_link.as_ref() {
             tracing::info!(link = %existing, "automation: recording already uploaded, reusing its link");
             existing.clone()
         } else if let Some(project_path) = ctx.project_path.as_ref() {
+            if !project_path.is_dir() {
+                return Err("The recording no longer exists".to_string());
+            }
+            if needs_render_before_upload(project_path) {
+                render(
+                    project_path,
+                    &upload_render_profile(),
+                    &ExportDestination::ProjectFolder,
+                )
+                .await?;
+            }
             tracing::info!(path = %project_path.display(), "automation: uploading recording");
             match crate::upload::upload_exported_video(
                 project_path.clone(),
@@ -734,45 +796,48 @@ impl AutomationHost for GpuiAutomationHost {
 
     async fn notify(
         &self,
-        _ctx: &TriggerContext,
-        _title_template: &str,
-        _body_template: &str,
+        ctx: &TriggerContext,
+        title_template: &str,
+        body_template: &str,
     ) -> Result<(), String> {
-        Err("Automation notifications are not available in Cap yet".to_string())
+        if !crate::notifications::enabled() {
+            tracing::info!("automation: notifications are turned off in settings");
+            return Ok(());
+        }
+        let (title, body) = notification_text(ctx, title_template, body_template);
+        tokio::task::spawn_blocking(move || crate::notifications::show(&title, &body))
+            .await
+            .map_err(|error| format!("Failed to send notification: {error}"))?
     }
 
     async fn open_editor(&self, ctx: &TriggerContext) -> Result<(), String> {
+        if self.editor_already_decided() {
+            return Ok(());
+        }
         if let Some(image_path) = ctx.image_path.as_ref() {
             return ui(UiRequest::OpenScreenshotEditor(image_path.clone())).await;
         }
-        let path = ctx
-            .project_path
-            .as_ref()
-            .ok_or("No project path for editor")?;
+        let path = existing_project(ctx, "No project path for editor")?;
         ui(UiRequest::OpenEditor(path.clone())).await
     }
 
     async fn apply_preset(&self, ctx: &TriggerContext, name: &str) -> Result<(), String> {
-        let project_path = ctx
-            .project_path
-            .as_ref()
-            .ok_or("No project path for preset")?;
-        let presets = crate::presets::PresetsStore::load();
-        let preset = presets
-            .presets
-            .iter()
-            .find(|preset| preset.name == name)
-            .ok_or_else(|| format!("Preset '{name}' not found"))?;
+        let project_path = existing_project(ctx, "No project path for preset")?;
+        let config = preset_config(name)?;
         tracing::info!(preset = name, project = %project_path.display(), "automation: applying preset");
-        let current = match cap_project::ProjectConfiguration::load(project_path) {
-            Ok(current) => current,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
-            Err(error) => return Err(format!("Failed to load project config: {error}")),
-        };
-        crate::presets::apply_preset(&preset.config, &current)
-            .ok_or_else(|| format!("Preset '{name}' could not be read"))?
-            .write(project_path)
-            .map_err(|error| format!("Failed to write project config: {error}"))
+        let deadline = std::time::Instant::now() + EDITOR_LOAD_WAIT;
+        loop {
+            let request = UiRequest::ApplyPreset {
+                project: project_path.clone(),
+                config: config.clone(),
+            };
+            match ui(request).await {
+                Err(error) if error == EDITOR_LOADING && std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn delete_local_files(&self, ctx: &TriggerContext) -> Result<(), String> {
@@ -801,14 +866,130 @@ impl AutomationHost for GpuiAutomationHost {
             .project_path
             .as_ref()
             .ok_or("No project path for deletion")?;
-        verify_before_delete(project, preceding, self.last_output().as_deref())
+        let source = ctx.image_path.as_ref().or(ctx.output_path.as_ref());
+        verify_before_delete(
+            project,
+            preceding,
+            self.last_output().as_deref(),
+            source.map(PathBuf::as_path),
+        )
     }
+}
+
+fn existing_project<'a>(ctx: &'a TriggerContext, missing: &str) -> Result<&'a PathBuf, String> {
+    let project = ctx
+        .project_path
+        .as_ref()
+        .ok_or_else(|| missing.to_string())?;
+    if !project.is_dir() {
+        return Err("The recording no longer exists".to_string());
+    }
+    Ok(project)
+}
+
+fn preset_config(name: &str) -> Result<serde_json::Value, String> {
+    crate::presets::PresetsStore::load()
+        .presets
+        .into_iter()
+        .find(|preset| preset.name == name)
+        .map(|preset| preset.config)
+        .ok_or_else(|| format!("Preset '{name}' not found"))
+}
+
+/// Writes a preset into a project no editor has open. Runs on the main
+/// thread after the editor registry was checked, so an editor cannot load the
+/// old settings in between and later save them back over the preset.
+pub(crate) fn write_preset(project: &Path, config: &serde_json::Value) -> Result<(), String> {
+    let current = match cap_project::ProjectConfiguration::load(project) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(error) => return Err(format!("Failed to load project config: {error}")),
+    };
+    crate::presets::apply_preset(config, &current)
+        .ok_or_else(|| "The preset could not be read".to_string())?
+        .write(project)
+        .map_err(|error| format!("Failed to write project config: {error}"))
+}
+
+async fn render(
+    project_path: &Path,
+    profile: &ExportProfile,
+    destination: &ExportDestination,
+) -> Result<PathBuf, String> {
+    tracing::info!(project = %project_path.display(), format = ?profile.format, "automation: exporting");
+    let mut builder = cap_export::ExporterBase::builder(project_path.to_path_buf());
+    if let ExportDestination::CustomPath { dir } = destination {
+        let folder = chosen_folder(dir)?;
+        tokio::fs::create_dir_all(&folder)
+            .await
+            .map_err(|error| format!("Failed to create directory: {error}"))?;
+    }
+    if let Some(output) = export_output_path(project_path, profile.format, destination) {
+        builder = builder.with_output_path(output);
+    }
+    let base = builder.build().await.map_err(|error| format!("{error}"))?;
+    let output = match profile.format {
+        ExportFormat::Mp4 => {
+            cap_export::mp4::Mp4ExportSettings {
+                fps: profile.fps,
+                resolution_base: profile.resolution_base,
+                compression: export_compression(profile.compression),
+                custom_bpp: None,
+                force_ffmpeg_decoder: false,
+                optimize_filesize: false,
+            }
+            .export(base, |_| true)
+            .await
+        }
+        ExportFormat::Gif => {
+            cap_export::gif::GifExportSettings {
+                fps: profile.fps,
+                resolution_base: profile.resolution_base,
+                quality: None,
+            }
+            .export(base, |_| true)
+            .await
+        }
+        ExportFormat::Mov => {
+            cap_export::mov::MovExportSettings {
+                fps: profile.fps,
+                resolution_base: profile.resolution_base,
+                cursor_only: false,
+            }
+            .export(base, |_| true)
+            .await
+        }
+    }
+    .map_err(|error| format!("Export failed: {error}"))?;
+    tracing::info!(output = %output.display(), "automation: export complete");
+    Ok(output)
+}
+
+/// 0.6.0 failed an Upload of a Studio recording nobody had exported yet with
+/// "Rendered video not found", so the shipped "Upload and grab the share
+/// link" template never worked. Such a recording is rendered first, at the
+/// Export action's defaults, into its own output file, which is where the
+/// upload reads from.
+fn upload_render_profile() -> ExportProfile {
+    ExportProfile {
+        format: ExportFormat::Mp4,
+        fps: 30,
+        resolution_base: cap_project::XY { x: 1920, y: 1080 },
+        compression: None,
+        preset_name: None,
+    }
+}
+
+fn needs_render_before_upload(project_path: &Path) -> bool {
+    cap_project::RecordingMeta::load_for_project(project_path)
+        .is_ok_and(|meta| meta.studio_meta().is_some() && !meta.output_path().is_file())
 }
 
 fn verify_before_delete(
     project: &Path,
     preceding: Option<PrecedingAction<'_>>,
     last_output: Option<&Path>,
+    source: Option<&Path>,
 ) -> Result<(), String> {
     let preceding = preceding.ok_or(
         "Delete local files needs an Export or Save to location before it; local files kept",
@@ -830,7 +1011,58 @@ fn verify_before_delete(
     }
     let output =
         last_output.ok_or("The previous action left no file to check; local files kept")?;
-    verify_output(output, project)
+    verify_output(output, project)?;
+    match preceding.action {
+        Action::SaveToLocation { .. } => verify_copy(output, source),
+        _ => verify_playable(output),
+    }
+}
+
+/// A Save to location copy must be the whole source file.
+fn verify_copy(output: &Path, source: Option<&Path>) -> Result<(), String> {
+    let source = source.ok_or("The saved file has no source to compare; local files kept")?;
+    let expected = std::fs::metadata(source)
+        .map_err(|error| {
+            format!(
+                "{} could not be checked ({error}); local files kept",
+                source.display()
+            )
+        })?
+        .len();
+    let saved = std::fs::metadata(output)
+        .map_err(|error| {
+            format!(
+                "{} could not be checked ({error}); local files kept",
+                output.display()
+            )
+        })?
+        .len();
+    if saved != expected {
+        return Err(format!(
+            "{} is {saved} bytes but the original is {expected}; local files kept",
+            output.display()
+        ));
+    }
+    Ok(())
+}
+
+/// An export must open as media with a video track and a duration, so a
+/// truncated or unreadable file never stands in for the recording.
+fn verify_playable(output: &Path) -> Result<(), String> {
+    let unreadable = |reason: String| {
+        format!(
+            "{} is not a playable video ({reason}); local files kept",
+            output.display()
+        )
+    };
+    let input = ffmpeg::format::input(output).map_err(|error| unreadable(error.to_string()))?;
+    if input.streams().best(ffmpeg::media::Type::Video).is_none() {
+        return Err(unreadable("no video track".to_string()));
+    }
+    if input.duration() <= 0 {
+        return Err(unreadable("no duration".to_string()));
+    }
+    Ok(())
 }
 
 fn verify_output(output: &Path, project: &Path) -> Result<(), String> {
@@ -876,7 +1108,11 @@ fn ensure_no_pending_upload(project: &Path) -> Result<(), String> {
     }
 }
 
-async fn upload_screenshot(ctx: &TriggerContext, image_path: &Path) -> Result<String, String> {
+async fn upload_screenshot(
+    ctx: &TriggerContext,
+    image_path: &Path,
+    organization_id: Option<&str>,
+) -> Result<(PathBuf, crate::upload::UploadedItem), String> {
     tracing::info!(path = %image_path.display(), "automation: uploading screenshot");
     let project = ctx
         .project_path
@@ -890,19 +1126,25 @@ async fn upload_screenshot(ctx: &TriggerContext, image_path: &Path) -> Result<St
     let bytes = tokio::fs::read(image_path)
         .await
         .map_err(|error| format!("Failed to read screenshot: {error}"))?;
-    let uploaded =
-        match crate::upload::upload_rendered_screenshot(bytes, "image/png", existing_id).await? {
-            crate::upload::ScreenshotShareOutcome::Uploaded(item) => item,
-            crate::upload::ScreenshotShareOutcome::NotAuthenticated => {
-                return Err("Not authenticated for upload".to_string());
-            }
-            crate::upload::ScreenshotShareOutcome::UpgradeRequired => {
-                return Err("Upgrade required for upload".to_string());
-            }
-        };
+    let uploaded = match crate::upload::upload_rendered_screenshot(
+        bytes,
+        "image/png",
+        existing_id,
+        organization_id.map(str::to_string),
+    )
+    .await?
+    {
+        crate::upload::ScreenshotShareOutcome::Uploaded(item) => item,
+        crate::upload::ScreenshotShareOutcome::NotAuthenticated => {
+            return Err("Not authenticated for upload".to_string());
+        }
+        crate::upload::ScreenshotShareOutcome::UpgradeRequired => {
+            return Err("Upgrade required for upload".to_string());
+        }
+    };
     if let Some(mut meta) = meta {
         meta.sharing = Some(cap_project::SharingMeta {
-            id: uploaded.id,
+            id: uploaded.id.clone(),
             link: uploaded.link.clone(),
             content_hash: None,
         });
@@ -913,7 +1155,7 @@ async fn upload_screenshot(ctx: &TriggerContext, image_path: &Path) -> Result<St
             );
         }
     }
-    Ok(uploaded.link)
+    Ok((project, uploaded))
 }
 
 fn clipboard_image(ctx: &TriggerContext, source: ClipboardSource) -> Result<PathBuf, String> {
@@ -958,17 +1200,50 @@ async fn save_to_location(
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "capture.png".to_string()),
     };
-    let destination = PathBuf::from(dir).join(&filename);
+    let destination = chosen_folder(dir)?.join(&filename);
     tracing::info!(src = %source.display(), dst = %destination.display(), "automation: saving to location");
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| format!("Failed to create directory: {error}"))?;
     }
+    if destination.exists()
+        && is_same_file(source, &destination)
+            .map_err(|error| format!("Failed to compare source and destination: {error}"))?
+    {
+        tracing::info!(dst = %destination.display(), "automation: the file is already there");
+        return Ok(destination);
+    }
     tokio::fs::copy(source, &destination)
         .await
         .map_err(|error| format!("Failed to copy file: {error}"))?;
     Ok(destination)
+}
+
+/// A folder a rule names must be absolute: an empty or relative one would
+/// resolve against wherever Cap was launched from.
+fn chosen_folder(dir: &str) -> Result<PathBuf, String> {
+    let folder = PathBuf::from(dir.trim());
+    if dir.trim().is_empty() || !folder.is_absolute() {
+        return Err("Choose a folder for this action".to_string());
+    }
+    Ok(folder)
+}
+
+/// `apps/cli/src/file_identity.rs`: copying a file onto itself, or onto a
+/// link to it, truncates the original.
+fn is_same_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let source = source.metadata()?;
+        let destination = destination.metadata()?;
+        Ok(source.dev() == destination.dev() && source.ino() == destination.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        same_file::is_same_file(source, destination)
+    }
 }
 
 fn export_output_path(
@@ -1031,6 +1306,16 @@ fn apply_filename_template(template: &str, ctx: &TriggerContext) -> String {
         result = result.replace("{window}", &sanitize_filename_component(title));
     }
     result
+}
+
+/// 0.6.0's Notify: the filename variables, then the event's paths and link.
+fn notification_text(
+    ctx: &TriggerContext,
+    title_template: &str,
+    body_template: &str,
+) -> (String, String) {
+    let fill = |template: &str| apply_body_template(&apply_filename_template(template, ctx), ctx);
+    (fill(title_template), fill(body_template))
 }
 
 fn apply_body_template(template: &str, ctx: &TriggerContext) -> String {

@@ -855,12 +855,17 @@ impl<B: UploadBackend> Manager<B> {
             Some(&upload.cancel),
         )
         .map_err(|error| error.to_string())?;
-        crate::automation::upload_completed(project, &state.video_id);
+        let automations = crate::automation::upload_completed(
+            project,
+            crate::automation::instant_share(project, &state.video_id),
+        );
         let cleanup_cleared = self.backend.forget_start_cleanup(&state.video_id);
         if !state.preserve_local && self.backend.delete_after_upload() {
             check_segment_cancelled(&upload.cancel)?;
             if !cleanup_cleared {
                 tracing::warn!(path = %project.display(), "Verified upload kept locally because its cleanup entry could not be cleared");
+            } else if let Some(automations) = automations {
+                tokio::spawn(remove_after_automations(project.to_path_buf(), automations));
             } else if let Err(error) = std::fs::remove_dir_all(project) {
                 tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
             }
@@ -1218,6 +1223,36 @@ pub(crate) async fn retry(project: PathBuf) -> Result<(), String> {
     state.next_retry_at = None;
     write_state(&canonical, &state)?;
     manager().resume(canonical, state, ownership).await
+}
+
+/// The upload-after-delete cleanup for a recording whose upload-completed
+/// rules are still running: the rules read the folder (a command given
+/// `CAP_PROJECT_PATH`, an export), so it goes only once they finish, and
+/// stays if one of them opened it in an editor.
+async fn remove_after_automations(project: PathBuf, automations: tokio::task::JoinHandle<()>) {
+    if let Err(error) = automations.await {
+        tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because its automations did not finish");
+        return;
+    }
+    if let Err(error) = crate::library::ensure_not_open_in_editor(&project) {
+        tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because it is open in an editor");
+        return;
+    }
+    let removed = tokio::task::spawn_blocking({
+        let project = project.clone();
+        move || std::fs::remove_dir_all(project)
+    })
+    .await;
+    match removed {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(Err(error)) => {
+            tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
+        }
+        Err(error) => {
+            tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
+        }
+    }
 }
 
 pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {

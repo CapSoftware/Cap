@@ -7497,7 +7497,7 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
 /// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, skip_editor: bool, cx: &mut App) {
+pub fn screenshot_finished(captured: Option<PathBuf>, editor_choice: Option<bool>, cx: &mut App) {
     let Some(png) = captured else {
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
@@ -7527,7 +7527,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, skip_editor: bool, cx: &mu
         .detach();
     }
 
-    if behaviour.opens_editor() && !skip_editor {
+    if editor_choice.unwrap_or_else(|| behaviour.opens_editor()) {
         // The editor owns the foreground now, the way a stopped studio
         // recording hands off to the video editor; `screenshot_editor_closed`
         // brings the main window back.
@@ -7568,6 +7568,28 @@ pub fn delete_screenshot_for_automation(bundle: &Path, cx: &mut App) -> Result<(
     }
     refresh_library_after_delete(cx);
     Ok(())
+}
+
+/// An automation's Apply preset: through the editor's own preset path when an
+/// editor has the project open, since it would otherwise save its loaded
+/// settings back over the file. An editor still loading the project answers
+/// [`crate::automation::EDITOR_LOADING`] so the caller can wait for it.
+pub fn apply_preset_for_automation(
+    project: &Path,
+    config: &serde_json::Value,
+    cx: &mut App,
+) -> Result<(), String> {
+    let Some(handle) = editor_window_handle(project, cx) else {
+        return crate::automation::write_preset(project, config);
+    };
+    handle
+        .update(cx, |editor, window, cx| {
+            if editor.instance.is_none() {
+                return Err(crate::automation::EDITOR_LOADING.to_string());
+            }
+            editor.apply_preset_config(config, window, cx)
+        })
+        .map_err(|_| "The editor window closed before the preset was applied".to_string())?
 }
 
 /// Open (or focus) the screenshot editor for a bundle -- the

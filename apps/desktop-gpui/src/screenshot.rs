@@ -111,15 +111,15 @@ fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
                 None
             }
         };
-        let skip_editor = match (&captured, automation_target) {
+        let editor_choice = match (&captured, automation_target) {
             (Some(png), Some(target)) => {
-                let skip = crate::automation::screenshot_skips_editor(Some(&target), png);
+                let choice = crate::automation::screenshot_editor_choice(Some(&target), png);
                 crate::automation::screenshot_taken(png.clone(), target);
-                skip
+                choice
             }
-            _ => false,
+            _ => None,
         };
-        cx.update(|cx| app_windows::screenshot_finished(captured, skip_editor, cx));
+        cx.update(|cx| app_windows::screenshot_finished(captured, editor_choice, cx));
     })
     .detach();
 }
