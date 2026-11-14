@@ -227,10 +227,11 @@ const S3_FIELDS: [(fn() -> &'static str, &str); 5] = [
     (tr::settings::integrations::s3::region, "us-east-1"),
 ];
 
-const S3_PROVIDERS: [(&str, fn() -> &'static str); 5] = [
+const S3_PROVIDERS: [(&str, fn() -> &'static str); 6] = [
     ("aws", || "AWS S3"),
     ("cloudflare", || "Cloudflare R2"),
     ("supabase", || "Supabase"),
+    ("neon", || "Neon"),
     ("minio", || "MinIO"),
     ("other", tr::settings::integrations::s3::other_provider),
 ];

@@ -40,6 +40,7 @@ const s3ProviderOptions = [
 	{ value: "aws", label: "AWS S3" },
 	{ value: "cloudflare", label: "Cloudflare R2" },
 	{ value: "supabase", label: "Supabase" },
+	{ value: "neon", label: "Neon" },
 	{ value: "minio", label: "MinIO" },
 	{ value: "other", label: "Other S3-Compatible" },
 ];

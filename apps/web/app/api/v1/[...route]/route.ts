@@ -12,6 +12,7 @@ import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { s3CompatibleClientOptions } from "@cap/utils/s3";
 import { serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import {
@@ -1609,6 +1610,7 @@ const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 						secretAccessKey: config.secretAccessKey,
 					},
 					requestHandler: publicOnlyS3Agents(),
+					...s3CompatibleClientOptions(config.endpoint),
 				});
 				await client.send(
 					new HeadBucketCommand({ Bucket: config.bucketName }),

@@ -4,6 +4,7 @@ import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
+import { s3CompatibleClientOptions } from "@cap/utils/s3";
 import { Organisation, S3Bucket } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
@@ -333,6 +334,7 @@ app.post(
 					abortSignal: controller.signal,
 					...publicOnlyS3Agents(),
 				},
+				...s3CompatibleClientOptions(data.endpoint),
 			});
 
 			try {
