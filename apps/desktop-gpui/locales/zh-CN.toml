@@ -3204,6 +3204,13 @@ quit_anyway = "仍然退出"
 still_open = "Cap 仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
 
+[dialog.startup]
+failed = "{error}\n\n详细信息已保存在 {folder}。"
+failed_title = "Cap 无法启动"
+quit_and_reopen = "退出并重新打开"
+unresponsive = "Cap 已在运行，但没有响应。要退出它并重新打开 Cap 吗？"
+unresponsive_title = "Cap 没有响应"
+
 [dialog.update]
 already_getting = "Cap 已在准备版本 {version}。"
 available = "Cap {version} 版本现已推出。Cap 会在后台下载，并在可以安装时通知你。"

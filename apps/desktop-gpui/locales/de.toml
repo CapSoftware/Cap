@@ -3204,6 +3204,13 @@ quit_anyway = "Trotzdem beenden"
 still_open = "Cap ist noch geöffnet"
 unconfirmed = "Beenden abgebrochen, weil nicht bestätigt werden konnte, dass die Aufnahme beendet wurde. Cap bleibt geöffnet. Verwenden Sie „Stoppen“ und beenden Sie Cap dann erneut."
 
+[dialog.startup]
+failed = "{error}\n\nDetails wurden in {folder} gespeichert."
+failed_title = "Cap konnte nicht gestartet werden"
+quit_and_reopen = "Beenden und neu öffnen"
+unresponsive = "Cap läuft bereits, reagiert aber nicht. Diese Instanz beenden und Cap neu öffnen?"
+unresponsive_title = "Cap reagiert nicht"
+
 [dialog.update]
 already_getting = "Cap bereitet Version {version} bereits vor."
 available = "Version {version} von Cap ist verfügbar. Cap lädt sie im Hintergrund herunter und informiert Sie, sobald sie installiert werden kann."
