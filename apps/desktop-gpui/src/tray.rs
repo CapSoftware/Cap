@@ -16,8 +16,6 @@
 //! Labels mirror `build_tray_menu`, except on macOS where the mode group
 //! names the current mode and its section header follows the palette's
 //! highlight in italic; the grouping is [`build_menu`]'s own.
-//! "Upload Logs" sends what Settings > Feedback sends, and reads "Uploading..."
-//! until the result alert.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -702,8 +700,6 @@ fn current_menu_entries(cx: &App, mode: Mode, previous: &[PreviousItem]) -> Vec<
 
 static LOGS_UPLOADING: AtomicBool = AtomicBool::new(false);
 
-/// One upload at a time: the row reads "Uploading..." and does nothing until
-/// the result alert.
 fn mark_logs_uploading(entries: &mut [Entry]) {
     for entry in entries {
         if let Entry::Item { item, .. } = entry
