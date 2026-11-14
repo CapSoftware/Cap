@@ -49,6 +49,7 @@ import {
 	SLICED_HLS,
 	slicedFileName,
 	slicedHlsRenditions,
+	supersededSlicedHls,
 } from "./developer-video-slices";
 import {
 	abandonSlicedHls,
@@ -271,12 +272,25 @@ async function commitEncodeState(
 	} | null,
 	executor?: InfraDbExecutor,
 ): Promise<DeveloperVideoRow | null> {
-	return mutateEncode(
+	let discarded: string[] = [];
+	const updated = await mutateEncode(
 		videoId,
 		encodeId,
 		(processing, video) => {
+			discarded = [];
 			const next = change(processing, video);
 			if (!next) return null;
+			// Slices given up while others still encode: nothing takes their
+			// results any more, so their workers are freed for the job that
+			// replaces them.
+			if (
+				processing.sliced?.state === "encoding" &&
+				next.processing.sliced?.state === "abandoned"
+			) {
+				discarded = next.processing.sliced.slices.flatMap(({ job }) =>
+					job.state === "running" && job.jobId ? [job.jobId] : [],
+				);
+			}
 			// Slices that were given up and could not be replaced leave no
 			// adaptive stream, so the renditions they listed go with them.
 			const withdrawn =
@@ -294,6 +308,10 @@ async function commitEncodeState(
 		},
 		executor,
 	);
+	if (updated && discarded.length > 0) {
+		await cancelDeveloperVideoJobs(videoId, discarded);
+	}
+	return updated;
 }
 
 function slicedHlsEnabled(): boolean {
@@ -1369,6 +1387,18 @@ export async function sweepSupersededDeveloperVideoOutputs(
 			? sliced
 			: null;
 	const slicedFiles = new Set<string>();
+	const superseded = supersededSlicedHls(processing);
+	if (superseded) {
+		const { hlsPrefix } = slicedHlsKeys(video, encodeId, superseded.output);
+		for (const file of slicedHlsMediaFiles({
+			video,
+			encodeId,
+			...superseded,
+			ended: true,
+		})) {
+			slicedFiles.add(`${hlsPrefix}${file}`);
+		}
+	}
 	if (slicedOutput) {
 		const source = {
 			video,
@@ -1555,9 +1585,9 @@ async function startSlice(
 			});
 			return dispatched ? { processing: dispatched } : null;
 		});
-		if (!recorded && (await findDeveloperVideo(video.id))?.deletedAt) {
-			await cancelDeveloperVideoJobs(video.id, [jobId]);
-		}
+		// The slice was given up, or the video deleted, while its start was on
+		// the way: no result of this job would be taken.
+		if (!recorded) await cancelDeveloperVideoJobs(video.id, [jobId]);
 		return "dispatched";
 	}
 	if (started.status === "unconfirmed") return "unconfirmed";
@@ -1816,6 +1846,7 @@ async function completedSliceOutcome(
 	if (!top || playlists.some((playlist) => playlist === null)) {
 		return SLICE_NOT_STORED;
 	}
+	const audio = streams.at(-1) === HLS_AUDIO_NAME ? playlists.at(-1) : null;
 	if (
 		slice.durationSeconds !== null &&
 		Math.abs(top.seconds - slice.durationSeconds) >
@@ -1838,6 +1869,11 @@ async function completedSliceOutcome(
 			seconds: top.seconds,
 			renditions: ladder.renditions,
 			audioBytes: index === 0 ? ladder.audioBytes : 0,
+			...(audio && audio.seconds > 0
+				? {
+						audioBitrate: Math.round((ladder.audioBytes * 8) / audio.seconds),
+					}
+				: {}),
 		},
 		posterBytes: poster?.bytes ?? 0,
 	};

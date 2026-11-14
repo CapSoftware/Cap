@@ -1,4 +1,7 @@
-import type { DeveloperVideoProcessingState } from "@cap/database/types";
+import type {
+	DeveloperVideoProcessingState,
+	DeveloperVideoSlicedHls,
+} from "@cap/database/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type DeveloperVideoStore,
@@ -86,7 +89,8 @@ const { developerVideoOutputs } = await import("@/lib/developer-video-api");
 const FOLDER = "developer/app-1/video-1/encode-1/sliced-1";
 // Lengths of the four slices of the 300 second fixture video.
 const SECONDS = [20, 96, 96, 88];
-const AUDIO_BYTES = 300;
+// 128 kbps over the 299.9 s of audio the fixture's audio playlist lists.
+const AUDIO_BYTES = 4_798_400;
 
 function video() {
 	if (!mocks.store.video) throw new Error("no video");
@@ -621,6 +625,38 @@ describe("slice results", () => {
 	});
 });
 
+describe("copied audio", () => {
+	it("lists audio copied from the source at its own rate", async () => {
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+		await applyDeveloperVideoProgress(
+			{
+				videoId: "video-1",
+				phase: "complete",
+				ladder: sliceLadder(sliceResult(SECONDS[0] ?? 20), 5_998_000),
+			},
+			"hls",
+			latest(0).token,
+		);
+		await finish(1);
+		await finish(2);
+		await finish(3);
+		const written = Object.fromEntries(
+			mocks.writeText.mock.calls.map(([key, text]) => [
+				(key as string).split("/").at(-1),
+				text as string,
+			]),
+		);
+
+		expect(state().sliced?.slices[0]?.result?.audioBitrate).toBe(160_000);
+		expect(written["master.m3u8"]).toContain(
+			"BANDWIDTH=4192000,AVERAGE-BANDWIDTH=3160000,",
+		);
+		expect(video().renditions?.map((rendition) => rendition.bitrate)).toEqual([
+			3_160_000, 560_000,
+		]);
+	});
+});
+
 describe("the last slice", () => {
 	beforeEach(async () => {
 		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
@@ -941,7 +977,7 @@ describe("a slice that fails twice", () => {
 		expect(video().renditions).toBeNull();
 	});
 
-	it("removes the slices once the single job has finished", async () => {
+	it("keeps the media viewers were shown once the single job has finished", async () => {
 		await failSlice(1);
 		await failSlice(1);
 		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
@@ -977,10 +1013,25 @@ describe("a slice that fails twice", () => {
 		const keep = mocks.deleteObjects.mock.calls[0]?.[1] as (
 			key: string,
 		) => boolean;
-		expect(keep(`${FOLDER}/hls/1080p-0-${latest(0).token}.m4s`)).toBe(false);
+		expect(keep(`${FOLDER}/hls/1080p-0-${latest(0).token}.m4s`)).toBe(true);
+		expect(keep(`${FOLDER}/hls/audio-0-${latest(0).token}.m4s`)).toBe(true);
+		expect(keep(`${FOLDER}/slices/1080p-0-${latest(0).token}.m3u8`)).toBe(
+			false,
+		);
 		expect(
 			keep(`developer/app-1/video-1/encode-1/${hls.token}/hls/1080p.m4s`),
 		).toBe(true);
+	});
+
+	it("stops the slice jobs still running when the slices are given up", async () => {
+		await failSlice(1);
+		await failSlice(1);
+
+		expect(state().sliced?.state).toBe("abandoned");
+		expect(mocks.cancelJob.mock.calls.map(([jobId]) => jobId).sort()).toEqual([
+			"slice-job-2",
+			"slice-job-3",
+		]);
 	});
 
 	it("ends errored when the workflow runs out of time before anything else finished", async () => {
@@ -1071,6 +1122,35 @@ describe("slices alongside the rest of Infra processing", () => {
 		expect(sent()).toHaveLength(3);
 		expect(state().hls).toEqual({ state: "pending" });
 		expect(state().mp4.state).toBe("running");
+	});
+
+	it("cancels a slice job whose start lands after the slices were given up", async () => {
+		mocks.startJob.mockImplementation(async (_path, body) => {
+			const range = (body as { range?: { startSeconds: number } }).range;
+			if (range?.startSeconds === 20) {
+				mocks.store.video = {
+					...video(),
+					processing: {
+						...state(),
+						sliced: {
+							...(state().sliced as DeveloperVideoSlicedHls),
+							state: "abandoned",
+							reason: "x",
+						},
+					},
+				};
+			}
+			return {
+				status: "started",
+				jobId: `slice-job-${STARTS.indexOf(range?.startSeconds ?? -1)}`,
+			};
+		});
+		mocks.cancelJob.mockResolvedValue("cancelled");
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+
+		expect(mocks.cancelJob).toHaveBeenCalledWith("slice-job-1");
+		expect(mocks.cancelJob).not.toHaveBeenCalledWith("slice-job-0");
 	});
 
 	it("cancels a slice job whose start lands after the video was deleted", async () => {
