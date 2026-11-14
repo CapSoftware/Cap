@@ -130,6 +130,10 @@ pub enum DeepLinkAction {
     #[cfg(debug_assertions)]
     ResumeRecording,
     #[cfg(debug_assertions)]
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    #[cfg(debug_assertions)]
     OpenCamera {
         camera: DeviceOrModelID,
     },
@@ -481,6 +485,13 @@ impl DeepLinkAction {
                 Ok(())
             }
             #[cfg(debug_assertions)]
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                RecordingSession::global(cx).update(cx, |session, cx| {
+                    session.switch_input(crate::session::InputRequest::Microphone(mic_label), cx);
+                });
+                Ok(())
+            }
+            #[cfg(debug_assertions)]
             DeepLinkAction::ResumeRecording => {
                 RecordingSession::global(cx).update(cx, |session, cx| {
                     if session.is_paused() {
@@ -760,6 +771,27 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&resume_url),
             Ok(DeepLinkAction::ResumeRecording)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_switch_microphone_action_urls() {
+        let parse = |value: serde_json::Value| {
+            let mut url = Url::parse("cap-desktop://action").unwrap();
+            url.query_pairs_mut()
+                .append_pair("value", &value.to_string());
+            DeepLinkAction::try_from(&url)
+        };
+        assert_eq!(
+            parse(serde_json::json!({ "switch_microphone": { "mic_label": "USB Mic" } })),
+            Ok(DeepLinkAction::SwitchMicrophone {
+                mic_label: Some("USB Mic".into())
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({ "switch_microphone": { "mic_label": null } })),
+            Ok(DeepLinkAction::SwitchMicrophone { mic_label: None })
         );
     }
 
