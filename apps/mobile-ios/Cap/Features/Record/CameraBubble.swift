@@ -53,7 +53,10 @@ final class CameraBubble: NSObject {
         }
     }
 
-    func prepare() async {
+    /// Studio Mode records the bubble's camera as its own track, so it asks the camera for 720p rather than the
+    /// small picture the bubble alone needs.
+    func prepare(studio: Bool = false) async {
+        capture.usePreset(studio ? .hd1280x720 : CameraCapture.Configuration.bubble.preset)
         guard state != .ready else { return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -122,6 +125,24 @@ final class CameraBubble: NSObject {
     func releaseUnlessFloating() {
         if !isFloating { stop() }
     }
+
+    func beginStudioRecording(_ writer: StudioTrackWriter) {
+        capture.beginRecording(writer)
+    }
+
+    /// Closes the camera's file. Nil if the camera never recorded a frame, for example when iOS kept it off while
+    /// another app was in front.
+    func endStudioRecording(_ writer: StudioTrackWriter) async -> StudioTrackInfo? {
+        let result = await withCheckedContinuation { continuation in
+            capture.endRecording { continuation.resume(returning: $0) }
+        }
+        // A file that stopped early (a full disk) still holds what it wrote before.
+        guard var info = writer.info else { return nil }
+        if let duration = try? result.get(), duration > 0 { info.duration = duration }
+        return info.duration > 0 ? info : nil
+    }
+
+    var captureClock: CMClock? { capture.captureClock }
 
     nonisolated private static func show(_ buffer: CMSampleBuffer, on layer: AVSampleBufferDisplayLayer) {
         // Live frames: show each as it arrives rather than on a playback clock.

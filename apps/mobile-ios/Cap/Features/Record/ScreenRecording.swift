@@ -1,4 +1,5 @@
 import ActivityKit
+@preconcurrency import AVFoundation
 import CapKit
 import notify
 import Observation
@@ -31,7 +32,7 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var isAvailable: Bool { self == .instant }
+    var isAvailable: Bool { self != .screenshot }
 
     var comingSoonMessage: String { "\(title) is coming soon" }
 }
@@ -56,6 +57,15 @@ enum RecordMode: String, CaseIterable, Identifiable {
     /// Screen + Camera keeps the camera running behind other apps, which needs Apple's multitasking camera
     /// entitlement. It stays hidden until the app has it.
     static let offered: [RecordMode] = [.camera, .screen]
+
+    /// Studio records the camera into its own track while the screen records, where the phone allows the camera to
+    /// keep running behind other apps.
+    static func offered(for capture: CaptureMode) -> [RecordMode] {
+        guard capture == .studio, cameraWhileMultitasking else { return offered }
+        return [.camera, .screen, .screenAndCamera]
+    }
+
+    static let cameraWhileMultitasking = AVCaptureSession().isMultitaskingCameraAccessSupported
 }
 
 /// iOS only lets its own button start a broadcast, so that button sits invisibly on top of Cap's.
@@ -118,6 +128,8 @@ final class ScreenRecordingSession {
     private static let log = Logger(subsystem: "so.cap.mobile", category: "screen-recording")
     private var activity: Activity<ScreenRecordingAttributes>?
     private var recording: (withCamera: Bool, startedAt: Date, stats: ProcessStats.Mark)?
+    /// A Studio recording stays on the phone, so none of the upload hand-over applies when it stops.
+    private var isStudio = false
     private var handOffToken: Int32 = NOTIFY_TOKEN_INVALID
     private var started = false
 
@@ -143,10 +155,11 @@ final class ScreenRecordingSession {
         }
     }
 
-    func began(withCamera: Bool) {
+    func began(withCamera: Bool, studio: Bool = false) {
         guard recording == nil else { return }
         recording = (withCamera, .now, ProcessStats.mark())
-        Usage.track("recording_started", ["mode": "screen", "camera": .bool(withCamera)])
+        isStudio = studio
+        if !studio { Usage.track("recording_started", ["mode": "screen", "camera": .bool(withCamera)]) }
         startActivityIfNeeded()
         // iOS only starts Live Activities while Cap is in front, and the system sheet is still
         // closing as recording begins.
@@ -190,7 +203,7 @@ final class ScreenRecordingSession {
             endActivity()
             return
         }
-        RecentRecordings.shared.savingScreen()
+        if !isStudio { RecentRecordings.shared.savingScreen() }
         ScreenRecordingStop.request()
         if let found = activity {
             nonisolated(unsafe) let activity = found
@@ -202,6 +215,12 @@ final class ScreenRecordingSession {
         guard !ScreenRecorder.isScreenCaptured else { return }
         let wasRecording = recording != nil || activity != nil
         endActivity()
+        if isStudio {
+            isStudio = false
+            recording = nil
+            StudioSession.shared.screenRecordingEnded(bubble: CameraBubble.shared)
+            return
+        }
         if let recording {
             self.recording = nil
             // No length here: Cap may only notice the stop when it is next opened. The recorded length comes with
@@ -269,6 +288,7 @@ struct ScreenModePanel: View {
     let mode: RecordMode
     let bubble: CameraBubble
     var compact = false
+    var studio = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -279,7 +299,7 @@ struct ScreenModePanel: View {
                 Text(recorder.isCapturing ? "Recording your screen" : title)
                     .font(.title2.weight(.semibold))
                 if recorder.isCapturing {
-                    Text("Use any app. To stop, tap the Dynamic Island or the Stop button on the Lock Screen, or come back here. Cap opens your recording.")
+                    Text(studio ? "Use any app. To stop, tap the Dynamic Island or come back here. Your recording opens in the editor." : "Use any app. To stop, tap the Dynamic Island or the Stop button on the Lock Screen, or come back here. Cap opens your recording.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
@@ -294,7 +314,7 @@ struct ScreenModePanel: View {
                     VStack(alignment: .leading, spacing: 10) {
                         step(1, "Tap the record button, then **Start Recording**. Turn the microphone on there to add your voice.")
                         step(2, mode == .screenAndCamera ? "Use any app. Your camera floats on top and is recorded too. Drag it anywhere, pinch to resize, or swipe it to the edge to hide it." : "Use any app. Cap keeps recording.")
-                        step(3, "Tap the Dynamic Island to stop. Your link is ready straight away.")
+                        step(3, studio ? "Tap the Dynamic Island to stop. Your recording opens in the editor." : "Tap the Dynamic Island to stop. Your link is ready straight away.")
                     }
                 }
             }

@@ -32,6 +32,17 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         static let bubble = Configuration(preset: .vga640x480, mirrored: true, multitasking: true)
     }
 
+    /// Studio Mode records the floating camera too, so it asks for more than the bubble alone needs.
+    func usePreset(_ preset: AVCaptureSession.Preset) {
+        sessionQueue.async { [self] in
+            presetOverride = preset
+            guard configured, session.sessionPreset != preset, session.canSetSessionPreset(preset) else { return }
+            session.beginConfiguration()
+            session.sessionPreset = preset
+            session.commitConfiguration()
+        }
+    }
+
     private static let log = Logger(subsystem: "so.cap.mobile", category: "recorder")
 
     let session = AVCaptureSession()
@@ -44,13 +55,14 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
     // sessionQueue
     private var videoInput: AVCaptureDeviceInput?
     private var configured = false
+    private var presetOverride: AVCaptureSession.Preset?
     private var observers: [NSObjectProtocol] = []
     #if DEBUG
     private var fileSource: DebugFileSource?
     #endif
 
     // outputQueue
-    private var writer: SegmentWriter?
+    private var writer: (any RecordingSink)?
 
     var onEvent: (@Sendable (Event) -> Void)?
     var onFrame: (@Sendable (CMSampleBuffer) -> Void)?
@@ -109,8 +121,9 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
     private func configure(position: AVCaptureDevice.Position, microphone: Bool) throws {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
-        if session.canSetSessionPreset(configuration.preset) {
-            session.sessionPreset = configuration.preset
+        let preset = presetOverride ?? configuration.preset
+        if session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
         } else {
             session.sessionPreset = .high
         }
@@ -211,7 +224,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
 
     // MARK: Recording
 
-    func beginRecording(_ writer: SegmentWriter) {
+    func beginRecording(_ writer: any RecordingSink) {
         outputQueue.async { self.writer = writer }
     }
 
@@ -222,7 +235,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
                 return
             }
             self.writer = nil
-            writer.finish(completion)
+            writer.finish(at: nil, completion)
         }
     }
 
@@ -231,6 +244,15 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
             writer?.cancel()
             writer = nil
         }
+    }
+
+    /// The clock frames are timed on. Studio converts it to the host clock, which the screen recording uses.
+    var captureClock: CMClock? {
+        #if DEBUG
+        // Played-in files are timed on the host clock already.
+        if DebugFileSource.configuredFile != nil { return nil }
+        #endif
+        return session.synchronizationClock
     }
 
     func recordedDuration(_ completion: @escaping @Sendable (Double) -> Void) {

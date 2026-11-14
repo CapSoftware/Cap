@@ -10,6 +10,9 @@ struct RecordView: View {
     private let bubble = CameraBubble.shared
     private let recent = RecentRecordings.shared
     @AppStorage("so.cap.mobile.recordMode") private var mode: RecordMode = .camera
+    @AppStorage("so.cap.mobile.captureMode") private var captureMode: CaptureMode = .instant
+    @State private var studio = StudioSession.shared
+    @Environment(SessionModel.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -52,9 +55,19 @@ struct RecordView: View {
         .persistentSystemOverlays(model.isRecording ? .hidden : .automatic)
         .task { upgrade.start() }
         .onAppear {
-            if !RecordMode.offered.contains(mode) { mode = .screen }
+            if !captureMode.isAvailable { captureMode = .instant }
+            if !RecordMode.offered(for: captureMode).contains(mode) { mode = .screen }
+            model.captureMode = captureMode
+            studio.session = session
+            studio.reload()
+        }
+        .onChange(of: captureMode) { _, capture in
+            model.captureMode = capture
+            if !RecordMode.offered(for: capture).contains(mode) { mode = .camera }
+            armStudio()
         }
         .task(id: mode) {
+            armStudio()
             // Each camera only runs while it's being shown.
             switch mode {
             case .camera:
@@ -65,13 +78,25 @@ struct RecordView: View {
                 bubble.releaseUnlessFloating()
             case .screenAndCamera:
                 model.pauseCamera()
-                await bubble.prepare()
+                await bubble.prepare(studio: captureMode == .studio)
+            }
+        }
+        .task(id: captureMode == .studio && mode.recordsScreen) {
+            // The request the extension takes has a lifetime; keep it fresh while the screen option is showing.
+            while captureMode == .studio, mode.recordsScreen, !Task.isCancelled {
+                armStudio()
+                try? await Task.sleep(for: .seconds(60))
             }
         }
         .onChange(of: screen.isCapturing) { _, capturing in
             guard capturing, mode.recordsScreen else { return }
-            ScreenRecordingSession.shared.began(withCamera: mode == .screenAndCamera)
+            let studioRecording = captureMode == .studio
+            ScreenRecordingSession.shared.began(withCamera: mode == .screenAndCamera, studio: studioRecording)
+            if studioRecording { studio.screenRecordingBegan(withCamera: mode == .screenAndCamera, bubble: bubble) }
             if mode == .screenAndCamera { bubble.float() }
+        }
+        .fullScreenCover(item: $studio.editing) { project in
+            StudioEditorCover(project: project, session: session)
         }
         .onAppear {
             recent.isRecorderVisible = true
@@ -81,6 +106,7 @@ struct RecordView: View {
             recent.isRecorderVisible = false
             model.teardown()
             bubble.releaseUnlessFloating()
+            if !screen.isCapturing { studio.disarmScreenRecording() }
         }
         .onChange(of: scenePhase) { _, phase in
             // Coming back from Settings after granting access.
@@ -119,7 +145,7 @@ struct RecordView: View {
                     RecordingTimer(startedAt: startedAt, limit: model.limit)
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
                 } else if !screen.isCapturing, model.phase != .finishing {
-                    CaptureModeSwitch()
+                    CaptureModeSwitch(selection: $captureMode)
                         .transition(.opacity)
                 }
 
@@ -130,7 +156,11 @@ struct RecordView: View {
             .padding(.horizontal, 20)
             .padding(.top, 8)
 
-            if !model.isRecording, !screen.isCapturing, !recent.items.isEmpty {
+            if captureMode == .studio, !model.isRecording, !screen.isCapturing, !studio.projects.isEmpty {
+                StudioDrafts(studio: studio)
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            } else if captureMode == .instant, !model.isRecording, !screen.isCapturing, !recent.items.isEmpty {
                 RecentRecordingsList(recent: recent)
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
@@ -141,7 +171,7 @@ struct RecordView: View {
 
             if mode.recordsScreen {
                 // In the same column as the list above, so the two never overlap.
-                ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: !recent.items.isEmpty)
+                ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: captureMode == .studio ? !studio.projects.isEmpty : !recent.items.isEmpty, studio: captureMode == .studio)
                     .transition(.opacity)
                 Spacer(minLength: 12)
             }
@@ -153,8 +183,15 @@ struct RecordView: View {
                     .transition(.opacity)
             }
 
+            if studio.isFinishingScreen {
+                Label("Saving your recording", systemImage: "film")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+            }
+
             if !model.isRecording, model.phase != .finishing {
-                ModePicker(mode: $mode)
+                ModePicker(mode: $mode, options: RecordMode.offered(for: captureMode))
                     .padding(.bottom, 20)
                     .transition(.opacity)
             }
@@ -219,6 +256,16 @@ struct RecordView: View {
         .animation(.spring(duration: 0.35), value: model.isRecording)
         .animation(.spring(duration: 0.35), value: mode)
         .animation(.spring(duration: 0.35), value: recent.items)
+        .animation(.spring(duration: 0.35), value: captureMode)
+        .animation(.spring(duration: 0.35), value: studio.projects)
+    }
+
+    private func armStudio() {
+        if captureMode == .studio, mode.recordsScreen {
+            studio.armScreenRecording()
+        } else {
+            studio.disarmScreenRecording()
+        }
     }
 
     private func blocked(title: String, message: String, systemImage: String, action: (String, () -> Void)?) -> some View {
@@ -241,13 +288,14 @@ struct RecordView: View {
 }
 
 private struct CaptureModeSwitch: View {
+    @Binding var selection: CaptureMode
     @State private var comingSoon: CaptureMode?
     @State private var taps = 0
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(CaptureMode.allCases) { option in
-                if option.isAvailable {
+                if option == selection {
                     Label(option.title, systemImage: option.systemImage)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
@@ -256,11 +304,17 @@ private struct CaptureModeSwitch: View {
                         .background(Capsule().fill(.white.opacity(0.22)))
                         .accessibilityElement(children: .combine)
                         .accessibilityAddTraits(.isSelected)
+                        .transition(.opacity)
                 } else {
                     Button {
-                        comingSoon = option
+                        if option.isAvailable {
+                            selection = option
+                            Usage.track("capture_mode_changed", ["mode": .string(option.rawValue)])
+                        } else {
+                            comingSoon = option
+                            AccessibilityNotification.Announcement(option.comingSoonMessage).post()
+                        }
                         taps += 1
-                        AccessibilityNotification.Announcement(option.comingSoonMessage).post()
                     } label: {
                         Image(systemName: option.systemImage)
                             .font(.system(size: 15, weight: .semibold))
@@ -268,9 +322,10 @@ private struct CaptureModeSwitch: View {
                             .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(option.isAvailable ? 0.85 : 0.55))
                     .accessibilityLabel(option.title)
-                    .accessibilityValue("Coming soon")
+                    .accessibilityValue(option.isAvailable ? "" : "Coming soon")
+                    .accessibilityIdentifier("capture-mode-\(option.rawValue)")
                 }
             }
         }
@@ -291,6 +346,7 @@ private struct CaptureModeSwitch: View {
         .glassEffect(.regular, in: Capsule())
         .dynamicTypeSize(...DynamicTypeSize.large)
         .animation(.easeOut(duration: 0.2), value: comingSoon)
+        .animation(.spring(duration: 0.3), value: selection)
         .sensoryFeedback(.selection, trigger: taps)
         .task(id: taps) {
             guard comingSoon != nil else { return }
@@ -303,10 +359,11 @@ private struct CaptureModeSwitch: View {
 
 private struct ModePicker: View {
     @Binding var mode: RecordMode
+    let options: [RecordMode]
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(RecordMode.offered) { option in
+            ForEach(options) { option in
                 Button {
                     mode = option
                 } label: {
