@@ -254,15 +254,23 @@ final class CapUITests: XCTestCase {
         waitFor(app.buttons["Close"], 10)
         waitFor(app.staticTexts["Instant Mode"], 10)
         shot("75-record-modes")
-        for mode in ["Studio Mode", "Screenshot Mode"] {
-            let button = app.buttons[mode]
-            waitFor(button, 10)
-            XCTAssertEqual(button.value as? String, "Coming soon")
-            button.tap()
-            waitFor(app.staticTexts["\(mode) is coming soon"], 5)
-            shot("75-record-\(mode.split(separator: " ")[0].lowercased())-soon")
-            waitFor(app.staticTexts["Instant Mode"], 10)
-        }
+        let screenshot = app.buttons["Screenshot Mode"]
+        waitFor(screenshot, 10)
+        XCTAssertEqual(screenshot.value as? String, "Coming soon")
+        screenshot.tap()
+        waitFor(app.staticTexts["Screenshot Mode is coming soon"], 5)
+        shot("75-record-screenshot-soon")
+        waitFor(app.staticTexts["Instant Mode"], 10)
+        // Studio Mode is a real mode now: choosing it keeps it chosen.
+        let studio = app.buttons["Studio Mode"]
+        waitFor(studio, 10)
+        studio.tap()
+        waitFor(app.staticTexts["Studio Mode"], 5)
+        XCTAssertFalse(app.staticTexts["Free plan recordings stop at 5 minutes. Cap Pro has no limit."].exists)
+        shot("75-record-studio")
+        // Leave Instant Mode chosen for the tests that follow; the choice is remembered.
+        app.buttons["Instant Mode"].tap()
+        waitFor(app.staticTexts["Instant Mode"], 5)
     }
 
     func testLinkAccessSwitch() {
