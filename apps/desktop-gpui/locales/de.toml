@@ -1405,6 +1405,8 @@ devices_changed_before_start = "Die ausgewählten Geräte haben sich vor Beginn 
 shortcut_conflict = "Ctrl+Shift+F9 ist einer anderen Cap-Aktion zugewiesen. Ändern Sie dieses Kürzel vor der Aufnahme."
 shortcut_description = "Diese Cap-Aufnahme starten oder beenden"
 shortcut_hint = "Drücken Sie {shortcut} und lassen Sie los, um zu starten. Mit demselben Kürzel beenden Sie die Aufnahme. Dieses vorübergehende Kürzel ändert Ihre Einstellungen nicht."
+source_lost = "Cap hat die Aufnahme beendet, weil das Aufnahmeziel nicht mehr verfügbar war, zum Beispiel weil der Bildschirm in den Ruhezustand gewechselt ist oder das Fenster geschlossen wurde. Alles bis dahin Aufgenommene wurde gespeichert."
+source_lost_title = "Aufnahme beendet"
 tray_stop_hint = "Aktivieren Sie das Cap-Stopp-Symbol in der Taskleiste, um zu starten. Aktivieren Sie es erneut, um zu beenden. Die Aufnahme beginnt erst, wenn Sie dieses Steuerelement verwenden."
 window_unavailable = "Das ausgewählte Fenster ist nicht mehr verfügbar. Wählen Sie es erneut aus."
 

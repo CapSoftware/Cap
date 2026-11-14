@@ -1405,6 +1405,8 @@ devices_changed_before_start = "录制开始前所选设备已更改。请重新
 shortcut_conflict = "Ctrl+Shift+F9 已分配给另一个 Cap 操作。请在录制前更改该快捷键。"
 shortcut_description = "开始或停止此 Cap 录制"
 shortcut_hint = "按下并松开 {shortcut} 开始录制。再次使用同一快捷键即可停止。此临时快捷键不会更改你的设置。"
+source_lost = "Cap 已停止录制，因为录制的对象已不可用（例如显示器进入睡眠或窗口已关闭）。此前录制的内容已全部保存。"
+source_lost_title = "录制已停止"
 tray_stop_hint = "点击 Cap 的“停止”托盘图标即可开始。再次点击同一图标即可停止。在你使用该控件之前，录制不会开始。"
 window_unavailable = "所选窗口已不可用。请重新选择。"
 

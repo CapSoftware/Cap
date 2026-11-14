@@ -818,8 +818,8 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
 /// The display sleeping mid-recording makes ScreenCaptureKit report that it
 /// has nothing to capture. That ends the screen track with its media on disk
 /// instead of failing it and leaving Stop and Quit waiting on a capture that
-/// can never confirm cleanup. Instant ends there; Studio keeps its other
-/// tracks until Stop, which the auto-record driver presses at 30 s. Sleeping
+/// can never confirm cleanup. The app then stops and saves the recording in
+/// both modes, well before the auto-record driver would press Stop. Sleeping
 /// the display disturbs whoever is at the machine, so this runs only with
 /// `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
 #[cfg(target_os = "macos")]
@@ -882,6 +882,14 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         assert!(
             !log.contains("Capture cleanup is unconfirmed"),
             "{mode}: Stop was left waiting on a dead capture:\n{log}"
+        );
+        // The app stops the recording itself and saves it, instead of
+        // counting on while nothing is captured or reporting a failure.
+        assert!(
+            log.contains("capture source went away; stopping and saving the recording")
+                && log.contains("recording finished")
+                && !log.contains("recording pipeline failed"),
+            "{mode}: the recording was not stopped and saved when its source went away:\n{log}"
         );
         let projects = sandbox.projects();
         assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
