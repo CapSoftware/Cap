@@ -1,19 +1,13 @@
 "use server";
 
-import type { ActionResult } from "@cap/app-store";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
-import type { Organisation, Video } from "@cap/web-domain";
+import type { Organisation } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
-import {
-	type CapAction,
-	listCapActions,
-	runCapAction,
-	sendUninstalled,
-} from "@/lib/app-store/delivery";
+import { sendUninstalled } from "@/lib/app-store/delivery";
 import {
 	announceInBackground,
 	announceLifecycle,
@@ -101,30 +95,6 @@ export async function uninstallAppAction(
 		);
 		revalidatePath("/dashboard/apps", "layout");
 		return null;
-	});
-}
-
-export async function listCapActionsAction(
-	videoId: Video.VideoId,
-): Promise<AppStoreActionResult<CapAction[]>> {
-	return run(async () => {
-		const user = await requireUser();
-		return listCapActions(user.id, videoId);
-	});
-}
-
-export async function runCapActionAction(input: {
-	videoId: Video.VideoId;
-	installationId: string;
-	actionId: string;
-}): Promise<AppStoreActionResult<ActionResult>> {
-	return run(async () => {
-		const user = await requireUser();
-		return runCapAction({
-			userId: user.id,
-			userName: user.name ?? null,
-			...input,
-		});
 	});
 }
 

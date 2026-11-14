@@ -2,33 +2,66 @@
 
 import { DropdownMenuItem, DropdownMenuSeparator } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { listCapActionsAction, runCapActionAction } from "@/actions/app-store";
+
+type CapAction = {
+	installationId: string;
+	appName: string;
+	iconUrl: string;
+	actionId: string;
+	title: string;
+};
+
+type ActionResult =
+	| { type: "toast"; message: string }
+	| { type: "open"; url: string; message?: string };
+
+const actionsPath = (videoId: string) =>
+	`/api/app-store/caps/${encodeURIComponent(videoId)}/actions`;
+
+async function readError(response: Response) {
+	const body = (await response.json().catch(() => null)) as {
+		error?: string;
+	} | null;
+	return body?.error ?? "Something went wrong";
+}
 
 export function CapAppActionItems({ videoId }: { videoId: Video.VideoId }) {
-	const { data } = useQuery({
-		queryKey: ["app-store", "cap-actions", videoId],
-		queryFn: async () => {
-			const result = await listCapActionsAction(videoId);
-			return result.ok ? result.value : [];
-		},
-		staleTime: 60_000,
-	});
+	const [data, setData] = useState<CapAction[] | null>(null);
+
+	useEffect(() => {
+		const controller = new AbortController();
+		fetch(actionsPath(videoId), {
+			credentials: "same-origin",
+			signal: controller.signal,
+		})
+			.then((response) => (response.ok ? response.json() : null))
+			.then((body: { actions?: CapAction[] } | null) =>
+				setData(body?.actions ?? []),
+			)
+			.catch(() => {});
+		return () => controller.abort();
+	}, [videoId]);
 
 	if (!data || data.length === 0) return null;
 
-	const run = (action: (typeof data)[number]) => {
-		const promise = runCapActionAction({
-			videoId,
-			installationId: action.installationId,
-			actionId: action.actionId,
-		}).then((result) => {
-			if (!result.ok) throw new Error(result.error);
-			if (result.value.type === "open") {
-				window.open(result.value.url, "_blank", "noopener,noreferrer");
+	const run = (action: CapAction) => {
+		const promise = fetch(actionsPath(videoId), {
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				installationId: action.installationId,
+				actionId: action.actionId,
+			}),
+		}).then(async (response) => {
+			if (!response.ok) throw new Error(await readError(response));
+			const { result } = (await response.json()) as { result: ActionResult };
+			if (result.type === "open" && result.url.startsWith("https://")) {
+				window.open(result.url, "_blank", "noopener,noreferrer");
 			}
-			return result.value.message ?? `${action.title}: done`;
+			return result.message ?? `${action.title}: done`;
 		});
 		toast.promise(promise, {
 			loading: `${action.title}...`,
