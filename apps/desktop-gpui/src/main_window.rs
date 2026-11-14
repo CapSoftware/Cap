@@ -940,6 +940,35 @@ struct MicrophoneWarning {
     error: Option<String>,
 }
 
+enum MicrophoneCheck {
+    Start(recording::StartConfig),
+    Warn(recording::StartConfig),
+}
+
+/// The Start shortcuts confirm a start without a working microphone before
+/// they start (`hotkeys::start_from_hotkey`), so a start already confirmed
+/// there records without the microphone instead of asking again.
+fn check_microphone(
+    mut config: recording::StartConfig,
+    microphones: &[MicrophoneOption],
+    confirmed_without_microphone: bool,
+) -> MicrophoneCheck {
+    if confirmed_without_microphone {
+        config.microphone = None;
+        config.mic_feed = None;
+        return MicrophoneCheck::Start(config);
+    }
+    let connected = config
+        .microphone
+        .as_ref()
+        .is_some_and(|name| microphones.iter().any(|device| &device.name == name));
+    if connected {
+        MicrophoneCheck::Start(config)
+    } else {
+        MicrophoneCheck::Warn(config)
+    }
+}
+
 pub struct MainWindow {
     theme: Theme,
     mode: Mode,
@@ -2410,7 +2439,7 @@ impl MainWindow {
             cx.defer(move |cx: &mut gpui::App| crate::screenshot::take_screenshot(target, cx));
             return;
         }
-        self.start_recording_with_target(target, Vec::new(), window, cx);
+        self.start_recording_with_target(target, Vec::new(), false, window, cx);
     }
 
     /// Collect the UI state into a start config and hand it to the
@@ -2425,6 +2454,7 @@ impl MainWindow {
         &mut self,
         target: ScreenCaptureTarget,
         excluded_windows: Vec<scap_targets::WindowId>,
+        confirmed_without_microphone: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2506,12 +2536,13 @@ impl MainWindow {
             tracing::warn!("saving the last recording target failed");
         }
 
-        self.start_recording_config(config, cx);
+        self.start_recording_config(config, confirmed_without_microphone, cx);
     }
 
     pub(crate) fn start_recording_config(
         &mut self,
         config: recording::StartConfig,
+        confirmed_without_microphone: bool,
         cx: &mut Context<Self>,
     ) {
         if self.enumerating
@@ -2528,25 +2559,27 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
-        let microphone_available = config.microphone.as_ref().is_some_and(|name| {
-            self.devices
-                .microphones
-                .iter()
-                .any(|device| &device.name == name)
-        });
-        if !microphone_available && crate::store::GeneralSettings::load().confirm_without_microphone
-        {
-            self.microphone_warning = Some(MicrophoneWarning {
-                config,
-                permit,
-                dont_show_again: false,
-                error: None,
-            });
-            cx.defer(app_windows::show_main_window);
-            cx.notify();
-            return;
+        match check_microphone(
+            config,
+            &self.devices.microphones,
+            confirmed_without_microphone,
+        ) {
+            MicrophoneCheck::Warn(config)
+                if crate::store::GeneralSettings::load().confirm_without_microphone =>
+            {
+                self.microphone_warning = Some(MicrophoneWarning {
+                    config,
+                    permit,
+                    dont_show_again: false,
+                    error: None,
+                });
+                cx.defer(app_windows::show_main_window);
+                cx.notify();
+            }
+            MicrophoneCheck::Start(config) | MicrophoneCheck::Warn(config) => {
+                self.check_storage_before_start(config, false, permit, cx);
+            }
         }
-        self.check_storage_before_start(config, false, permit, cx);
     }
 
     pub(crate) fn prepare_deep_link_start(
@@ -7492,6 +7525,54 @@ mod remembered_device_tests {
             Some("Remembered microphone")
         );
         assert!(take_pending_recording_inputs(&mut pending, false, false).is_none());
+    }
+
+    fn start_config(microphone: Option<&str>) -> recording::StartConfig {
+        recording::StartConfig {
+            mode: recording::RecordingMode::Studio,
+            target: ScreenCaptureTarget::Display {
+                id: "1".parse().unwrap(),
+            },
+            microphone: microphone.map(str::to_string),
+            camera: None,
+            device_settings: crate::store::RecordingDeviceSettings::default(),
+            input_readiness: crate::feeds::InputReadiness::default(),
+            system_audio: false,
+            excluded_windows: Vec::new(),
+            camera_feed: None,
+            mic_feed: None,
+            mic_meter: None,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
+            start_gate: None,
+        }
+    }
+
+    #[test]
+    fn a_start_confirmed_without_microphone_does_not_warn_again() {
+        let microphones = [MicrophoneOption {
+            name: "Desk".into(),
+            sample_rate: Some(48000),
+            channels: Some(1),
+        }];
+        for microphone in [None, Some("Unplugged")] {
+            assert!(matches!(
+                check_microphone(start_config(microphone), &microphones, false),
+                MicrophoneCheck::Warn(_)
+            ));
+            let MicrophoneCheck::Start(config) =
+                check_microphone(start_config(microphone), &microphones, true)
+            else {
+                panic!("a confirmed start without {microphone:?} warned again");
+            };
+            assert!(config.microphone.is_none());
+        }
+        let MicrophoneCheck::Start(config) =
+            check_microphone(start_config(Some("Desk")), &microphones, false)
+        else {
+            panic!("a connected microphone warned");
+        };
+        assert_eq!(config.microphone.as_deref(), Some("Desk"));
     }
 }
 

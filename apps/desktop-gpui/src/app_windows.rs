@@ -2665,7 +2665,7 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
 
     let preparing = main
         .update(cx, |view, window, cx| {
-            view.start_recording_with_target(target, excluded, window, cx);
+            view.start_recording_with_target(target, excluded, false, window, cx);
             view.is_preparing_recording()
         })
         .unwrap_or(false);
