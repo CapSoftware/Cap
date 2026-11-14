@@ -42,7 +42,7 @@ pub fn acquire() {
             activate_macos_instance,
         ) {
             Ok(Some(lock)) => lock,
-            Ok(None) => std::process::exit(0),
+            Ok(None) => crate::startup::exit(0),
             Err(error) => {
                 crate::startup::fail(format!("Could not acquire the Cap instance lock: {error}"))
             }
@@ -68,7 +68,7 @@ pub fn acquire() {
         match forward_linux_reopen(&path, pid as u32) {
             Ok(()) => {
                 tracing::info!(pid, "Requested the existing Cap GPUI controls");
-                std::process::exit(0);
+                crate::startup::exit(0);
             }
             Err(error) => {
                 tracing::warn!(pid, %error, "The running Cap GPUI did not answer the reopen request");
@@ -107,7 +107,7 @@ fn take_over_from_unresponsive_linux_instance(pid: i32) {
         return;
     }
     if !crate::startup::confirm_quit_unresponsive() {
-        std::process::exit(0);
+        crate::startup::exit(0);
     }
     if !end_linux_instance(pid, || is_cap_gpui(pid)) {
         crate::startup::fail(format!(
@@ -1103,7 +1103,7 @@ fn acquire_windows_instance(path: &Path) {
         let handed_off = hand_off_to_windows_instance(path);
         let _ = unsafe { CloseHandle(mutex) };
         let unresponsive = match handed_off {
-            Ok(()) => std::process::exit(0),
+            Ok(()) => crate::startup::exit(0),
             Err(pid) => pid,
         };
         if ended_unresponsive {
@@ -1116,7 +1116,7 @@ fn acquire_windows_instance(path: &Path) {
             "the running Cap GPUI did not answer the reopen request"
         );
         if !crate::startup::confirm_quit_unresponsive() {
-            std::process::exit(0);
+            crate::startup::exit(0);
         }
         let pids = match unresponsive {
             Some(pid) => vec![pid],

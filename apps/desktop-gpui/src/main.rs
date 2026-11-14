@@ -337,8 +337,7 @@ fn main() {
         std::process::exit(status);
     }
 
-    let _log_guard = init_logging();
-    startup::begin();
+    startup::begin(init_logging());
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
@@ -844,6 +843,7 @@ fn main() {
         }
     });
     runtime.shutdown_background();
+    startup::flush_log();
 }
 
 #[cfg(all(

@@ -6,18 +6,25 @@
 //! with nothing on screen and, for the earliest ones, nothing in the log.
 
 use std::sync::{
-    OnceLock,
+    Mutex, OnceLock, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
+
+use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::i18n::tr;
 
 static MAIN_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
 static FINISHED: AtomicBool = AtomicBool::new(false);
 static FAILURE_SHOWN: AtomicBool = AtomicBool::new(false);
+static LOG_GUARD: Mutex<Option<WorkerGuard>> = Mutex::new(None);
 
-/// Call first thing in `main`, after logging starts.
-pub fn begin() {
+/// Call first thing in `main`, right after logging starts. The log writer's
+/// guard lives here so an early exit can drain it: `process::exit` skips
+/// destructors, and a launch that handed off to a running Cap used to lose
+/// every line it had queued, including why it left.
+pub fn begin(log_guard: Option<WorkerGuard>) {
+    *LOG_GUARD.lock().unwrap_or_else(PoisonError::into_inner) = log_guard;
     let _ = MAIN_THREAD.set(std::thread::current().id());
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -27,6 +34,22 @@ pub fn begin() {
             .unwrap_or_default(),
         "Cap starting"
     );
+}
+
+/// Writes every queued log line to disk.
+pub fn flush_log() {
+    drop(
+        LOG_GUARD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take(),
+    );
+}
+
+/// `process::exit` after the log is on disk.
+pub fn exit(code: i32) -> ! {
+    flush_log();
+    std::process::exit(code);
 }
 
 /// The main window is open; from here a panic is the crash reporter's job.
@@ -55,7 +78,7 @@ pub fn fail(error: impl std::fmt::Display) -> ! {
     tracing::error!(%error, "Cap could not start");
     crate::crash_capture::record_startup_failure(&error);
     show_failure(&error);
-    std::process::exit(1);
+    exit(1);
 }
 
 fn show_failure(error: &str) {
