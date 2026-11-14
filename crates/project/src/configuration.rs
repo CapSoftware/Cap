@@ -15,6 +15,8 @@ use specta::Type;
 use crate::DisplayNotch;
 
 #[cfg(test)]
+mod background_path_tests;
+#[cfg(test)]
 mod clip_transition_tests;
 mod markers;
 #[cfg(test)]
@@ -82,6 +84,29 @@ impl Default for BackgroundSource {
         BackgroundSource::Color {
             value: [255, 255, 255],
             alpha: 255,
+        }
+    }
+}
+
+impl BackgroundSource {
+    fn resolve_project_asset(&mut self, project_path: &Path) {
+        let (Self::Wallpaper { path: Some(path) } | Self::Image { path: Some(path) }) = self else {
+            return;
+        };
+        let mut components = path.rsplit(['/', '\\']);
+        let (Some(name), Some("assets")) = (components.next(), components.next()) else {
+            return;
+        };
+        if components.next().is_some_and(|directory| {
+            directory
+                .rsplit_once('.')
+                .is_none_or(|(_, extension)| !extension.eq_ignore_ascii_case("cap"))
+        }) {
+            return;
+        }
+        let local = project_path.join("assets").join(name);
+        if local.is_file() {
+            *path = local.to_string_lossy().into_owned();
         }
     }
 }
@@ -3480,6 +3505,14 @@ impl ProjectConfiguration {
             });
         let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        config.background.source.resolve_project_asset(project_path);
+        if let Some(timeline) = config.timeline.as_mut() {
+            for segment in &mut timeline.style_segments {
+                if let Some(background) = segment.overrides.background.as_mut() {
+                    background.source.resolve_project_asset(project_path);
+                }
+            }
+        }
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
         let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
