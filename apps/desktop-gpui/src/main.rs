@@ -45,6 +45,7 @@ mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
 mod encoder_recovery;
+mod failure_points;
 mod feeds;
 mod focus_border;
 mod hotkeys;
@@ -337,6 +338,7 @@ fn main() {
     }
 
     let _log_guard = init_logging();
+    failure_points::configure();
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
