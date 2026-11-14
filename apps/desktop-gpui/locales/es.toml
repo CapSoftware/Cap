@@ -1175,6 +1175,10 @@ resuming = "Continúa…"
 saving = "Guardar…"
 starting = "Iniciando"
 
+[controls.disconnected]
+camera = "Cámara desconectada. La grabación continúa sin la cámara superpuesta."
+microphone = "Micrófono desconectado. Se grabará silencio hasta que se vuelva a conectar."
+
 [controls.marker]
 add = "Añadir marcador"
 
@@ -1200,6 +1204,8 @@ mirror_title = "Espejo no disponible"
 [camera.issue]
 access_message = "Haz clic para permitir que Cap use tu cámara en Ajustes del Sistema."
 access_title = "Se necesita acceso a la cámara"
+disconnected_message = "La cámara seleccionada dejó de enviar video."
+disconnected_title = "Cámara desconectada"
 generic = "No se pudo iniciar la cámara seleccionada. Elige otra cámara o vuelve a conectar esta."
 invalid_format = "Esta cámara no indicó ningún formato de captura utilizable."
 not_found = "Esta cámara ya no está disponible. Comprueba que esté conectada y permitida en los permisos del sistema."

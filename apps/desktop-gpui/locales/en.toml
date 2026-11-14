@@ -1177,6 +1177,10 @@ resuming = { text = "Resuming…", max_px = 73, size = 14 }
 saving = { text = "Saving…", max_px = 73, size = 14 }
 starting = { text = "Starting", max_px = 73, size = 14 }
 
+[controls.disconnected]
+camera = "Camera disconnected. Recording continues without camera overlay."
+microphone = "Microphone disconnected. Silence will be used until it reconnects."
+
 [controls.marker]
 add = "Add marker"
 
@@ -1202,6 +1206,8 @@ mirror_title = "Mirror unavailable"
 [camera.issue]
 access_message = "Click to allow Cap to use your camera in System Settings."
 access_title = "Camera access needed"
+disconnected_message = "The selected camera stopped sending video."
+disconnected_title = "Camera disconnected"
 generic = "The selected camera could not be started. Choose another camera or reconnect this one."
 invalid_format = "This camera did not report a usable capture format."
 not_found = "This camera is no longer available. Check that it is connected and allowed by system permissions."

@@ -1175,6 +1175,10 @@ resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
 
+[controls.disconnected]
+camera = "摄像头已断开。录制将在没有摄像头画面的情况下继续。"
+microphone = "麦克风已断开。重新连接前将录制静音。"
+
 [controls.marker]
 add = "添加标记"
 
@@ -1200,6 +1204,8 @@ mirror_title = "镜像不可用"
 [camera.issue]
 access_message = "点击以在系统设置中允许 Cap 使用你的摄像头。"
 access_title = "需要摄像头权限"
+disconnected_message = "所选摄像头已停止发送视频。"
+disconnected_title = "摄像头已断开"
 generic = "无法启动所选摄像头。请选择其他摄像头，或重新连接此摄像头。"
 invalid_format = "此摄像头未提供可用的捕获格式。"
 not_found = "此摄像头已不可用。请检查它是否已连接，并已在系统权限中允许。"

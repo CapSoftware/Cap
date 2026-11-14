@@ -1175,6 +1175,10 @@ resuming = "Reprise…"
 saving = "Arrêt…"
 starting = "Début"
 
+[controls.disconnected]
+camera = "Caméra déconnectée. L'enregistrement continue sans l'incrustation de la caméra."
+microphone = "Micro déconnecté. Du silence sera enregistré jusqu'à sa reconnexion."
+
 [controls.marker]
 add = "Ajouter un repère"
 
@@ -1200,6 +1204,8 @@ mirror_title = "Miroir indisponible"
 [camera.issue]
 access_message = "Cliquez pour autoriser Cap à utiliser votre caméra dans Réglages Système."
 access_title = "Accès à la caméra requis"
+disconnected_message = "La caméra sélectionnée n'envoie plus de vidéo."
+disconnected_title = "Caméra déconnectée"
 generic = "La caméra sélectionnée n'a pas pu démarrer. Choisissez une autre caméra ou reconnectez celle-ci."
 invalid_format = "Cette caméra n'a signalé aucun format de capture utilisable."
 not_found = "Cette caméra n'est plus disponible. Vérifiez qu'elle est connectée et autorisée dans les autorisations du système."

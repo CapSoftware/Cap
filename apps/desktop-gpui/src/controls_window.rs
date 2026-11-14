@@ -169,6 +169,7 @@ impl ControlsWindow {
         session
             .error
             .clone()
+            .or_else(|| disconnected_issue(session.disconnected_inputs()))
             .or_else(|| session.input_switch_error().map(str::to_owned))
             .or_else(|| {
                 (session.paused_for_sleep && session.is_paused())
@@ -526,21 +527,22 @@ impl ControlsWindow {
         let has_microphone = self.has_microphone
             && (session.mode() == Some(RecordingMode::Instant)
                 || Feeds::global(cx).read(cx).microphone.is_some());
+        let disconnected = has_microphone && session.disconnected_inputs().microphone;
         self.level_bar.update(cx, |bar, cx| {
             bar.configure(
-                has_microphone && !muted,
+                has_microphone && !muted && !disconnected,
                 theme.blue_9.into(),
                 theme.gray_10.into(),
                 cx,
             );
         });
 
-        let icon = if !has_microphone || muted {
+        let icon = if !has_microphone || muted || disconnected {
             "icons/mic-off.svg"
         } else {
             "icons/microphone.svg"
         };
-        let icon_color: gpui::Hsla = if muted {
+        let icon_color: gpui::Hsla = if muted || disconnected {
             theme.red_9.into()
         } else if has_microphone {
             theme.gray_12.into()
@@ -568,7 +570,7 @@ impl ControlsWindow {
                     }))
             })
             .child(svg().path(icon).size(px(20.)).text_color(icon_color))
-            .when(has_microphone && !muted, |this| {
+            .when(has_microphone && !muted && !disconnected, |this| {
                 this.child(self.level_bar.clone())
             })
     }
@@ -1215,6 +1217,19 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
                 crate::i18n::messages::localize(&error)
             },
         )
+}
+
+fn disconnected_issue(disconnected: crate::session::DisconnectedInputs) -> Option<String> {
+    let lines: Vec<&str> = [
+        disconnected
+            .microphone
+            .then(tr::controls::disconnected::microphone),
+        disconnected.camera.then(tr::controls::disconnected::camera),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn tick_delay(live: bool, elapsed: Duration) -> Duration {
