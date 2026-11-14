@@ -1,12 +1,13 @@
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
-import { faCheck, faCircleInfo } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import clsx from "clsx";
 import { HardDrive, Link2, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import Link from "next/link";
 import { memo, useEffect, useRef, useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 
 export const UsageButton = memo(

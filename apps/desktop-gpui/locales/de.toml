@@ -386,6 +386,10 @@ quarter = "Viertel"
 
 [settings.shortcuts]
 blocked_while_recording = "Tastenkürzel können nicht geändert werden, solange diese Aufnahme ihre Stopp-Taste belegt. Stoppen Sie zuerst die Aufnahme."
+cancelling_description = "Für Bildschirmfotos und Aufnahmen, die per Tastenkürzel oder über das Cap-Symbol gestartet werden."
+cancelling_title = "Abbrechen"
+closing_editor_description = "Für den Bildschirmfoto-Editor und den Video-Editor."
+closing_editor_title = "Editor schließen"
 needs_modifier_macos = "Verwenden Sie ⌘, ⌃ oder ⌥, damit das Tastenkürzel beim Tippen nicht stört."
 needs_modifier_other = "Verwenden Sie Strg, Alt oder Win, damit das Tastenkürzel beim Tippen nicht stört."
 record_shortcut = "Kürzel festlegen"
@@ -413,7 +417,23 @@ title = "Nach einer Studio-Aufnahme"
 hint = "Der Link zum Teilen wird immer kopiert"
 title = "Nach einer Instant-Aufnahme"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc oder Schließen der Auswahl"
+title = "Beim Abbrechen"
+
+[settings.shortcuts.on_editor_close]
+hint = "Sobald der letzte geschlossen ist"
+title = "Beim Schließen des Editors"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Cap anzeigen"
+cancel_show_cap_hint = "Zurück zum Rekorder"
+cancel_stay_hidden = "Ausgeblendet bleiben"
+cancel_stay_hidden_hint = "Außer Cap war geöffnet"
+editor_close_show_cap = "Cap anzeigen"
+editor_close_show_cap_hint = "Zurück zum Rekorder"
+editor_close_stay_hidden = "Ausgeblendet bleiben"
+editor_close_stay_hidden_hint = "Bis Sie Cap öffnen"
 instant_copy_link = "Nur Link kopieren"
 instant_copy_link_hint = "Nichts wird geöffnet"
 instant_open_link = "Link öffnen"
@@ -1407,6 +1427,7 @@ failed_title = "Aufnahme konnte nicht gelöscht werden"
 finishing_body = "Cap wartet auf das Ende der Aufräumarbeiten, bevor das Löschen abgeschlossen wird."
 finishing_title = "Das Löschen läuft noch"
 in_use = "Diese Aufnahme wird noch verwendet. Schließen Sie den Upload ab oder brechen Sie ihn ab und versuchen Sie es erneut: {error}"
+open_in_editor = "Diese Aufnahme ist im Editor geöffnet. Schließen Sie den Editor und versuchen Sie es erneut."
 outside_library = "Diese Aufnahme liegt außerhalb der Aufnahmebibliothek. Ihre Dateien wurden nicht geändert."
 recording_active = "Beenden oder verwerfen Sie die Aufnahme, bevor Sie dieses Projekt löschen."
 retained_title = "Aufnahme beibehalten"
@@ -2163,6 +2184,9 @@ mode = "Zoom-Modus"
 positions_mixed = "Die Segmente zoomen auf unterschiedliche Stellen. Ziehen Sie, um alle auf dieselbe Stelle zu setzen."
 title = "Zoom {number}"
 
+[editor.side_panel]
+style = "Stil"
+
 [editor.sidebar]
 desktop_import_failed = "Ihr Desktop-Hintergrundbild konnte nicht importiert werden"
 importing_image = "Bild wird importiert…"
@@ -2326,9 +2350,8 @@ text_item = "Text"
 [editor.clips]
 append_error = "Clip konnte nicht hinzugefügt werden: {message}"
 append_error_title = "Aufnahmefehler"
-back = "Zurück zum Editor"
-cap_filter = "Cap-Aufnahme"
 clip = "Clip {number}"
+count = { one = "{count} Clip", other = "{count} Clips" }
 empty_description = "Nehmen Sie einen Clip auf oder importieren Sie einen, dann erscheint er hier."
 empty_title = "Noch keine Clips"
 import = "Importieren"
@@ -2339,6 +2362,7 @@ import_mp4 = "MP4-Video…"
 importing = "Import läuft…"
 mp4_filter = "MP4-Video"
 prepare_controls_failed = "Die Aufnahmesteuerung konnte nicht vorbereitet werden: {error}"
+record = "Aufnehmen"
 record_new = "Neuen Clip aufnehmen"
 save_before_recording_failed = "Das aktuelle Projekt konnte vor der Aufnahme nicht gespeichert werden: {error}"
 split = "Teil {number}"
@@ -2452,6 +2476,9 @@ upload_complete = "Hochladen abgeschlossen"
 uploading = "Link zum Teilen wird erstellt"
 
 [editor.export.quality]
+gif_high = "Hoch"
+gif_low = "Niedrig"
+gif_medium = "Mittel"
 larger = "Größere Datei"
 maximum = "Maximal"
 potato = "Kartoffel"
@@ -2514,6 +2541,38 @@ mono_left = "Mono L"
 mono_right = "Mono R"
 stereo = "Stereo"
 
+[editor.tabs.audio.voice_eq]
+apply_all = "Auf alle Clips anwenden"
+band_high = "Höhen"
+band_high_mid = "Obere Mitten"
+band_low = "Tiefen"
+band_low_cut = "Low-Cut"
+band_low_mid = "Untere Mitten"
+declick = "De-Click"
+declick_description = "Repariert Schmatzgeräusche und Knistern und lässt den Rest Ihrer Stimme unverändert."
+declick_light = "Leicht"
+declick_off = "Aus"
+declick_strong = "Stark"
+description = "Formen Sie den Klang Ihres Mikrofons. Was Sie hier hören, wird auch exportiert."
+frequency = "Frequenz"
+gain = "Verstärkung"
+graph_hint = "Ziehen Sie einen Punkt, um den Klang zu formen. Scrollen Sie über einem Punkt, um ihn breiter oder schmaler zu machen, und doppelklicken Sie, um ihn zurückzusetzen."
+low_cut_description = "Entfernt Rumpeln und Griffgeräusche unterhalb der Grenzfrequenz."
+off = "Aus"
+preset_bright = "Hell"
+preset_broadcast = "Rundfunk"
+preset_clear = "Klar"
+preset_custom = "Eigene"
+preset_natural = "Natürlich"
+preset_warm = "Warm"
+q = "Q"
+scope_all = "Alle Clips werden bearbeitet"
+scope_all_hint = "Wählen Sie einen Clip in der Zeitleiste aus, um ihn einzeln anzupassen."
+scope_mixed = "Die Clips haben unterschiedliche Einstellungen. Eine Änderung hier gilt für alle."
+scope_selected = "Ausgewählter Clip wird bearbeitet"
+scope_selected_many = "Ausgewählte Clips werden bearbeitet"
+title = "Stimm-EQ"
+
 [editor.tabs.camera]
 advanced_shadow = "Erweiterte Schatteneinstellungen"
 background = "Hintergrund"
@@ -2572,6 +2631,8 @@ keep_open = "Lassen Sie Cap geöffnet, während das Modell heruntergeladen wird.
 language_label = "Sprache"
 model_downloaded = "Modell {model} heruntergeladen"
 model_label = "Modell"
+model_updated = "Empfohlenes Modell aktualisiert"
+model_updated_description = "Wir empfehlen die neue Version. Sie ist genauer und erkennt auch kurze Aufnahmen, die der alten entgangen sind."
 position = "Position"
 refining_word_timings = "Wort-Timings werden verfeinert…"
 regenerate = "Untertitel neu erstellen"
@@ -2830,6 +2891,7 @@ manual_zoom = "Manueller Zoom"
 muted = "Stumm"
 numbered_clip = "Clip {number}"
 sensitive = "Vertraulich"
+voice_eq = "Stimm-EQ"
 
 [editor.timeline.track]
 audio = "Audio"
@@ -2855,6 +2917,7 @@ empty_title = "Noch kein Transkript"
 hint = "Klicken Sie auf ein Wort, um dorthin zu springen. Wählen Sie Wörter aus und drücken Sie die Löschtaste, um sie aus dem Video zu schneiden."
 next_match = "Nächster Treffer"
 no_audio = "Diese Aufnahme hat keinen Ton zum Transkribieren."
+no_speech = "Keine Sprache in dieser Aufnahme gefunden"
 previous_match = "Vorheriger Treffer"
 restore_blocked = "Dieser Teil wurde in der Zeitleiste geschnitten. Nutzen Sie Rückgängig oder ziehen Sie den Clip-Rand, um ihn zurückzuholen."
 restore_hint = { one = "Klicken, um {count} Wort wiederherzustellen", other = "Klicken, um {count} Wörter wiederherzustellen" }
@@ -2968,6 +3031,7 @@ volume = "Lautstärke"
 transition = "ÜBERGANG"
 transition_none = "Keiner"
 transition_seconds = "{seconds} s"
+voice_eq = "Stimm-EQ"
 
 [editor.window.clip_menu.merge_blocker]
 edge = "Auf dieser Seite ist kein Clip"
@@ -3002,8 +3066,6 @@ delete_recording = "Aufnahme löschen"
 export = "Exportieren"
 open_bundle = "Aufnahmepaket öffnen"
 presets = "Vorlagen"
-transcript = "Transkript"
-transcript_tooltip = "Per Transkript bearbeiten"
 
 [editor.window.image]
 changed = "Dieses Bild hat sich bei der Auswahl eines Ersatzes geändert. Wählen Sie es aus und versuchen Sie es erneut."
@@ -3222,72 +3284,3 @@ verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
 
 [message.cli]
 binary_missing = "Mitgelieferte CLI unter {path} nicht gefunden"
-[repair]
-fix = "Reparieren"
-fix_recording = "Aufnahme reparieren"
-
-[repair.window]
-title = "Aufnahme reparieren"
-recover_failed = "Wiederherstellung fehlgeschlagen"
-open_failed = "Diese Aufnahme konnte nicht geöffnet werden"
-privacy = "Cap prüft die Dateien dieser Aufnahme, um sie zu reparieren. Sonst wird nichts auf Ihrem Computer gelesen."
-cancel = "Abbrechen"
-close = "Schließen"
-
-[repair.status]
-connecting = "Sichere Arbeitsumgebung wird gestartet"
-working = "Ihre Aufnahme wird untersucht"
-verifying = "Reparatur wird getestet"
-sending = "Wird an Cap gesendet"
-worked_for = "Fertig nach {duration}"
-duration_seconds = "{seconds} s"
-duration_minutes = "{minutes} min {seconds} s"
-timer_seconds = "{seconds} s"
-timer_minutes = "{minutes} min {seconds} s"
-earlier_thoughts = { one = "{count} frühere Notiz anzeigen", other = "{count} frühere Notizen anzeigen" }
-fewer_thoughts = "Weniger Notizen anzeigen"
-
-[repair.tool]
-describe = "Überblick"
-list = "Auflisten"
-read = "Lesen"
-inspect = "Prüfen"
-pull = "Kopieren"
-edit = "Bearbeiten"
-truncate = "Kürzen"
-remove = "Beiseitelegen"
-replace = "Ersetzen"
-verify = "Testen"
-source_read = "Quellcode lesen"
-search = "Suchen"
-run = "Ausführen"
-write = "Schreiben"
-
-[repair.fixed]
-title = "Ihre Aufnahme ist repariert"
-open = "Aufnahme öffnen"
-
-[repair.help]
-cant_fix_title = "Diese Aufnahme braucht einen genaueren Blick"
-failed_title = "Die Reparatur konnte nicht abgeschlossen werden"
-send_failed_title = "Das Senden wurde nicht abgeschlossen"
-explanation = "Senden Sie diese Aufnahme an das Cap-Team. Wir reparieren sie von Hand und schreiben Ihnen eine E-Mail."
-size_line = "Größe: {size}"
-send = "An Cap senden"
-
-[repair.sending]
-progress = "{sent} von {total}"
-
-[repair.sent]
-title = "Gesendet. Wir schreiben Ihnen, sobald sie repariert ist."
-
-[repair.sign_in]
-title = "Melden Sie sich an, um Aufnahmen zu reparieren"
-body = "Die Reparatur läuft über Ihr Cap-Konto."
-button = "Anmelden"
-waiting = "Warten auf Ihren Browser"
-
-[repair.bytes]
-gigabytes = "{value} GB"
-megabytes = "{value} MB"
-kilobytes = "{value} KB"

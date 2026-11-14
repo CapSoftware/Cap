@@ -31,6 +31,9 @@ export type VideosPolicyDeps = {
 			id: Video.VideoId,
 			email: string,
 		) => Effect.Effect<boolean, DatabaseError>;
+		isLinkOpenToAnyone: (
+			id: Video.VideoId,
+		) => Effect.Effect<boolean, DatabaseError>;
 	};
 	orgsRepo: {
 		membershipForVideo: (
@@ -121,19 +124,20 @@ const decideCanView = (
 
 		if (restriction.length > 0) {
 			if (Option.isNone(user)) {
-				yield* Effect.log(
-					"Email access restriction active and user not logged in. Access denied.",
-				);
-				return yield* Effect.fail(
-					new Policy.PolicyDeniedError({
-						reason: "email_restriction_login_required",
-					}),
-				);
-			}
-			if (
-				Option.isSome(user) &&
+				if (!(yield* repo.isLinkOpenToAnyone(video.id))) {
+					yield* Effect.log(
+						"Email access restriction active and user not logged in. Access denied.",
+					);
+					return yield* Effect.fail(
+						new Policy.PolicyDeniedError({
+							reason: "email_restriction_login_required",
+						}),
+					);
+				}
+			} else if (
 				!isEmailAllowedByRestriction(user.value.email, restriction) &&
-				!(yield* repo.hasViewerGrant(video.id, user.value.email))
+				!(yield* repo.hasViewerGrant(video.id, user.value.email)) &&
+				!(yield* repo.isLinkOpenToAnyone(video.id))
 			) {
 				yield* Effect.log("Email access restriction active. Access denied.");
 				return yield* Effect.fail(

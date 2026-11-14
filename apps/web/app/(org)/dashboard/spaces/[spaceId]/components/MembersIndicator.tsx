@@ -14,14 +14,15 @@ import {
 	Select,
 } from "@cap/ui";
 import { type Space, User } from "@cap/web-domain";
-import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
 	normalizeSpaceRole,
@@ -71,7 +72,7 @@ export const MembersIndicator = ({
 		},
 	});
 
-	useEffect(() => {
+	const resetToSaved = useCallback(() => {
 		setMemberRoles(
 			Object.fromEntries(
 				members.map((member) => [
@@ -84,6 +85,16 @@ export const MembersIndicator = ({
 			members: members.map((member) => member.userId),
 		});
 	}, [members, form]);
+
+	useEffect(() => {
+		resetToSaved();
+	}, [resetToSaved]);
+
+	// Edits that were closed without saving must not come back on reopen.
+	const handleOpenChange = (next: boolean) => {
+		if (next) resetToSaved();
+		setOpen(next);
+	};
 
 	const handleSaveMembers = async (selectedUserIds: User.UserId[]) => {
 		if (!canManageMembers) return;
@@ -116,13 +127,13 @@ export const MembersIndicator = ({
 				role: "member",
 			});
 			toast.success("Members updated!");
+			setOpen(false);
 			router.refresh();
 		} catch (error) {
 			console.error("Failed to update members:", error);
 			toast.error("Failed to update members");
 		} finally {
 			setIsLoading(false);
-			setOpen(false);
 		}
 	};
 
@@ -141,11 +152,11 @@ export const MembersIndicator = ({
 
 	return (
 		<div className="flex gap-3 items-center">
-			<Dialog open={open} onOpenChange={setOpen}>
+			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogTrigger asChild>
 					<Button variant="gray" size="sm" className="z-10">
 						<FontAwesomeIcon className="mr-1 size-4" icon={faUserGroup} />
-						{memberCount} members
+						{memberCount} {memberCount === 1 ? "member" : "members"}
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">

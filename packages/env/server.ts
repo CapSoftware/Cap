@@ -30,9 +30,17 @@ function createServerEnv() {
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
 
+			// Push notifications for the iOS app. Push is off when any of these are unset.
+			APNS_KEY_ID: z.string().optional(),
+			APNS_TEAM_ID: z.string().optional(),
+			APNS_PRIVATE_KEY: z.string().optional(),
+
 			// Cap uses Resend for email sending, including sending login code emails
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
+			CAP_INFRA_BILLING_EMAILS: boolString(false).describe(
+				"Sends the Cap Infra out of credit and failed auto top-up emails when set to 'true'",
+			),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
@@ -78,6 +86,7 @@ function createServerEnv() {
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
+			WORKOS_WEBHOOK_SECRET: z.string().optional(),
 
 			/// Generic OIDC
 			OIDC_ISSUER: z.string().optional(),
@@ -149,37 +158,6 @@ function createServerEnv() {
 					"Set to media-server to run instant-mode live transcription on the media server instead of a workflow (falls back to the workflow)",
 				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
-			AI_GATEWAY_API_KEY: z
-				.string()
-				.optional()
-				.describe(
-					"Vercel AI Gateway key for the desktop recording repair agent",
-				),
-			RECORDING_REPAIR_MODEL: z
-				.enum(["claude-opus-5-5", "gpt-6.1-terra"])
-				.optional()
-				.describe(
-					"Model for the desktop recording repair agent (default claude-opus-5-5). Uses AI_GATEWAY_API_KEY when set, otherwise ANTHROPIC_API_KEY or OPENAI_API_KEY",
-				),
-			RECORDING_REPAIR_ENABLED: boolString(false).describe(
-				"Offer the desktop Fix recording agent. Desktop apps hide the Fix button while this is false",
-			),
-			RECORDING_REPAIR_SUBMISSIONS_ENABLED: boolString(true).describe(
-				"Let users send a recording the repair agent can't fix to Cap",
-			),
-			RECORDING_REPAIR_COST_LIMIT_USD: z.coerce
-				.number()
-				.positive()
-				.optional()
-				.describe("Model spend limit per repair session in USD (default 5)"),
-			RECORDING_REPAIR_DAILY_LIMIT: z.coerce
-				.number()
-				.int()
-				.positive()
-				.optional()
-				.describe(
-					"Repair sessions each user may start per 24 hours (default 6)",
-				),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
 			AI_PROVIDER: z
@@ -235,6 +213,7 @@ function createServerEnv() {
 					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
 				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
+			STRIPE_SCIM_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),
@@ -276,6 +255,12 @@ function createServerEnv() {
 				.optional()
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
+				),
+			INFRA_PLAYBACK_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for developer video playback links. Defaults to WEB_URL/api/developer/playback; set it to a hostname that forwards to that path",
 				),
 			LOOM_IMPORTER_URL: z
 				.string()
