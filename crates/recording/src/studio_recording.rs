@@ -5786,10 +5786,14 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    type CompletionSender = watch::Sender<Option<Result<(), PipelineDoneError>>>;
+
+    #[cfg(target_os = "macos")]
     async fn watched_screen_pipeline() -> (
         Pipeline,
         flume::Sender<TestVideoFrame>,
         DoneFut,
+        CompletionSender,
         tempfile::TempDir,
     ) {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -5823,11 +5827,12 @@ mod tests {
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        pipeline.spawn_watcher(completion_tx);
+        pipeline.spawn_watcher(completion_tx.clone());
         (
             pipeline,
             screen_tx,
             completion_rx_to_done_fut(completion_rx),
+            completion_tx,
             temp_dir,
         )
     }
@@ -5839,10 +5844,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_screen_capture_ending_before_stop_completes_the_recording() {
-        let (pipeline, _screen_tx, done, _temp_dir) = watched_screen_pipeline().await;
+        let (pipeline, screen_tx, done, _actor_completion, _temp_dir) =
+            watched_screen_pipeline().await;
         assert!(done.clone().now_or_never().is_none());
 
         pipeline.screen.cancel();
+        drop(screen_tx);
 
         let result = tokio::time::timeout(Duration::from_secs(2), done)
             .await
@@ -5854,7 +5861,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_pause_or_stop_does_not_complete_the_recording() {
-        let (pipeline, screen_tx, done, _temp_dir) = watched_screen_pipeline().await;
+        let (pipeline, screen_tx, done, _actor_completion, _temp_dir) =
+            watched_screen_pipeline().await;
         let stopping = tokio::spawn(pipeline.stop());
         tokio::time::sleep(Duration::from_millis(50)).await;
         drop(screen_tx);
