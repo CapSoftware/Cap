@@ -7,9 +7,10 @@ struct RecordingActions {
 
 impl Render for RecordingActions {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.settings.update(cx, |settings, cx| {
-            settings.render_recordings_list(cx).into_any_element()
-        })
+        div().size_full().flex().flex_col().children(
+            self.settings
+                .update(cx, |settings, cx| settings.render_recordings(cx)),
+        )
     }
 }
 
@@ -36,7 +37,7 @@ fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Se
         project_name_input: input.clone(),
         server_url_input: input.clone(),
         _field_events: std::array::from_fn(|_| gpui::Subscription::new(|| {})),
-        recordings: Recordings::new(input.clone()),
+        recordings: Recordings::new(input.clone(), cx.focus_handle(), cx.focus_handle()),
         screenshots: Screenshots::new(input),
         placeholders: ui::CollapsibleState::new(false),
         placeholders_task: None,
@@ -78,14 +79,30 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+fn share_link(
+    settings: &Entity<SettingsWindow>,
+    item: usize,
+    cx: &mut VisualTestContext,
+) -> gpui::Point<Pixels> {
+    let row = settings
+        .read_with(cx, |settings, _| {
+            settings.recordings.list.bounds_for_item(item)
+        })
+        .unwrap();
+    point(row.right() - px(CONTENT_PADDING_X + 163.), row.center().y)
+}
+
 fn open_two_recordings(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, VisualTestContext) {
-    let window = cx.open_window(size(px(600.), px(300.)), |window, cx| RecordingActions {
-        settings: cx.new(|cx| {
-            let mut settings = settings_fixture(window, cx);
-            settings.recordings.items = Some(vec![row("first"), row("second")]);
-            settings
-        }),
-    });
+    let window = cx.open_window(
+        size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
+        |window, cx| RecordingActions {
+            settings: cx.new(|cx| {
+                let mut settings = settings_fixture(window, cx);
+                settings.recordings.items = Some(vec![row("first"), row("second")]);
+                settings
+            }),
+        },
+    );
     let settings = window
         .read_with(cx, |view, _| view.settings.clone())
         .unwrap();
@@ -97,7 +114,7 @@ fn open_two_recordings(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, Visu
 #[gpui::test]
 fn held_recording_action_does_not_move_to_a_different_recording(cx: &mut TestAppContext) {
     let (settings, mut visual) = open_two_recordings(cx);
-    let link = point(px(432.), px(40.));
+    let link = share_link(&settings, 1, &mut visual);
     visual.simulate_mouse_move(link, None, Modifiers::none());
     visual.simulate_mouse_down(link, MouseButton::Left, Modifiers::none());
     settings.update(&mut visual, |settings, _| {
@@ -116,7 +133,7 @@ fn held_recording_action_does_not_move_to_a_different_recording(cx: &mut TestApp
 #[gpui::test]
 fn held_recording_action_survives_an_unchanged_refresh(cx: &mut TestAppContext) {
     let (settings, mut visual) = open_two_recordings(cx);
-    let link = point(px(432.), px(40.));
+    let link = share_link(&settings, 1, &mut visual);
     visual.simulate_mouse_move(link, None, Modifiers::none());
     visual.simulate_mouse_down(link, MouseButton::Left, Modifiers::none());
     settings.update(&mut visual, |settings, _| {
@@ -133,8 +150,8 @@ fn held_recording_action_survives_an_unchanged_refresh(cx: &mut TestAppContext) 
 #[gpui::test]
 fn held_recording_action_follows_the_same_recording_after_reordering(cx: &mut TestAppContext) {
     let (settings, mut visual) = open_two_recordings(cx);
-    let old_link = point(px(432.), px(116.));
-    let new_link = point(px(432.), px(40.));
+    let old_link = share_link(&settings, 2, &mut visual);
+    let new_link = share_link(&settings, 1, &mut visual);
     visual.simulate_mouse_move(old_link, None, Modifiers::none());
     visual.simulate_mouse_down(old_link, MouseButton::Left, Modifiers::none());
     settings.update(&mut visual, |settings, _| {
