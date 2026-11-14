@@ -1,6 +1,6 @@
 "use client";
 
-import { CardDescription, Label, Switch } from "@cap/ui";
+import { Switch } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ import {
 import { FileInput } from "@/components/FileInput";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext } from "../../../Contexts";
+import { ProChip, SettingsRow } from "../_components/settings-ui";
 
 export const ShareableLinkIcon = () => {
 	const router = useRouter();
@@ -112,25 +113,48 @@ export const ShareableLinkIcon = () => {
 
 	return (
 		<>
-			<div className="flex-1 space-y-4">
-				<div className="space-y-1">
-					<div className="flex gap-1.5 items-center">
-						<Label htmlFor={iconInputId}>Shareable link icon</Label>
-						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-							Pro
-						</p>
-					</div>
-					<CardDescription className="w-full">
-						Use a custom logo or icon on your shareable link pages.
-					</CardDescription>
-				</div>
-				<div className="flex items-center justify-between gap-4 rounded-xl border border-gray-3 bg-gray-2 p-4">
-					<div className="space-y-1">
-						<p className="text-sm text-gray-12">Use organization icon</p>
-						<p className="text-xs text-gray-10">
-							Use the organization icon when one is available.
-						</p>
-					</div>
+			<SettingsRow
+				title={<label htmlFor={iconInputId}>Shareable link icon</label>}
+				meta={<ProChip />}
+				description="Use a custom logo or icon on your shareable link pages."
+				control={
+					<FileInput
+						className="w-full sm:w-60"
+						height={36}
+						previewIconSize={20}
+						id={iconInputId}
+						name="shareable-link-icon"
+						onChange={(file) => {
+							if (!file || !organizationId) return;
+							if (!user.isPro) {
+								setShowUpgradeModal(true);
+								return;
+							}
+							uploadIcon.mutate({ organizationId, file });
+						}}
+						disabled={!user.isPro || useOrganizationIconChecked || isMutating}
+						isLoading={uploadIcon.isPending}
+						initialPreviewUrl={
+							useOrganizationIconChecked
+								? (organization?.iconUrl ?? null)
+								: existingIconUrl
+						}
+						onRemove={() => {
+							if (!organizationId) return;
+							if (!user.isPro) {
+								setShowUpgradeModal(true);
+								return;
+							}
+							removeIcon.mutate(organizationId);
+						}}
+						maxFileSizeBytes={1024 * 1024}
+					/>
+				}
+			/>
+			<SettingsRow
+				title="Use organization icon"
+				description="Use the organization icon on shareable links when one is available."
+				control={
 					<Switch
 						disabled={!user.isPro || !hasOrganizationIcon || isMutating}
 						checked={useOrganizationIconChecked}
@@ -148,38 +172,8 @@ export const ShareableLinkIcon = () => {
 							});
 						}}
 					/>
-				</div>
-				<FileInput
-					height={44}
-					previewIconSize={20}
-					id={iconInputId}
-					name="shareable-link-icon"
-					onChange={(file) => {
-						if (!file || !organizationId) return;
-						if (!user.isPro) {
-							setShowUpgradeModal(true);
-							return;
-						}
-						uploadIcon.mutate({ organizationId, file });
-					}}
-					disabled={!user.isPro || useOrganizationIconChecked || isMutating}
-					isLoading={uploadIcon.isPending}
-					initialPreviewUrl={
-						useOrganizationIconChecked
-							? (organization?.iconUrl ?? null)
-							: existingIconUrl
-					}
-					onRemove={() => {
-						if (!organizationId) return;
-						if (!user.isPro) {
-							setShowUpgradeModal(true);
-							return;
-						}
-						removeIcon.mutate(organizationId);
-					}}
-					maxFileSizeBytes={1024 * 1024}
-				/>
-			</div>
+				}
+			/>
 			<UpgradeModal
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}

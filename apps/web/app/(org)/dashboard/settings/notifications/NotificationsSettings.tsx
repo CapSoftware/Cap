@@ -1,12 +1,17 @@
 "use client";
 
-import { Card, CardDescription, CardTitle, Switch } from "@cap/ui";
+import { Switch } from "@cap/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { updatePreferences } from "@/actions/notifications/update-preferences";
 import { useDashboardContext } from "../../Contexts";
+import {
+	SettingsCard,
+	SettingsRow,
+	SettingsSection,
+} from "../organization/_components/settings-ui";
 
 type NotificationPreferences = {
 	pauseComments: boolean;
@@ -82,23 +87,25 @@ export const NotificationsSettings = () => {
 	};
 
 	return (
-		<Card className="divide-y divide-gray-4">
-			{NOTIFICATION_TYPES.map(({ key, title, description }) => (
-				<div
-					key={key}
-					className="flex gap-4 justify-between items-center py-4 first:pt-0 last:pb-0"
-				>
-					<div className="space-y-1">
-						<CardTitle className="text-base">{title}</CardTitle>
-						<CardDescription>{description}</CardDescription>
-					</div>
-					<Switch
-						checked={!preferences[key]}
-						onCheckedChange={() => toggle(key)}
-						aria-label={`${title} notifications`}
-					/>
-				</div>
-			))}
-		</Card>
+		<div className="mx-auto w-full max-w-4xl">
+			<SettingsSection title="Notify me about">
+				<SettingsCard>
+					{NOTIFICATION_TYPES.map(({ key, title, description }) => (
+						<SettingsRow
+							key={key}
+							title={title}
+							description={description}
+							control={
+								<Switch
+									checked={!preferences[key]}
+									onCheckedChange={() => toggle(key)}
+									aria-label={`${title} notifications`}
+								/>
+							}
+						/>
+					))}
+				</SettingsCard>
+			</SettingsSection>
+		</div>
 	);
 };

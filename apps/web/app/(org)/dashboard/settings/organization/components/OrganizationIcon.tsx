@@ -1,6 +1,5 @@
 "use client";
 
-import { CardDescription, Label } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { useRouter } from "next/navigation";
@@ -9,6 +8,7 @@ import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../../Contexts";
+import { SettingsRow } from "../_components/settings-ui";
 
 export const OrganizationIcon = () => {
 	const router = useRouter();
@@ -68,31 +68,30 @@ export const OrganizationIcon = () => {
 	});
 
 	return (
-		<div className="flex-1 space-y-4">
-			<div className="space-y-1">
-				<Label htmlFor="icon">Organization Icon</Label>
-				<CardDescription className="w-full">
-					Upload a custom logo or icon for your organization.
-				</CardDescription>
-			</div>
-			<FileInput
-				height={44}
-				previewIconSize={20}
-				id={iconInputId}
-				name="icon"
-				onChange={(file) => {
-					if (!file || !organizationId) return;
-					uploadIcon.mutate({ organizationId, file });
-				}}
-				disabled={uploadIcon.isPending}
-				isLoading={uploadIcon.isPending}
-				initialPreviewUrl={existingIconUrl}
-				onRemove={() => {
-					if (!organizationId) return;
-					removeIcon.mutate(organizationId);
-				}}
-				maxFileSizeBytes={1 * 1024 * 1024} // 1MB
-			/>
-		</div>
+		<SettingsRow
+			title={<label htmlFor={iconInputId}>Organization icon</label>}
+			description="Upload a custom logo or icon for your organization."
+			control={
+				<FileInput
+					className="w-full sm:w-60"
+					height={36}
+					previewIconSize={20}
+					id={iconInputId}
+					name="icon"
+					onChange={(file) => {
+						if (!file || !organizationId) return;
+						uploadIcon.mutate({ organizationId, file });
+					}}
+					disabled={uploadIcon.isPending}
+					isLoading={uploadIcon.isPending}
+					initialPreviewUrl={existingIconUrl}
+					onRemove={() => {
+						if (!organizationId) return;
+						removeIcon.mutate(organizationId);
+					}}
+					maxFileSizeBytes={1 * 1024 * 1024}
+				/>
+			}
+		/>
 	);
 };
