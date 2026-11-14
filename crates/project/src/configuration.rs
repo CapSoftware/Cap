@@ -680,6 +680,220 @@ impl Default for AudioConfiguration {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceEqPreset {
+    #[default]
+    Natural,
+    Clear,
+    Warm,
+    Bright,
+    Broadcast,
+    Custom,
+}
+
+impl VoiceEqPreset {
+    pub const ALL: [Self; 5] = [
+        Self::Natural,
+        Self::Clear,
+        Self::Warm,
+        Self::Bright,
+        Self::Broadcast,
+    ];
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceDeclick {
+    #[default]
+    Off,
+    Light,
+    Strong,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceEqBand {
+    pub hz: f32,
+    pub gain_db: f32,
+    #[serde(default = "VoiceEqBand::default_q")]
+    pub q: f32,
+}
+
+impl VoiceEqBand {
+    const fn new(hz: f32, gain_db: f32, q: f32) -> Self {
+        Self { hz, gain_db, q }
+    }
+
+    fn default_q() -> f32 {
+        1.0
+    }
+
+    fn sanitized(self, kind: VoiceEqBandKind, fallback: Self) -> Self {
+        Self {
+            hz: clamp_finite(self.hz, kind.hz_range(), fallback.hz),
+            gain_db: clamp_finite(self.gain_db, VoiceEq::GAIN_RANGE, fallback.gain_db),
+            q: clamp_finite(self.q, VoiceEq::Q_RANGE, fallback.q),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VoiceEqBandKind {
+    Low,
+    LowMid,
+    HighMid,
+    High,
+}
+
+impl VoiceEqBandKind {
+    pub const ALL: [Self; 4] = [Self::Low, Self::LowMid, Self::HighMid, Self::High];
+
+    pub fn hz_range(self) -> (f32, f32) {
+        match self {
+            Self::Low => (40.0, 600.0),
+            Self::LowMid => (100.0, 2_000.0),
+            Self::HighMid => (600.0, 10_000.0),
+            Self::High => (2_000.0, 16_000.0),
+        }
+    }
+
+    pub fn is_shelf(self) -> bool {
+        matches!(self, Self::Low | Self::High)
+    }
+}
+
+/// `enabled` bypasses the EQ without losing it; de-click runs on its own
+/// switch.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VoiceEq {
+    pub enabled: bool,
+    pub preset: VoiceEqPreset,
+    pub high_pass: bool,
+    pub high_pass_hz: f32,
+    pub low: VoiceEqBand,
+    pub low_mid: VoiceEqBand,
+    pub high_mid: VoiceEqBand,
+    pub high: VoiceEqBand,
+    pub declick: VoiceDeclick,
+}
+
+impl Default for VoiceEq {
+    fn default() -> Self {
+        Self::from_preset(VoiceEqPreset::Natural)
+    }
+}
+
+impl VoiceEq {
+    pub const GAIN_RANGE: (f32, f32) = (-12.0, 12.0);
+    pub const Q_RANGE: (f32, f32) = (0.3, 4.0);
+    pub const HIGH_PASS_RANGE: (f32, f32) = (20.0, 300.0);
+
+    pub fn from_preset(preset: VoiceEqPreset) -> Self {
+        let (high_pass_hz, low, low_mid, high_mid, high) = match preset {
+            VoiceEqPreset::Natural | VoiceEqPreset::Custom => (
+                80.0,
+                VoiceEqBand::new(150.0, 0.0, 0.7),
+                VoiceEqBand::new(300.0, -2.0, 1.0),
+                VoiceEqBand::new(3_500.0, 1.5, 0.8),
+                VoiceEqBand::new(10_000.0, 0.0, 0.7),
+            ),
+            VoiceEqPreset::Clear => (
+                90.0,
+                VoiceEqBand::new(150.0, -1.5, 0.7),
+                VoiceEqBand::new(320.0, -3.0, 1.2),
+                VoiceEqBand::new(3_500.0, 3.5, 0.9),
+                VoiceEqBand::new(10_000.0, 2.0, 0.7),
+            ),
+            VoiceEqPreset::Warm => (
+                70.0,
+                VoiceEqBand::new(160.0, 3.0, 0.7),
+                VoiceEqBand::new(400.0, -1.0, 1.0),
+                VoiceEqBand::new(3_000.0, 1.0, 0.8),
+                VoiceEqBand::new(9_000.0, -2.0, 0.7),
+            ),
+            VoiceEqPreset::Bright => (
+                100.0,
+                VoiceEqBand::new(180.0, -2.0, 0.7),
+                VoiceEqBand::new(350.0, -2.0, 1.0),
+                VoiceEqBand::new(4_500.0, 3.0, 0.8),
+                VoiceEqBand::new(10_000.0, 4.5, 0.7),
+            ),
+            VoiceEqPreset::Broadcast => (
+                80.0,
+                VoiceEqBand::new(110.0, 3.5, 0.7),
+                VoiceEqBand::new(380.0, -3.5, 1.4),
+                VoiceEqBand::new(2_800.0, 3.0, 1.0),
+                VoiceEqBand::new(9_000.0, 2.5, 0.7),
+            ),
+        };
+        Self {
+            enabled: true,
+            preset,
+            high_pass: true,
+            high_pass_hz,
+            low,
+            low_mid,
+            high_mid,
+            high,
+            declick: VoiceDeclick::Off,
+        }
+    }
+
+    pub fn with_preset(self, preset: VoiceEqPreset) -> Self {
+        Self {
+            enabled: self.enabled,
+            declick: self.declick,
+            ..Self::from_preset(preset)
+        }
+    }
+
+    pub fn band(&self, kind: VoiceEqBandKind) -> VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => self.low,
+            VoiceEqBandKind::LowMid => self.low_mid,
+            VoiceEqBandKind::HighMid => self.high_mid,
+            VoiceEqBandKind::High => self.high,
+        }
+    }
+
+    pub fn band_mut(&mut self, kind: VoiceEqBandKind) -> &mut VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => &mut self.low,
+            VoiceEqBandKind::LowMid => &mut self.low_mid,
+            VoiceEqBandKind::HighMid => &mut self.high_mid,
+            VoiceEqBandKind::High => &mut self.high,
+        }
+    }
+
+    pub fn sanitized(&self) -> Self {
+        let fallback = Self::from_preset(self.preset);
+        let mut clean = *self;
+        clean.high_pass_hz = clamp_finite(
+            self.high_pass_hz,
+            Self::HIGH_PASS_RANGE,
+            fallback.high_pass_hz,
+        );
+        for kind in VoiceEqBandKind::ALL {
+            *clean.band_mut(kind) = self.band(kind).sanitized(kind, fallback.band(kind));
+        }
+        clean
+    }
+
+    pub fn shapes_tone(&self) -> bool {
+        self.enabled
+            && (self.high_pass
+                || VoiceEqBandKind::ALL
+                    .iter()
+                    .any(|kind| self.sanitized().band(*kind).gain_db.abs() >= 0.01))
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.shapes_tone() || self.declick != VoiceDeclick::Off
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorType {
@@ -949,6 +1163,8 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_cursor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_eq: Option<VoiceEq>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1001,6 +1217,12 @@ fn deserialize_timescale<'de, D: serde::Deserializer<'de>>(
 impl TimelineSegment {
     pub fn hides_cursor(&self) -> bool {
         self.hide_cursor.unwrap_or(false)
+    }
+
+    pub fn active_voice_eq(&self) -> Option<VoiceEq> {
+        self.voice_eq
+            .filter(VoiceEq::is_active)
+            .map(|voice_eq| voice_eq.sanitized())
     }
 
     pub fn volume(&self) -> f64 {
@@ -3564,6 +3786,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -3574,6 +3797,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
             ],
             transitions,
@@ -4497,6 +4721,74 @@ mod tests {
     }
 
     #[test]
+    fn voice_eq_is_absent_until_set_and_survives_partial_or_out_of_range_values() {
+        let mut segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert!(segment.voice_eq.is_none());
+        assert!(segment.active_voice_eq().is_none());
+        assert!(
+            serde_json::to_value(&segment)
+                .unwrap()
+                .get("voiceEq")
+                .is_none()
+        );
+
+        segment.voice_eq = Some(VoiceEq {
+            enabled: false,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        assert!(segment.active_voice_eq().is_none());
+        segment.voice_eq = Some(VoiceEq {
+            declick: VoiceDeclick::Light,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        let saved = serde_json::to_string(&segment).unwrap();
+        let restored: TimelineSegment = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.voice_eq, segment.voice_eq);
+        assert_eq!(restored.active_voice_eq(), segment.voice_eq);
+
+        let partial: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": { "declick": "strong", "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(
+            partial.voice_eq,
+            Some(VoiceEq {
+                enabled: false,
+                declick: VoiceDeclick::Strong,
+                ..VoiceEq::default()
+            })
+        );
+        assert!(partial.active_voice_eq().is_some());
+
+        let damaged: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": {
+                "highPassHz": 1e9,
+                "low": { "hz": -5.0, "gainDb": 400.0 },
+                "highMid": { "hz": 3500.0, "gainDb": -90.0, "q": 0.0 }
+            }
+        }))
+        .unwrap();
+        let active = damaged.active_voice_eq().unwrap();
+        assert_eq!(active.high_pass_hz, VoiceEq::HIGH_PASS_RANGE.1);
+        assert_eq!(active.low.hz, VoiceEqBandKind::Low.hz_range().0);
+        assert_eq!(active.low.gain_db, VoiceEq::GAIN_RANGE.1);
+        assert_eq!(active.high_mid.gain_db, VoiceEq::GAIN_RANGE.0);
+        assert_eq!(active.high_mid.q, VoiceEq::Q_RANGE.0);
+    }
+
+    #[test]
     fn timeline_segment_speed_audio_mode_is_backward_compatible() {
         let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
             "recordingSegment": 0,
@@ -4655,6 +4947,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: hide_cursor.then_some(true),
+            voice_eq: None,
         }
     }
 

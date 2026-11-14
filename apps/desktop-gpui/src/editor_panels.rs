@@ -3331,7 +3331,7 @@ fn commit_segment_timing(
         return false;
     }
     if start {
-        segment.set_start(value);
+        segment.trim_start_to(value);
     } else {
         segment.set_end(value);
     }
@@ -8504,6 +8504,24 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn keyboard_start_field_preserves_keypress_times() {
+        let mut segment: KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "typed", "start": 2.0, "end": 6.0, "displayText": "ab",
+            "keys": [
+                { "key": "a", "timeOffset": 0.0 },
+                { "key": "b", "timeOffset": 2000.0 }
+            ]
+        }))
+        .unwrap();
+        assert!(commit_segment_timing(&mut segment, true, "3.00", 3.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+        assert!(commit_segment_timing(&mut segment, false, "7.00", 7.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+    }
 
     #[test]
     fn unchanged_timing_fields_preserve_redo() {

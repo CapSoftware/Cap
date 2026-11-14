@@ -35,6 +35,7 @@ import { renewConciergeImport } from "@/lib/loom-concierge";
 import {
 	getLoomDownloadUrl,
 	LoomDownloadTemporaryError,
+	LoomDownloadUnavailableError,
 } from "@/lib/loom-download-url";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import {
@@ -242,6 +243,9 @@ export async function resolveLoomDownload(
 				errorCode: "loom_temporarily_unavailable",
 				retryAfterMs: error.retryAfterMs,
 			};
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			return { success: false, error: error.message };
 		}
 		return {
 			success: false,
@@ -491,6 +495,9 @@ export async function importLoomVideoForOwner({
 				error: error.message,
 				errorCode: "loom_temporarily_unavailable",
 			};
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			return { success: false, error: error.message };
 		}
 		throw error;
 	}

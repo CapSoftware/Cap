@@ -2,13 +2,21 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { developerApiKeys, developerApps } from "@cap/database/schema";
+import {
+	developerApiKeys,
+	developerApps,
+	developerVideos,
+} from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { purgeDeveloperPlaybackCache } from "@/lib/developer-video-cache";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
+import { canUseInfra } from "@/lib/infra-access";
+import { settleFirstMonthsForDeletedApp } from "@/lib/infra-storage-minimum";
 
 export async function deleteDeveloperApp(appId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const [app] = await db()
 		.select()
@@ -24,10 +32,11 @@ export async function deleteDeveloperApp(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
+	const deletedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		await tx
 			.update(developerApiKeys)
-			.set({ revokedAt: new Date() })
+			.set({ revokedAt: deletedAt })
 			.where(
 				and(
 					eq(developerApiKeys.appId, appId),
@@ -37,10 +46,23 @@ export async function deleteDeveloperApp(appId: string) {
 
 		await tx
 			.update(developerApps)
-			.set({ deletedAt: new Date() })
+			.set({ deletedAt })
 			.where(eq(developerApps.id, appId));
-	});
 
-	revalidatePath("/dashboard/developers");
+		await tx
+			.update(developerVideos)
+			.set({ deletedAt })
+			.where(
+				and(
+					eq(developerVideos.appId, appId),
+					isNull(developerVideos.deletedAt),
+				),
+			);
+	});
+	await purgeDeveloperPlaybackCache({ appId });
+	await settleFirstMonthsForDeletedApp(appId, deletedAt);
+	await cancelDeveloperVideoEncodes({ appId, deletedAt });
+
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

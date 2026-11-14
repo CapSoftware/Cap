@@ -5,6 +5,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { CommentType } from "../../Share";
 import { MediaCommentBody } from "../media-comment/MediaCommentBody";
 import { isMediaComment } from "../media-comment/media-comment-types";
+import { RelativeTime } from "../RelativeTime";
 import { formatTimeAgo } from "../tabs/Activity/utils";
 import {
 	CARD_WIDTH,
@@ -141,7 +142,10 @@ function SingleCard({
 					{name}
 				</span>
 				<span className="text-[11px] text-gray-9">
-					{formatTimeAgo(new Date(comment.createdAt))}
+					<RelativeTime
+						date={new Date(comment.createdAt)}
+						format={formatTimeAgo}
+					/>
 				</span>
 				<button
 					type="button"

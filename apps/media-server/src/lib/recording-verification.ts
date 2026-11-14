@@ -1301,6 +1301,102 @@ async function decodePacketProvenChunks(
 	}
 }
 
+async function scanStderr(
+	args: string[],
+	signal: AbortSignal,
+	onLine: (line: string) => void,
+): Promise<boolean> {
+	const child = spawn("ffmpeg", args, {
+		stdio: ["ignore", "ignore", "pipe"],
+		signal,
+	});
+	let pending = "";
+	child.stderr.setEncoding("utf8");
+	child.stderr.on("data", (text: string) => {
+		pending += text;
+		const lines = pending.split("\n");
+		pending = lines.pop() ?? "";
+		for (const line of lines) onLine(line);
+	});
+	const code = await new Promise<number | null>((resolve) => {
+		child.once("error", () => resolve(null));
+		child.once("close", resolve);
+	});
+	if (pending) onLine(pending);
+	return code === 0;
+}
+
+// A source missing a reference frame (a frame_num gap) decodes without any
+// error, but the decoder withholds the frames after the gap until its frame
+// numbering comes back around. Every packet is still proven byte for byte, so
+// a shortfall the gaps fully account for is the recording as it was captured.
+export async function referenceGapsExplaining(
+	videoPath: string,
+	shortfall: number,
+	signal: AbortSignal,
+): Promise<{ gaps: number; frameNumCycle: number } | null> {
+	let gaps = 0;
+	let log2MaxFrameNum: number | undefined;
+	const input = ["-protocol_whitelist", "file", "-i", videoPath];
+	const [decoded, parsed] = await Promise.all([
+		scanStderr(
+			[
+				"-hide_banner",
+				"-nostdin",
+				"-v",
+				"debug",
+				"-filter_threads",
+				"1",
+				"-filter_complex_threads",
+				"1",
+				"-threads",
+				decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 1),
+				...input,
+				"-map",
+				"0:v:0",
+				"-f",
+				"null",
+				"-",
+			],
+			signal,
+			(line) => {
+				if (/\bFrame num gap -?\d+ -?\d+/.test(line)) gaps++;
+			},
+		),
+		scanStderr(
+			[
+				"-hide_banner",
+				"-nostdin",
+				...input,
+				"-map",
+				"0:v:0",
+				"-c",
+				"copy",
+				"-bsf:v",
+				"trace_headers",
+				"-frames:v",
+				"1",
+				"-f",
+				"null",
+				"-",
+			],
+			signal,
+			(line) => {
+				const value = /\blog2_max_frame_num_minus4\s+\S+\s+=\s+(\d+)$/.exec(
+					line.trim(),
+				)?.[1];
+				if (value !== undefined)
+					log2MaxFrameNum = Math.max(log2MaxFrameNum ?? 0, Number(value) + 4);
+			},
+		),
+	]);
+	signal.throwIfAborted();
+	if (!decoded || !parsed || gaps === 0 || log2MaxFrameNum === undefined)
+		return null;
+	const frameNumCycle = 2 ** log2MaxFrameNum;
+	return shortfall <= gaps * frameNumCycle ? { gaps, frameNumCycle } : null;
+}
+
 export async function verifyRemuxedRecording(
 	videoPath: string,
 	audioPath: string | null,
@@ -1411,11 +1507,30 @@ export async function verifyRemuxedRecording(
 		proof,
 	);
 	await proof.assertUnchanged();
-	if (
-		result.video.frameCount !== proof.videoPackets ||
-		Boolean(result.audio) !== proof.hasAudio
-	) {
+	if (Boolean(result.audio) !== proof.hasAudio) {
 		throw new Error("Recording decoded tracks do not match the encoded source");
+	}
+	if (result.video.frameCount !== proof.videoPackets) {
+		const shortfall = proof.videoPackets - result.video.frameCount;
+		const gaps =
+			shortfall > 0
+				? await referenceGapsExplaining(videoPath, shortfall, signal)
+				: null;
+		await proof.assertUnchanged();
+		if (!gaps) {
+			throw new Error(
+				"Recording decoded tracks do not match the encoded source",
+			);
+		}
+		console.warn(
+			JSON.stringify({
+				event: "recording_reference_gaps_accepted",
+				packets: proof.videoPackets,
+				missingFrames: shortfall,
+				gaps: gaps.gaps,
+				frameNumCycle: gaps.frameNumCycle,
+			}),
+		);
 	}
 	return {
 		...result,
