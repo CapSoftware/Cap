@@ -25,13 +25,17 @@ fn encode_display(display: &Path, fragments: usize) {
         },
     )
     .unwrap();
-    // Every encoder keeps its GOP at two seconds of frames, and hardware
-    // encoders ignore a requested keyframe, so at one frame per second each
-    // fragment holds exactly two frames on every platform.
+    // At one frame per second the GOP is two frames, which NVENC and the
+    // other hardware encoders honor; VideoToolbox ignores that GOP but honors
+    // a requested keyframe. Asking for both gives two-frame fragments
+    // everywhere.
     for index in 0..fragments * 2 {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
         frame.data_mut(0).fill(16 + (index % 200) as u8);
         frame.data_mut(1).fill(128);
+        if index % 2 == 0 {
+            frame.set_kind(ffmpeg::picture::Type::I);
+        }
         encoder
             .queue_frame(frame, Duration::from_secs(index as u64))
             .unwrap();
