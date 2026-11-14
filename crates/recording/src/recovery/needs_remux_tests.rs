@@ -679,3 +679,36 @@ fn a_full_disk_while_staging_leaves_the_recording_as_it_was() {
     assert_eq!(layout(&project), before);
     assert!(workspaces(&project).is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn restoration_never_follows_a_linked_content_directory_out_of_the_recording() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = needs_remux_project(temporary.path(), "linked content", 10);
+    let workspace = stranded_by_an_older_build(&project, 2);
+    let outside = temporary.path().join("outside");
+    fs::rename(project.join("content"), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, project.join("content")).unwrap();
+    let listing = |path: &Path| {
+        let mut files = Vec::new();
+        let mut pending = vec![path.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    files.push((entry.path(), fs::read(entry.path()).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        files
+    };
+    let outside_files = listing(&outside);
+
+    assert!(RecoveryManager::restore_interrupted_recovery(&project).is_err());
+
+    assert_eq!(listing(&outside), outside_files);
+    assert!(workspace.join("original-segments").is_dir());
+    assert!(!workspace.join("displaced-segments").exists());
+}

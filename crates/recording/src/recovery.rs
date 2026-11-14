@@ -4443,6 +4443,22 @@ fn restore_unpublished_originals(project: &Path) -> Result<bool, RecoveryError> 
             ));
         }
     };
+    // Every rename below goes through these directories, so a link or
+    // junction could carry the restore outside the recording.
+    for path in [project.join("content"), project.join("content/segments")] {
+        match path.symlink_metadata() {
+            Ok(metadata) => {
+                reject_recovery_link(&metadata)?;
+                if !metadata.is_dir() {
+                    return Err(RecoveryError::Validation(
+                        "Recording content is not a directory; all files retained".into(),
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     let backup = workspace.join("original-segments");
     let segments = project.join("content/segments");
     if backup_files_present(&backup, &segments)? {
