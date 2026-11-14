@@ -65,17 +65,13 @@ fn macos_window_crop(
         .raw_handle()
         .logical_bounds()?;
     let display_position = display.raw_handle().logical_position();
-    // The video reads the window inside its rounded corners; the cursor
-    // is placed against the same trimmed frame.
-    Some(CursorCropBounds::new_macos(
-        crate::sources::screen_capture::trim_window_corners(LogicalBounds::new(
-            LogicalPosition::new(
-                window_bounds.position().x() - display_position.x(),
-                window_bounds.position().y() - display_position.y(),
-            ),
-            window_bounds.size(),
-        )),
-    ))
+    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+        LogicalPosition::new(
+            window_bounds.position().x() - display_position.x(),
+            window_bounds.position().y() - display_position.y(),
+        ),
+        window_bounds.size(),
+    )))
 }
 
 #[cfg(windows)]

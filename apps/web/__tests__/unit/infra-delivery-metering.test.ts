@@ -256,6 +256,128 @@ describe("HLS segment seconds", () => {
 	});
 });
 
+// A ladder joined from slices: each slice's media file follows its own init
+// section, and a range with no offset continues within its own file.
+const JOINED_PLAYLIST = [
+	"#EXTM3U",
+	"#EXT-X-VERSION:7",
+	"#EXT-X-TARGETDURATION:4",
+	"#EXT-X-PLAYLIST-TYPE:EVENT",
+	'#EXT-X-MAP:URI="720p-0-tokA.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:1000@800",
+	"720p-0-tokA.m4s",
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:1000",
+	"720p-0-tokA.m4s",
+	'#EXT-X-MAP:URI="720p-1-tokB.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:3000@800",
+	"720p-1-tokB.m4s",
+	"#EXTINF:2.000000,",
+	"#EXT-X-BYTERANGE:1500",
+	"720p-1-tokB.m4s",
+	"#EXT-X-ENDLIST",
+].join("\n");
+
+const SLICE_PLAYLIST = [
+	"#EXTM3U",
+	'#EXT-X-MAP:URI="720p.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:3000@800",
+	"720p.m4s",
+	"#EXTINF:2.000000,",
+	"#EXT-X-BYTERANGE:1500@3800",
+	"720p.m4s",
+].join("\n");
+
+describe("a ladder encoded in slices", () => {
+	const sliceKey = `${base}/hls/720p-1-tokB.m4s`;
+	const request = (range: [number, number]) => {
+		const parsed = parseDeliveryLine(
+			line({
+				"cs-uri-stem": sliceKey,
+				"sc-range-start": String(range[0]),
+				"sc-range-end": String(range[1]),
+				"sc-content-len": String(range[1] - range[0] + 1),
+			}),
+		);
+		if (!parsed) throw new Error("not parsed");
+		return parsed;
+	};
+	const resolver = (stored: Record<string, string>): DeliveryResolver => ({
+		async hls(key, mediaName) {
+			const text = stored[key];
+			const name = key.slice(key.lastIndexOf("/") + 1);
+			return text
+				? parseHlsByteRanges(text, mediaName ?? name.replace(/\.m3u8$/, ".m4s"))
+				: null;
+		},
+		async video() {
+			return VIDEO_ROW;
+		},
+	});
+
+	it("counts a slice's media file under its rendition", () => {
+		expect(request([800, 3799])).toMatchObject({
+			appId: APP,
+			videoId: VIDEO,
+			kind: "720p",
+			key: sliceKey.slice(1),
+		});
+		expect(
+			parseDeliveryLine(line({ "cs-uri-stem": `${base}/hls/audio-0-tokA.m4s` }))
+				?.kind,
+		).toBe("audio");
+	});
+
+	it("reads only the requested slice's segments from the joined playlist", () => {
+		expect(parseHlsByteRanges(JOINED_PLAYLIST, "720p-1-tokB.m4s")).toEqual([
+			{ start: 800, end: 3800, duration: 4 },
+			{ start: 3800, end: 5300, duration: 2 },
+		]);
+		expect(parseHlsByteRanges(JOINED_PLAYLIST, "720p-0-tokA.m4s")).toEqual([
+			{ start: 800, end: 1800, duration: 4 },
+			{ start: 1800, end: 2800, duration: 4 },
+		]);
+		expect(
+			parseHlsByteRanges(
+				JOINED_PLAYLIST.replace(
+					"720p-0-tokA.m4s\n#EXTINF:4",
+					"other.m4s\n#EXTINF:4",
+				),
+				"720p-1-tokB.m4s",
+			),
+		).toBeNull();
+	});
+
+	it("maps a slice's segment to exact seconds once the ladder is whole", async () => {
+		const stored = {
+			[`${base.slice(1)}/hls/720p.m3u8`]: JOINED_PLAYLIST,
+		};
+		expect(
+			await deliveredSeconds(request([800, 3799]), resolver(stored)),
+		).toEqual({ tier: "720p", seconds: 4, method: "playlist" });
+	});
+
+	it("maps it from the slice's own playlist while the ladder is still growing", async () => {
+		const stored = {
+			[`${base.slice(1)}/slices/720p-1-tokB.m3u8`]: SLICE_PLAYLIST,
+		};
+		expect(
+			await deliveredSeconds(request([3800, 5299]), resolver(stored)),
+		).toEqual({ tier: "720p", seconds: 2, method: "playlist" });
+	});
+
+	it("counts each slice's bytes once, never against a neighbour", async () => {
+		const stored = {
+			[`${base.slice(1)}/hls/720p.m3u8`]: JOINED_PLAYLIST,
+		};
+		const whole = await deliveredSeconds(request([0, 5299]), resolver(stored));
+		expect(whole?.seconds).toBeCloseTo(6, 9);
+	});
+});
+
 describe("deliveredSeconds", () => {
 	const parsed = (overrides: Record<string, unknown> = {}) => {
 		const request = parseDeliveryLine(line(overrides));
