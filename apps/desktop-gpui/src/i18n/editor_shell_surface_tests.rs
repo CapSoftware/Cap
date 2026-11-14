@@ -1121,8 +1121,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::transcript::fillers::title(), "Filler words"),
         (
+            tr::editor::transcript::edit_hint(),
+            "Enter to save, Esc to cancel, Tab for the next word",
+        ),
+        (
             tr::editor::transcript::hint(),
-            "Click a word to jump to it. Select words and press Delete to cut them from the video.",
+            "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video.",
         ),
         (tr::editor::transcript::next_match(), "Next match"),
         (
