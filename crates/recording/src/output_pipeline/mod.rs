@@ -48,16 +48,6 @@ mod win;
 pub use win::*;
 
 #[cfg(windows)]
-mod win_segmented;
-#[cfg(windows)]
-pub use win_segmented::*;
-
-#[cfg(windows)]
-mod win_segmented_camera;
-#[cfg(windows)]
-pub use win_segmented_camera::*;
-
-#[cfg(windows)]
 mod win_fragmented_m4s;
 #[cfg(windows)]
 pub use win_fragmented_m4s::*;

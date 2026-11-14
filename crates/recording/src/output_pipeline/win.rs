@@ -14,13 +14,14 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use futures::channel::oneshot;
 use std::{
+    cell::Cell,
     path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::AtomicBool,
         mpsc::{SyncSender, TrySendError, sync_channel},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::*;
 
@@ -28,7 +29,7 @@ const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
 
 /// The direct Media Foundation encoder loads the same vendor transforms as
 /// FFmpeg's `h264_mf`, so it shares that name for crash recovery.
-const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
+pub(crate) const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -434,6 +435,7 @@ impl Muxer for WindowsMuxer {
                         let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
+                        let mut readback_misses = 0u64;
 
                         loop {
                             let (ffmpeg_frame, ts) = match pacer.next(&video_rx, &pause_flag) {
@@ -443,7 +445,24 @@ impl Muxer for WindowsMuxer {
                                         (Some(f), timestamp)
                                     }
                                     Err(e) => {
-                                        warn!("Failed to convert frame: {e:?}");
+                                        let readback_miss = matches!(
+                                            e,
+                                            scap_ffmpeg::AsFFmpegError::NotReady
+                                                | scap_ffmpeg::AsFFmpegError::StagingBusy
+                                        );
+                                        if !readback_miss {
+                                            warn!("Failed to convert frame: {e:?}");
+                                        } else {
+                                            readback_misses += 1;
+                                            if readback_misses == 1
+                                                || readback_misses.is_multiple_of(90)
+                                            {
+                                                warn!(
+                                                    readback_misses,
+                                                    "Screen readback is missing deadlines; the encoder is duplicating the last frame"
+                                                );
+                                            }
+                                        }
                                         (
                                             last_ffmpeg_frame.as_ref().map(reference_video_frame),
                                             timestamp,
@@ -603,7 +622,7 @@ impl AudioMuxer for WindowsMuxer {
     }
 }
 
-fn duration_to_timespan(duration: Duration) -> TimeSpan {
+pub(crate) fn duration_to_timespan(duration: Duration) -> TimeSpan {
     const TICKS_PER_SEC: u64 = 10_000_000;
     const NANOS_PER_TICK: u32 = 100;
 
@@ -906,6 +925,8 @@ impl Muxer for WindowsCameraMuxer {
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
                         let mut camera_buffers = CameraBuffers::new();
+                        let upload_ns = Cell::new(0u64);
+                        let mux_ns = Cell::new(0u64);
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
@@ -927,11 +948,21 @@ impl Muxer for WindowsCameraMuxer {
                                 let normalized_ts =
                                     normalize_camera_timestamp(timestamp, &mut first_timestamp);
                                 frame_count += 1;
-                                if frame_count.is_multiple_of(30) {
-                                    debug!("Windows camera encoder: processed {} frames", frame_count);
-                                }
+                                let upload_start = Instant::now();
                                 let texture =
                                     upload_mf_buffer_to_texture(&d3d_device, frame, &mut camera_buffers)?;
+                                upload_ns
+                                    .set(upload_ns.get() + upload_start.elapsed().as_nanos() as u64);
+                                if frame_count.is_multiple_of(30) {
+                                    let upload_avg =
+                                        upload_ns.get() as f64 / frame_count as f64 / 1_000_000.0;
+                                    let mux_avg =
+                                        mux_ns.get() as f64 / frame_count as f64 / 1_000_000.0;
+                                    debug!(
+                                        "Windows camera encoder: processed {} frames (upload {:.3}ms, mux {:.3}ms)",
+                                        frame_count, upload_avg, mux_avg
+                                    );
+                                }
                                 return Ok(Some((texture, duration_to_timespan(normalized_ts))));
                             },
                             |output_sample| {
@@ -945,10 +976,12 @@ impl Muxer for WindowsCameraMuxer {
                                         ));
                                     }
                                 };
+                                let mux_start = Instant::now();
                                 if let Err(e) = muxer.write_sample(&output_sample, &mut output)
                                 {
                                     tracing::error!("Camera WriteSample failed: {e}");
                                 }
+                                mux_ns.set(mux_ns.get() + mux_start.elapsed().as_nanos() as u64);
                                 Ok(())
                             },
                         );
