@@ -362,6 +362,18 @@ p {
 	border-color: var(--ink);
 }
 
+.field input:disabled {
+	background: transparent;
+	color: var(--ink-soft);
+	cursor: not-allowed;
+}
+
+.field-note {
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--ink-soft);
+}
+
 .footnote {
 	padding: 0 24px 28px;
 	text-align: center;
