@@ -3204,7 +3204,7 @@ const START_COVERAGE_SECS: f64 = 0.3;
 /// no magenta from the occluder in front of it (the screen key is blue, the
 /// noise grey, so strong positive Cr is the occluder alone), no black column
 /// or row along an edge (the window drawn smaller than its frame), and the
-/// window's own size, less the rounded corners macOS trims off.
+/// whole window, every edge, at its own size.
 fn check_focus(case: &mut Case, track: &Track, stimulus: &[StimulusEvent]) -> anyhow::Result<()> {
     let Some((width, height, scale)) = stimulus.iter().find_map(|event| match event {
         StimulusEvent::Ready {
@@ -3218,15 +3218,7 @@ fn check_focus(case: &mut Case, track: &Track, stimulus: &[StimulusEvent]) -> an
         case.problem("missing", "focus: the stimulus never reported its size");
         return Ok(());
     };
-    #[cfg(target_os = "macos")]
-    let trim =
-        2 * (cap_recording::sources::screen_capture::WINDOW_CORNER_TRIM * scale).round() as u32;
-    #[cfg(not(target_os = "macos"))]
-    let trim = {
-        let _ = scale;
-        0
-    };
-    let expected = (width.saturating_sub(trim), height.saturating_sub(trim));
+    let expected = (width, height);
 
     let mut frames = 0usize;
     let mut sizes = BTreeMap::new();
@@ -3288,7 +3280,7 @@ fn check_focus(case: &mut Case, track: &Track, stimulus: &[StimulusEvent]) -> an
         case.problem(
             "focus-size",
             format!(
-                "expected {}x{} (the window less {trim} px of corners), recorded {sizes:?}",
+                "expected {}x{} (the whole window), recorded {sizes:?}",
                 expected.0, expected.1
             ),
         );
