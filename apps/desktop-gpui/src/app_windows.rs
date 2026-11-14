@@ -526,7 +526,11 @@ pub(crate) fn export_in_flight(cx: &App) -> bool {
     })
 }
 
-pub(crate) fn flush_pending_editor_saves(cx: &mut App) -> Result<(), String> {
+pub(crate) fn prepare_editors_for_exit(cx: &mut App) -> Result<(), String> {
+    if export_in_flight(cx) {
+        return Err(tr::editor::window::busy::export().into());
+    }
+
     if !cx.has_global::<AppWindows>() {
         return Ok(());
     }
@@ -7820,6 +7824,68 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn quitting_keeps_an_exporting_editor_open(cx: &mut gpui::TestAppContext) {
+        use crate::editor_export::{ExportPhase, ExportUi};
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let handle = editor.update_in(cx, |_, window, _| {
+            window.window_handle().downcast::<EditorWindow>().unwrap()
+        });
+        cx.cx.update(|cx| {
+            cx.set_global(AppWindows {
+                main: WindowHandle::new(handle.window_id()),
+                controls: None,
+                camera: None,
+                settings: None,
+                onboarding: None,
+                mode_select: None,
+                teleprompter: None,
+                overlays: Vec::new(),
+                editors: vec![(project.path().into(), handle)],
+                deleting_editors: HashSet::new(),
+                preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
+                screenshot_editors: Vec::new(),
+                main_hidden_for_picker: false,
+                main_visible_before_picker: false,
+                main_hidden_by_app: false,
+                editor_hidden_for_picker: None,
+                camera_park: CameraPark::default(),
+                #[cfg(target_os = "linux")]
+                clean_capture: None,
+                #[cfg(target_os = "linux")]
+                clean_capture_generation: 0,
+            });
+        });
+        for phase in [
+            ExportPhase::ChoosingFile,
+            ExportPhase::Starting,
+            ExportPhase::Rendering,
+            ExportPhase::Copying,
+            ExportPhase::Uploading,
+        ] {
+            editor.update(cx, |editor, _| {
+                let mut export = ExportUi::load();
+                export.phase = phase;
+                editor.export = Some(export);
+            });
+            assert!(
+                cx.cx.update(prepare_editors_for_exit).is_err(),
+                "quit must be refused during {phase:?}"
+            );
+        }
+        for phase in [ExportPhase::Idle, ExportPhase::Done, ExportPhase::Failed] {
+            editor.update(cx, |editor, _| {
+                editor.export.as_mut().unwrap().phase = phase;
+            });
+            assert!(cx.cx.update(prepare_editors_for_exit).is_ok(), "{phase:?}");
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

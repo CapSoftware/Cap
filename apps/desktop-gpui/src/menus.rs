@@ -785,7 +785,7 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
         QuitAction::Exit => {
             cx.global_mut::<QuitCoordinator>().observer = None;
             cx.defer(|cx| {
-                if let Err(error) = app_windows::flush_pending_editor_saves(cx) {
+                if let Err(error) = app_windows::prepare_editors_for_exit(cx) {
                     cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
                     tracing::error!(%error, "quit canceled because editor changes could not be saved");
                     cx.spawn(async move |_| {
