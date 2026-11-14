@@ -66,7 +66,8 @@ async fn gradient_angles_and_stops_follow_the_canvas_when_resizing() {
         ] {
             project.aspect_ratio = Some(aspect);
             let shared = Arc::new(project.clone());
-            let zoom = ZoomTransformTimeline::from_project(&shared, &cursor, 1.0, screen_size);
+            let zoom =
+                ZoomTransformTimeline::from_project(&shared, &cursor, 1.0, &constants.options);
             for resolution in [160, 320] {
                 let uniforms = ProjectUniforms::new(
                     &constants,

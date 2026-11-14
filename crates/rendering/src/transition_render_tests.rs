@@ -74,6 +74,7 @@ async fn fixture_with(with_overlay: bool, with_mask: bool) -> Fixture {
         project_styles: ProjectStyleCache::default(),
         background_textures: Arc::new(BackgroundTextureCache::default()),
         is_software_adapter: false,
+        clip_camera_sizes: Vec::new(),
     };
 
     let mut project = ProjectConfiguration::default();
@@ -166,8 +167,12 @@ struct Sides {
 }
 
 fn sides(fixture: &Fixture, cursor: &CursorEvents) -> Sides {
-    let zoom =
-        ZoomTransformTimeline::from_project(&fixture.project, cursor, 10.0, XY::new(WIDTH, HEIGHT));
+    let zoom = ZoomTransformTimeline::from_project(
+        &fixture.project,
+        cursor,
+        10.0,
+        ZoomLayoutInputs::screen_only(XY::new(WIDTH, HEIGHT)),
+    );
     let side = |color, time| {
         let frames = frames(color, time);
         let uniforms = ProjectUniforms::new(
@@ -537,7 +542,7 @@ async fn a_sensitive_mask_moves_with_the_footage_it_hides() {
         &fixture.project,
         &cursor,
         10.0,
-        XY::new(WIDTH, HEIGHT),
+        ZoomLayoutInputs::screen_only(XY::new(WIDTH, HEIGHT)),
     );
     let striped = striped_frames(1.0);
     sides.outgoing = (
@@ -705,7 +710,7 @@ async fn a_sensitive_mask_over_a_clip_edge_matches_the_plain_frames_at_both_ends
         &fixture.project,
         &cursor,
         10.0,
-        XY::new(WIDTH, HEIGHT),
+        ZoomLayoutInputs::screen_only(XY::new(WIDTH, HEIGHT)),
     );
     let striped = striped_frames(1.0);
     sides.outgoing = (

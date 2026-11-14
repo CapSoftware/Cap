@@ -4243,6 +4243,7 @@ mod tests {
             split_layout: None,
             transition_in: 0.3,
             transition_out: 0.3,
+            from_silence: false,
         }];
         let kind = cap_project::ClipTransitionType::Zoom;
         let mut live = base.clone();

@@ -83,6 +83,7 @@ mod frame;
 mod loading;
 mod markers;
 mod scenes;
+mod silence;
 mod snap;
 mod style_preset_ui;
 mod transitions;
@@ -1498,6 +1499,9 @@ pub struct EditorWindow {
     timeline_locale: crate::i18n::Locale,
     zoom_prompt_dismissed: bool,
     hovering_generate_zoom: bool,
+    analyzing_speech: bool,
+    speech_request: Option<silence::SpeechRequest>,
+    clip_speech: Option<Arc<Vec<Option<cap_rendering::ClipSpeech>>>>,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
@@ -2237,6 +2241,9 @@ impl EditorWindow {
             timeline_locale: crate::i18n::current(),
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
+            analyzing_speech: false,
+            speech_request: None,
+            clip_speech: None,
             generating_keyboard: false,
             keyboard_generation_message: None,
             clip_speed: None,
@@ -2974,6 +2981,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.speech_request = None;
         self.sidebar.style_target = None;
         self.sidebar.menu = None;
         self.text_menu = None;
@@ -6945,8 +6953,18 @@ impl EditorWindow {
         {
             self.set_selection(None, cx);
         }
-        let cleared = self.edit(
-            |timeline| match kind {
+        if kind == TrackKind::Scene {
+            self.speech_request = None;
+        }
+        let cleared = self.edit_timeline_project(
+            |project| {
+                if kind == TrackKind::Scene {
+                    project.camera_silence_delay = None;
+                }
+                let Some(timeline) = project.timeline.as_mut() else {
+                    return false;
+                };
+                match kind {
                 TrackKind::Zoom => {
                     let had = !timeline.zoom_segments.is_empty();
                     timeline.zoom_segments.clear();
@@ -6963,6 +6981,7 @@ impl EditorWindow {
                     had
                 }
                 _ => false,
+                }
             },
             window,
             cx,

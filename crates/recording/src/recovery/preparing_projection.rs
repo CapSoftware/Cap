@@ -294,11 +294,12 @@ fn validate_configuration(
     }) {
         return Err("Timeline overlays require ordinary loading".into());
     }
-    let expected = ProjectConfiguration {
+    let mut expected = ProjectConfiguration {
         timeline: config.timeline.clone(),
         clips: config.clips.clone(),
         ..ProjectConfiguration::default()
     };
+    expected.camera.zoom_avoids_camera = config.camera.zoom_avoids_camera;
     if persisted_json_value(config)? != persisted_json_value(&expected)? {
         return Err("Edited or legacy configuration requires ordinary loading".into());
     }
@@ -1193,6 +1194,17 @@ mod tests {
         std::fs::write(&path, &changed).unwrap();
         assert!(fixture.project().is_err());
         assert_eq!(std::fs::read(path).unwrap(), changed);
+    }
+
+    #[test]
+    fn preparing_projection_accepts_a_new_recordings_configuration() {
+        let mut fixture = Fixture::new(1);
+        fixture.configuration = ProjectConfiguration {
+            timeline: fixture.configuration.timeline.take(),
+            ..ProjectConfiguration::for_new_recording()
+        };
+        fixture.persist();
+        assert!(fixture.project().is_ok());
     }
 
     #[test]

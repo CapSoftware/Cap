@@ -315,7 +315,7 @@ async fn render_still(
         config,
         &cursor_events,
         0.0,
-        constants.options.screen_size,
+        &constants.options,
     );
     zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
 

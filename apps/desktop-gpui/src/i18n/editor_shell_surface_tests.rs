@@ -443,9 +443,29 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::camera::rounded_corners(),
             "Rounded Corners",
         ),
+        (
+            tr::editor::tabs::camera::finding_silences(),
+            "Finding the silences...",
+        ),
+        (
+            tr::editor::tabs::camera::hide_when_silent(),
+            "Hide When Silent",
+        ),
+        (
+            tr::editor::tabs::camera::no_silence_found(),
+            "No long silences to hide the camera for.",
+        ),
+        (
+            tr::editor::tabs::camera::silence_delay(),
+            "Silence Before Hiding",
+        ),
         (tr::editor::tabs::camera::shadow(), "Shadow"),
         (tr::editor::tabs::camera::shadow_blur(), "Blur"),
         (tr::editor::tabs::camera::shadow_opacity(), "Opacity"),
+        (
+            tr::editor::tabs::camera::zoom_avoids_camera(),
+            "Keep zooms clear of camera",
+        ),
         (tr::editor::tabs::camera::shape::source(), "Source"),
         (tr::editor::tabs::camera::shape::square(), "Square"),
         (tr::editor::tabs::camera::shape_label(), "Shape"),
