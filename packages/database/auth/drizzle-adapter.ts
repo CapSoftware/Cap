@@ -4,6 +4,7 @@ import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
+import { bindVerificationToken } from "../crypto.ts";
 import { nanoId } from "../helpers.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
@@ -426,6 +427,10 @@ export function DrizzleAdapter(
 		async createVerificationToken(verificationToken) {
 			const normalizedIdentifier =
 				verificationToken.identifier?.toLowerCase() ?? "";
+			const token = bindVerificationToken(
+				normalizedIdentifier,
+				verificationToken.token,
+			);
 			const existingTokens = await db
 				.select()
 				.from(verificationTokens)
@@ -435,30 +440,20 @@ export function DrizzleAdapter(
 			if (existingTokens.length > 0) {
 				await db
 					.update(verificationTokens)
-					.set({
-						token: verificationToken.token,
-						expires: verificationToken.expires,
-					})
+					.set({ token, expires: verificationToken.expires })
 					.where(eq(verificationTokens.identifier, normalizedIdentifier));
-
-				return await db
-					.select()
-					.from(verificationTokens)
-					.where(eq(verificationTokens.identifier, normalizedIdentifier))
-					.limit(1)
-					.then((rows) => rows[0]);
+			} else {
+				await db.insert(verificationTokens).values({
+					expires: verificationToken.expires,
+					identifier: normalizedIdentifier,
+					token,
+				});
 			}
-
-			await db.insert(verificationTokens).values({
-				expires: verificationToken.expires,
-				identifier: normalizedIdentifier,
-				token: verificationToken.token,
-			});
 
 			const rows = await db
 				.select()
 				.from(verificationTokens)
-				.where(eq(verificationTokens.token, verificationToken.token))
+				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 			const row = rows[0];
 			if (!row) throw new Error("Error: inserted verification token not found");
@@ -494,7 +489,7 @@ export function DrizzleAdapter(
 				console.warn("[useVerificationToken] Token already consumed");
 				return null;
 			}
-			if (row.token !== token) {
+			if (row.token !== bindVerificationToken(normalizedIdentifier, token)) {
 				console.warn("[useVerificationToken] Token mismatch");
 				return null;
 			}
