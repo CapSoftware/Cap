@@ -27,9 +27,10 @@ import {
 } from "../fixtures/developer-video-slices";
 
 describe("which videos are encoded in slices", () => {
-	it("keeps the single job for a video under two minutes", () => {
+	it("keeps the single job for a video under twenty minutes", () => {
 		expect(planDeveloperVideoSlices(8)).toBeNull();
-		expect(planDeveloperVideoSlices(119.9)).toBeNull();
+		expect(planDeveloperVideoSlices(334)).toBeNull();
+		expect(planDeveloperVideoSlices(1199.9)).toBeNull();
 	});
 
 	it("keeps the single job when the length is not known", () => {
@@ -38,25 +39,13 @@ describe("which videos are encoded in slices", () => {
 		expect(planDeveloperVideoSlices(Number.POSITIVE_INFINITY)).toBeNull();
 	});
 
-	it("gives a two minute video a short first slice and one more", () => {
-		expect(planDeveloperVideoSlices(120)).toEqual([
+	it("slices a video from twenty minutes", () => {
+		expect(planDeveloperVideoSlices(1200)).toEqual([
 			{ startSeconds: 0, durationSeconds: 20 },
-			{ startSeconds: 20 },
-		]);
-	});
-
-	it("shares the rest of a five minute video between three workers", () => {
-		expect(planDeveloperVideoSlices(200)).toEqual([
-			{ startSeconds: 0, durationSeconds: 20 },
-			{ startSeconds: 20, durationSeconds: 60 },
-			{ startSeconds: 80, durationSeconds: 60 },
-			{ startSeconds: 140 },
-		]);
-		expect(planDeveloperVideoSlices(334)).toEqual([
-			{ startSeconds: 0, durationSeconds: 20 },
-			{ startSeconds: 20, durationSeconds: 108 },
-			{ startSeconds: 128, durationSeconds: 108 },
-			{ startSeconds: 236 },
+			{ startSeconds: 20, durationSeconds: 120 },
+			{ startSeconds: 140, durationSeconds: 356 },
+			{ startSeconds: 496, durationSeconds: 356 },
+			{ startSeconds: 852 },
 		]);
 	});
 
@@ -111,7 +100,11 @@ describe("which videos are encoded in slices", () => {
 	});
 
 	it("always covers the whole video on segment boundaries with no gap or overlap", () => {
-		for (let duration = 120; duration <= 4 * 60 * 60; duration += 37.3) {
+		for (
+			let duration = SLICED_HLS.minDurationSeconds;
+			duration <= 4 * 60 * 60;
+			duration += 37.3
+		) {
 			const ranges = planDeveloperVideoSlices(duration) ?? [];
 			expect(ranges.length).toBeGreaterThanOrEqual(2);
 			expect(ranges.length).toBeLessThanOrEqual(
@@ -138,7 +131,11 @@ describe("which videos are encoded in slices", () => {
 	});
 
 	it("never plans a slice a viewer playing from the first one would catch up with", () => {
-		for (let duration = 120; duration <= 4 * 60 * 60; duration += 61) {
+		for (
+			let duration = SLICED_HLS.minDurationSeconds;
+			duration <= 4 * 60 * 60;
+			duration += 61
+		) {
 			const ranges = planDeveloperVideoSlices(duration) ?? [];
 			for (const range of ranges.slice(1)) {
 				const length = range.durationSeconds ?? duration - range.startSeconds;

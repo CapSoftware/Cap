@@ -224,8 +224,8 @@ describe("deciding how a video's adaptive stream is encoded", () => {
 		});
 	};
 
-	it("plans slices for a video of two minutes or more", async () => {
-		probed(334);
+	it("plans slices for a video of twenty minutes or more", async () => {
+		probed(1266);
 
 		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
 			"ready",
@@ -236,9 +236,10 @@ describe("deciding how a video's adaptive stream is encoded", () => {
 			exposed: null,
 			slices: [
 				{ startSeconds: 0, durationSeconds: 20, job: { state: "pending" } },
-				{ startSeconds: 20, durationSeconds: 108 },
-				{ startSeconds: 128, durationSeconds: 108 },
-				{ startSeconds: 236, durationSeconds: null },
+				{ startSeconds: 20, durationSeconds: 120 },
+				{ startSeconds: 140, durationSeconds: 376 },
+				{ startSeconds: 516, durationSeconds: 376 },
+				{ startSeconds: 892, durationSeconds: null },
 			],
 		});
 		expect(state().sliced?.output).toMatch(/^[A-Za-z0-9_-]{16}$/);
@@ -246,7 +247,7 @@ describe("deciding how a video's adaptive stream is encoded", () => {
 	});
 
 	it("leaves a shorter video on the single job", async () => {
-		probed(119);
+		probed(1199);
 
 		await prepareDeveloperVideoProcessing("video-1", "encode-1");
 
@@ -255,7 +256,7 @@ describe("deciding how a video's adaptive stream is encoded", () => {
 
 	it("leaves every video on the single job when slicing is switched off", async () => {
 		mocks.env.INFRA_SLICED_HLS = "off";
-		probed(334);
+		probed(1266);
 
 		await prepareDeveloperVideoProcessing("video-1", "encode-1");
 

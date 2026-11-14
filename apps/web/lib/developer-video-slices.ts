@@ -20,12 +20,14 @@ import {
 
 // A ladder job spends about five seconds before its first frame (download,
 // probe, encoder start) and then encodes at roughly 6 to 15 times real time.
-// Under two minutes the whole ladder is done in 13 to 25 seconds, so slicing
-// would save a few seconds for three or four times the jobs. From two minutes
-// up, the first slice makes the video playable after the fixed cost plus two
-// or three seconds, and the rest is shared between the workers.
+// Slices share the workers with Cap's own recordings, and every slice pays
+// that fixed cost again. Measured beside a steady stream of Cap jobs, a 5
+// minute 4K video in slices cost those jobs more in total than one whole job
+// does, while from 21 minutes up the slices cost them the same or less. So
+// only videos of 20 minutes or more are sliced, and shorter ones keep the
+// single job and its MP4 for playback.
 export const SLICED_HLS = {
-	minDurationSeconds: 120,
+	minDurationSeconds: 1200,
 	// Short enough to encode in two or three seconds.
 	firstSliceSeconds: 20,
 	// A viewer who presses play the moment the first slice is in must not catch
