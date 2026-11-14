@@ -995,6 +995,22 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Compatibility checked: every action in this automation runs in Cap. No actions were run.",
         ),
         (
+            tr::settings::automations::action_unsupported(),
+            "Cap doesn't run this action yet, so it is skipped.",
+        ),
+        (
+            tr::settings::automations::delete_guarded(),
+            "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept.",
+        ),
+        (
+            tr::settings::automations::delete_needs_copy(),
+            "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step.",
+        ),
+        (
+            tr::settings::automations::notify_needs_setting(),
+            "Shows only while System notifications is on in General settings.",
+        ),
+        (
             tr::settings::automations::compatibility_unsupported(),
             "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
