@@ -10,9 +10,11 @@ import {
 } from "../shared/preferences";
 import { sendServiceWorkerMessage } from "../shared/runtime";
 import {
+	AUTH_KEY,
 	defaultSettings,
 	FAILED_RECORDINGS_KEY,
 	loadAuth,
+	loadAuthError,
 	loadCachedBootstrap,
 	loadFailedRecordings,
 	loadMediaAccessState,
@@ -393,6 +395,30 @@ function App() {
 			disposed = true;
 			chrome.storage.onChanged.removeListener(handleStorageChange);
 		};
+	}, []);
+
+	// The worker can sign out while the panel is open (a background refresh
+	// found the key rejected, or the Cap URL changed); follow it to the Sign in
+	// view with the reason it saved.
+	useEffect(() => {
+		const handleStorageChange = (
+			changes: Record<string, chrome.storage.StorageChange>,
+			areaName: string,
+		) => {
+			const change = changes[AUTH_KEY];
+			if (areaName !== "local" || !change || change.newValue !== undefined) {
+				return;
+			}
+			setAuth(null);
+			setBootstrap(null);
+			loadAuthError()
+				.then((reason) => {
+					if (reason) setError(reason);
+				})
+				.catch(() => undefined);
+		};
+		chrome.storage.onChanged.addListener(handleStorageChange);
+		return () => chrome.storage.onChanged.removeListener(handleStorageChange);
 	}, []);
 
 	useEffect(() => {
