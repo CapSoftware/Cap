@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use cap_recording::feeds::microphone;
-use gpui::{AppContext as _, Context, Task};
+use gpui::{Context, Task};
 
 use super::{InputKind, Phase, RecordingSession};
 use crate::feeds::Feeds;
