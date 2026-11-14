@@ -35,6 +35,31 @@ pub struct CursorActorResponse {
     pub keyboard_presses: Vec<KeyPressEvent>,
 }
 
+/// Minimum squared delta in normalized coordinates required to push a new cursor
+/// move event, preventing unbounded heap growth from sub-pixel sensor noise while
+/// preserving 1-pixel moves on 4K+ displays (1px on 4K is ~6.78e-8).
+pub const MIN_CURSOR_MOVE_DELTA_SQ: f64 = 1e-8;
+
+impl CursorActorResponse {
+    pub fn push_move_deduped(&mut self, event: CursorMoveEvent) -> bool {
+        let should_push = match self.moves.last() {
+            Some(last) => {
+                let dx = last.x - event.x;
+                let dy = last.y - event.y;
+                (dx * dx + dy * dy) >= MIN_CURSOR_MOVE_DELTA_SQ || last.cursor_id != event.cursor_id
+            }
+            None => true,
+        };
+
+        if should_push {
+            self.moves.push(event);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub struct CursorActor {
     stop: Option<DropGuard>,
     stop_wakeup: Option<std::sync::mpsc::Sender<()>>,
@@ -237,28 +262,34 @@ fn prefers_wayland_portal_cursor() -> bool {
             .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
 }
 
-/// Replaces `path` with `parts` through a temporary file and a rename, so a
-/// crash or kill mid-write leaves the previous complete file for recovery. A
-/// refused rename, such as a reader holding the file open on Windows, falls
-/// back to writing in place as before.
-pub(crate) fn write_atomically(path: &Path, parts: &[&[u8]]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let write = |path: &Path| {
-        let mut file = std::fs::File::create(path)?;
-        parts.iter().try_for_each(|part| file.write_all(part))
-    };
+/// Replaces `path` by running `write_fn` against a temporary file and renaming
+/// it over `path`, so a crash or kill mid-write leaves the previous complete
+/// file for recovery. A refused rename, such as a reader holding the file open
+/// on Windows, falls back to writing in place as before.
+pub(crate) fn write_atomically_with(
+    path: &Path,
+    write_fn: impl Fn(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut temp_path = path.as_os_str().to_owned();
     temp_path.push(".tmp");
     let temp_path = PathBuf::from(temp_path);
-    if let Err(error) = write(&temp_path) {
+    if let Err(error) = write_fn(&temp_path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(error);
     }
     std::fs::rename(&temp_path, path).or_else(|error| {
         let _ = std::fs::remove_file(&temp_path);
         tracing::warn!(path = %path.display(), %error, "Atomic replace failed, writing in place");
-        write(path)
+        write_fn(path)
+    })
+}
+
+/// Replaces `path` with `parts` through a temporary file and a rename.
+pub(crate) fn write_atomically(path: &Path, parts: &[&[u8]]) -> std::io::Result<()> {
+    use std::io::Write;
+    write_atomically_with(path, |target| {
+        let mut file = std::fs::File::create(target)?;
+        parts.iter().try_for_each(|part| file.write_all(part))
     })
 }
 
@@ -882,7 +913,7 @@ pub fn spawn_cursor_recorder(
                         x,
                         y,
                     };
-                    response.moves.push(mouse_event);
+                    response.push_move_deduped(mouse_event);
                 }
             }
 
@@ -2412,5 +2443,97 @@ mod cursor_image_tests {
         );
         assert_eq!(response.cursors.len(), 1);
         assert!(cursor_path.is_file());
+    }
+
+    #[test]
+    fn cursor_subpixel_moves_are_deduplicated() {
+        let mut response = empty_response();
+
+        let pushed_first = response.push_move_deduped(CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "0".to_string(),
+            time_ms: 0.0,
+            x: 0.5,
+            y: 0.5,
+        });
+        assert!(pushed_first);
+        assert_eq!(response.moves.len(), 1);
+
+        let pushed_jitter = response.push_move_deduped(CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "0".to_string(),
+            time_ms: 16.0,
+            x: 0.50002,
+            y: 0.50002,
+        });
+        assert!(!pushed_jitter);
+        assert_eq!(response.moves.len(), 1);
+
+        let pushed_move = response.push_move_deduped(CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "0".to_string(),
+            time_ms: 32.0,
+            x: 0.501,
+            y: 0.501,
+        });
+        assert!(pushed_move);
+        assert_eq!(response.moves.len(), 2);
+
+        let pushed_shape_change = response.push_move_deduped(CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "1".to_string(),
+            time_ms: 48.0,
+            x: 0.501,
+            y: 0.501,
+        });
+        assert!(pushed_shape_change);
+        assert_eq!(response.moves.len(), 3);
+    }
+
+    #[test]
+    fn benchmark_cursor_deduplication_reduces_event_count_under_sensor_jitter() {
+        let mut response = empty_response();
+        let total_samples = 10_000;
+        let mut raw_events_count = 0;
+
+        let mut current_x = 0.5f64;
+        let mut current_y = 0.5f64;
+
+        for i in 0..total_samples {
+            raw_events_count += 1;
+            if i % 100 == 0 {
+                current_x += 0.005;
+                current_y += 0.005;
+            } else {
+                let jitter = ((i % 5) as f64 - 2.0) * 0.00001;
+                current_x += jitter;
+                current_y += jitter;
+            }
+
+            response.push_move_deduped(CursorMoveEvent {
+                active_modifiers: vec![],
+                cursor_id: "0".to_string(),
+                time_ms: i as f64 * 16.6,
+                x: current_x,
+                y: current_y,
+            });
+        }
+
+        let deduped_count = response.moves.len();
+        let reduction_pct = (1.0 - (deduped_count as f64 / raw_events_count as f64)) * 100.0;
+
+        println!(
+            "\n=== Cursor Deduplication Benchmark ===\n\
+             Raw input events:      {}\n\
+             Retained dedup events: {}\n\
+             Reduction:             {:.1}%\n\
+             ======================================\n",
+            raw_events_count, deduped_count, reduction_pct
+        );
+
+        assert!(
+            reduction_pct >= 80.0,
+            "Expected at least 80% reduction under jitter, got {reduction_pct:.1}% ({deduped_count}/{raw_events_count})"
+        );
     }
 }

@@ -141,14 +141,27 @@ fn persist_segment_input_events(
     failure: &mut Option<anyhow::Error>,
 ) -> (Cursors, u32) {
     if let Some(path) = cursor_path {
-        let result = serde_json::to_string_pretty(&CursorEvents {
-            clicks: response.clicks,
-            moves: response.moves,
+        #[derive(serde::Serialize)]
+        struct CursorEventsRef<'a> {
+            clicks: &'a [cap_project::CursorClickEvent],
+            moves: &'a [cap_project::CursorMoveEvent],
+        }
+
+        let result = crate::cursor::write_atomically_with(path, |target| {
+            use std::io::Write;
+            let file = std::fs::File::create(target)?;
+            let mut writer = std::io::BufWriter::new(file);
+            serde_json::to_writer_pretty(
+                &mut writer,
+                &CursorEventsRef {
+                    clicks: &response.clicks,
+                    moves: &response.moves,
+                },
+            )
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            writer.flush()
         })
         .map_err(anyhow::Error::from)
-        .and_then(|events| {
-            crate::cursor::write_atomically(path, &[events.as_bytes()]).map_err(anyhow::Error::from)
-        })
         .with_context(|| format!("Could not save cursor events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
