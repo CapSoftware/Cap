@@ -1147,34 +1147,43 @@ fn acquire_windows_instance(path: &Path) {
 /// responsive instance acknowledges a reopen from its listener thread within
 /// milliseconds, so a failed reopen means its process is stuck; activating
 /// its window then showed nothing and the new launch exited without a trace.
-/// A window that still answers messages (a build without the reopen
-/// endpoint) is activated as before.
+/// A Cap whose window still answers messages (a build without the reopen
+/// endpoint, or one whose pidfile could not be written) is activated as
+/// before, so a working instance is never offered for quitting.
 #[cfg(windows)]
 fn hand_off_to_windows_instance(path: &Path) -> Result<(), Option<u32>> {
+    let mut identified = None;
     for _ in 0..40 {
-        if let Some(pid) = windows_instance_pid(path) {
-            tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
-            if forward_windows_deep_links(path, pid) {
-                activate_windows_instance(pid);
-                return Ok(());
-            }
-            return match reopen_windows_instance(path, pid) {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    tracing::warn!(%error, "could not reopen the running Cap GPUI");
-                    match windows_instance_window(pid) {
-                        Some(window) if windows_window_responds(window) => {
-                            activate_windows_window(window);
-                            Ok(())
-                        }
-                        _ => Err(Some(pid)),
-                    }
-                }
-            };
+        identified = windows_instance_pid(path);
+        if identified.is_some() {
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    Err(None)
+    if let Some(pid) = identified {
+        tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
+        if forward_windows_deep_links(path, pid) {
+            activate_windows_instance(pid);
+            return Ok(());
+        }
+        match reopen_windows_instance(path, pid) {
+            Ok(()) => return Ok(()),
+            Err(error) => tracing::warn!(%error, "could not reopen the running Cap GPUI"),
+        }
+    }
+    let candidates = match identified {
+        Some(pid) => vec![pid],
+        None => other_windows_instances(),
+    };
+    for pid in candidates {
+        if let Some(window) = windows_instance_window(pid)
+            && windows_window_responds(window)
+        {
+            activate_windows_window(window);
+            return Ok(());
+        }
+    }
+    Err(identified)
 }
 
 #[cfg(windows)]
