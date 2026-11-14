@@ -25,6 +25,10 @@ import Testing
         var color: CIColor
         var size: CGSize
         var beeps: Bool
+        /// The microphone goes quiet (no samples at all) over this stretch, as when it's muted mid-recording.
+        var audioDropout: EditRange? = nil
+        /// No sound after this many seconds, while the picture carries on.
+        var audioStopsAt: Double? = nil
     }
 
     /// Deterministic pseudo-random numbers, so a failure reproduces.
@@ -62,7 +66,13 @@ import Testing
             index += 1
             // Audio up to this frame first, as a recorder interleaves it.
             while track.beeps, Double(nextAudio) / 48_000 < ideal {
-                let start = track.hostStart + Double(nextAudio) / 48_000
+                let local = Double(nextAudio) / 48_000
+                if let stop = track.audioStopsAt, local >= stop { break }
+                if let dropout = track.audioDropout, local >= dropout.start, local < dropout.end {
+                    nextAudio += audioChunk
+                    continue
+                }
+                let start = track.hostStart + local
                 var samples = [Int16](repeating: 0, count: audioChunk)
                 for i in 0..<audioChunk {
                     let t = start + Double(i) / 48_000
@@ -108,7 +118,6 @@ import Testing
         var cameraHidden: [Double] = []
     }
 
-    /// Reads every exported frame and the whole soundtrack.
     static func measure(_ url: URL, screen: CGPoint, camera: CGPoint) async throws -> Measured {
         let asset = AVURLAsset(url: url)
         let reader = try AVAssetReader(asset: asset)
@@ -168,7 +177,8 @@ import Testing
         // Host-clock moments both tracks flash at. The camera starts 0.73 s before the screen.
         let base = 5000.0
         let flashTimes = [base + 2.0, base + 9.47, base + 21.03, base + 33.6, base + 58.1]
-        let screenTrack = Track(hostStart: base + 0.73, seconds: 60, frameInterval: 1.0 / 30, jitter: 0.004, dropEvery: 31, gap: nil, color: Self.screenColor, size: Self.screenSize, beeps: true)
+        // The microphone is muted for three seconds part way, so the voice after it must still land on its picture.
+        let screenTrack = Track(hostStart: base + 0.73, seconds: 60, frameInterval: 1.0 / 30, jitter: 0.004, dropEvery: 31, gap: nil, color: Self.screenColor, size: Self.screenSize, beeps: true, audioDropout: EditRange(start: 36, end: 39))
         // 29.97 fps, more jitter, every 23rd frame dropped, and nothing for four seconds (a call, say).
         let cameraTrack = Track(hostStart: base, seconds: 61, frameInterval: 1001.0 / 30000, jitter: 0.008, dropEvery: 23, gap: EditRange(start: 40, end: 44), color: Self.cameraColor, size: Self.cameraSize, beeps: false)
         let (screenInfo, screenFlashFrames) = try await Self.record(screenTrack, flashesAt: flashTimes, to: directory.appending(path: "screen.mp4"), kind: .screen)
@@ -181,7 +191,8 @@ import Testing
         let screenProject = try #require(aligned.screen)
         let cameraProject = try #require(aligned.camera)
         #expect(abs(screenProject.offset - 0.73) < 0.01)
-        let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: screenProject.offset, gaps: screenProject.gaps ?? [])
+        let screenAudio = try #require(screenProject.audio)
+        let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: screenProject.offset, gaps: screenProject.gaps ?? [], audio: (directory.appending(path: screenAudio.file), screenAudio.offset, screenAudio.duration))
         let camera = try await StudioTrackSource.load(url: directory.appending(path: "camera.mp4"), offset: cameraProject.offset, gaps: cameraProject.gaps ?? [])
 
         var look = StudioLook.studioDefault
@@ -248,7 +259,7 @@ import Testing
         let url = directory.appending(path: "camera.mp4")
         let started = Mutex<Double?>(nil)
         do {
-            let writer = try StudioTrackWriter(url: url, settings: .init(kind: .camera, audio: false)) { host in started.withLock { $0 = host } }
+            let writer = try StudioTrackWriter(url: url, settings: .init(kind: .camera, audio: false)) { info in started.withLock { $0 = info.hostStart } }
             var format: CMVideoFormatDescription?
             for index in 0..<(30 * 7) {
                 var buffer: CVPixelBuffer?
@@ -301,6 +312,53 @@ import Testing
         // Measured 133-163 MB added on an M4 with hardware codecs and about 245 MB on CI's virtual Macs, which encode in
         // software. Frames piling up over this 600-frame export would add gigabytes, which is what this catches.
         #expect(high - before.current < 400)
+    }
+
+    /// Cancelling a render part way returns at once, whatever each feeding loop was waiting on.
+    @Test func cancellingARenderReturns() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "studio-cancel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let track = Track(hostStart: 0, seconds: 12, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 720, height: 1560), beeps: true)
+        _ = try await Self.record(track, flashesAt: [3], to: directory.appending(path: "screen.mp4"), kind: .screen)
+        let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: 0)
+        let scene = StudioScene(look: .studioDefault, screen: screen.info, camera: nil)
+        for delay in [0.0, 0.05, 0.3] {
+            let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 12)], screen: screen, camera: nil, music: nil, voiceVolume: 1, scene: scene, longEdge: 1920, remembersFrames: false)
+            let exporter = StudioExporter()
+            let url = directory.appending(path: "out-\(delay).mp4")
+            let started = CFAbsoluteTimeGetCurrent()
+            let render = Task { try await exporter.export(built, to: url) }
+            try await Task.sleep(for: .seconds(delay))
+            exporter.cancel()
+            var cancelled = false
+            do {
+                _ = try await render.value
+            } catch StudioExporter.Failure.cancelled {
+                cancelled = true
+            } catch {
+                cancelled = true
+            }
+            let took = CFAbsoluteTimeGetCurrent() - started - delay
+            print("STUDIO_BENCH cancel after \(delay) s returned in \(String(format: "%.2f", took)) s")
+            #expect(cancelled)
+            #expect(took < 3)
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    /// Sound that stops while the picture carries on (a muted microphone, an interruption) must never stop the picture.
+    @Test func pictureCarriesOnWhenSoundStops() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "studio-nosound-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let track = Track(hostStart: 200, seconds: 10, frameInterval: 1.0 / 30, jitter: 0.002, dropEvery: nil, gap: nil, color: Self.screenColor, size: Self.screenSize, beeps: true, audioStopsAt: 1.5)
+        let (info, _) = try await Self.record(track, flashesAt: [201, 208], to: directory.appending(path: "screen.mp4"), kind: .screen)
+        print("STUDIO_SYNC sound stopped at 1.5 s: picture \(String(format: "%.2f", info.duration)) s, sound \(String(format: "%.2f", info.audio?.duration ?? 0)) s")
+        #expect(info.duration > 9.9)
+        #expect(abs((info.audio?.duration ?? 0) - 1.5) < 0.1)
+        let video = try await AVURLAsset(url: directory.appending(path: "screen.mp4")).load(.duration).seconds
+        #expect(video > 9.9)
     }
 
     @Test func recordedRangesSkipGaps() {

@@ -1,7 +1,6 @@
 import CoreGraphics
 import Foundation
 
-/// A colour stored as 8-bit sRGB, the way Cap desktop stores them.
 public struct StudioColor: Codable, Sendable, Hashable {
     public var red: UInt8
     public var green: UInt8
@@ -19,13 +18,10 @@ public struct StudioColor: Codable, Sendable, Hashable {
 }
 
 public enum StudioBackground: Codable, Sendable, Hashable {
-    /// The video fills the frame, untouched.
     case none
     case color(StudioColor)
     case gradient(from: StudioColor, to: StudioColor, angle: Double)
-    /// A wallpaper that ships with the app, by name.
     case wallpaper(String)
-    /// A photo the person picked, stored next to the project by file name.
     case image(String)
 
     public var isNone: Bool { self == .none }
@@ -58,7 +54,6 @@ public enum StudioBackground: Codable, Sendable, Hashable {
 }
 
 public enum StudioAspect: String, Codable, Sendable, CaseIterable, Identifiable {
-    /// The shape of the recording itself.
     case auto
     case portrait
     case fourFive
@@ -105,7 +100,6 @@ public enum StudioCameraShape: String, Codable, Sendable, CaseIterable, Identifi
 }
 
 public enum StudioCameraLayout: String, Codable, Sendable, CaseIterable, Identifiable {
-    /// The camera floats over the screen.
     case bubble
     /// Screen above the camera (side by side when the frame is wide).
     case split
@@ -142,7 +136,6 @@ public struct StudioLook: Codable, Sendable, Hashable {
     public var padding: Double
     /// As a share of the video's shorter side.
     public var rounding: Double
-    /// 0 is none, 1 is the strongest.
     public var shadow: Double
     public var aspect: StudioAspect
     public var camera: StudioCameraLook
@@ -156,7 +149,6 @@ public struct StudioLook: Codable, Sendable, Hashable {
         self.camera = camera
     }
 
-    /// A Cap exactly as it was recorded.
     public static let untouched = StudioLook()
     /// What a new Studio recording starts with.
     public static let studioDefault = StudioLook(background: StudioBackground.gradients[0], padding: 0.06, rounding: 0.06, shadow: 0.6)
@@ -177,9 +169,7 @@ public struct StudioLook: Codable, Sendable, Hashable {
 
 public struct StudioMusic: Codable, Sendable, Hashable {
     public enum Source: Codable, Sendable, Hashable {
-        /// Ships with the app, by file name without extension.
         case builtIn(String)
-        /// Imported by the person, stored next to the project.
         case file(String)
     }
 
@@ -196,7 +186,6 @@ public struct StudioMusic: Codable, Sendable, Hashable {
         self.offset = offset
     }
 
-    /// How long the music fades out at the end of the video.
     public static let fadeOut: Double = 1.5
 }
 
@@ -211,15 +200,30 @@ public struct StudioProject: Codable, Sendable, Hashable, Identifiable {
         public var duration: Double
         /// Seconds from the track's first frame where it recorded nothing. Hidden rather than frozen.
         public var gaps: [EditRange]?
+        /// Sound recorded beside the picture, in its own file.
+        public var audio: Audio?
 
-        public init(file: String, offset: Double, duration: Double, gaps: [EditRange]? = nil) {
+        public struct Audio: Codable, Sendable, Hashable {
+            public var file: String
+            /// Seconds from the track's first frame to its first sound; negative when the sound started first.
+            public var offset: Double
+            public var duration: Double
+
+            public init(file: String, offset: Double, duration: Double) {
+                self.file = file
+                self.offset = offset
+                self.duration = duration
+            }
+        }
+
+        public init(file: String, offset: Double, duration: Double, gaps: [EditRange]? = nil, audio: Audio? = nil) {
             self.file = file
             self.offset = offset
             self.duration = duration
             self.gaps = gaps
+            self.audio = audio
         }
 
-        /// The parts of the track that have pictures, in the track's own time.
         public var recorded: [EditRange] {
             var ranges: [EditRange] = []
             var cursor = 0.0
@@ -307,7 +311,6 @@ public struct StudioLayout: Sendable, Equatable {
         return CGSize(width: max(2, width), height: max(2, height))
     }
 
-    /// The shape the frame follows in `.auto`.
     private static func contentShape(look: StudioLook, primary: CGSize?, camera: CGSize?) -> CGSize {
         switch look.camera.layout {
         case .cameraOnly: camera ?? primary ?? .zero
@@ -391,7 +394,6 @@ public struct StudioLayout: Sendable, Equatable {
         }
     }
 
-    /// Largest rect of `size`'s shape inside `area`, centred, on whole pixels.
     public static func fit(_ size: CGSize, in area: CGRect) -> CGRect {
         guard size.width > 0, size.height > 0, area.width > 0, area.height > 0 else { return area }
         let scale = min(area.width / size.width, area.height / size.height)
@@ -400,7 +402,6 @@ public struct StudioLayout: Sendable, Equatable {
         return CGRect(x: (area.midX - width / 2).rounded(), y: (area.midY - height / 2).rounded(), width: width, height: height)
     }
 
-    /// Scale and offset that make `size` cover `rect`, cropping what spills over (aspect fill).
     public static func fill(_ size: CGSize, into rect: CGRect) -> (scale: Double, origin: CGPoint) {
         guard size.width > 0, size.height > 0 else { return (1, rect.origin) }
         let scale = max(rect.width / size.width, rect.height / size.height)
@@ -408,7 +409,6 @@ public struct StudioLayout: Sendable, Equatable {
         return (scale, origin)
     }
 
-    /// The corner nearest a point in the canvas, for dragging the bubble.
     public static func nearestCorner(to point: CGPoint, in canvas: CGSize) -> StudioCorner {
         let left = point.x < canvas.width / 2
         let top = point.y < canvas.height / 2
@@ -435,10 +435,27 @@ public final class StudioStore: @unchecked Sendable {
         try? url.setResourceValues(values)
     }
 
-    public static func shared(appGroup: String = "group.so.cap.mobile") -> StudioStore {
-        let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    private static func base(appGroup: String) -> URL {
+        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return StudioStore(root: base.appending(path: "Studio", directoryHint: .isDirectory))
+        return container.appending(path: "Studio", directoryHint: .isDirectory)
+    }
+
+    /// One user's drafts. Each account has its own folder, so signing in as someone else never shows them.
+    public static func shared(owner: String, appGroup: String = "group.so.cap.mobile") -> StudioStore {
+        StudioStore(root: base(appGroup: appGroup).appending(path: "Users/\(folderName(for: owner))", directoryHint: .isDirectory))
+    }
+
+    /// Where the app leaves requests for the screen recording extension, outside every user's drafts.
+    public static func requests(appGroup: String = "group.so.cap.mobile") -> StudioStore {
+        StudioStore(root: base(appGroup: appGroup))
+    }
+
+    /// User ids are server data; only plain characters reach the file system.
+    static func folderName(for owner: String) -> String {
+        let allowed = owner.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "_" || $0 == "-" }
+        let name = String(String.UnicodeScalarView(allowed)).prefix(80)
+        return name.isEmpty ? "unknown" : String(name)
     }
 
     public func directory(for id: String) -> URL {
@@ -493,7 +510,6 @@ public final class StudioStore: @unchecked Sendable {
         return free >= minimum
     }
 
-    /// Bytes on disk for a project, to show what deleting it frees.
     public func size(of id: String) -> Int64 {
         let directory = directory(for: id)
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
@@ -506,17 +522,19 @@ public final class StudioStore: @unchecked Sendable {
 public enum StudioScreenRequest {
     public struct Request: Codable, Sendable, Equatable {
         public var projectId: String
+        /// Whose drafts the recording joins.
+        public var ownerId: String
         public var requestedAt: Date
 
-        public init(projectId: String, requestedAt: Date = .now) {
+        public init(projectId: String, ownerId: String, requestedAt: Date = .now) {
             self.projectId = projectId
+            self.ownerId = ownerId
             self.requestedAt = requestedAt
         }
     }
 
     /// A request older than this is from a sheet that was closed without recording.
     public static let lifetime: TimeInterval = 10 * 60
-    /// Posted by the extension when a Studio screen recording is on disk and complete.
     public static let finishedNotification = "so.cap.mobile.studio.screen-finished"
 
     private static func file(in store: StudioStore) -> URL {

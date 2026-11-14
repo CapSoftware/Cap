@@ -9,7 +9,6 @@ import Synchronization
 
 /// What one source contributes to a frame: its shape as recorded, and how it was rotated.
 public struct StudioSourceInfo: Sendable, Equatable {
-    /// Pixel size of the decoded frames.
     public var naturalSize: CGSize
     public var transform: CGAffineTransform
 
@@ -18,7 +17,6 @@ public struct StudioSourceInfo: Sendable, Equatable {
         self.transform = transform
     }
 
-    /// The size a viewer sees, after rotation.
     public var displaySize: CGSize {
         let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
         return CGSize(width: abs(rect.width), height: abs(rect.height))
@@ -41,7 +39,6 @@ public final class StudioScene: @unchecked Sendable {
         public var look: StudioLook
         public var screen: StudioSourceInfo?
         public var camera: StudioSourceInfo?
-        /// Opaque pictures for wallpapers and photos, keyed by the background's name.
         public var backgroundImage: CGImage?
     }
 
@@ -99,7 +96,6 @@ public final class StudioScene: @unchecked Sendable {
         frames.withLock { $0.removeAll() }
     }
 
-    /// For diagnostics: the composition times of the frames kept.
     public var rememberedTimes: [Double] {
         frames.withLock { $0.map(\.time.seconds) }
     }
@@ -194,7 +190,6 @@ public final class StudioRenderer: @unchecked Sendable {
         context.render(image, to: output, bounds: CGRect(origin: .zero, size: size), colorSpace: colorSpace)
     }
 
-    /// Places a frame: rotate upright, scale to cover its slot, crop to the slot's shape, lay over what's below.
     private func composite(_ buffer: CVPixelBuffer, info: StudioSourceInfo, placement: StudioLayout.Placement, mask: CIImage?, canvas: CGSize, over below: CIImage) -> CIImage {
         var source = CIImage(cvPixelBuffer: buffer)
         if info.orientation != .up { source = source.oriented(info.orientation) }
@@ -358,7 +353,6 @@ public final class StudioInstruction: NSObject, AVVideoCompositionInstructionPro
     public let scene: StudioScene
     public let screenTrack: CMPersistentTrackID?
     public let cameraTrack: CMPersistentTrackID?
-    /// The preview keeps its last frames for paused redraws; an export doesn't need to.
     public let remembersFrames: Bool
 
     public init(timeRange: CMTimeRange, scene: StudioScene, screenTrack: CMPersistentTrackID?, cameraTrack: CMPersistentTrackID?, remembersFrames: Bool) {
@@ -373,10 +367,8 @@ public final class StudioInstruction: NSObject, AVVideoCompositionInstructionPro
 
 public final class StudioCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
-    /// Milliseconds spent rendering each frame, for the editor's measurements.
     static let renderTimes = Mutex<[Double]>([])
 
-    /// The frame times recorded since the last call.
     public static func takeRenderTimes() -> [Double] {
         renderTimes.withLock { times in
             defer { times.removeAll() }
@@ -452,8 +444,10 @@ public struct StudioTrackSource: @unchecked Sendable {
     public let info: StudioSourceInfo
     /// Stretches of the track's own time with no pictures, which show as nothing rather than a frozen frame.
     public let gaps: [EditRange]
+    /// Sound from its own file: where it starts relative to the picture, and how long it runs.
+    public let separateAudio: (asset: AVAsset, offset: Double, duration: Double)?
 
-    public init(asset: AVAsset, video: AVAssetTrack, audio: AVAssetTrack?, duration: Double, offset: Double, info: StudioSourceInfo, gaps: [EditRange] = []) {
+    public init(asset: AVAsset, video: AVAssetTrack, audio: AVAssetTrack?, duration: Double, offset: Double, info: StudioSourceInfo, gaps: [EditRange] = [], separateAudio: (asset: AVAsset, offset: Double, duration: Double)? = nil) {
         self.asset = asset
         self.video = video
         self.audio = audio
@@ -461,15 +455,25 @@ public struct StudioTrackSource: @unchecked Sendable {
         self.offset = offset
         self.info = info
         self.gaps = gaps
+        self.separateAudio = separateAudio
     }
 
-    public static func load(url: URL, offset: Double, gaps: [EditRange] = [], precise: Bool = true) async throws -> StudioTrackSource {
+    /// `audio` is the sound file recorded beside the picture, with its start relative to the first frame.
+    public static func load(url: URL, offset: Double, gaps: [EditRange] = [], audio: (url: URL, offset: Double, duration: Double)? = nil, precise: Bool = true) async throws -> StudioTrackSource {
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: precise])
         let source = try await load(asset: asset, offset: offset)
-        return StudioTrackSource(asset: source.asset, video: source.video, audio: source.audio, duration: source.duration, offset: source.offset, info: source.info, gaps: gaps)
+        var soundTrack = source.audio
+        var separate: (asset: AVAsset, offset: Double, duration: Double)?
+        if let audio, FileManager.default.fileExists(atPath: audio.url.path) {
+            let soundAsset = AVURLAsset(url: audio.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: precise])
+            if let track = try? await soundAsset.loadTracks(withMediaType: .audio).first {
+                soundTrack = track
+                separate = (soundAsset, audio.offset, audio.duration)
+            }
+        }
+        return StudioTrackSource(asset: source.asset, video: source.video, audio: soundTrack, duration: source.duration, offset: source.offset, info: source.info, gaps: gaps, separateAudio: separate)
     }
 
-    /// Where the track has pictures, in its own time.
     var pictured: [EditRange] {
         StudioProject.Track(file: "", offset: offset, duration: duration, gaps: gaps).recorded
     }
@@ -628,12 +632,11 @@ public struct StudioComposition: @unchecked Sendable {
         let sourceEnd = CMTime(seconds: source.offset + source.duration, preferredTimescale: 600)
         let overlapStart = CMTimeMaximum(start, offset)
         let overlapEnd = CMTimeMinimum(end, sourceEnd)
-        guard overlapEnd > overlapStart else { return }
         let range = CMTimeRange(start: CMTimeSubtract(overlapStart, offset), end: CMTimeSubtract(overlapEnd, offset))
         let at = cursor + CMTimeSubtract(overlapStart, start)
         // Pictures only where the track recorded some: across a gap the slot is left empty, so the compositor gets no
         // frame and draws nothing there instead of holding the last one.
-        for piece in source.pictured {
+        for piece in source.pictured where overlapEnd > overlapStart {
             let pieceRange = CMTimeRange(start: CMTime(seconds: piece.start, preferredTimescale: 600), end: CMTime(seconds: piece.end, preferredTimescale: 600))
             let clipped = range.intersection(pieceRange)
             guard clipped.duration > .zero else { continue }
@@ -641,7 +644,19 @@ public struct StudioComposition: @unchecked Sendable {
         }
         // Sound runs straight through: silence in a gap is real silence, and the voice must never shift.
         if let audio, let track = source.audio {
-            try? audio.insertTimeRange(range, of: track, at: at)
+            if let separate = source.separateAudio {
+                // Its own file, which can start before or after the picture: place it by its own start.
+                let soundStart = CMTime(seconds: source.offset + separate.offset, preferredTimescale: 48_000)
+                let soundEnd = CMTime(seconds: source.offset + separate.offset + separate.duration, preferredTimescale: 48_000)
+                let from = CMTimeMaximum(start, soundStart)
+                let to = CMTimeMinimum(end, soundEnd)
+                if to > from {
+                    let soundRange = CMTimeRange(start: CMTimeSubtract(from, soundStart), end: CMTimeSubtract(to, soundStart))
+                    try? audio.insertTimeRange(soundRange, of: track, at: cursor + CMTimeSubtract(from, start))
+                }
+            } else {
+                try? audio.insertTimeRange(range, of: track, at: at)
+            }
         }
     }
 }
