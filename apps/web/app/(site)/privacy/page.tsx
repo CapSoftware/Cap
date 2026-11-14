@@ -3,6 +3,8 @@ import { buildMarketingMetadata } from "@/lib/og/url";
 
 export const metadata: Metadata = buildMarketingMetadata({
 	title: "Privacy Policy — Cap",
+	description:
+		"Read the Cap Software, Inc. Privacy Policy to learn how we collect, use, and protect your personal information when using Cap.",
 	path: "/privacy",
 	ogTitle: "Privacy policy",
 	ogTag: "Legal",
