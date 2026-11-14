@@ -1664,6 +1664,13 @@ fn get_codec_and_options(
             }
             "h264_vaapi" => {
                 options.set("profile", "high");
+                // h264_vaapi defaults to two B-frames. Recordings are muxed as
+                // DASH segments, and with reordering a capture gap at a segment
+                // cut collapses: movenc moves the cut keyframe's pts back to
+                // the previous fragment's end.
+                if !is_export {
+                    options.set("bf", "0");
+                }
                 options.set("g", &keyframe_interval_str);
             }
             "h264_mf" => {
