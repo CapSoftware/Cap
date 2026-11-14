@@ -368,10 +368,6 @@ impl OrganizationSnapshot {
         let id = self.selected_id.as_deref()?;
         self.organizations.iter().find(|org| org.id == id)
     }
-
-    pub fn find(&self, id: &str) -> Option<&Organization> {
-        self.organizations.iter().find(|org| org.id == id)
-    }
 }
 
 pub fn stored_selected_id() -> Option<String> {

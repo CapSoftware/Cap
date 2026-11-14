@@ -353,6 +353,7 @@ mod tests {
         include_str!("editor_clips.rs"),
         // The export page's destination cards and share-status glyphs.
         include_str!("editor_export.rs"),
+        include_str!("editor_organization.rs"),
         // The screenshot editor's toolbar, popovers and zoom HUD; the
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),

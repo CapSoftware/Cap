@@ -44,6 +44,7 @@ pub(crate) struct OrganizationUi {
     refresh_failed_at: Option<Instant>,
     logos: HashMap<String, LogoState>,
     retired_images: Vec<Arc<RenderImage>>,
+    started: bool,
     sign_in_subscription: Option<gpui::Subscription>,
     snapshot: RefCell<Option<(Instant, Rc<OrganizationSnapshot>)>>,
 }
@@ -167,22 +168,23 @@ impl EditorWindow {
     /// First frame: refresh a stale cache, load logos, and follow sign-ins
     /// from any window so the header updates without a reopen.
     pub(crate) fn start_organization_sync(&mut self, cx: &mut Context<Self>) {
-        if self.organization.sign_in_subscription.is_some() {
+        if std::mem::replace(&mut self.organization.started, true) {
             return;
         }
-        let sign_in = SignIn::global(cx);
-        self.organization.sign_in_subscription = Some(cx.subscribe(
-            &sign_in,
-            |this, _, event: &crate::sign_in::SignInEvent, cx| {
-                if matches!(event, crate::sign_in::SignInEvent::AccountRefreshed) {
-                    this.organization.refresh_failed_at = None;
-                    this.organization.invalidate_snapshot();
-                    let snapshot = this.organization.snapshot();
-                    this.load_organization_logos(&snapshot, cx);
-                    cx.notify();
-                }
-            },
-        ));
+        if let Some(sign_in) = SignIn::try_global(cx) {
+            self.organization.sign_in_subscription = Some(cx.subscribe(
+                &sign_in,
+                |this, _, event: &crate::sign_in::SignInEvent, cx| {
+                    if matches!(event, crate::sign_in::SignInEvent::AccountRefreshed) {
+                        this.organization.refresh_failed_at = None;
+                        this.organization.invalidate_snapshot();
+                        let snapshot = this.organization.snapshot();
+                        this.load_organization_logos(&snapshot, cx);
+                        cx.notify();
+                    }
+                },
+            ));
+        }
         self.refresh_organizations(false, cx);
     }
 
@@ -457,7 +459,8 @@ impl EditorWindow {
                 tr::editor::window::organization::signed_out_description(),
             ),
         };
-        let sign_in_pending = SignIn::global(cx).read(cx).is_pending();
+        let sign_in_pending =
+            SignIn::try_global(cx).is_some_and(|sign_in| sign_in.read(cx).is_pending());
         div()
             .flex()
             .flex_col()
@@ -496,8 +499,10 @@ impl EditorWindow {
                     .disabled(sign_in_pending)
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.organization.menu = None;
-                        SignIn::global(cx)
-                            .update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Editor, cx));
+                        if let Some(sign_in) = SignIn::try_global(cx) {
+                            sign_in
+                                .update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Editor, cx));
+                        }
                         cx.notify();
                     })),
                 )
