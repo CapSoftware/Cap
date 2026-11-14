@@ -14,8 +14,8 @@ fn encode_display(display: &Path, fragments: usize) {
         display.to_path_buf(),
         cap_media_info::VideoInfo {
             pixel_format: cap_media_info::Pixel::NV12,
-            width: 64,
-            height: 64,
+            width: 320,
+            height: 240,
             time_base: ffmpeg::Rational(1, 1_000_000),
             frame_rate: ffmpeg::Rational(10, 1),
         },
@@ -26,7 +26,7 @@ fn encode_display(display: &Path, fragments: usize) {
     )
     .unwrap();
     for index in 0..fragments {
-        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 64);
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
         frame.data_mut(0).fill(16 + (index % 200) as u8);
         frame.data_mut(1).fill(128);
         frame.set_kind(ffmpeg::picture::Type::I);
@@ -136,6 +136,22 @@ fn status(project: &Path) -> StudioRecordingStatus {
         .status()
 }
 
+/// Video packets the recorder wrote: the init segment and every fragment but
+/// `skip`, joined the way recovery joins them.
+fn recorded_frames(project: &Path, skip: Option<&str>) -> usize {
+    let display = project.join(DISPLAY);
+    let scratch = tempfile::tempdir().unwrap();
+    let joined = scratch.path().join("joined.mp4");
+    let mut bytes = fs::read(display.join("init.mp4")).unwrap();
+    for name in fragment_names(&display) {
+        if Some(name.as_str()) != skip {
+            bytes.extend(fs::read(display.join(name)).unwrap());
+        }
+    }
+    fs::write(&joined, bytes).unwrap();
+    video_packets(&joined)
+}
+
 fn remuxed_frames(project: &Path) -> usize {
     assert!(matches!(status(project), StudioRecordingStatus::Complete));
     video_packets(&project.join("content/segments/segment-0/display.mp4"))
@@ -188,6 +204,7 @@ fn needs_remux_recordings_of_every_size_validate_and_remux_in_order() {
             fragments,
         );
         validate_recovery_manifests(&project.join("content"), true).unwrap();
+        let recorded = recorded_frames(&project, None);
         let incomplete = RecoveryManager::inspect_recording(&project).unwrap();
         let display = &incomplete.recoverable_segments[0].display_fragments;
         assert_eq!(display.len(), fragments);
@@ -200,7 +217,7 @@ fn needs_remux_recordings_of_every_size_validate_and_remux_in_order() {
             "{fragments}"
         );
         assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
-        assert_eq!(remuxed_frames(&project), fragments, "{fragments}");
+        assert_eq!(remuxed_frames(&project), recorded, "{fragments}");
         assert!(original_backups(&project).is_empty());
         assert!(!project.join(RECOVERY_PUBLICATION).exists());
     }
@@ -212,21 +229,24 @@ fn torn_missing_or_unlisted_tails_still_remux_and_mid_recording_damage_is_refuse
     let make = |name: &str| needs_remux_project(temporary.path(), name, 1356);
 
     let partial = make("partial last fragment");
+    let recorded = recorded_frames(&partial, Some("segment_1356.m4s"));
     let last = partial.join(DISPLAY).join("segment_1356.m4s");
     let bytes = fs::read(&last).unwrap();
     fs::write(&last, &bytes[..bytes.len() / 2]).unwrap();
     assert_eq!(RecoveryManager::remux_if_needed(&partial).unwrap(), true);
-    assert_eq!(remuxed_frames(&partial), 1355);
+    assert_eq!(remuxed_frames(&partial), recorded);
 
     let missing = make("missing last fragment");
+    let recorded = recorded_frames(&missing, Some("segment_1356.m4s"));
     fs::remove_file(missing.join(DISPLAY).join("segment_1356.m4s")).unwrap();
     assert_eq!(RecoveryManager::remux_if_needed(&missing).unwrap(), true);
-    assert_eq!(remuxed_frames(&missing), 1355);
+    assert_eq!(remuxed_frames(&missing), recorded);
 
     let unlisted = make("missing manifest");
+    let recorded = recorded_frames(&unlisted, None);
     fs::remove_file(unlisted.join(DISPLAY).join("manifest.json")).unwrap();
     assert_eq!(RecoveryManager::remux_if_needed(&unlisted).unwrap(), true);
-    assert_eq!(remuxed_frames(&unlisted), 1356);
+    assert_eq!(remuxed_frames(&unlisted), recorded);
 
     let damaged = make("damaged middle fragment");
     let middle = damaged.join(DISPLAY).join("segment_700.m4s");
@@ -252,6 +272,7 @@ fn a_publication_killed_at_any_step_relaunches_to_the_original_layout() {
     for renames in 0..=3 {
         let temporary = tempfile::tempdir().unwrap();
         let project = needs_remux_project(temporary.path(), "killed", 40);
+        let recorded = recorded_frames(&project, None);
         let before = layout(&project);
         if renames == 0 {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -283,7 +304,7 @@ fn a_publication_killed_at_any_step_relaunches_to_the_original_layout() {
             40
         );
         assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
-        assert_eq!(remuxed_frames(&project), 40);
+        assert_eq!(remuxed_frames(&project), recorded);
     }
 }
 
@@ -350,6 +371,7 @@ fn a_rollback_that_windows_refuses_is_finished_by_the_next_open() {
     for failure in 2..=4 {
         let temporary = tempfile::tempdir().unwrap();
         let project = needs_remux_project(temporary.path(), "rollback refused", 20);
+        let recorded = recorded_frames(&project, None);
         let before = layout(&project);
         let mut calls = 0;
         let error = finalize_publishing_with(&project, |source, destination| {
@@ -368,7 +390,7 @@ fn a_rollback_that_windows_refuses_is_finished_by_the_next_open() {
         assert_eq!(layout(&project), before, "failure at rename {failure}");
         assert!(!project.join(RECOVERY_PUBLICATION).exists());
         assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
-        assert_eq!(remuxed_frames(&project), 20);
+        assert_eq!(remuxed_frames(&project), recorded);
     }
 }
 
@@ -417,6 +439,7 @@ fn projects_an_older_build_stranded_are_restored_and_open_again() {
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let project = needs_remux_project(temporary.path(), "Cap Ünïcode - Copy (2)", 30);
+        let recorded = recorded_frames(&project, None);
         let original_meta = fs::read(project.join("recording-meta.json")).unwrap();
         let before = layout(&project);
         if matches!(variant, Variant::ReadOnlyMedia) {
@@ -496,7 +519,7 @@ fn projects_an_older_build_stranded_are_restored_and_open_again() {
             }
         }
         assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
-        assert_eq!(remuxed_frames(&project), 30, "{variant:?}");
+        assert_eq!(remuxed_frames(&project), recorded, "{variant:?}");
     }
 }
 
@@ -538,6 +561,7 @@ fn restoration_leaves_settled_and_repaired_projects_alone() {
 
     // A finished remux whose backup was kept for a preparing editor.
     let committed = needs_remux_project(temporary.path(), "committed", 10);
+    let recorded = recorded_frames(&committed, None);
     let incomplete = RecoveryManager::inspect_recording(&committed).unwrap();
     RecoveryManager::finalize_with_publication(
         &incomplete,
@@ -553,7 +577,7 @@ fn restoration_leaves_settled_and_repaired_projects_alone() {
     let settled = layout(&committed);
     RecoveryManager::restore_interrupted_recovery(&committed).unwrap();
     assert_eq!(layout(&committed), settled);
-    assert_eq!(remuxed_frames(&committed), 10);
+    assert_eq!(remuxed_frames(&committed), recorded);
 
     // A user who already copied their fragments back by hand.
     let repaired = needs_remux_project(temporary.path(), "repaired", 10);
@@ -586,6 +610,7 @@ fn restoration_leaves_settled_and_repaired_projects_alone() {
 fn a_remux_while_another_open_holds_the_project_changes_nothing() {
     let temporary = tempfile::tempdir().unwrap();
     let project = needs_remux_project(temporary.path(), "two opens", 200);
+    let recorded = recorded_frames(&project, None);
     let before = layout(&project);
     {
         let _held = RecoveryLock::acquire(&project).unwrap();
@@ -610,7 +635,7 @@ fn a_remux_while_another_open_holds_the_project_changes_nothing() {
         results.iter().any(|result| matches!(result, Ok(true))),
         "{results:?}"
     );
-    assert_eq!(remuxed_frames(&project), 200);
+    assert_eq!(remuxed_frames(&project), recorded);
     assert!(original_backups(&project).is_empty());
     assert!(!project.join(RECOVERY_PUBLICATION).exists());
 }
