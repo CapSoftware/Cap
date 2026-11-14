@@ -1699,8 +1699,10 @@ reorder_hint = "Glissez pour réorganiser • Haut = premier plan"
 title = "Calques"
 
 [screenshot_editor.menu]
+copy_text = "Copier le texte"
 delete = "Supprimer"
 open_folder = "Ouvrir le dossier"
+select_all_text = "Sélectionner tout le texte"
 
 [screenshot_editor.share]
 create_link = "Créer un lien de partage"
@@ -1726,6 +1728,7 @@ width = "Largeur"
 copied = "Capture d'écran copiée dans le presse-papiers !"
 link_copied = "Lien de partage copié dans le presse-papiers"
 saved = "Capture d'écran enregistrée !"
+text_copied = "Texte copié dans le presse-papiers"
 
 [screenshot_editor.tool]
 arrow = "Flèche"

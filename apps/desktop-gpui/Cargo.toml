@@ -206,6 +206,16 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
+# Screenshot text recognition (`Windows.Media.Ocr`). The same 0.61 line gpui
+# already builds, so only features are added.
+windows = { version = "0.61", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_WinRT",
+] }
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [

@@ -1699,8 +1699,10 @@ reorder_hint = "Arrastra para reordenar • Arriba = delante"
 title = "Capas"
 
 [screenshot_editor.menu]
+copy_text = "Copiar texto"
 delete = "Eliminar"
 open_folder = "Abrir carpeta"
+select_all_text = "Seleccionar todo el texto"
 
 [screenshot_editor.share]
 create_link = "Crear enlace para compartir"
@@ -1726,6 +1728,7 @@ width = "Ancho"
 copied = "¡Captura de pantalla copiada al portapapeles!"
 link_copied = "Enlace para compartir copiado al portapapeles"
 saved = "¡Captura de pantalla guardada!"
+text_copied = "Texto copiado al portapapeles"
 
 [screenshot_editor.tool]
 arrow = "Flecha"

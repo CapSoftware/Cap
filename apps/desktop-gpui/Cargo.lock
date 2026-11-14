@@ -1617,6 +1617,7 @@ dependencies = [
  "wayland-client",
  "wgpu 25.0.2",
  "whisper-rs",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "x11rb",
 ]

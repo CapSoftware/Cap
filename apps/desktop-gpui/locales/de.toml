@@ -1699,8 +1699,10 @@ reorder_hint = "Zum Sortieren ziehen • Oben = vorne"
 title = "Ebenen"
 
 [screenshot_editor.menu]
+copy_text = "Text kopieren"
 delete = "Löschen"
 open_folder = "Ordner öffnen"
+select_all_text = "Gesamten Text auswählen"
 
 [screenshot_editor.share]
 create_link = "Link zum Teilen erstellen"
@@ -1726,6 +1728,7 @@ width = "Breite"
 copied = "Bildschirmfoto in die Zwischenablage kopiert!"
 link_copied = "Link zum Teilen in die Zwischenablage kopiert"
 saved = "Bildschirmfoto gespeichert!"
+text_copied = "Text in die Zwischenablage kopiert"
 
 [screenshot_editor.tool]
 arrow = "Pfeil"

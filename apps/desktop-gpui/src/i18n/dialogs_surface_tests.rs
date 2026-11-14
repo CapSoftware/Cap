@@ -758,8 +758,13 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Drag to reorder • Top = front",
         ),
         (tr::screenshot_editor::layers::title(), "Layers"),
+        (tr::screenshot_editor::menu::copy_text(), "Copy Text"),
         (tr::screenshot_editor::menu::delete(), "Delete"),
         (tr::screenshot_editor::menu::open_folder(), "Open Folder"),
+        (
+            tr::screenshot_editor::menu::select_all_text(),
+            "Select All Text",
+        ),
         (
             tr::screenshot_editor::share::create_link(),
             "Create shareable link",
@@ -803,6 +808,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Share link copied to clipboard",
         ),
         (tr::screenshot_editor::toast::saved(), "Screenshot saved!"),
+        (
+            tr::screenshot_editor::toast::text_copied(),
+            "Text copied to clipboard",
+        ),
         (tr::screenshot_editor::tool::arrow(), "Arrow"),
         (tr::screenshot_editor::tool::circle(), "Circle"),
         (tr::screenshot_editor::tool::draw(), "Draw"),

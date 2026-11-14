@@ -1699,8 +1699,10 @@ reorder_hint = "拖动以重新排序 • 顶部 = 最前"
 title = "图层"
 
 [screenshot_editor.menu]
+copy_text = "复制文本"
 delete = "删除"
 open_folder = "打开文件夹"
+select_all_text = "全选文本"
 
 [screenshot_editor.share]
 create_link = "创建分享链接"
@@ -1726,6 +1728,7 @@ width = "宽度"
 copied = "截图已复制到剪贴板！"
 link_copied = "分享链接已复制到剪贴板"
 saved = "截图已保存！"
+text_copied = "文本已复制到剪贴板"
 
 [screenshot_editor.tool]
 arrow = "箭头"

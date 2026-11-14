@@ -2089,6 +2089,10 @@ impl ScreenshotEditorWindow {
         }
     }
 
+    pub(crate) fn annotation_hovered(&self) -> bool {
+        self.annotation_state.hover.is_some() || self.annotation_state.hover_cursor.is_some()
+    }
+
     fn clear_annotation_hover(&mut self, cx: &mut Context<Self>) {
         if self.annotation_state.hover.take().is_some()
             || self.annotation_state.hover_cursor.take().is_some()
