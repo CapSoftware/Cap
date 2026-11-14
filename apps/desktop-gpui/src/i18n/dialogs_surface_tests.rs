@@ -8,6 +8,7 @@ pub(super) fn is_dialogs_surface_key(key: &str) -> bool {
         "import.",
         "overlay.",
         "permission.",
+        "recordings_overlay.",
         "screenshot_editor.",
         "transcription.",
         "upload.",
@@ -868,6 +869,74 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (
             tr::dialog::update::package_not_installed(),
             "The package wasn't installed. Approve the system prompt, or install it from Cap.so/download.",
+        ),
+        (tr::recordings_overlay::close(), "Close"),
+        (tr::recordings_overlay::copy(), "Copy to clipboard"),
+        (tr::recordings_overlay::copy_link(), "Copy shareable link"),
+        (
+            tr::recordings_overlay::create_link(),
+            "Create shareable link",
+        ),
+        (tr::recordings_overlay::edit(), "Edit"),
+        (tr::recordings_overlay::export(), "Export"),
+        (tr::recordings_overlay::open(), "Open"),
+        (tr::recordings_overlay::retry(), "Retry"),
+        (
+            tr::recordings_overlay::progress::choose_image(),
+            "Choose where to save the image",
+        ),
+        (
+            tr::recordings_overlay::progress::choose_video(),
+            "Choose where to export the video",
+        ),
+        (
+            tr::recordings_overlay::progress::copied(),
+            "Copied to clipboard",
+        ),
+        (
+            tr::recordings_overlay::progress::copy_failed(),
+            "Couldn't copy",
+        ),
+        (
+            tr::recordings_overlay::progress::copying(),
+            "Copying to clipboard",
+        ),
+        (
+            tr::recordings_overlay::progress::creating_link(),
+            "Creating shareable link",
+        ),
+        (
+            tr::recordings_overlay::progress::link_copied(),
+            "Shareable link copied",
+        ),
+        (tr::recordings_overlay::progress::preparing(), "Preparing"),
+        (
+            tr::recordings_overlay::progress::rendering_video(),
+            "Rendering video",
+        ),
+        (
+            tr::recordings_overlay::progress::save_failed(),
+            "Couldn't save",
+        ),
+        (
+            tr::recordings_overlay::progress::saved_image(),
+            "Image saved",
+        ),
+        (
+            tr::recordings_overlay::progress::saved_video(),
+            "Video saved",
+        ),
+        (
+            tr::recordings_overlay::progress::saving_image(),
+            "Saving image",
+        ),
+        (
+            tr::recordings_overlay::progress::saving_video(),
+            "Saving video",
+        ),
+        (
+            tr::recordings_overlay::progress::share_failed(),
+            "Couldn't create the link",
         ),
     ];
     for (translated, literal) in pairs {

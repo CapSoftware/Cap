@@ -103,23 +103,28 @@ impl ActionState {
     }
 
     pub fn title(&self, kind: MediaKind) -> Option<&'static str> {
-        use tr::recordings_overlay::progress as text;
         let video = kind == MediaKind::Recording;
         Some(match self {
             Self::Idle => return None,
-            Self::Busy(_, Stage::Rendering { .. }) => text::rendering_video(),
-            Self::Busy(_, Stage::ChoosingLocation) => text::preparing(),
-            Self::Busy(ActionKind::Copy, _) => text::copying(),
-            Self::Busy(ActionKind::Save, _) if video => text::saving_video(),
-            Self::Busy(ActionKind::Save, _) => text::saving_image(),
-            Self::Busy(ActionKind::Share, _) => text::creating_link(),
-            Self::Done(ActionKind::Copy) => text::copied(),
-            Self::Done(ActionKind::Save) if video => text::saved_video(),
-            Self::Done(ActionKind::Save) => text::saved_image(),
-            Self::Done(ActionKind::Share) => text::link_copied(),
-            Self::Failed(ActionKind::Copy, _) => text::copy_failed(),
-            Self::Failed(ActionKind::Save, _) => text::save_failed(),
-            Self::Failed(ActionKind::Share, _) => text::share_failed(),
+            Self::Busy(_, Stage::Rendering { .. }) => {
+                tr::recordings_overlay::progress::rendering_video()
+            }
+            Self::Busy(_, Stage::ChoosingLocation) => tr::recordings_overlay::progress::preparing(),
+            Self::Busy(ActionKind::Copy, _) => tr::recordings_overlay::progress::copying(),
+            Self::Busy(ActionKind::Save, _) if video => {
+                tr::recordings_overlay::progress::saving_video()
+            }
+            Self::Busy(ActionKind::Save, _) => tr::recordings_overlay::progress::saving_image(),
+            Self::Busy(ActionKind::Share, _) => tr::recordings_overlay::progress::creating_link(),
+            Self::Done(ActionKind::Copy) => tr::recordings_overlay::progress::copied(),
+            Self::Done(ActionKind::Save) if video => {
+                tr::recordings_overlay::progress::saved_video()
+            }
+            Self::Done(ActionKind::Save) => tr::recordings_overlay::progress::saved_image(),
+            Self::Done(ActionKind::Share) => tr::recordings_overlay::progress::link_copied(),
+            Self::Failed(ActionKind::Copy, _) => tr::recordings_overlay::progress::copy_failed(),
+            Self::Failed(ActionKind::Save, _) => tr::recordings_overlay::progress::save_failed(),
+            Self::Failed(ActionKind::Share, _) => tr::recordings_overlay::progress::share_failed(),
         })
     }
 
