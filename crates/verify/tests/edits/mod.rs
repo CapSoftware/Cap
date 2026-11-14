@@ -597,12 +597,26 @@ impl TimeModel {
 
     /// Output -> recording position on the concatenated source (clip `c`
     /// starts at the sum of the earlier clips' durations), preferring the
-    /// last timeline segment that contains the gapless time, ends included.
-    pub fn output_to_source(&self, o: f64, clip_starts: &[f64]) -> Option<f64> {
+    /// last timeline segment that contains the gapless time. Range ends
+    /// exclude segment starts at cuts, except at time zero.
+    pub fn output_to_source(&self, o: f64, clip_starts: &[f64], is_end: bool) -> Option<f64> {
         let e = o - self.held_before(o);
+        let e = if is_end {
+            self.segments
+                .iter()
+                .rev()
+                .find(|s| self.to_output(s.out_start) as f32 == o as f32)
+                .map_or(e, |s| s.out_start)
+        } else {
+            e
+        };
         self.segments.iter().rev().find_map(|s| {
             let edited_end = s.out_start + s.duration;
-            (e >= s.out_start && e <= edited_end)
+            ((if is_end && e != 0.0 {
+                e > s.out_start
+            } else {
+                e >= s.out_start
+            }) && e <= edited_end)
                 .then(|| clip_starts[s.clip as usize] + s.start + (e - s.out_start) * s.timescale)
         })
     }
