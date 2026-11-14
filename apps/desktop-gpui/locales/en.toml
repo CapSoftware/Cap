@@ -606,6 +606,9 @@ uploading = "Uploading..."
 confirm_body = { text = "Cap will take over your screen with a flashing pattern and play loud beeps for about {seconds} seconds per pipeline. Take your headphones off, leave the volume audible, and leave the machine alone until it finishes.", context = "{seconds} is a whole number of seconds." }
 confirm_title = "Run diagnostic?"
 description = "Records a short flashing/beeping test pattern, measures how far the picture and sound drift apart, and snapshots your displays, cameras, microphones, disk space and recording settings. Nothing is sent anywhere until you choose to send it."
+duration_description = "Longer runs are more sensitive to slow drift."
+duration_label = "Test duration"
+duration_option = { text = "{seconds} seconds", context = "Segment in a three-way control in the settings window; {seconds} is 20, 40 or 60." }
 mic_description = "Also record your microphone and check that it hears the beeps in time. Needs speakers the mic can actually hear."
 mic_label = "Test microphone"
 mode_description = "Which pipeline to test. Both runs the studio leg and then the instant one."

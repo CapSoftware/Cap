@@ -668,6 +668,18 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Which pipeline to test. Both runs the studio leg and then the instant one.",
         ),
         (
+            tr::settings::feedback::diagnostic::duration_label(),
+            "Test duration",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_description(),
+            "Longer runs are more sensitive to slow drift.",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_option(40),
+            "40 seconds",
+        ),
+        (
             tr::settings::feedback::diagnostic::mic_label(),
             "Test microphone",
         ),
