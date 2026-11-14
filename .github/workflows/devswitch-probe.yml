@@ -1,0 +1,181 @@
+name: devswitch probe (temporary)
+
+on:
+  push:
+    branches: [ci/devswitch-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-tree
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-devswitch-probe
+          save-cache: "false"
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Build branch and main probes
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp probe/devswitch-probe.rs probe/devswitch-baseline.rs crates/recording/examples/
+          cargo build -p cap-recording --example devswitch-probe --example devswitch-baseline
+          cargo build -p cap-audio --bin av-sync-check
+          cp target/debug/examples/devswitch-probe "$RUNNER_TEMP/bin/branch-probe"
+          cp target/debug/examples/devswitch-baseline "$RUNNER_TEMP/bin/branch-baseline"
+          cp target/debug/av-sync-check "$RUNNER_TEMP/bin/av-sync-check"
+          cp probe/devswitch-baseline.rs main-tree/crates/recording/examples/
+          mkdir -p main-tree/.cargo
+          cp .cargo/config.toml main-tree/.cargo/config.toml
+          (cd main-tree && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" FFMPEG_DIR="$GITHUB_WORKSPACE/target/native-deps" cargo build -p cap-recording --example devswitch-baseline)
+          cp target/debug/examples/devswitch-baseline "$RUNNER_TEMP/bin/main-baseline"
+          mkdir -p "$RUNNER_TEMP/Frameworks"
+          cp -R target/native-deps/Spacedrive.framework "$RUNNER_TEMP/Frameworks/" || true
+          ls -la "$RUNNER_TEMP/bin"
+          swiftc -O probe/aggdev.swift -o "$RUNNER_TEMP/bin/aggdev"
+          swiftc -O probe/flashclick.swift -o "$RUNNER_TEMP/bin/flashclick"
+
+      - name: Capture permissions and audio devices
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          osascript -e 'set volume alert volume 0' || true
+          defaults write -g com.apple.sound.uiaudio.enabled -int 0
+          ls "$RUNNER_TEMP"/bin/* > "$RUNNER_TEMP/clients"
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/clients"
+          echo /bin/bash >> "$RUNNER_TEMP/clients"
+          echo /bin/zsh >> "$RUNNER_TEMP/clients"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/clients" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+          "$RUNNER_TEMP/bin/aggdev" create "Cap Test Mic B" cap-test-mic-b
+          sleep 2
+          "$RUNNER_TEMP/bin/aggdev" list
+
+      - name: Record
+        env:
+          B: ${{ runner.temp }}/bin
+          OUT: ${{ runner.temp }}/rec
+        run: |
+          set -uo pipefail
+          mkdir -p "$OUT"
+          run() {
+            local name=$1; shift
+            "$B/flashclick" 70 2 > "$OUT/$name.flash.log" 2>&1 &
+            local flash=$!
+            sleep 3
+            "$@" --out "$OUT/$name" > "$OUT/$name.log" 2>&1
+            echo "$name exit $?" | tee -a "$OUT/status"
+            wait $flash
+          }
+          unplug() {
+            sleep "$1"; "$B/aggdev" destroy cap-test-mic-b; echo "unplugged at $1 s" >> "$OUT/unplug.log"
+            sleep "$2"; "$B/aggdev" create "Cap Test Mic B" cap-test-mic-b; echo "replugged after $2 s" >> "$OUT/unplug.log"
+          }
+          run main-instant "$B/main-baseline" --mode instant --duration 60 --mic "BlackHole 2ch"
+          run branch-instant "$B/branch-baseline" --mode instant --duration 60 --mic "BlackHole 2ch"
+          run branch-instant-switch "$B/branch-probe" --mode instant --duration 60 --mic "BlackHole 2ch" --switch-to "Cap Test Mic B" --switch-at 30
+          run main-studio "$B/main-baseline" --mode studio --duration 60 --mic "BlackHole 2ch"
+          run branch-studio-switch "$B/branch-probe" --mode studio --duration 60 --mic "BlackHole 2ch" --switch-to "Cap Test Mic B" --switch-at 30
+          (unplug 23 15) &
+          run branch-instant-unplug "$B/branch-baseline" --mode instant --duration 60 --mic "Cap Test Mic B"
+          wait
+          (unplug 23 15) &
+          run main-instant-unplug "$B/main-baseline" --mode instant --duration 60 --mic "Cap Test Mic B"
+          wait
+          cat "$OUT/status"
+          grep -h PROBE "$OUT"/*.log || true
+
+      - name: Analyze
+        if: always()
+        env:
+          B: ${{ runner.temp }}/bin
+          OUT: ${{ runner.temp }}/rec
+        run: |
+          set -uo pipefail
+          for dir in "$OUT"/*/; do
+            name=$(basename "$dir")
+            echo "=================== $name"
+            find "$dir" -type f \( -name '*.mp4' -o -name '*.m4a' -o -name '*.ogg' -o -name '*.m4s' \) | sort | head -40
+            if [ -d "$dir/content/segments" ]; then
+              for seg in "$dir"/content/segments/segment-*; do
+                audio=$(ls "$seg"/audio-input.* 2>/dev/null | head -1)
+                [ -n "$audio" ] || continue
+                echo "--- $(basename "$seg")"
+                "$B/av-sync-check" --video "$seg/display.mp4" --audio "$audio" --csv "$OUT/$name-$(basename "$seg").csv" 2>&1 | tail -14
+              done
+            else
+              video="$dir/joined-video.mp4"; audio="$dir/joined-audio.mp4"
+              vinit=$(find "$dir" -path '*display*' -name init.mp4 | head -1)
+              ainit=$(find "$dir" -name init.mp4 ! -path '*display*' | head -1)
+              if [ -n "$vinit" ]; then
+                cat "$vinit" $(ls "$(dirname "$vinit")"/*.m4s | sort -V) > "$video"
+              else
+                video=$(find "$dir" -name '*.mp4' | head -1)
+              fi
+              if [ -n "$ainit" ]; then
+                cat "$ainit" $(ls "$(dirname "$ainit")"/*.m4s | sort -V) > "$audio"
+                echo "--- video $vinit audio $ainit"
+                "$B/av-sync-check" --video "$video" --audio "$audio" --csv "$OUT/$name.csv" 2>&1 | tail -14
+              else
+                echo "--- $video (muxed audio)"
+                "$B/av-sync-check" --video "$video" --csv "$OUT/$name.csv" 2>&1 | tail -14
+              fi
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: devswitch-probe
+          path: |
+            ${{ runner.temp }}/rec/*.log
+            ${{ runner.temp }}/rec/*.csv
+            ${{ runner.temp }}/rec/status
