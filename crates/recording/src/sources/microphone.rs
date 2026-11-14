@@ -194,7 +194,9 @@ pub struct Microphone {
     #[cfg(target_os = "linux")]
     required_health: Option<RequiredMicrophoneHealth>,
     info: AudioInfo,
-    binding: SharedMicrophoneBinding,
+    // Holds the current feed lock for the source's lifetime; Windows also
+    // reads it to retire the current subscription.
+    _binding: SharedMicrophoneBinding,
     cancel: CancellationToken,
 }
 
@@ -216,7 +218,7 @@ impl Microphone {
         Arc<MicrophoneFeedLock>,
         Arc<microphone::RecordingSubscription>,
     ) {
-        let binding = self.binding.lock().unwrap();
+        let binding = self._binding.lock().unwrap();
         (binding.lock.clone(), binding.subscription.clone())
     }
 }
@@ -1103,7 +1105,7 @@ impl Microphone {
                 #[cfg(windows)]
                 capture_scope,
                 info: audio_info,
-                binding,
+                _binding: binding,
                 #[cfg(target_os = "linux")]
                 required_health,
                 cancel,
@@ -2291,7 +2293,7 @@ mod switch_tests {
         let (switch, switch_requests) = MicrophoneSwitch::channel();
         let captured = Captured::default();
         let temp = tempfile::tempdir().unwrap();
-        let mut pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
+        let pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
             .with_audio_source::<SwitchableMicrophone>(SwitchableMicrophoneConfig {
                 lock: Arc::new(built_in.lock().await.unwrap()),
                 switch_requests,
@@ -2326,7 +2328,7 @@ mod switch_tests {
 
         push_for(
             &headset,
-            0.6,
+            0.35,
             (44_100, 2),
             start,
             Duration::from_millis(300),
@@ -2336,7 +2338,7 @@ mod switch_tests {
         settle(&captured, |peaks| peaks.iter().any(|peak| *peak > 0.3)).await;
 
         built_in
-            .push(&[0.9; 480], Timestamp::Instant(Instant::now()))
+            .push(&[0.95; 480], Timestamp::Instant(Instant::now()))
             .await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         pipeline.stop().await.unwrap();
@@ -2362,7 +2364,7 @@ mod switch_tests {
         let (switch, switch_requests) = MicrophoneSwitch::channel();
         let captured = Captured::default();
         let temp = tempfile::tempdir().unwrap();
-        let mut pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
+        let pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
             .with_audio_source::<SwitchableMicrophone>(SwitchableMicrophoneConfig {
                 lock: Arc::new(built_in.lock().await.unwrap()),
                 switch_requests,
