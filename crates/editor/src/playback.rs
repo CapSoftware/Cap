@@ -2168,6 +2168,7 @@ impl Playback {
             drop(transitioned_audio);
             stop_tx.send(true).ok();
 
+            self.renderer.flush_pending_blocking();
             event_tx.send(PlaybackEvent::Stop).ok();
         };
 
