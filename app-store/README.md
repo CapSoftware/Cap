@@ -122,6 +122,8 @@ For actions, reply within 10 seconds with one of:
 | `cap.summary.ready` | `cap.summary` |
 | `cap.comment.created` | `cap.comments` |
 
+Installed for one person, a connection hears about that person's Caps. Installed for an organization, it hears about Caps their owners shared with that organization, never private ones.
+
 **Permissions** decide what is in each payload. Every request includes the Cap's id, title, share link, owner name, length and creation time. `cap.transcript` adds the transcript, `cap.summary` adds the AI title, summary and chapters, and `cap.comments` adds comment text and author names. Ask only for what you use: people see this list before they install.
 
 **Settings** are a form Cap renders at install time. Field types are `text`, `url`, `secret`, `select` and `toggle`. Values arrive in every request as `settings`. Use `secret` for API keys and tokens: Cap encrypts them at rest and never shows them again after they are saved.

@@ -11,6 +11,7 @@ import { and, eq, or } from "drizzle-orm";
 import { after } from "next/server";
 import { start } from "workflow/api";
 import { deliverAppStoreRequestWorkflow } from "@/workflows/deliver-app-store-request";
+import { isSharedWithOrganization } from "./access";
 import { getCatalogApp } from "./catalog";
 import type { AppStoreDeliveryJob } from "./delivery";
 import { eventIsGranted } from "./installations";
@@ -108,7 +109,7 @@ export async function emitAppStoreEvent(
 			eq(appStoreInstallations.userId, video.ownerId),
 		),
 	];
-	if (video.orgId) {
+	if (video.orgId && (await isSharedWithOrganization(videoId, video.orgId))) {
 		scopes.push(
 			and(
 				eq(appStoreInstallations.scope, "organization"),

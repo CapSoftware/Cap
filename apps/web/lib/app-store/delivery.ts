@@ -14,7 +14,11 @@ import {
 	WEBHOOK_DISABLE_AFTER_FAILURES,
 	WEBHOOK_DISABLE_AFTER_MS,
 } from "@/lib/developer-webhook-events";
-import { memberMayInstallConnections, userOrganizations } from "./access";
+import {
+	isSharedWithOrganization,
+	memberMayInstallConnections,
+	userOrganizations,
+} from "./access";
 import { getCatalogApp } from "./catalog";
 import { type ConnectionResult, sendConnectionRequest } from "./connection";
 import {
@@ -70,7 +74,11 @@ export async function capVisibleToInstallation(
 	record: CapRecord,
 ): Promise<boolean> {
 	if (row.scope === "organization") {
-		return !!row.organizationId && record.video.orgId === row.organizationId;
+		return (
+			!!row.organizationId &&
+			record.video.orgId === row.organizationId &&
+			(await isSharedWithOrganization(record.video.id, row.organizationId))
+		);
 	}
 	if (record.video.ownerId !== row.userId || !row.userId) return false;
 	if (!record.video.orgId) return true;

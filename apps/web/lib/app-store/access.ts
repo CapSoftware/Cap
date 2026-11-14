@@ -1,6 +1,10 @@
 import { db } from "@cap/database";
-import { organizationMembers, organizations } from "@cap/database/schema";
-import type { Organisation, User } from "@cap/web-domain";
+import {
+	organizationMembers,
+	organizations,
+	sharedVideos,
+} from "@cap/database/schema";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull, or } from "drizzle-orm";
 import {
 	canManageOrganizationSettings,
@@ -77,3 +81,23 @@ export const memberMayInstallConnections = (
 	!organization ||
 	!organization.adminsOnly ||
 	canManageOrganizationSettings(organization.role);
+
+// Organization installs only see Caps their owners shared with the
+// organization. A Cap that merely belongs to the organization can still be
+// private to its owner.
+export async function isSharedWithOrganization(
+	videoId: Video.VideoId,
+	organizationId: Organisation.OrganisationId,
+) {
+	const [row] = await db()
+		.select({ id: sharedVideos.id })
+		.from(sharedVideos)
+		.where(
+			and(
+				eq(sharedVideos.videoId, videoId),
+				eq(sharedVideos.organizationId, organizationId),
+			),
+		)
+		.limit(1);
+	return !!row;
+}

@@ -91,7 +91,7 @@ The catalog also carries a `blocked` list. A blocked app disappears from the sto
 An install belongs to an account, never a device.
 
 - **For me:** the app sees only Caps you own.
-- **For my organization:** owners and admins install it, and it sees Caps in that organization. Owners can stop members from installing connection apps at all.
+- **For my organization:** owners and admins install it, and it sees Caps their owners shared with that organization. A Cap that only belongs to the organization stays private to its owner. Owners can stop members from installing connection apps at all.
 
 Installs live in `app_store_installations`, one row per app and scope, with settings encrypted using the same app-layer encryption as storage integrations. The row records the permissions and events that were granted. When a new version of an app asks for more, Cap keeps delivering only what was granted and asks for a review in the store, the way Slack asks for re-consent on new scopes.
 
