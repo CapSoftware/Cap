@@ -3081,6 +3081,43 @@ no_segments = "録画にセグメントがありません。先に復元が必�
 not_found = "動画のパス{path}が見つかりません！"
 not_studio = "Studio以外の録画は編集できません"
 
+[editor.window.organization]
+brand_colours = "ブランドカラー"
+brand_settings = "ブランド設定"
+button = "組織"
+loading_description = "Cap Webから組織を読み込んでいます。"
+loading_title = "組織を読み込み中"
+none = "組織がありません"
+remove = "削除"
+remove_colour = "色を削除"
+retry = "再試行"
+saved = "組織のブランドを更新しました"
+saving = "保存中..."
+set = "設定"
+sign_in = "サインイン"
+signed_out_description = "サインインすると、組織を選んでブランドカラーを編集し、Studioで使用できます。"
+signed_out_title = "組織のブランドにはサインインが必要です"
+unavailable_description = "Cap Webに接続できませんでした。接続を確認してもう一度お試しください。"
+unavailable_title = "組織を読み込めません"
+upload = "アップロード"
+
+[editor.window.organization.color]
+accent = "アクセント"
+background = "背景"
+primary = "プライマリ"
+secondary = "セカンダリ"
+
+[editor.window.organization.error]
+failed = "組織のブランドを更新できませんでした"
+forbidden = "ブランドを編集できるのは組織の管理者とオーナーだけです"
+logo_empty = "ロゴファイルが空です"
+logo_read_failed = "ファイルを読み込めませんでした"
+logo_too_large = "ロゴファイルは1MB未満にしてください"
+logo_unsupported = "対応していないロゴのファイル形式です"
+not_found = "この組織はもう存在しません"
+offline = "Cap Webに接続できませんでした。接続を確認してもう一度お試しください。"
+signed_out = "ブランドを編集するにはもう一度サインインしてください"
+
 [editor.window.presets]
 apply = "適用"
 create = "作成"
