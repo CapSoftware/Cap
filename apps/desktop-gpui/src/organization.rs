@@ -212,12 +212,17 @@ pub fn resolve_selected_id(organizations: &[Organization], stored: Option<&str>)
 }
 
 /// The export picker's label and the upload both resolve through this, so
-/// they cannot name different organizations.
+/// they cannot name different organizations. While the list is unknown (not
+/// fetched yet, or offline) a saved choice is kept rather than dropped, as the
+/// upload sent it before.
 pub fn share_organization_id(
     export_choice: Option<&str>,
     selected: Option<&str>,
     organization_ids: &[&str],
 ) -> Option<String> {
+    if organization_ids.is_empty() {
+        return export_choice.or(selected).map(str::to_string);
+    }
     export_choice
         .filter(|id| organization_ids.contains(id))
         .or_else(|| selected.filter(|id| organization_ids.contains(id)))
@@ -776,7 +781,16 @@ mod tests {
             share_organization_id(None, None, &ids).as_deref(),
             Some("personal")
         );
-        assert_eq!(share_organization_id(Some("team"), None, &[]), None);
+        // The list is unknown after a sign-in whose organizations request failed.
+        assert_eq!(
+            share_organization_id(Some("team"), Some("client"), &[]).as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            share_organization_id(None, Some("client"), &[]).as_deref(),
+            Some("client")
+        );
+        assert_eq!(share_organization_id(None, None, &[]), None);
     }
 
     #[test]
