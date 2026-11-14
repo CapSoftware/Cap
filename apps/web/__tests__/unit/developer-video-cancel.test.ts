@@ -85,6 +85,37 @@ describe("runningDeveloperVideoJobIds", () => {
 		).toEqual([]);
 		expect(runningDeveloperVideoJobIds(null)).toEqual([]);
 	});
+
+	it("returns the job of every running slice while the hls part waits", () => {
+		const job = (jobId: string | null) => ({
+			startSeconds: 0,
+			durationSeconds: 20,
+			job: running(jobId),
+			attempts: 1,
+			lostJobs: 0,
+		});
+		expect(
+			runningDeveloperVideoJobIds(
+				processingState({
+					hls: { state: "pending" },
+					mp4: running("job-mp4"),
+					sliced: {
+						state: "encoding",
+						output: "sliced-1",
+						exposed: true,
+						hasAudio: true,
+						slices: [
+							{ ...job(null), job: { state: "complete", output: "a" } },
+							job("slice-job-1"),
+							job(null),
+							{ ...job(null), job: { state: "pending" } },
+							job("slice-job-4"),
+						],
+					},
+				}),
+			).sort(),
+		).toEqual(["job-mp4", "slice-job-1", "slice-job-4"]);
+	});
 });
 
 describe("cancelDeveloperVideoJobs", () => {
@@ -162,6 +193,9 @@ describe("cancelDeveloperVideoEncodes", () => {
 		);
 		expect(query.sql).toContain(
 			"JSON_UNQUOTE(JSON_EXTRACT(`developer_videos`.`processing`, '$.mp4.state')) = 'running'",
+		);
+		expect(query.sql).toContain(
+			"JSON_SEARCH(`developer_videos`.`processing`, 'one', 'running', NULL, '$.sliced.slices[*].job.state') IS NOT NULL",
 		);
 		expect(query.sql).toContain("`developer_videos`.`deletedAt` is not null");
 		expect(query.sql).toContain("`developer_videos`.`deletedAt` >= ?");
