@@ -1479,11 +1479,13 @@ impl RecordingSession {
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
+                        this.capture_source_lost = false;
                         this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
+                        this.capture_source_lost = false;
                         this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
