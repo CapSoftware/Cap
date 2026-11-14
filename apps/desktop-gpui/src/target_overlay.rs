@@ -431,6 +431,11 @@ impl HoveredWindow {
     }
 }
 
+enum PinnedWindowProbe {
+    Closed,
+    Present(Option<HoveredWindow>),
+}
+
 /// App-scoped target-select state: which mode is armed, what the cursor is
 /// over, and which window a click has locked onto.
 pub struct TargetSelect {
@@ -599,6 +604,21 @@ impl TargetSelect {
         false
     }
 
+    fn refresh_pinned_window(&mut self, requested: &WindowId, probe: PinnedWindowProbe) -> bool {
+        let pinned = match probe {
+            PinnedWindowProbe::Closed => None,
+            PinnedWindowProbe::Present(Some(window)) => Some(window),
+            PinnedWindowProbe::Present(None) => return false,
+        };
+        if self.pinned_window.as_ref().map(|window| &window.id) != Some(requested)
+            || self.pinned_window == pinned
+        {
+            return false;
+        }
+        self.pinned_window = pinned;
+        true
+    }
+
     fn start_polling(&mut self, cx: &mut Context<Self>) {
         self._poll = Some(cx.spawn(async move |this, cx| {
             loop {
@@ -626,11 +646,15 @@ impl TargetSelect {
                             .and_then(HoveredWindow::from_window);
                         // The pinned window is re-read too: it may have been
                         // moved or resized, by the picker or by its app.
-                        let pinned = pinned
-                            .filter(|_| want_window)
-                            .and_then(|id| scap_targets::Window::from_id(&id))
-                            .as_ref()
-                            .and_then(HoveredWindow::from_window);
+                        let pinned = pinned.filter(|_| want_window).map(|id| {
+                            let probe = scap_targets::Window::from_id_direct(&id).map_or(
+                                PinnedWindowProbe::Closed,
+                                |window| {
+                                    PinnedWindowProbe::Present(HoveredWindow::from_window(&window))
+                                },
+                            );
+                            (id, probe)
+                        });
                         (display, window, pinned)
                     })
                     .await;
@@ -638,18 +662,12 @@ impl TargetSelect {
                 let Ok((icon_wanted, active, changed, microphone_changed)) =
                     this.update(cx, |this: &mut Self, cx| {
                         let (display, window, pinned) = probe;
-                        let pinned_moved = pinned.as_ref().is_some_and(|pinned| {
-                            this.pinned_window
-                                .as_ref()
-                                .is_some_and(|current| current.id == pinned.id && current != pinned)
-                        });
-                        if pinned_moved {
-                            this.pinned_window = pinned;
-                        }
+                        let pinned_changed = pinned
+                            .is_some_and(|(id, probe)| this.refresh_pinned_window(&id, probe));
                         let microphone_fill = crate::ui::MicrophoneLevel::capture_fill(cx);
                         // The mic level stays out of `changed`: only the overlays
                         // drawing the meter repaint for it, below.
-                        let changed = pinned_moved
+                        let changed = pinned_changed
                             || this.cursor_display != display
                             || this.hovered_window != window;
                         let microphone_changed = this.microphone_fill != microphone_fill;
@@ -4726,6 +4744,101 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hovered_window(id: &str) -> HoveredWindow {
+        HoveredWindow {
+            id: id.parse().unwrap(),
+            app_name: "Test app".into(),
+            display_id: "1".parse().unwrap(),
+            bounds: rect(100., 100., 800., 600.),
+        }
+    }
+
+    #[gpui::test]
+    fn closing_the_pinned_window_returns_to_the_hovered_window(cx: &mut gpui::TestAppContext) {
+        let select = cx.update(TargetSelect::init);
+        select.update(cx, |select, _| {
+            let pinned = hovered_window("1");
+            let hovered = hovered_window("2");
+            for hovered in [Some(hovered), None] {
+                select.pinned_window = Some(pinned.clone());
+                select.hovered_window = hovered.clone();
+
+                assert!(select.refresh_pinned_window(&pinned.id, PinnedWindowProbe::Closed));
+                assert!(select.pinned_window.is_none());
+                assert_eq!(select.active_window(), hovered.as_ref());
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn a_live_pinned_window_without_metadata_keeps_its_selection(cx: &mut gpui::TestAppContext) {
+        let select = cx.update(TargetSelect::init);
+        select.update(cx, |select, _| {
+            let pinned = hovered_window("1");
+            select.pinned_window = Some(pinned.clone());
+            select.hovered_window = Some(hovered_window("2"));
+
+            assert!(!select.refresh_pinned_window(&pinned.id, PinnedWindowProbe::Present(None)));
+            assert_eq!(select.active_window(), Some(&pinned));
+
+            let restored = HoveredWindow {
+                bounds: rect(200., 150., 640., 480.),
+                ..pinned.clone()
+            };
+            assert!(select.refresh_pinned_window(
+                &pinned.id,
+                PinnedWindowProbe::Present(Some(restored.clone())),
+            ));
+            assert_eq!(select.active_window(), Some(&restored));
+        });
+    }
+
+    #[gpui::test]
+    fn the_pinned_window_follows_moves_without_repainting_unchanged_probes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let select = cx.update(TargetSelect::init);
+        select.update(cx, |select, _| {
+            let pinned = hovered_window("1");
+            select.pinned_window = Some(pinned.clone());
+            assert!(!select.refresh_pinned_window(
+                &pinned.id,
+                PinnedWindowProbe::Present(Some(pinned.clone())),
+            ));
+
+            let moved = HoveredWindow {
+                display_id: "2".parse().unwrap(),
+                bounds: rect(200., 150., 640., 480.),
+                ..pinned.clone()
+            };
+            assert!(select.refresh_pinned_window(
+                &pinned.id,
+                PinnedWindowProbe::Present(Some(moved.clone())),
+            ));
+            assert_eq!(select.active_window(), Some(&moved));
+        });
+    }
+
+    #[gpui::test]
+    fn late_window_probes_do_not_replace_a_newer_selection(cx: &mut gpui::TestAppContext) {
+        let select = cx.update(TargetSelect::init);
+        select.update(cx, |select, _| {
+            let old = hovered_window("1");
+            let new = hovered_window("2");
+            for current in [Some(new), None] {
+                for result in [
+                    PinnedWindowProbe::Present(Some(old.clone())),
+                    PinnedWindowProbe::Present(None),
+                    PinnedWindowProbe::Closed,
+                ] {
+                    select.pinned_window = current.clone();
+                    assert!(!select.refresh_pinned_window(&old.id, result));
+                    assert_eq!(select.pinned_window, current);
+                }
+            }
+        });
+    }
 
     #[test]
     fn windows_display_and_window_pickers_take_no_backdrop() {
