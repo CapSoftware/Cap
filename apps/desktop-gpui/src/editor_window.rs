@@ -2692,7 +2692,9 @@ impl EditorWindow {
                 }
                 changed
             }
-            (TrackKind::Audio, edits::Hit::Body { index }) => {
+            // A short fade lies wholly inside the 10 px trim-handle zone, so a
+            // handle hit can be a fade double-click too.
+            (TrackKind::Audio, edits::Hit::Body { index } | edits::Hit::Handle { index, .. }) => {
                 let Some(fade_in) = self
                     .project
                     .timeline
