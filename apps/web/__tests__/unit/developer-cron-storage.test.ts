@@ -1,378 +1,708 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { dailyStorageMicroCredits } from "@/lib/developer-pricing";
 
-const mockDb = vi.fn();
-
-type DbRow = Record<string, unknown>;
-type JsonBody = Record<string, unknown>;
-type TransactionValues = {
-	type: string;
-	amountMicroCredits: number;
-};
-type MockDbChain = {
-	select: ReturnType<typeof vi.fn>;
-	from: ReturnType<typeof vi.fn>;
-	where: ReturnType<typeof vi.fn>;
-	groupBy?: ReturnType<typeof vi.fn>;
-	limit: ReturnType<typeof vi.fn>;
-	insert: ReturnType<typeof vi.fn>;
-	values: ReturnType<typeof vi.fn>;
-	update: ReturnType<typeof vi.fn>;
-	set: ReturnType<typeof vi.fn>;
-	transaction?: ReturnType<typeof vi.fn>;
-};
+const mocks = vi.hoisted(() => ({
+	selects: [] as Record<string, unknown>[][],
+	page: [] as Record<string, unknown>[],
+	accountsTable: { id: "id", appId: "appId" },
+	appsTable: { id: "id", deletedAt: "deletedAt" },
+	ledgerTable: {
+		accountId: "accountId",
+		referenceId: "referenceId",
+		referenceType: "referenceType",
+	},
+	snapshotsTable: { appId: "appId", snapshotDate: "snapshotDate" },
+	yesterdayBilled: null as Record<string, unknown>[] | null,
+	markers: [] as unknown[],
+	getStorageUsageByApp: vi.fn(),
+	chargeMissedFirstMonths: vi.fn(),
+	shortfallsAwaitingNotice: vi.fn(),
+	openFirstMonthShortfalls: vi.fn(),
+	markShortfallsNotified: vi.fn(),
+	markStorageDayNotified: vi.fn(),
+	chargeStorageDay: vi.fn(),
+	latestStorageCharge: vi.fn(),
+	latestStorageCharges: vi.fn(),
+	restoredSinceCharge: vi.fn(),
+	runDueAutoTopUps: vi.fn(),
+	sendInfraOutOfCreditEmail: vi.fn(),
+	deliveryBillingStart: vi.fn(),
+	settleDeliveryDays: vi.fn(),
+	markDeliveryDayNotified: vi.fn(),
+}));
 
 vi.mock("@cap/database", () => ({
-	db: mockDb,
+	db: () => {
+		let table: unknown;
+		const dateOf = (condition: unknown) => {
+			const match = JSON.stringify(condition).match(
+				/\{"eq":\["referenceId","(\d{4}-\d{2}-\d{2})"\]\}/,
+			);
+			return match?.[1] ?? null;
+		};
+		const read = (condition: unknown) => {
+			if (table === mocks.appsTable) {
+				return mocks.page.map((account) => ({ id: account.appId }));
+			}
+			if (table === mocks.accountsTable) {
+				mocks.page = mocks.selects[0] ?? [];
+				return mocks.page;
+			}
+			if (table === mocks.ledgerTable) {
+				if (dateOf(condition) === new Date().toISOString().slice(0, 10)) {
+					return mocks.selects[1] ?? [];
+				}
+				return (
+					mocks.yesterdayBilled ??
+					mocks.page.map((account) => ({ accountId: account.id }))
+				);
+			}
+			return [];
+		};
+		const chain = {
+			select: () => chain,
+			from: (next: unknown) => {
+				table = next;
+				return chain;
+			},
+			where: (condition: unknown) => {
+				const rows = Promise.resolve(read(condition));
+				return Object.assign(rows, {
+					orderBy: () => ({ limit: () => rows }),
+				});
+			},
+		};
+		return chain;
+	},
 }));
-
-vi.mock("@cap/database/helpers", () => ({
-	nanoId: vi.fn(() => "test-nano-id"),
-}));
-
 vi.mock("@cap/database/schema", () => ({
-	developerApps: { id: "id", deletedAt: "deletedAt" },
-	developerCreditAccounts: {
-		id: "id",
-		appId: "appId",
-		balanceMicroCredits: "balanceMicroCredits",
-	},
-	developerCreditTransactions: {},
-	developerDailyStorageSnapshots: {
-		appId: "appId",
-		snapshotDate: "snapshotDate",
-		id: "id",
-		processedAt: "processedAt",
-	},
-	developerVideos: {
-		appId: "appId",
-		deletedAt: "deletedAt",
-		duration: "duration",
-	},
+	developerApps: mocks.appsTable,
+	developerCreditAccounts: mocks.accountsTable,
+	developerCreditTransactions: mocks.ledgerTable,
+	developerDailyStorageSnapshots: mocks.snapshotsTable,
 }));
-
 vi.mock("drizzle-orm", () => ({
-	and: vi.fn((...args: unknown[]) => args),
-	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
-	inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
-	isNull: vi.fn((a: unknown) => ({ isNull: a })),
-	sql: vi.fn(),
+	and: (...args: unknown[]) => args,
+	asc: (a: unknown) => ({ asc: a }),
+	gt: (a: unknown, b: unknown) => ({ gt: [a, b] }),
+	eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
+	inArray: (a: unknown, b: unknown) => ({ inArray: [a, b] }),
+	isNull: (a: unknown) => ({ isNull: a }),
+	isNotNull: (a: unknown) => ({ isNotNull: a }),
 }));
-
-let capturedJsonBody: JsonBody | null = null;
-let capturedStatus: number | undefined;
-
-vi.mock("next/server", () => ({
-	NextResponse: {
-		json: vi.fn((body: JsonBody, init?: ResponseInit) => {
-			capturedJsonBody = body;
-			capturedStatus = init?.status;
-			return { body, status: init?.status ?? 200 };
-		}),
+vi.mock("@/lib/infra-storage", () => ({
+	getStorageUsageByApp: mocks.getStorageUsageByApp,
+}));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	chargeMissedFirstMonths: mocks.chargeMissedFirstMonths,
+	shortfallsAwaitingNotice: mocks.shortfallsAwaitingNotice,
+	openFirstMonthShortfalls: mocks.openFirstMonthShortfalls,
+	markShortfallsNotified: mocks.markShortfallsNotified,
+	markStorageDayNotified: mocks.markStorageDayNotified,
+}));
+vi.mock("@/lib/infra-storage-billing", () => ({
+	chargeStorageDay: mocks.chargeStorageDay,
+	recordStorageDayVisits: async ({ appIds }: { appIds: string[] }) => {
+		mocks.markers.push(...appIds);
 	},
 }));
+vi.mock("@/lib/infra-standing", () => ({
+	INFRA_GRACE_DAYS: 7,
+	STORAGE_DAY_REFERENCE_TYPE: "storage_day",
+	latestStorageCharge: mocks.latestStorageCharge,
+	latestStorageCharges: mocks.latestStorageCharges,
+	restoredSinceCharge: mocks.restoredSinceCharge,
+}));
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	runDueAutoTopUps: mocks.runDueAutoTopUps,
+}));
+vi.mock("@/lib/infra-billing-emails", () => ({
+	sendInfraOutOfCreditEmail: mocks.sendInfraOutOfCreditEmail,
+}));
+vi.mock("@/lib/infra-delivery-billing", () => ({
+	deliveryBillingStart: mocks.deliveryBillingStart,
+	settleDeliveryDays: mocks.settleDeliveryDays,
+	markDeliveryDayNotified: mocks.markDeliveryDayNotified,
+}));
+
+import { GET } from "@/app/api/cron/developer-storage/route";
 
 const CRON_SECRET = "test-cron-secret";
+const NO_TOP_UPS = { attempted: 0, succeeded: 0, failed: 0 };
+const NO_FIRST_MONTHS = { charged: 0, short: 0, failed: 0 };
 
-function makeChain(
-	result: DbRow[],
-	options?: { onTransaction?: (tx: MockDbChain) => void },
-) {
-	const chain = Promise.resolve(result) as Promise<DbRow[]> & MockDbChain;
-	Object.assign(chain, {
-		select: vi.fn(() => chain),
-		from: vi.fn(() => chain),
-		where: vi.fn(() => chain),
-		groupBy: vi.fn(() => chain),
-		limit: vi.fn(() => Promise.resolve(result)),
-		insert: vi.fn(() => chain),
-		values: vi.fn(() => Promise.resolve()),
-		update: vi.fn(() => chain),
-		set: vi.fn(() => chain),
-		transaction: vi.fn(async (cb: (tx: MockDbChain) => Promise<unknown>) => {
-			let currentOperation: "select" | "update" | "insert" | null = null;
-			const txChain = {
-				select: vi.fn(() => {
-					currentOperation = "select";
-					return txChain;
-				}),
-				from: vi.fn(() => txChain),
-				where: vi.fn(() => {
-					if (currentOperation === "update") {
-						return Promise.resolve([{ affectedRows: 1 }]);
-					}
-					return txChain;
-				}),
-				limit: vi.fn(() => Promise.resolve([{ balanceMicroCredits: 0 }])),
-				insert: vi.fn(() => {
-					currentOperation = "insert";
-					return txChain;
-				}),
-				values: vi.fn(() => Promise.resolve()),
-				update: vi.fn(() => {
-					currentOperation = "update";
-					return txChain;
-				}),
-				set: vi.fn(() => txChain),
-			};
-			if (options?.onTransaction) {
-				options.onTransaction(txChain);
-			}
-			await cb(txChain);
-		}),
-	});
-	return chain;
-}
-
-function setupDbSequence(
-	responses: DbRow[][],
-	txOptions?: { onTransaction?: (tx: MockDbChain) => void },
-) {
-	let callIndex = 0;
-	mockDb.mockImplementation(() => {
-		const idx = callIndex++;
-		const result = responses[idx] ?? [];
-		return makeChain(result, txOptions);
-	});
-}
-
-function isTransactionValues(value: unknown): value is TransactionValues {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"type" in value &&
-		typeof value.type === "string" &&
-		"amountMicroCredits" in value &&
-		typeof value.amountMicroCredits === "number"
-	);
-}
-
-function getCapturedJsonBody() {
-	if (capturedJsonBody === null) throw new Error("Expected JSON response body");
-	return capturedJsonBody;
-}
-
-beforeEach(() => {
-	vi.clearAllMocks();
-	capturedJsonBody = null;
-	capturedStatus = undefined;
-	process.env.CRON_SECRET = CRON_SECRET;
+const usage = (dailyMicroCredits: number) => ({
+	videoCount: dailyMicroCredits > 0 ? 1 : 0,
+	totalMinutes: dailyMicroCredits > 0 ? 10 : 0,
+	minutesByTier: { "1080p": 10, "1440p": 0, "2160p": 0 },
+	monthlyMicroCredits: dailyMicroCredits * 30,
+	dailyMicroCredits,
 });
 
-async function importGET() {
-	const mod = await import("@/app/api/cron/developer-storage/route");
-	return mod.GET;
-}
+const billed = (extra: Record<string, unknown> = {}) => ({
+	state: "billed",
+	owedMicroCredits: 28,
+	chargedMicroCredits: 28,
+	balanceMicroCredits: 972,
+	shortSince: null,
+	fellShort: false,
+	...extra,
+});
 
-function makeRequest(authHeader?: string): Request {
-	const headers = new Headers();
-	if (authHeader) {
-		headers.set("authorization", authHeader);
+const run = async (authorization?: string) => {
+	const response = await GET(
+		new Request("https://localhost/api/cron/developer-storage", {
+			headers: authorization ? { authorization } : {},
+		}),
+	);
+	return { status: response.status, body: await response.json() };
+};
+
+const authorized = () => run(`Bearer ${CRON_SECRET}`);
+
+beforeEach(() => {
+	process.env.CRON_SECRET = CRON_SECRET;
+	mocks.selects = [];
+	mocks.page = [];
+	mocks.yesterdayBilled = null;
+	mocks.markers = [];
+	for (const mock of [
+		mocks.getStorageUsageByApp,
+		mocks.chargeStorageDay,
+		mocks.latestStorageCharges,
+		mocks.runDueAutoTopUps,
+		mocks.sendInfraOutOfCreditEmail,
+	]) {
+		mock.mockReset();
 	}
-	return new Request("https://localhost/api/cron/developer-storage", {
-		method: "GET",
-		headers,
-	});
-}
+	mocks.chargeMissedFirstMonths.mockReset();
+	mocks.chargeMissedFirstMonths.mockResolvedValue(NO_FIRST_MONTHS);
+	mocks.shortfallsAwaitingNotice.mockReset();
+	mocks.shortfallsAwaitingNotice.mockResolvedValue(new Map());
+	mocks.markShortfallsNotified.mockReset();
+	mocks.markStorageDayNotified.mockReset();
+	mocks.openFirstMonthShortfalls.mockReset();
+	mocks.openFirstMonthShortfalls.mockResolvedValue(new Set());
+	mocks.restoredSinceCharge.mockReset();
+	mocks.restoredSinceCharge.mockResolvedValue(false);
+	mocks.runDueAutoTopUps.mockResolvedValue(NO_TOP_UPS);
+	mocks.latestStorageCharges.mockResolvedValue(new Map());
+	mocks.chargeStorageDay.mockResolvedValue(billed());
+	mocks.deliveryBillingStart.mockReset();
+	mocks.deliveryBillingStart.mockReturnValue(null);
+	mocks.settleDeliveryDays.mockReset();
+	mocks.settleDeliveryDays.mockImplementation(
+		async ({ startDay }: { startDay: string | null }) => ({
+			enabled: !!startDay,
+			billed: 0,
+		}),
+	);
+	mocks.markDeliveryDayNotified.mockReset();
+});
 
 describe("developer-storage cron job", () => {
-	describe("authentication", () => {
-		it("returns 401 when no auth header", async () => {
-			const GET = await importGET();
-			await GET(makeRequest());
-
-			expect(capturedJsonBody).toEqual({ error: "Unauthorized" });
-			expect(capturedStatus).toBe(401);
+	it("refuses a request with no or the wrong bearer token, before touching anything", async () => {
+		expect(await run()).toEqual({
+			status: 401,
+			body: { error: "Unauthorized" },
 		});
+		expect(await run("Bearer wrong-secret")).toMatchObject({ status: 401 });
+		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+		expect(mocks.runDueAutoTopUps).not.toHaveBeenCalled();
+	});
 
-		it("returns 401 when wrong bearer token", async () => {
-			const GET = await importGET();
-			await GET(makeRequest("Bearer wrong-secret"));
+	it("fails closed when the secret is not configured", async () => {
+		delete process.env.CRON_SECRET;
 
-			expect(capturedJsonBody).toEqual({ error: "Unauthorized" });
-			expect(capturedStatus).toBe(401);
+		expect(await run("Bearer undefined")).toMatchObject({ status: 500 });
+		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+	});
+
+	it("charges each app that stores video and reports the day", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(28)],
+				["app-2", usage(144)],
+			]),
+		);
+
+		const { status, body } = await authorized();
+
+		expect(status).toBe(200);
+		expect(body).toMatchObject({
+			success: true,
+			appsProcessed: 2,
+			appsShort: 0,
+			autoTopUps: NO_TOP_UPS,
+		});
+		expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(mocks.getStorageUsageByApp.mock.calls[0]?.[0]).toEqual([
+			"app-1",
+			"app-2",
+		]);
+		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(2);
+		expect(mocks.chargeStorageDay).toHaveBeenCalledWith(
+			expect.objectContaining({
+				appId: "app-2",
+				accountId: "account-2",
+				usage: usage(144),
+				dateKey: body.date,
+			}),
+		);
+		const measured = new Map([["app-2", usage(56)]]);
+		mocks.getStorageUsageByApp.mockResolvedValueOnce(measured);
+		const tx = { lock: "held" };
+		const [{ measure }] = mocks.chargeStorageDay.mock.calls[1] ?? [{}];
+		expect(await measure(tx)).toEqual(usage(56));
+		expect(mocks.getStorageUsageByApp).toHaveBeenLastCalledWith(
+			["app-2"],
+			undefined,
+			tx,
+			{ dailyChargeAt: expect.any(Date) },
+		);
+	});
+
+	it("skips accounts already billed today", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+			],
+			[{ accountId: "account-1" }],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-2", usage(28)]]),
+		);
+
+		const { body } = await authorized();
+
+		expect(body.appsProcessed).toBe(1);
+		expect(mocks.getStorageUsageByApp.mock.calls[0]?.[0]).toEqual(["app-2"]);
+		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
+		expect(mocks.chargeStorageDay.mock.calls[0]?.[0]).toMatchObject({
+			accountId: "account-2",
 		});
 	});
 
-	describe("processing apps", () => {
-		it("processes apps with videos and charges correctly", async () => {
-			const GET = await importGET();
+	it("does not open a charge for an app that stores nothing and owes nothing", async () => {
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
 
-			setupDbSequence([
-				[{ id: "app-1" }],
-				[],
-				[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
-				[{ id: "account-1", appId: "app-1", balanceMicroCredits: 1000 }],
-				[],
-			]);
+		const { body } = await authorized();
 
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
-
-			expect(capturedJsonBody).toMatchObject({
-				success: true,
-				appsProcessed: 1,
-			});
-			expect(getCapturedJsonBody().date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-		});
-
-		it("skips already-processed apps", async () => {
-			const GET = await importGET();
-
-			setupDbSequence([
-				[{ id: "app-1" }],
-				[{ id: "snapshot-1", appId: "app-1", processedAt: new Date() }],
-			]);
-
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
-
-			expect(capturedJsonBody).toMatchObject({
-				success: true,
-				appsProcessed: 0,
-			});
-		});
-
-		it("skips apps with 0 total duration", async () => {
-			const GET = await importGET();
-
-			setupDbSequence([
-				[{ id: "app-1" }],
-				[],
-				[{ appId: "app-1", totalDurationMinutes: 0, videoCount: 0 }],
-			]);
-
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
-
-			expect(capturedJsonBody).toMatchObject({
-				success: true,
-				appsProcessed: 0,
-			});
-		});
-
-		it("skips apps with no credit account", async () => {
-			const GET = await importGET();
-
-			setupDbSequence([
-				[{ id: "app-1" }],
-				[],
-				[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
-				[],
-			]);
-
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
-
-			expect(capturedJsonBody).toMatchObject({
-				success: true,
-				appsProcessed: 0,
-			});
-		});
+		expect(body.appsProcessed).toBe(0);
+		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+		expect(mocks.markers).toEqual(["app-1"]);
 	});
 
-	describe("transaction behavior", () => {
-		it("creates negative transaction for storage_daily", async () => {
-			const GET = await importGET();
-			let insertValues: unknown = null;
+	it("looks up the last charge of every idle account in one read", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+				{ id: "account-3", appId: "app-3" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(0)],
+				["app-2", usage(28)],
+				["app-3", usage(0)],
+			]),
+		);
 
-			setupDbSequence(
+		const { body } = await authorized();
+
+		expect(body).toMatchObject({ complete: true, appsProcessed: 1 });
+		expect(mocks.latestStorageCharges).toHaveBeenCalledTimes(1);
+		expect(mocks.latestStorageCharges).toHaveBeenCalledWith(expect.anything(), [
+			"account-1",
+			"account-3",
+		]);
+	});
+
+	it("still settles an app that stores nothing now but is short from before", async () => {
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
+		mocks.latestStorageCharges.mockResolvedValue(
+			new Map([
 				[
-					[{ id: "app-1" }],
-					[],
-					[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
-					[{ id: "account-1", appId: "app-1", balanceMicroCredits: 1000 }],
-					[],
-				],
-				{
-					onTransaction: (tx) => {
-						tx.values.mockImplementation((vals: unknown) => {
-							if (isTransactionValues(vals) && vals.type === "storage_daily") {
-								insertValues = vals;
-							}
-							return Promise.resolve();
-						});
+					"account-1",
+					{
+						createdAt: new Date(),
+						owedMicroCredits: 28,
+						shortSince: new Date(),
 					},
-				},
-			);
-
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
-
-			if (!isTransactionValues(insertValues))
-				throw new Error("Expected storage transaction");
-			expect(insertValues.type).toBe("storage_daily");
-			expect(insertValues.amountMicroCredits).toBe(-26);
-		});
-
-		it("transaction amount is negative (debit)", async () => {
-			const GET = await importGET();
-			let capturedAmount: number | null = null;
-
-			setupDbSequence(
-				[
-					[{ id: "app-1" }],
-					[],
-					[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 3 }],
-					[{ id: "account-1", appId: "app-1", balanceMicroCredits: 500 }],
-					[],
 				],
-				{
-					onTransaction: (tx) => {
-						tx.values.mockImplementation((vals: unknown) => {
-							if (isTransactionValues(vals) && vals.type === "storage_daily") {
-								capturedAmount = vals.amountMicroCredits;
-							}
-							return Promise.resolve();
-						});
-					},
-				},
-			);
+			]),
+		);
 
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
+		await authorized();
 
-			expect(capturedAmount).toBeLessThan(0);
+		expect(mocks.latestStorageCharges).toHaveBeenCalledWith(expect.anything(), [
+			"account-1",
+		]);
+		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
+	});
+
+	it("emails once when an app first falls short, with the pause date seven days on", async () => {
+		const shortSince = new Date("2026-11-11T06:41:00Z");
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(28)]]),
+		);
+		mocks.chargeStorageDay.mockResolvedValue(
+			billed({ chargedMicroCredits: 5, shortSince, fellShort: true }),
+		);
+
+		const { body } = await authorized();
+
+		expect(body).toMatchObject({ appsProcessed: 1, appsShort: 1 });
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledWith({
+			accountId: "account-1",
+			shortSince,
+			pausesAt: new Date("2026-11-18T06:41:00Z"),
 		});
 	});
 
-	describe("response format", () => {
-		it("returns correct response format", async () => {
-			const GET = await importGET();
+	it("does not email again on later short or unpaid days", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(28)],
+				["app-2", usage(28)],
+			]),
+		);
+		mocks.chargeStorageDay
+			.mockResolvedValueOnce(
+				billed({ chargedMicroCredits: 5, shortSince: new Date() }),
+			)
+			.mockResolvedValueOnce({ state: "unpaid", shortSince: new Date() });
 
-			setupDbSequence([[]]);
+		const { body } = await authorized();
 
-			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
+		expect(body).toMatchObject({ appsProcessed: 1, appsShort: 2 });
+		expect(mocks.sendInfraOutOfCreditEmail).not.toHaveBeenCalled();
+	});
 
-			const body = getCapturedJsonBody();
-			expect(body).toHaveProperty("success", true);
-			expect(body).toHaveProperty("date");
-			expect(body).toHaveProperty("appsProcessed");
-			expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-			expect(typeof body.appsProcessed).toBe("number");
+	it("keeps going when one app fails", async () => {
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(28)],
+				["app-2", usage(28)],
+			]),
+		);
+		mocks.chargeStorageDay
+			.mockRejectedValueOnce(new Error("deadlock"))
+			.mockResolvedValueOnce(billed());
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const { status, body } = await authorized();
+
+		expect(status).toBe(200);
+		expect(body.appsProcessed).toBe(1);
+		expect(mocks.runDueAutoTopUps).toHaveBeenCalledTimes(2);
+		errors.mockRestore();
+	});
+
+	it("runs auto top-ups before and after the day's charges and adds up the report", async () => {
+		const order: string[] = [];
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(28)]]),
+		);
+		mocks.chargeStorageDay.mockImplementation(async () => {
+			order.push("charge");
+			return billed();
+		});
+		mocks.runDueAutoTopUps
+			.mockImplementationOnce(async () => {
+				order.push("top-up");
+				return { attempted: 2, succeeded: 1, failed: 1 };
+			})
+			.mockImplementationOnce(async () => {
+				order.push("top-up");
+				return { attempted: 1, succeeded: 1, failed: 0 };
+			});
+
+		const { body } = await authorized();
+
+		expect(order).toEqual(["top-up", "charge", "top-up"]);
+		expect(body.autoTopUps).toEqual({ attempted: 3, succeeded: 2, failed: 1 });
+	});
+
+	it("charges missed first months after the first top-ups and before the day is measured", async () => {
+		const order: string[] = [];
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.runDueAutoTopUps.mockImplementation(async () => {
+			order.push("top-up");
+			return NO_TOP_UPS;
+		});
+		mocks.chargeMissedFirstMonths.mockImplementation(async () => {
+			order.push("first months");
+			return { charged: 2, short: 1, failed: 0 };
+		});
+		mocks.getStorageUsageByApp.mockImplementation(async () => {
+			order.push("measure");
+			return new Map([["app-1", usage(28)]]);
+		});
+
+		const { body } = await authorized();
+
+		expect(order).toEqual(["top-up", "first months", "measure", "top-up"]);
+		expect(body.firstMonths).toEqual({ charged: 2, short: 1, failed: 0 });
+	});
+
+	it("opens the day's charge for a short first month even when nothing is charged daily, so a recovery can be recorded", async () => {
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
+		mocks.openFirstMonthShortfalls.mockResolvedValue(new Set(["account-1"]));
+
+		await authorized();
+
+		expect(mocks.openFirstMonthShortfalls).toHaveBeenCalledWith(["account-1"]);
+		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
+		expect(mocks.chargeStorageDay.mock.calls[0]?.[0]).toMatchObject({
+			accountId: "account-1",
+			measure: expect.any(Function),
 		});
 	});
 
-	describe("storage rate calculations", () => {
-		it("1 minute -> 2 credits", () => {
-			expect(dailyStorageMicroCredits(1)).toBe(2);
-		});
+	it("emails a new first month shortfall once, like a daily one, with the pause date seven days after it began", async () => {
+		const shortSince = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+		const accounts = () => [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+				{ id: "account-3", appId: "app-3" },
+			],
+			[],
+		];
+		mocks.selects = accounts();
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(0)],
+				["app-2", usage(0)],
+				["app-3", usage(0)],
+			]),
+		);
+		mocks.shortfallsAwaitingNotice.mockResolvedValueOnce(
+			new Map([
+				["account-2", { shortSince, ids: ["row-2"] }],
+				["account-3", { shortSince, ids: ["row-3"] }],
+			]),
+		);
+		const short = {
+			createdAt: shortSince,
+			owedMicroCredits: 850,
+			shortSince,
+			firstMonth: true,
+		};
+		mocks.latestStorageCharge.mockImplementation(
+			async (_db: unknown, accountId: string) =>
+				accountId === "account-1" ? null : short,
+		);
+		mocks.restoredSinceCharge.mockImplementation(
+			async (_db: unknown, accountId: string) => accountId === "account-3",
+		);
+		mocks.sendInfraOutOfCreditEmail.mockResolvedValue(true);
 
-		it("10 minutes -> 26 credits", () => {
-			expect(dailyStorageMicroCredits(10)).toBe(26);
-		});
+		const before = Date.now();
+		await authorized();
 
-		it("100 minutes -> 266 credits", () => {
-			expect(dailyStorageMicroCredits(100)).toBe(266);
+		const [accountIds, since] =
+			mocks.shortfallsAwaitingNotice.mock.calls[0] ?? [];
+		expect(accountIds).toEqual(["account-1", "account-2", "account-3"]);
+		expect(before - (since as Date).getTime()).toBeGreaterThanOrEqual(
+			7 * 24 * 60 * 60 * 1000 - 1000,
+		);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledWith({
+			accountId: "account-2",
+			shortSince,
+			pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
 		});
+		expect(mocks.markShortfallsNotified.mock.calls.map(([ids]) => ids)).toEqual(
+			[["row-2"], ["row-3"]],
+		);
 
-		it("1000 minutes -> 2666 credits", () => {
-			expect(dailyStorageMicroCredits(1000)).toBe(2666);
-		});
+		mocks.selects = accounts();
+		await authorized();
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+	});
 
-		it("0.5 minutes -> 1 credit", () => {
-			expect(dailyStorageMicroCredits(0.5)).toBe(1);
-		});
-
-		it("1,000 minutes for 30 days costs $0.80", () => {
-			expect((dailyStorageMicroCredits(1000) * 30) / 100_000).toBeCloseTo(
-				0.8,
-				3,
+	it("stamps a daily shortfall's row once its email was accepted, and leaves a rejected one for the next run", async () => {
+		const shortSince = new Date("2026-11-11T06:41:00Z");
+		const run = async (sent: boolean) => {
+			mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+			mocks.getStorageUsageByApp.mockResolvedValue(
+				new Map([["app-1", usage(28)]]),
 			);
+			mocks.chargeStorageDay.mockResolvedValueOnce(
+				billed({ chargedMicroCredits: 5, shortSince, fellShort: true }),
+			);
+			mocks.sendInfraOutOfCreditEmail.mockResolvedValueOnce(sent);
+			return authorized();
+		};
+
+		const { body } = await run(false);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.markStorageDayNotified).not.toHaveBeenCalled();
+
+		await run(true);
+		expect(mocks.markStorageDayNotified).toHaveBeenCalledWith(
+			"account-1",
+			body.date,
+			expect.any(Date),
+		);
+	});
+
+	it("keeps a first month shortfall to email again when the email could not be sent", async () => {
+		const shortSince = new Date();
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
+		mocks.shortfallsAwaitingNotice.mockResolvedValueOnce(
+			new Map([["account-1", { shortSince, ids: ["row-1"] }]]),
+		);
+		mocks.latestStorageCharge.mockResolvedValue({
+			createdAt: shortSince,
+			owedMicroCredits: 850,
+			shortSince,
+			firstMonth: true,
 		});
+		mocks.restoredSinceCharge.mockResolvedValue(false);
+		mocks.sendInfraOutOfCreditEmail.mockResolvedValue(false);
+
+		await authorized();
+
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.markShortfallsNotified).not.toHaveBeenCalled();
+	});
+
+	it("settles delivery days after the storage charges with the start day from the env, and none while it is unset", async () => {
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(28)]]),
+		);
+		const order: string[] = [];
+		mocks.chargeStorageDay.mockImplementation(async () => {
+			order.push("storage");
+			return billed();
+		});
+		mocks.settleDeliveryDays.mockImplementation(
+			async ({ startDay }: { startDay: string | null }) => {
+				order.push(`delivery ${startDay}`);
+				return { enabled: !!startDay, billed: 0 };
+			},
+		);
+
+		const off = await authorized();
+		expect(off.body.delivery).toMatchObject({ enabled: false });
+
+		mocks.deliveryBillingStart.mockReturnValue("2026-11-15");
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		const on = await authorized();
+
+		expect(on.body.delivery).toMatchObject({ enabled: true });
+		expect(order.filter((step) => step.startsWith("delivery"))).toEqual([
+			"delivery null",
+			"delivery 2026-11-15",
+		]);
+		expect(order.lastIndexOf("storage")).toBeLessThan(
+			order.indexOf("delivery 2026-11-15"),
+		);
+	});
+
+	it("emails a delivery day that first falls short, and stamps its row only once the email is accepted", async () => {
+		mocks.deliveryBillingStart.mockReturnValue("2026-11-15");
+		const shortSince = new Date("2026-11-17T06:41:00Z");
+		mocks.settleDeliveryDays.mockImplementation(
+			async ({
+				onFellShort,
+			}: {
+				onFellShort: (shortfall: {
+					accountId: string;
+					dateKey: string;
+					shortSince: Date;
+				}) => Promise<void>;
+			}) => {
+				await onFellShort({
+					accountId: "account-1",
+					dateKey: "2026-11-15",
+					shortSince,
+				});
+				await onFellShort({
+					accountId: "account-2",
+					dateKey: "2026-11-15",
+					shortSince,
+				});
+				return { billed: 2, short: 2 };
+			},
+		);
+		mocks.sendInfraOutOfCreditEmail
+			.mockResolvedValueOnce(true)
+			.mockResolvedValueOnce(false);
+
+		await authorized();
+
+		expect(mocks.sendInfraOutOfCreditEmail.mock.calls).toEqual([
+			[
+				{
+					accountId: "account-1",
+					shortSince,
+					pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
+				},
+			],
+			[
+				{
+					accountId: "account-2",
+					shortSince,
+					pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
+				},
+			],
+		]);
+		expect(mocks.markDeliveryDayNotified.mock.calls).toEqual([
+			["account-1", "2026-11-15", expect.any(Date)],
+		]);
+	});
+
+	it("answers with zero apps when there are none", async () => {
+		const { body } = await authorized();
+
+		expect(body).toMatchObject({
+			success: true,
+			appsProcessed: 0,
+			appsShort: 0,
+		});
+		expect(mocks.getStorageUsageByApp).not.toHaveBeenCalled();
 	});
 });

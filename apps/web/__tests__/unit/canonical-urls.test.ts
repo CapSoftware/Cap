@@ -141,11 +141,20 @@ describe("Canonical URLs", () => {
 		);
 	});
 
-	it("dynamic blog [slug] route generates canonical from the post slug", () => {
-		const content = readPage("(site)/blog/[slug]/page.tsx");
-		expect(content).toContain(
+	it("blog post routes generate canonical from the post slug", () => {
+		const metadata = readFileSync(
+			join(process.cwd(), "utils/blog-post-metadata.ts"),
+			"utf-8",
+		);
+		expect(metadata).toContain(
 			`canonical: \`https://cap.so/blog/\${post.slug}\``,
 		);
+		for (const route of [
+			"(site)/blog/[slug]/page.tsx",
+			"(infra-post)/blog/introducing-cap-infra/page.tsx",
+		]) {
+			expect(readPage(route)).toContain("blogPostMetadata(");
+		}
 	});
 
 	it("dynamic docs route generates canonical from the slug, with /docs as the docs home", () => {

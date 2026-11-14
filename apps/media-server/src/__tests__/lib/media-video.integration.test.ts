@@ -380,7 +380,8 @@ describe("generateThumbnail integration tests", () => {
 			},
 		});
 		const controller = new AbortController();
-		const input = `http://127.0.0.1:${server.port}/${crypto.randomUUID()}.mp4`;
+		const name = `${crypto.randomUUID()}.mp4`;
+		const input = `http://127.0.0.1:${server.port}/${name}`;
 		const reason = new Error("Recording worker lease expired");
 		const outcome = generateThumbnail(input, 5, {}, controller.signal).catch(
 			(error: unknown) => error,
@@ -409,7 +410,7 @@ describe("generateThumbnail integration tests", () => {
 							.split("\n");
 			const pids = commands
 				.filter(
-					(command) => command.includes("ffmpeg") && command.includes(input),
+					(command) => command.includes("ffmpeg") && command.includes(name),
 				)
 				.map((command) => Number.parseInt(command.trim(), 10));
 			expect(pids).toHaveLength(1);
@@ -1420,6 +1421,42 @@ describe("processVideo integration tests", () => {
 			expect(outputMetadata.audioCodec).toBe("aac");
 
 			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("keeps audio in a codec the probe cannot name, as AAC", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-unnamed-audio-"));
+		try {
+			const losslessPath = join(workDir, "input.mov");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"copy",
+				"-c:a",
+				"alac",
+				losslessPath,
+			]);
+
+			const metadata = await probeVideo(`file://${losslessPath}`);
+			expect(metadata.audioCodec).toBeNull();
+			expect(metadata.audioChannels).not.toBeNull();
+
+			for (const options of [{}, { remuxOnly: true }]) {
+				const tempFile = await processVideo(losslessPath, metadata, options);
+				tempFiles.push(tempFile.path);
+				const output = await probeVideo(`file://${tempFile.path}`);
+				expect(output.videoCodec).toBe("h264");
+				expect(output.audioCodec).toBe("aac");
+				expect(output.audioChannels).toBe(metadata.audioChannels);
+				await tempFile.cleanup();
+			}
 		} finally {
 			rmSync(workDir, { recursive: true, force: true });
 		}

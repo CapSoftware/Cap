@@ -57,6 +57,7 @@ interface SharedCapCardProps {
 	isSelected?: boolean;
 	anyCapSelected?: boolean;
 	onSelectToggle?: () => void;
+	selectedIds?: Video.VideoId[];
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
@@ -76,6 +77,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	isSelected,
 	anyCapSelected,
 	onSelectToggle,
+	selectedIds,
 }) => {
 	const displayCount =
 		analytics === 0
@@ -110,6 +112,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				isSelected={isSelected}
 				anyCapSelected={anyCapSelected}
 				onSelectToggle={onSelectToggle}
+				selectedIds={selectedIds}
 				onDelete={isOwner ? () => deleteCap.mutateAsync(cap.id) : undefined}
 			>
 				<div className="mb-2 space-y-1">

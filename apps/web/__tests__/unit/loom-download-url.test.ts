@@ -3,6 +3,7 @@ import {
 	getLoomDownloadUrl,
 	getReusableLoomDownloadUrl,
 	LoomDownloadTemporaryError,
+	LoomDownloadUnavailableError,
 } from "@/lib/loom-download-url";
 
 afterEach(() => {
@@ -162,6 +163,35 @@ describe("getLoomDownloadUrl", () => {
 			await expect(getLoomDownloadUrl("video")).rejects.toBeInstanceOf(
 				LoomDownloadTemporaryError,
 			);
+		},
+	);
+
+	it.each([
+		{ age: 25 * 60 * 60 * 1000, error: LoomDownloadUnavailableError },
+		{ age: 10 * 60 * 1000, error: LoomDownloadTemporaryError },
+	])(
+		"stops retrying once a video has had no source for a day: $age",
+		async ({ age, error }) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input) =>
+					String(input) === "https://www.loom.com/graphql"
+						? Response.json({
+								data: {
+									getVideo: {
+										id: "video",
+										createdAt: new Date(Date.now() - age).toISOString(),
+										downloadable: true,
+										download_enabled: true,
+										nullableRawCdnUrl: null,
+										__typename: "RegularUserVideo",
+									},
+								},
+							})
+						: new Response("Conflict", { status: 409 }),
+				),
+			);
+			await expect(getLoomDownloadUrl("video")).rejects.toBeInstanceOf(error);
 		},
 	);
 

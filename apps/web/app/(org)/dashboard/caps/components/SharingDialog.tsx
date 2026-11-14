@@ -15,9 +15,8 @@ import { faShareNodes } from "@fortawesome/free-solid-svg-icons/faShareNodes";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Globe2, Lock, Search } from "lucide-react";
-import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import {
@@ -29,12 +28,15 @@ import {
 	inviteVideoViewer,
 	revokeVideoViewer,
 } from "@/actions/videos/viewer-invites";
+import {
+	libraryDoodleHost,
+	SpaceDoodle,
+} from "@/app/(org)/dashboard/_components/library-doodles";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { Tooltip } from "@/components/Tooltip";
 import { buildEmbedCode } from "@/lib/embed-code";
 import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
@@ -322,10 +324,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		}
 	};
 
-	const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
-
+	// Reset to the saved settings once each time the dialog opens. Inviting or
+	// removing a viewer refreshes the page, which hands in a new sharedSpaces
+	// array; resetting on that would drop the edits the user has not saved.
+	const initializedForOpen = useRef(false);
 	useEffect(() => {
-		if (isOpen && sharedSpaces) {
+		if (!isOpen) {
+			initializedForOpen.current = false;
+			return;
+		}
+		if (sharedSpaces && !initializedForOpen.current) {
+			initializedForOpen.current = true;
 			const spaceIds = new Set(sharedSpaces.map((space) => space.id));
 			setSelectedSpaces(spaceIds);
 			setInitialSelectedSpaces(spaceIds);
@@ -340,15 +349,6 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setActiveTab(tabs[0]);
 		}
 	}, [isOpen, sharedSpaces, isPublic, linkOpenToAnyone, hasPassword, tabs[0]]);
-
-	const isSpaceSharedViaOrganization = useCallback(
-		(spaceId: string) => {
-			const space = spacesData?.find((s) => s.id === spaceId);
-			if (!space) return false;
-			return sharedSpaceIds.has(space.id);
-		},
-		[spacesData, sharedSpaceIds],
-	);
 
 	const handleToggleSpace = (spaceId: string) => {
 		setSelectedSpaces((prev) => {
@@ -662,41 +662,55 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								)}
 							</div>
 
-							<div className="relative mb-3">
-								<Input
-									type="text"
-									placeholder="Search and add to spaces..."
-									value={searchTerm}
-									className="pr-8"
-									onChange={(e) => setSearchTerm(e.target.value)}
-								/>
-								<Search
-									className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-10"
-									size={20}
-								/>
-							</div>
-							<div className="grid overflow-y-auto grid-cols-4 gap-3 pt-2 max-h-60">
-								{filteredSpaces && filteredSpaces.length > 0 ? (
-									filteredSpaces.map((space) => (
-										<SpaceCard
-											key={space.id}
-											space={space}
-											selectedSpaces={selectedSpaces}
-											handleToggleSpace={handleToggleSpace}
-											isSharedViaOrganization={isSpaceSharedViaOrganization(
-												space.id,
-											)}
-										/>
-									))
-								) : (
-									<div className="flex col-span-5 gap-2 justify-center items-center text-sm">
-										<p className="text-gray-12">
-											{allShareableItems && allShareableItems.length > 0
-												? "No spaces match your search"
-												: "No spaces available"}
+							<div className="rounded-lg border bg-gray-1 border-gray-4">
+								<div
+									className={clsx(
+										libraryDoodleHost,
+										"flex gap-3 items-center p-3 pb-2",
+									)}
+								>
+									<span className="flex justify-center items-center rounded-full size-8 shrink-0 bg-gray-3">
+										<SpaceDoodle size={20} />
+									</span>
+									<div className="min-w-0">
+										<p className="text-sm font-medium text-gray-12">Spaces</p>
+										<p className="text-xs text-gray-10 text-pretty">
+											Members of a space can watch it there. It also stays in My
+											Caps. To file it in a folder, use Move.
 										</p>
 									</div>
+								</div>
+								{allShareableItems.length > SPACE_SEARCH_THRESHOLD && (
+									<div className="relative px-3 pb-2">
+										<Search className="absolute left-6 top-1/2 size-4 -translate-y-1/2 pointer-events-none text-gray-9" />
+										<Input
+											type="text"
+											placeholder="Search spaces"
+											aria-label="Search spaces"
+											value={searchTerm}
+											className="pl-9 h-9"
+											onChange={(e) => setSearchTerm(e.target.value)}
+										/>
+									</div>
 								)}
+								<div className="overflow-y-auto pb-1 max-h-56 custom-scroll">
+									{filteredSpaces.length > 0 ? (
+										filteredSpaces.map((space) => (
+											<SpaceRow
+												key={space.id}
+												space={space}
+												selected={selectedSpaces.has(space.id)}
+												onToggle={() => handleToggleSpace(space.id)}
+											/>
+										))
+									) : (
+										<p className="px-3 py-4 text-sm text-center text-gray-10">
+											{allShareableItems.length > 0
+												? "No spaces match your search"
+												: "No spaces yet"}
+										</p>
+									)}
+								</div>
 							</div>
 						</>
 					) : (
@@ -761,82 +775,54 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	);
 };
 
-const SpaceCard = ({
+const SPACE_SEARCH_THRESHOLD = 6;
+
+const SpaceRow = ({
 	space,
-	selectedSpaces,
-	handleToggleSpace,
-	isSharedViaOrganization,
+	selected,
+	onToggle,
 }: {
 	space: {
 		id: string;
 		name: string;
 		iconUrl?: ImageUpload.ImageUrl | null;
-		organizationId: string;
-		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 		hasPassword?: boolean;
 	};
-	selectedSpaces: Set<string>;
-	handleToggleSpace: (spaceId: string) => void;
-	isSharedViaOrganization?: boolean;
-}) => {
-	const isSelected = selectedSpaces.has(space.id);
-
-	return (
-		<Tooltip
-			content={
-				isSharedViaOrganization
-					? `${space.name} (shared via organization)`
-					: space.name
-			}
+	selected: boolean;
+	onToggle: () => void;
+}) => (
+	<button
+		type="button"
+		aria-pressed={selected}
+		title={space.name}
+		onClick={onToggle}
+		className="flex gap-3 items-center px-3 w-full h-11 text-left transition-colors hover:bg-gray-3"
+	>
+		<SignedImageUrl
+			image={space.iconUrl}
+			name={space.name}
+			letterClass="text-[11px]"
+			className="flex-shrink-0 size-5"
+		/>
+		<span className="flex-1 min-w-0 text-sm truncate text-gray-12">
+			{space.name}
+		</span>
+		{space.hasPassword && (
+			<Lock
+				aria-label="Password protected"
+				className="size-3.5 text-amber-600"
+			/>
+		)}
+		<span
+			className={clsx(
+				"flex justify-center items-center rounded-md border transition-colors size-5 shrink-0",
+				selected ? "bg-blue-10 border-blue-10" : "border-gray-6 bg-gray-1",
+			)}
 		>
-			<button
-				type="button"
-				className={clsx(
-					"flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-2",
-					"duration-200 w-full p-2.5 rounded-xl cursor-pointer",
-					isSelected
-						? "bg-gray-3 border-green-500"
-						: "hover:bg-gray-3 hover:border-gray-5 border-gray-4",
-					isSharedViaOrganization && "ring-1 ring-inset ring-green-500/30",
-				)}
-				onClick={() => handleToggleSpace(space.id)}
-			>
-				<SignedImageUrl
-					image={space.iconUrl}
-					name={space.name}
-					letterClass="text-[11px]"
-					className="relative z-10 flex-shrink-0 size-5"
-				/>
-				<p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
-					{space.name}
-				</p>
-				{space.hasPassword && (
-					<div className="absolute top-1 left-1 flex size-4 items-center justify-center rounded-full bg-amber-500 text-white">
-						<Lock size={10} />
-					</div>
-				)}
-				<motion.div
-					key={space.id}
-					animate={{
-						scale: isSelected ? 1 : 0,
-					}}
-					initial={{
-						scale: isSelected ? 1 : 0,
-					}}
-					transition={{
-						type: isSelected ? "spring" : "tween",
-						stiffness: isSelected ? 300 : undefined,
-						damping: isSelected ? 20 : undefined,
-						duration: !isSelected ? 0.2 : undefined,
-					}}
-					className="flex absolute -top-2 -right-2 z-10 justify-center items-center bg-green-500 rounded-full bg-gray-4 size-4"
-				>
-					<Check className="text-white" size={10} />
-				</motion.div>
-			</button>
-		</Tooltip>
-	);
-};
+			{selected && <Check className="text-white" size={12} strokeWidth={3} />}
+		</span>
+	</button>
+);
 
 function useEmbedCode(capId: Video.VideoId) {
 	const publicEnv = usePublicEnv();
