@@ -152,7 +152,6 @@ impl EditorButton {
         self
     }
 
-    /// Caps the button so a long label truncates instead of growing it.
     pub fn max_width(mut self, width: Pixels) -> Self {
         self.max_width = Some(width);
         self
