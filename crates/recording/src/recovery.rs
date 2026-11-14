@@ -4351,11 +4351,17 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
         // directories and find the rebuilt files instead. Roll it back to the
         // original layout. Each step leaves a state this reconciliation
         // accepts, so a crash part way through resumes here.
+        // The staged config is gone once publication installed it. Its bytes
+        // can equal the original's, so whether it was installed is read from
+        // the files, not from the digests.
         let config = project.join("project-config.json");
-        if current.config != receipt.original.config {
+        if !workspace.join("staged/project-config.json").try_exists()? {
+            let backup_config = workspace.join("original-project-config.json");
             if receipt.original.config.is_some() {
-                rename_recovery_path(&workspace.join("original-project-config.json"), &config)?;
-            } else {
+                if backup_config.try_exists()? {
+                    rename_recovery_path(&backup_config, &config)?;
+                }
+            } else if config.try_exists()? {
                 std::fs::remove_file(&config)?;
             }
         }
@@ -7968,6 +7974,24 @@ mod transactional_recovery_tests {
                 std::fs::read(project.join("recording-meta.json")).unwrap(),
                 b"original status"
             );
+        }
+    }
+
+    #[test]
+    fn interrupted_publication_with_an_identical_staged_config_rolls_back() {
+        for after in 1..=3 {
+            let (_temporary, project, workspace) = publication_fixture();
+            std::fs::write(
+                workspace.join("staged/project-config.json"),
+                b"original config",
+            )
+            .unwrap();
+            let original = recovery_snapshot(&project).unwrap();
+            interrupt_publication(&project, &workspace, after);
+            let _lock = RecoveryLock::acquire(&project).unwrap();
+            assert_eq!(recovery_snapshot(&project).unwrap(), original, "{after}");
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
+            assert!(!workspace.join("original-segments").exists());
         }
     }
 
