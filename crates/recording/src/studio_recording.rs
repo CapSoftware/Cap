@@ -3928,6 +3928,44 @@ mod tests {
         ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer,
     };
 
+    /// A start that fails after the metadata was written leaves the recording
+    /// `Failed` with its error instead of `InProgress` forever (#3948).
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn a_failed_start_marks_its_recording_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        write_in_progress_meta(temp.path(), None).unwrap();
+        let error =
+            preserve_failed_startup::<()>(temp.path(), Err(anyhow!("screen capture setup failed")))
+                .unwrap_err();
+        assert_eq!(format!("{error:#}"), "screen capture setup failed");
+        let status = RecordingMeta::load_for_project(temp.path())
+            .unwrap()
+            .studio_meta()
+            .unwrap()
+            .status();
+        assert!(
+            matches!(&status, StudioRecordingStatus::Failed { error } if error == "screen capture setup failed"),
+            "{status:?}"
+        );
+
+        let started = tempfile::tempdir().unwrap();
+        write_in_progress_meta(started.path(), None).unwrap();
+        preserve_failed_startup(started.path(), Ok(())).unwrap();
+        assert!(matches!(
+            RecordingMeta::load_for_project(started.path())
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::InProgress
+        ));
+
+        let unwritten = tempfile::tempdir().unwrap();
+        assert!(preserve_failed_startup::<()>(unwritten.path(), Err(anyhow!("no meta"))).is_err());
+        assert!(!unwritten.path().join("recording-meta.json").exists());
+    }
+
     fn sidecar_response() -> CursorActorResponse {
         CursorActorResponse {
             cursors: [(
