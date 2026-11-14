@@ -576,8 +576,10 @@ fn stepped(fraction: f32, minimum: f32, maximum: f32, step: f32) -> f32 {
 impl Render for TeleprompterWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        let mirrored = self.state.mirror;
         self.script_input.update(cx, |input, _| {
-            input.set_placeholder(tr::dialog::teleprompter::placeholder())
+            input.set_placeholder(tr::dialog::teleprompter::placeholder());
+            input.set_mirrored(mirrored);
         });
         let theme = self.theme;
 
@@ -719,19 +721,22 @@ impl TeleprompterWindow {
                         // box and measures its own height from the row count,
                         // so the scroller and the auto-scroll maths see exactly
                         // the content height they did before.
-                        div().w_full().px(px(32.)).child(
-                            ui::TextInput::bare(&theme, "script", &self.script_input)
-                                .align(gpui::TextAlign::Center)
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_size(px(state.font_size))
-                                .line_height(px(state.font_size * state.line_height))
-                                .text_color(Hsla::from(theme.gray_12))
-                                // `placeholder:text-gray-8/70`
-                                .placeholder_color(Theme::with_alpha(theme.gray_8, 0.7))
-                                // Bare glass: `gray-12` at 25 %, the same wash
-                                // the other teleprompter controls use rather
-                                // than the settings accent.
-                                .selection_color(Theme::with_alpha(theme.gray_12, 0.25)),
+                        MirrorX::new(
+                            state.mirror,
+                            div().w_full().px(px(32.)).child(
+                                ui::TextInput::bare(&theme, "script", &self.script_input)
+                                    .align(gpui::TextAlign::Center)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_size(px(state.font_size))
+                                    .line_height(px(state.font_size * state.line_height))
+                                    .text_color(Hsla::from(theme.gray_12))
+                                    // `placeholder:text-gray-8/70`
+                                    .placeholder_color(Theme::with_alpha(theme.gray_8, 0.7))
+                                    // Bare glass: `gray-12` at 25 %, the same wash
+                                    // the other teleprompter controls use rather
+                                    // than the settings accent.
+                                    .selection_color(Theme::with_alpha(theme.gray_12, 0.25)),
+                            ),
                         ),
                     )
                     .child(div().h(px(spacer)).flex_shrink_0()),
@@ -1046,9 +1051,6 @@ impl TeleprompterWindow {
                     tr::dialog::teleprompter::mirror(),
                     self.state.mirror,
                     cx.listener(|this, _, window, cx| {
-                        // Persisted, but inert: this gpui rev has no flip
-                        // transform (the camera window's mirror button is
-                        // disabled for the same reason). README deviation.
                         this.state.mirror = !this.state.mirror;
                         this.touch(TeleprompterState::MIRROR, window, cx);
                         cx.notify();
@@ -1103,6 +1105,80 @@ impl TeleprompterWindow {
                 checked,
             ))
             .on_click(on_click)
+    }
+}
+
+/// `scale-x-[-1]`: paints its child mirrored left to right about its own
+/// centre. Hit testing stays unmirrored, so the script field reflects
+/// pointer positions itself (`TextInputState::set_mirrored`).
+struct MirrorX {
+    enabled: bool,
+    child: gpui::AnyElement,
+}
+
+impl MirrorX {
+    fn new(enabled: bool, child: impl IntoElement) -> Self {
+        Self {
+            enabled,
+            child: child.into_any_element(),
+        }
+    }
+}
+
+impl IntoElement for MirrorX {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for MirrorX {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        let axis = self.enabled.then(|| bounds.center().x);
+        window.with_mirrored_x(axis, |window| self.child.paint(window, cx));
     }
 }
 

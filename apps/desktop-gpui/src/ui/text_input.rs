@@ -538,6 +538,9 @@ pub struct TextInputState {
     layout: Rc<RefCell<Option<InputLayout>>>,
     /// Bounds of the *text* (inside the field's padding), in window space.
     text_bounds: Option<Bounds<Pixels>>,
+    /// Painted mirrored about the text's centre (`Window::with_mirrored_x`),
+    /// so pointer positions are reflected back before they are mapped.
+    mirrored: bool,
     line_height: Pixels,
     /// Single-line fields scroll horizontally to keep the caret visible.
     scroll_x: Pixels,
@@ -576,6 +579,7 @@ impl TextInputState {
             disabled: false,
             layout: Rc::new(RefCell::new(None)),
             text_bounds: None,
+            mirrored: false,
             line_height: px(16.),
             scroll_x: px(0.),
             drag: None,
@@ -626,6 +630,21 @@ impl TextInputState {
 
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
+    }
+
+    /// For a field painted inside `Window::with_mirrored_x` about its own
+    /// centre: clicks, drags and the IME's candidate window follow the
+    /// mirrored text.
+    pub fn set_mirrored(&mut self, mirrored: bool) {
+        self.mirrored = mirrored;
+    }
+
+    fn reflect_x(&self, x: Pixels, bounds: Bounds<Pixels>) -> Pixels {
+        if self.mirrored {
+            bounds.left() + bounds.right() - x
+        } else {
+            x
+        }
     }
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
@@ -1161,6 +1180,7 @@ impl TextInputState {
         let Some(bounds) = self.text_bounds else {
             return 0;
         };
+        let position = point(self.reflect_x(position.x, bounds), position.y);
         let layout = self.layout.borrow();
         let Some(layout) = layout.as_ref() else {
             return 0;
@@ -1432,6 +1452,14 @@ impl EntityInputHandler for TextInputState {
         let end_x = bounds.left() + align + layout.x_for_offset(range.end, self.line_height)
             - self.scroll_x;
         let top = bounds.top() + self.line_height * row as f32;
+        let (start_x, end_x) = if self.mirrored {
+            (
+                self.reflect_x(end_x, bounds),
+                self.reflect_x(start_x, bounds),
+            )
+        } else {
+            (start_x, end_x)
+        };
         Some(Bounds::from_corners(
             point(start_x, top),
             point(end_x.max(start_x), top + self.line_height),
@@ -3135,6 +3163,41 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[gpui::test]
+    fn a_mirrored_field_maps_pointer_and_ime_positions_through_the_mirror(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.add_empty_window().update(|window, cx| {
+            let body = measurement_body("mirror me", window, cx);
+            body.ensure_layout(body.layout_key(window, cx), Some(px(400.)), window, cx);
+            let bounds = Bounds::new(point(px(100.), px(20.)), size(px(400.), px(45.)));
+            let x = body
+                .layout
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .x_for_offset(3, px(45.));
+            body.state.update(cx, |state, _| {
+                state.text_bounds = Some(bounds);
+                state.line_height = px(45.);
+            });
+            let offset_at = |x: Pixels, cx: &mut App| {
+                body.state.read(cx).offset_for_position(point(x, px(30.)))
+            };
+            assert_eq!(offset_at(bounds.left() + x, cx), 3);
+            body.state.update(cx, |state, _| state.set_mirrored(true));
+            assert_eq!(offset_at(bounds.right() - x, cx), 3);
+            let ime = body
+                .state
+                .update(cx, |state, cx| {
+                    state.bounds_for_range(0..3, bounds, window, cx)
+                })
+                .unwrap();
+            assert_eq!(ime.right(), bounds.right());
+            assert_eq!(ime.left(), bounds.right() - x);
+        });
     }
 
     #[gpui::test]
