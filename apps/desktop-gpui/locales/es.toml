@@ -367,7 +367,7 @@ screen_region = "Región de pantalla"
 [settings.options.post_studio]
 do_nothing = "No hacer nada"
 open_editor = "Abrir el editor"
-show_cap = "Mostrar Cap"
+show_overlay = "Mostrar en superposición"
 
 [settings.options.post_screenshot]
 copy = "Copiar al portapapeles"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "Anotar primero"
 studio_do_nothing = "No hacer nada"
 studio_open_editor = "Abrir el editor"
 studio_open_editor_hint = "Editar enseguida"
-studio_show_cap = "Mostrar Cap"
-studio_show_cap_hint = "Volver a la grabadora"
+studio_show_overlay = "Superposición"
+studio_show_overlay_hint = "Copiar, compartir o exportar"
 
 [settings.shortcuts.label]
 add_marker = "Añadir marcador"
@@ -1146,6 +1146,33 @@ no_matching_displays = "No hay pantallas que coincidan"
 no_matching_windows = "No hay ventanas que coincidan"
 no_windows = "No se encontraron ventanas"
 window = "Ventana"
+
+[recordings_overlay]
+close = "Cerrar"
+copy = "Copiar al portapapeles"
+copy_link = "Copiar enlace para compartir"
+create_link = "Crear enlace para compartir"
+edit = "Editar"
+export = "Exportar"
+open = "Abrir"
+retry = "Reintentar"
+
+[recordings_overlay.progress]
+choose_image = "Elige dónde guardar la imagen"
+choose_video = "Elige dónde exportar el vídeo"
+copied = "Copiado al portapapeles"
+copy_failed = "No se pudo copiar"
+copying = "Copiando al portapapeles"
+creating_link = "Creando enlace para compartir"
+link_copied = "Enlace para compartir copiado"
+preparing = "Preparando"
+rendering_video = "Renderizando vídeo"
+save_failed = "No se pudo guardar"
+saved_image = "Imagen guardada"
+saved_video = "Vídeo guardado"
+saving_image = "Guardando imagen"
+saving_video = "Guardando vídeo"
+share_failed = "No se pudo crear el enlace"
 
 [controls]
 disk_full_resume = "No hay espacio suficiente para reanudar. Libera espacio e inténtalo de nuevo, o pulsa Detener para guardar."

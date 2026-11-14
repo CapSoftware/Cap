@@ -86,6 +86,7 @@ mod presets;
 mod style_presets;
 mod project_save;
 mod recording;
+mod recordings_overlay;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;

@@ -367,7 +367,7 @@ screen_region = "स्क्रीन क्षेत्र"
 [settings.options.post_studio]
 do_nothing = "कुछ न करें"
 open_editor = "एडिटर खोलें"
-show_cap = "Cap दिखाएँ"
+show_overlay = "ओवरले में दिखाएँ"
 
 [settings.options.post_screenshot]
 copy = "क्लिपबोर्ड पर कॉपी करें"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "पहले एनोटेट करें"
 studio_do_nothing = "कुछ न करें"
 studio_open_editor = "एडिटर खोलें"
 studio_open_editor_hint = "तुरंत एडिट करें"
-studio_show_cap = "Cap दिखाएँ"
-studio_show_cap_hint = "रिकॉर्डर पर वापस"
+studio_show_overlay = "ओवरले दिखाएँ"
+studio_show_overlay_hint = "कॉपी, शेयर या एक्सपोर्ट"
 
 [settings.shortcuts.label]
 add_marker = "मार्कर जोड़ें"
@@ -1146,6 +1146,33 @@ no_matching_displays = "कोई मिलता-जुलता डिस्�
 no_matching_windows = "कोई मिलती-जुलती विंडो नहीं"
 no_windows = "कोई विंडो नहीं मिली"
 window = "विंडो"
+
+[recordings_overlay]
+close = "बंद करें"
+copy = "क्लिपबोर्ड पर कॉपी करें"
+copy_link = "शेयर करने लायक लिंक कॉपी करें"
+create_link = "शेयर करने लायक लिंक बनाएँ"
+edit = "एडिट करें"
+export = "एक्सपोर्ट करें"
+open = "खोलें"
+retry = "फिर से कोशिश करें"
+
+[recordings_overlay.progress]
+choose_image = "चुनें कि इमेज कहाँ सेव करनी है"
+choose_video = "चुनें कि वीडियो कहाँ एक्सपोर्ट करना है"
+copied = "क्लिपबोर्ड पर कॉपी हो गया"
+copy_failed = "कॉपी नहीं हो सका"
+copying = "क्लिपबोर्ड पर कॉपी हो रहा है"
+creating_link = "शेयर करने लायक लिंक बन रहा है"
+link_copied = "शेयर करने लायक लिंक कॉपी हो गया"
+preparing = "तैयारी हो रही है"
+rendering_video = "वीडियो रेंडर हो रहा है"
+save_failed = "सेव नहीं हो सका"
+saved_image = "इमेज सेव हो गई"
+saved_video = "वीडियो सेव हो गया"
+saving_image = "इमेज सेव हो रही है"
+saving_video = "वीडियो सेव हो रहा है"
+share_failed = "लिंक नहीं बन सका"
 
 [controls]
 disk_full_resume = "फिर से शुरू करने के लिए डिस्क में जगह कम है। जगह खाली करके फिर कोशिश करें, या सहेजने के लिए रोकें दबाएँ।"

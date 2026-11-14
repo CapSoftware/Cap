@@ -367,7 +367,7 @@ screen_region = "Bildschirmbereich"
 [settings.options.post_studio]
 do_nothing = "Nichts tun"
 open_editor = "Editor öffnen"
-show_cap = "Cap anzeigen"
+show_overlay = "Im Overlay zeigen"
 
 [settings.options.post_screenshot]
 copy = "In die Zwischenablage kopieren"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "Erst beschriften"
 studio_do_nothing = "Nichts tun"
 studio_open_editor = "Editor öffnen"
 studio_open_editor_hint = "Sofort bearbeiten"
-studio_show_cap = "Cap anzeigen"
-studio_show_cap_hint = "Zurück zum Rekorder"
+studio_show_overlay = "Overlay zeigen"
+studio_show_overlay_hint = "Kopieren, teilen, exportieren"
 
 [settings.shortcuts.label]
 add_marker = "Marker hinzufügen"
@@ -1146,6 +1146,33 @@ no_matching_displays = "Keine passenden Bildschirme"
 no_matching_windows = "Keine passenden Fenster"
 no_windows = "Keine Fenster gefunden"
 window = "Fenster"
+
+[recordings_overlay]
+close = "Schließen"
+copy = "In die Zwischenablage kopieren"
+copy_link = "Link zum Teilen kopieren"
+create_link = "Link zum Teilen erstellen"
+edit = "Bearbeiten"
+export = "Exportieren"
+open = "Öffnen"
+retry = "Erneut versuchen"
+
+[recordings_overlay.progress]
+choose_image = "Wähle, wo das Bild gespeichert wird"
+choose_video = "Wähle, wohin das Video exportiert wird"
+copied = "In die Zwischenablage kopiert"
+copy_failed = "Kopieren fehlgeschlagen"
+copying = "Wird in die Zwischenablage kopiert"
+creating_link = "Link zum Teilen wird erstellt"
+link_copied = "Link zum Teilen kopiert"
+preparing = "Wird vorbereitet"
+rendering_video = "Video wird gerendert"
+save_failed = "Speichern fehlgeschlagen"
+saved_image = "Bild gespeichert"
+saved_video = "Video gespeichert"
+saving_image = "Bild wird gespeichert"
+saving_video = "Video wird gespeichert"
+share_failed = "Link konnte nicht erstellt werden"
 
 [controls]
 disk_full_resume = "Nicht genug Speicherplatz zum Fortsetzen. Geben Sie Speicher frei und versuchen Sie es erneut, oder drücken Sie Stopp, um zu speichern."
