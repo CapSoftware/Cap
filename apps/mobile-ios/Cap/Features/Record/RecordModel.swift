@@ -33,7 +33,7 @@ final class RecordModel {
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var wantsCamera = true
     var captureMode: CaptureMode = .instant
-    @ObservationIgnored private var studio: (writer: StudioTrackWriter, projectId: String)?
+    @ObservationIgnored private var studio: (writer: StudioTrackWriter, projectId: String, store: StudioStore)?
 
     init(session: SessionModel, folderId: String?) {
         self.session = session
@@ -233,7 +233,7 @@ final class RecordModel {
             Usage.track("recording_discarded", ["mode": "studio", "reason": "cancelled"])
             UIApplication.shared.isIdleTimerDisabled = false
             capture.cancelRecording()
-            StudioSession.shared.store.delete(studio.projectId)
+            studio.store.delete(studio.projectId)
             phase = .ready
             return
         }
@@ -279,7 +279,7 @@ final class RecordModel {
             session.toasts.show(error: error)
             return
         }
-        studio = (writer, projectId)
+        studio = (writer, projectId, store)
         stopping = false
         RecordingCoordinator.shared.activeModel = self
         capture.beginRecording(writer)
@@ -314,17 +314,17 @@ final class RecordModel {
         self.studio = nil
         phase = .ready
         guard var info = studio.writer.info else {
-            StudioSession.shared.store.delete(studio.projectId)
+            studio.store.delete(studio.projectId)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
             return
         }
         if let duration = try? result.get(), duration > 0 { info.duration = duration }
         guard info.duration >= Self.minimumDuration else {
-            StudioSession.shared.store.delete(studio.projectId)
+            studio.store.delete(studio.projectId)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
             return
         }
-        await StudioSession.shared.cameraRecordingFinished(projectId: studio.projectId, camera: info)
+        await StudioSession.shared.cameraRecordingFinished(projectId: studio.projectId, in: studio.store, camera: info)
     }
 
     private func writerFailed(_ error: any Error) {
