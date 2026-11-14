@@ -192,6 +192,9 @@ test("the Windows installer copies nothing while a CLI from this install runs", 
 	assert.match(wait, /GetDirectoryName\(\$\$_\.ExecutablePath\) -eq \$\$dir/);
 	assert.match(wait, /exit 2 \} catch \{ exit 0 \}/);
 	assert.match(wait, /\$\{If\} \$0 == 2/);
+	const probe = wait.indexOf('FindProcessCurrentUser "cap-cli.exe"');
+	assert.ok(probe >= 0 && probe < wait.indexOf("nsExec::ExecToStack"));
+	assert.match(wait, /FindProcessCurrentUser "cap-muxer\.exe"/);
 	assert.match(
 		wait,
 		/MB_RETRYCANCEL[^\n]*\/SD IDCANCEL IDRETRY \$\{CapToolsCheck\}/,
