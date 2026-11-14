@@ -140,6 +140,7 @@ beforeEach(() => {
 				bucketName: "bucket",
 				headObject: mocks.head,
 				copyObject: mocks.copy,
+				deleteObject: () => Effect.void,
 				getInternalSignedObjectUrl: () =>
 					Effect.succeed("https://storage.test/original.mp4"),
 			},
