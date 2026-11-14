@@ -124,16 +124,20 @@ export function BreadcrumbItem({
 	if (isLast) {
 		return (
 			<div
-				className="flex gap-1.5 px-2 items-center"
+				className="flex gap-2 items-center px-2 min-w-0"
+				title={name}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 			>
-				<AllFolders color={color} className="size-5" />
+				<AllFolders color={color} className="size-5 shrink-0" />
 				<p
-					className={clsx(`text-xl whitespace-nowrap text-gray-12`, {
-						"opacity-70": isMoving,
-					})}
+					className={clsx(
+						"text-xl font-semibold tracking-tight truncate text-gray-12",
+						{
+							"opacity-70": isMoving,
+						},
+					)}
 				>
 					{name}
 				</p>

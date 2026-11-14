@@ -277,9 +277,13 @@ export const WebRecorderDialog = () => {
 		<>
 			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogTrigger asChild>
-					<Button variant="blue" size="sm" className="flex items-center gap-2">
+					<Button
+						variant="blue"
+						size="sm"
+						className="flex gap-2 items-center px-4 h-9"
+					>
 						<MonitorIcon className="size-3.5" />
-						Record in Browser
+						Record in browser
 					</Button>
 				</DialogTrigger>
 				<DialogContent

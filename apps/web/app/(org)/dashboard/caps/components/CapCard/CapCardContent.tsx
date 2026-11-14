@@ -163,7 +163,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 	const renderSharedStatus = () => {
 		const baseClassName = clsx(
-			"text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
+			"flex shrink-0 gap-1 items-center text-[13px] text-gray-10 transition-colors duration-200",
 			"hover:text-gray-12",
 			hideSharedStatus ? "pointer-events-none" : "cursor-pointer",
 		);
@@ -179,8 +179,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Not shared{" "}
-						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+						Not shared
+						<FontAwesomeIcon
+							className="size-2 text-gray-9"
+							icon={faChevronDown}
+						/>
 					</p>
 				);
 			} else {
@@ -189,21 +192,23 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Shared{" "}
-						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+						Shared
+						<FontAwesomeIcon
+							className="size-2 text-gray-9"
+							icon={faChevronDown}
+						/>
 					</p>
 				);
 			}
-		} else {
-			return <p className={baseClassName}>Shared with you</p>;
 		}
+		if (isOwner) return null;
+		return <p className={baseClassName}>Shared with you</p>;
 	};
+	const sharedStatus = renderSharedStatus();
 
 	return (
-		<div>
-			<div className="h-[1.25rem] mb-1">
-				{" "}
-				{/* Fixed height container */}
+		<div className="flex flex-col gap-1 min-w-0">
+			<div className="h-5">
 				{isEditing && !sharedCapCard ? (
 					<textarea
 						rows={1}
@@ -211,11 +216,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onChange={(e) => setDraft(e.target.value)}
 						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
-						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
+						className="overflow-hidden p-0 m-0 w-full h-5 text-sm font-medium tracking-normal leading-5 truncate bg-transparent border-0 resize-none outline-0 text-gray-12 font-[inherit]"
 					/>
 				) : (
 					<p
-						className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
+						className="p-0 m-0 h-5 text-sm font-medium tracking-normal leading-5 truncate text-gray-12"
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
@@ -229,25 +234,27 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 				)}
 			</div>
 
-			{renderSharedStatus()}
-			<div className="mb-1 h-[1.5rem]">
-				{" "}
+			<div className="flex gap-1.5 items-center min-w-0 h-5">
+				{sharedStatus}
+				{sharedStatus && (
+					<span aria-hidden className="text-[13px] text-gray-7">
+						·
+					</span>
+				)}
 				{isDateEditing && !sharedCapCard ? (
-					<div className="flex items-center h-full">
-						<input
-							type="text"
-							value={dateValue}
-							onChange={handleDateChange}
-							onBlur={handleDateBlur}
-							onKeyDown={handleDateKeyDown}
-							className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
-							placeholder="YYYY-MM-DD HH:mm:ss"
-						/>
-					</div>
+					<input
+						type="text"
+						value={dateValue}
+						onChange={handleDateChange}
+						onBlur={handleDateBlur}
+						onKeyDown={handleDateKeyDown}
+						className="flex-1 min-w-0 h-5 text-[13px] leading-5 truncate bg-transparent text-gray-10 focus:outline-none"
+						placeholder="YYYY-MM-DD HH:mm:ss"
+					/>
 				) : (
 					<Tooltip content={`Cap created at ${effectiveDate}`}>
 						<p
-							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
+							className="min-w-0 text-[13px] leading-5 truncate transition-colors cursor-pointer text-gray-10 hover:text-gray-12"
 							onClick={handleDateClick}
 						>
 							{showFullDate

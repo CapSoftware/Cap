@@ -89,53 +89,76 @@ export default function BrowseSpacesPage() {
 
 	return (
 		<>
-			<div className="flex flex-wrap gap-3 justify-between items-start w-full">
-				<Button
-					onClick={() => {
-						dialogRequest.current += 1;
-						setShowSpaceDialog(true);
-					}}
-					size="sm"
-					variant="dark"
-				>
-					<FontAwesomeIcon className="size-3" icon={faPlus} />
-					Create Space
-				</Button>
-				<div className="flex relative w-full max-w-md">
-					<div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
-						<Search className="size-4 text-gray-9" />
+			<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-end mb-4 w-full">
+				<div className="min-w-0">
+					<h1 className="text-2xl font-semibold tracking-tight text-gray-12">
+						Spaces
+					</h1>
+					<p className="mt-1 text-sm text-gray-10">
+						Shared libraries for your teams and projects
+					</p>
+				</div>
+				<div className="flex flex-wrap gap-2 items-center w-full sm:w-auto">
+					<div className="flex relative flex-1 sm:flex-none sm:w-64">
+						<div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
+							<Search className="size-3.5 text-gray-9" />
+						</div>
+						<Input
+							type="text"
+							placeholder="Search spaces"
+							className="flex-1 pr-3 pl-8 w-full h-9 text-sm rounded-full placeholder:text-gray-9"
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+						/>
 					</div>
-					<Input
-						type="text"
-						placeholder="Search spaces..."
-						className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
-						value={searchQuery}
-						onChange={(e) => setSearchQuery(e.target.value)}
-					/>
+					<Button
+						onClick={() => {
+							dialogRequest.current += 1;
+							setShowSpaceDialog(true);
+						}}
+						size="sm"
+						variant="dark"
+						className="gap-2 px-4 h-9"
+					>
+						<FontAwesomeIcon className="size-3" icon={faPlus} />
+						Create space
+					</Button>
 				</div>
 			</div>
-			<div className="overflow-x-auto rounded-xl border border-gray-3">
-				<table className="min-w-full bg-gray-1">
-					<thead>
-						<tr className="text-sm text-left text-gray-10">
-							<th className="px-6 py-3 font-medium">Name</th>
-							<th className="px-6 py-3 font-medium">Members</th>
-							<th className="px-6 py-3 font-medium">Videos</th>
-							<th className="px-6 py-3 font-medium">Role</th>
-							<th className="px-6 py-3 font-medium">Actions</th>
+			<div className="overflow-x-auto rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] border-gray-3 bg-gray-1">
+				<table className="min-w-full">
+					<thead className="bg-gray-2">
+						<tr className="text-xs text-left text-gray-10">
+							<th className="px-3 py-2.5 sm:px-5 font-medium">Name</th>
+							<th className="hidden px-3 py-2.5 sm:px-5 font-medium sm:table-cell">
+								Members
+							</th>
+							<th className="hidden px-3 py-2.5 sm:px-5 font-medium sm:table-cell">
+								Videos
+							</th>
+							<th className="px-3 py-2.5 sm:px-5 font-medium">Role</th>
+							<th className="px-3 py-2.5 sm:px-5 font-medium">
+								<span className="sr-only">Actions</span>
+							</th>
 						</tr>
 					</thead>
 					<tbody>
 						{!spacesData && (
 							<tr>
-								<td colSpan={5} className="px-6 py-6 text-center text-gray-8">
+								<td
+									colSpan={5}
+									className="px-5 py-10 text-sm text-center border-t border-gray-3 text-gray-10"
+								>
 									Loading Spaces…
 								</td>
 							</tr>
 						)}
 						{spacesData && filteredSpaces && filteredSpaces.length === 0 && (
 							<tr>
-								<td colSpan={5} className="px-6 py-6 text-center text-gray-8">
+								<td
+									colSpan={5}
+									className="px-5 py-10 text-sm text-center border-t border-gray-3 text-gray-10"
+								>
 									No spaces found.
 								</td>
 							</tr>
@@ -145,36 +168,42 @@ export default function BrowseSpacesPage() {
 								<tr
 									key={space.id}
 									onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
-									className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
+									className="border-t transition-colors cursor-pointer group hover:bg-gray-2 border-gray-3"
 								>
-									<td className="flex gap-3 items-center px-6 py-4">
+									<td className="flex gap-3 items-center px-3 py-3 sm:px-5 min-w-0">
 										<SignedImageUrl
 											image={space.iconUrl}
 											name={space.name}
 											className="relative flex-shrink-0 size-7"
 											letterClass="text-sm"
 										/>
-										<span className="text-sm font-semibold text-gray-12">
+										<span
+											title={space.name}
+											className="text-sm font-medium truncate text-gray-12 max-w-[104px] sm:max-w-[220px] xl:max-w-[min(34vw,480px)]"
+										>
 											{space.name}
 										</span>
 									</td>
-									<td className="px-6 py-4 text-sm text-gray-12">
+									<td className="hidden px-3 py-3 sm:px-5 text-sm whitespace-nowrap tabular-nums sm:table-cell text-gray-11">
 										{space.memberCount} member
 										{space.memberCount === 1 ? "" : "s"}
 									</td>
-									<td className="px-6 py-4 text-sm text-gray-12">
+									<td className="hidden px-3 py-3 sm:px-5 text-sm whitespace-nowrap tabular-nums sm:table-cell text-gray-11">
 										{space.videoCount} video
 										{space.videoCount === 1 ? "" : "s"}
 									</td>
-									<td className="px-6 py-4 text-sm text-gray-12">
-										{getRoleLabel(space.currentUserRole)}
+									<td className="px-3 py-3 sm:px-5 text-sm">
+										<span className="inline-flex items-center px-2 h-6 text-xs font-medium rounded-full bg-gray-3 text-gray-11">
+											{getRoleLabel(space.currentUserRole)}
+										</span>
 									</td>
-									<td className="px-6">
+									<td className="px-3 w-px sm:px-5">
 										{space.currentUserCanManage && !space.primary ? (
-											<div className="flex gap-2">
+											<div className="flex gap-1 justify-end opacity-60 transition-opacity group-hover:opacity-100">
 												<Button
-													variant="gray"
-													className="size-8 p-0 min-w-[unset]"
+													variant="outline"
+													aria-label={`Edit ${space.name}`}
+													className="size-8 p-0 min-w-[unset] rounded-lg border-transparent hover:border-gray-4 hover:bg-gray-1"
 													size="sm"
 													onClick={async (e) => {
 														e.stopPropagation();
@@ -206,18 +235,17 @@ export default function BrowseSpacesPage() {
 													<FontAwesomeIcon icon={faEdit} className="size-3" />
 												</Button>
 												<Button
-													variant="gray"
+													variant="outline"
+													aria-label={`Delete ${space.name}`}
 													onClick={(e) => handleDeleteSpace(e, space)}
-													className="size-8 p-0 min-w-[unset]"
+													className="size-8 p-0 min-w-[unset] rounded-lg border-transparent hover:border-gray-4 hover:bg-gray-1"
 													size="sm"
 												>
 													<FontAwesomeIcon icon={faTrash} className="size-3" />
 												</Button>
 											</div>
 										) : (
-											<div className="h-8 text-gray-10">
-												<p>...</p>
-											</div>
+											<div className="h-8" />
 										)}
 									</td>
 								</tr>

@@ -67,38 +67,47 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 
 		return (
 			<div>
-				<div className="flex flex-wrap gap-2 items-center mb-10">
-					<NewSubfolderButton parentFolderId={folderId} />
-					<UploadCapButton size="sm" />
-					<WebRecorderDialog />
-					<CollectionShareControl
-						kind="folder"
-						collectionId={folderId}
-						isPublic={share.folder.public}
-						canManage={share.canManage}
-						isPro={share.ownerIsPro}
-						settings={
-							share.canManage
-								? (share.folder.settings?.publicPage ?? null)
-								: null
-						}
-					/>
-				</div>
-				<div className="flex flex-wrap gap-3 items-center mb-6 w-full">
-					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink />
+				<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-10 w-full">
+					<div className="flex-1 min-w-0">
+						<div className="flex items-center min-w-0 font-medium">
+							<ClientMyCapsLink />
 
-						{breadcrumb.map((folder, index) => (
-							<div key={folder.id} className="flex items-center">
-								<p className="mx-2 text-gray-10">/</p>
-								<BreadcrumbItem
-									id={folder.id}
-									name={folder.name}
-									color={folder.color}
-									isLast={index === breadcrumb.length - 1}
-								/>
-							</div>
-						))}
+							{breadcrumb.map((folder, index) => (
+								<div
+									key={folder.id}
+									className={
+										index === breadcrumb.length - 1
+											? "flex items-center min-w-0"
+											: "flex items-center shrink-0"
+									}
+								>
+									<p className="mx-2 text-gray-10">/</p>
+									<BreadcrumbItem
+										id={folder.id}
+										name={folder.name}
+										color={folder.color}
+										isLast={index === breadcrumb.length - 1}
+									/>
+								</div>
+							))}
+						</div>
+					</div>
+					<div className="flex flex-wrap gap-2 items-center">
+						<NewSubfolderButton parentFolderId={folderId} />
+						<UploadCapButton size="sm" />
+						<WebRecorderDialog />
+						<CollectionShareControl
+							kind="folder"
+							collectionId={folderId}
+							isPublic={share.folder.public}
+							canManage={share.canManage}
+							isPro={share.ownerIsPro}
+							settings={
+								share.canManage
+									? (share.folder.settings?.publicPage ?? null)
+									: null
+							}
+						/>
 					</div>
 				</div>
 
