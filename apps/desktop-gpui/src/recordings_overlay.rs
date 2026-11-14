@@ -287,9 +287,78 @@ fn existing_model(cx: &App) -> Option<Entity<Overlay>> {
 }
 
 pub fn show_studio_recording(project_dir: PathBuf, cx: &mut App) {
-    model(cx).update(cx, |overlay, cx| {
+    let model = model(cx);
+    model.update(cx, |overlay, cx| {
         overlay.add(project_dir, MediaKind::Recording, cx)
     });
+    #[cfg(debug_assertions)]
+    run_auto_actions(model, cx);
+}
+
+/// `CAP_GPUI_AUTO_RECORDINGS_OVERLAY=copy,share,export,edit`: run these
+/// actions on the newest card in order, each after the previous one settles,
+/// so the real-app tests can drive the overlay without synthetic clicks
+/// (which unprivileged CI sessions drop). Export writes to
+/// `CAP_GPUI_AUTO_EXPORT`.
+#[cfg(debug_assertions)]
+fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
+    let Ok(spec) = std::env::var("CAP_GPUI_AUTO_RECORDINGS_OVERLAY") else {
+        return;
+    };
+    let steps: Vec<String> = spec
+        .split(',')
+        .map(|step| step.trim().to_string())
+        .filter(|step| !step.is_empty())
+        .collect();
+    cx.spawn(async move |cx| {
+        for step in steps {
+            loop {
+                match cx.update(|cx| {
+                    model
+                        .read(cx)
+                        .entries
+                        .first()
+                        .map(|entry| entry.state.is_busy())
+                }) {
+                    Some(false) => break,
+                    Some(true) => cx.background_executor().timer(PROGRESS_POLL).await,
+                    None => return,
+                }
+            }
+            tracing::info!(step = %step, "recordings overlay auto action");
+            cx.update(|cx| {
+                let Some((id, path)) = model
+                    .read(cx)
+                    .entries
+                    .first()
+                    .map(|entry| (entry.id, entry.path.clone()))
+                else {
+                    return;
+                };
+                match step.as_str() {
+                    "copy" => model.update(cx, |overlay, cx| overlay.copy(id, cx)),
+                    "share" => model.update(cx, |overlay, cx| overlay.share(id, cx)),
+                    "export" => {
+                        let Some(destination) = std::env::var_os("CAP_GPUI_AUTO_EXPORT") else {
+                            return;
+                        };
+                        model.update(cx, |overlay, cx| {
+                            if overlay.begin(id, ActionKind::Save, Stage::ChoosingLocation, cx) {
+                                overlay.save_to(id, destination.into(), cx);
+                            }
+                        });
+                    }
+                    "edit" => {
+                        model.update(cx, |overlay, cx| overlay.remove(id, cx));
+                        cx.defer(move |cx| crate::app_windows::open_editor(path, cx));
+                    }
+                    other => tracing::warn!(other, "unknown recordings overlay auto action"),
+                }
+            });
+            cx.background_executor().timer(PROGRESS_POLL).await;
+        }
+    })
+    .detach();
 }
 
 pub fn screenshot_captured(png: Option<&Path>, cx: &mut App) {
@@ -725,6 +794,7 @@ impl Overlay {
                     {
                         Ok(output) => {
                             update_stage(&this, id, ActionKind::Copy, Stage::Copying, cx);
+                            tracing::info!(path = %output.display(), "recordings overlay copies the render");
                             cx.update(|cx| platform::copy_file_to_clipboard(&output, cx))
                         }
                         Err(error) => Err(error),
@@ -935,6 +1005,12 @@ fn finish(
             .as_ref()
             .err()
             .is_some_and(|error| cap_utils::export_resources::is_resource_stop(error));
+    tracing::info!(
+        ?kind,
+        ok = result.is_ok(),
+        cancelled,
+        "recordings overlay action finished"
+    );
     match &result {
         Ok(()) => crate::app_sounds::play_notification(),
         Err(error) if !cancelled => {
