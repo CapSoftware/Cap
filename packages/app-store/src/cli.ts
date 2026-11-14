@@ -19,6 +19,7 @@ import {
 	type BaseApp,
 	listAppFolders,
 	loadApp,
+	secretKeysOf,
 	type ValidationIssue,
 	validateAppStore,
 } from "./validate";
@@ -74,6 +75,7 @@ async function loadBase(ref: string): Promise<Map<string, BaseApp>> {
 				base.set(app.id, {
 					version: app.manifest.version,
 					contentHash: app.contentHash,
+					secretKeys: secretKeysOf(app.manifest),
 				});
 			}
 		}

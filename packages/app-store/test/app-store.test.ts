@@ -288,6 +288,32 @@ describe("validator guards", () => {
 	});
 });
 
+describe("secret settings across versions", () => {
+	it("refuses an update that turns a secret into plain text", async () => {
+		const { root, dir } = await appFromTemplate("connection");
+		const before = await loadApp(dir, "my-app");
+		const manifestPath = join(dir, "manifest.json");
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+		manifest.version = "1.1.0";
+		manifest.connection.settings[0].type = "text";
+		await writeFile(manifestPath, JSON.stringify(manifest));
+		const base = new Map([
+			[
+				"my-app",
+				{
+					version: "1.0.0",
+					contentHash: before.app?.contentHash ?? "",
+					secretKeys: ["apiKey"],
+				},
+			],
+		]);
+		const { issues } = await validateAppStore(root, { base });
+		expect(issues.map((issue) => issue.message).join("\n")).toContain(
+			'setting "apiKey" was a secret and must stay one',
+		);
+	});
+});
+
 describe("connection urls", () => {
 	it("accepts public https urls only", () => {
 		expect(connectionUrlProblem("https://example.com/cap")).toBeNull();

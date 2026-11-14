@@ -490,7 +490,16 @@ export function compareSemver(a: string, b: string) {
 	return 0;
 }
 
-export type BaseApp = { version: string; contentHash: string };
+export type BaseApp = {
+	version: string;
+	contentHash: string;
+	secretKeys?: string[];
+};
+
+export const secretKeysOf = (manifest: Manifest) =>
+	(manifest.connection?.settings ?? [])
+		.filter((setting) => setting.type === "secret")
+		.map((setting) => setting.key);
 
 export async function listAppFolders(appsRoot: string) {
 	const entries = await readdir(appsRoot, { withFileTypes: true }).catch(
@@ -544,6 +553,18 @@ export async function validateAppStore(
 		for (const app of apps) {
 			const previous = options.base.get(app.id);
 			if (!previous || previous.contentHash === app.contentHash) continue;
+			for (const key of previous.secretKeys ?? []) {
+				const setting = app.manifest.connection?.settings?.find(
+					(candidate) => candidate.key === key,
+				);
+				if (setting && setting.type !== "secret") {
+					issues.push({
+						app: app.id,
+						file: "manifest.json",
+						message: `setting "${key}" was a secret and must stay one. Use a new key for a different kind of value`,
+					});
+				}
+			}
 			if (compareSemver(app.manifest.version, previous.version) <= 0) {
 				issues.push({
 					app: app.id,
