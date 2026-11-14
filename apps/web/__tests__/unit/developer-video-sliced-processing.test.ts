@@ -213,14 +213,19 @@ afterEach(() => {
 });
 
 describe("deciding how a video's adaptive stream is encoded", () => {
-	const probed = (duration: number) => {
+	const probed = (
+		duration: number,
+		source: Partial<Parameters<typeof developerVideo>[0]> = {},
+		size = { width: 1920, height: 1080 },
+	) => {
 		mocks.store.video = developerVideo({
 			duration,
 			processing: processingState({ probe: null }),
+			...source,
 		});
 		mocks.probe.mockResolvedValue({
 			status: "probed",
-			metadata: { duration, width: 1920, height: 1080, fps: 30 },
+			metadata: { duration, ...size, fps: 30 },
 		});
 	};
 
@@ -244,6 +249,22 @@ describe("deciding how a video's adaptive stream is encoded", () => {
 		});
 		expect(state().sliced?.output).toMatch(/^[A-Za-z0-9_-]{16}$/);
 		expect(video().status).toBe("processing");
+	});
+
+	it("leaves a ladder that tops out above 1080p on the single job", async () => {
+		probed(3797, { maxResolutionTier: "2160p" }, { width: 3840, height: 2160 });
+
+		await prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+		expect(state().sliced).toBeUndefined();
+	});
+
+	it("slices a 4K source whose ladder is held to 1080p", async () => {
+		probed(3797, { maxResolutionTier: "1080p" }, { width: 3840, height: 2160 });
+
+		await prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+		expect(state().sliced?.state).toBe("encoding");
 	});
 
 	it("leaves a shorter video on the single job", async () => {

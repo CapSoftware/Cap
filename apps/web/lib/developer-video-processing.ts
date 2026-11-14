@@ -25,6 +25,7 @@ import {
 	createDeveloperEncodeId,
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_MASTER_PLAYLIST,
+	type DeveloperVideoLadderTier,
 	developerVideoKeys,
 	developerVideoSourceExtension,
 	HLS_PLAYLIST_CONTENT_TYPE,
@@ -316,6 +317,25 @@ async function commitEncodeState(
 
 function slicedHlsEnabled(): boolean {
 	return serverEnv().INFRA_SLICED_HLS !== "off";
+}
+
+// Ladders that top out above 1080p stay on the single job. Beside a steady
+// stream of Cap's own jobs, their slices left the slowest of those jobs a
+// little slower than one whole 4K ladder does, in repeated runs. Slices of
+// 1080p and lower ladders cost Cap's jobs nothing measurable.
+const SLICED_LADDER_TIERS: readonly DeveloperVideoLadderTier[] = [
+	"360p",
+	"720p",
+	"1080p",
+];
+
+function slicedHlsTier(
+	video: DeveloperVideoRow,
+	source: { width: number; height: number },
+): boolean {
+	return SLICED_LADDER_TIERS.includes(
+		planDeveloperVideoEncode(source, video.maxResolutionTier).ladderMaxTier,
+	);
 }
 
 async function findDeveloperVideo(
@@ -677,9 +697,11 @@ export async function prepareDeveloperVideoProcessing(
 			Number.isFinite(metadata.duration) && metadata.duration > 0
 				? metadata.duration
 				: null;
-		const slices = slicedHlsEnabled()
-			? planDeveloperVideoSlices(probedDuration)
-			: null;
+		const slices =
+			slicedHlsEnabled() &&
+			slicedHlsTier(video, { width: metadata.width, height: metadata.height })
+				? planDeveloperVideoSlices(probedDuration)
+				: null;
 		const updated = await underAccountLock(video.appId, async (tx) => {
 			await chargeForProbedDuration(
 				video,
