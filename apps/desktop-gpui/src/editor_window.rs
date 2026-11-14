@@ -1267,6 +1267,10 @@ enum Scrub {
     Press { time: f64 },
 }
 
+/// The narrowest an audio fade's double-click target gets, so a short fade
+/// can still be reset.
+const FADE_RESET_MIN_PX: f64 = 8.;
+
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
@@ -2646,6 +2650,95 @@ impl EditorWindow {
         }
         self.project_changed(window, cx);
         true
+    }
+
+    /// A double-click on a zoom or scene handle runs that edge to its
+    /// neighbour, and one inside an audio fade resets it. The segment the
+    /// first click selected stays selected, as it did in 0.6.0.
+    #[allow(clippy::too_many_arguments)]
+    fn double_click_segment(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        hit: edits::Hit,
+        press_time: f64,
+        secs_per_pixel: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let selection = self.selection.clone();
+        let changed = match (kind, hit) {
+            (TrackKind::Zoom | TrackKind::Scene, edits::Hit::Handle { index, start }) => {
+                let segments = self.timeline.segments(kind);
+                if index >= segments.len() {
+                    return false;
+                }
+                let edge =
+                    edits::fill_gap_edge(segments, lane, index, start, self.total_duration());
+                let changed = self.edit(
+                    |timeline| {
+                        if start {
+                            edits::set_segment_start(timeline, kind, index, edge)
+                        } else {
+                            edits::set_segment_end(timeline, kind, index, edge)
+                        }
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.set_preview_time(edge);
+                    self.note_edit("fill-gap", Some(kind));
+                }
+                changed
+            }
+            // A short fade lies wholly inside the 10 px trim-handle zone, so a
+            // handle hit can be a fade double-click too.
+            (TrackKind::Audio, edits::Hit::Body { index } | edits::Hit::Handle { index, .. }) => {
+                let Some(fade_in) = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.audio_segments.get(index))
+                    .and_then(|segment| {
+                        edits::fade_reset_at(
+                            segment.start,
+                            segment.end,
+                            segment.fade_in,
+                            segment.fade_out,
+                            press_time,
+                            FADE_RESET_MIN_PX * secs_per_pixel,
+                        )
+                    })
+                else {
+                    return false;
+                };
+                let changed = self.edit(
+                    |timeline| {
+                        let Some(segment) = timeline.audio_segments.get_mut(index) else {
+                            return false;
+                        };
+                        if fade_in {
+                            segment.fade_in = 0.;
+                        } else {
+                            segment.fade_out = 0.;
+                        }
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.note_edit("fade-reset", Some(kind));
+                }
+                changed
+            }
+            _ => return false,
+        };
+        if changed {
+            self.set_selection(selection, cx);
+        }
+        changed
     }
 
     fn edit(
@@ -4930,6 +5023,12 @@ impl EditorWindow {
                 window,
                 cx,
             );
+            return;
+        }
+
+        if event.click_count == 2
+            && self.double_click_segment(kind, lane, hit, press_time, secs_per_pixel, window, cx)
+        {
             return;
         }
 

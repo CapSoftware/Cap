@@ -486,6 +486,51 @@ fn neighbours(segments: &[Segment], lane: u32, index: usize, total: f64) -> (f64
     (previous_end, next_start)
 }
 
+/// Where a double-clicked zoom or scene handle runs to (`fillStart` /
+/// `fillEnd`, `TL/ZoomTrack.tsx:359-407`, `TL/SceneTrack.tsx:228-262`): the
+/// neighbouring segment on its lane, or the timeline's edge. A neighbour
+/// that already touches the edge leaves it where it is.
+pub fn fill_gap_edge(
+    segments: &[Segment],
+    lane: u32,
+    index: usize,
+    start: bool,
+    total: f64,
+) -> f64 {
+    let (previous_end, next_start) = neighbours(segments, lane, index, total);
+    let segment = &segments[index];
+    if start {
+        previous_end.min(segment.start)
+    } else {
+        next_start.max(segment.end)
+    }
+}
+
+/// Which fade a double-click on an audio segment resets
+/// (`FadeControl`'s `onDblClick`, `TL/AudioTrack.tsx:582-593`): `Some(true)`
+/// inside the fade-in shade, `Some(false)` inside the fade-out one, the
+/// nearer edge where they overlap. `min_span` keeps a short fade hittable.
+pub fn fade_reset_at(
+    start: f64,
+    end: f64,
+    fade_in: f64,
+    fade_out: f64,
+    time: f64,
+    min_span: f64,
+) -> Option<bool> {
+    let duration = (end - start).max(0.);
+    let fade_in_end = start + fade_in.max(min_span).min(duration);
+    let fade_out_start = end - fade_out.max(min_span).min(duration);
+    let in_fade_in = fade_in > 0. && time >= start && time <= fade_in_end;
+    let in_fade_out = fade_out > 0. && time <= end && time >= fade_out_start;
+    match (in_fade_in, in_fade_out) {
+        (true, true) => Some(time - start <= end - time),
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    }
+}
+
 /// `SegmentHandle position="start"`'s setup (`TL/MaskTrack.tsx:404-419`):
 /// `minValue = prevEnd`, `maxValue = max(minValue, min(end - minDuration,
 /// nextStart - minDuration))`.
@@ -3556,6 +3601,65 @@ mod tests {
         assert_eq!(min_segment_duration(TrackKind::Keyboard, 0.001), 0.3);
         assert_eq!(min_segment_duration(TrackKind::Audio, 0.001), 0.5);
         assert_eq!(min_segment_duration(TrackKind::Mask, 0.05), 4.);
+    }
+
+    #[test]
+    fn a_double_clicked_handle_fills_the_gap_to_its_neighbour() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": [
+                    { "start": 2.0, "end": 5.0, "amount": 1.5, "mode": "auto" },
+                    { "start": 20.0, "end": 24.0, "amount": 2.0, "mode": "auto" }
+                ],
+                "sceneSegments": [
+                    { "start": 8.0, "end": 12.0, "mode": "cameraOnly" },
+                    { "start": 15.0, "end": 18.0, "mode": "hideCamera" }
+                ]
+            }
+        }));
+        for (kind, expected) in [
+            (TrackKind::Zoom, [(0., 20.), (5., 30.)]),
+            (TrackKind::Scene, [(0., 15.), (12., 30.)]),
+        ] {
+            let model = TimelineModel::build(&project, false, false);
+            let track = match kind {
+                TrackKind::Zoom => model.zoom.clone(),
+                _ => model.scene.clone(),
+            };
+            for (index, (start, end)) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    fill_gap_edge(&track, 0, index, true, 30.),
+                    start,
+                    "{kind:?}"
+                );
+                assert_eq!(fill_gap_edge(&track, 0, index, false, 30.), end, "{kind:?}");
+            }
+        }
+
+        // Filled, the two zooms touch, and a second double-click on either
+        // shared edge goes nowhere instead of jumping over the neighbour.
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(set_segment_end(timeline, TrackKind::Zoom, 0, 20.));
+        assert!(!set_segment_end(timeline, TrackKind::Zoom, 0, 20.));
+        let model = TimelineModel::build(&project, false, false);
+        assert_eq!(fill_gap_edge(&model.zoom, 0, 0, false, 30.), 20.);
+        assert_eq!(fill_gap_edge(&model.zoom, 0, 1, true, 30.), 20.);
+    }
+
+    #[test]
+    fn a_double_click_inside_a_fade_resets_that_fade() {
+        let at = |time: f64| fade_reset_at(10., 20., 2., 1., time, 0.1);
+        assert_eq!(at(10.), Some(true));
+        assert_eq!(at(11.9), Some(true));
+        assert_eq!(at(15.), None);
+        assert_eq!(at(19.2), Some(false));
+        assert_eq!(at(20.), Some(false));
+        assert_eq!(at(21.), None);
+        assert_eq!(fade_reset_at(10., 20., 0., 0., 10., 5.), None);
+        assert_eq!(fade_reset_at(10., 20., 0.01, 0., 10.4, 0.5), Some(true));
+        assert_eq!(fade_reset_at(10., 20., 10., 10., 12., 0.1), Some(true));
+        assert_eq!(fade_reset_at(10., 20., 10., 10., 18., 0.1), Some(false));
     }
 
     #[test]
