@@ -906,12 +906,24 @@ export async function dispatchDeveloperVideoParts(
 		knownSource === undefined && tokens.length > 1 && video.s3Key
 			? await headDeveloperVideoObject(video.s3Key)
 			: knownSource;
-	return Promise.allSettled([
-		...tokens.map(([part, token]) =>
-			sendDeveloperVideoPart(video, processing, part, token, source),
-		),
-		...(slicedHlsEncoding(processing) ? [slices()] : []),
-	]);
+	const send = ([part, token]: [DeveloperVideoPart, string]) =>
+		sendDeveloperVideoPart(video, processing, part, token, source);
+	if (!slicedHlsEncoding(processing)) {
+		return Promise.allSettled(tokens.map(send));
+	}
+	// The MP4 goes out before the slices: a worker making an Infra MP4 turns
+	// slices away, so the slices that follow land on the other workers and the
+	// MP4 runs on its own, as it does beside a whole-video ladder.
+	const mp4 = await Promise.allSettled(
+		tokens.filter(([part]) => part === "mp4").map(send),
+	);
+	return [
+		...mp4,
+		...(await Promise.allSettled([
+			...tokens.filter(([part]) => part !== "mp4").map(send),
+			slices(),
+		])),
+	];
 }
 
 async function sendDeveloperVideoPart(

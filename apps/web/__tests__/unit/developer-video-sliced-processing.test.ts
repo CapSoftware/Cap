@@ -325,6 +325,40 @@ describe("sending slices", () => {
 		});
 	});
 
+	it("sends the MP4 before any slice when the video starts", async () => {
+		let answerMp4: (value: { status: "started"; jobId: string }) => void = () =>
+			undefined;
+		const startJob = mocks.startJob.getMockImplementation();
+		mocks.startJob.mockImplementation(async (path, body) =>
+			path === "/video/process"
+				? new Promise((resolve) => {
+						answerMp4 = resolve;
+					})
+				: startJob?.(path, body),
+		);
+
+		const dispatched = dispatchDeveloperVideoParts("video-1", "encode-1");
+		await vi.waitFor(() => expect(mocks.startJob).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(mocks.startJob.mock.calls.map(([path]) => path)).toEqual([
+			"/video/process",
+		]);
+
+		answerMp4({ status: "started", jobId: "mp4-job" });
+		const results = await dispatched;
+		expect(results.map((result) => result.status)).toEqual([
+			"fulfilled",
+			"fulfilled",
+		]);
+		expect(mocks.startJob.mock.calls.map(([path]) => path)).toEqual([
+			"/video/process",
+			"/video/ladder",
+			"/video/ladder",
+			"/video/ladder",
+		]);
+		expect(state().mp4).toMatchObject({ state: "running", jobId: "mp4-job" });
+	});
+
 	it("gives the first slice the audio and the poster, and the others neither", async () => {
 		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
 		const first = latest(0);
