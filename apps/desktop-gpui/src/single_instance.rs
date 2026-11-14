@@ -104,9 +104,15 @@ pub fn acquire() {
 /// a reused pid can never receive the signal.
 #[cfg(target_os = "linux")]
 fn take_over_from_unresponsive_linux_instance(pid: i32) {
-    let Ok(process) = LinuxProcess::open(pid) else {
-        tracing::info!(pid, "the previous Cap GPUI exited; starting a new one");
-        return;
+    let process = match LinuxProcess::open(pid) {
+        Ok(process) => process,
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
+            tracing::info!(pid, "the previous Cap GPUI exited; starting a new one");
+            return;
+        }
+        Err(error) => crate::startup::fail(format!(
+            "Another copy of Cap (process {pid}) is running but isn't responding, and it could not be checked: {error}"
+        )),
     };
     if !is_cap_gpui(pid) {
         tracing::info!(pid, "the previous Cap GPUI exited; starting a new one");
