@@ -156,6 +156,10 @@ async function buildCommand(args: string[]) {
 
 async function schemaCommand() {
 	await writeFile(schemaPath, manifestJsonSchema());
+	const biome = join(repoRoot, "node_modules/.bin/biome");
+	if (await stat(biome).catch(() => null)) {
+		execFileSync(biome, ["format", "--write", schemaPath], { cwd: repoRoot });
+	}
 	console.log(`Wrote ${schemaPath}`);
 }
 

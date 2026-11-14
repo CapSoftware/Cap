@@ -19,9 +19,7 @@
 				},
 				"apiVersion": {
 					"type": "number",
-					"enum": [
-						1
-					],
+					"enum": [1],
 					"description": "The App Store API version this app is written for."
 				},
 				"id": {
@@ -53,10 +51,7 @@
 				},
 				"author": {
 					"type": "object",
-					"required": [
-						"name",
-						"github"
-					],
+					"required": ["name", "github"],
 					"properties": {
 						"name": {
 							"type": "string",
@@ -166,11 +161,7 @@
 				},
 				"builtin": {
 					"type": "string",
-					"enum": [
-						"slack",
-						"amazon-s3",
-						"google-drive"
-					],
+					"enum": ["slack", "amazon-s3", "google-drive"],
 					"description": "Only for apps published by Cap that use one of Cap's own integrations."
 				},
 				"backgrounds": {
@@ -179,11 +170,7 @@
 						"anyOf": [
 							{
 								"type": "object",
-								"required": [
-									"id",
-									"name",
-									"image"
-								],
+								"required": ["id", "name", "image"],
 								"properties": {
 									"id": {
 										"type": "string",
@@ -210,11 +197,7 @@
 							},
 							{
 								"type": "object",
-								"required": [
-									"id",
-									"name",
-									"gradient"
-								],
+								"required": ["id", "name", "gradient"],
 								"properties": {
 									"id": {
 										"type": "string",
@@ -233,11 +216,7 @@
 									},
 									"gradient": {
 										"type": "object",
-										"required": [
-											"from",
-											"to",
-											"angle"
-										],
+										"required": ["from", "to", "angle"],
 										"properties": {
 											"from": {
 												"type": "string",
@@ -264,11 +243,7 @@
 							},
 							{
 								"type": "object",
-								"required": [
-									"id",
-									"name",
-									"color"
-								],
+								"required": ["id", "name", "color"],
 								"properties": {
 									"id": {
 										"type": "string",
@@ -346,11 +321,7 @@
 							},
 							"fontWeight": {
 								"type": "number",
-								"enum": [
-									400,
-									500,
-									700
-								]
+								"enum": [400, 500, 700]
 							},
 							"size": {
 								"$ref": "#/$defs/Int",
@@ -394,18 +365,11 @@
 							},
 							"highlightStyle": {
 								"type": "string",
-								"enum": [
-									"color",
-									"pill"
-								]
+								"enum": ["color", "pill"]
 							},
 							"animation": {
 								"type": "string",
-								"enum": [
-									"none",
-									"bounce",
-									"pop"
-								]
+								"enum": ["none", "bounce", "pop"]
 							},
 							"uppercase": {
 								"type": "boolean"
@@ -429,11 +393,7 @@
 					"type": "array",
 					"items": {
 						"type": "object",
-						"required": [
-							"id",
-							"name",
-							"values"
-						],
+						"required": ["id", "name", "values"],
 						"properties": {
 							"id": {
 								"type": "string",
@@ -544,9 +504,7 @@
 				},
 				"connection": {
 					"type": "object",
-					"required": [
-						"url"
-					],
+					"required": ["url"],
 					"properties": {
 						"url": {
 							"type": "string",
@@ -559,11 +517,7 @@
 							"type": "array",
 							"items": {
 								"type": "string",
-								"enum": [
-									"cap.transcript",
-									"cap.summary",
-									"cap.comments"
-								]
+								"enum": ["cap.transcript", "cap.summary", "cap.comments"]
 							}
 						},
 						"events": {
@@ -584,11 +538,7 @@
 								"anyOf": [
 									{
 										"type": "object",
-										"required": [
-											"key",
-											"label",
-											"type"
-										],
+										"required": ["key", "label", "type"],
 										"properties": {
 											"key": {
 												"type": "string",
@@ -614,9 +564,7 @@
 											},
 											"type": {
 												"type": "string",
-												"enum": [
-													"text"
-												]
+												"enum": ["text"]
 											},
 											"placeholder": {
 												"type": "string",
@@ -636,11 +584,7 @@
 									},
 									{
 										"type": "object",
-										"required": [
-											"key",
-											"label",
-											"type"
-										],
+										"required": ["key", "label", "type"],
 										"properties": {
 											"key": {
 												"type": "string",
@@ -666,9 +610,7 @@
 											},
 											"type": {
 												"type": "string",
-												"enum": [
-													"url"
-												]
+												"enum": ["url"]
 											},
 											"placeholder": {
 												"type": "string",
@@ -689,11 +631,7 @@
 									},
 									{
 										"type": "object",
-										"required": [
-											"key",
-											"label",
-											"type"
-										],
+										"required": ["key", "label", "type"],
 										"properties": {
 											"key": {
 												"type": "string",
@@ -719,9 +657,7 @@
 											},
 											"type": {
 												"type": "string",
-												"enum": [
-													"secret"
-												]
+												"enum": ["secret"]
 											},
 											"placeholder": {
 												"type": "string",
@@ -735,12 +671,7 @@
 									},
 									{
 										"type": "object",
-										"required": [
-											"key",
-											"label",
-											"type",
-											"options"
-										],
+										"required": ["key", "label", "type", "options"],
 										"properties": {
 											"key": {
 												"type": "string",
@@ -766,18 +697,13 @@
 											},
 											"type": {
 												"type": "string",
-												"enum": [
-													"select"
-												]
+												"enum": ["select"]
 											},
 											"options": {
 												"type": "array",
 												"items": {
 													"type": "object",
-													"required": [
-														"value",
-														"label"
-													],
+													"required": ["value", "label"],
 													"properties": {
 														"value": {
 															"type": "string",
@@ -813,11 +739,7 @@
 									},
 									{
 										"type": "object",
-										"required": [
-											"key",
-											"label",
-											"type"
-										],
+										"required": ["key", "label", "type"],
 										"properties": {
 											"key": {
 												"type": "string",
@@ -840,9 +762,7 @@
 											},
 											"type": {
 												"type": "string",
-												"enum": [
-													"toggle"
-												]
+												"enum": ["toggle"]
 											},
 											"default": {
 												"type": "boolean"
@@ -860,11 +780,7 @@
 							"type": "array",
 							"items": {
 								"type": "object",
-								"required": [
-									"id",
-									"title",
-									"target"
-								],
+								"required": ["id", "title", "target"],
 								"properties": {
 									"id": {
 										"type": "string",
@@ -883,9 +799,7 @@
 									},
 									"target": {
 										"type": "string",
-										"enum": [
-											"cap"
-										]
+										"enum": ["cap"]
 									}
 								},
 								"additionalProperties": false
