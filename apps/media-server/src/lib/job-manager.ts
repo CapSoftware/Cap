@@ -163,7 +163,6 @@ export interface Job {
 	// A ladder for a Cap Infra video at the 1440p or 2160p tier, which keeps the
 	// GPU encoder busy on its own.
 	infraHeavyLadder?: boolean;
-	// The MP4 of a Cap Infra video.
 	infraMp4?: boolean;
 }
 
