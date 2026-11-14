@@ -513,7 +513,7 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-fn export_file_name(pretty_name: &str, extension: &str) -> String {
+pub(crate) fn export_file_name(pretty_name: &str, extension: &str) -> String {
     let mut name = sanitize_filename::sanitize_with_options(
         pretty_name,
         sanitize_filename::Options {

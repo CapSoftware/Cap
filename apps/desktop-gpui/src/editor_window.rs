@@ -2002,6 +2002,7 @@ fn clip_menu_row(
 enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
+    CaptionDownload,
 }
 
 struct OpenToolbarMenu {
@@ -7630,7 +7631,76 @@ impl EditorWindow {
                 .iter()
                 .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
                 .collect(),
+            ToolbarMenu::CaptionDownload => crate::caption_export::CaptionFormat::ALL
+                .iter()
+                .map(|format| ui::MenuItem::new(format.label(), false))
+                .collect(),
         }
+    }
+
+    pub(crate) fn caption_download_menu_open(&self) -> bool {
+        self.toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::CaptionDownload)
+    }
+
+    pub(crate) fn open_caption_download_menu(
+        &mut self,
+        trigger_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_toolbar_menu(ToolbarMenu::CaptionDownload, trigger_bounds, window, cx);
+    }
+
+    pub(crate) fn download_captions(
+        &mut self,
+        format: crate::caption_export::CaptionFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cues = crate::caption_export::cues(&self.project);
+        if cues.is_empty() {
+            return;
+        }
+        let contents = crate::caption_export::format(&cues, format);
+        let extension = format.extension();
+        let pretty_name = self
+            .summary()
+            .map(|summary| summary.pretty_name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Cap Recording".into());
+        let name = crate::editor_export::export_file_name(&pretty_name, extension);
+        tracing::info!(format = extension, cues = cues.len(), "caption download");
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = crate::platform::save_file_panel_async(&name, &[extension], cx).await
+            else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { std::fs::write(&path, contents) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match written {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "captions saved");
+                    this.show_notice(tr::editor::transcript::captions_saved(), window, cx);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "saving captions failed");
+                    this.show_notice(
+                        tr::editor::transcript::captions_save_failed(error.to_string()),
+                        window,
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_toolbar_menu(
@@ -7708,6 +7778,11 @@ impl EditorWindow {
                     self.set_preview_speed(*speed, window, cx);
                 }
             }
+            ToolbarMenu::CaptionDownload => {
+                if let Some(format) = crate::caption_export::CaptionFormat::ALL.get(index) {
+                    self.download_captions(*format, window, cx);
+                }
+            }
         }
         cx.notify();
         window.refresh();
@@ -7722,6 +7797,7 @@ impl EditorWindow {
                 .min_width(match kind {
                     ToolbarMenu::AspectRatio => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
+                    ToolbarMenu::CaptionDownload => px(160.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
