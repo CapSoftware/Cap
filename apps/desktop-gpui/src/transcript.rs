@@ -15,8 +15,9 @@ pub(crate) mod model;
 #[cfg(test)]
 mod tests;
 mod view;
+pub(crate) mod word_edit;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -24,7 +25,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cap_project::disfluency::DisfluencyKind;
-use gpui::{FocusHandle, ListAlignment, ListState, TextLayout, px};
+use gpui::{FocusHandle, ListAlignment, ListOffset, ListState, Pixels, Point, TextLayout, px};
 
 use self::energy::EnergyEnvelope;
 use self::model::{TranscriptDoc, TranscriptEdl};
@@ -59,6 +60,23 @@ impl WordSelection {
     pub fn range(self) -> Range<usize> {
         self.anchor.min(self.focus)..self.anchor.max(self.focus) + 1
     }
+}
+
+/// The word being corrected in place, found again by its text and start if
+/// the transcript is rebuilt while the field is open.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WordEditor {
+    pub word: usize,
+    pub text: String,
+    pub start: f64,
+}
+
+/// Where the edited word sits inside its paragraph's text, measured when the
+/// paragraph paints so the field lands exactly over it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WordAnchor {
+    pub origin: Point<Pixels>,
+    pub width: Pixels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +183,12 @@ pub(crate) struct TranscriptState {
     pub selection: Option<WordSelection>,
     pub caret: Option<usize>,
     pub drag: Option<WordDrag>,
+    pub editing: Option<WordEditor>,
+    pub edit_input: Option<gpui::Entity<crate::ui::TextInputState>>,
+    pub edit_anchor: Rc<Cell<Option<WordAnchor>>>,
+    /// The press that started this click restored a cut, so its double click
+    /// must not also open the word for editing.
+    pub restored_on_press: bool,
     pub active: Option<usize>,
     pub hovered_cut: Option<usize>,
     pub user_scrolled: Option<Instant>,
@@ -190,6 +214,10 @@ impl TranscriptState {
             selection: None,
             caret: None,
             drag: None,
+            editing: None,
+            edit_input: None,
+            edit_anchor: Rc::new(Cell::new(None)),
+            restored_on_press: false,
             active: None,
             hovered_cut: None,
             user_scrolled: None,
@@ -216,6 +244,7 @@ impl TranscriptState {
         let Some(captions) = project.captions.as_ref().filter(|_| has_words(project)) else {
             let changed = self.doc.is_some();
             self.doc = None;
+            self.editing = None;
             self.edl = None;
             self.list.reset(0);
             self.selection = None;
@@ -231,7 +260,14 @@ impl TranscriptState {
             .is_none_or(|doc| doc.signature != signature)
         {
             let doc = TranscriptDoc::build(captions);
+            let scroll = self.doc.is_some().then(|| self.list.logical_scroll_top());
             self.list.reset(doc.paragraphs.len());
+            if let Some(scroll) = scroll.filter(|_| !doc.paragraphs.is_empty()) {
+                self.list.scroll_to(ListOffset {
+                    item_ix: scroll.item_ix.min(doc.paragraphs.len() - 1),
+                    offset_in_item: scroll.offset_in_item,
+                });
+            }
             self.layouts.borrow_mut().clear();
             self.selection = None;
             self.caret = None;
