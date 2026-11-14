@@ -19,6 +19,7 @@ import {
 	hdrTransferFrom,
 	SDR_COLOR_ARGS,
 } from "./hdr";
+import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import type { VideoMetadata } from "./job-manager";
 import {
 	createGuardedMediaFetch,
@@ -64,7 +65,6 @@ import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
 } from "./recording-timing";
-import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import {
 	createTempFile,
