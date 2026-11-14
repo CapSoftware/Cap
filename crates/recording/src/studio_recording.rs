@@ -5727,6 +5727,7 @@ mod tests {
                 cursor: None,
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
+                stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
 
             let stopping = tokio::spawn(pipeline.stop());
