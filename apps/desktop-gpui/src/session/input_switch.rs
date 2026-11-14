@@ -242,8 +242,9 @@ impl RecordingSession {
                         }
                         match result {
                             Ok(opened) => {
-                                if let Some(active) = &this.active {
+                                if let Some(active) = this.active.as_mut() {
                                     active.adopt_switched_microphone(opened);
+                                    active.release_owned_microphone();
                                 }
                                 Feeds::global(cx).update(cx, |feeds, cx| {
                                     feeds.adopt_recording_microphone(label.clone(), cx);
@@ -335,6 +336,12 @@ impl RecordingSession {
                 }
                 if outcome.error.is_none() {
                     this.remember_input(&requested);
+                    if let Some(active) = this.active.as_mut() {
+                        match requested.kind() {
+                            InputKind::Microphone => active.release_owned_microphone(),
+                            InputKind::Camera => active.release_owned_camera(),
+                        }
+                    }
                 }
                 this.input_switch.error = outcome.error;
                 this.finish_input_switch(generation, cx);

@@ -167,7 +167,11 @@ impl RecordingSession {
         let actor = self
             .active
             .as_ref()
-            .and_then(|active| active.switched_microphone_actor())
+            .and_then(|active| {
+                active
+                    .switched_microphone_actor()
+                    .or_else(|| active.owned_microphone_actor())
+            })
             .or_else(|| Feeds::global(cx).read(cx).mic_actor());
         let Some(actor) = actor else {
             return;
@@ -206,6 +210,37 @@ impl RecordingSession {
     }
 
     fn reopen_camera(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if let Some(actor) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.owned_camera_actor())
+        {
+            let Some(camera) = Feeds::global(cx).read(cx).camera.clone() else {
+                return;
+            };
+            self.input_watch.reconnecting.camera = true;
+            let settings = crate::store::RecordingDeviceSettings::for_camera(
+                &camera.device_id,
+                camera.model_id.as_ref(),
+            );
+            let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+                let ready = actor
+                    .ask(cap_recording::feeds::camera::SetInput {
+                        id: camera.id,
+                        settings,
+                    })
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                ready.await.map_err(|error| anyhow::anyhow!("{error}"))?;
+                Ok(())
+            });
+            self.finish_camera_reopen(
+                generation,
+                async move { task.await.map_err(|e| format!("{e:#}")) },
+                cx,
+            );
+            return;
+        }
         let ready = Feeds::global(cx).update(cx, |feeds, cx| {
             feeds.restart_camera(cx);
             feeds.input_readiness().camera
@@ -214,15 +249,24 @@ impl RecordingSession {
             return;
         };
         self.input_watch.reconnecting.camera = true;
+        self.finish_camera_reopen(generation, async move { ready.await.map(drop) }, cx);
+    }
+
+    fn finish_camera_reopen(
+        &mut self,
+        generation: u64,
+        reopened: impl std::future::Future<Output = Result<(), String>> + 'static,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
-            let result = ready.await;
+            let result = reopened.await;
             this.update(cx, |this, cx| {
                 if generation != this.recording_generation {
                     return;
                 }
                 this.input_watch.reconnecting.camera = false;
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         tracing::info!("recording camera reconnected");
                         this.input_watch.disconnected.camera = false;
                         cx.notify();
