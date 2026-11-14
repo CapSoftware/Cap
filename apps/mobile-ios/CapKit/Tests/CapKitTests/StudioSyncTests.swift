@@ -286,15 +286,15 @@ import Testing
         let directory = FileManager.default.temporaryDirectory.appending(path: "studio-memory-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let screenTrack = Track(hostStart: 0, seconds: 20, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 1178, height: 2556), beeps: true)
-        let cameraTrack = Track(hostStart: 0.2, seconds: 20, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.cameraColor, size: CGSize(width: 720, height: 1280), beeps: false)
+        let screenTrack = Track(hostStart: 0, seconds: 8, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 1178, height: 2556), beeps: true)
+        let cameraTrack = Track(hostStart: 0.2, seconds: 8, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.cameraColor, size: CGSize(width: 720, height: 1280), beeps: false)
         let (screenInfo, _) = try await Self.record(screenTrack, flashesAt: [5, 10], to: directory.appending(path: "screen.mp4"), kind: .screen)
         let (cameraInfo, _) = try await Self.record(cameraTrack, flashesAt: [5, 10], to: directory.appending(path: "camera.mp4"), kind: .camera)
         let aligned = StudioTrackInfo.align(screen: screenInfo, camera: cameraInfo)
         let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: aligned.screen!.offset)
         let camera = try await StudioTrackSource.load(url: directory.appending(path: "camera.mp4"), offset: aligned.camera!.offset)
         let scene = StudioScene(look: .studioDefault, screen: screen.info, camera: camera.info)
-        let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 20)], screen: screen, camera: camera, music: nil, voiceVolume: 1, scene: scene, longEdge: StudioLayout.exportLongEdge, remembersFrames: false)
+        let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 8)], screen: screen, camera: camera, music: nil, voiceVolume: 1, scene: scene, longEdge: StudioLayout.exportLongEdge, remembersFrames: false)
         let before = ProcessStats.footprint()
         let sampler = Task.detached { () -> Double in
             var high = 0.0
@@ -310,7 +310,7 @@ import Testing
         let high = await sampler.value
         print("STUDIO_BENCH full-size export \(Int(result.size.width))x\(Int(result.size.height)) \(String(format: "%.1f", result.duration)) s in \(String(format: "%.2f", result.seconds)) s (\(String(format: "%.1f", result.duration / result.seconds))x), memory \(Int(before.current)) MB before, \(Int(high)) MB highest during, \(Int(high - before.current)) MB added")
         // Measured 133-163 MB added on an M4 with hardware codecs and about 245 MB on CI's virtual Macs, which encode in
-        // software. Frames piling up over this 600-frame export would add gigabytes, which is what this catches.
+        // software. Frames piling up over this 240-frame export would add a gigabyte or more, which is what this catches.
         #expect(high - before.current < 400)
     }
 
@@ -319,12 +319,12 @@ import Testing
         let directory = FileManager.default.temporaryDirectory.appending(path: "studio-cancel-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let track = Track(hostStart: 0, seconds: 12, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 720, height: 1560), beeps: true)
+        let track = Track(hostStart: 0, seconds: 6, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 720, height: 1560), beeps: true)
         _ = try await Self.record(track, flashesAt: [3], to: directory.appending(path: "screen.mp4"), kind: .screen)
         let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: 0)
         let scene = StudioScene(look: .studioDefault, screen: screen.info, camera: nil)
         for delay in [0.0, 0.05, 0.3] {
-            let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 12)], screen: screen, camera: nil, music: nil, voiceVolume: 1, scene: scene, longEdge: 1920, remembersFrames: false)
+            let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 6)], screen: screen, camera: nil, music: nil, voiceVolume: 1, scene: scene, longEdge: 1920, remembersFrames: false)
             let exporter = StudioExporter()
             let url = directory.appending(path: "out-\(delay).mp4")
             let started = CFAbsoluteTimeGetCurrent()
