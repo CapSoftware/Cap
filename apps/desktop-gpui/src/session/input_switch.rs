@@ -89,6 +89,11 @@ struct StudioSwitchOutcome {
     /// `Some(true)` when the recording was left paused (a resume failed),
     /// `Some(false)` when it runs again, `None` when the actor never answered.
     paused: Option<bool>,
+    /// The old feed was taken off the recording, so whatever it reads next
+    /// came through the app's feed, even if the switch then failed.
+    detached: bool,
+    /// The requested device is the one the recording reads now.
+    attached: bool,
 }
 
 impl RecordingSession {
@@ -334,13 +339,15 @@ impl RecordingSession {
                     this.phase = Phase::Recording { paused: true };
                     this.input_switch.timer_frozen_at = None;
                 }
-                if outcome.error.is_none() {
+                if outcome.attached {
                     this.remember_input(&requested);
-                    if let Some(active) = this.active.as_mut() {
-                        match requested.kind() {
-                            InputKind::Microphone => active.release_owned_microphone(),
-                            InputKind::Camera => active.release_owned_camera(),
-                        }
+                }
+                if outcome.detached
+                    && let Some(active) = this.active.as_mut()
+                {
+                    match requested.kind() {
+                        InputKind::Microphone => active.release_owned_microphone(),
+                        InputKind::Camera => active.release_owned_camera(),
                     }
                 }
                 this.input_switch.error = outcome.error;
@@ -406,6 +413,8 @@ async fn studio_switch(
                     &request.device_label(),
                 )),
                 paused: Some(false),
+                detached: false,
+                attached: false,
             };
         }
     }
@@ -421,14 +430,20 @@ async fn studio_switch(
     .await;
 
     let mut error = None;
-    if let Err(detach_error) = detached {
-        tracing::warn!("detaching the old input failed: {detach_error:#}");
-        error = Some(tr::controls::settings::switch_failed(
-            &request.device_label(),
-        ));
-    } else if current(cx) {
+    let mut attached = false;
+    let detached = match detached {
+        Ok(()) => true,
+        Err(detach_error) => {
+            tracing::warn!("detaching the old input failed: {detach_error:#}");
+            error = Some(tr::controls::settings::switch_failed(
+                &request.device_label(),
+            ));
+            false
+        }
+    };
+    if detached && current(cx) {
         match attach_selection(this, cx, &handle, &request).await {
-            Ok(()) => {}
+            Ok(()) => attached = true,
             Err(attach_error) => {
                 tracing::warn!(
                     device = %request.device_label(),
@@ -450,6 +465,8 @@ async fn studio_switch(
         return StudioSwitchOutcome {
             error,
             paused: Some(was_paused),
+            detached,
+            attached,
         };
     }
     let resume = handle.clone();
@@ -457,6 +474,8 @@ async fn studio_switch(
         Ok(()) => StudioSwitchOutcome {
             error,
             paused: Some(false),
+            detached,
+            attached,
         },
         Err(resume_error) => {
             tracing::error!("resuming after an input switch failed: {resume_error:#}");
@@ -470,6 +489,8 @@ async fn studio_switch(
                     "{resume_error:#}. Use Stop if recording cannot continue safely."
                 )),
                 paused,
+                detached,
+                attached,
             }
         }
     }
