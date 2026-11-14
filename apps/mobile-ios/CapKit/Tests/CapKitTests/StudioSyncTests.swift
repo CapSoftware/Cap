@@ -176,16 +176,16 @@ import Testing
 
         // Host-clock moments both tracks flash at. The camera starts 0.73 s before the screen.
         let base = 5000.0
-        let flashTimes = [base + 2.0, base + 9.47, base + 21.03, base + 33.6, base + 58.1]
-        // The microphone is muted for three seconds part way, so the voice after it must still land on its picture.
-        let screenTrack = Track(hostStart: base + 0.73, seconds: 60, frameInterval: 1.0 / 30, jitter: 0.004, dropEvery: 31, gap: nil, color: Self.screenColor, size: Self.screenSize, beeps: true, audioDropout: EditRange(start: 36, end: 39))
+        let flashTimes = [base + 1.5, base + 5.47, base + 11.03, base + 16.6, base + 28.1]
+        // The microphone is muted for two and a half seconds part way, so the voice after it must still land on its picture.
+        let screenTrack = Track(hostStart: base + 0.73, seconds: 30, frameInterval: 1.0 / 30, jitter: 0.004, dropEvery: 31, gap: nil, color: Self.screenColor, size: Self.screenSize, beeps: true, audioDropout: EditRange(start: 18, end: 20.5))
         // 29.97 fps, more jitter, every 23rd frame dropped, and nothing for four seconds (a call, say).
-        let cameraTrack = Track(hostStart: base, seconds: 61, frameInterval: 1001.0 / 30000, jitter: 0.008, dropEvery: 23, gap: EditRange(start: 40, end: 44), color: Self.cameraColor, size: Self.cameraSize, beeps: false)
+        let cameraTrack = Track(hostStart: base, seconds: 31, frameInterval: 1001.0 / 30000, jitter: 0.008, dropEvery: 23, gap: EditRange(start: 21, end: 24), color: Self.cameraColor, size: Self.cameraSize, beeps: false)
         let (screenInfo, screenFlashFrames) = try await Self.record(screenTrack, flashesAt: flashTimes, to: directory.appending(path: "screen.mp4"), kind: .screen)
         let (cameraInfo, cameraFlashFrames) = try await Self.record(cameraTrack, flashesAt: flashTimes, to: directory.appending(path: "camera.mp4"), kind: .camera)
         #expect(abs(screenInfo.hostStart - (base + 0.73)) < 0.01)
         let cameraGap = try #require(cameraInfo.gaps?.first)
-        #expect(abs(cameraGap.start - 40) < 0.1 && abs(cameraGap.end - 44) < 0.1)
+        #expect(abs(cameraGap.start - 21) < 0.1 && abs(cameraGap.end - 24) < 0.1)
 
         let aligned = StudioTrackInfo.align(screen: screenInfo, camera: cameraInfo)
         let screenProject = try #require(aligned.screen)
@@ -199,9 +199,9 @@ import Testing
         look.shadow = 0
         look.camera.size = 0.4
         let scene = StudioScene(look: look, screen: screen.info, camera: camera.info)
-        // Cuts on either side of flashes and across the camera gap: project time 5-8, 25-27 and 45-47 removed.
+        // Cuts on either side of flashes and across the camera gap: project time 3-4.5, 13-14 and 22-23 removed.
         let project = StudioProject(title: "Sync", screen: screenProject, camera: cameraProject)
-        let clips = [EditRange(start: 0, end: 5), EditRange(start: 8, end: 25), EditRange(start: 27, end: 45), EditRange(start: 47, end: project.duration)]
+        let clips = [EditRange(start: 0, end: 3), EditRange(start: 4.5, end: 13), EditRange(start: 14, end: 22), EditRange(start: 23, end: project.duration)]
         let timeline = EditTimeline(sourceDuration: project.duration, clips: clips)
         let built = try StudioComposition.build(clips: timeline.clips, screen: screen, camera: camera, music: nil, voiceVolume: 1, scene: scene, longEdge: 960, remembersFrames: false)
         let exported = try await StudioExporter().export(built, to: directory.appending(path: "export.mp4"))
@@ -242,11 +242,11 @@ import Testing
             // AAC adds a few milliseconds of fixed delay at most.
             #expect(abs(voiceError) < 0.006)
         }
-        // In the camera's gap (project 40-44 s from the camera's start, so 40-44 s), the bubble is gone, not frozen.
-        let gapMiddle = timeline.outputTime(forSource: 42)
+        // In the camera's gap (21-24 s; the camera starts the project), the bubble is gone, not frozen.
+        let gapMiddle = timeline.outputTime(forSource: 23.5)
         #expect(measured.cameraHidden.contains { abs($0 - gapMiddle) < 0.1 })
         // And it's back after.
-        let afterGap = timeline.outputTime(forSource: 50)
+        let afterGap = timeline.outputTime(forSource: 26)
         #expect(!measured.cameraHidden.contains { abs($0 - afterGap) < 0.05 })
         #expect(abs(exported.duration - timeline.outputDuration) < 0.05)
     }
