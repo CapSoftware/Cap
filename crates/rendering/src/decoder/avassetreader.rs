@@ -793,6 +793,7 @@ impl AVAssetReaderDecoder {
                     }
                 };
                 match message {
+                    VideoDecoderMessage::PreferSequentialAccess => {}
                     VideoDecoderMessage::GetFrame(
                         requested_time,
                         max_fallback_distance,
@@ -812,6 +813,7 @@ impl AVAssetReaderDecoder {
 
                 while let Ok(message) = rx.try_recv() {
                     match message {
+                        VideoDecoderMessage::PreferSequentialAccess => {}
                         VideoDecoderMessage::GetFrame(
                             requested_time,
                             max_fallback_distance,
