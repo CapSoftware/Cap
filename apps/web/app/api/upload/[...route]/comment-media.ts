@@ -350,13 +350,23 @@ app.post(
 				}),
 			);
 
+			// Part sizes are client-reported, so the stored length is the real bound.
+			const size = head.ContentLength ?? totalSize;
+			if (size > MAX_MEDIA_OBJECT_BYTES) {
+				yield* bucket
+					.deleteObject(claims.key)
+					.pipe(Effect.catchAll(Effect.logError));
+				c.status(413);
+				return c.json({ error: "Recording is too large" });
+			}
+
 			// No videos-row update, no transcription queue, no videoUploads delete:
 			// comment media is a leaf object, not a Cap video.
 			return c.json({
 				success: true,
 				processingStarted: true,
 				key: claims.key,
-				size: head.ContentLength ?? totalSize,
+				size,
 				contentType: head.ContentType ?? claims.contentType,
 			});
 		}).pipe(
