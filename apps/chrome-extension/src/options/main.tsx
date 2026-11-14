@@ -282,15 +282,18 @@ function RecoveredRecordingsSection() {
 const DoodleCheckbox = ({
 	label,
 	checked,
+	disabled,
 	onChange,
 }: {
 	label: string;
 	checked: boolean;
+	disabled: boolean;
 	onChange: (checked: boolean) => void;
 }) => (
 	<label className="doodle-check">
 		<input
 			type="checkbox"
+			disabled={disabled}
 			checked={checked}
 			onChange={(event) => onChange(event.currentTarget.checked)}
 		/>
@@ -307,8 +310,33 @@ const DoodleCheckbox = ({
 	</label>
 );
 
+type OptionChanges = {
+	apiBaseUrl?: string;
+	webcam?: Partial<Omit<ExtensionSettings["webcam"], "deviceId">>;
+	microphone?: Pick<ExtensionSettings["microphone"], "enabled">;
+	systemAudio?: ExtensionSettings["systemAudio"];
+	sounds?: ExtensionSettings["sounds"];
+	countdown?: Partial<ExtensionSettings["countdown"]>;
+	microphoneWarning?: ExtensionSettings["microphoneWarning"];
+};
+
+const applyOptionChanges = (
+	settings: ExtensionSettings,
+	changes: OptionChanges,
+): ExtensionSettings => ({
+	...settings,
+	...changes,
+	webcam: { ...settings.webcam, ...changes.webcam },
+	microphone: { ...settings.microphone, ...changes.microphone },
+	countdown: { ...settings.countdown, ...changes.countdown },
+});
+
 function App() {
-	const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
+	const [savedSettings, setSavedSettings] =
+		useState<ExtensionSettings>(defaultSettings);
+	const [changes, setChanges] = useState<OptionChanges>({});
+	const [busy, setBusy] = useState(true);
+	const settings = applyOptionChanges(savedSettings, changes);
 	const [auth, setAuth] = useState<ExtensionAuth | null>(null);
 	const [saved, setSaved] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -318,13 +346,16 @@ function App() {
 		Promise.all([loadSettings(), loadAuth()])
 			.then(([nextSettings, nextAuth]) => {
 				if (disposed) return;
-				setSettings(nextSettings);
+				setSavedSettings(nextSettings);
 				setAuth(nextAuth);
 			})
 			.catch((err: unknown) => {
 				if (!disposed) {
 					setError(err instanceof Error ? err.message : String(err));
 				}
+			})
+			.finally(() => {
+				if (!disposed) setBusy(false);
 			});
 		return () => {
 			disposed = true;
@@ -332,19 +363,26 @@ function App() {
 	}, []);
 
 	const save = async () => {
+		if (busy) return;
+		setBusy(true);
 		setError(null);
 		setSaved(false);
 		try {
-			new URL(settings.apiBaseUrl);
-			await saveSettings(settings);
+			const next = applyOptionChanges(await loadSettings(), changes);
+			new URL(next.apiBaseUrl);
+			await saveSettings(next);
 			await sendServiceWorkerMessage({
 				target: "service-worker",
 				type: "settings-updated",
-				settings,
+				settings: next,
 			}).catch(() => undefined);
+			setSavedSettings(next);
+			setChanges({});
 			setSaved(true);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
 		}
 	};
 
@@ -418,11 +456,12 @@ function App() {
 						<label className="field">
 							<span>Cap URL</span>
 							<input
+								disabled={busy}
 								type="url"
 								value={settings.apiBaseUrl}
 								onChange={(event) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										apiBaseUrl: event.currentTarget.value,
 									})
 								}
@@ -436,15 +475,16 @@ function App() {
 							<label className="field">
 								<span>Camera size</span>
 								<input
+									disabled={busy}
 									type="number"
 									min="120"
 									max="420"
 									value={settings.webcam.size}
 									onChange={(event) =>
-										setSettings({
-											...settings,
+										setChanges({
+											...changes,
 											webcam: {
-												...settings.webcam,
+												...changes.webcam,
 												size: Number(event.currentTarget.value),
 											},
 										})
@@ -454,12 +494,13 @@ function App() {
 							<label className="field">
 								<span>Position</span>
 								<select
+									disabled={busy}
 									value={settings.webcam.position}
 									onChange={(event) =>
-										setSettings({
-											...settings,
+										setChanges({
+											...changes,
 											webcam: {
-												...settings.webcam,
+												...changes.webcam,
 												position: event.currentTarget
 													.value as ExtensionSettings["webcam"]["position"],
 											},
@@ -475,12 +516,13 @@ function App() {
 							<label className="field">
 								<span>Shape</span>
 								<select
+									disabled={busy}
 									value={settings.webcam.shape}
 									onChange={(event) =>
-										setSettings({
-											...settings,
+										setChanges({
+											...changes,
 											webcam: {
-												...settings.webcam,
+												...changes.webcam,
 												shape: event.currentTarget
 													.value as ExtensionSettings["webcam"]["shape"],
 											},
@@ -496,12 +538,12 @@ function App() {
 								<span>Countdown</span>
 								<select
 									value={String(settings.countdown.seconds)}
-									disabled={!settings.countdown.enabled}
+									disabled={busy || !settings.countdown.enabled}
 									onChange={(event) =>
-										setSettings({
-											...settings,
+										setChanges({
+											...changes,
 											countdown: {
-												...settings.countdown,
+												...changes.countdown,
 												seconds: Number(event.currentTarget.value),
 											},
 										})
@@ -515,91 +557,98 @@ function App() {
 						</div>
 						<div className="checks">
 							<DoodleCheckbox
+								disabled={busy}
 								label="Show camera preview by default"
 								checked={settings.webcam.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										webcam: {
-											...settings.webcam,
+											...changes.webcam,
 											enabled: checked && Boolean(settings.webcam.deviceId),
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Enable microphone by default"
 								checked={settings.microphone.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										microphone: {
-											...settings.microphone,
+											...changes.microphone,
 											enabled: checked,
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Enable system audio by default"
 								checked={settings.systemAudio.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										systemAudio: {
-											...settings.systemAudio,
+											...changes.systemAudio,
 											enabled: checked,
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Play recording sounds"
 								checked={settings.sounds.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										sounds: {
-											...settings.sounds,
+											...changes.sounds,
 											enabled: checked,
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Show countdown before recording"
 								checked={settings.countdown.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										countdown: {
-											...settings.countdown,
+											...changes.countdown,
 											enabled: checked,
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Warn about microphone issues"
 								checked={settings.microphoneWarning.enabled}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										microphoneWarning: {
-											...settings.microphoneWarning,
+											...changes.microphoneWarning,
 											enabled: checked,
 										},
 									})
 								}
 							/>
 							<DoodleCheckbox
+								disabled={busy}
 								label="Mirror webcam"
 								checked={settings.webcam.mirror}
 								onChange={(checked) =>
-									setSettings({
-										...settings,
+									setChanges({
+										...changes,
 										webcam: {
-											...settings.webcam,
+											...changes.webcam,
 											mirror: checked,
 										},
 									})
@@ -611,7 +660,12 @@ function App() {
 					<RecoveredRecordingsSection />
 
 					<div className="actions">
-						<button type="button" className="cta" onClick={() => void save()}>
+						<button
+							type="button"
+							className="cta"
+							disabled={busy}
+							onClick={() => void save()}
+						>
 							Save changes
 						</button>
 						<button
