@@ -2248,6 +2248,7 @@ impl SettingsWindow {
         }
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
+        crate::app_store::account_changed(cx);
         if !store::set_store_value("user_profile", Value::Null) {
             tracing::error!("failed to clear the cached user profile");
         }

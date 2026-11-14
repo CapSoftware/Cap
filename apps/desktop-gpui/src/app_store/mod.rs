@@ -1,9 +1,3 @@
-//! The desktop side of the App Store. The catalog is built from
-//! `app-store/apps` in the repo and served by the web app; installs belong to
-//! the account, with a local list for people who are signed out. Apps never
-//! ship UI: this module turns what they declare into data the editor, the
-//! settings window and the recording cards draw with Cap's own components.
-
 pub mod catalog;
 pub mod settings_page;
 
@@ -34,7 +28,6 @@ pub enum SyncState {
     Failed,
 }
 
-/// One action an installed connection offers on a Cap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapAction {
     pub installation_id: String,
@@ -53,6 +46,9 @@ pub struct AppStore {
     pub signed_in: bool,
     pub state: SyncState,
     pub pending: BTreeSet<String>,
+    account: Option<String>,
+    cap_actions: HashMap<String, Vec<CapAction>>,
+    cap_actions_pending: BTreeSet<String>,
     assets: HashMap<String, PathBuf>,
     thumbnails: HashMap<String, Arc<RenderImage>>,
     last_refresh: Option<Instant>,
@@ -75,6 +71,43 @@ pub fn asset_path(asset: &CatalogAsset) -> Option<PathBuf> {
             .join("assets")
             .join(format!("{}.{}", asset.sha256, asset.extension()))
     })
+}
+
+fn installations_cache_path() -> PathBuf {
+    root_dir().join("installations.json")
+}
+
+fn current_account() -> Option<String> {
+    let auth = store::auth_snapshot();
+    let token = auth.token?;
+    Some(sha256_hex(
+        format!("{}\n{token}", auth::server_url()).as_bytes(),
+    ))
+}
+
+fn read_cached_installations(account: &str) -> Option<Vec<Installation>> {
+    let bytes = std::fs::read(installations_cache_path()).ok()?;
+    let cached: CachedInstallations = serde_json::from_slice(&bytes).ok()?;
+    (cached.account == account).then_some(cached.installations)
+}
+
+fn write_cached_installations(account: &str, installations: &[Installation]) {
+    let path = installations_cache_path();
+    let Ok(bytes) = serde_json::to_vec(&CachedInstallations {
+        account: account.to_string(),
+        installations: installations.to_vec(),
+    }) else {
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let temporary = path.with_extension("partial");
+    if std::fs::write(&temporary, bytes).is_err() || std::fs::rename(&temporary, &path).is_err() {
+        tracing::warn!("Could not cache App Store installations");
+    }
 }
 
 fn read_local_installs() -> BTreeSet<String> {
@@ -109,8 +142,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Writes `bytes` to `target` only when they hash to `expected`, through a
-/// temporary file so a crash never leaves a half-written asset in place.
 pub fn store_verified_asset(target: &Path, bytes: &[u8], expected: &str) -> Result<(), String> {
     if sha256_hex(bytes) != expected {
         return Err("downloaded asset does not match its hash".to_string());
@@ -134,8 +165,15 @@ fn asset_url(server: &str, asset: &CatalogAsset) -> String {
 impl AppStore {
     pub fn init(cx: &mut App) {
         let catalog = read_cached_catalog().map(Arc::new);
+        let account = current_account();
+        let installations = account
+            .as_deref()
+            .and_then(read_cached_installations)
+            .unwrap_or_default();
         let mut state = AppStore {
             catalog,
+            installations,
+            account,
             local_installs: read_local_installs(),
             signed_in: store::auth_snapshot().token.is_some(),
             ..Default::default()
@@ -171,9 +209,24 @@ impl AppStore {
         }
     }
 
+    // Installs belong to the account they were fetched for. Auth can be
+    // cleared from several places (sign out, an upload rejecting the key), so
+    // they are checked against the current account instead of trusting that
+    // every one of those places resets the store.
+    pub fn account_installations(&self) -> &[Installation] {
+        self.installations_for(current_account().as_deref())
+    }
+
+    fn installations_for(&self, account: Option<&str>) -> &[Installation] {
+        match (&self.account, account) {
+            (Some(stored), Some(current)) if stored == current => &self.installations,
+            _ => &[],
+        }
+    }
+
     pub fn installed_ids(&self) -> BTreeSet<String> {
         let mut ids: BTreeSet<String> = self
-            .installations
+            .account_installations()
             .iter()
             .filter(|installation| installation.is_active())
             .map(|installation| installation.app_id.clone())
@@ -202,8 +255,6 @@ impl AppStore {
         self.thumbnails.get(sha256).cloned()
     }
 
-    /// Backgrounds from installed apps that can be used right now: images
-    /// only once their file is on disk and verified.
     pub fn backgrounds(&self) -> Vec<(String, CatalogBackground)> {
         self.installed_apps()
             .into_iter()
@@ -243,37 +294,28 @@ impl AppStore {
             .collect()
     }
 
-    pub fn cap_actions(&self) -> Vec<CapAction> {
+    pub fn has_cap_actions(&self) -> bool {
+        self.has_cap_actions_in(self.account_installations())
+    }
+
+    fn has_cap_actions_in(&self, installations: &[Installation]) -> bool {
         let Some(catalog) = self.catalog.as_deref() else {
-            return Vec::new();
+            return false;
         };
-        let mut actions = Vec::new();
-        for installation in self.installations.iter().filter(|i| i.is_active()) {
-            let Some(app) = catalog.app(&installation.app_id) else {
-                continue;
-            };
-            let Some(connection) = &app.connection else {
-                continue;
-            };
-            for action in &connection.actions {
-                actions.push(CapAction {
-                    installation_id: installation.id.clone(),
-                    app_id: app.id.clone(),
-                    app_name: app.name.clone(),
-                    action_id: action.id.clone(),
-                    title: action.title.clone(),
-                    icon_sha256: app.icon.sha256.clone(),
-                });
-            }
-        }
-        actions.sort_by(|a, b| a.title.cmp(&b.title));
-        actions.dedup_by(|a, b| a.app_id == b.app_id && a.action_id == b.action_id);
-        actions
+        installations.iter().any(|installation| {
+            installation.is_active()
+                && catalog
+                    .app(&installation.app_id)
+                    .and_then(|app| app.connection.as_ref())
+                    .is_some_and(|connection| !connection.actions.is_empty())
+        })
+    }
+
+    pub fn actions_for_cap(&self, cap_id: &str) -> Option<&Vec<CapAction>> {
+        self.cap_actions.get(cap_id)
     }
 }
 
-/// An owned copy of what a view needs, so it can render with a mutable
-/// context while the global stays untouched.
 #[derive(Clone, Default)]
 pub struct AppStoreSnapshot {
     pub catalog: Option<Arc<Catalog>>,
@@ -306,7 +348,7 @@ impl AppStore {
     pub fn snapshot(&self) -> AppStoreSnapshot {
         AppStoreSnapshot {
             catalog: self.catalog.clone(),
-            installations: self.installations.clone(),
+            installations: self.account_installations().to_vec(),
             local_installs: self.local_installs.clone(),
             pending: self.pending.clone(),
             signed_in: self.signed_in,
@@ -326,8 +368,6 @@ pub fn try_get(cx: &App) -> Option<&AppStore> {
     cx.try_global::<AppStore>()
 }
 
-/// Refreshes when the last sync is older than [`REFRESH_INTERVAL`], so every
-/// window can ask on open without the store hammering the server.
 pub fn refresh_if_stale(cx: &mut App) {
     let stale = cx.try_global::<AppStore>().is_none_or(|store| {
         store.state != SyncState::Loading
@@ -343,6 +383,7 @@ pub fn refresh_if_stale(cx: &mut App) {
 struct SyncResult {
     catalog: Option<Catalog>,
     installations: Option<Vec<Installation>>,
+    account: Option<String>,
     signed_in: bool,
     failed: bool,
 }
@@ -362,6 +403,7 @@ pub fn refresh(cx: &mut App) {
         let result = task.await.unwrap_or(SyncResult {
             catalog: None,
             installations: None,
+            account: None,
             signed_in: false,
             failed: true,
         });
@@ -375,7 +417,9 @@ pub fn refresh(cx: &mut App) {
                 }
                 if let Some(installations) = result.installations {
                     store.installations = installations;
+                    store.account = result.account;
                 }
+                store.cap_actions.clear();
                 store.signed_in = result.signed_in;
                 store.local_installs = read_local_installs();
                 store.state = if result.failed {
@@ -406,13 +450,19 @@ async fn sync(local: BTreeSet<String>) -> SyncResult {
         }
     };
     let signed_in = store::auth_snapshot().token.is_some();
+    let account = current_account();
     let mut installations = None;
     if signed_in {
         if !local.is_empty() {
             adopt_local_installs(&local).await;
         }
         match fetch_installations().await {
-            Ok(list) => installations = Some(list),
+            Ok(list) => {
+                if let Some(account) = &account {
+                    write_cached_installations(account, &list);
+                }
+                installations = Some(list);
+            }
             Err(error) => {
                 tracing::warn!(%error, "App Store installations refresh failed");
                 failed = true;
@@ -424,6 +474,7 @@ async fn sync(local: BTreeSet<String>) -> SyncResult {
     SyncResult {
         catalog,
         installations,
+        account,
         signed_in,
         failed,
     }
@@ -464,8 +515,6 @@ async fn fetch_installations() -> Result<Vec<Installation>, String> {
     Ok(body.installations)
 }
 
-/// Content apps installed while signed out move onto the account the first
-/// time Cap syncs signed in, so they follow the person to every device.
 async fn adopt_local_installs(local: &BTreeSet<String>) {
     let mut kept = BTreeSet::new();
     for app_id in local {
@@ -488,8 +537,6 @@ async fn adopt_local_installs(local: &BTreeSet<String>) {
     write_local_installs(&kept);
 }
 
-/// Downloads every asset installed apps need, plus every catalog icon, and
-/// decodes thumbnails off the main thread.
 async fn load_assets(cx: &mut AsyncApp) {
     let Some((catalog, installed, known)) = cx.update(|cx| {
         cx.try_global::<AppStore>().and_then(|store| {
@@ -573,9 +620,6 @@ pub enum InstallOutcome {
     OpenedWeb,
 }
 
-/// Installs for the signed-in account, or into the local list when signed
-/// out. Apps that need settings or an outside account are set up on the web,
-/// where Cap draws their settings form.
 pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
     let store = cx.try_global::<AppStore>()?;
     let app = store.catalog.as_deref()?.app(&app_id)?.clone();
@@ -624,15 +668,13 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
     Some(InstallOutcome::Installed)
 }
 
-/// Removes the person's own install. Installs made for an organization are
-/// managed by its owners and admins on the web.
 pub fn uninstall(app_id: String, cx: &mut App) {
     let Some(store) = cx.try_global::<AppStore>() else {
         return;
     };
     let was_local = store.local_installs.contains(&app_id);
     let installation = store
-        .installations
+        .account_installations()
         .iter()
         .find(|installation| {
             installation.app_id == app_id && installation.scope == "user" && installation.can_manage
@@ -673,8 +715,108 @@ pub fn uninstall(app_id: String, cx: &mut App) {
     .detach();
 }
 
-/// Runs a connection's action on an uploaded Cap and returns what the app
-/// asked Cap to show.
+pub fn account_changed(cx: &mut App) {
+    if !cx.has_global::<AppStore>() {
+        return;
+    }
+    cx.update_global::<AppStore, _>(|store, _| {
+        store.installations.clear();
+        store.account = None;
+        store.cap_actions.clear();
+        store.cap_actions_pending.clear();
+    });
+    refresh(cx);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerCapAction {
+    installation_id: String,
+    app_id: String,
+    app_name: String,
+    action_id: String,
+    title: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ServerCapActions {
+    actions: Vec<ServerCapAction>,
+}
+
+pub fn request_cap_actions(cap_ids: Vec<String>, cx: &mut App) {
+    let Some(store) = cx.try_global::<AppStore>() else {
+        return;
+    };
+    if !store.has_cap_actions() {
+        return;
+    }
+    let wanted: Vec<String> = cap_ids
+        .into_iter()
+        .filter(|id| !store.cap_actions.contains_key(id) && !store.cap_actions_pending.contains(id))
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let icons: HashMap<String, String> = store
+        .catalog
+        .as_deref()
+        .map(|catalog| {
+            catalog
+                .apps
+                .iter()
+                .map(|app| (app.id.clone(), app.icon.sha256.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    cx.update_global::<AppStore, _>(|store, _| {
+        store.cap_actions_pending.extend(wanted.iter().cloned());
+    });
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let task = cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                let mut loaded = Vec::new();
+                for cap_id in wanted {
+                    let path = format!("/api/app-store/caps/{cap_id}/actions");
+                    let actions =
+                        match auth::authed_request(reqwest::Method::GET, &path, None).await {
+                            Ok(response) if response.status().is_success() => response
+                                .json::<ServerCapActions>()
+                                .await
+                                .map(|body| body.actions)
+                                .unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
+                    loaded.push((cap_id, actions));
+                }
+                loaded
+            })
+        });
+        let loaded = task.await.unwrap_or_default();
+        cx.update(|cx| {
+            cx.update_global::<AppStore, _>(|store, _| {
+                for (cap_id, actions) in loaded {
+                    store.cap_actions_pending.remove(&cap_id);
+                    store.cap_actions.insert(
+                        cap_id,
+                        actions
+                            .into_iter()
+                            .map(|action| CapAction {
+                                icon_sha256: icons.get(&action.app_id).cloned().unwrap_or_default(),
+                                installation_id: action.installation_id,
+                                app_id: action.app_id,
+                                app_name: action.app_name,
+                                action_id: action.action_id,
+                                title: action.title,
+                            })
+                            .collect(),
+                    );
+                }
+            });
+        });
+    })
+    .detach();
+}
+
 pub async fn run_cap_action(action: CapAction, cap_id: String) -> Result<ActionResult, String> {
     let path = format!("/api/app-store/caps/{cap_id}/actions");
     let response = auth::authed_request(

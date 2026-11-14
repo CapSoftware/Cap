@@ -148,7 +148,7 @@ fn contributions_come_only_from_installed_apps() {
     };
     assert!(store.backgrounds().is_empty());
     assert!(store.caption_styles().is_empty());
-    assert!(store.cap_actions().is_empty());
+    assert!(!store.has_cap_actions_in(&[]));
 
     store.local_installs.insert("fixture-content".into());
     let backgrounds = store.backgrounds();
@@ -172,10 +172,37 @@ fn contributions_come_only_from_installed_apps() {
         needs_review: false,
         can_manage: true,
     });
-    let actions = store.cap_actions();
-    assert_eq!(actions.len(), 1);
-    assert_eq!(actions[0].title, "Send to Fixture");
+    assert!(store.installations_for(Some("account-a")).is_empty());
+    store.account = Some("account-a".into());
+    assert_eq!(store.installations_for(Some("account-a")).len(), 1);
+    assert!(
+        store.installations_for(Some("account-b")).is_empty(),
+        "installs never leak to another account"
+    );
+    assert!(store.installations_for(None).is_empty());
+    assert!(store.has_cap_actions_in(store.installations_for(Some("account-a"))));
 
     store.installations[0].status = "disabled".into();
-    assert!(store.cap_actions().is_empty());
+    assert!(!store.has_cap_actions_in(store.installations_for(Some("account-a"))));
+}
+
+#[test]
+fn installation_cache_round_trips_for_its_account() {
+    let installation = Installation {
+        id: "inst_1".into(),
+        app_id: "fixture-content".into(),
+        scope: "organization".into(),
+        organization_name: Some("Acme".into()),
+        status: "active".into(),
+        needs_review: false,
+        can_manage: false,
+    };
+    let cached = CachedInstallations {
+        account: "account-a".into(),
+        installations: vec![installation.clone()],
+    };
+    let parsed: CachedInstallations =
+        serde_json::from_slice(&serde_json::to_vec(&cached).unwrap()).unwrap();
+    assert_eq!(parsed.installations, vec![installation]);
+    assert_eq!(parsed.account, "account-a");
 }

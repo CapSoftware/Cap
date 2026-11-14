@@ -260,7 +260,7 @@ impl Catalog {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Installation {
     pub id: String,
@@ -279,6 +279,12 @@ impl Installation {
     pub fn is_active(&self) -> bool {
         self.status == "active"
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CachedInstallations {
+    pub account: String,
+    pub installations: Vec<Installation>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -315,7 +321,6 @@ impl ActionResult {
     }
 }
 
-/// The Cap id from a share link: the segment after `/s/`.
 pub fn cap_id_from_share_url(url: &str) -> Option<String> {
     let (_, rest) = url.split_once("/s/")?;
     let id = rest

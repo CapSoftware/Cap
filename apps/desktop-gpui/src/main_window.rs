@@ -945,8 +945,6 @@ pub struct MainWindow {
     mode: Mode,
     mode_hover: ModeHoverState,
     mode_hover_task: Option<Task<()>>,
-    /// The last App Store action's result, shown in place of its card's
-    /// buttons for a few seconds.
     app_action_notice: Option<(std::path::PathBuf, SharedString)>,
     app_action_task: Option<Task<()>>,
     mode_hover_bounds: [Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>; 3],
@@ -5007,12 +5005,18 @@ impl MainWindow {
         let app_actions = sharing
             .as_deref()
             .and_then(crate::app_store::cap_id_from_share_url)
-            .map(|cap_id| {
-                let actions = crate::app_store::try_get(cx)
-                    .map(crate::app_store::AppStore::cap_actions)
-                    .unwrap_or_default();
+            .and_then(|cap_id| {
+                let store = crate::app_store::try_get(cx)?;
+                if !store.has_cap_actions() {
+                    return None;
+                }
+                let Some(actions) = store.actions_for_cap(&cap_id).cloned() else {
+                    let pending = cap_id.clone();
+                    cx.defer(move |cx| crate::app_store::request_cap_actions(vec![pending], cx));
+                    return None;
+                };
                 let icons = crate::app_store::snapshot(cx).thumbnails;
-                (cap_id, actions, icons)
+                Some((cap_id, actions, icons))
             });
         let mut row = div()
             .flex()
