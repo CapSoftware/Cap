@@ -764,12 +764,63 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-fn stored_locked_area() -> Option<(String, AreaRect)> {
+/// The display a lock belongs to. macOS can hand the same monitor a new
+/// `CGDirectDisplayID` after it is reconnected or the display set changes,
+/// which made a saved area look forgotten, so a lock also records the
+/// display's UUID and matches on either.
+#[derive(Clone, Debug, PartialEq)]
+struct AreaScreen {
+    id: String,
+    uuid: Option<String>,
+}
+
+impl AreaScreen {
+    fn of(display: &DisplayId, cx: &App) -> Self {
+        #[cfg(target_os = "macos")]
+        let uuid = display
+            .to_string()
+            .parse::<u64>()
+            .ok()
+            .and_then(|id| cx.find_display(gpui::DisplayId::new(id)))
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string());
+        #[cfg(not(target_os = "macos"))]
+        let uuid = {
+            let _ = cx;
+            None
+        };
+        Self {
+            id: display.to_string(),
+            uuid,
+        }
+    }
+
+    fn owns(&self, locked: &LockedArea) -> bool {
+        locked.screen_id == self.id
+            || locked
+                .screen_uuid
+                .as_deref()
+                .is_some_and(|uuid| self.uuid.as_deref() == Some(uuid))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LockedArea {
+    screen_id: String,
+    screen_uuid: Option<String>,
+    bounds: AreaRect,
+}
+
+fn stored_locked_area() -> Option<LockedArea> {
     let section = crate::store::store_section(AREA_SELECTION_STORE);
     if !section.get("locked")?.as_bool()? {
         return None;
     }
-    let display = section.get("screenId")?.as_str()?.to_string();
+    let screen_id = section.get("screenId")?.as_str()?.to_string();
+    let screen_uuid = section
+        .get("screenUuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let bounds = section.get("bounds")?;
     let value = |key: &str| bounds.get(key)?.as_f64().map(|value| value as f32);
     let bounds = AreaRect {
@@ -781,15 +832,23 @@ fn stored_locked_area() -> Option<(String, AreaRect)> {
     [bounds.x, bounds.y, bounds.width, bounds.height]
         .iter()
         .all(|value| value.is_finite())
-        .then_some((display, bounds))
+        .then_some(LockedArea {
+            screen_id,
+            screen_uuid,
+            bounds,
+        })
 }
 
-fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
+fn store_locked_area(locked: Option<(&AreaScreen, AreaRect)>) {
     crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
         match locked {
-            Some((display, bounds)) => {
+            Some((screen, bounds)) => {
                 section.insert("locked".into(), true.into());
-                section.insert("screenId".into(), display.to_string().into());
+                section.insert("screenId".into(), screen.id.clone().into());
+                match &screen.uuid {
+                    Some(uuid) => section.insert("screenUuid".into(), uuid.clone().into()),
+                    None => section.remove("screenUuid"),
+                };
                 section.insert(
                     "bounds".into(),
                     serde_json::json!({
@@ -808,10 +867,11 @@ fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
     });
 }
 
-fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
-    let (locked_display, bounds) = stored_locked_area()?;
-    (locked_display == display.to_string())
-        .then(|| bounds.clamped(display_size))
+fn locked_area_for(screen: &AreaScreen, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
+    let locked = stored_locked_area()?;
+    screen
+        .owns(&locked)
+        .then(|| locked.bounds.clamped(display_size))
         .filter(|bounds| bounds.is_valid_for(min))
 }
 
@@ -1415,6 +1475,7 @@ pub struct OverlayWindow {
     theme: Theme,
     select: Entity<TargetSelect>,
     display_id: DisplayId,
+    area_screen: AreaScreen,
     display_name: String,
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
@@ -1602,8 +1663,9 @@ impl OverlayWindow {
             .clamped(logical);
         #[cfg(target_os = "macos")]
         import_legacy_area_selection();
+        let area_screen = AreaScreen::of(&display.id(), cx);
         let locked_area = locked_area_for(
-            &display.id(),
+            &area_screen,
             logical,
             area_min_size(select.read(cx).recording_mode),
         );
@@ -1612,6 +1674,7 @@ impl OverlayWindow {
             theme,
             select,
             display_id: display.id(),
+            area_screen,
             display_name: display
                 .name()
                 .unwrap_or_else(|| tr::overlay::display_fallback(display.id())),
@@ -4046,7 +4109,7 @@ impl OverlayWindow {
     /// Only the display the saved lock belongs to clears it.
     fn unlock_area(&mut self) {
         self.area_locked = false;
-        if stored_locked_area().is_some_and(|(display, _)| display == self.display_id.to_string()) {
+        if stored_locked_area().is_some_and(|locked| self.area_screen.owns(&locked)) {
             store_locked_area(None);
         }
     }
@@ -4062,7 +4125,7 @@ impl OverlayWindow {
             self.area_locked = true;
             self.drag = None;
             self.snap_guides.clear();
-            store_locked_area(Some((&self.display_id, crop)));
+            store_locked_area(Some((&self.area_screen, crop)));
             // One lock is saved: another display's lock is replaced.
             let display = self.display_id.clone();
             cx.defer(move |cx| app_windows::release_other_area_locks(&display, cx));
@@ -4084,8 +4147,8 @@ impl OverlayWindow {
         let Some(crop) = self.crop.filter(|_| self.area_locked) else {
             return;
         };
-        if stored_locked_area().is_some_and(|(display, _)| display == self.display_id.to_string()) {
-            store_locked_area(Some((&self.display_id, crop)));
+        if stored_locked_area().is_some_and(|locked| self.area_screen.owns(&locked)) {
+            store_locked_area(Some((&self.area_screen, crop)));
         }
     }
 
@@ -5845,6 +5908,51 @@ mod snap_to_ratio_tests {
     }
 
     #[test]
+    fn a_lock_follows_its_display_when_macos_renumbers_it() {
+        let _store = TempStore::new("{}");
+        let bounds = AreaRect {
+            x: 560.,
+            y: 315.,
+            width: 800.,
+            height: 450.,
+        };
+        let screen = |id: &str, uuid: Option<&str>| AreaScreen {
+            id: id.into(),
+            uuid: uuid.map(str::to_string),
+        };
+        let display = (1920., 1080.);
+        store_locked_area(Some((&screen("34", Some("UUID-A")), bounds)));
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-B")), display, AREA_MIN_SIZE),
+            None
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", None), display, AREA_MIN_SIZE),
+            None
+        );
+        // A lock saved without a UUID (0.6.0, or a display that has none)
+        // still matches by id, and relocking drops a stale UUID.
+        store_locked_area(Some((&screen("34", None), bounds)));
+        assert_eq!(stored_locked_area().unwrap().screen_uuid, None);
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-A")), display, AREA_MIN_SIZE),
+            None
+        );
+    }
+
+    #[test]
     fn webkit_storage_values_decode_from_utf16() {
         assert_eq!(
             decode_webkit_storage_hex("6C006900670068007400\n").as_deref(),
@@ -5885,8 +5993,14 @@ mod snap_to_ratio_tests {
         });
         assert!(!stored_area_snap_to_ratio());
         assert_eq!(stored_area_ratio(), Some((16, 9)));
-        let display = "2".parse::<DisplayId>().unwrap();
-        let other = "1".parse::<DisplayId>().unwrap();
+        let display = AreaScreen {
+            id: "2".into(),
+            uuid: None,
+        };
+        let other = AreaScreen {
+            id: "1".into(),
+            uuid: None,
+        };
         let expected = AreaRect {
             x: 120.,
             y: 80.,
