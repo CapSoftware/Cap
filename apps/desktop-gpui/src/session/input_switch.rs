@@ -106,8 +106,13 @@ impl RecordingSession {
         }
     }
 
+    /// Pause and switching share one guard: a Studio switch pauses and
+    /// resumes the actor itself, so neither may start while the other runs.
     fn input_switch_live(&self) -> bool {
-        matches!(self.phase, Phase::Recording { .. }) && !self.pipeline_failed
+        matches!(self.phase, Phase::Recording { .. })
+            && !self.pipeline_failed
+            && !self.pause_pending()
+            && !self.pause_uncertain()
     }
 
     /// The recording started with a microphone and its pipeline can move to

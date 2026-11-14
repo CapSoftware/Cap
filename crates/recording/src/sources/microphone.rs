@@ -444,7 +444,10 @@ impl Microphone {
         #[cfg(windows)]
         let source_cancel = ctx.stop_token().child_token();
         #[cfg(windows)]
-        let subscription = feed_lock.recording_subscription(source_cancel.clone());
+        // Retiring a subscription cancels its token. Each one gets a child of the
+        // source's token so a microphone switch can retire the old subscription
+        // without stopping the source.
+        let subscription = feed_lock.recording_subscription(source_cancel.child_token());
         let binding: SharedMicrophoneBinding = Arc::new(std::sync::Mutex::new(MicrophoneBinding {
             lock: feed_lock.clone(),
             #[cfg(windows)]
@@ -612,7 +615,7 @@ impl Microphone {
                                     continue;
                                 }
                                 #[cfg(windows)]
-                                let next_subscription = next.recording_subscription(cancel.clone());
+                                let next_subscription = next.recording_subscription(cancel.child_token());
                                 #[cfg(windows)]
                                 let attached = next
                                     .attach_recording_subscription(

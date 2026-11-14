@@ -1510,7 +1510,7 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
-        if self.pipeline_failed {
+        if self.pipeline_failed || self.input_switch_pending().is_some() {
             return;
         }
         let Some((ticket, registration)) =
@@ -1615,7 +1615,8 @@ impl RecordingSession {
     /// straight away instead, because its pause keeps capture running.
     pub fn sleep_should_wait(&self) -> bool {
         self.phase == Phase::Stopping
-            || (self.pause_pending() && self.mode() != Some(recording::RecordingMode::Instant))
+            || ((self.pause_pending() || self.input_switch_pending().is_some())
+                && self.mode() != Some(recording::RecordingMode::Instant))
     }
 
     pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {

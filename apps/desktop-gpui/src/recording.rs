@@ -865,9 +865,6 @@ impl ActiveRecording {
         }
     }
 
-    /// Marks `at` in a Studio recording and returns the new marker count.
-    /// Instant recordings have no editor timeline to put a marker on, so
-    /// they take none.
     pub(crate) fn studio_handle(&self) -> Option<studio_recording::ActorHandle> {
         match &self.handle {
             Handle::Studio(handle) => Some(handle.clone()),
@@ -901,6 +898,9 @@ impl ActiveRecording {
         drop(previous);
     }
 
+    /// Marks `at` in a Studio recording and returns the new marker count.
+    /// Instant recordings have no editor timeline to put a marker on, so
+    /// they take none.
     pub fn add_marker(&self, at: std::time::Instant) -> Option<usize> {
         match &self.handle {
             Handle::Studio(handle) => handle.add_marker(at),

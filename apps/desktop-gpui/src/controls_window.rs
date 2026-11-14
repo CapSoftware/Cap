@@ -191,6 +191,14 @@ impl ControlsWindow {
             return;
         }
         self.fitted_height = height;
+        // Linux has no native frame to grow from the bottom, so the bar's
+        // window takes the panel's height through gpui, never shrinking below
+        // the height it opened at.
+        #[cfg(target_os = "linux")]
+        window.resize(gpui::size(
+            px(crate::app_windows::CONTROLS_WIDTH),
+            px(height.max(crate::app_windows::CONTROLS_HEIGHT)),
+        ));
         let Some(native) = crate::platform::native_window(window) else {
             return;
         };
@@ -648,8 +656,6 @@ impl ControlsWindow {
         .detach();
     }
 
-    /// The microphones the menu offers: what was found, plus the one in use
-    /// if enumeration has not caught up with it yet.
     fn microphone_choices(&self, cx: &gpui::App) -> Vec<String> {
         let mut choices = self.microphones.clone();
         if let Some(current) = &Feeds::global(cx).read(cx).microphone
@@ -685,8 +691,6 @@ impl ControlsWindow {
         choices
     }
 
-    /// Rows under each heading, "None" included; a heading whose input this
-    /// recording cannot change shows no rows.
     fn settings_rows(&self, cx: &gpui::App) -> (usize, usize) {
         let session = self.session.read(cx);
         let microphones = if session.microphone_switch_available() {
