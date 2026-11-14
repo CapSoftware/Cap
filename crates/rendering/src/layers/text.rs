@@ -862,9 +862,7 @@ mod tests {
         let mut previous = vec![(1, "first"), (2, "second"), (3, "third")];
         previous.reverse();
         assert_eq!(take_cached_shape(&mut previous, &1), Some((1, "first")));
-        // The next frame can reorder text overlays and still reuse by key.
         assert_eq!(take_cached_shape(&mut previous, &3), Some((3, "third")));
-        // A changed key must miss rather than draw stale text.
         assert_eq!(take_cached_shape(&mut previous, &4), None);
         assert_eq!(take_cached_shape(&mut previous, &2), Some((2, "second")));
         assert!(previous.is_empty());
