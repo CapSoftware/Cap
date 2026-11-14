@@ -847,29 +847,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn visible_shape_order(&self, time: f64) -> Vec<usize> {
-        let segments = self.shape_segments();
-        if segments.is_empty() {
-            return Vec::new();
-        }
-        let mut order = Vec::new();
-        for track in self
-            .project
-            .overlay_tracks()
-            .into_iter()
-            .rev()
-            .filter(|track| track.kind == cap_project::OverlayTrackKind::Shape)
-        {
-            order.extend(
-                segments
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, segment)| {
-                        segment.track == track.track && segment.is_active_at(time)
-                    })
-                    .map(|(index, _)| index),
-            );
-        }
-        order
+        self.project.visible_shape_order(time)
     }
 
     /// Whether a text, image or mask box on a track stacked above the

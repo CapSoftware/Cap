@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
@@ -3276,13 +3276,29 @@ impl ProjectConfiguration {
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
+        if available.len() <= 24 && saved.len() <= 24 {
+            for track in available {
+                if !saved.contains(track) && !ordered.contains(track) {
+                    ordered.push(*track);
+                }
+            }
+            for track in saved {
+                if available.contains(track) && !ordered.contains(track) {
+                    ordered.push(*track);
+                }
+            }
+            return ordered;
+        }
+
+        let saved_tracks: HashSet<_> = saved.iter().copied().collect();
+        let mut available_tracks: HashSet<_> = available.iter().copied().collect();
         for track in available {
-            if !saved.contains(track) && !ordered.contains(track) {
+            if !saved_tracks.contains(track) && available_tracks.remove(track) {
                 ordered.push(*track);
             }
         }
         for track in saved {
-            if available.contains(track) && !ordered.contains(track) {
+            if available_tracks.remove(track) {
                 ordered.push(*track);
             }
         }
@@ -3338,6 +3354,83 @@ impl ProjectConfiguration {
             );
         }
         self.resolved_overlay_order(&available)
+    }
+
+    fn scan_shape_order_directly(shape_tracks: usize, segments: usize) -> bool {
+        shape_tracks <= 16 || shape_tracks.saturating_mul(segments) <= 32_768
+    }
+
+    pub fn visible_shape_order(&self, time: f64) -> Vec<usize> {
+        let Some(timeline) = &self.timeline else {
+            return Vec::new();
+        };
+        let segments = &timeline.shape_segments;
+        if segments.is_empty() || !time.is_finite() {
+            return Vec::new();
+        }
+
+        let tracks = self.overlay_tracks();
+        let shape_count = tracks
+            .iter()
+            .filter(|track| track.kind == OverlayTrackKind::Shape)
+            .count();
+        if shape_count == 0 {
+            return Vec::new();
+        }
+        if Self::scan_shape_order_directly(shape_count, segments.len()) {
+            let mut order = Vec::new();
+            for track in tracks
+                .into_iter()
+                .rev()
+                .filter(|track| track.kind == OverlayTrackKind::Shape)
+            {
+                order.extend(
+                    segments
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, segment)| {
+                            segment.track == track.track && segment.is_active_at(time)
+                        })
+                        .map(|(index, _)| index),
+                );
+            }
+            return order;
+        }
+
+        let track_positions: HashMap<_, _> = tracks
+            .into_iter()
+            .rev()
+            .filter(|track| track.kind == OverlayTrackKind::Shape)
+            .enumerate()
+            .map(|(position, track)| (track.track, position))
+            .collect();
+        let missing = usize::MAX;
+        let mut first = vec![missing; shape_count];
+        let mut last = vec![missing; shape_count];
+        let mut next = vec![missing; segments.len()];
+        let mut count = 0;
+        for (index, segment) in segments.iter().enumerate() {
+            if segment.is_active_at(time)
+                && let Some(&position) = track_positions.get(&segment.track)
+            {
+                if last[position] == missing {
+                    first[position] = index;
+                } else {
+                    next[last[position]] = index;
+                }
+                last[position] = index;
+                count += 1;
+            }
+        }
+        let mut ordered = Vec::with_capacity(count);
+        for start in first {
+            let mut index = start;
+            while index != missing {
+                ordered.push(index);
+                index = next[index];
+            }
+        }
+        ordered
     }
 
     fn style_override_at<T>(
@@ -5994,6 +6087,261 @@ mod overlay_order_tests {
         current.set_overlay_order(vec![text, shape]);
         let applied = current.with_preset(ProjectConfiguration::default());
         assert_eq!(applied.overlay_order(), [text, shape]);
+    }
+}
+
+#[cfg(test)]
+mod overlay_frame_order_tests {
+    use super::*;
+
+    fn original_resolved_order(
+        available: &[OverlayTrack],
+        saved: &[OverlayTrack],
+    ) -> Vec<OverlayTrack> {
+        let mut ordered = Vec::with_capacity(available.len());
+        for track in available {
+            if !saved.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        for track in saved {
+            if available.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        ordered
+    }
+
+    fn original_visible_shape_order(project: &ProjectConfiguration, time: f64) -> Vec<usize> {
+        let Some(timeline) = &project.timeline else {
+            return Vec::new();
+        };
+        let mut order = Vec::new();
+        for track in project
+            .overlay_tracks()
+            .into_iter()
+            .rev()
+            .filter(|track| track.kind == OverlayTrackKind::Shape)
+        {
+            order.extend(
+                timeline
+                    .shape_segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, segment)| {
+                        segment.track == track.track && segment.is_active_at(time)
+                    })
+                    .map(|(index, _)| index),
+            );
+        }
+        order
+    }
+
+    #[test]
+    fn overlay_order_is_identical_with_duplicates_and_stale_saved_tracks() {
+        for length in [0, 1, 7, 24, 25, 32, 128, 512] {
+            let available: Vec<_> = (0..length)
+                .map(|index| OverlayTrack {
+                    kind: if index % 3 == 0 {
+                        OverlayTrackKind::Shape
+                    } else {
+                        OverlayTrackKind::Text
+                    },
+                    track: (index / 2) as u32,
+                })
+                .collect();
+            let mut saved: Vec<_> = available.iter().copied().step_by(3).rev().collect();
+            saved.extend([
+                OverlayTrack {
+                    kind: OverlayTrackKind::Shape,
+                    track: 65_535,
+                },
+                saved.first().copied().unwrap_or(OverlayTrack {
+                    kind: OverlayTrackKind::Mask,
+                    track: 0,
+                }),
+            ]);
+            let mut project = ProjectConfiguration::default();
+            project.set_overlay_order(saved.clone());
+            assert_eq!(
+                project.resolved_overlay_order(&available),
+                original_resolved_order(&available, &saved),
+                "length={length}"
+            );
+            project.set_overlay_order(Vec::new());
+            assert_eq!(
+                project.resolved_overlay_order(&available),
+                original_resolved_order(&available, &[]),
+                "default length={length}"
+            );
+        }
+    }
+
+    #[test]
+    fn visible_shape_order_matches_track_by_track_scans_on_all_edges() {
+        let tracks = [0_u32, 7, 92, 4_096];
+        let shapes: Vec<_> = (0..512)
+            .map(|index| {
+                let mut shape = crate::ShapeSegment::default();
+                shape.track = tracks[(index * 13) % tracks.len()];
+                shape.start = if index % 11 == 0 { 1.5 } else { 0. };
+                shape.end = if index % 17 == 0 { -1. } else { 4. };
+                shape.enabled = index % 9 != 0;
+                shape
+            })
+            .collect();
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        timeline.shape_segments = shapes;
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+
+        let shaped = |track| OverlayTrack {
+            kind: OverlayTrackKind::Shape,
+            track,
+        };
+        for order in [
+            vec![],
+            vec![shaped(4_096), shaped(0), shaped(92), shaped(7)],
+            vec![shaped(7), shaped(7), shaped(999_999), shaped(0)],
+        ] {
+            project.set_overlay_order(order);
+            for time in [
+                f64::NEG_INFINITY,
+                -1.,
+                0.,
+                1.5,
+                3.999,
+                4.,
+                f64::INFINITY,
+                f64::NAN,
+            ] {
+                assert_eq!(
+                    project.visible_shape_order(time),
+                    original_visible_shape_order(&project, time),
+                    "time={time}"
+                );
+            }
+        }
+
+        project.timeline = None;
+        assert!(project.visible_shape_order(1.).is_empty());
+    }
+
+    fn assert_visible_shape_order_matches_reference(tracks: &[u32], shape_count: usize) {
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        timeline.shape_segments = (0..shape_count)
+            .map(|index| {
+                let mut shape = crate::ShapeSegment::default();
+                shape.track = tracks[index % tracks.len()];
+                shape.start = if index % 11 == 0 { 1.5 } else { 0. };
+                shape.end = if index % 17 == 0 { -1. } else { 4. };
+                shape.enabled = index % 9 != 0;
+                shape
+            })
+            .collect();
+
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+        let mut custom_order: Vec<_> = tracks
+            .iter()
+            .rev()
+            .copied()
+            .map(|track| OverlayTrack {
+                kind: OverlayTrackKind::Shape,
+                track,
+            })
+            .collect();
+        custom_order.push(custom_order[0]);
+        custom_order.insert(
+            1,
+            OverlayTrack {
+                kind: OverlayTrackKind::Shape,
+                track: 999_999,
+            },
+        );
+        for order in [vec![], custom_order] {
+            project.set_overlay_order(order);
+            for time in [
+                f64::NEG_INFINITY,
+                -1.,
+                0.,
+                1.5,
+                3.999,
+                4.,
+                f64::INFINITY,
+                f64::NAN,
+            ] {
+                assert_eq!(
+                    project.visible_shape_order(time),
+                    original_visible_shape_order(&project, time),
+                    "tracks={} shapes={shape_count} time={time}",
+                    tracks.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shape_order_dispatch_preserves_low_track_count_scans() {
+        assert!(ProjectConfiguration::scan_shape_order_directly(1, 8_193));
+        assert!(ProjectConfiguration::scan_shape_order_directly(8, 8_256));
+        assert!(ProjectConfiguration::scan_shape_order_directly(16, 9_600));
+        assert!(ProjectConfiguration::scan_shape_order_directly(17, 68));
+        assert!(ProjectConfiguration::scan_shape_order_directly(17, 1_927));
+        assert!(!ProjectConfiguration::scan_shape_order_directly(17, 1_928));
+        assert!(!ProjectConfiguration::scan_shape_order_directly(64, 2_048));
+
+        assert_visible_shape_order_matches_reference(&[92], 8_193);
+        assert_visible_shape_order_matches_reference(
+            &[0, 7, 92, 4_096, 10_000, 11_000, 12_000, 13_000],
+            8_256,
+        );
+        let sixteen_tracks: Vec<u32> = (0..16).map(|index| index * 131 + 7).collect();
+        assert_visible_shape_order_matches_reference(&sixteen_tracks, 9_600);
+    }
+
+    #[test]
+    fn grouping_matches_reference_with_sparse_tracks_and_custom_stacking() {
+        let seventeen_tracks: Vec<u32> = (0..17).map(|index| index * 113 + 7).collect();
+        assert_visible_shape_order_matches_reference(&seventeen_tracks, 68);
+        assert_visible_shape_order_matches_reference(&seventeen_tracks, 2_048);
+        let sixty_four_tracks: Vec<u32> = (0..64).map(|index| index * 113 + 7).collect();
+        assert_visible_shape_order_matches_reference(&sixty_four_tracks, 2_048);
+    }
+
+    #[test]
+    fn a_single_shape_track_keeps_source_order_and_ignores_inactive_segments() {
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        timeline.shape_segments = (0..8)
+            .map(|index| {
+                let mut shape = crate::ShapeSegment::default();
+                shape.track = 4;
+                shape.start = index as f64;
+                shape.end = index as f64 + 4.;
+                shape
+            })
+            .collect();
+        let project = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+        assert_eq!(project.visible_shape_order(5.), vec![2, 3, 4, 5]);
     }
 }
 
