@@ -489,6 +489,11 @@ export type ServiceWorkerRequest =
 			type: "hide-recording-start-overlays";
 	  }
 	| {
+			target: "service-worker";
+			type: "auth-rejected";
+			authApiKey: string;
+	  }
+	| {
 			// The recorded tab's confirm overlay reports the user's decision back to
 			// the service worker, which is blocking the recording start on it.
 			target: "service-worker";
