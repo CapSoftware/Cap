@@ -507,6 +507,17 @@ fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut A
         .detach();
 }
 
+pub(crate) fn capture_ui_in_flight(cx: &App) -> bool {
+    clean_capture_owned(cx)
+        || cx.try_global::<AppWindows>().is_some_and(|windows| {
+            !windows.overlays.is_empty()
+                || windows
+                    .main
+                    .read(cx)
+                    .is_ok_and(MainWindow::is_preparing_recording)
+        })
+}
+
 pub(crate) fn export_in_flight(cx: &App) -> bool {
     if !cx.has_global::<AppWindows>() {
         return false;
@@ -8166,6 +8177,22 @@ mod tests {
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn capture_ui_stays_busy_while_a_picker_is_open(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert!(!capture_ui_in_flight(cx));
+            let mut windows = test_app_windows(Vec::new());
+            windows
+                .overlays
+                .push(("1".parse().unwrap(), WindowHandle::new(u64::MAX.into())));
+            cx.set_global(windows);
+            assert!(capture_ui_in_flight(cx));
+            cx.global_mut::<AppWindows>().overlays.clear();
+            assert!(!capture_ui_in_flight(cx));
+        });
     }
 
     #[cfg(target_os = "linux")]

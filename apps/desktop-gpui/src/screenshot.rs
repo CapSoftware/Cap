@@ -11,14 +11,57 @@
 //! Known deviations from that command: no native notification and no `ScreenshotTaken`
 //! automations (no automation runner here).
 
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    rc::{Rc, Weak},
+    time::Duration,
+};
 
 use anyhow::{Context as _, anyhow};
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
-use gpui::App;
+use gpui::{App, Global};
 
 use crate::app_windows;
+
+#[derive(Default)]
+struct ScreenshotInFlight(Weak<()>);
+
+impl Global for ScreenshotInFlight {}
+
+impl ScreenshotInFlight {
+    fn begin(cx: &mut App) -> Rc<()> {
+        let active = cx.default_global::<Self>();
+        active.0.upgrade().unwrap_or_else(|| {
+            let capture = Rc::new(());
+            active.0 = Rc::downgrade(&capture);
+            capture
+        })
+    }
+}
+
+pub(crate) fn capture_in_flight(cx: &App) -> bool {
+    cx.try_global::<ScreenshotInFlight>()
+        .is_some_and(|active| active.0.strong_count() != 0)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[gpui::test]
+fn overlapping_screenshots_keep_capture_in_flight(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        assert!(!capture_in_flight(cx));
+        let first = ScreenshotInFlight::begin(cx);
+        let second = ScreenshotInFlight::begin(cx);
+        assert!(capture_in_flight(cx));
+        drop(first);
+        assert!(capture_in_flight(cx));
+        drop(second);
+        assert!(!capture_in_flight(cx));
+        let next = ScreenshotInFlight::begin(cx);
+        assert!(capture_in_flight(cx));
+        drop(next);
+        assert!(!capture_in_flight(cx));
+    });
+}
 
 pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     if matches!(target, ScreenCaptureTarget::CameraOnly) {
@@ -28,6 +71,7 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
         return;
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
+    let in_flight = ScreenshotInFlight::begin(cx);
 
     #[cfg(target_os = "linux")]
     if cap_recording::screenshot::uses_wayland_portal()
@@ -48,7 +92,7 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
             Ok(()) => {
                 WAYLAND_SCREENSHOTS_ALLOWED.store(true, std::sync::atomic::Ordering::Release);
                 tracing::info!("the desktop allows Cap's screenshots");
-                cx.update(|cx| capture(target, cx));
+                cx.update(|cx| capture(target, in_flight, cx));
             }
             // The picker is still up, so the user can try again.
             Err(error) => tracing::error!("screenshot capture failed: {error:#}"),
@@ -56,7 +100,7 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
         .detach();
         return;
     }
-    capture(target, cx);
+    capture(target, in_flight, cx);
 }
 
 /// Set once the screenshot portal has answered a request: the permission it
@@ -65,7 +109,7 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
 static WAYLAND_SCREENSHOTS_ALLOWED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-fn capture(target: ScreenCaptureTarget, cx: &mut App) {
+fn capture(target: ScreenCaptureTarget, in_flight: Rc<()>, cx: &mut App) {
     // A Wayland compositor keeps drawing a closed window while it animates it
     // away, and the animation can outlast the pause below (KWin's fade does
     // at slower animation speeds), which left the selection overlay in the
@@ -79,15 +123,15 @@ fn capture(target: ScreenCaptureTarget, cx: &mut App) {
     {
         cx.spawn(async move |cx| {
             emptied.await;
-            cx.update(|cx| capture_without_overlays(target, cx));
+            cx.update(|cx| capture_without_overlays(target, in_flight, cx));
         })
         .detach();
         return;
     }
-    capture_without_overlays(target, cx);
+    capture_without_overlays(target, in_flight, cx);
 }
 
-fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
+fn capture_without_overlays(target: ScreenCaptureTarget, in_flight: Rc<()>, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -112,6 +156,7 @@ fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
             }
         };
         cx.update(|cx| app_windows::screenshot_finished(captured, cx));
+        drop(in_flight);
     })
     .detach();
 }

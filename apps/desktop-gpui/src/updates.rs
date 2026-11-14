@@ -15,6 +15,7 @@ const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 const NIGHTLY_FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 const NIGHTLY_CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BUSY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+const CAPTURE_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum UpdateStatus {
@@ -154,14 +155,6 @@ fn qualifies(
             && remote != current)
 }
 
-/// A check the user asked for answers now; a scheduled one waits for the
-/// work in flight to finish before showing its modal prompt.
-fn holds_scheduled_prompt(manual: bool, busy: bool) -> bool {
-    !manual && busy
-}
-
-/// A manual check or a channel change queued while an automatic prompt waits
-/// replaces it, so neither has to wait for the work in flight to finish.
 fn supersedes_held_prompt(pending: &PendingUpdateRequests) -> bool {
     pending.manual || pending.channel.is_some()
 }
@@ -214,11 +207,30 @@ fn select_available_release(
     }
 }
 
-pub(crate) fn work_in_flight(cx: &mut App) -> bool {
+fn capture_in_flight(cx: &App) -> bool {
     RecordingSession::recording_in_flight(cx)
-        || crate::app_windows::export_in_flight(cx)
+        || crate::screenshot::capture_in_flight(cx)
+        || crate::app_windows::capture_ui_in_flight(cx)
+}
+
+fn other_work_in_flight(cx: &App) -> bool {
+    crate::app_windows::export_in_flight(cx)
         || crate::import::imports_in_flight(cx)
         || crate::transcription::work_in_flight()
+}
+
+fn work_in_flight(cx: &App) -> bool {
+    capture_in_flight(cx) || other_work_in_flight(cx)
+}
+
+fn prompt_retry_delay(manual: bool, cx: &App) -> Option<Duration> {
+    if capture_in_flight(cx) {
+        Some(CAPTURE_RETRY_DELAY)
+    } else if !manual && other_work_in_flight(cx) {
+        Some(BUSY_RETRY_DELAY)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn status(cx: &App) -> UpdateStatus {
@@ -581,24 +593,28 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 continue;
             }
 
-            // The prompt is modal and brings Cap forward, so an automatic
-            // check holds it until a recording, export, import or
-            // transcription has finished rather than interrupting it.
             let mut superseded = false;
-            if holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
-                // Leave the menu's Check for Update row usable for the length
-                // of a recording; a manual check replaces the held prompt.
-                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
-            }
-            while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
-                let timer = cx.background_executor().timer(BUSY_RETRY_DELAY);
+            while let Some(retry_delay) = cx.update(|cx| {
+                let retry_delay = prompt_retry_delay(manual, cx);
+                if retry_delay.is_some() && !manual {
+                    set_status(UpdateStatus::Idle, cx);
+                }
+                retry_delay
+            }) {
+                let timer = cx.background_executor().timer(retry_delay);
                 let request = requests.recv_async();
                 futures_util::pin_mut!(timer, request);
                 if let Either::Right((Err(_), _)) = select(timer, request).await {
                     return;
                 }
-                superseded =
-                    cx.update(|cx| supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending));
+                superseded = cx.update(|cx| {
+                    let scheduler = cx.global_mut::<UpdateScheduler>();
+                    if manual && scheduler.pending.channel.is_some() {
+                        scheduler.pending.manual = true;
+                        scheduler.manual_in_flight = false;
+                    }
+                    supersedes_held_prompt(&scheduler.pending)
+                });
                 if superseded {
                     break;
                 }
@@ -752,17 +768,19 @@ fn prompt_restart(cx: &mut App) {
     else {
         return;
     };
-    let busy = work_in_flight(cx);
+    let retry_delay = prompt_retry_delay(false, cx);
     match cx
         .global_mut::<UpdateScheduler>()
         .restart_prompt
-        .request(busy)
+        .request(retry_delay.is_some())
     {
         RestartStep::Ignore => {}
         RestartStep::Wait(epoch) => {
             tracing::info!(%version, "update ready; waiting for in-flight work before prompting");
             cx.spawn(async move |cx| {
-                cx.background_executor().timer(BUSY_RETRY_DELAY).await;
+                cx.background_executor()
+                    .timer(retry_delay.unwrap_or(BUSY_RETRY_DELAY))
+                    .await;
                 cx.update(|cx| {
                     if cx
                         .global_mut::<UpdateScheduler>()
@@ -777,6 +795,15 @@ fn prompt_restart(cx: &mut App) {
         }
         RestartStep::Show => {
             cx.spawn(async move |cx| {
+                if cx.update(|cx| work_in_flight(cx)) {
+                    cx.update(|cx| {
+                        cx.global_mut::<UpdateScheduler>()
+                            .restart_prompt
+                            .dialog_closed();
+                        prompt_restart(cx);
+                    });
+                    return;
+                }
                 crate::platform::activate_app();
                 let accepted = crate::platform::confirm_dialog(
                     tr::dialog::update::title(),
@@ -1002,14 +1029,6 @@ mod tests {
     }
 
     #[test]
-    fn only_scheduled_checks_wait_for_work_in_flight() {
-        assert!(holds_scheduled_prompt(false, true));
-        assert!(!holds_scheduled_prompt(false, false));
-        assert!(!holds_scheduled_prompt(true, true));
-        assert!(!holds_scheduled_prompt(true, false));
-    }
-
-    #[test]
     fn queued_manual_checks_and_channel_changes_replace_a_held_prompt() {
         assert!(!supersedes_held_prompt(&PendingUpdateRequests::default()));
         assert!(supersedes_held_prompt(&PendingUpdateRequests {
@@ -1020,6 +1039,26 @@ mod tests {
             channel: Some(UpdateChannel::Nightly),
             ..PendingUpdateRequests::default()
         }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn recording_defers_manual_and_scheduled_prompts(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let session = RecordingSession::init(cx);
+            for phase in [
+                crate::session::Phase::Starting,
+                crate::session::Phase::Recording { paused: false },
+                crate::session::Phase::Recording { paused: true },
+                crate::session::Phase::Stopping,
+            ] {
+                session.update(cx, |session, _| session.phase = phase);
+                assert_eq!(prompt_retry_delay(false, cx), Some(CAPTURE_RETRY_DELAY));
+                assert_eq!(prompt_retry_delay(true, cx), Some(CAPTURE_RETRY_DELAY));
+            }
+            session.update(cx, |session, _| session.phase = crate::session::Phase::Idle);
+            assert_eq!(prompt_retry_delay(true, cx), None);
+        });
     }
 
     #[test]
