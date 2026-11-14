@@ -990,13 +990,7 @@ async fn render_for_project(
     };
     if let Some(message) = checked
         && std::env::var_os("CAP_GPUI_AUTO_EXPORT").is_none()
-        && !platform::confirm_dialog(
-            tr::editor::export::resources::title(),
-            &message,
-            tr::editor::export::resources::proceed(),
-            tr::common::go_back(),
-            false,
-        )
+        && !confirm_resources(message, cx).await
     {
         cancel.store(true, Ordering::Release);
         return Err("Export cancelled".into());
@@ -1048,6 +1042,27 @@ async fn render_for_project(
     match export.await {
         Ok(result) => result,
         Err(error) => Err(format!("Export task failed: {error}")),
+    }
+}
+
+async fn confirm_resources(message: String, cx: &mut AsyncApp) -> bool {
+    let ask = move || {
+        platform::confirm_dialog(
+            tr::editor::export::resources::title(),
+            &message,
+            tr::editor::export::resources::proceed(),
+            tr::common::go_back(),
+            false,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    {
+        cx.background_executor().spawn(async move { ask() }).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cx;
+        ask()
     }
 }
 
