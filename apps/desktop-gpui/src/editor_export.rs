@@ -321,6 +321,23 @@ impl ExportUi {
         )
     }
 
+    /// The export picker's choice belongs to this export and its saved
+    /// preferences only. `recording_settings.organizationId` decides where
+    /// every Instant recording uploads, so sharing one video to a team must
+    /// not move the next personal recording there; only the header sets it.
+    fn choose_next_organization(&mut self, organizations: &[store::AuthOrganization]) -> bool {
+        if organizations.is_empty() {
+            return false;
+        }
+        let current = self.share_organization_id(organizations);
+        let index = organizations
+            .iter()
+            .position(|org| Some(org.id.as_str()) == current.as_deref())
+            .unwrap_or(0);
+        self.organization_id = Some(organizations[(index + 1) % organizations.len()].id.clone());
+        true
+    }
+
     pub(crate) fn select_organization(&mut self, id: &str) {
         if self.organization_id.as_deref() == Some(id) {
             return;
@@ -2080,18 +2097,9 @@ impl EditorWindow {
                             if orgs.is_empty() {
                                 return;
                             }
-                            if let Some(ui) = this.export.as_mut() {
-                                let current = ui.share_organization_id(&orgs);
-                                let current = current.as_deref();
-                                let index = orgs
-                                    .iter()
-                                    .position(|org| Some(org.id.as_str()) == current)
-                                    .unwrap_or(0);
-                                let next = orgs[(index + 1) % orgs.len()].id.clone();
-                                if !crate::organization::persist_selected_id(&next) {
-                                    tracing::warn!("the selected organization could not be saved");
-                                }
-                                ui.organization_id = Some(next);
+                            if let Some(ui) = this.export.as_mut()
+                                && ui.choose_next_organization(&orgs)
+                            {
                                 ui.persist();
                             }
                             cx.notify();
@@ -3421,6 +3429,48 @@ mod tests {
             turbo: false,
             gif_quality: None,
         })
+    }
+
+    #[test]
+    fn the_export_picker_never_moves_where_instant_recordings_go() {
+        let path =
+            std::env::temp_dir().join(format!("cap-gpui-export-org-test-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{"recording_settings":{"organizationId":"personal"}}"#,
+        )
+        .unwrap();
+        crate::store::set_test_tauri_store_path(Some(path.clone()));
+        let organizations: Vec<crate::store::AuthOrganization> = ["personal", "team"]
+            .into_iter()
+            .map(|id| crate::store::AuthOrganization {
+                id: id.into(),
+                name: id.into(),
+            })
+            .collect();
+
+        let mut ui = clipboard_export();
+        assert_eq!(
+            ui.share_organization_id(&organizations).as_deref(),
+            Some("personal")
+        );
+        assert!(ui.choose_next_organization(&organizations));
+        assert_eq!(ui.organization_id.as_deref(), Some("team"));
+        assert_eq!(
+            ui.share_organization_id(&organizations).as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            crate::organization::stored_selected_id().as_deref(),
+            Some("personal")
+        );
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["recording_settings"]["organizationId"], "personal");
+        assert!(!ui.choose_next_organization(&[]));
+
+        crate::store::set_test_tauri_store_path(None);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
