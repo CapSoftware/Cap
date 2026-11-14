@@ -221,7 +221,9 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
         // A real-time input that isn't ready drops the frame; the next one carries on at its own time.
         guard video.isReadyForMoreMediaData else { return }
         if video.append(buffer) {
-            if lastVideo.isValid, let started, CMTimeSubtract(time, lastVideo).seconds > Self.gapThreshold {
+            // Only a camera can be interrupted. A still screen sends no frames and is held by repeats that can be
+            // late, and it must keep showing.
+            if case .camera = settings.kind, lastVideo.isValid, let started, CMTimeSubtract(time, lastVideo).seconds > Self.gapThreshold {
                 let gap = EditRange(start: CMTimeSubtract(CMTimeAdd(lastVideo, frameDuration), started).seconds, end: CMTimeSubtract(time, started).seconds)
                 state.withLock { $0.gaps.append(gap) }
             }

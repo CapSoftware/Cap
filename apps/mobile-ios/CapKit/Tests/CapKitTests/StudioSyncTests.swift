@@ -361,6 +361,18 @@ import Testing
         #expect(video > 9.9)
     }
 
+    /// A screen that stops changing sends nothing for a while; its last picture must hold, not be cut out as a gap.
+    @Test func aStillScreenIsNotAGap() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "studio-still-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pause = EditRange(start: 2, end: 3.2)
+        let (screen, _) = try await Self.record(Track(hostStart: 0, seconds: 5, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: pause, color: Self.screenColor, size: Self.screenSize, beeps: false), flashesAt: [], to: directory.appending(path: "screen.mp4"), kind: .screen)
+        #expect(screen.gaps == nil)
+        let (camera, _) = try await Self.record(Track(hostStart: 0, seconds: 5, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: pause, color: Self.cameraColor, size: Self.cameraSize, beeps: false), flashesAt: [], to: directory.appending(path: "camera.mp4"), kind: .camera)
+        #expect(camera.gaps?.count == 1)
+    }
+
     @Test func recordedRangesSkipGaps() {
         let track = StudioProject.Track(file: "c", offset: 1, duration: 10, gaps: [EditRange(start: 6, end: 7), EditRange(start: 2, end: 3), EditRange(start: 9.5, end: 12)])
         #expect(track.recorded == [EditRange(start: 0, end: 2), EditRange(start: 3, end: 6), EditRange(start: 7, end: 9.5)])
