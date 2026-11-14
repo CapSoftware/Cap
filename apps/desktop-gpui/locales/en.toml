@@ -398,6 +398,7 @@ record_shortcut = "Record shortcut"
 recording_description = "Start a recording without opening Cap first."
 recording_hint = "Press the keys you want to use. Esc cancels, Delete removes it."
 recording_title = "Recording"
+save_failed = "Couldn't save the shortcut. Try again."
 saved = { text = "Saved. Press {keys} in any app to {effect}.", context = "{keys} is the shortcut, such as ⌘⇧4. {effect} is one of the settings.shortcuts.effect messages and completes the sentence." }
 saved_moved = { text = "Saved. Press {keys} in any app to {effect}. Removed from {shortcut}.", context = "Like settings.shortcuts.saved; {shortcut} is the label of the shortcut that used these keys before, such as Record an area." }
 screenshots_description = "Shortcuts work from any app. Click one to change it."

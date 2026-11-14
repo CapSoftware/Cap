@@ -301,6 +301,7 @@ pub(crate) struct PagesState {
     shortcut_saved: Option<SavedShortcut>,
     shortcut_saved_reset: Option<gpui::Task<()>>,
     shortcut_blocked: Option<&'static str>,
+    shortcut_save_failed: Option<&'static str>,
 
     // CLI (cli.tsx). `None` while the status fetch is in flight.
     cli_status: Option<Result<cli_install::CliInstallStatus, String>>,
@@ -415,6 +416,7 @@ impl PagesState {
             shortcut_saved: None,
             shortcut_saved_reset: None,
             shortcut_blocked: None,
+            shortcut_save_failed: None,
             cli_status: None,
             cli_installing: false,
             cli_uninstalling: false,
@@ -494,6 +496,7 @@ impl SettingsWindow {
                 self.pages.shortcut_saved = None;
                 self.pages.shortcut_saved_reset = None;
                 self.pages.shortcut_blocked = None;
+                self.pages.shortcut_save_failed = None;
             }
             Page::Cli => self.cli_refresh(window, cx),
             Page::Transcription => {
@@ -1494,6 +1497,7 @@ impl SettingsWindow {
     ) {
         self.pages.shortcut_saved = None;
         self.pages.shortcut_saved_reset = None;
+        self.pages.shortcut_save_failed = None;
         if !crate::hotkeys::pause(cx) {
             self.pages.shortcut_blocked = Some(action);
             cx.notify();
@@ -1563,7 +1567,7 @@ impl SettingsWindow {
         if bare && matches!(keystroke.key.as_str(), "backspace" | "delete") {
             self.pages.listening = None;
             self.pages.hotkeys.remove(action);
-            self.shortcuts_commit(cx);
+            self.shortcuts_commit(action, cx);
             return true;
         }
 
@@ -1608,7 +1612,9 @@ impl SettingsWindow {
         let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
         self.pages.hotkeys.insert(action.to_string(), value);
         self.pages.listening = None;
-        self.shortcuts_commit(cx);
+        if !self.shortcuts_commit(action, cx) {
+            return true;
+        }
         self.pages.shortcut_saved = Some(SavedShortcut { action, moved_from });
         self.pages.shortcut_saved_reset = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SHORTCUT_SAVED_NOTICE).await;
@@ -1631,9 +1637,14 @@ impl SettingsWindow {
     /// Persist the map and swap the OS registrations. Deferred because the
     /// registry swap reads the store this just wrote; resuming re-registers
     /// from the store, and so does a reload when nothing was paused.
-    fn shortcuts_commit(&mut self, cx: &mut Context<Self>) {
-        if !store::set_hotkeys_raw(&self.pages.hotkeys) {
+    fn shortcuts_commit(&mut self, action: &'static str, cx: &mut Context<Self>) -> bool {
+        let saved = store::set_hotkeys_raw(&self.pages.hotkeys);
+        self.pages.shortcut_save_failed = (!saved).then_some(action);
+        if !saved {
             tracing::warn!("saving the hotkeys store failed");
+            self.pages.hotkeys = store::hotkeys_raw();
+            self.pages.shortcut_saved = None;
+            self.pages.shortcut_saved_reset = None;
         }
         cx.defer(|cx| {
             if !crate::hotkeys::resume(cx) {
@@ -1642,6 +1653,7 @@ impl SettingsWindow {
             cx.refresh_windows();
         });
         cx.notify();
+        saved
     }
 
     pub(crate) fn render_shortcuts(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -1988,6 +2000,8 @@ impl SettingsWindow {
                 red,
                 None,
             )
+        } else if self.pages.shortcut_save_failed == Some(action) {
+            (tr::settings::shortcuts::save_failed().into(), red, None)
         } else if let Some(listening) = listening {
             match listening.error {
                 Some(error) => (error().into(), red, None),
@@ -2055,7 +2069,7 @@ impl SettingsWindow {
                 {
                     this.pages.shortcut_saved = None;
                 }
-                this.shortcuts_commit(cx);
+                this.shortcuts_commit(action, cx);
             }));
 
         div()
@@ -8259,6 +8273,68 @@ mod tests {
             alt,
             shift,
         }
+    }
+
+    #[gpui::test]
+    fn failed_shortcut_changes_keep_the_saved_bindings(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store");
+        store::set_test_tauri_store_path(Some(path.clone()));
+        let original = Map::from_iter([
+            (
+                "stopRecording".into(),
+                serde_json::to_value(hotkey("KeyS", false, true, false, false)).unwrap(),
+            ),
+            (
+                "screenshotArea".into(),
+                serde_json::to_value(hotkey("KeyA", false, true, false, false)).unwrap(),
+            ),
+        ]);
+        assert!(store::set_hotkeys_raw(&original));
+        std::fs::create_dir(path.with_extension("gpui-tmp")).unwrap();
+        cx.update(crate::sign_in::SignIn::init);
+        let window = cx.open_window(gpui::size(px(782.), px(775.)), |window, cx| {
+            SettingsWindow::new(Page::Shortcuts, window, cx)
+        });
+
+        window
+            .update(cx, |settings, window, cx| {
+                for key in ["ctrl-s", "delete"] {
+                    settings.shortcuts_start_listening("screenshotArea", window, cx);
+                    assert!(
+                        settings.shortcuts_capture_key(&gpui::Keystroke::parse(key).unwrap(), cx)
+                    );
+                    assert_eq!(store::hotkeys_raw(), original);
+                    assert_eq!(settings.pages.hotkeys, original, "{key}");
+                    assert!(settings.pages.shortcut_saved.is_none());
+                    assert_eq!(
+                        settings.pages.shortcut_save_failed,
+                        Some("screenshotArea"),
+                        "{key}"
+                    );
+                }
+                std::fs::remove_dir(path.with_extension("gpui-tmp")).unwrap();
+                settings.shortcuts_start_listening("screenshotArea", window, cx);
+                settings.shortcuts_capture_key(&gpui::Keystroke::parse("ctrl-s").unwrap(), cx);
+                assert_eq!(settings.pages.hotkeys, store::hotkeys_raw());
+                assert!(!settings.pages.hotkeys.contains_key("stopRecording"));
+                assert_eq!(
+                    settings.shortcut_binding("screenshotArea"),
+                    Some(hotkey("KeyS", false, true, false, false))
+                );
+                let saved = settings.pages.shortcut_saved.as_ref().unwrap();
+                assert_eq!(saved.action, "screenshotArea");
+                assert_eq!(saved.moved_from, Some("stopRecording"));
+                assert!(settings.pages.shortcut_save_failed.is_none());
+
+                settings.shortcuts_start_listening("screenshotArea", window, cx);
+                settings.shortcuts_capture_key(&gpui::Keystroke::parse("delete").unwrap(), cx);
+                assert!(settings.pages.hotkeys.is_empty());
+                assert!(store::hotkeys_raw().is_empty());
+                assert!(settings.pages.shortcut_save_failed.is_none());
+            })
+            .unwrap();
+        store::set_test_tauri_store_path(None);
     }
 
     #[test]
