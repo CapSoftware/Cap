@@ -114,15 +114,21 @@ export function resolveSettings(
 		: { ok: true, settings };
 }
 
+export type StoredSettings = {
+	values: InstallationSettings;
+	secretKeys: string[];
+};
+
 export function publicSettings(
 	fields: readonly SettingField[],
-	settings: InstallationSettings,
+	stored: StoredSettings,
 ): PublicSettings {
+	const hidden = new Set(stored.secretKeys);
 	const values: Record<string, SettingValue> = {};
 	const secretsSet: string[] = [];
 	for (const field of fields) {
-		const value = settings[field.key];
-		if (field.type === "secret") {
+		const value = stored.values[field.key];
+		if (field.type === "secret" || hidden.has(field.key)) {
 			if (typeof value === "string" && value) secretsSet.push(field.key);
 			continue;
 		}
@@ -131,15 +137,58 @@ export function publicSettings(
 	return { values, secretsSet };
 }
 
-export function parseStoredSettings(raw: string | null): InstallationSettings {
-	if (!raw) return {};
-	const parsed: unknown = JSON.parse(raw);
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+// A key stays secret once it has held a secret, even if a later version of
+// the app declares it as plain text, so an update can never reveal a saved
+// credential to people who can read the install.
+export function storedSettings(
+	fields: readonly SettingField[],
+	values: InstallationSettings,
+	previous: StoredSettings | null,
+): StoredSettings {
+	const secretKeys = new Set(previous?.secretKeys ?? []);
+	for (const field of fields) {
+		if (field.type === "secret" && values[field.key] !== undefined) {
+			secretKeys.add(field.key);
+		}
+	}
+	return {
+		values,
+		secretKeys: [...secretKeys].filter((key) => values[key] !== undefined),
+	};
+}
+
+function settingValues(input: unknown): InstallationSettings {
 	const settings: InstallationSettings = {};
-	for (const [key, value] of Object.entries(parsed)) {
+	if (!input || typeof input !== "object" || Array.isArray(input)) {
+		return settings;
+	}
+	for (const [key, value] of Object.entries(input)) {
 		if (typeof value === "string" || typeof value === "boolean") {
 			settings[key] = value;
 		}
 	}
 	return settings;
+}
+
+export function parseStoredSettings(raw: string | null): StoredSettings {
+	if (!raw) return { values: {}, secretKeys: [] };
+	const parsed: unknown = JSON.parse(raw);
+	if (
+		parsed &&
+		typeof parsed === "object" &&
+		"values" in parsed &&
+		"secretKeys" in parsed
+	) {
+		const { values, secretKeys } = parsed as {
+			values: unknown;
+			secretKeys: unknown;
+		};
+		return {
+			values: settingValues(values),
+			secretKeys: Array.isArray(secretKeys)
+				? secretKeys.filter((key): key is string => typeof key === "string")
+				: [],
+		};
+	}
+	return { values: settingValues(parsed), secretKeys: [] };
 }

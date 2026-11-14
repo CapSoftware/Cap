@@ -26,6 +26,8 @@ import {
 	publicSettings,
 	resolveSettings,
 	type SettingsInput,
+	type StoredSettings,
+	storedSettings,
 } from "./settings";
 
 export type InstallationRow = typeof appStoreInstallations.$inferSelect;
@@ -90,17 +92,23 @@ export function eventIsGranted(
 	return !required || row.grantedPermissions.includes(required);
 }
 
-export async function readInstallationSettings(
+export async function readStoredSettings(
 	row: Pick<InstallationRow, "encryptedSettings">,
-): Promise<InstallationSettings> {
-	if (!row.encryptedSettings) return {};
+): Promise<StoredSettings> {
+	if (!row.encryptedSettings) return { values: {}, secretKeys: [] };
 	return parseStoredSettings(await decrypt(row.encryptedSettings));
 }
 
-const encryptSettings = async (settings: InstallationSettings) =>
-	Object.keys(settings).length === 0
+export async function readInstallationSettings(
+	row: Pick<InstallationRow, "encryptedSettings">,
+): Promise<InstallationSettings> {
+	return (await readStoredSettings(row)).values;
+}
+
+const encryptSettings = async (stored: StoredSettings) =>
+	Object.keys(stored.values).length === 0
 		? null
-		: await encrypt(JSON.stringify(settings));
+		: await encrypt(JSON.stringify(stored));
 
 export function installationRef(row: InstallationRow): InstallationRef {
 	return {
@@ -150,7 +158,7 @@ async function toView(
 	const fields = app.connection?.settings ?? [];
 	const settings =
 		fields.length > 0
-			? publicSettings(fields, await readInstallationSettings(row))
+			? publicSettings(fields, await readStoredSettings(row))
 			: { values: {}, secretsSet: [] };
 	return {
 		id: row.id,
@@ -318,7 +326,9 @@ export async function installApp(
 				appVersion: app.version,
 				grantedPermissions: requestedPermissions(app),
 				grantedEvents: requestedEvents(app),
-				encryptedSettings: await encryptSettings(settings),
+				encryptedSettings: await encryptSettings(
+					storedSettings(fields, settings, null),
+				),
 				status: "active",
 			});
 	} catch (error) {
@@ -365,7 +375,8 @@ export async function updateInstallation(
 	let settingsChanged = false;
 	const fields = app.connection?.settings ?? [];
 	if (input.settings && fields.length > 0) {
-		const existing = await readInstallationSettings(row);
+		const previous = await readStoredSettings(row);
+		const existing = previous.values;
 		const resolved = resolveSettings(fields, input.settings, existing);
 		if (!resolved.ok) {
 			throw new AppStoreError(
@@ -376,7 +387,9 @@ export async function updateInstallation(
 		}
 		settingsChanged =
 			JSON.stringify(existing) !== JSON.stringify(resolved.settings);
-		patch.encryptedSettings = await encryptSettings(resolved.settings);
+		patch.encryptedSettings = await encryptSettings(
+			storedSettings(fields, resolved.settings, previous),
+		);
 	}
 	if (input.acceptUpdate) {
 		patch.grantedPermissions = requestedPermissions(app);

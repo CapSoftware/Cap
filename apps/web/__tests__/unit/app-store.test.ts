@@ -14,9 +14,13 @@ vi.mock("@cap/env", () => ({
 const { getAppStoreCatalog, getCatalogApp, catalogForClient } = await import(
 	"@/lib/app-store/catalog"
 );
-const { publicSettings, resolveSettings, defaultSettings } = await import(
-	"@/lib/app-store/settings"
-);
+const {
+	publicSettings,
+	resolveSettings,
+	defaultSettings,
+	storedSettings,
+	parseStoredSettings,
+} = await import("@/lib/app-store/settings");
 const { appStoreEventId, isNewRecording } = await import(
 	"@/lib/app-store/events"
 );
@@ -112,10 +116,25 @@ describe("installation settings", () => {
 		const saved = { webhookUrl: WEBHOOK, postNewCaps: true };
 		const result = resolveSettings(fields, { webhookUrl: "" }, saved);
 		expect(result).toEqual({ ok: true, settings: saved });
-		expect(publicSettings(fields, saved)).toEqual({
-			values: { postNewCaps: true },
-			secretsSet: ["webhookUrl"],
+		expect(publicSettings(fields, storedSettings(fields, saved, null))).toEqual(
+			{
+				values: { postNewCaps: true },
+				secretsSet: ["webhookUrl"],
+			},
+		);
+	});
+
+	it("keeps a saved secret hidden when an app update turns it into plain text", () => {
+		const before = [{ key: "token", type: "secret" as const, label: "Token" }];
+		const after = [{ key: "token", type: "text" as const, label: "Token" }];
+		const stored = storedSettings(before, { token: "s3cr3t" }, null);
+		expect(publicSettings(after, stored)).toEqual({
+			values: {},
+			secretsSet: ["token"],
 		});
+		const resaved = storedSettings(after, { token: "s3cr3t" }, stored);
+		expect(resaved.secretKeys).toEqual(["token"]);
+		expect(parseStoredSettings(JSON.stringify(resaved))).toEqual(resaved);
 	});
 
 	it("validates urls, selects and toggles", () => {
