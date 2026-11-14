@@ -100,12 +100,6 @@ impl RecordingSession {
         self.input_switch.error.as_deref()
     }
 
-    pub fn dismiss_input_switch_error(&mut self, cx: &mut Context<Self>) {
-        if self.input_switch.error.take().is_some() {
-            cx.notify();
-        }
-    }
-
     /// Pause and switching share one guard: a Studio switch pauses and
     /// resumes the actor itself, so neither may start while the other runs.
     fn input_switch_live(&self) -> bool {
