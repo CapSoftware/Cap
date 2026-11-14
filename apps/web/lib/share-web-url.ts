@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
-import { organizations } from "@cap/database/schema";
+import { organizations, videos } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
-import { eq } from "drizzle-orm";
+import type { Video } from "@cap/web-domain";
+import { eq, sql } from "drizzle-orm";
+import { videoBelongsToOrganization } from "@/lib/cap-analytics-access";
 
 const DEFAULT_HOSTNAMES = ["cap.so", "cap.link", "localhost", "127.0.0.1"];
 
@@ -77,18 +79,42 @@ export const resolveShareWebUrl = async (
 		return defaultWebUrl;
 
 	try {
-		const [organization] = await db()
-			.select({ domainVerified: organizations.domainVerified })
-			.from(organizations)
-			.where(eq(organizations.customDomain, hostname))
-			.limit(1);
-
-		if (!organization?.domainVerified) return defaultWebUrl;
+		const organization = await findVerifiedDomainOrganization(hostname);
+		if (!organization) return defaultWebUrl;
 		return `https://${hostname}`;
 	} catch (error) {
 		console.error("Failed to resolve custom domain for share metadata", error);
 		return defaultWebUrl;
 	}
+};
+
+const findVerifiedDomainOrganization = async (hostname: string) => {
+	const [organization] = await db()
+		.select({
+			id: organizations.id,
+			domainVerified: organizations.domainVerified,
+		})
+		.from(organizations)
+		.where(eq(organizations.customDomain, hostname))
+		.limit(1);
+
+	return organization?.domainVerified ? organization : null;
+};
+
+const mainOriginShareUrl = (
+	videoId: string,
+	searchParams: Record<string, string | string[] | undefined>,
+) => {
+	const url = new URL(
+		`/s/${encodeURIComponent(videoId)}`,
+		buildEnv.NEXT_PUBLIC_WEB_URL,
+	);
+	for (const [key, value] of Object.entries(searchParams)) {
+		for (const entry of Array.isArray(value) ? value : [value]) {
+			if (entry !== undefined) url.searchParams.append(key, entry);
+		}
+	}
+	return url.toString();
 };
 
 /**
@@ -105,11 +131,45 @@ export const resolveRestrictedShareRedirect = async (
 	const defaultWebUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
 	if ((await resolveShareWebUrl(headersList)) === defaultWebUrl) return null;
 
-	const url = new URL(`/s/${encodeURIComponent(videoId)}`, defaultWebUrl);
-	for (const [key, value] of Object.entries(searchParams)) {
-		for (const entry of Array.isArray(value) ? value : [value]) {
-			if (entry !== undefined) url.searchParams.append(key, entry);
-		}
-	}
-	return url.toString();
+	return mainOriginShareUrl(videoId, searchParams);
+};
+
+/**
+ * A verified custom domain belongs to one organization, but `proxy.ts` lets it
+ * serve any `/s/` path. A video that is not in that organization, not shared
+ * with it and not in one of its spaces is sent to the main origin, so nobody
+ * can publish their own video under another organization's domain. Returns
+ * null on the main origin and while the video row does not exist yet.
+ */
+export const resolveForeignShareRedirect = async (
+	headersList: Headers,
+	videoId: Video.VideoId,
+	searchParams: Record<string, string | string[] | undefined>,
+): Promise<string | null> => {
+	const hostname = requestShareHostname(headersList);
+	if (
+		isDefaultShareHostname(
+			hostname,
+			buildEnv.NEXT_PUBLIC_WEB_URL,
+			deploymentHostnames(),
+		)
+	)
+		return null;
+
+	const organization = await findVerifiedDomainOrganization(hostname);
+	if (!organization) return null;
+
+	const [video] = await db()
+		.select({
+			belongsToDomain:
+				sql<boolean>`${videoBelongsToOrganization(organization.id)}`.mapWith(
+					Boolean,
+				),
+		})
+		.from(videos)
+		.where(eq(videos.id, videoId))
+		.limit(1);
+
+	if (!video || video.belongsToDomain) return null;
+	return mainOriginShareUrl(videoId, searchParams);
 };

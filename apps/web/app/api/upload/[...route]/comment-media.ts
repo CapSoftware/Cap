@@ -11,16 +11,21 @@ import {
 	verifyCommentMediaUploadToken,
 } from "@cap/web-backend";
 import { Comment, Policy, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { commentMediaKeys } from "@/lib/comment-media";
+import {
+	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	reserveCommentMediaObjects,
+} from "@/lib/comment-media-quota";
 import { canUseMediaComments } from "@/lib/media-comments";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono().use(withAuth);
 
@@ -28,12 +33,11 @@ const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
 
-// Stateless storage-growth bounds. Uploads land in the video owner's
-// (possibly BYO) bucket, so an unbounded viewer must not be able to fill it
-// unattended: per-commenter comment-rate, per-video object count, and a
-// per-object multipart ceiling (single PUTs are capped at 5GB by S3 itself).
+// Storage-growth bounds. Uploads land in the video owner's (possibly BYO)
+// bucket, so an unbounded viewer must not be able to fill it unattended:
+// per-commenter comment-rate, per-video object count, and a per-object
+// multipart ceiling (single PUTs are capped at 5GB by S3 itself).
 const MAX_MEDIA_COMMENTS_PER_HOUR = 30;
-const MAX_MEDIA_OBJECTS_PER_VIDEO = 400;
 const MAX_MEDIA_OBJECT_BYTES = 20 * 1024 * 1024 * 1024;
 
 app.post(
@@ -96,25 +100,18 @@ app.post(
 				return c.json({ error: "Too many media comments, slow down" });
 			}
 
-			const [bucket] = yield* Storage.getAccessForVideo(video);
-
-			// The comment-row throttle above only counts finished comments; an
-			// initiate-and-PUT loop that never creates rows would bypass it. The
-			// object count under the comments prefix is the ground truth for bytes
-			// actually landed in the owner's (possibly BYO) bucket, so it is the
-			// bound that matters.
-			const existingObjects = yield* bucket.listObjects({
-				prefix: `${video.ownerId}/${video.id}/comments/`,
-				maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
-			});
-			if (
-				(existingObjects.Contents?.length ?? 0) >= MAX_MEDIA_OBJECTS_PER_VIDEO
-			) {
+			const initiatesLimited = yield* Effect.promise(() =>
+				isRateLimited(RATE_LIMIT_IDS.COMMENT_MEDIA_UPLOAD, {
+					key: `comment-media-upload:${user.id}`,
+					headers: c.req.raw.headers,
+				}),
+			);
+			if (initiatesLimited) {
 				c.status(429);
-				return c.json({
-					error: "This video has reached its media comment limit",
-				});
+				return c.json({ error: "Too many media comments, slow down" });
 			}
+
+			const [bucket] = yield* Storage.getAccessForVideo(video);
 
 			const commentId = Comment.CommentId.make(nanoId());
 			const keys = commentMediaKeys({
@@ -130,6 +127,30 @@ app.post(
 				return c.json({ error: "Unsupported content type" });
 			}
 			const { contentType, key, thumbnailKey } = keys;
+
+			// The comment-row throttle above only counts finished comments; an
+			// initiate-and-PUT loop that never creates rows would bypass it. The
+			// object count under the comments prefix is the ground truth for bytes
+			// actually landed in the owner's (possibly BYO) bucket. Uploads that
+			// have not landed yet are counted through a reservation taken under a
+			// row lock, so concurrent initiates cannot all pass the same snapshot.
+			const existingObjects = yield* bucket.listObjects({
+				prefix: `${video.ownerId}/${video.id}/comments/`,
+				maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
+			});
+			const reserved = yield* Effect.tryPromise(() =>
+				reserveCommentMediaObjects({
+					videoId: video.id,
+					objects: thumbnailKey ? 2 : 1,
+					storedObjects: existingObjects.Contents?.length ?? 0,
+				}),
+			);
+			if (!reserved) {
+				c.status(429);
+				return c.json({
+					error: "This video has reached its media comment limit",
+				});
+			}
 
 			// Drive rejects presigned POST, so upload targets are always PUT-style;
 			// createUploadTarget returns the provider-appropriate target shape.

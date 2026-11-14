@@ -1,28 +1,32 @@
 import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
-import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-
+import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
+import { memo } from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { LinkifiedText } from "@/components/LinkifiedText";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import { MediaCommentBody } from "../../media-comment/MediaCommentBody";
 import { isMediaComment } from "../../media-comment/media-comment-types";
+import { RelativeTime } from "../../RelativeTime";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
+
+const EMPTY_REPLIES: CommentType[] = [];
 
 const CommentComponent: React.FC<{
 	comment: CommentType;
 	replies: CommentType[];
 	onReply: (commentId: Comment.CommentId) => void;
 	replyingToId: Comment.CommentId | null;
-	handleReply: (content: string) => void;
+	handleReply: (content: string, commentId: Comment.CommentId) => Promise<void>;
 	onCancelReply: () => void;
 	onDelete: (
 		commentId: Comment.CommentId,
@@ -46,16 +50,6 @@ const CommentComponent: React.FC<{
 	const isOwnComment = user?.id === comment.authorId;
 	const commentParams = useSearchParams().get("comment");
 	const replyParams = useSearchParams().get("reply");
-	const nestedReplies =
-		level === 0
-			? replies.filter((reply) => {
-					if (reply.parentCommentId === comment.id) return true;
-					const parentComment = replies.find(
-						(r) => r.id === reply.parentCommentId,
-					);
-					return parentComment && parentComment.parentCommentId === comment.id;
-				})
-			: [];
 
 	const handleDelete = () => {
 		if (window.confirm("Are you sure you want to delete this comment?")) {
@@ -118,7 +112,7 @@ const CommentComponent: React.FC<{
 						<div className="flex gap-2 items-center text-nowrap min-w-fit">
 							<Tooltip content={formatTimestamp(commentDate)}>
 								<p className="text-xs text-gray-8">
-									{formatTimeAgo(commentDate)}
+									<RelativeTime date={commentDate} format={formatTimeAgo} />
 								</p>
 							</Tooltip>
 							{comment.timestamp !== null && (
@@ -164,7 +158,7 @@ const CommentComponent: React.FC<{
 								/>
 							</Tooltip>
 						)}
-						{isOwnComment && (
+						{isOwnComment && !comment.sending && (
 							<Tooltip content="Delete comment">
 								<Button
 									onClick={handleDelete}
@@ -184,7 +178,7 @@ const CommentComponent: React.FC<{
 			{isReplying && canReply && (
 				<div className="ml-5">
 					<CommentInput
-						onSubmit={handleReply}
+						onSubmit={(content) => handleReply(content, comment.id)}
 						onCancel={onCancelReply}
 						placeholder="Write a reply..."
 						showCancelButton={true}
@@ -193,13 +187,13 @@ const CommentComponent: React.FC<{
 				</div>
 			)}
 
-			{nestedReplies.length > 0 && (
+			{replies.length > 0 && (
 				<div className="mt-3 space-y-3">
-					{nestedReplies.map((reply) => (
+					{replies.map((reply) => (
 						<CommentComponent
 							key={reply.clientKey ?? reply.id}
 							comment={reply}
-							replies={replies}
+							replies={EMPTY_REPLIES}
 							onReply={onReply}
 							replyingToId={replyingToId}
 							handleReply={handleReply}
@@ -215,4 +209,4 @@ const CommentComponent: React.FC<{
 	);
 };
 
-export default CommentComponent;
+export default memo(CommentComponent);

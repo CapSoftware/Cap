@@ -185,6 +185,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Deletion is still finishing",
         ),
         (
+            tr::dialog::delete_recording::open_in_editor(),
+            "This recording is open in the editor. Close the editor and try again.",
+        ),
+        (
             tr::dialog::delete_recording::outside_library(),
             "This recording is outside the recordings library. Its files were not changed.",
         ),
@@ -832,6 +836,12 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language",
         ),
         (tr::dialog::quit::still_open(), "Cap is still open"),
+        (
+            tr::dialog::quit::files_kept(),
+            "Everything recorded so far stays in the recording's folder.",
+        ),
+        (tr::dialog::quit::keep_open(), "Keep Cap Open"),
+        (tr::dialog::quit::quit_anyway(), "Quit Anyway"),
         (
             tr::dialog::quit::pending(),
             "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.",

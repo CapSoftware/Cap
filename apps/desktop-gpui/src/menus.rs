@@ -177,7 +177,7 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &HideSelf, cx: &mut App| cx.hide());
     cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
-    cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
+    cx.on_action(|_: &Quit, cx: &mut App| quit(QuitSource::AppMenu, cx));
     cx.on_action(|_: &OpenFile, cx: &mut App| {
         let (files, directories) = if cfg!(target_os = "macos") {
             (true, false)
@@ -205,7 +205,9 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Changelog, cx: &mut App| {
         app_windows::open_settings(crate::settings_window::Page::Changelog, cx)
     });
-    cx.on_action(|_: &HelpDashboard, cx: &mut App| cx.open_url("https://cap.so/dashboard"));
+    cx.on_action(|_: &HelpDashboard, cx: &mut App| {
+        cx.open_url(&format!("{}/dashboard", crate::auth::server_url()));
+    });
     cx.on_action(|_: &HelpDocs, cx: &mut App| cx.open_url("https://cap.so/docs"));
     cx.on_action(|_: &HelpFaq, cx: &mut App| cx.open_url("https://cap.so/faq"));
     cx.on_action(|_: &HelpSelfHosting, cx: &mut App| cx.open_url("https://cap.so/self-hosting"));
@@ -579,6 +581,21 @@ pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
 
 const QUIT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+#[derive(Clone, Copy, Debug)]
+pub enum QuitSource {
+    AppMenu,
+    Tray,
+    #[cfg(target_os = "macos")]
+    NativeTermination,
+    #[cfg(target_os = "macos")]
+    NativeQuitHandlerUnavailable,
+    #[cfg(target_os = "windows")]
+    MainWindowClose,
+    UpdateInstaller,
+    UpdateRelaunchFailed,
+    Relaunch,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QuitAction {
     Wait,
@@ -669,6 +686,14 @@ impl QuitGate {
 struct QuitCoordinator {
     gate: QuitGate,
     observer: Option<Subscription>,
+    /// The session error showing when Quit was chosen. A pause or resume
+    /// failure stays in `error` while the recording carries on; only an error
+    /// raised after the request means the stop itself failed.
+    error_at_request: Option<String>,
+}
+
+fn quit_stop_failed(error: Option<&str>, error_at_request: Option<&str>) -> bool {
+    error.is_some() && error != error_at_request
 }
 
 impl Global for QuitCoordinator {}
@@ -686,7 +711,8 @@ fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
     }
 }
 
-pub fn quit(cx: &mut App) {
+pub fn quit(source: QuitSource, cx: &mut App) {
+    tracing::info!(?source, "quit requested");
     let session = RecordingSession::global(cx);
     if !cx.has_global::<QuitCoordinator>() {
         cx.set_global(QuitCoordinator::default());
@@ -705,6 +731,7 @@ pub fn quit(cx: &mut App) {
         apply_quit_action(action, cx);
         return;
     }
+    cx.global_mut::<QuitCoordinator>().error_at_request = session.read(cx).error.clone();
 
     tracing::info!("quit requested during a recording; stopping it first");
     let observer = cx.observe(&session, move |_, cx| {
@@ -740,7 +767,10 @@ fn advance_pending_quit(generation: u64, timed_out: bool, cx: &mut App) {
         session.read(cx).phase,
         app_windows::clean_capture_owned(cx) || crate::recording::studio_thumbnails_pending(),
     );
-    let failed = session.read(cx).error.is_some();
+    let failed = quit_stop_failed(
+        session.read(cx).error.as_deref(),
+        cx.global::<QuitCoordinator>().error_at_request.as_deref(),
+    );
     let action = cx
         .global_mut::<QuitCoordinator>()
         .gate
@@ -784,12 +814,33 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
                 message
             });
             tracing::warn!(%message);
-            cx.spawn(async move |_| {
-                platform::alert_dialog(tr::dialog::quit::still_open(), &message)
+            let detail = format!("{message}\n\n{}", tr::dialog::quit::files_kept());
+            cx.spawn(async move |cx| {
+                let quit_anyway = platform::confirm_dialog(
+                    tr::dialog::quit::still_open(),
+                    &detail,
+                    tr::dialog::quit::quit_anyway(),
+                    tr::dialog::quit::keep_open(),
+                    true,
+                );
+                if quit_anyway {
+                    cx.update(quit_with_unconfirmed_recording);
+                }
             })
             .detach();
         }
     }
+}
+
+/// The user chose to quit although the recording could not be confirmed
+/// stopped. Every fragment written so far is already on disk, so this is
+/// never worse than the force quit it replaces.
+fn quit_with_unconfirmed_recording(cx: &mut App) {
+    tracing::warn!("quitting with an unconfirmed recording stop; its files are kept for recovery");
+    let coordinator = cx.global_mut::<QuitCoordinator>();
+    coordinator.gate.pending = None;
+    coordinator.gate.exit_committed = true;
+    apply_quit_action(QuitAction::Exit, cx);
 }
 
 // -- The dock icon -----------------------------------------------------------
@@ -937,6 +988,41 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
 mod tests {
     use super::*;
 
+    #[gpui::test]
+    fn dashboard_menu_uses_the_current_server(cx: &mut gpui::TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        store::set_test_tauri_store_path(Some(directory.path().join("store.json")));
+        cx.update(init);
+        let cases = [
+            (None, "https://cap.so/dashboard"),
+            (
+                Some("https://cap.example.com/"),
+                "https://cap.example.com/dashboard",
+            ),
+            (
+                Some("http://localhost:3000"),
+                "http://localhost:3000/dashboard",
+            ),
+            (Some(""), "https://cap.so/dashboard"),
+        ];
+        let mut opened = Vec::new();
+        for (server, _) in cases {
+            if let Some(server) = server {
+                assert!(store::set_store_setting(
+                    store::GENERAL_SETTINGS,
+                    "serverUrl",
+                    serde_json::Value::String(server.into()),
+                ));
+            }
+            cx.update(|cx| cx.dispatch_action(&HelpDashboard));
+            opened.push(cx.opened_url());
+        }
+        store::set_test_tauri_store_path(None);
+        for (actual, (_, expected)) in opened.iter().zip(cases) {
+            assert_eq!(actual.as_deref(), Some(expected));
+        }
+    }
+
     #[test]
     fn quit_waits_for_recording_ui_restoration() {
         for phase in [Phase::Idle, Phase::Starting] {
@@ -1033,6 +1119,37 @@ mod tests {
         );
         assert_eq!(
             gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    /// A failed pause leaves its message in the session error while the
+    /// recording carries on. Quitting then has to stop and exit, not report
+    /// that message as a failed stop and leave Cap open.
+    #[test]
+    fn an_error_from_before_quit_does_not_fail_the_stop() {
+        let pause_error = "Pause failed. Use Stop if recording cannot continue safely.";
+        assert!(!quit_stop_failed(None, None));
+        assert!(!quit_stop_failed(Some(pause_error), Some(pause_error)));
+        assert!(quit_stop_failed(Some("Stop task failed."), None));
+        assert!(quit_stop_failed(
+            Some("Stop task failed."),
+            Some(pause_error)
+        ));
+
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        for phase in [Phase::Recording { paused: false }, Phase::Stopping] {
+            let failed = quit_stop_failed(Some(pause_error), Some(pause_error));
+            assert_eq!(
+                gate.advance(generation, phase, failed, false),
+                QuitAction::Wait
+            );
+        }
+        let failed = quit_stop_failed(Some(pause_error), Some(pause_error));
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, failed, false),
             QuitAction::Exit
         );
     }

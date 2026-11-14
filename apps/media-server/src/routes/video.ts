@@ -9,6 +9,9 @@ import {
 	hasMediaServerSecret,
 	validateMediaServerSecret,
 } from "../lib/auth";
+import { HLS_LADDER_TIER_NAMES } from "../lib/hls-ladder";
+import { encodeHlsLadder } from "../lib/hls-ladder-encode";
+import { posterThumbnailOptions } from "../lib/infra-poster";
 import type {
 	Job,
 	RecordingErrorCode,
@@ -17,6 +20,7 @@ import type {
 import {
 	beginRecordingProcessing,
 	beginRecordingVerification,
+	canAcceptNewInfraVideoProcess,
 	canAcceptNewVideoProcess,
 	claimRecordingWorker,
 	createJob,
@@ -43,14 +47,25 @@ import {
 	trackBackgroundTask,
 } from "../lib/lifecycle";
 import { logReason } from "../lib/log-redaction";
-import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
+import { MediaAddressError } from "../lib/media-address-guard";
+import {
+	createGuardedMediaFetch,
+	PROCESS_TIMEOUT_MS,
+	UPLOAD_TIMEOUT_MS,
+} from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
 	renderEditedVideo,
 } from "../lib/media-edit";
 import {
+	INPUT_POLICY_VIOLATION,
+	MediaInputPolicyError,
+} from "../lib/media-input-policy";
+import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	isUnreadableMediaInput,
+	MediaInputNotAccessibleError,
 	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
@@ -84,7 +99,11 @@ import {
 	uploadToS3,
 } from "../lib/media-video";
 import { encodeAttemptsBudgetMs } from "../lib/nvenc-encoder";
-import { findJobOnPeer, isPeerLookup } from "../lib/peer-jobs";
+import {
+	findJobOnPeer,
+	isPeerLookup,
+	lookUpJobOnPeers,
+} from "../lib/peer-jobs";
 import {
 	MAX_PREVERIFIED_RUN_BYTES,
 	type PreverifiedRunPayload,
@@ -129,7 +148,9 @@ const RECORDING_VERIFICATION_RETRY_ERROR =
 	"Recording verification temporarily unavailable (503)";
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
+const UNREADABLE_INPUT_CODE = "UNREADABLE_INPUT";
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
+const PEER_LOOKUP_RETRY_AFTER_SECONDS = 5;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
 const MUX_FAILURE_LOG_LENGTH = 1_000;
@@ -210,6 +231,30 @@ const processSchema = z.object({
 	remuxOnly: z.boolean().optional(),
 	normalizeH264Level: z.boolean().optional(),
 	importedOriginal: z.boolean().optional(),
+	infra: z.boolean().optional(),
+});
+
+const ladderSchema = z.object({
+	videoId: z.string(),
+	userId: z.string(),
+	videoUrl: z.string().url(),
+	inputExtension: z.string().optional(),
+	maxTier: z.enum(HLS_LADDER_TIER_NAMES).optional(),
+	range: z
+		.object({
+			startSeconds: z.number().int().min(0),
+			durationSeconds: z.number().int().positive().optional(),
+		})
+		.optional(),
+	includeAudio: z.boolean().optional(),
+	uploads: z.record(
+		z.string().regex(/^[A-Za-z0-9_-]+\.(m3u8|m4s)$/),
+		z.string().url(),
+	),
+	thumbnailPresignedUrl: z.string().url().optional(),
+	webhookUrl: z.string().url().optional(),
+	webhookSecret: z.string().optional(),
+	infra: z.boolean().optional(),
 });
 
 export function isCompleteRecovery(
@@ -506,18 +551,20 @@ video.get("/status", async (c) => {
 		resources,
 		activeDirectVideoProcesses: getActiveDirectVideoProcessCount(),
 		jobCount: jobs.length,
-		jobs: jobs.map((j) => ({
-			jobId: j.jobId,
-			videoId: j.videoId,
-			phase: j.phase,
-			progress: j.progress,
-			createdAt: j.createdAt,
-			updatedAt: j.updatedAt,
-			ageMinutes: Math.round((now - j.createdAt) / 60000),
-			stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
-			error: j.error,
-		})),
-		...(hasMediaServerSecret(c) && { runtime: await getRuntimeReport() }),
+		...(hasMediaServerSecret(c) && {
+			jobs: jobs.map((j) => ({
+				jobId: j.jobId,
+				videoId: j.videoId,
+				phase: j.phase,
+				progress: j.progress,
+				createdAt: j.createdAt,
+				updatedAt: j.updatedAt,
+				ageMinutes: Math.round((now - j.createdAt) / 60000),
+				stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
+				error: j.error,
+			})),
+			runtime: await getRuntimeReport(),
+		}),
 	});
 });
 
@@ -549,6 +596,22 @@ video.post("/probe", async (c) => {
 		const metadata = await probeVideo(result.data.videoUrl);
 		return c.json({ metadata });
 	} catch (err) {
+		if (isUnreadableMediaInput(err)) {
+			const details = err instanceof Error ? err.message : String(err);
+			console.warn("[video/probe] Unreadable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+
 		console.error("[video/probe] Error:", err);
 
 		if (isBusyError(err)) {
@@ -611,15 +674,15 @@ video.post("/thumbnail", async (c) => {
 	try {
 		const metadata = await probeVideo(result.data.videoUrl);
 
+		// Only the options the caller set: an explicit undefined would replace
+		// the default and reach FFmpeg as NaN.
+		const { videoUrl, ...requested } = result.data;
 		const thumbnailData = await generateThumbnail(
-			result.data.videoUrl,
+			videoUrl,
 			metadata.duration,
-			{
-				timestamp: result.data.timestamp,
-				width: result.data.width,
-				height: result.data.height,
-				quality: result.data.quality,
-			},
+			Object.fromEntries(
+				Object.entries(requested).filter(([, value]) => value !== undefined),
+			),
 		);
 
 		return new Response(Buffer.from(thumbnailData), {
@@ -629,6 +692,43 @@ video.post("/thumbnail", async (c) => {
 			},
 		});
 	} catch (err) {
+		const details = err instanceof Error ? err.message : String(err);
+		if (isUnreadableMediaInput(err) || err instanceof MediaAddressError) {
+			console.warn("[video/thumbnail] Unusable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError ||
+						err instanceof MediaAddressError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+		// The host answered that the file is not there or not ours to read,
+		// which asking again will not change.
+		if (
+			err instanceof MediaInputNotAccessibleError &&
+			err.status !== null &&
+			err.status >= 400 &&
+			err.status < 500 &&
+			err.status !== 408 &&
+			err.status !== 429
+		) {
+			console.warn("[video/thumbnail] Input not accessible:", err.status);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code: "INPUT_NOT_ACCESSIBLE",
+					details: `${details} (HTTP ${err.status})`,
+				},
+				422,
+			);
+		}
+
 		console.error("[video/thumbnail] Error:", err);
 
 		if (isBusyError(err)) {
@@ -862,7 +962,11 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		result.data.priority === "bulk" &&
 		capacity.effectiveMaxVideoProcesses > 1 &&
 		capacity.activeVideoProcesses >= capacity.effectiveMaxVideoProcesses - 1;
-	if (bulkCapacityReached || !canAcceptNewVideoProcess()) {
+	if (
+		bulkCapacityReached ||
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true && !canAcceptNewInfraVideoProcess(false))
+	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(capacity), 503);
 	}
@@ -916,6 +1020,84 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		jobId,
 		status: "queued",
 		message: "Video processing started",
+	});
+});
+
+video.post("/ladder", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+	}
+	const result = ladderSchema.safeParse(body);
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	if (isDraining()) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(
+			{
+				...getBusyResponseBody(getVideoCapacitySnapshot()),
+				details: DRAINING_DETAILS,
+			},
+			503,
+		);
+	}
+	const infraHeavyLadder =
+		result.data.infra === true &&
+		(result.data.maxTier === "1440p" || result.data.maxTier === "2160p");
+	if (
+		!canAcceptNewVideoProcess() ||
+		(result.data.infra === true &&
+			!canAcceptNewInfraVideoProcess(infraHeavyLadder))
+	) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
+	}
+
+	const { videoId, userId, webhookUrl, webhookSecret } = result.data;
+	const jobId = generateJobId();
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	if (infraHeavyLadder) job.infraHeavyLadder = true;
+
+	void trackBackgroundTask(
+		withMediaTransfers(32 * 1024 ** 3, () =>
+			encodeLadderAsync(job.jobId, result.data),
+		).catch((err) => {
+			console.error(`[video/ladder] Async error for job ${jobId}:`, err);
+			const currentJob = getJob(jobId);
+			if (
+				currentJob &&
+				currentJob.phase !== "error" &&
+				currentJob.phase !== "complete" &&
+				currentJob.phase !== "cancelled"
+			) {
+				updateJob(jobId, {
+					phase: "error",
+					error: err instanceof Error ? err.message : String(err),
+					message: "Encoding failed (unhandled)",
+				});
+			}
+		}),
+	);
+
+	return c.json({
+		jobId,
+		status: "queued",
+		message: "Ladder encoding started",
 	});
 });
 
@@ -1319,6 +1501,153 @@ async function verifyUploadedVideo(
 	throw lastError ?? new Error("Uploaded video verification failed");
 }
 
+async function encodeLadderAsync(
+	jobId: string,
+	options: z.infer<typeof ladderSchema>,
+): Promise<void> {
+	if (!getJob(jobId)) return;
+
+	const abortController = new AbortController();
+	const signal = abortController.signal;
+	updateJob(jobId, { abortController });
+	let inputTempFile: TempFileHandle | null = null;
+	let cleanupLadder: (() => Promise<void>) | null = null;
+
+	try {
+		updateJob(jobId, {
+			phase: "downloading",
+			progress: 0,
+			message: "Downloading source video...",
+		});
+		const downloadingJob = getJob(jobId);
+		if (downloadingJob) void sendWebhook(downloadingJob);
+
+		const input = await withJobHeartbeat(jobId, () =>
+			downloadVideoToTemp(options.videoUrl, options.inputExtension, signal),
+		);
+		inputTempFile = input;
+		updateJob(jobId, { inputTempFile: input });
+
+		updateJob(jobId, {
+			phase: "probing",
+			progress: 5,
+			message: "Analyzing source video...",
+		});
+		const metadata = await withJobHeartbeat(jobId, () =>
+			probeVideoFile(input.path),
+		);
+		signal.throwIfAborted();
+		updateJob(jobId, { metadata });
+		extendJobLifetimeForWork(
+			jobId,
+			getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
+			metadata.fileSize,
+		);
+
+		updateJob(jobId, {
+			phase: "processing",
+			progress: 10,
+			message: "Encoding renditions...",
+		});
+		const processingJob = getJob(jobId);
+		if (processingJob) void sendWebhook(processingJob);
+
+		const ladder = await withJobHeartbeat(jobId, () =>
+			encodeHlsLadder(
+				input.path,
+				metadata,
+				{
+					maxTier: options.maxTier,
+					range: options.range,
+					includeAudio: options.includeAudio,
+				},
+				(progress, message) => {
+					updateJob(jobId, {
+						progress: Math.min(80, 10 + progress * 0.7),
+						message,
+					});
+				},
+				signal,
+			),
+		);
+		cleanupLadder = ladder.cleanup;
+
+		const missing = ladder.files.filter((file) => !options.uploads[file.name]);
+		if (missing.length > 0) {
+			throw new Error(
+				`No upload target for ${missing.map((file) => file.name).join(", ")}`,
+			);
+		}
+
+		updateJob(jobId, {
+			phase: "uploading",
+			progress: 80,
+			message: "Uploading renditions...",
+		});
+		const uploadingJob = getJob(jobId);
+		if (uploadingJob) void sendWebhook(uploadingJob);
+
+		await withJobHeartbeat(jobId, async () => {
+			const uploadsStopped = new AbortController();
+			const uploadSignal = AbortSignal.any([signal, uploadsStopped.signal]);
+			const uploads = ladder.files.map((file) =>
+				uploadFileToS3(
+					file.path,
+					options.uploads[file.name] as string,
+					file.contentType,
+					uploadSignal,
+				).catch((error) => {
+					uploadsStopped.abort();
+					throw error;
+				}),
+			);
+			const posterUrl = options.thumbnailPresignedUrl;
+			const poster = posterUrl
+				? generateThumbnail(
+						ladder.poster.path,
+						ladder.poster.durationSeconds,
+						posterThumbnailOptions(options.infra),
+						uploadSignal,
+					)
+						.then((image) =>
+							uploadToS3(image, posterUrl, "image/jpeg", uploadSignal),
+						)
+						.catch((error) => {
+							uploadsStopped.abort();
+							throw error;
+						})
+				: null;
+			const failed = (await Promise.allSettled([...uploads, poster])).find(
+				(upload) => upload.status === "rejected",
+			);
+			if (failed?.status === "rejected") throw failed.reason;
+		});
+		signal.throwIfAborted();
+
+		updateJob(jobId, {
+			phase: "complete",
+			progress: 100,
+			message: "Encoding complete",
+			ladder: ladder.result,
+		});
+		const completedJob = getJob(jobId);
+		if (completedJob) await sendWebhook(completedJob);
+	} catch (err) {
+		if (!signal.aborted) {
+			console.error(`[video/ladder] Error encoding job ${jobId}:`, err);
+		}
+		const updatedJob = updateJob(jobId, {
+			phase: "error",
+			error: err instanceof Error ? err.message : String(err),
+			message: "Encoding failed",
+		});
+		if (updatedJob) await sendWebhook(updatedJob);
+	} finally {
+		await cleanupLadder?.();
+		await cleanupTempFiles([inputTempFile]);
+	}
+}
+
 async function editVideoAsync(
 	jobId: string,
 	sourceUrl: string,
@@ -1487,8 +1816,6 @@ async function editVideoAsync(
 		if (completedJob) {
 			await sendWebhook(completedJob);
 		}
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		if (!signal.aborted) {
 			console.error(`[video/edit] Error editing job ${jobId}:`, err);
@@ -1500,12 +1827,8 @@ async function editVideoAsync(
 			message: "Edit failed",
 		});
 
-		try {
-			if (updatedJob) {
-				await sendWebhook(updatedJob);
-			}
-		} finally {
-			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
 		}
 	} finally {
 		await cleanupTempFiles([inputTempFile, outputTempFile]);
@@ -1756,7 +2079,12 @@ async function processVideoAsync(
 		const previewAbort = new AbortController();
 		const previewSignal = AbortSignal.any([signal, previewAbort.signal]);
 		const thumbnailRender = thumbnailPresignedUrl
-			? generateThumbnail(outputPath, metadata.duration, {}, previewSignal)
+			? generateThumbnail(
+					outputPath,
+					metadata.duration,
+					posterThumbnailOptions(options.infra),
+					previewSignal,
+				)
 			: undefined;
 		const previewGifRender = previewGifPresignedUrl
 			? generatePreviewGif(outputPath, metadata.duration, {}, previewSignal)
@@ -1860,8 +2188,6 @@ async function processVideoAsync(
 				webhookUrl: options.webhookUrl,
 				webhookSecret: options.webhookSecret,
 			});
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		await abortPendingUploads();
 		if (!signal.aborted) {
@@ -1907,6 +2233,12 @@ video.get("/process/:jobId/status", async (c) => {
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
 	const accept = c.req.header("Accept");
+	const progressFor = hasMediaServerSecret(c)
+		? getJobProgress
+		: (current: NonNullable<ReturnType<typeof getJob>>) => {
+				const { jobId, phase, progress } = getJobProgress(current);
+				return { jobId, phase, progress };
+			};
 
 	if (!job) {
 		if (
@@ -1914,11 +2246,23 @@ video.get("/process/:jobId/status", async (c) => {
 			!isPeerLookup(c.req.raw) &&
 			!accept?.includes("text/event-stream")
 		) {
-			const owner = await findJobOnPeer(
+			const lookup = await lookUpJobOnPeers(
 				`/video/process/${encodeURIComponent(jobId)}/status`,
 				"GET",
 			);
-			if (owner) return owner;
+			if (lookup.found) return lookup.found;
+			if (lookup.outcome === "unavailable") {
+				c.header("Retry-After", PEER_LOOKUP_RETRY_AFTER_SECONDS.toString());
+				return c.json(
+					{
+						error: "Could not ask every media server about this job",
+						code: "PEER_LOOKUP_FAILED",
+						instanceId: getInstanceId(),
+						pid: process.pid,
+					},
+					503,
+				);
+			}
 		}
 		return c.json(
 			{
@@ -1948,7 +2292,7 @@ video.get("/process/:jobId/status", async (c) => {
 						return false;
 					}
 
-					const progress = getJobProgress(currentJob);
+					const progress = progressFor(currentJob);
 					controller.enqueue(
 						encoder.encode(`data: ${JSON.stringify(progress)}\n\n`),
 					);
@@ -1989,7 +2333,7 @@ video.get("/process/:jobId/status", async (c) => {
 		});
 	}
 
-	return c.json(getJobProgress(job));
+	return c.json(progressFor(job));
 });
 
 video.post("/process/:jobId/cancel", async (c) => {
@@ -2894,7 +3238,9 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetch(url, { signal: budget });
+					const response = await createGuardedMediaFetch(url, {
+						fetchImpl: fetch,
+					})(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;

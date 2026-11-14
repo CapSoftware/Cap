@@ -7,9 +7,20 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import {
+	moveFolderToFolder,
+	moveVideosToFolder,
+} from "@/actions/folders/moveVideoToFolder";
+import {
+	CAP_DRAG_TYPE,
+	describeDraggedCaps,
+	FOLDER_DRAG_TYPE,
+	parseCapDrag,
+	parseFolderDrag,
+} from "@/lib/move-items";
 import { useDashboardContext } from "../../../Contexts";
 import { AllFolders } from "../../../caps/components/Folders";
+import { notifyCapsMoved } from "../../../caps/components/useCapsMoved";
 
 interface BreadcrumbItemProps {
 	id: Folder.FolderId;
@@ -30,13 +41,19 @@ export function BreadcrumbItem({
 	const [isMoving, setIsMoving] = useState(false);
 	const router = useRouter();
 	const { activeSpace } = useDashboardContext();
+	// The route's space comes first: the context only knows spaces the viewer
+	// created, joined or can see publicly.
+	const linkSpaceId = spaceId ?? activeSpace?.id;
 
 	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 
-		// Check if the dragged item is a CapCard
-		if (e.dataTransfer.types.includes("application/cap")) {
+		const types = e.dataTransfer.types;
+		if (
+			types.includes(CAP_DRAG_TYPE) ||
+			(!isLast && types.includes(FOLDER_DRAG_TYPE))
+		) {
 			setIsDragOver(true);
 			e.dataTransfer.dropEffect = "move";
 		}
@@ -53,24 +70,52 @@ export function BreadcrumbItem({
 		e.stopPropagation();
 		setIsDragOver(false);
 
+		const folderPayload = parseFolderDrag(
+			e.dataTransfer.getData(FOLDER_DRAG_TYPE),
+		);
+		if (folderPayload) {
+			if (isLast || folderPayload.id === id) return;
+
+			try {
+				setIsMoving(true);
+				await moveFolderToFolder({
+					folderId: folderPayload.id,
+					parentId: id,
+					spaceId: spaceId ?? null,
+				});
+				router.refresh();
+				toast.success(`"${folderPayload.name}" moved into "${name}"`);
+			} catch (error) {
+				console.error("Error moving folder:", error);
+				toast.error("Failed to move folder");
+			} finally {
+				setIsMoving(false);
+			}
+			return;
+		}
+
+		const capPayload = parseCapDrag(e.dataTransfer.getData(CAP_DRAG_TYPE));
+		if (!capPayload) return;
+
 		try {
-			const data = e.dataTransfer.getData("application/cap");
-			if (!data) return;
-
-			const capData = JSON.parse(data);
-			if (!capData.id) return;
-
 			setIsMoving(true);
-			await moveVideoToFolder({
-				videoId: capData.id,
+			await moveVideosToFolder({
+				videoIds: capPayload.ids,
 				folderId: id,
 				spaceId: spaceId ?? null,
 			});
+			notifyCapsMoved(capPayload.ids);
 			router.refresh();
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			toast.success(
+				`${describeDraggedCaps(capPayload)} moved to "${name}" folder`,
+			);
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
-			toast.error("Failed to move video to folder");
+			toast.error(
+				capPayload.ids.length > 1
+					? "Failed to move Caps to folder"
+					: "Failed to move video to folder",
+			);
 		} finally {
 			setIsMoving(false);
 		}
@@ -108,8 +153,8 @@ export function BreadcrumbItem({
 		>
 			<Link
 				href={
-					activeSpace
-						? `/dashboard/spaces/${activeSpace.id}/folder/${id}`
+					linkSpaceId
+						? `/dashboard/spaces/${linkSpaceId}/folder/${id}`
 						: `/dashboard/folder/${id}`
 				}
 				className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"

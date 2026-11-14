@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { Check, ChevronDown } from "lucide-react";
@@ -15,12 +16,13 @@ import {
 	useState,
 } from "react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { canUseInfra } from "@/lib/infra-access";
 import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../Contexts";
-import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
+import { CapIcon, CodeIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
 
 const Tabs = [
@@ -30,6 +32,12 @@ const Tabs = [
 		icon: <CogIcon size={22} />,
 		href: "/dashboard/settings/organization",
 		adminOnly: true,
+	},
+	{
+		icon: <CodeIcon size={22} />,
+		href: "/dashboard/infra",
+		label: "Infra",
+		infraOnly: true,
 	},
 ];
 
@@ -46,6 +54,10 @@ const MobileTab = () => {
 		memberRole: currentMember?.role,
 	});
 	const canViewSettings = canViewOrganizationSettings(currentRole);
+	const showInfra =
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" &&
+		canUseInfra(user.email) &&
+		activeOrg?.organization.ownerId === user.id;
 	const menuRef = useClickAway((e) => {
 		if (
 			containerRef.current &&
@@ -63,11 +75,18 @@ const MobileTab = () => {
 				<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
 			</div>
 			<div className="flex gap-6 justify-between items-center h-full text-gray-11">
-				{Tabs.filter((i) => !i.adminOnly || canViewSettings).map((tab) => (
-					<Link href={tab.href} key={tab.href}>
-						{tab.icon}
-					</Link>
-				))}
+				{Tabs.filter((i) => !i.adminOnly || canViewSettings)
+					.filter((i) => !i.infraOnly || showInfra)
+					.map((tab) => (
+						<Link
+							href={tab.href}
+							key={tab.href}
+							aria-label={tab.label}
+							prefetch={tab.infraOnly ? false : undefined}
+						>
+							{tab.icon}
+						</Link>
+					))}
 			</div>
 		</div>
 	);

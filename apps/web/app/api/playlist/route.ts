@@ -6,7 +6,7 @@ import {
 	Storage,
 	Videos,
 } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
 import {
 	HttpApi,
 	HttpApiBuilder,
@@ -24,10 +24,12 @@ import {
 import {
 	getEarlySegmentTracks,
 	getSegmentPlaybackState,
+	isAbandonedSegmentUpload,
 	readRecordedLength,
 	totalSegmentDuration,
 } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
+import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
 	generateM3U8Playlist,
@@ -98,6 +100,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									Effect.fail(new HttpApiError.NotFound()),
 								),
 							);
+
+						const viewer = yield* Effect.serviceOption(CurrentUser);
+						if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+							const locked = yield* Effect.tryPromise(() =>
+								isVideoLockedByShareableLinkLimit(video.id),
+							).pipe(
+								Effect.tapError(Effect.logError),
+								Effect.orElseSucceed(() => false),
+							);
+							if (locked)
+								return yield* Effect.fail(new HttpApiError.Forbidden());
+						}
 
 						return yield* getPlaylistResponse(
 							video,
@@ -412,7 +426,24 @@ const getPlaylistResponse = (
 				playlist += `${segmentUrls[i]}\n`;
 			}
 
-			if (manifest.is_complete) {
+			// An upload that stopped mid-recording never completes its manifest,
+			// and players reload an unended playlist forever, so end it once the
+			// manifest has gone quiet. A resumed upload rewrites the manifest and
+			// the next load is live again.
+			const uploadAbandoned =
+				!manifest.is_complete &&
+				(yield* bucket.listObjects({ prefix: manifestKey, maxKeys: 1 }).pipe(
+					Effect.map((objects) =>
+						isAbandonedSegmentUpload(
+							objects.Contents?.find((object) => object.Key === manifestKey)
+								?.LastModified,
+							Date.now(),
+						),
+					),
+					Effect.orElseSucceed(() => false),
+				));
+
+			if (manifest.is_complete || uploadAbandoned) {
 				playlist += "#EXT-X-ENDLIST\n";
 			}
 

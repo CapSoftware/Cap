@@ -7,6 +7,10 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	PROCESSING_RETRY_RATE_MESSAGE,
+	processingRetryLimited,
+} from "@/lib/processing-retry-limit";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 const LEGACY_AI_SUMMARY_FALLBACK =
@@ -94,6 +98,13 @@ export async function POST(
 					error: "AI generation feature is not available for this user",
 				},
 				{ status: 403 },
+			);
+		}
+
+		if (await processingRetryLimited(user.id, request.headers)) {
+			return Response.json(
+				{ error: PROCESSING_RETRY_RATE_MESSAGE },
+				{ status: 429 },
 			);
 		}
 

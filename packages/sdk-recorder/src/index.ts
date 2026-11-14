@@ -9,6 +9,7 @@ import type {
 	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
+	RecorderUpload,
 	RecordingResult,
 } from "./types";
 import { MultipartClient } from "./upload/multipart-client";
@@ -17,6 +18,7 @@ export type {
 	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
+	RecorderUpload,
 	RecordingResult,
 };
 
@@ -28,7 +30,7 @@ type EventHandler<K extends keyof RecorderEventMap> = (
 
 export class CapRecorder {
 	private options: Required<
-		Pick<RecorderOptions, "publicKey" | "apiBase" | "mode">
+		Pick<RecorderOptions, "createUpload" | "apiBase" | "mode">
 	> &
 		RecorderOptions;
 	private _phase: RecorderPhase = "idle";
@@ -45,7 +47,6 @@ export class CapRecorder {
 	private selectedMimeType = "";
 	private maxDurationMs: number;
 	private maxDurationTimeout: ReturnType<typeof setTimeout> | null = null;
-	private client: MultipartClient;
 	private listeners = new Map<
 		string,
 		Set<EventHandler<keyof RecorderEventMap>>
@@ -58,10 +59,6 @@ export class CapRecorder {
 			mode: options.mode ?? "fullscreen",
 		};
 		this.maxDurationMs = options.maxDurationMs ?? 4 * 60 * 60 * 1000;
-		this.client = new MultipartClient(
-			this.options.apiBase,
-			this.options.publicKey,
-		);
 	}
 
 	get phase(): RecorderPhase {
@@ -83,10 +80,11 @@ export class CapRecorder {
 		if (!this.listeners.has(event)) {
 			this.listeners.set(event, new Set());
 		}
+		const registeredHandler = handler as EventHandler<keyof RecorderEventMap>;
 		const set = this.listeners.get(event);
-		if (set) set.add(handler as EventHandler<keyof RecorderEventMap>);
+		if (set) set.add(registeredHandler);
 		return () => {
-			this.listeners.get(event)?.delete(handler);
+			this.listeners.get(event)?.delete(registeredHandler);
 		};
 	}
 
@@ -229,14 +227,12 @@ export class CapRecorder {
 
 		if (recorder.state !== "inactive") recorder.stop();
 		await stopped;
-		if (this.recorder !== recorder) {
-			throw new DOMException("Recording was canceled", "AbortError");
-		}
+		this.assertCurrentRecording(recorder);
 		if (streams) {
 			releaseStreams(streams);
 			this.streams = null;
 		}
-		return this.uploadRecording();
+		return this.uploadRecording(recorder);
 	}
 
 	destroy(): void {
@@ -247,23 +243,39 @@ export class CapRecorder {
 		this.setPhase("idle");
 	}
 
-	private async uploadRecording(): Promise<RecordingResult> {
+	private assertCurrentRecording(recorder: MediaRecorder) {
+		if (this.recorder !== recorder) {
+			throw new DOMException("Recording was canceled", "AbortError");
+		}
+	}
+
+	private async uploadRecording(
+		recorder: MediaRecorder,
+	): Promise<RecordingResult> {
+		const durationMs = this._durationMs;
 		this.setPhase("uploading");
 
 		try {
+			this.assertCurrentRecording(recorder);
 			const blob = new Blob(this.chunks, {
 				type: this.selectedMimeType || "video/webm",
 			});
 
-			const { videoId, shareUrl, embedUrl } = await this.client.createVideo({
-				userId: this.options.userId,
-			});
+			const { videoId, token, shareUrl, embedUrl } =
+				await this.options.createUpload();
+			if (!videoId || !token) {
+				throw new Error("createUpload must return a videoId and a token");
+			}
 
+			this.assertCurrentRecording(recorder);
 			this._videoId = videoId;
 
-			await this.client.uploadBlob(videoId, blob, {
-				durationMs: this._durationMs,
-			});
+			await new MultipartClient(this.options.apiBase, token).uploadBlob(
+				videoId,
+				blob,
+				{ durationMs },
+			);
+			this.assertCurrentRecording(recorder);
 
 			const result: RecordingResult = {
 				videoId,
@@ -273,14 +285,15 @@ export class CapRecorder {
 
 			this.setPhase("complete");
 			this.emit("complete", result);
-			this.cleanup();
+			if (this.recorder === recorder) this.cleanup();
 
 			return result;
 		} catch (error) {
+			this.assertCurrentRecording(recorder);
 			this.setPhase("error");
 			const err = error instanceof Error ? error : new Error(String(error));
 			this.emit("error", { error: err });
-			this.cleanup();
+			if (this.recorder === recorder) this.cleanup();
 			throw err;
 		}
 	}

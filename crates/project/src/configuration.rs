@@ -15,7 +15,12 @@ use specta::Type;
 use crate::DisplayNotch;
 
 #[cfg(test)]
+mod clip_transition_tests;
+mod markers;
+#[cfg(test)]
 mod style_resolution_tests;
+
+pub use markers::{PlacedMarker, TimelineMarker};
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -675,6 +680,220 @@ impl Default for AudioConfiguration {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceEqPreset {
+    #[default]
+    Natural,
+    Clear,
+    Warm,
+    Bright,
+    Broadcast,
+    Custom,
+}
+
+impl VoiceEqPreset {
+    pub const ALL: [Self; 5] = [
+        Self::Natural,
+        Self::Clear,
+        Self::Warm,
+        Self::Bright,
+        Self::Broadcast,
+    ];
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceDeclick {
+    #[default]
+    Off,
+    Light,
+    Strong,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceEqBand {
+    pub hz: f32,
+    pub gain_db: f32,
+    #[serde(default = "VoiceEqBand::default_q")]
+    pub q: f32,
+}
+
+impl VoiceEqBand {
+    const fn new(hz: f32, gain_db: f32, q: f32) -> Self {
+        Self { hz, gain_db, q }
+    }
+
+    fn default_q() -> f32 {
+        1.0
+    }
+
+    fn sanitized(self, kind: VoiceEqBandKind, fallback: Self) -> Self {
+        Self {
+            hz: clamp_finite(self.hz, kind.hz_range(), fallback.hz),
+            gain_db: clamp_finite(self.gain_db, VoiceEq::GAIN_RANGE, fallback.gain_db),
+            q: clamp_finite(self.q, VoiceEq::Q_RANGE, fallback.q),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VoiceEqBandKind {
+    Low,
+    LowMid,
+    HighMid,
+    High,
+}
+
+impl VoiceEqBandKind {
+    pub const ALL: [Self; 4] = [Self::Low, Self::LowMid, Self::HighMid, Self::High];
+
+    pub fn hz_range(self) -> (f32, f32) {
+        match self {
+            Self::Low => (40.0, 600.0),
+            Self::LowMid => (100.0, 2_000.0),
+            Self::HighMid => (600.0, 10_000.0),
+            Self::High => (2_000.0, 16_000.0),
+        }
+    }
+
+    pub fn is_shelf(self) -> bool {
+        matches!(self, Self::Low | Self::High)
+    }
+}
+
+/// `enabled` bypasses the EQ without losing it; de-click runs on its own
+/// switch.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VoiceEq {
+    pub enabled: bool,
+    pub preset: VoiceEqPreset,
+    pub high_pass: bool,
+    pub high_pass_hz: f32,
+    pub low: VoiceEqBand,
+    pub low_mid: VoiceEqBand,
+    pub high_mid: VoiceEqBand,
+    pub high: VoiceEqBand,
+    pub declick: VoiceDeclick,
+}
+
+impl Default for VoiceEq {
+    fn default() -> Self {
+        Self::from_preset(VoiceEqPreset::Natural)
+    }
+}
+
+impl VoiceEq {
+    pub const GAIN_RANGE: (f32, f32) = (-12.0, 12.0);
+    pub const Q_RANGE: (f32, f32) = (0.3, 4.0);
+    pub const HIGH_PASS_RANGE: (f32, f32) = (20.0, 300.0);
+
+    pub fn from_preset(preset: VoiceEqPreset) -> Self {
+        let (high_pass_hz, low, low_mid, high_mid, high) = match preset {
+            VoiceEqPreset::Natural | VoiceEqPreset::Custom => (
+                80.0,
+                VoiceEqBand::new(150.0, 0.0, 0.7),
+                VoiceEqBand::new(300.0, -2.0, 1.0),
+                VoiceEqBand::new(3_500.0, 1.5, 0.8),
+                VoiceEqBand::new(10_000.0, 0.0, 0.7),
+            ),
+            VoiceEqPreset::Clear => (
+                90.0,
+                VoiceEqBand::new(150.0, -1.5, 0.7),
+                VoiceEqBand::new(320.0, -3.0, 1.2),
+                VoiceEqBand::new(3_500.0, 3.5, 0.9),
+                VoiceEqBand::new(10_000.0, 2.0, 0.7),
+            ),
+            VoiceEqPreset::Warm => (
+                70.0,
+                VoiceEqBand::new(160.0, 3.0, 0.7),
+                VoiceEqBand::new(400.0, -1.0, 1.0),
+                VoiceEqBand::new(3_000.0, 1.0, 0.8),
+                VoiceEqBand::new(9_000.0, -2.0, 0.7),
+            ),
+            VoiceEqPreset::Bright => (
+                100.0,
+                VoiceEqBand::new(180.0, -2.0, 0.7),
+                VoiceEqBand::new(350.0, -2.0, 1.0),
+                VoiceEqBand::new(4_500.0, 3.0, 0.8),
+                VoiceEqBand::new(10_000.0, 4.5, 0.7),
+            ),
+            VoiceEqPreset::Broadcast => (
+                80.0,
+                VoiceEqBand::new(110.0, 3.5, 0.7),
+                VoiceEqBand::new(380.0, -3.5, 1.4),
+                VoiceEqBand::new(2_800.0, 3.0, 1.0),
+                VoiceEqBand::new(9_000.0, 2.5, 0.7),
+            ),
+        };
+        Self {
+            enabled: true,
+            preset,
+            high_pass: true,
+            high_pass_hz,
+            low,
+            low_mid,
+            high_mid,
+            high,
+            declick: VoiceDeclick::Off,
+        }
+    }
+
+    pub fn with_preset(self, preset: VoiceEqPreset) -> Self {
+        Self {
+            enabled: self.enabled,
+            declick: self.declick,
+            ..Self::from_preset(preset)
+        }
+    }
+
+    pub fn band(&self, kind: VoiceEqBandKind) -> VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => self.low,
+            VoiceEqBandKind::LowMid => self.low_mid,
+            VoiceEqBandKind::HighMid => self.high_mid,
+            VoiceEqBandKind::High => self.high,
+        }
+    }
+
+    pub fn band_mut(&mut self, kind: VoiceEqBandKind) -> &mut VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => &mut self.low,
+            VoiceEqBandKind::LowMid => &mut self.low_mid,
+            VoiceEqBandKind::HighMid => &mut self.high_mid,
+            VoiceEqBandKind::High => &mut self.high,
+        }
+    }
+
+    pub fn sanitized(&self) -> Self {
+        let fallback = Self::from_preset(self.preset);
+        let mut clean = *self;
+        clean.high_pass_hz = clamp_finite(
+            self.high_pass_hz,
+            Self::HIGH_PASS_RANGE,
+            fallback.high_pass_hz,
+        );
+        for kind in VoiceEqBandKind::ALL {
+            *clean.band_mut(kind) = self.band(kind).sanitized(kind, fallback.band(kind));
+        }
+        clean
+    }
+
+    pub fn shapes_tone(&self) -> bool {
+        self.enabled
+            && (self.high_pass
+                || VoiceEqBandKind::ALL
+                    .iter()
+                    .any(|kind| self.sanitized().band(*kind).gain_db.abs() >= 0.01))
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.shapes_tone() || self.declick != VoiceDeclick::Off
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorType {
@@ -944,6 +1163,8 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_cursor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_eq: Option<VoiceEq>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -996,6 +1217,12 @@ fn deserialize_timescale<'de, D: serde::Deserializer<'de>>(
 impl TimelineSegment {
     pub fn hides_cursor(&self) -> bool {
         self.hide_cursor.unwrap_or(false)
+    }
+
+    pub fn active_voice_eq(&self) -> Option<VoiceEq> {
+        self.voice_eq
+            .filter(VoiceEq::is_active)
+            .map(|voice_eq| voice_eq.sanitized())
     }
 
     pub fn volume(&self) -> f64 {
@@ -1799,21 +2026,139 @@ pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
 /// (and to fade back in before leaving the hidden run).
 pub const CLIP_CURSOR_FADE_SECS: f64 = 0.3;
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClipTransitionType {
     #[default]
     CrossFade,
     FadeThroughBlack,
+    FadeThroughWhite,
+    PushLeft,
+    PushRight,
+    PushUp,
+    PushDown,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    Zoom,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
-#[serde(rename_all = "camelCase")]
+impl ClipTransitionType {
+    pub const ALL: [Self; 12] = [
+        Self::CrossFade,
+        Self::FadeThroughBlack,
+        Self::FadeThroughWhite,
+        Self::PushLeft,
+        Self::PushRight,
+        Self::PushUp,
+        Self::PushDown,
+        Self::WipeLeft,
+        Self::WipeRight,
+        Self::WipeUp,
+        Self::WipeDown,
+        Self::Zoom,
+    ];
+
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::CrossFade => "cross-fade",
+            Self::FadeThroughBlack => "fade-through-black",
+            Self::FadeThroughWhite => "fade-through-white",
+            Self::PushLeft => "push-left",
+            Self::PushRight => "push-right",
+            Self::PushUp => "push-up",
+            Self::PushDown => "push-down",
+            Self::WipeLeft => "wipe-left",
+            Self::WipeRight => "wipe-right",
+            Self::WipeUp => "wipe-up",
+            Self::WipeDown => "wipe-down",
+            Self::Zoom => "zoom",
+        }
+    }
+
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.wire_name() == name)
+    }
+
+    /// The kind written to the `type` field, which 0.6.2 and earlier read
+    /// and reject anything but these two. A dip keeps dipping there so its
+    /// audio matches; every other kind plays as a crossfade.
+    pub fn legacy_fallback(self) -> Self {
+        match self {
+            Self::FadeThroughBlack | Self::FadeThroughWhite => Self::FadeThroughBlack,
+            _ => Self::CrossFade,
+        }
+    }
+
+    /// Dips pass through silence (and a solid colour); every other kind
+    /// blends the two clips' audio with an equal-power crossfade.
+    pub fn dips(self) -> bool {
+        matches!(self, Self::FadeThroughBlack | Self::FadeThroughWhite)
+    }
+}
+
+/// A transition on the boundary between `segments[segment_index - 1]` and
+/// `segments[segment_index]`. The two clips overlap by `duration` output
+/// seconds, so every transition shortens the timeline by its duration.
+///
+/// On disk, `type` only ever holds a kind 0.6.2 understands and `effect`
+/// carries the real kind when it differs, so projects stay loadable there.
+#[derive(Type, Clone, Copy, Debug, PartialEq)]
 pub struct ClipTransition {
     pub segment_index: u32,
-    #[serde(rename = "type")]
     pub kind: ClipTransitionType,
     pub duration: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionOut {
+    segment_index: u32,
+    #[serde(rename = "type")]
+    legacy_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect: Option<&'static str>,
+    duration: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionIn {
+    segment_index: u32,
+    #[serde(rename = "type", default)]
+    legacy_kind: Option<String>,
+    #[serde(default)]
+    effect: Option<String>,
+    duration: f64,
+}
+
+impl Serialize for ClipTransition {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let legacy = self.kind.legacy_fallback();
+        ClipTransitionOut {
+            segment_index: self.segment_index,
+            legacy_kind: legacy.wire_name(),
+            effect: (legacy != self.kind).then(|| self.kind.wire_name()),
+            duration: self.duration,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClipTransition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ClipTransitionIn::deserialize(deserializer)?;
+        let parse = |name: Option<&str>| name.and_then(ClipTransitionType::from_wire_name);
+        let kind = parse(wire.effect.as_deref())
+            .or_else(|| parse(wire.legacy_kind.as_deref()))
+            .unwrap_or_default();
+        Ok(Self {
+            segment_index: wire.segment_index,
+            kind,
+            duration: wire.duration,
+        })
+    }
 }
 
 fn deserialize_clip_transitions<'de, D>(deserializer: D) -> Result<Vec<ClipTransition>, D::Error>
@@ -1864,6 +2209,8 @@ pub struct TimelineConfiguration {
     pub style_segments: Vec<StyleSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_segments: Vec<ImageSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_segments: Vec<crate::ShapeSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -2375,6 +2722,19 @@ pub struct CaptionSettings {
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
     pub uppercase: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub show_filler_words: bool,
+    /// The language whose hesitation fillers these captions hide, set when
+    /// they are generated: only English is supported, and captions from
+    /// before it existed hide nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filler_language: Option<String>,
+}
+
+impl CaptionSettings {
+    pub fn hides_fillers(&self) -> bool {
+        !self.show_filler_words && self.filler_language.as_deref() == Some("en")
+    }
 }
 
 impl CaptionSettings {
@@ -2440,6 +2800,8 @@ impl Default for CaptionSettings {
             animation: Self::default_animation(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
+            show_filler_words: false,
+            filler_language: None,
         }
     }
 }
@@ -2657,6 +3019,16 @@ pub enum OverlayTrackKind {
     Mask,
     Image,
     Text,
+    Shape,
+}
+
+impl OverlayTrackKind {
+    /// Kinds every shipped build can parse. 0.6.2 and earlier fail to load a
+    /// project whose `overlayOrder` names any other kind, so newer kinds are
+    /// kept out of that field.
+    pub fn is_legacy(self) -> bool {
+        !matches!(self, Self::Shape)
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2676,8 +3048,17 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    /// The saved stacking order, restricted to [`OverlayTrackKind::is_legacy`]
+    /// kinds so older builds can still open the project. Read and write the
+    /// order through [`ProjectConfiguration::overlay_order`] and
+    /// [`ProjectConfiguration::set_overlay_order`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order: Vec<OverlayTrack>,
+    /// The full saved stacking order whenever it includes a newer track kind.
+    /// Builds that do not know this field drop it, and fall back to
+    /// `overlay_order`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order_with_shapes: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2707,6 +3088,12 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    #[serde(
+        default,
+        deserialize_with = "markers::deserialize_markers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub markers: Vec<TimelineMarker>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2748,6 +3135,7 @@ impl Default for ProjectConfiguration {
             hotkeys: Default::default(),
             timeline: Default::default(),
             overlay_order: Vec::new(),
+            overlay_order_with_shapes: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2758,6 +3146,7 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            markers: Vec::new(),
         }
     }
 }
@@ -2829,11 +3218,18 @@ impl ProjectConfiguration {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
             (Some(mut captions), settings) => {
-                captions.settings = settings.unwrap_or_default();
+                let filler_language = captions.settings.filler_language.take();
+                captions.settings = CaptionSettings {
+                    filler_language,
+                    ..settings.unwrap_or_default()
+                };
                 Some(captions)
             }
             (None, Some(settings)) => Some(CaptionsData {
-                settings,
+                settings: CaptionSettings {
+                    filler_language: None,
+                    ..settings
+                },
                 ..Default::default()
             }),
             (None, None) => None,
@@ -2842,18 +3238,50 @@ impl ProjectConfiguration {
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
+        preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
+        preset.markers = self.markers.clone();
         preset
     }
 
+    /// The saved overlay stacking order, top first.
+    pub fn overlay_order(&self) -> &[OverlayTrack] {
+        if self.overlay_order_with_shapes.is_empty() {
+            &self.overlay_order
+        } else {
+            &self.overlay_order_with_shapes
+        }
+    }
+
+    pub fn has_overlay_order(&self) -> bool {
+        !self.overlay_order().is_empty()
+    }
+
+    /// Saves `order`, writing the newer kinds only to the field older builds
+    /// ignore.
+    pub fn set_overlay_order(&mut self, order: Vec<OverlayTrack>) {
+        if order.iter().all(|track| track.kind.is_legacy()) {
+            self.overlay_order = order;
+            self.overlay_order_with_shapes.clear();
+        } else {
+            self.overlay_order = order
+                .iter()
+                .copied()
+                .filter(|track| track.kind.is_legacy())
+                .collect();
+            self.overlay_order_with_shapes = order;
+        }
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
-            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+            if !saved.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
         }
-        for track in &self.overlay_order {
+        for track in saved {
             if available.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
@@ -2871,6 +3299,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Text,
                 timeline
                     .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Shape,
+                timeline
+                    .shape_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -3264,6 +3700,36 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
+        assert!(!legacy.show_filler_words);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("showFillerWords").is_none());
+
+        assert!(written.get("fillerLanguage").is_none());
+        assert!(!legacy.hides_fillers());
+
+        let english = CaptionSettings {
+            filler_language: Some("en".into()),
+            ..legacy.clone()
+        };
+        assert!(english.hides_fillers());
+        let shown = CaptionSettings {
+            show_filler_words: true,
+            ..english
+        };
+        assert!(!shown.hides_fillers());
+        let written = serde_json::to_value(&shown).unwrap();
+        assert_eq!(written["showFillerWords"], Value::Bool(true));
+        assert_eq!(written["fillerLanguage"], Value::from("en"));
+        let restored: CaptionSettings = serde_json::from_value(written).unwrap();
+        assert!(restored.show_filler_words);
+        assert_eq!(restored.filler_language.as_deref(), Some("en"));
+        assert!(restored.uppercase);
+    }
+
+    #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
         let legacy: AudioConfiguration =
             serde_json::from_str(r#"{"improve":true,"micVolumeDb":-3.0}"#).unwrap();
@@ -3320,6 +3786,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -3330,6 +3797,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
             ],
             transitions,
@@ -3342,6 +3810,7 @@ mod tests {
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
     }
@@ -4252,6 +4721,74 @@ mod tests {
     }
 
     #[test]
+    fn voice_eq_is_absent_until_set_and_survives_partial_or_out_of_range_values() {
+        let mut segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert!(segment.voice_eq.is_none());
+        assert!(segment.active_voice_eq().is_none());
+        assert!(
+            serde_json::to_value(&segment)
+                .unwrap()
+                .get("voiceEq")
+                .is_none()
+        );
+
+        segment.voice_eq = Some(VoiceEq {
+            enabled: false,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        assert!(segment.active_voice_eq().is_none());
+        segment.voice_eq = Some(VoiceEq {
+            declick: VoiceDeclick::Light,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        let saved = serde_json::to_string(&segment).unwrap();
+        let restored: TimelineSegment = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.voice_eq, segment.voice_eq);
+        assert_eq!(restored.active_voice_eq(), segment.voice_eq);
+
+        let partial: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": { "declick": "strong", "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(
+            partial.voice_eq,
+            Some(VoiceEq {
+                enabled: false,
+                declick: VoiceDeclick::Strong,
+                ..VoiceEq::default()
+            })
+        );
+        assert!(partial.active_voice_eq().is_some());
+
+        let damaged: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": {
+                "highPassHz": 1e9,
+                "low": { "hz": -5.0, "gainDb": 400.0 },
+                "highMid": { "hz": 3500.0, "gainDb": -90.0, "q": 0.0 }
+            }
+        }))
+        .unwrap();
+        let active = damaged.active_voice_eq().unwrap();
+        assert_eq!(active.high_pass_hz, VoiceEq::HIGH_PASS_RANGE.1);
+        assert_eq!(active.low.hz, VoiceEqBandKind::Low.hz_range().0);
+        assert_eq!(active.low.gain_db, VoiceEq::GAIN_RANGE.1);
+        assert_eq!(active.high_mid.gain_db, VoiceEq::GAIN_RANGE.0);
+        assert_eq!(active.high_mid.q, VoiceEq::Q_RANGE.0);
+    }
+
+    #[test]
     fn timeline_segment_speed_audio_mode_is_backward_compatible() {
         let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
             "recordingSegment": 0,
@@ -4410,6 +4947,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: hide_cursor.then_some(true),
+            voice_eq: None,
         }
     }
 
@@ -4803,6 +5341,57 @@ mod tests {
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
     }
 
+    #[test]
+    fn manual_caption_position_loads_from_old_projects_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        value["captions"] = serde_json::json!({
+            "segments": [],
+            "settings": { "enabled": true, "position": "manual" },
+        });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let old = ProjectConfiguration::load(dir.path()).unwrap();
+        let settings = &old.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        assert_eq!(settings.manual_position, None);
+
+        value["captions"]["settings"]["manualPosition"] = serde_json::json!({ "x": 0.3, "y": 0.2 });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let tauri = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            tauri.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.3, 0.2))
+        );
+
+        let mut config = tauri;
+        config.captions.as_mut().unwrap().settings.manual_position =
+            Some(XY::new(0.423_7, 0.123_4));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["captions"]["settings"]["manualPosition"],
+            serde_json::json!({ "x": 0.423_7_f32, "y": 0.123_4_f32 })
+        );
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            reopened.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.423_7, 0.123_4))
+        );
+    }
+
     fn write_config_with_text_segment(
         project_path: &std::path::Path,
         font_size: f32,
@@ -4854,6 +5443,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -4963,6 +5553,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -5285,6 +5876,124 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum ShippedKind {
+        Mask,
+        Image,
+        Text,
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct ShippedTrack {
+        kind: ShippedKind,
+        track: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ShippedProject {
+        #[serde(default)]
+        overlay_order: Vec<ShippedTrack>,
+    }
+
+    #[test]
+    fn shape_layers_stay_out_of_the_field_shipped_builds_parse() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text, image]);
+        assert_eq!(project.overlay_order, [text, image]);
+        assert_eq!(project.overlay_order(), [shape, text, image]);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let shipped: ShippedProject = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            shipped.overlay_order,
+            [
+                ShippedTrack {
+                    kind: ShippedKind::Text,
+                    track: 0
+                },
+                ShippedTrack {
+                    kind: ShippedKind::Image,
+                    track: 0
+                }
+            ]
+        );
+
+        let restored: ProjectConfiguration = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, shape, image]),
+            [shape, text, image]
+        );
+    }
+
+    #[test]
+    fn an_order_without_shapes_clears_the_shape_aware_copy() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text]);
+        project.set_overlay_order(vec![image, text]);
+        assert!(project.overlay_order_with_shapes.is_empty());
+        assert_eq!(project.overlay_order(), [image, text]);
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json.get("overlayOrderWithShapes").is_none());
+        project.set_overlay_order(Vec::new());
+        assert!(!project.has_overlay_order());
+    }
+
+    #[test]
+    fn shape_tracks_default_between_text_and_images() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "textSegments": [{"start": 0.0, "end": 1.0}],
+                "maskSegments": [{
+                    "start": 0.0, "end": 1.0, "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5}, "size": {"x": 0.2, "y": 0.2}
+                }],
+                "shapeSegments": [{"start": 0.0, "end": 1.0}, {"start": 0.0, "end": 1.0, "track": 1}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            project.overlay_tracks(),
+            [
+                layer(OverlayTrackKind::Text, 0),
+                layer(OverlayTrackKind::Shape, 1),
+                layer(OverlayTrackKind::Shape, 0),
+                layer(OverlayTrackKind::Mask, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn projects_without_shapes_serialize_without_shape_fields() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {"segments": [], "zoomSegments": []}
+        }))
+        .unwrap();
+        assert!(project.timeline.as_ref().unwrap().shape_segments.is_empty());
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json["timeline"].get("shapeSegments").is_none());
+        assert!(json.get("overlayOrderWithShapes").is_none());
+    }
+
+    #[test]
+    fn preset_application_keeps_the_shape_aware_order() {
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let text = layer(OverlayTrackKind::Text, 0);
+        let mut current = ProjectConfiguration::default();
+        current.set_overlay_order(vec![text, shape]);
+        let applied = current.with_preset(ProjectConfiguration::default());
+        assert_eq!(applied.overlay_order(), [text, shape]);
     }
 }
 

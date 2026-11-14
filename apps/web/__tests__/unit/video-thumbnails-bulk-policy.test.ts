@@ -26,7 +26,9 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 							Effect.succeed(`signed:${key}`),
 						listObjects: ({ prefix }: { prefix: string }) =>
 							Effect.succeed({
-								Contents: [{ Key: `${prefix}screenshot/screen-capture.jpg` }],
+								Contents: prefix.endsWith("/screenshot/screen-capture.")
+									? [{ Key: `${prefix}jpg` }]
+									: [],
 							}),
 					},
 					Option.none(),
@@ -176,6 +178,7 @@ const repoLayers = (failMemberships: boolean) => {
 					),
 				hasViewerGrant: (id: Video.VideoId, email: string) =>
 					Effect.succeed(fixtures[id]?.grants?.includes(email) ?? false),
+				isLinkOpenToAnyone: () => Effect.succeed(false),
 				prepareDelete: vi.fn(),
 				delete: vi.fn(),
 				create: vi.fn(),

@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,16 @@ import {
 	getActiveProcessCount,
 } from "../../lib/media-audio";
 import * as subprocess from "../../lib/subprocess";
+
+const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_STREAMING_HOSTS = "127.0.0.1,localhost";
+});
+afterAll(() => {
+	if (previousStreamingHosts === undefined)
+		delete process.env.MEDIA_SERVER_STREAMING_HOSTS;
+	else process.env.MEDIA_SERVER_STREAMING_HOSTS = previousStreamingHosts;
+});
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
@@ -177,15 +187,13 @@ describe("mediaAudio integration tests", () => {
 			}
 		});
 
-		test("still rejects audio-only inputs without leaking an operation", async () => {
+		test("reads audio-only inputs without leaking an operation", async () => {
 			const beforeCount = getActiveProcessCount();
 			const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-only-"));
 			const outputPath = join(dirPath, "audio.mp3");
 			try {
 				await Bun.write(outputPath, await extractAudio(TEST_VIDEO_WITH_AUDIO));
-				await expect(
-					checkHasAudioTrack(`file://${outputPath}`),
-				).rejects.toThrow("No video stream found");
+				expect(await checkHasAudioTrack(`file://${outputPath}`)).toBe(true);
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await rm(dirPath, { recursive: true, force: true });

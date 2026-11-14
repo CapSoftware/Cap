@@ -3,6 +3,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { redirect } from "next/navigation";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { canViewOrganizationSettings } from "@/lib/permissions/roles";
+import { DoodleFilters } from "./_components/doodles";
 import { SettingsNav } from "./_components/SettingsNav";
 
 export default async function OrganizationSettingsLayout({
@@ -42,6 +43,7 @@ export default async function OrganizationSettingsLayout({
 
 	return (
 		<div className="flex flex-col gap-6">
+			<DoodleFilters />
 			<SettingsNav />
 			{children}
 		</div>

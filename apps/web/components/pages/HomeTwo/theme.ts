@@ -122,7 +122,7 @@ export const SERIF_BODY =
 
 export const MONO = "[font-family:var(--font-ht-mono),ui-monospace,monospace]";
 
-export const EYEBROW = `${MONO} text-[12px] font-normal uppercase leading-none tracking-[0.05em]`;
+export const EYEBROW = `${SANS} text-[14px] font-normal leading-none`;
 
 export const H_HERO = `${SANS} font-normal leading-[0.98] tracking-[-0.03em] text-[#111111]`;
 

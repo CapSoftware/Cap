@@ -10,7 +10,7 @@ import {
 	type DatabaseError,
 	type Video,
 } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Schedule, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
@@ -23,7 +23,7 @@ export type AgentMutationOutcome<A> =
 	| { state: "success"; response: A }
 	| { state: "not_found" }
 	| { state: "forbidden" }
-	| { state: "conflict" };
+	| { state: "conflict"; message?: string };
 
 type IdempotencyInput = {
 	userId: Agent.AgentPrincipal["Type"]["id"];
@@ -174,7 +174,29 @@ const idempotencyConflict = (requestId: string) =>
 		code: "IDEMPOTENCY_CONFLICT",
 	});
 
-export const runAgentMutation = <A>(input: {
+const hasSavedMutation = async (
+	db: DbClient,
+	input: Pick<IdempotencyInput, "userId" | "operation" | "key">,
+) => {
+	const [record] = await db
+		.select({ expiresAt: Db.agentApiIdempotency.expiresAt })
+		.from(Db.agentApiIdempotency)
+		.where(
+			and(
+				eq(Db.agentApiIdempotency.userId, input.userId),
+				eq(Db.agentApiIdempotency.operation, input.operation),
+				eq(Db.agentApiIdempotency.keyHash, hash(input.key)),
+			),
+		)
+		.limit(1);
+	return !!record && record.expiresAt.getTime() > Date.now();
+};
+
+export const runAgentMutation = <
+	A,
+	AdmitError = never,
+	AdmitContext = never,
+>(input: {
 	principal: Agent.AgentPrincipal["Type"];
 	operation: string;
 	idempotencyKey: string;
@@ -182,6 +204,8 @@ export const runAgentMutation = <A>(input: {
 	requestId: string;
 	decodeReplay: (value: unknown) => A;
 	execute: (tx: Transaction) => Promise<AgentMutationOutcome<NoInfer<A>>>;
+	notFound?: (requestId: string) => Agent.AgentNotFoundError;
+	admit?: Effect.Effect<void, AdmitError, AdmitContext>;
 }): Effect.Effect<
 	A,
 	| Agent.AgentBadRequestError
@@ -189,8 +213,9 @@ export const runAgentMutation = <A>(input: {
 	| Agent.AgentTemporaryUnavailableError
 	| Agent.AgentNotFoundError
 	| Agent.AgentForbiddenError
-	| DatabaseError,
-	Database
+	| DatabaseError
+	| AdmitError,
+	Database | AdmitContext
 > =>
 	Effect.gen(function* () {
 		if (!isAgentIdempotencyKey(input.idempotencyKey)) {
@@ -204,6 +229,16 @@ export const runAgentMutation = <A>(input: {
 			input.operation,
 			input.request,
 		);
+		if (input.admit) {
+			const saved = yield* database.use((db) =>
+				hasSavedMutation(db, {
+					userId: input.principal.id,
+					operation: input.operation,
+					key: input.idempotencyKey,
+				}),
+			);
+			if (!saved) yield* input.admit;
+		}
 		const result = yield* database.use((db) =>
 			db.transaction(async (tx) => {
 				const idempotency = await acquireIdempotency(tx, {
@@ -243,7 +278,9 @@ export const runAgentMutation = <A>(input: {
 		if (result.state === "unavailable" || result.state === "pending") {
 			return yield* temporarilyUnavailable(input.requestId);
 		}
-		if (result.state === "not_found") return yield* notFound(input.requestId);
+		if (result.state === "not_found") {
+			return yield* (input.notFound ?? notFound)(input.requestId);
+		}
 		if (result.state === "forbidden") {
 			return yield* new Agent.AgentForbiddenError({
 				...commonError(input.requestId, "Access is not allowed"),
@@ -254,7 +291,7 @@ export const runAgentMutation = <A>(input: {
 			return yield* new Agent.AgentConflictError({
 				...commonError(
 					input.requestId,
-					"The resource changed; refresh and retry",
+					result.message ?? "The resource changed; refresh and retry",
 				),
 				code: "CONFLICT",
 			});
@@ -521,6 +558,60 @@ export const createAgentFeedback = Effect.fn("Agent.createFeedback")(
 		return result.response;
 	},
 );
+
+export const deleteAgentFeedback = async (
+	tx: Transaction,
+	input: {
+		videoId: Video.VideoId;
+		commentId: Comment.CommentId;
+		authorId: Agent.AgentPrincipal["Type"]["id"];
+	},
+) => {
+	const ownComment = and(
+		eq(Db.comments.id, input.commentId),
+		eq(Db.comments.videoId, input.videoId),
+		eq(Db.comments.authorId, input.authorId),
+	);
+	const [comment] = await tx
+		.select({ parentCommentId: Db.comments.parentCommentId })
+		.from(Db.comments)
+		.where(ownComment)
+		.limit(1)
+		.for("update");
+	if (!comment) return false;
+	await tx.delete(Db.comments).where(ownComment);
+	if (comment.parentCommentId) {
+		await tx
+			.delete(Db.notifications)
+			.where(
+				and(
+					eq(Db.notifications.videoId, input.videoId),
+					eq(Db.notifications.type, "reply"),
+					sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
+				),
+			);
+		return true;
+	}
+	await tx
+		.delete(Db.notifications)
+		.where(
+			and(
+				eq(Db.notifications.videoId, input.videoId),
+				inArray(Db.notifications.type, ["comment", "reaction"]),
+				sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.id') = ${input.commentId}`,
+			),
+		);
+	await tx
+		.delete(Db.notifications)
+		.where(
+			and(
+				eq(Db.notifications.videoId, input.videoId),
+				eq(Db.notifications.type, "reply"),
+				sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${input.commentId}`,
+			),
+		);
+	return true;
+};
 
 export const updateAgentCap = Effect.fn("Agent.updateCap")(function* (input: {
 	videoId: Video.VideoId;

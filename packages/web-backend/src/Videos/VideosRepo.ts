@@ -10,7 +10,11 @@ import { Database } from "../Database.ts";
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
 	"id" | "createdAt" | "updatedAt"
-> & { password?: string; importSource?: Video.ImportSource };
+> &
+	Pick<typeof Db.videos.$inferInsert, "isScreenshot" | "settings"> & {
+		password?: string;
+		importSource?: Video.ImportSource;
+	};
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {
@@ -54,6 +58,28 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 								.where(Dz.inArray(Db.videos.id, [...new Set(ids)])),
 						)
 						.pipe(Effect.map((rows) => rows.map(decodeRow)));
+
+		const isLinkOpenToAnyone = (id: Video.VideoId) =>
+			db.use(async (database) => {
+				const [row] = await database
+					.select({
+						videoSettings: Db.videos.settings,
+						organizationSettings: Db.organizations.settings,
+					})
+					.from(Db.videos)
+					.innerJoin(
+						Db.organizations,
+						Dz.eq(Db.videos.orgId, Db.organizations.id),
+					)
+					.where(Dz.eq(Db.videos.id, id))
+					.limit(1);
+				return row
+					? Video.isLinkOpenToAnyone(
+							row.videoSettings,
+							row.organizationSettings,
+						)
+					: false;
+			});
 
 		const hasViewerGrant = (id: Video.VideoId, email: string) =>
 			db.use(async (database) => {
@@ -199,6 +225,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			getById,
 			getByIds,
 			hasViewerGrant,
+			isLinkOpenToAnyone,
 			prepareDelete,
 			delete: delete_,
 			create,
