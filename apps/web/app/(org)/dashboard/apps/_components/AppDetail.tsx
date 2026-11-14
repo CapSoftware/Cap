@@ -113,7 +113,7 @@ export function AppDetail({
 							))}
 						</div>
 					)}
-					<Readme markdown={app.readme} />
+					<Readme markdown={withoutTitle(app.readme, app.name)} />
 				</div>
 
 				<aside className="flex flex-col gap-4">
@@ -211,6 +211,13 @@ function PermissionItem({ children }: { children: React.ReactNode }) {
 			<span>{children}</span>
 		</li>
 	);
+}
+
+function withoutTitle(markdown: string, name: string) {
+	const [first, ...rest] = markdown.trimStart().split("\n");
+	return first?.replace(/^#\s+/, "").trim() === name
+		? rest.join("\n").trimStart()
+		: markdown;
 }
 
 function Readme({ markdown }: { markdown: string }) {
