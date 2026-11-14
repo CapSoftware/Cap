@@ -865,6 +865,14 @@ impl ActiveRecording {
         }
     }
 
+    pub(crate) fn switched_microphone_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
+        self.switched_microphone
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|switched| switched._feed.0.clone())
+    }
+
     pub(crate) fn studio_handle(&self) -> Option<studio_recording::ActorHandle> {
         match &self.handle {
             Handle::Studio(handle) => Some(handle.clone()),

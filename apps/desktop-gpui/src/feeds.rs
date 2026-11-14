@@ -1327,6 +1327,24 @@ impl Feeds {
         cx.notify();
     }
 
+    /// Opens the selected camera again on the same feed, for a camera that was
+    /// unplugged and is back. A feed a recording holds takes the same device
+    /// back without a new lock.
+    pub fn restart_camera(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.camera.clone() else {
+            return;
+        };
+        if self.camera_preview_parked {
+            return;
+        }
+        self.camera_epoch += 1;
+        self.camera_input_epoch
+            .store(self.camera_epoch, Ordering::Release);
+        self.camera_ready = None;
+        self.start_camera_preview(selection, cx);
+        cx.notify();
+    }
+
     /// An Instant recording moved onto `label`, opened on a feed of its own.
     /// Selects it (the main window persists that) and lets the app feed close
     /// the microphone the recording left, so the level meter only hears the
