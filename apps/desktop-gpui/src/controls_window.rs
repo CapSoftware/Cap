@@ -110,8 +110,7 @@ impl ControlsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&session, window, |this, _, window, cx| {
-            if this.settings_open
-                && !matches!(this.session.read(cx).phase, Phase::Recording { .. })
+            if this.settings_open && !matches!(this.session.read(cx).phase, Phase::Recording { .. })
             {
                 this.settings_open = false;
             }
@@ -714,9 +713,7 @@ impl ControlsWindow {
         let available = matches!(self.session.read(cx).phase, Phase::Recording { .. });
         let open = self.settings_open;
         self.action_button("settings", "icons/settings.svg", !available)
-            .when(open, |this| {
-                this.bg(Theme::with_alpha(theme.gray_12, 0.08))
-            })
+            .when(open, |this| this.bg(Theme::with_alpha(theme.gray_12, 0.08)))
             .when(!open, |this| {
                 this.tooltip(move |_, cx| {
                     ui::Tooltip::new(&theme, tr::controls::settings::open()).view(cx)
@@ -963,10 +960,12 @@ impl ControlsWindow {
             }
         }
 
-        panel = panel.child(self.settings_divider()).child(self.settings_heading(
-            tr::main::device::camera(),
-            note(camera_available, started_with_camera, InputKind::Camera),
-        ));
+        panel = panel
+            .child(self.settings_divider())
+            .child(self.settings_heading(
+                tr::main::device::camera(),
+                note(camera_available, started_with_camera, InputKind::Camera),
+            ));
 
         if camera_available {
             let enabled = pending != Some(InputKind::Camera);

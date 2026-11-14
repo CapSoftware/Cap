@@ -1355,7 +1355,9 @@ impl Feeds {
                 })
                 .await
                 {
-                    tracing::warn!("releasing the microphone a recording switched away from: {error}");
+                    tracing::warn!(
+                        "releasing the microphone a recording switched away from: {error}"
+                    );
                 }
             })
             .detach();

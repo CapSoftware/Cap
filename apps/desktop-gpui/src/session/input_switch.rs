@@ -187,7 +187,12 @@ impl RecordingSession {
         }
     }
 
-    fn run_instant_switch(&mut self, request: InputRequest, generation: u64, cx: &mut Context<Self>) {
+    fn run_instant_switch(
+        &mut self,
+        request: InputRequest,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         match request {
             InputRequest::Camera(selection) => {
                 Feeds::global(cx).update(cx, |feeds, cx| {
@@ -276,8 +281,17 @@ impl RecordingSession {
         mute.store(muted, std::sync::atomic::Ordering::Relaxed);
     }
 
-    fn run_studio_switch(&mut self, request: InputRequest, generation: u64, cx: &mut Context<Self>) {
-        let Some(handle) = self.active.as_ref().and_then(|active| active.studio_handle()) else {
+    fn run_studio_switch(
+        &mut self,
+        request: InputRequest,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(handle) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.studio_handle())
+        else {
             self.finish_input_switch(generation, cx);
             return;
         };
@@ -348,7 +362,9 @@ async fn studio_switch(
         if let Err(error) = paused {
             tracing::warn!("pausing for an input switch failed: {error:#}");
             return StudioSwitchOutcome {
-                error: Some(tr::controls::settings::switch_failed(&request.device_label())),
+                error: Some(tr::controls::settings::switch_failed(
+                    &request.device_label(),
+                )),
                 paused: Some(false),
             };
         }
@@ -367,7 +383,9 @@ async fn studio_switch(
     let mut error = None;
     if let Err(detach_error) = detached {
         tracing::warn!("detaching the old input failed: {detach_error:#}");
-        error = Some(tr::controls::settings::switch_failed(&request.device_label()));
+        error = Some(tr::controls::settings::switch_failed(
+            &request.device_label(),
+        ));
     } else if current(cx) {
         match attach_selection(this, cx, &handle, &request).await {
             Ok(()) => {}
@@ -376,7 +394,9 @@ async fn studio_switch(
                     device = %request.device_label(),
                     "studio input switch failed, restoring the previous input: {attach_error:#}"
                 );
-                error = Some(tr::controls::settings::switch_failed(&request.device_label()));
+                error = Some(tr::controls::settings::switch_failed(
+                    &request.device_label(),
+                ));
                 if current(cx)
                     && let Err(restore_error) = attach_selection(this, cx, &handle, &previous).await
                 {
@@ -401,9 +421,10 @@ async fn studio_switch(
         Err(resume_error) => {
             tracing::error!("resuming after an input switch failed: {resume_error:#}");
             let query = handle.clone();
-            let paused = gpui_tokio::Tokio::spawn_result(cx, async move { query.is_paused().await })
-                .await
-                .ok();
+            let paused =
+                gpui_tokio::Tokio::spawn_result(cx, async move { query.is_paused().await })
+                    .await
+                    .ok();
             StudioSwitchOutcome {
                 error: Some(format!(
                     "{resume_error:#}. Use Stop if recording cannot continue safely."

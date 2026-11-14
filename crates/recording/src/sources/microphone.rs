@@ -445,12 +445,11 @@ impl Microphone {
         let source_cancel = ctx.stop_token().child_token();
         #[cfg(windows)]
         let subscription = feed_lock.recording_subscription(source_cancel.clone());
-        let binding: SharedMicrophoneBinding =
-            Arc::new(std::sync::Mutex::new(MicrophoneBinding {
-                lock: feed_lock.clone(),
-                #[cfg(windows)]
-                subscription: subscription.clone(),
-            }));
+        let binding: SharedMicrophoneBinding = Arc::new(std::sync::Mutex::new(MicrophoneBinding {
+            lock: feed_lock.clone(),
+            #[cfg(windows)]
+            subscription: subscription.clone(),
+        }));
         #[cfg(windows)]
         {
             capture_scope.register_token(source_cancel.clone());
@@ -2286,8 +2285,7 @@ mod switch_tests {
     }
 
     #[tokio::test]
-    async fn a_running_source_moves_to_a_device_with_a_different_format_and_releases_the_old_one()
-    {
+    async fn a_running_source_moves_to_a_device_with_a_different_format_and_releases_the_old_one() {
         let built_in = SyntheticMicrophone::spawn("built-in", 48_000, 1);
         let headset = SyntheticMicrophone::spawn("headset", 44_100, 2);
         let (switch, switch_requests) = MicrophoneSwitch::channel();
