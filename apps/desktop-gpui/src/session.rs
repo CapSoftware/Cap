@@ -2445,16 +2445,6 @@ mod clean_capture_tests {
         }
     }
 
-    /// A capture that lost its source ends cleanly before Stop; it is stopped
-    /// and saved rather than treated as a failure (#3578).
-    #[test]
-    fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
-        let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
-        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
-        let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
-        assert!(!capture_ended_cleanly(&task_died));
-    }
-
     #[test]
     fn recording_failure_targets_only_the_current_recording() {
         for paused in [false, true] {
@@ -2807,6 +2797,16 @@ mod instant_terminal_tests {
 #[cfg(test)]
 mod recording_failure_tests {
     use super::*;
+
+    /// A capture that lost its source ends cleanly before Stop; it is stopped
+    /// and saved rather than treated as a failure (#3578).
+    #[test]
+    fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
+        let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
+        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
+        let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
+        assert!(!capture_ended_cleanly(&task_died));
+    }
 
     #[test]
     fn only_current_recording_failure_can_request_stop() {
