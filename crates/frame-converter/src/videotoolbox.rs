@@ -95,8 +95,60 @@ struct SessionHandle(VTPixelTransferSessionRef);
 
 unsafe impl Send for SessionHandle {}
 
+struct OwnedPixelBuffer(CVPixelBufferRef);
+
+unsafe impl Send for OwnedPixelBuffer {}
+
+impl OwnedPixelBuffer {
+    fn as_ptr(&self) -> CVPixelBufferRef {
+        self.0
+    }
+}
+
+impl Drop for OwnedPixelBuffer {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CVPixelBufferRelease(self.0);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlaneCopyRegion {
+    src_ptr: *const u8,
+    src_stride: usize,
+    dst_ptr: *mut u8,
+    dst_stride: usize,
+    height: usize,
+}
+
+unsafe fn copy_strided_plane(region: PlaneCopyRegion) {
+    if region.src_stride == region.dst_stride {
+        unsafe {
+            ptr::copy_nonoverlapping(
+                region.src_ptr,
+                region.dst_ptr,
+                region.height * region.src_stride,
+            );
+        }
+        return;
+    }
+
+    let copy_len = region.src_stride.min(region.dst_stride);
+    for row in 0..region.height {
+        unsafe {
+            let src_row = region.src_ptr.add(row * region.src_stride);
+            let dst_row = region.dst_ptr.add(row * region.dst_stride);
+            ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+        }
+    }
+}
+
 pub struct VideoToolboxConverter {
     session: Mutex<SessionHandle>,
+    reusable_output_buffer: Mutex<Option<OwnedPixelBuffer>>,
     input_format: Pixel,
     input_cv_format: u32,
     output_format: Pixel,
@@ -146,6 +198,7 @@ impl VideoToolboxConverter {
 
         Ok(Self {
             session: Mutex::new(SessionHandle(session)),
+            reusable_output_buffer: Mutex::new(None),
             input_format: config.input_format,
             input_cv_format,
             output_format: config.output_format,
@@ -162,7 +215,7 @@ impl VideoToolboxConverter {
     fn create_input_pixel_buffer(
         &self,
         input: &frame::Video,
-    ) -> Result<CVPixelBufferRef, ConvertError> {
+    ) -> Result<OwnedPixelBuffer, ConvertError> {
         let mut pixel_buffer: CVPixelBufferRef = ptr::null_mut();
 
         let base_address = input.data(0).as_ptr() as *mut c_void;
@@ -189,10 +242,14 @@ impl VideoToolboxConverter {
             )));
         }
 
-        Ok(pixel_buffer)
+        Ok(OwnedPixelBuffer(pixel_buffer))
     }
 
-    fn create_output_pixel_buffer(&self) -> Result<CVPixelBufferRef, ConvertError> {
+    fn take_or_create_output_pixel_buffer(&self) -> Result<OwnedPixelBuffer, ConvertError> {
+        if let Some(cached) = self.reusable_output_buffer.lock().take() {
+            return Ok(cached);
+        }
+
         let mut pixel_buffer: CVPixelBufferRef = ptr::null_mut();
 
         let status = unsafe {
@@ -212,7 +269,14 @@ impl VideoToolboxConverter {
             )));
         }
 
-        Ok(pixel_buffer)
+        Ok(OwnedPixelBuffer(pixel_buffer))
+    }
+
+    fn recycle_output_pixel_buffer(&self, buffer: OwnedPixelBuffer) {
+        let mut slot = self.reusable_output_buffer.lock();
+        if slot.is_none() {
+            *slot = Some(buffer);
+        }
     }
 
     fn copy_output_to_frame(
@@ -220,57 +284,35 @@ impl VideoToolboxConverter {
         pixel_buffer: CVPixelBufferRef,
         output: &mut frame::Video,
     ) -> Result<(), ConvertError> {
-        unsafe {
-            let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
-            if lock_status != K_CV_RETURN_SUCCESS {
-                return Err(ConvertError::ConversionFailed(format!(
-                    "CVPixelBufferLockBaseAddress failed: {lock_status}"
-                )));
-            }
+        let lock_status = unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, 0) };
+        if lock_status != K_CV_RETURN_SUCCESS {
+            return Err(ConvertError::ConversionFailed(format!(
+                "CVPixelBufferLockBaseAddress failed: {lock_status}"
+            )));
         }
 
         unsafe {
             let plane_count = CVPixelBufferGetPlaneCount(pixel_buffer);
 
             if plane_count == 0 {
-                let src_ptr = CVPixelBufferGetBaseAddress(pixel_buffer);
-                let src_stride = CVPixelBufferGetBytesPerRow(pixel_buffer);
-                let height = CVPixelBufferGetHeight(pixel_buffer);
-                let dst_stride = output.stride(0);
-
-                let dst_data = output.data_mut(0);
-                let dst_ptr = dst_data.as_mut_ptr();
-
-                if src_stride == dst_stride {
-                    ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
-                } else {
-                    let copy_len = src_stride.min(dst_stride);
-                    for row in 0..height {
-                        let src_row = src_ptr.add(row * src_stride);
-                        let dst_row = dst_ptr.add(row * dst_stride);
-                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
-                    }
-                }
+                let region = PlaneCopyRegion {
+                    src_ptr: CVPixelBufferGetBaseAddress(pixel_buffer),
+                    src_stride: CVPixelBufferGetBytesPerRow(pixel_buffer),
+                    dst_ptr: output.data_mut(0).as_mut_ptr(),
+                    dst_stride: output.stride(0),
+                    height: CVPixelBufferGetHeight(pixel_buffer),
+                };
+                copy_strided_plane(region);
             } else {
                 for plane in 0..plane_count {
-                    let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
-                    let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
-                    let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
-                    let dst_stride = output.stride(plane);
-
-                    let dst_data = output.data_mut(plane);
-                    let dst_ptr = dst_data.as_mut_ptr();
-
-                    if src_stride == dst_stride {
-                        ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
-                    } else {
-                        let copy_len = src_stride.min(dst_stride);
-                        for row in 0..height {
-                            let src_row = src_ptr.add(row * src_stride);
-                            let dst_row = dst_ptr.add(row * dst_stride);
-                            ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
-                        }
-                    }
+                    let region = PlaneCopyRegion {
+                        src_ptr: CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane),
+                        src_stride: CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane),
+                        dst_ptr: output.data_mut(plane).as_mut_ptr(),
+                        dst_stride: output.stride(plane),
+                        height: CVPixelBufferGetHeightOfPlane(pixel_buffer, plane),
+                    };
+                    copy_strided_plane(region);
                 }
             }
 
@@ -317,23 +359,22 @@ impl FrameConverter for VideoToolboxConverter {
         }
 
         let input_buffer = self.create_input_pixel_buffer(&input)?;
-        let output_buffer = self.create_output_pixel_buffer()?;
+        let output_buffer = self.take_or_create_output_pixel_buffer()?;
 
         let status = {
             let session_guard = self.session.lock();
             unsafe {
-                VTPixelTransferSessionTransferImage(session_guard.0, input_buffer, output_buffer)
+                VTPixelTransferSessionTransferImage(
+                    session_guard.0,
+                    input_buffer.as_ptr(),
+                    output_buffer.as_ptr(),
+                )
             }
         };
 
-        unsafe {
-            CVPixelBufferRelease(input_buffer);
-        }
+        drop(input_buffer);
 
         if status != 0 {
-            unsafe {
-                CVPixelBufferRelease(output_buffer);
-            }
             return Err(ConvertError::ConversionFailed(format!(
                 "VTPixelTransferSessionTransferImage failed: {status}"
             )));
@@ -345,12 +386,9 @@ impl FrameConverter for VideoToolboxConverter {
             );
         }
 
-        self.copy_output_to_frame(output_buffer, output)?;
+        self.copy_output_to_frame(output_buffer.as_ptr(), output)?;
         output.set_pts(input.pts());
-
-        unsafe {
-            CVPixelBufferRelease(output_buffer);
-        }
+        self.recycle_output_pixel_buffer(output_buffer);
 
         Ok(())
     }
