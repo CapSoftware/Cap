@@ -758,8 +758,10 @@ struct ScreenPipelineInput {
 async fn create_pipeline(
     content_dir: PathBuf,
     screen: ScreenPipelineInput,
-    mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    mic_switch_requests: Option<flume::Receiver<crate::sources::MicrophoneSwitchRequest>>,
+    mic_feed: Option<(
+        Arc<MicrophoneFeedLock>,
+        Option<flume::Receiver<crate::sources::MicrophoneSwitchRequest>>,
+    )>,
     system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
@@ -866,8 +868,8 @@ async fn create_pipeline(
                 .with_audio_source::<crate::sources::screen_capture::SystemAudioSource>(sys_audio);
         }
 
-        match (mic_feed, mic_switch_requests) {
-            (Some(lock), Some(switch_requests)) => {
+        match mic_feed {
+            Some((lock, Some(switch_requests))) => {
                 builder = builder.with_audio_source::<crate::sources::SwitchableMicrophone>(
                     crate::sources::SwitchableMicrophoneConfig {
                         lock,
@@ -875,10 +877,10 @@ async fn create_pipeline(
                     },
                 );
             }
-            (Some(mic), None) => {
+            Some((mic, None)) => {
                 builder = builder.with_audio_source::<crate::sources::Microphone>(mic);
             }
-            (None, _) => {}
+            None => {}
         }
 
         let segment_tx_for_audio = segment_channel.as_ref().map(|(tx, _)| tx.clone());
@@ -1490,8 +1492,10 @@ async fn build_instant_recording_actor(
                     #[cfg(target_os = "linux")]
                     prepared_camera,
                 },
-                inputs.mic_feed.clone(),
-                mic_switch_requests.take(),
+                inputs
+                    .mic_feed
+                    .clone()
+                    .map(|lock| (lock, mic_switch_requests.take())),
                 system_audio_source,
                 max_output_size,
                 timestamps,

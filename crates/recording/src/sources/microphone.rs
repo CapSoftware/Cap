@@ -644,19 +644,23 @@ impl Microphone {
                                         subscription: next_subscription.clone(),
                                     },
                                 );
+                                let previous_name = previous.lock.device_name().to_string();
                                 #[cfg(windows)]
                                 {
-                                    let _ = previous.subscription.retire();
-                                    if let Err(error) = previous
-                                        .lock
-                                        .detach_recording_subscription(previous.subscription)
+                                    let MicrophoneBinding {
+                                        lock: previous_lock,
+                                        subscription: previous_subscription,
+                                    } = previous;
+                                    let _ = previous_subscription.retire();
+                                    if let Err(error) = previous_lock
+                                        .detach_recording_subscription(previous_subscription)
                                         .await
                                     {
                                         warn!(%error, "Detaching the previous microphone after a switch");
                                     }
                                     subscription = next_subscription;
                                 }
-                                let previous_name = previous.lock.device_name().to_string();
+                                #[cfg(not(windows))]
                                 drop(previous);
                                 rx = next_rx;
                                 feed_lock = next;
