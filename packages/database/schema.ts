@@ -249,6 +249,7 @@ export const organizations = mysqlTable(
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
 			allowPublicLinkOverride?: boolean;
+			appStoreAdminsOnly?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -399,6 +400,67 @@ export const integrationInstallations = mysqlTable(
 		organizationProviderDisplayNameIndex: index(
 			"organization_provider_display_name_idx",
 		).on(table.organizationId, table.provider, table.displayName),
+	}),
+);
+
+export type AppStoreInstallationScope = "user" | "organization";
+export type AppStoreInstallationStatus = "active" | "disabled";
+
+export const appStoreInstallations = mysqlTable(
+	"app_store_installations",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: varchar("appId", { length: 64 }).notNull(),
+		scope: varchar("scope", { length: 16 })
+			.notNull()
+			.$type<AppStoreInstallationScope>(),
+		scopeKey: varchar("scopeKey", { length: 64 }).notNull(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		organizationId:
+			nanoIdNullable("organizationId").$type<Organisation.OrganisationId>(),
+		installedByUserId: nanoId("installedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		appVersion: varchar("appVersion", { length: 32 }).notNull(),
+		grantedPermissions: json("grantedPermissions").notNull().$type<string[]>(),
+		grantedEvents: json("grantedEvents").notNull().$type<string[]>(),
+		encryptedSettings: encryptedTextNullable("encryptedSettings"),
+		status: varchar("status", { length: 16 })
+			.notNull()
+			.default("active")
+			.$type<AppStoreInstallationStatus>(),
+		disabledReason: varchar("disabledReason", { length: 64 }),
+		consecutiveFailures: int("consecutiveFailures").notNull().default(0),
+		failingSince: timestamp("failingSince"),
+		lastDeliveryAt: timestamp("lastDeliveryAt"),
+		lastDeliveryStatus: varchar("lastDeliveryStatus", { length: 32 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		appScopeIndex: uniqueIndex("app_store_installations_app_scope_idx").on(
+			table.appId,
+			table.scopeKey,
+		),
+		userIndex: index("app_store_installations_user_idx").on(table.userId),
+		organizationIndex: index("app_store_installations_organization_idx").on(
+			table.organizationId,
+		),
+	}),
+);
+
+export const appStoreEvents = mysqlTable(
+	"app_store_events",
+	{
+		id: varchar("id", { length: 64 }).notNull().primaryKey(),
+		type: varchar("type", { length: 64 }).notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		createdAtIndex: index("app_store_events_created_at_idx").on(
+			table.createdAt,
+		),
 	}),
 );
 
