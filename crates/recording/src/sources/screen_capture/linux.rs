@@ -383,11 +383,39 @@ async fn create_wayland_source_config(
         LinuxCaptureSource::Area => config.config.crop_bounds,
         LinuxCaptureSource::Display | LinuxCaptureSource::Window { .. } => None,
     };
-    let video_info = wayland_video_info(
-        portal.stream.size(),
-        config.video_info,
-        &config.config.linux_source,
-    );
+    let stream_size = match portal.stream.size() {
+        // KDE's portal sends window streams without a size (GitHub #2419), but
+        // the node's EnumFormat still carries it.
+        None if matches!(
+            config.config.linux_source,
+            LinuxCaptureSource::Window { .. }
+        ) =>
+        {
+            let node_id = portal.stream.pipe_wire_node_id();
+            let probed: anyhow::Result<_> = async {
+                let fd = portal.fd.try_clone().context("duplicate PipeWire remote")?;
+                tokio::task::spawn_blocking(move || pipewire_node_video_size(fd, node_id))
+                    .await
+                    .context("join PipeWire window size probe")?
+            }
+            .await;
+            probed
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        ?error,
+                        "could not read the Wayland window size from PipeWire"
+                    );
+                })
+                .ok()
+                .flatten()
+                .and_then(|(width, height)| {
+                    Some((i32::try_from(width).ok()?, i32::try_from(height).ok()?))
+                })
+        }
+        size => size,
+    };
+    let video_info =
+        wayland_video_info(stream_size, config.video_info, &config.config.linux_source);
 
     Ok((
         video_info,
@@ -512,6 +540,142 @@ fn wayland_video_info(
         ensure_even(height as u32),
         fallback.fps(),
     )
+}
+
+fn pipewire_node_video_size(fd: OwnedFd, node_id: u32) -> anyhow::Result<Option<(u32, u32)>> {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    let main_loop = pw::main_loop::MainLoopRc::new(None).context("create PipeWire main loop")?;
+    let context =
+        pw::context::ContextRc::new(&main_loop, None).context("create PipeWire context")?;
+    let core = context
+        .connect_fd_rc(fd, None)
+        .context("connect to PipeWire remote")?;
+    let registry = core.get_registry_rc().context("get PipeWire registry")?;
+
+    let size = Rc::new(Cell::new(None));
+    let timed_out = Rc::new(Cell::new(false));
+    let pending = Rc::new(Cell::new(core.sync(0).context("sync PipeWire core")?));
+    let node = Rc::new(RefCell::new(None));
+
+    let _core_listener = core
+        .add_listener_local()
+        .done({
+            let main_loop = main_loop.clone();
+            let pending = pending.clone();
+            move |id, seq| {
+                if id == pw::core::PW_ID_CORE && seq == pending.get() {
+                    main_loop.quit();
+                }
+            }
+        })
+        .register();
+
+    let _registry_listener = registry
+        .add_listener_local()
+        .global({
+            let main_loop = main_loop.clone();
+            let core = core.clone();
+            let registry = registry.clone();
+            let size = size.clone();
+            let node = node.clone();
+            move |global| {
+                if global.id != node_id
+                    || global.type_ != pw::types::ObjectType::Node
+                    || node.borrow().is_some()
+                {
+                    return;
+                }
+                let Ok(proxy) = registry.bind::<pw::node::Node, _>(global) else {
+                    return;
+                };
+                let listener = proxy
+                    .add_listener_local()
+                    .param({
+                        let main_loop = main_loop.clone();
+                        let size = size.clone();
+                        move |_, _, _, _, param| {
+                            if size.get().is_none()
+                                && let Some(found) = param.and_then(enum_format_video_size)
+                            {
+                                size.set(Some(found));
+                                main_loop.quit();
+                            }
+                        }
+                    })
+                    .register();
+                proxy.enum_params(0, Some(spa::param::ParamType::EnumFormat), 0, u32::MAX);
+                if let Ok(seq) = core.sync(0) {
+                    pending.set(seq);
+                }
+                *node.borrow_mut() = Some((proxy, listener));
+            }
+        })
+        .register();
+
+    let timer = main_loop.loop_().add_timer({
+        let main_loop = main_loop.clone();
+        let timed_out = timed_out.clone();
+        move |_| {
+            timed_out.set(true);
+            main_loop.quit();
+        }
+    });
+    timer
+        .update_timer(Some(Duration::from_secs(2)), None)
+        .into_result()
+        .context("arm PipeWire window size timeout")?;
+
+    main_loop.run();
+
+    let bound = node.borrow().is_some();
+    if let Some(size) = size.get() {
+        Ok(Some(size))
+    } else if timed_out.get() {
+        bail!("PipeWire node {node_id} sent no format within 2 s")
+    } else if !bound {
+        bail!("PipeWire node {node_id} is not in the registry")
+    } else {
+        Ok(None)
+    }
+}
+
+/// The size a video/raw EnumFormat offers: a Rectangle, or the default of a
+/// Choice. gst pipewiresink sends a Choice of kind None. KWin sends a Range
+/// whose default is the window size, which SPA's `VideoInfoRaw::parse` drops.
+fn enum_format_video_size(param: &spa::pod::Pod) -> Option<(u32, u32)> {
+    use spa::{
+        pod::{ChoiceValue, Value},
+        utils::{Choice, ChoiceEnum},
+    };
+
+    let (media_type, media_subtype) = spa::param::format_utils::parse_format(param).ok()?;
+    if media_type != spa::param::format::MediaType::Video
+        || media_subtype != spa::param::format::MediaSubtype::Raw
+    {
+        return None;
+    }
+    let prop = param.as_object().ok()?.find_prop(spa::utils::Id(
+        spa::param::format::FormatProperties::VideoSize.0,
+    ))?;
+    let (_, value) =
+        spa::pod::deserialize::PodDeserializer::deserialize_any_from(prop.value().as_bytes())
+            .ok()?;
+    let size = match value {
+        Value::Rectangle(size) => size,
+        Value::Choice(ChoiceValue::Rectangle(Choice(_, choice))) => match choice {
+            ChoiceEnum::None(default)
+            | ChoiceEnum::Range { default, .. }
+            | ChoiceEnum::Step { default, .. }
+            | ChoiceEnum::Enum { default, .. }
+            | ChoiceEnum::Flags { default, .. } => default,
+        },
+        _ => return None,
+    };
+    (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
 
 fn capture_wayland(
@@ -3708,11 +3872,133 @@ mod system_audio_tests {
 mod pipewire_frame_tests {
     use super::{
         FrameScaler, LinuxCaptureSource, PipewireNodeInput, VideoInfo, capture_pipewire_node,
-        frame_from_pipewire_data, pipewire_dmabuf_format_param, pipewire_format_param,
-        prefers_wayland_environment, prepare_pipewire_frame, spa, wayland_area_matches_display,
+        enum_format_video_size, frame_from_pipewire_data, pipewire_dmabuf_format_param,
+        pipewire_format_param, pipewire_node_video_size, prefers_wayland_environment,
+        prepare_pipewire_frame, serialize_pod, spa, wayland_area_matches_display,
         wayland_video_info,
     };
     use std::os::fd::AsRawFd;
+
+    /// GitHub #2419: KDE's portal gives window streams no size, so Cap reads
+    /// it from the PipeWire node the portal returned.
+    #[test]
+    #[ignore = "needs a PipeWire daemon"]
+    fn window_size_is_read_from_the_producer_node() {
+        let name = format!("cap-window-size-test-{}", std::process::id());
+        let child = std::process::Command::new("gst-launch-1.0")
+            .args([
+                "-q",
+                "videotestsrc",
+                "is-live=true",
+                "!",
+                "video/x-raw,format=BGRx,width=540,height=960,framerate=30/1",
+                "!",
+                "pipewiresink",
+                "mode=provide",
+                &format!("stream-properties=p,media.class=Video/Source,node.name={name}"),
+            ])
+            .spawn()
+            .unwrap();
+        struct Kill(std::process::Child);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let _child = Kill(child);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let node_id = loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the producer node {name} never appeared"
+            );
+            let dump = std::process::Command::new("pw-dump").output().unwrap();
+            let objects: Vec<serde_json::Value> = serde_json::from_slice(&dump.stdout).unwrap();
+            let found = objects.iter().find_map(|object| {
+                (object["info"]["props"]["node.name"] == name.as_str())
+                    .then(|| object["id"].as_u64())
+                    .flatten()
+            });
+            if let Some(id) = found {
+                break id as u32;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+
+        let runtime = std::env::var("PIPEWIRE_RUNTIME_DIR")
+            .or_else(|_| std::env::var("XDG_RUNTIME_DIR"))
+            .unwrap();
+        let socket =
+            std::os::unix::net::UnixStream::connect(format!("{runtime}/pipewire-0")).unwrap();
+        assert_eq!(
+            pipewire_node_video_size(socket.into(), node_id).unwrap(),
+            Some((540, 960))
+        );
+    }
+
+    fn video_size_format(size: spa::pod::Value) -> Vec<u8> {
+        serialize_pod(
+            spa::pod::Object {
+                type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+                id: spa::param::ParamType::EnumFormat.as_raw(),
+                properties: vec![
+                    spa::pod::property!(
+                        spa::param::format::FormatProperties::MediaType,
+                        Id,
+                        spa::param::format::MediaType::Video
+                    ),
+                    spa::pod::property!(
+                        spa::param::format::FormatProperties::MediaSubtype,
+                        Id,
+                        spa::param::format::MediaSubtype::Raw
+                    ),
+                    spa::pod::Property::new(
+                        spa::param::format::FormatProperties::VideoSize.as_raw(),
+                        size,
+                    ),
+                ],
+            },
+            "test format",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn enum_format_size_is_the_fixed_rectangle_or_the_choice_default() {
+        use spa::{
+            pod::{ChoiceValue, Value},
+            utils::{Choice, ChoiceEnum, ChoiceFlags, Rectangle},
+        };
+
+        let fixed = video_size_format(Value::Rectangle(Rectangle {
+            width: 540,
+            height: 960,
+        }));
+        let fixed = spa::pod::Pod::from_bytes(&fixed).unwrap();
+        assert_eq!(enum_format_video_size(fixed), Some((540, 960)));
+
+        let kwin_range = video_size_format(Value::Choice(ChoiceValue::Rectangle(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Range {
+                default: Rectangle {
+                    width: 812,
+                    height: 1234,
+                },
+                min: Rectangle {
+                    width: 1,
+                    height: 1,
+                },
+                max: Rectangle {
+                    width: 812,
+                    height: 1234,
+                },
+            },
+        ))));
+        let kwin_range = spa::pod::Pod::from_bytes(&kwin_range).unwrap();
+        assert_eq!(enum_format_video_size(kwin_range), Some((812, 1234)));
+    }
 
     /// GitHub #2941: niri 26.04 shares screencasts only as DMA-BUFs with a
     /// mandatory modifier, which 0.6.1 never offered, so nothing was ever
