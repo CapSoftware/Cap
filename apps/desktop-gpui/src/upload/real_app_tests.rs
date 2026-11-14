@@ -943,33 +943,31 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
-    let title = |mode: &str| format!("Cap capture target {mode} {}", std::process::id());
-    let owners = std::sync::Mutex::new(Vec::<Child>::new());
+    let documents = tempfile::tempdir().unwrap();
     losing_the_capture_source_stops_and_saves(
         "window-closed",
         |mode| {
-            let title = title(mode);
-            let owner = Command::new("osascript")
-                .args([
-                    "-e",
-                    &format!(
-                        "display dialog \"{title}\" with title \"{title}\" giving up after 120"
-                    ),
-                ])
-                .spawn()
-                .unwrap();
-            owners.lock().unwrap().push(owner);
-            std::thread::sleep(Duration::from_secs(2));
+            let title = format!("cap-capture-target-{mode}-{}", std::process::id());
+            let document = documents.path().join(&title);
+            std::fs::write(&document, "The window Cap records").unwrap();
+            assert!(
+                Command::new("open")
+                    .args(["-a", "TextEdit"])
+                    .arg(&document)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::thread::sleep(Duration::from_secs(3));
             vec![
                 ("CAP_GPUI_AUTO_OVERLAY".into(), "window".into()),
                 ("CAP_GPUI_AUTO_WINDOW".into(), title),
             ]
         },
         |_| {
-            for mut owner in owners.lock().unwrap().drain(..) {
-                let _ = owner.kill();
-                let _ = owner.wait();
-            }
+            let _ = Command::new("osascript")
+                .args(["-e", "tell application \"TextEdit\" to quit saving no"])
+                .status();
         },
     )
     .await;
