@@ -2318,7 +2318,6 @@ impl ActorBuilder {
         self,
         #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
-        #[cfg(any(target_os = "linux", windows))]
         let recording_dir = self.output_path.clone();
         #[cfg(target_os = "linux")]
         let lifecycle = self.lifetime.lifecycle.clone();
@@ -2354,17 +2353,7 @@ impl ActorBuilder {
         {
             let scope = crate::output_pipeline::PipelineBuildScope::new();
             let result = crate::output_pipeline::finish_pipeline_startup(&scope, startup).await;
-            match result {
-                Err(error) if recording_dir.join("recording-meta.json").exists() => {
-                    match persist_failed_recording(&recording_dir, &format!("{error:#}")) {
-                        Ok(()) => Err(error),
-                        Err(persist) => Err(error.context(format!(
-                            "Could not preserve failed Studio startup: {persist:#}"
-                        ))),
-                    }
-                }
-                result => result,
-            }
+            preserve_failed_startup(&recording_dir, result)
         }
         #[cfg(target_os = "linux")]
         {
@@ -2382,7 +2371,27 @@ impl ActorBuilder {
             result
         }
         #[cfg(not(any(windows, target_os = "linux")))]
-        startup.await
+        preserve_failed_startup(&recording_dir, startup.await)
+    }
+}
+
+/// A start that fails after the metadata was written must not leave the
+/// recording `InProgress`, or the library treats it as live forever (#3948).
+#[cfg(not(target_os = "linux"))]
+fn preserve_failed_startup<T>(
+    recording_dir: &Path,
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    match result {
+        Err(error) if recording_dir.join("recording-meta.json").exists() => {
+            match persist_failed_recording(recording_dir, &format!("{error:#}")) {
+                Ok(()) => Err(error),
+                Err(persist) => Err(error.context(format!(
+                    "Could not preserve failed Studio startup: {persist:#}"
+                ))),
+            }
+        }
+        result => result,
     }
 }
 
