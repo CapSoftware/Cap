@@ -28,7 +28,7 @@ use gpui::{App, Global, PromptButton, PromptLevel};
 use crate::{
     app_windows,
     i18n::tr,
-    main_window::{Mode, TargetType},
+    main_window::{Mode, RecordingStartPermit, TargetType},
     session::{Phase, RecordingSession},
     store,
 };
@@ -994,6 +994,11 @@ fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) 
         HotkeyAction::StartStudioRecording => start_from_hotkey(Mode::Studio, cx),
         HotkeyAction::StartInstantRecording => start_from_hotkey(Mode::Instant, cx),
         HotkeyAction::StopRecording => {
+            let main = cx.global::<app_windows::AppWindows>().main;
+            let _ = main.update(cx, |view, _, cx| {
+                view.cancel_deep_link_start();
+                cx.notify();
+            });
             RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
         }
         HotkeyAction::RestartRecording => {
@@ -1073,34 +1078,32 @@ fn microphone_available(name: &str) -> bool {
 /// where it was. Deliberate: this app's start path reads the window's mode,
 /// and a recording visibly in Studio mode with the pill saying Instant is the
 /// worse mismatch.
-pub(crate) fn start_default_recording(mode: Option<Mode>, cx: &mut App) {
+pub(crate) fn start_default_recording(mode: Option<Mode>, cx: &mut App) -> Result<(), String> {
     let resolved_mode = match mode.unwrap_or_else(Mode::from_store) {
         Mode::Studio => Mode::Studio,
         Mode::Instant | Mode::Screenshot => Mode::Instant,
     };
-    start_from_hotkey(resolved_mode, cx);
-}
-
-fn start_from_hotkey(mode: Mode, cx: &mut App) {
-    app_windows::set_recording_mode(mode, cx);
     let main = cx.global::<app_windows::AppWindows>().main;
+    let can_set_mode = RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && !app_windows::clean_capture_owned(cx)
+        && main
+            .read(cx)
+            .is_ok_and(|view| !view.is_preparing_recording());
+    if can_set_mode {
+        app_windows::set_recording_mode(resolved_mode, cx);
+    }
+    let permit = main
+        .update(cx, |view, _, cx| view.prepare_default_recording_start(cx))
+        .map_err(|_| "The recording window is unavailable".to_string())??;
     let armed = main.read(cx).ok().and_then(|view| view.armed_target());
     let stored = stored_target();
-
-    // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
-    // active session skips the confirm -- the re-start is a no-op either way,
-    // `start_recording_with_target`'s phase check here and `start_recording`'s
-    // over there.
-    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    let confirm = idle && store::GeneralSettings::load().confirm_without_microphone;
+    let confirm = store::GeneralSettings::load().confirm_without_microphone;
     let mic_name = main.read(cx).ok().and_then(|view| {
         view.microphone_selection()
             .map(|microphone| microphone.name.clone())
     });
 
     cx.spawn(async move |cx| {
-        // Window and display lookups enumerate the system, so they run off
-        // the main thread along with the microphone probe below.
         let target = cx
             .background_executor()
             .spawn(async move {
@@ -1111,15 +1114,13 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
                 })
             })
             .await;
-        if !confirm {
-            cx.update(|cx| start_now(main, mode, target, cx));
+        if !cx.update(|cx| default_start_is_current(main, &permit, cx)) {
             return;
         }
-        // The availability probe the Tauri confirm runs. On macOS that is a
-        // name match (`microphone_available_for_confirmation` over there):
-        // `MicrophoneFeed::list()` reads every input device's configuration,
-        // which held the hotkey start for over 100 ms. No selection means no
-        // microphone, which needs no enumeration to know.
+        if !confirm {
+            cx.update(|cx| start_default_now(main, target, false, permit, cx));
+            return;
+        }
         let available = match mic_name {
             Some(name) => {
                 cx.background_executor()
@@ -1128,15 +1129,17 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             }
             None => false,
         };
-        if available {
-            cx.update(|cx| start_now(main, mode, target, cx));
+        if !cx.update(|cx| default_start_is_current(main, &permit, cx)) {
             return;
         }
-        // The Tauri dialog, word for word
-        // (`confirm_direct_recording_without_microphone`). gpui prompts are
-        // window sheets rather than free-standing alerts, so the main window
-        // comes forward to host it.
+        if available {
+            cx.update(|cx| start_default_now(main, target, false, permit, cx));
+            return;
+        }
         let receiver = cx.update(|cx| {
+            if !default_start_is_current(main, &permit, cx) {
+                return None;
+            }
             app_windows::show_main_window(cx);
             cx.activate(true);
             main.update(cx, |_, window, cx| {
@@ -1151,17 +1154,24 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
                     cx,
                 )
             })
+            .ok()
         });
-        let Ok(receiver) = receiver else {
+        let Some(receiver) = receiver else {
+            cx.update(|cx| finish_default_start(main, &permit, cx));
             return;
         };
-        // `receiver.await.unwrap_or(false)`: a dismissed sheet records
-        // nothing.
         if receiver.await == Ok(0) {
-            cx.update(|cx| start_now(main, mode, target, cx));
+            cx.update(|cx| start_default_now(main, target, true, permit, cx));
+        } else {
+            cx.update(|cx| finish_default_start(main, &permit, cx));
         }
     })
     .detach();
+    Ok(())
+}
+
+fn start_from_hotkey(mode: Mode, cx: &mut App) {
+    let _ = start_default_recording(Some(mode), cx);
 }
 
 /// What a Start shortcut records: the target selected in the main window,
@@ -1200,22 +1210,54 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
     }
 }
 
-fn start_now(
+fn default_start_is_current(
     main: gpui::WindowHandle<crate::main_window::MainWindow>,
-    mode: Mode,
-    target: ScreenCaptureTarget,
+    permit: &RecordingStartPermit,
+    cx: &mut App,
+) -> bool {
+    let current = main
+        .read(cx)
+        .is_ok_and(|view| view.recording_start_is_current(permit, cx));
+    if !current {
+        finish_default_start(main, permit, cx);
+    }
+    current
+}
+
+fn finish_default_start(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    permit: &RecordingStartPermit,
     cx: &mut App,
 ) {
-    // The start waited on the target lookup (and maybe the microphone
-    // prompt); another Start or Cycle shortcut can change the mode meanwhile,
-    // and the start path reads the window's mode.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
-        app_windows::set_recording_mode(mode, cx);
+    if main
+        .update(cx, |view, _, _| view.finish_deep_link_start(permit))
+        .is_err()
+    {
+        permit.cancel();
     }
-    main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, Vec::new(), window, cx)
-    })
-    .ok();
+}
+
+fn start_default_now(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    target: ScreenCaptureTarget,
+    confirmed_without_microphone: bool,
+    permit: RecordingStartPermit,
+    cx: &mut App,
+) {
+    if main
+        .update(cx, |view, _, cx| {
+            view.start_recording_with_target_and_permit(
+                target,
+                Vec::new(),
+                confirmed_without_microphone,
+                permit.clone(),
+                cx,
+            )
+        })
+        .is_err()
+    {
+        permit.cancel();
+    }
 }
 
 /// `RecordingSettingsStore.target`, straight off the shared store's JSON. A

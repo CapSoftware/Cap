@@ -307,6 +307,20 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+fn resolve_screen_capture_target(
+    name: &str,
+    primary_display: impl FnOnce() -> scap_targets::DisplayId,
+    cursor_display: impl FnOnce() -> Option<scap_targets::DisplayId>,
+    named_display: impl FnOnce() -> Option<scap_targets::DisplayId>,
+) -> Result<ScreenCaptureTarget, String> {
+    let id = match name {
+        "default" | "primary" => primary_display(),
+        "cursor" => cursor_display().unwrap_or_else(primary_display),
+        _ => named_display().ok_or_else(|| format!("No screen with name \"{name}\""))?,
+    };
+    Ok(ScreenCaptureTarget::Display { id })
+}
+
 fn dispatch_recording_stop<C>(
     phase: Phase,
     clean_capture_owned: bool,
@@ -338,23 +352,17 @@ impl DeepLinkAction {
                 // The name -> target resolution, verbatim from
                 // `deeplink_actions.rs:200-231`.
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) if name == "default" || name == "primary" => {
-                        ScreenCaptureTarget::Display {
-                            id: scap_targets::Display::primary().id(),
-                        }
-                    }
-                    CaptureMode::Screen(name) if name == "cursor" => {
-                        ScreenCaptureTarget::Display {
-                            id: scap_targets::Display::get_containing_cursor()
-                                .unwrap_or_else(scap_targets::Display::primary)
-                                .id(),
-                        }
-                    }
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", name))?,
+                    CaptureMode::Screen(name) => resolve_screen_capture_target(
+                        &name,
+                        || scap_targets::Display::primary().id(),
+                        || scap_targets::Display::get_containing_cursor().map(|d| d.id()),
+                        || {
+                            cap_recording::screen_capture::list_displays()
+                                .into_iter()
+                                .find(|(s, _)| s.name == name)
+                                .map(|(s, _)| s.id)
+                        },
+                    )?,
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
@@ -471,8 +479,7 @@ impl DeepLinkAction {
                     }
                     None => None,
                 };
-                crate::hotkeys::start_default_recording(mode, cx);
-                Ok(())
+                crate::hotkeys::start_default_recording(mode, cx)
             }
             DeepLinkAction::StopRecording => {
                 let main = cx.global::<app_windows::AppWindows>().main;
@@ -884,6 +891,66 @@ mod tests {
                 mode: Some(cap_recording::RecordingMode::Studio),
             })
         );
+    }
+
+    #[test]
+    fn resolves_screen_aliases_and_cursor_fallback() {
+        let display_id = |id: &str| -> scap_targets::DisplayId { id.parse().unwrap() };
+        let target_json = |target: &ScreenCaptureTarget| serde_json::to_value(target).unwrap();
+        let expected = |id: &str| {
+            serde_json::json!({
+                "variant": "display",
+                "id": display_id(id),
+            })
+        };
+
+        for alias in ["default", "primary"] {
+            let target = resolve_screen_capture_target(
+                alias,
+                || display_id("1"),
+                || panic!("cursor lookup should not run for {alias}"),
+                || panic!("named lookup should not run for {alias}"),
+            )
+            .unwrap();
+            assert_eq!(target_json(&target), expected("1"));
+        }
+
+        let cursor_target = resolve_screen_capture_target(
+            "cursor",
+            || panic!("primary fallback should not run when cursor display exists"),
+            || Some(display_id("2")),
+            || panic!("named lookup should not run for cursor"),
+        )
+        .unwrap();
+        assert_eq!(target_json(&cursor_target), expected("2"));
+
+        let fallback_target = resolve_screen_capture_target(
+            "cursor",
+            || display_id("1"),
+            || None,
+            || panic!("named lookup should not run for cursor"),
+        )
+        .unwrap();
+        assert_eq!(target_json(&fallback_target), expected("1"));
+
+        let named_target = resolve_screen_capture_target(
+            "Odyssey G93SC",
+            || panic!("primary lookup should not run for named screen"),
+            || panic!("cursor lookup should not run for named screen"),
+            || Some(display_id("3")),
+        )
+        .unwrap();
+        assert_eq!(target_json(&named_target), expected("3"));
+
+        let Err(missing) = resolve_screen_capture_target(
+            "Missing Display",
+            || display_id("1"),
+            || None,
+            || None,
+        ) else {
+            panic!("expected missing display error");
+        };
+        assert_eq!(missing, "No screen with name \"Missing Display\"");
     }
 
     #[test]

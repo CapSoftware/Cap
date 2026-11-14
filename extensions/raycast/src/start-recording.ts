@@ -1,7 +1,7 @@
 import { closeMainWindow, type LaunchProps, showHUD } from "@raycast/api";
 import {
 	buildStartDefaultRecordingAction,
-	 type RecordingModeOverride,
+	type RecordingModeOverride,
 	triggerCapAction,
 } from "./utils";
 
