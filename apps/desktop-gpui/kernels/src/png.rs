@@ -248,12 +248,15 @@ fn adaptive_filter(
 }
 
 fn sum_abs(buf: &[u8]) -> u64 {
-    buf.chunks(32)
+    // Each chunk sums to at most 256 * 128, keeping the narrow reduction exact.
+    buf.chunks(256)
         .map(|chunk| {
-            chunk
-                .iter()
-                .map(|&b| u64::from((b as i8).unsigned_abs()))
-                .sum::<u64>()
+            u64::from(
+                chunk
+                    .iter()
+                    .map(|&b| u16::from((b as i8).unsigned_abs()))
+                    .sum::<u16>(),
+            )
         })
         .sum()
 }
@@ -314,6 +317,35 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_filter_cost_matches_wide_reference_across_chunk_boundaries() {
+        for len in (0..=1_025).chain([15_360, 65_537, 1_048_577]) {
+            for byte in [0, 127, 128, 255] {
+                let bytes = vec![byte; len];
+                let expected = len as u64 * u64::from((byte as i8).unsigned_abs());
+                assert_eq!(sum_abs(&bytes), expected, "byte {byte}, length {len}");
+            }
+
+            let mut state = 0x1234_5678_u32;
+            let bytes: Vec<_> = (0..len)
+                .map(|index| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    if len <= 1_025 {
+                        index as u8
+                    } else {
+                        state as u8
+                    }
+                })
+                .collect();
+            let expected = bytes.iter().fold(0u64, |sum, &byte| {
+                sum + u64::from((byte as i8).unsigned_abs())
+            });
+            assert_eq!(sum_abs(&bytes), expected, "length {len}");
+        }
+    }
 
     fn screen_like(width: u32, height: u32, channels: usize) -> Vec<u8> {
         let mut state = 0x2545_f491_u32;

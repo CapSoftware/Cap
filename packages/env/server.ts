@@ -262,6 +262,12 @@ function createServerEnv() {
 				.describe(
 					"Base URL for developer video playback links. Defaults to WEB_URL/api/developer/playback; set it to a hostname that forwards to that path",
 				),
+			INFRA_SLICED_HLS: z
+				.string()
+				.optional()
+				.describe(
+					"Set to off to encode every developer video's adaptive stream as one job instead of in slices",
+				),
 			LOOM_IMPORTER_URL: z
 				.string()
 				.optional()
