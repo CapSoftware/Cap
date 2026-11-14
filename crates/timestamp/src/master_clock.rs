@@ -105,8 +105,8 @@ impl MasterClock {
     }
 
     pub fn remap_raw_ns(&self, source_ts: Timestamp) -> i64 {
-        let secs = source_ts.signed_duration_since_secs(self.timestamps);
-        seconds_to_ns_saturating(secs)
+        let nanos = source_ts.signed_duration_since_nanos(self.timestamps);
+        nanos.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
     }
 
     pub fn remap(&self, source_ts: Timestamp) -> i64 {
@@ -130,19 +130,6 @@ fn samples_to_ns(samples: u64, rate: u32) -> u64 {
     }
 }
 
-fn seconds_to_ns_saturating(secs: f64) -> i64 {
-    if !secs.is_finite() {
-        return 0;
-    }
-    let scaled = secs * 1_000_000_000.0;
-    if scaled >= i64::MAX as f64 {
-        i64::MAX
-    } else if scaled <= i64::MIN as f64 {
-        i64::MIN
-    } else {
-        scaled as i64
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceClockOutcome {
@@ -1312,5 +1299,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn remap_raw_ns_preserves_nanosecond_precision_over_multi_hour_recordings() {
+        let clock = clock();
+        let offset = Duration::from_secs(6 * 3600) + Duration::from_nanos(123_456_789);
+        let future_instant = clock.start_instant() + offset;
+
+        let remapped = clock.remap_raw_ns(Timestamp::Instant(future_instant));
+        assert_eq!(remapped, offset.as_nanos() as i64);
+    }
+
+    #[test]
+    fn remap_raw_ns_handles_negative_offsets_exactly() {
+        let clock = clock();
+        let offset = Duration::from_millis(250) + Duration::from_nanos(7);
+        let base_system = clock.timestamps().system_time();
+        let earlier_system = base_system.checked_sub(offset).unwrap();
+
+        let remapped = clock.remap_raw_ns(Timestamp::SystemTime(earlier_system));
+        assert_eq!(remapped, -(offset.as_nanos() as i64));
     }
 }

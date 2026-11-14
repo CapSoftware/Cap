@@ -6,7 +6,7 @@ use std::{
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PerformanceCounterTimestamp(i128);
 
 static PERF_FREQ: OnceLock<i64> = OnceLock::new();
@@ -22,6 +22,26 @@ fn perf_freq() -> i64 {
     })
 }
 
+fn counter_diff_to_nanos(diff: i128, frequency: i64) -> i128 {
+    let freq = i128::from(frequency.max(1));
+    let whole_secs = diff / freq;
+    let rem = diff % freq;
+    let rem_nanos = if rem >= 0 {
+        (rem * 1_000_000_000 + freq / 2) / freq
+    } else {
+        (rem * 1_000_000_000 - freq / 2) / freq
+    };
+    let base_nanos = whole_secs.saturating_mul(1_000_000_000);
+    base_nanos.saturating_add(rem_nanos)
+}
+
+fn duration_to_counter_ticks(duration: Duration, frequency: i64) -> i128 {
+    let freq = i128::from(frequency.max(1));
+    let whole_ticks = i128::from(duration.as_secs()).saturating_mul(freq);
+    let subsec_ticks = (i128::from(duration.subsec_nanos()) * freq + 500_000_000) / 1_000_000_000;
+    whole_ticks.saturating_add(subsec_ticks)
+}
+
 impl PerformanceCounterTimestamp {
     pub fn new(value: i64) -> Self {
         Self(i128::from(value))
@@ -32,46 +52,44 @@ impl PerformanceCounterTimestamp {
     }
 
     pub fn duration_since(&self, other: Self) -> Duration {
-        let freq = perf_freq() as i128;
-        debug_assert!(freq > 0);
-
-        let diff = self.0 - other.0;
-
-        if diff <= 0 {
-            Duration::ZERO
-        } else {
-            let diff = diff as u128;
-            let freq = freq as u128;
-
-            let secs = diff / freq;
-            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
-
-            Duration::new(secs as u64, nanos as u32)
+        match self.checked_duration_since(other) {
+            Some(duration) => duration,
+            None => Duration::ZERO,
         }
     }
 
     pub fn checked_duration_since(&self, other: Self) -> Option<Duration> {
-        let freq = perf_freq() as i128;
+        let freq = i128::from(perf_freq());
         debug_assert!(freq > 0);
 
         let diff = self.0 - other.0;
-
         if diff < 0 {
-            None
+            return None;
+        }
+
+        let diff = diff as u128;
+        let freq = freq.max(1) as u128;
+        let mut secs = diff / freq;
+        let mut nanos = ((diff % freq) * 1_000_000_000u128 + freq / 2) / freq;
+        if nanos >= 1_000_000_000 {
+            secs += 1;
+            nanos -= 1_000_000_000;
+        }
+
+        let clamped_secs = u64::try_from(secs).unwrap_or(u64::MAX);
+        if clamped_secs == u64::MAX {
+            Some(Duration::MAX)
         } else {
-            let diff = diff as u128;
-            let freq = freq as u128;
-
-            let secs = diff / freq;
-            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
-
-            Some(Duration::new(secs as u64, nanos as u32))
+            Some(Duration::new(clamped_secs, nanos as u32))
         }
     }
 
+    pub fn signed_duration_since_nanos(&self, other: Self) -> i128 {
+        counter_diff_to_nanos(self.0 - other.0, perf_freq())
+    }
+
     pub fn signed_duration_since_secs(&self, other: Self) -> f64 {
-        let freq = perf_freq() as f64;
-        (self.0 - other.0) as f64 / freq
+        self.signed_duration_since_nanos(other) as f64 / 1_000_000_000.0
     }
 
     pub fn now() -> Self {
@@ -95,8 +113,8 @@ impl Add<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i128)
+        let ticks = duration_to_counter_ticks(rhs, perf_freq());
+        Self(self.0.saturating_add(ticks))
     }
 }
 
@@ -104,8 +122,8 @@ impl Sub<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn sub(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 - (rhs.as_secs_f64() * freq as f64) as i128)
+        let ticks = duration_to_counter_ticks(rhs, perf_freq());
+        Self(self.0.saturating_sub(ticks))
     }
 }
 
@@ -164,5 +182,22 @@ mod tests {
             (screen_or_audio + Duration::from_millis(10)).duration_since(native),
             Duration::from_millis(10)
         );
+    }
+
+    #[test]
+    fn high_uptime_duration_arithmetic_avoids_f64_precision_loss() {
+        let base = PerformanceCounterTimestamp::new((1i64 << 53) + 1);
+        assert_eq!(base + Duration::ZERO, base);
+        assert_eq!(base - Duration::ZERO, base);
+
+        let delta = Duration::from_nanos(16_666_667);
+        let advanced = base + delta;
+        let expected_ticks = duration_to_counter_ticks(delta, perf_freq());
+        assert_eq!(advanced.0 - base.0, expected_ticks);
+        assert_eq!(advanced - delta, base);
+
+        let later = base + Duration::from_millis(500);
+        assert_eq!(later.signed_duration_since_nanos(base), 500_000_000);
+        assert_eq!(base.signed_duration_since_nanos(later), -500_000_000);
     }
 }

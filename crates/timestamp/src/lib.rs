@@ -48,29 +48,37 @@ impl Timestamp {
         }
     }
 
-    pub fn signed_duration_since_secs(&self, start: Timestamps) -> f64 {
+    pub fn signed_duration_since_nanos(&self, start: Timestamps) -> i128 {
         match self {
             Self::Instant(instant) => {
                 if let Some(duration) = instant.checked_duration_since(start.instant) {
-                    duration.as_secs_f64()
+                    i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX)
                 } else {
-                    let reverse = start.instant.duration_since(*instant);
-                    -(reverse.as_secs_f64())
+                    let reverse = start.instant.saturating_duration_since(*instant);
+                    let nanos = i128::try_from(reverse.as_nanos()).unwrap_or(i128::MAX);
+                    -nanos
                 }
             }
             Self::SystemTime(time) => match time.duration_since(start.system_time) {
-                Ok(duration) => duration.as_secs_f64(),
-                Err(e) => -(e.duration().as_secs_f64()),
+                Ok(duration) => i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX),
+                Err(e) => {
+                    let nanos = i128::try_from(e.duration().as_nanos()).unwrap_or(i128::MAX);
+                    -nanos
+                }
             },
             #[cfg(windows)]
             Self::PerformanceCounter(counter) => {
-                counter.signed_duration_since_secs(start.performance_counter)
+                counter.signed_duration_since_nanos(start.performance_counter)
             }
             #[cfg(target_os = "macos")]
             Self::MachAbsoluteTime(time) => {
-                time.signed_duration_since_secs(start.mach_absolute_time)
+                time.signed_duration_since_nanos(start.mach_absolute_time)
             }
         }
+    }
+
+    pub fn signed_duration_since_secs(&self, start: Timestamps) -> f64 {
+        self.signed_duration_since_nanos(start) as f64 / 1_000_000_000.0
     }
 
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
@@ -163,6 +171,11 @@ impl Timestamps {
 
     pub fn system_time(&self) -> SystemTime {
         self.system_time
+    }
+
+    #[cfg(windows)]
+    pub fn performance_counter(&self) -> PerformanceCounterTimestamp {
+        self.performance_counter
     }
 
     #[cfg(target_os = "macos")]
