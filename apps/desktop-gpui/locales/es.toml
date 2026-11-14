@@ -1405,6 +1405,8 @@ devices_changed_before_start = "Los dispositivos seleccionados cambiaron antes d
 shortcut_conflict = "Ctrl+Shift+F9 está asignado a otra acción de Cap. Cambia ese atajo antes de grabar."
 shortcut_description = "Iniciar o detener esta grabación de Cap"
 shortcut_hint = "Pulsa y suelta {shortcut} para empezar. Usa el mismo atajo para detener. Este atajo temporal no cambia tus ajustes."
+source_lost = "Cap detuvo la grabación porque lo que estaba grabando dejó de estar disponible, por ejemplo, la pantalla entró en reposo o se cerró la ventana. Todo lo grabado hasta ese momento se guardó."
+source_lost_title = "Grabación detenida"
 tray_stop_hint = "Activa el icono de detener de Cap en la bandeja para empezar. Vuelve a activarlo para detener. La grabación no empezará hasta que uses ese control."
 window_unavailable = "La ventana seleccionada ya no está disponible. Vuelve a seleccionarla."
 

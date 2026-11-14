@@ -1407,6 +1407,8 @@ devices_changed_before_start = "Selected devices changed before recording starte
 shortcut_conflict = "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
 shortcut_description = { text = "Start or stop this Cap recording", context = "Shown by the Linux desktop when it asks the user to approve a global shortcut." }
 shortcut_hint = { text = "Press and release {shortcut} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.", context = "{shortcut} is a key combination such as Ctrl+Shift+F9." }
+source_lost = "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved."
+source_lost_title = "Recording stopped"
 tray_stop_hint = "Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control."
 window_unavailable = "The selected window is no longer available. Select it again."
 

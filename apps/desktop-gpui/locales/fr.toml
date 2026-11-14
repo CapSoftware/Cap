@@ -1405,6 +1405,8 @@ devices_changed_before_start = "Les appareils sélectionnés ont changé avant l
 shortcut_conflict = "Ctrl+Shift+F9 est attribué à une autre action de Cap. Modifiez ce raccourci avant d'enregistrer."
 shortcut_description = "Lancer ou arrêter cet enregistrement Cap"
 shortcut_hint = "Appuyez sur {shortcut} puis relâchez pour démarrer. Utilisez le même raccourci pour arrêter. Ce raccourci temporaire ne modifie pas vos réglages."
+source_lost = "Cap a arrêté l'enregistrement, car ce qu'il capturait n'est plus disponible, par exemple l'écran s'est mis en veille ou la fenêtre a été fermée. Tout ce qui a été enregistré jusque-là a été sauvegardé."
+source_lost_title = "Enregistrement arrêté"
 tray_stop_hint = "Activez l'icône d'arrêt de Cap dans la zone de notification pour démarrer. Activez-la à nouveau pour arrêter. L'enregistrement ne commencera pas tant que vous n'aurez pas utilisé cette commande."
 window_unavailable = "La fenêtre sélectionnée n'est plus disponible. Sélectionnez-la à nouveau."
 
