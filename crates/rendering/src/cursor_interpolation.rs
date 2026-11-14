@@ -113,7 +113,7 @@ impl<'a> CursorSpringContext<'a> {
         while let Some(click) = self.clicks.get(self.next_click_index)
             && click.time_ms <= time_ms
         {
-            if click.cursor_num == 0 {
+            if click.cursor_num == 1 {
                 self.primary_button_down = click.down;
             }
             self.next_click_index += 1;
@@ -829,7 +829,7 @@ mod tests {
         CursorClickEvent {
             active_modifiers: vec![],
             cursor_id: "primary".into(),
-            cursor_num: 0,
+            cursor_num: 1,
             time_ms,
             down,
         }
@@ -859,6 +859,75 @@ mod tests {
 
         context.advance_to(620.0);
         assert_eq!(context.profile(620.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn secondary_button_release_does_not_end_a_primary_drag() {
+        let mut secondary_release = click_event(300.0, false);
+        secondary_release.cursor_num = 2;
+        let clicks = [
+            click_event(100.0, true),
+            secondary_release,
+            click_event(1000.0, false),
+        ];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        for time in [300.0, 500.0, 800.0] {
+            context.advance_to(time);
+            assert_eq!(context.profile(time), SpringProfile::Drag);
+        }
+        context.advance_to(1200.0);
+        assert_eq!(context.profile(1200.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn recorded_primary_drag_uses_the_drag_spring() {
+        let base = SpringMassDamperSimulationConfig {
+            tension: 500.0,
+            mass: 1.0,
+            friction: 20.0,
+        };
+        assert_eq!(spring_lag_ms(&base), spring_lag_ms(&DRAG_SPRING));
+        let moves = (0..=180)
+            .map(|frame| {
+                let time_ms = f64::from(frame) * SIMULATION_STEP_MS;
+                let x = if frame < 60 { 0.2 } else { 0.8 };
+                cursor_move(time_ms, x, 0.5)
+            })
+            .collect();
+        let no_clicks = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+        let expected = PrecomputedCursorTimeline::new(&no_clicks, Some(DRAG_SPRING), None);
+        let mut recorded = no_clicks.clone();
+        recorded.clicks = vec![click_event(0.0, true)];
+        let actual = PrecomputedCursorTimeline::new(&recorded, Some(base), None);
+        let max_error_px = (0..=180)
+            .map(|frame| {
+                let time = frame as f32 / 60.0;
+                let expected = expected.interpolate(time).unwrap();
+                let actual = actual.interpolate(time).unwrap();
+                (expected.position.coord.x - actual.position.coord.x).abs() * 1920.0
+            })
+            .fold(0.0, f64::max);
+        assert_eq!(
+            max_error_px, 0.0,
+            "primary drag deviated by {max_error_px}px"
+        );
+
+        recorded.clicks[0].cursor_num = 2;
+        let secondary = PrecomputedCursorTimeline::new(&recorded, Some(base), None);
+        let unchanged = PrecomputedCursorTimeline::new(&no_clicks, Some(base), None);
+        for frame in 0..=180 {
+            let time = frame as f32 / 60.0;
+            assert_position_bits(expected.interpolate(time), actual.interpolate(time));
+            assert_position_bits(unchanged.interpolate(time), secondary.interpolate(time));
+            assert_position_bits(
+                interpolate_cursor(&no_clicks, time, None),
+                actual.interpolate_raw(&recorded, time),
+            );
+        }
     }
 
     #[test]
