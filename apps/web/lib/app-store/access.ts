@@ -1,5 +1,3 @@
-import "server-only";
-
 import { db } from "@cap/database";
 import { organizationMembers, organizations } from "@cap/database/schema";
 import type { Organisation, User } from "@cap/web-domain";

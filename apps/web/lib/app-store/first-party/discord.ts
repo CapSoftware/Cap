@@ -1,5 +1,3 @@
-import "server-only";
-
 import type { ActionResult, CapPayload } from "@cap/app-store";
 import { FIRST_PARTY_CONNECTION_PREFIX } from "@cap/app-store";
 import { capJson, readVerifiedCapRequest } from "./verify";

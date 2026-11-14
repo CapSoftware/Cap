@@ -1,5 +1,3 @@
-import "server-only";
-
 import {
 	type CapEventType,
 	type CatalogApp,

@@ -1,5 +1,3 @@
-import "server-only";
-
 import {
 	type CapRequest,
 	CONNECTION_TIMEOUT_MS,

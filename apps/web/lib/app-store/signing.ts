@@ -1,5 +1,3 @@
-import "server-only";
-
 import { type CapSigningKey, deriveSigningKey } from "@cap/app-store/signing";
 import { serverEnv } from "@cap/env";
 

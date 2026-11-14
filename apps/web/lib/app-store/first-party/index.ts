@@ -1,5 +1,3 @@
-import "server-only";
-
 import { discordConnection } from "./discord";
 
 const HANDLERS: Record<string, (request: Request) => Promise<Response>> = {
