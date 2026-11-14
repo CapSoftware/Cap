@@ -18,6 +18,34 @@ fn every_preset_matches_every_reference_pixel() {
 }
 
 #[test]
+fn preview_geometry_matches_for_arbitrary_angles_and_dimensions() {
+    for angle in [
+        -407., -90., 0., 22.5, 90., 135., 180., 270., 360., 1_000_000.,
+    ] {
+        for vignette in [-0.2, 0., 0.00049, 0.01, 1.5] {
+            for (width, height) in [(0, 7), (7, 0), (1, 1), (3, 19), (31, 2), (37, 23)] {
+                let preset = Preset {
+                    name: "geometry",
+                    filters: &[Filter::Contrast(1.35), Filter::HueRotate(-17.)],
+                    overlay: Some(Overlay {
+                        angle,
+                        from: [0.9, 0.1, 0.8, 0.2],
+                        to: [0.1, 0.8, 0.3, 0.7],
+                    }),
+                    vignette,
+                    grain: 0.35,
+                };
+                assert_eq!(
+                    reference_preview(&preset, width, height),
+                    candidate_preview(&preset, width, height),
+                    "angle={angle} vignette={vignette} {width}x{height}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn public_filters_keep_the_original_float_results() {
     let values = [-0.5, 0., 1. / 255., 0.25, 0.5, 1., 1.5];
     for amount in [-180., -2., 0., 0.25, 0.5, 1., 1.5, 2., 360.] {

@@ -3,8 +3,13 @@
 The editor generates nine 216×122 color-preset tiles synchronously through
 `EditorWindow::preset_image` on their first paint and caches them for the process.
 Preparing filter coefficients once per tile removes repeated saturation, sepia,
-and hue-rotation setup from the pixel loop. Each filter still clamps its output
-before the next filter, with the original floating-point operation order.
+and hue-rotation setup from the pixel loop. Gradient trigonometry, gradient
+lengths, vignette radii, and vignette peak opacity are also prepared once per
+tile. Row iteration lets the compiler reuse row-invariant calculations. These
+additions stay inside the existing renderer and add 27 net production lines to
+the coefficient-only implementation, without a new public API or cached tables.
+Each filter still clamps its output before the next filter, with the original
+floating-point operation order, including division in gradient evaluation.
 
 This standalone workspace compiles the production `kernels/src/texture.rs` by
 path with the app's locked image version. It needs neither GPUI nor FFmpeg, so
@@ -34,20 +39,32 @@ profile with thin LTO and one codegen unit:
 
 | Nine-tile run | Before median | After median | Before p95 | After p95 | Speedup |
 | ------------- | ------------: | -----------: | ---------: | --------: | ------: |
-| 1             |     11.994 ms |     8.774 ms |  12.069 ms |  8.832 ms |   1.37× |
-| 2             |     12.060 ms |     8.773 ms |  12.340 ms |  8.897 ms |   1.37× |
-| 3             |     12.073 ms |     8.773 ms |  12.256 ms |  9.290 ms |   1.38× |
+| 1             |     12.494 ms |     7.881 ms |  16.818 ms | 10.191 ms |   1.59× |
+| 2             |     12.167 ms |     7.593 ms |  12.845 ms |  8.276 ms |   1.60× |
+| 3             |     13.338 ms |     8.106 ms |  19.889 ms | 11.874 ms |   1.65× |
 
-The three runs are retained in `results.csv`. Individual filtered tiles improve
-by 1.24–1.72×. The unfiltered tile is 8–9 µs slower (about 2–3%); the full
-catalog saves 3.22–3.30 ms. An initial comparison with the unmodified production
-kernel measured 12.034 ms for the reference and 12.190 ms for production (0.99×),
-providing a control for the benchmark harness.
+These runs are retained in `extended-results.csv`. The complete catalog uses
+37–39% less CPU time than the unchanged main-branch pixel pipeline, saving
+4.57–5.23 ms per first render. Every individual preset improves in all three
+runs, including the unfiltered tile. Host load varied during these measurements,
+especially during individual-preset workloads; compare each paired workload
+rather than adding individual medians or comparing timings across runs.
+
+The original coefficient-only results remain in `results.csv` (1.37–1.38×).
+A fresh run of that implementation at `8ea766ec18f7dce3fa8edd6bca9021d232c9c5d6`
+is retained in `original-pr-control.csv`: 12.123 ms reference, 8.860 ms candidate
+median, 1.37×. That control and the extension runs were separate invocations,
+so they do not constitute a paired estimate of the incremental improvement.
+Reproduce the control by running the same benchmark at that commit. The texture
+pipeline and preset catalog were unchanged on the new base `f2f338b90`.
 
 Tests compare every BGRA byte for all nine presets at six sizes, including zero
 dimensions, single-row and single-column images, and double-resolution tiles.
 They also compare 18,522 filter outputs bit for bit and exercise extreme filter
 chains with overlays, vignette, and grain to protect per-filter clamping.
+Another 300 image comparisons cover ten overlay angles (including cardinal,
+negative, fractional, and large angles), five vignette strengths (including
+negative and near-zero values), and six image shapes with grain enabled.
 
 These measurements cover CPU tile generation on first paint. Cached tiles do
 not rerender, and this is not an end-to-end app startup, frame-rate, GPU-upload,

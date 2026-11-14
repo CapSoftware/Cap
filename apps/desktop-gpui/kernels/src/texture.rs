@@ -246,35 +246,62 @@ pub fn preset_preview_bgra(
     let mut rgba = image::RgbaImage::new(w, h);
     let grain_opacity = (grain * 1.2).min(1.);
     let filters: Vec<_> = filter.iter().copied().map(PreparedFilter::new).collect();
-
-    for (x, y, pixel) in rgba.enumerate_pixels_mut() {
-        let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
-        let scene = gradient_color(gradient_position(xf, yf, wf, hf, SCENE_ANGLE), &SCENE_STOPS);
-        let mut color = filters
-            .iter()
-            .fold(scene, |color, filter| filter.apply(color));
-
-        if let Some(overlay) = overlay {
-            let position = gradient_position(xf, yf, wf, hf, overlay.angle);
-            let source = [
-                overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
-                overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
-                overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
-                overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
-            ];
-            color = composite_overlay(color, source);
+    let prepare_gradient = |angle: f32| {
+        let radians = angle.to_radians();
+        let (sin, cos) = (radians.sin(), radians.cos());
+        let length = (wf * sin).abs() + (hf * cos).abs();
+        move |x: f32, y: f32| {
+            if length <= 0. {
+                return 0.;
+            }
+            (0.5 + ((x - wf / 2.) * sin - (y - hf / 2.) * cos) / length).clamp(0., 1.)
         }
+    };
+    let scene_position = prepare_gradient(SCENE_ANGLE);
+    let overlay_position = overlay.map(|overlay| prepare_gradient(overlay.angle));
+    let (rx, ry) = (
+        wf / 2. * std::f32::consts::SQRT_2,
+        hf / 2. * std::f32::consts::SQRT_2,
+    );
+    let peak = ((vignette * 0.75) * 1000.).round() / 1000.;
 
-        let shade = 1. - vignette_alpha(xf, yf, wf, hf, vignette);
-        color = [color[0] * shade, color[1] * shade, color[2] * shade];
+    for (y, row) in rgba.rows_mut().enumerate() {
+        for (x, pixel) in row.enumerate() {
+            let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
+            let scene = gradient_color(scene_position(xf, yf), &SCENE_STOPS);
+            let mut color = filters
+                .iter()
+                .fold(scene, |color, filter| filter.apply(color));
 
-        if grain_opacity > 0. {
-            let level = fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2).clamp(0., 1.);
-            color = composite_overlay(color, [level, level, level, grain_opacity]);
+            if let Some((overlay, position)) = overlay.zip(overlay_position.as_ref()) {
+                let position = position(xf, yf);
+                let source = [
+                    overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
+                    overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
+                    overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
+                    overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
+                ];
+                color = composite_overlay(color, source);
+            }
+
+            let shade = if vignette <= 0. {
+                1.
+            } else {
+                let (dx, dy) = ((xf - wf / 2.) / rx, (yf - hf / 2.) / ry);
+                let distance = (dx * dx + dy * dy).sqrt();
+                1. - (((distance - 0.4) / 0.6).clamp(0., 1.)) * peak
+            };
+            color = [color[0] * shade, color[1] * shade, color[2] * shade];
+
+            if grain_opacity > 0. {
+                let level =
+                    fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2).clamp(0., 1.);
+                color = composite_overlay(color, [level, level, level, grain_opacity]);
+            }
+
+            let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+            *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
         }
-
-        let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
-        *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
     }
 
     rgba
