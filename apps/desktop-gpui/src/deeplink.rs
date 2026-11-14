@@ -955,7 +955,21 @@ mod tests {
 
     #[test]
     fn parses_start_recording_action_url_default_and_cursor_screen() {
-        for screen_alias in ["default", "primary", "cursor"] {
+        let display_id = |id: &str| -> scap_targets::DisplayId { id.parse().unwrap() };
+        let target_json = |target: &ScreenCaptureTarget| serde_json::to_value(target).unwrap();
+        let expected = |id: &str| {
+            serde_json::json!({
+                "variant": "display",
+                "id": display_id(id),
+            })
+        };
+
+        for (screen_alias, cursor_id, expected_id) in [
+            ("default", Some("2"), "1"),
+            ("primary", Some("2"), "1"),
+            ("cursor", Some("2"), "2"),
+            ("cursor", None, "1"),
+        ] {
             let value = serde_json::json!({
                 "start_recording": {
                     "capture_mode": { "screen": screen_alias },
@@ -967,16 +981,25 @@ mod tests {
             })
             .to_string();
             let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
-            assert_eq!(
-                DeepLinkAction::try_from(&url),
-                Ok(DeepLinkAction::StartRecording {
-                    capture_mode: CaptureMode::Screen(screen_alias.to_string()),
-                    camera: None,
-                    mic_label: None,
-                    capture_system_audio: true,
-                    mode: cap_recording::RecordingMode::Instant,
-                })
-            );
+            let Ok(DeepLinkAction::StartRecording {
+                capture_mode: CaptureMode::Screen(name),
+                camera: None,
+                mic_label: None,
+                capture_system_audio: true,
+                mode: cap_recording::RecordingMode::Instant,
+            }) = DeepLinkAction::try_from(&url)
+            else {
+                panic!("expected start recording screen action for {screen_alias}");
+            };
+
+            let target = resolve_screen_capture_target(
+                &name,
+                || display_id("1"),
+                || cursor_id.map(display_id),
+                || panic!("named lookup should not run for {screen_alias}"),
+            )
+            .unwrap();
+            assert_eq!(target_json(&target), expected(expected_id));
         }
     }
 
