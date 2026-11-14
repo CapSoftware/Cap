@@ -117,6 +117,7 @@ export async function slicedHlsPlaylistText(
 	if (file === DEVELOPER_VIDEO_MASTER_PLAYLIST) {
 		return buildSlicedHlsMaster(slicedHlsMasterVariants(slices), {
 			hasAudio: source.hasAudio,
+			audioBitrate: first.result.audioBitrate,
 		});
 	}
 	if (file === SLICED_AUDIO_PLAYLIST) {
@@ -166,7 +167,6 @@ export function slicedHlsPlaylistFiles(source: SlicedHlsSource): string[] {
 	];
 }
 
-// The media files a finished ladder of slices plays from.
 export function slicedHlsMediaFiles(source: SlicedHlsSource): string[] {
 	return source.slices.flatMap((slice, index) => [
 		...slice.result.renditions.map((rendition) =>

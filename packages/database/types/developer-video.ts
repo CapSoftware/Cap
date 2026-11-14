@@ -62,6 +62,9 @@ export interface DeveloperVideoSliceResult {
 	seconds: number;
 	renditions: DeveloperVideoSliceRendition[];
 	audioBytes: number;
+	// The first slice carries the whole video's audio, which may be copied from
+	// the source at its own rate instead of encoded at 128 kbps.
+	audioBitrate?: number;
 }
 
 // One stretch of the video encoded as its own ladder job. The job moves

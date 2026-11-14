@@ -172,10 +172,12 @@ export function hlsVariantCodecs(
 
 export function buildSlicedHlsMaster(
 	variants: HlsMasterVariant[],
-	options: { hasAudio: boolean },
+	options: { hasAudio: boolean; audioBitrate?: number },
 ): string {
 	if (variants.length === 0) throw new Error("HLS ladder has no renditions");
-	const audioBandwidth = options.hasAudio ? HLS_AUDIO_BITRATE : 0;
+	const audioBandwidth = options.hasAudio
+		? (options.audioBitrate ?? HLS_AUDIO_BITRATE)
+		: 0;
 	const audioPeak = options.hasAudio ? HLS_AUDIO_PEAK_BITRATE : 0;
 	const master = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
 	if (options.hasAudio) {
