@@ -1,4 +1,7 @@
+import { parseTranscriptVoice } from "@/lib/transcript-speakers";
+
 export interface TranscriptEntry {
+	speaker?: string;
 	id: number;
 	timestamp: string;
 	text: string;
@@ -101,7 +104,7 @@ export const parseTranscriptVTT = (vttContent: string): TranscriptEntry[] => {
 					? trimmedLine.slice(1, -1)
 					: trimmedLine;
 
-			currentEntry.text = textContent;
+			Object.assign(currentEntry, parseTranscriptVoice(textContent));
 			if (
 				currentEntry.id !== undefined &&
 				currentEntry.timestamp &&

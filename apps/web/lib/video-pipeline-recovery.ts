@@ -302,10 +302,7 @@ async function recoverAiCandidate(
 		const claimResult = await db()
 			.update(videos)
 			.set({
-				metadata: {
-					...metadata,
-					aiGenerationStatus: "ERROR",
-				},
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
 			})
 			.where(
 				and(

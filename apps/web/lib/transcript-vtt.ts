@@ -1,3 +1,5 @@
+import { escapeVttText, parseTranscriptVoice } from "@/lib/transcript-speakers";
+
 export function normalizeTranscriptCueText(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
@@ -54,7 +56,13 @@ export function updateVttEntryText(
 			continue;
 		}
 
-		updatedLines.push(...cueLines.slice(0, timingIndex + 1), normalizedText);
+		const voice = parseTranscriptVoice(
+			cueLines.slice(timingIndex + 1).join(" "),
+		);
+		const payload = voice.speaker
+			? `<v ${voice.speaker}>${escapeVttText(normalizedText)}</v>`
+			: escapeVttText(normalizedText);
+		updatedLines.push(...cueLines.slice(0, timingIndex + 1), payload);
 		if (cueEnd < lines.length) {
 			updatedLines.push(lines[cueEnd] ?? "");
 		}

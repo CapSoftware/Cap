@@ -33,6 +33,61 @@ function cueIdentifier(block: string): string {
 	return lines.slice(0, timestampIndex).join("\n");
 }
 
+function voiceAnnotations(block: string): string[] {
+	const lines = block.split("\n");
+	const index = lines.findIndex((line) => line.includes("-->"));
+	return (
+		lines
+			.slice(index + 1)
+			.join("\n")
+			.match(/<\/?v(?:\s[^>]*)?>/g) ?? []
+	);
+}
+
+function mapCuePayloads(
+	content: string,
+	transform: (text: string, index: number) => string,
+): string | null {
+	const blocks = splitVtt(content);
+	if (!blocks) return null;
+	return blocks
+		.map((block, index) => {
+			const lines = block.split("\n");
+			const timing = lines.findIndex((line) => line.includes("-->"));
+			if (timing < 0) return block;
+			return [
+				...lines.slice(0, timing + 1),
+				transform(lines.slice(timing + 1).join("\n"), index),
+			].join("\n");
+		})
+		.join("\n\n");
+}
+
+export function translationTextOnly(source: string): string | null {
+	return mapCuePayloads(source, (text) =>
+		text.replace(/^<v [A-Za-z0-9_-]{1,64}>([\s\S]*?)(?:<\/v>)?$/, "$1"),
+	);
+}
+
+export function restoreTranslationVoices(
+	source: string,
+	translation: string,
+): string | null {
+	const textOnly = translationTextOnly(source);
+	const sourceBlocks = splitVtt(source);
+	if (
+		!textOnly ||
+		!sourceBlocks ||
+		!isCompleteTranslation(textOnly, translation)
+	)
+		return null;
+	const result = mapCuePayloads(translation, (text, index) => {
+		const tags = voiceAnnotations(sourceBlocks[index] ?? "");
+		return tags.length ? `${tags[0]}${text}${tags[1] ?? ""}` : text;
+	});
+	return result && isCompleteTranslation(source, result) ? result : null;
+}
+
 export function isCompleteTranslation(
 	source: string,
 	translation: string,
@@ -56,6 +111,8 @@ export function isCompleteTranslation(
 		const translatedTimestamps = timestampLines(translated);
 		if (
 			originalTimestamps.length !== translatedTimestamps.length ||
+			JSON.stringify(voiceAnnotations(original)) !==
+				JSON.stringify(voiceAnnotations(translated)) ||
 			originalTimestamps.some(
 				(line, timestampIndex) => line !== translatedTimestamps[timestampIndex],
 			) ||
@@ -133,7 +190,7 @@ export function withSourceFingerprint(
 	translation: string,
 ): string | null {
 	const blocks = splitVtt(translation);
-	if (!blocks) return null;
+	if (!blocks || !isCompleteTranslation(source, translation)) return null;
 	const [header, ...cues] = blocks;
 	return [header, sourceFingerprint(source), ...cues].join("\n\n");
 }
