@@ -9,10 +9,10 @@ export function runningDeveloperVideoJobIds(
 	processing: DeveloperVideoProcessingState | null,
 ): string[] {
 	if (!processing) return [];
-	return DEVELOPER_VIDEO_PARTS.flatMap((part) => {
-		const current = processing[part];
-		return current.state === "running" && current.jobId ? [current.jobId] : [];
-	});
+	return [
+		...DEVELOPER_VIDEO_PARTS.map((part) => processing[part]),
+		...(processing.sliced?.slices.map((slice) => slice.job) ?? []),
+	].flatMap((job) => (job.state === "running" && job.jobId ? [job.jobId] : []));
 }
 
 export async function cancelDeveloperVideoJobs(
@@ -35,6 +35,7 @@ const hasRunningPart = () =>
 	or(
 		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerVideos.processing}, '$.hls.state')) = 'running'`,
 		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerVideos.processing}, '$.mp4.state')) = 'running'`,
+		sql`JSON_SEARCH(${developerVideos.processing}, 'one', 'running', NULL, '$.sliced.slices[*].job.state') IS NOT NULL`,
 	);
 
 export type DeveloperVideoCancelTarget =
