@@ -1,0 +1,139 @@
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1188,6 +1188,7 @@
+     pub(crate) rendered_entity_stack: Vec<EntityId>,
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
++    pub(crate) element_mirror_x: Option<Pixels>,
+     pub(crate) edge_fade: Option<EdgeFade>,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+@@ -1928,6 +1929,7 @@
+             element_offset_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
+             element_opacity: 1.0,
++            element_mirror_x: None,
+             edge_fade: None,
+             requested_autoscroll: None,
+             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+@@ -3623,6 +3625,41 @@
+         let result = f(self);
+         self.element_offset_stack.pop();
+         result
++    }
++
++    /// Paints `f` mirrored left to right about the vertical line at `axis`, in
++    /// window coordinates, the way CSS `scale-x: -1` mirrors an element about
++    /// its centre. Glyphs are flipped; quads, underlines and strikethroughs
++    /// are reflected; emoji are placed mirrored but keep their orientation.
++    /// Hit testing is not mirrored, so an element that maps pointer positions
++    /// to content must reflect them itself. Nested calls do not compose: the
++    /// innermost axis applies.
++    pub fn with_mirrored_x<R>(
++        &mut self,
++        axis: Option<Pixels>,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        let Some(axis) = axis else {
++            return f(self);
++        };
++        let previous = self.element_mirror_x.replace(axis);
++        let result = f(self);
++        self.element_mirror_x = previous;
++        result
++    }
++
++    /// The mirror axis doubled, in device pixels and whole, so a reflected
++    /// glyph or quad that was pixel-aligned stays pixel-aligned.
++    fn mirror_span_scaled(&self) -> Option<ScaledPixels> {
++        self.element_mirror_x
++            .map(|axis| ScaledPixels((axis.0 * 2. * self.scale_factor()).round()))
++    }
++
++    fn mirror_x(&self, x: Pixels, width: Pixels) -> Pixels {
++        match self.mirror_span_scaled() {
++            Some(span) => Pixels(span.0 / self.scale_factor()) - x - width,
++            None => x,
++        }
+     }
+ 
+     pub(crate) fn with_element_opacity<R>(
+@@ -4273,8 +4310,20 @@
+     /// Note that the `quad.corner_radii` are allowed to exceed the bounds, creating sharp corners
+     /// where the circular arcs meet. This will not display well when combined with dashed borders.
+     /// Use `Corners::clamp_radii_for_quad_size` if the radii should fit within the bounds.
+-    pub fn paint_quad(&mut self, quad: PaintQuad) {
++    pub fn paint_quad(&mut self, mut quad: PaintQuad) {
+         self.invalidator.debug_assert_paint();
++
++        if self.element_mirror_x.is_some() {
++            quad.bounds.origin.x = self.mirror_x(quad.bounds.origin.x, quad.bounds.size.width);
++            let radii = quad.corner_radii.clone();
++            quad.corner_radii = Corners {
++                top_left: radii.top_right,
++                top_right: radii.top_left,
++                bottom_right: radii.bottom_left,
++                bottom_left: radii.bottom_right,
++            };
++            std::mem::swap(&mut quad.border_widths.left, &mut quad.border_widths.right);
++        }
+ 
+         // Scoped edge fades apply PER PIXEL in the fragment shader
+         // ([`Quad::fade`]); only the uniform element opacity bakes into the
+@@ -4395,6 +4444,7 @@
+     ) {
+         self.invalidator.debug_assert_paint();
+ 
++        let origin = point(self.mirror_x(origin.x, width), origin.y);
+         let scale_factor = self.scale_factor();
+         let thickness = self.snap_stroke(style.thickness);
+         let height = if style.wavy {
+@@ -4430,6 +4480,7 @@
+     ) {
+         self.invalidator.debug_assert_paint();
+ 
++        let origin = point(self.mirror_x(origin.x, width), origin.y);
+         let scale_factor = self.scale_factor();
+         let height = style.thickness;
+         let bounds = Bounds {
+@@ -4535,8 +4586,9 @@
+                 size: tile.bounds.size.map(Into::into),
+             };
+             let content_mask = self.snapped_content_mask();
++            let mirror = self.mirror_span_scaled();
+ 
+-            if subpixel_rendering {
++            if subpixel_rendering && mirror.is_none() {
+                 self.next_frame.scene.insert_primitive(SubpixelSprite {
+                     order: 0,
+                     pad: 0,
+@@ -4554,7 +4606,12 @@
+                     content_mask,
+                     color: color.opacity(element_opacity),
+                     tile,
+-                    transformation: TransformationMatrix::unit(),
++                    transformation: mirror.map_or_else(TransformationMatrix::unit, |span| {
++                        TransformationMatrix {
++                            rotation_scale: [[-1., 0.], [0., 1.]],
++                            translation: [span.0, 0.],
++                        }
++                    }),
+                 });
+             }
+         }
+@@ -4621,10 +4678,13 @@
+                 })?
+                 .expect("Callback above only errors or returns Some");
+ 
+-            let bounds = Bounds {
++            let mut bounds = Bounds {
+                 origin: integer_origin + raster_bounds.origin.map(Into::into),
+                 size: tile.bounds.size.map(Into::into),
+             };
++            if let Some(span) = self.mirror_span_scaled() {
++                bounds.origin.x = span - bounds.origin.x - bounds.size.width;
++            }
+             let content_mask = self.snapped_content_mask();
+             let opacity = self.element_opacity();
+ 
