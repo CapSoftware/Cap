@@ -1,0 +1,47 @@
+name: ns diag ffmpeg extract
+on:
+  push:
+    branches: [scratch/ns-diag-ffmpeg]
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        shell: pwsh
+        run: |
+          $PSVersionTable | Out-String
+          Get-Module -ListAvailable Microsoft.PowerShell.Archive | Format-Table Name,Version,Path -AutoSize | Out-String -Width 300
+          powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString(); Get-Module -ListAvailable Microsoft.PowerShell.Archive | ForEach-Object { $_.Version.ToString() + " " + $_.Path }'
+          node --version
+      - name: Extract like setup.js
+        shell: bash
+        run: |
+          mkdir -p target
+          cat > /tmp/diag.mjs <<'JS'
+          import { exec as execCb } from "node:child_process";
+          import { promisify } from "node:util";
+          import fs from "node:fs/promises";
+          import path from "node:path";
+          const exec = promisify(execCb);
+          const targetDir = path.resolve("target");
+          const zip = path.join(targetDir, "ffmpeg-7.1.zip");
+          const res = await fetch("https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.zip");
+          const buf = Buffer.from(await res.arrayBuffer());
+          console.log("status", res.status, "bytes", buf.length, "magic", buf.subarray(0, 4).toString("hex"));
+          await fs.writeFile(zip, buf);
+          const t = Date.now();
+          try {
+            const r = await exec(`Expand-Archive -Path "${zip}" -DestinationPath "${targetDir}" -Force`, { shell: "powershell.exe" });
+            console.log("exec ok", Date.now() - t, "ms stdout=", JSON.stringify(r.stdout).slice(0, 2000), "stderr=", JSON.stringify(r.stderr).slice(0, 4000));
+          } catch (e) {
+            console.log("exec threw", Date.now() - t, "ms", e.code, String(e.stderr).slice(0, 4000));
+          }
+          console.log("target entries:", await fs.readdir(targetDir));
+          JS
+          node /tmp/diag.mjs
+          ls -la target | head -20
+          find target -maxdepth 3 -type d | head -20
