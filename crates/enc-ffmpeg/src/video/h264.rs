@@ -1957,7 +1957,7 @@ pub(crate) fn hardware_encoder_self_test(
     crf: Option<u8>,
 ) -> Result<(), String> {
     #[cfg(debug_assertions)]
-    isolated_self_test::inject_fault()?;
+    isolated_self_test::inject_fault(codec.name())?;
 
     // A throwaway encoder with production settings; frames are built directly
     // in the negotiated output format, so no converter is needed.

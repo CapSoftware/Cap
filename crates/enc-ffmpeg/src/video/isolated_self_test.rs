@@ -173,18 +173,26 @@ fn serve(raw: &str) -> Result<(), String> {
     )
 }
 
+/// `kind` faults every hardware self-test, `kind:codec` only that codec's.
 #[cfg(debug_assertions)]
-pub(crate) fn inject_fault() -> Result<(), String> {
-    match std::env::var(FAULT_ENV).as_deref() {
-        Ok("access_violation") => unsafe {
+pub(crate) fn inject_fault(codec: &str) -> Result<(), String> {
+    let Ok(spec) = std::env::var(FAULT_ENV) else {
+        return Ok(());
+    };
+    let (kind, only) = spec.split_once(':').unwrap_or((spec.as_str(), codec));
+    if only != codec {
+        return Ok(());
+    }
+    match kind {
+        "access_violation" => unsafe {
             std::ptr::without_provenance_mut::<u8>(0x10).write_volatile(1);
             unreachable!()
         },
-        Ok("abort") => std::process::abort(),
-        Ok("hang") => loop {
+        "abort" => std::process::abort(),
+        "hang" => loop {
             std::thread::sleep(Duration::from_secs(60));
         },
-        Ok("fail") => Err("injected self-test failure".to_string()),
+        "fail" => Err("injected self-test failure".to_string()),
         _ => Ok(()),
     }
 }
@@ -362,6 +370,14 @@ pub(crate) mod tests {
 
         assert_eq!(
             run_child(&odd, Some("fail"), CHILD_TIMEOUT),
+            Err("injected self-test failure".to_string())
+        );
+        assert_eq!(
+            run_child(&odd, Some("access_violation:h264_mf"), CHILD_TIMEOUT),
+            Ok(())
+        );
+        assert_eq!(
+            run_child(&odd, Some("fail:libx264"), CHILD_TIMEOUT),
             Err("injected self-test failure".to_string())
         );
 
