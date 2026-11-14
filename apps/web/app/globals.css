@@ -363,7 +363,7 @@ a.bg-primary:hover {
 	mask-composite: exclude;
 }
 
-@media all and (max-width: 1024px) {
+@media all and (max-width: 1023px) {
 	.dashboard-grid {
 		grid-template-columns: 1fr;
 		grid-template-rows: 1fr;
