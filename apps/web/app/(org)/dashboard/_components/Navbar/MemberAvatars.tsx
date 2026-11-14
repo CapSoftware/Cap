@@ -40,7 +40,7 @@ export function MemberAvatars() {
 	].slice(0, emptySlots);
 
 	return (
-		<div className="flex items-center mt-2.5 px-2.5">
+		<div className="flex items-center px-2 mt-1.5">
 			{visibleMembers.map((member, i) => (
 				<Tooltip
 					key={member.id}
@@ -52,7 +52,7 @@ export function MemberAvatars() {
 						<SignedImageUrl
 							image={member.user.image}
 							name={member.user.name ?? member.user.email}
-							className="size-6 ring-2 ring-gray-3 rounded-full"
+							className="rounded-full ring-2 size-6 ring-gray-2"
 							letterClass="text-[10px]"
 						/>
 					</div>
@@ -60,7 +60,7 @@ export function MemberAvatars() {
 			))}
 
 			{extraCount > 0 && (
-				<div className="-ml-1.5 flex items-center justify-center size-6 rounded-full bg-gray-4 ring-2 ring-gray-3">
+				<div className="-ml-1.5 flex items-center justify-center size-6 rounded-full bg-gray-4 ring-2 ring-gray-2">
 					<span className="text-[9px] font-medium text-gray-11">
 						+{extraCount}
 					</span>
@@ -78,7 +78,7 @@ export function MemberAvatars() {
 						<button
 							type="button"
 							onClick={() => setInviteDialogOpen(true)}
-							className="-ml-1.5 flex items-center justify-center size-6 rounded-full border border-dashed border-gray-8 bg-gray-3 hover:bg-gray-4 hover:border-gray-9 transition-colors"
+							className="-ml-1.5 flex items-center justify-center size-6 rounded-full border border-dashed border-gray-7 bg-gray-2 hover:bg-gray-4 hover:border-gray-9 transition-colors"
 						>
 							<Plus className="size-3 text-gray-10" />
 						</button>

@@ -22,7 +22,7 @@ export const NotificationHeader = () => {
 	});
 
 	return (
-		<div className="flex justify-between items-center px-6 py-3 rounded-t-xl border bg-gray-3 border-gray-4">
+		<div className="flex justify-between items-center px-5 py-3 bg-gray-1">
 			<p className="text-md text-gray-12">Notifications</p>
 			<div
 				onClick={() => mutation.mutate()}

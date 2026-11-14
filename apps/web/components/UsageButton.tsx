@@ -2,7 +2,7 @@ import { Button, Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import clsx from "clsx";
-import { HardDrive, Link2, Sparkles } from "lucide-react";
+import { ArrowUp, HardDrive, Link2 } from "lucide-react";
 import { motion } from "motion/react";
 import Link from "next/link";
 import { memo, useEffect, useRef, useState } from "react";
@@ -45,25 +45,22 @@ export const UsageButton = memo(
 			}
 
 			return (
-				<div className="p-3 w-full rounded-xl bg-gray-3">
-					<div className="flex justify-between items-center">
-						<span className="text-xs font-medium text-gray-11">
-							Shareable links
+				<Link
+					href="/dashboard/settings/workspace"
+					className="flex gap-2.5 items-center p-2.5 w-full rounded-xl border transition-colors border-gray-3 bg-gray-1 hover:border-gray-4 group"
+				>
+					<span className="flex justify-center items-center bg-blue-500 rounded-lg shadow-sm size-8 shrink-0">
+						<FontAwesomeIcon className="text-white size-3.5" icon={faCheck} />
+					</span>
+					<span className="flex flex-col min-w-0">
+						<span className="text-sm font-medium leading-tight text-gray-12">
+							Cap Pro
 						</span>
-						<span className="text-xs font-semibold text-gray-12">
-							Unlimited
+						<span className="text-xs leading-tight truncate text-gray-10">
+							Unlimited shareable links
 						</span>
-					</div>
-					<Link className="block mt-3" href="/dashboard/settings/workspace">
-						<Button size="sm" variant="blue" className="w-full">
-							<FontAwesomeIcon
-								className="mr-1 text-white size-4"
-								icon={faCheck}
-							/>
-							<p className="text-white">Cap Pro</p>
-						</Button>
-					</Link>
-				</div>
+					</span>
+				</Link>
 			);
 		}
 
@@ -88,7 +85,7 @@ export const UsageButton = memo(
 						aria-label="Upgrade to Pro"
 						className="p-0 mx-auto w-10 h-10 rounded-full min-w-[unset] max-w-10"
 					>
-						<Sparkles className="text-white size-4" />
+						<ArrowUp className="text-white size-4" />
 					</Button>
 				</Tooltip>
 			);
@@ -96,14 +93,19 @@ export const UsageButton = memo(
 
 		if (!shareableLinkUsage) {
 			return (
-				<Button variant="blue" onClick={openUpgrade} className="w-full">
+				<Button
+					variant="blue"
+					size="sm"
+					onClick={openUpgrade}
+					className="w-full h-9"
+				>
 					Upgrade to Pro
 				</Button>
 			);
 		}
 
 		return (
-			<div className="p-3 w-full rounded-xl bg-gray-3">
+			<div className="p-3 w-full rounded-xl border border-gray-3 bg-gray-1">
 				<ShareableLinksMeter
 					used={shareableLinkUsage.used}
 					limit={shareableLinkUsage.limit}
@@ -113,7 +115,7 @@ export const UsageButton = memo(
 					variant="blue"
 					size="sm"
 					onClick={openUpgrade}
-					className="mt-3 w-full"
+					className="mt-3 w-full h-9"
 				>
 					Upgrade to Pro
 				</Button>
@@ -260,7 +262,7 @@ const ShareableLinksMeter = ({
 					{used}/{limit}
 				</span>
 			</div>
-			<div className="overflow-hidden mt-2.5 w-full h-1.5 rounded-full bg-gray-5">
+			<div className="overflow-hidden mt-2.5 w-full h-1.5 rounded-full bg-gray-4">
 				<motion.div
 					initial={{ width: 0 }}
 					animate={{
