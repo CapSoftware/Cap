@@ -1,6 +1,7 @@
 mod animated_gradient;
 mod caption_timing;
 pub mod caption_words;
+mod chroma_key;
 #[cfg(test)]
 mod config_write_tests;
 mod configuration;
@@ -20,6 +21,7 @@ pub use caption_words::{
     TARGET_CAPTION_WORDS_PER_SEGMENT, caption_boundary_word_is_weak, caption_text_from_words,
     caption_word_chunks, normalize_caption_words,
 };
+pub use chroma_key::*;
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;

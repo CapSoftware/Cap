@@ -186,6 +186,13 @@ fn camera_hidden(config: &mut ProjectConfiguration) {
     config.camera.hide = true;
 }
 
+/// Keys green out of the camera. The fixture's camera is pink with a black and
+/// white code, so every camera frame must still read, now drawn from the keyed
+/// texture as a cutout.
+fn camera_green_screen(config: &mut ProjectConfiguration) {
+    config.camera.chroma_key = Some(cap_project::ChromaKey::default());
+}
+
 fn hide_camera_scene(config: &mut ProjectConfiguration) {
     config
         .timeline
@@ -263,6 +270,10 @@ fn basic() {
             Variant {
                 edit: "hide-camera-scene",
                 apply: hide_camera_scene,
+            },
+            Variant {
+                edit: "camera-green-screen",
+                apply: camera_green_screen,
             },
         ],
         &[(Format::Mp4, 30), (Format::Mp4, 60)],

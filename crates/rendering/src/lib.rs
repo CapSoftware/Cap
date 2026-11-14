@@ -3144,7 +3144,7 @@ fn compute_camera_position(
         ];
     }
 
-    let camera_padding = if camera.background_blur.removes_background() {
+    let camera_padding = if camera.is_cutout() {
         0.0
     } else {
         camera_padding
@@ -4118,9 +4118,11 @@ impl ProjectUniforms {
         (start, end)
     }
 
+    /// A cutout camera's effect only serves the overlay: camera-only scenes
+    /// show the whole camera.
     fn camera_background_effect_mode(&self) -> Option<cap_camera_effects::BlurMode> {
-        blur_mode_from_config(&self.project.camera.background_blur).filter(|mode| {
-            *mode != cap_camera_effects::BlurMode::Remove
+        blur_mode_from_config(&self.project.camera.background_blur).filter(|_| {
+            !self.project.camera.is_cutout()
                 || (self.camera.is_some() && self.scene.regular_camera_transition_opacity() > 0.01)
         })
     }
@@ -5481,16 +5483,18 @@ impl ProjectUniforms {
                 }
             });
         let cutout_uniforms = |mut uniforms: CompositeVideoFrameUniforms| {
-            if project.camera.background_blur.removes_background() {
-                uniforms.preserve_source_alpha = 1.0;
-                uniforms.rounding_px = 0.0;
-                uniforms.shadow = 0.0;
-                uniforms.shadow_opacity = 0.0;
-                uniforms.border_enabled = 0.0;
-            }
+            uniforms.preserve_source_alpha = 1.0;
+            uniforms.rounding_px = 0.0;
+            uniforms.shadow = 0.0;
+            uniforms.shadow_opacity = 0.0;
+            uniforms.border_enabled = 0.0;
             uniforms
         };
-        let camera = camera.map(cutout_uniforms);
+        let camera = if project.camera.is_cutout() {
+            camera.map(cutout_uniforms)
+        } else {
+            camera
+        };
 
         let masks = project
             .timeline
@@ -8509,6 +8513,7 @@ impl RendererLayers {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         mode: cap_camera_effects::BlurMode,
+        cutout: bool,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -8545,7 +8550,7 @@ impl RendererLayers {
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
-        if mode != cap_camera_effects::BlurMode::Remove {
+        if !cutout {
             self.camera_only.attach_shared_blur(device, processor, mode);
         }
     }
@@ -8556,6 +8561,7 @@ impl RendererLayers {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         mode: cap_camera_effects::BlurMode,
+        cutout: bool,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -8600,7 +8606,7 @@ impl RendererLayers {
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
-        if mode != cap_camera_effects::BlurMode::Remove {
+        if !cutout {
             self.camera_only.attach_shared_blur(device, processor, mode);
         }
     }
@@ -8727,8 +8733,25 @@ impl RendererLayers {
             camera_frame_data,
         );
 
+        if let Some(key) = uniforms.project.camera.active_chroma_key() {
+            let mut encoder =
+                constants
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Camera Chroma Key Encoder"),
+                    });
+            self.camera
+                .apply_chroma_key(&constants.device, &constants.queue, &mut encoder, &key);
+            constants.queue.submit([encoder.finish()]);
+        }
+
         if let Some(mode) = uniforms.camera_background_effect_mode() {
-            self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
+            self.run_shared_camera_blur(
+                &constants.device,
+                &constants.queue,
+                mode,
+                uniforms.project.camera.is_cutout(),
+            );
         }
 
         if let Some(overlays) = &mut self.overlays {
@@ -8899,6 +8922,11 @@ impl RendererLayers {
         );
         timings.camera_only_prepare_duration = start.elapsed();
 
+        if let Some(key) = uniforms.project.camera.active_chroma_key() {
+            self.camera
+                .apply_chroma_key(&constants.device, &constants.queue, encoder, &key);
+        }
+
         let start = Instant::now();
         if let Some(mode) = uniforms.camera_background_effect_mode() {
             self.run_shared_camera_blur_with_encoder(
@@ -8906,6 +8934,7 @@ impl RendererLayers {
                 &constants.queue,
                 encoder,
                 mode,
+                uniforms.project.camera.is_cutout(),
             );
         }
         timings.camera_blur_prepare_duration = start.elapsed();

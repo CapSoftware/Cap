@@ -12717,6 +12717,7 @@ impl Render for EditorWindow {
             this.prepare_sidebar_fields(window, cx);
             this.prepare_animated_gradient_fields(window, cx);
             this.prepare_cursor_fields(window, cx);
+            this.prepare_green_screen_fields(window, cx);
             this.sync_hex_inputs(window, cx);
             this.sync_picker_hex(window, cx);
         });
