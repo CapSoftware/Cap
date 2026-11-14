@@ -178,6 +178,44 @@ fn end_windows_session() {
     crash_capture::mark_clean_exit();
 }
 
+#[cfg(unix)]
+fn forward_quit_signals(cx: &mut App) {
+    use signal_hook::consts::{SIGHUP, SIGTERM};
+
+    let (sender, requests) = flume::unbounded();
+    let spawned = std::thread::Builder::new()
+        .name("quit-signals".into())
+        .spawn(move || {
+            let mut signals = match signal_hook::iterator::Signals::new([SIGTERM, SIGHUP]) {
+                Ok(signals) => signals,
+                Err(error) => {
+                    tracing::error!(%error, "Could not install SIGTERM and SIGHUP handling");
+                    return;
+                }
+            };
+            for signal in signals.forever() {
+                let source = if signal == SIGTERM {
+                    menus::QuitSource::SigTerm
+                } else {
+                    menus::QuitSource::SigHup
+                };
+                if sender.send(source).is_err() {
+                    return;
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::error!(%error, "Could not start the SIGTERM and SIGHUP listener");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        while let Ok(source) = requests.recv_async().await {
+            cx.update(|cx| menus::quit(source, cx));
+        }
+    })
+    .detach();
+}
+
 /// zbus warns whenever a portal request object is gone before its
 /// properties are cached, which every finished portal request is; at `warn`
 /// that filled each Linux log with lines that say nothing.
@@ -506,6 +544,8 @@ fn main() {
                 return;
             }
         }
+        #[cfg(unix)]
+        forward_quit_signals(cx);
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
