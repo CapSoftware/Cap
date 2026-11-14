@@ -108,7 +108,6 @@ impl BrandColors {
         Value::Object(object)
     }
 
-    /// The swatches the colour inputs offer, in the web's key order.
     pub fn swatches(&self) -> Vec<(BrandColorKey, [u8; 3])> {
         BrandColorKey::ALL
             .into_iter()
@@ -117,7 +116,6 @@ impl BrandColors {
     }
 }
 
-/// `OrganizationHexColor`: exactly `#RRGGBB`.
 pub fn parse_hex(value: &str) -> Option<[u8; 3]> {
     let digits = value.strip_prefix('#')?;
     if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -204,8 +202,6 @@ pub fn parse_organizations(value: &Value) -> Vec<Organization> {
         .unwrap_or_default()
 }
 
-/// `getSelectedOrganizationId`: the stored id while it is still one of the
-/// user's organizations (or while the list is not known), otherwise the first.
 pub fn resolve_selected_id(organizations: &[Organization], stored: Option<&str>) -> Option<String> {
     if let Some(stored) = stored
         && (organizations.is_empty() || organizations.iter().any(|org| org.id == stored))
@@ -213,6 +209,20 @@ pub fn resolve_selected_id(organizations: &[Organization], stored: Option<&str>)
         return Some(stored.to_string());
     }
     organizations.first().map(|org| org.id.clone())
+}
+
+/// The export picker's label and the upload both resolve through this, so
+/// they cannot name different organizations.
+pub fn share_organization_id(
+    export_choice: Option<&str>,
+    selected: Option<&str>,
+    organization_ids: &[&str],
+) -> Option<String> {
+    export_choice
+        .filter(|id| organization_ids.contains(id))
+        .or_else(|| selected.filter(|id| organization_ids.contains(id)))
+        .or_else(|| organization_ids.first().copied())
+        .map(str::to_string)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,7 +343,6 @@ pub fn branding_patch_body(colors: &BrandColors, logo: &LogoEdit) -> Value {
 #[derive(Clone, Debug, Default)]
 pub struct OrganizationSnapshot {
     pub signed_in: bool,
-    /// `auth.organizations` is an array, even an empty one.
     pub cached: bool,
     pub updated_at: Option<i64>,
     pub organizations: Vec<Organization>,
@@ -378,7 +387,6 @@ pub fn stored_selected_id() -> Option<String> {
         .map(str::to_string)
 }
 
-/// Where Instant recordings and, through the export dialog, new shares go.
 pub fn persist_selected_id(id: &str) -> bool {
     store::set_store_setting(
         store::RECORDING_SETTINGS,
@@ -412,7 +420,6 @@ fn write_cached_organizations(identity: &Option<(Value, Value)>, organizations: 
     }
 }
 
-/// Replace `updated` in `organizations` by id, appending it if it is new.
 pub fn merge_organization(mut organizations: Vec<Value>, updated: Value) -> Vec<Value> {
     let id = updated
         .get("id")
@@ -536,7 +543,7 @@ pub async fn fetch_logo(url: String) -> Result<Arc<RenderImage>, String> {
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client
+    let mut response = client
         .get(&url)
         .send()
         .await
@@ -550,11 +557,23 @@ pub async fn fetch_logo(url: String) -> Result<Arc<RenderImage>, String> {
     {
         return Err("logo is too large".into());
     }
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
-    if bytes.len() > LOGO_DOWNLOAD_MAX_BYTES {
-        return Err("logo is too large".into());
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if !append_within_limit(&mut bytes, &chunk, LOGO_DOWNLOAD_MAX_BYTES) {
+            return Err("logo is too large".into());
+        }
     }
     decode_logo(&bytes)
+}
+
+/// A server that omits Content-Length is cut off at the limit rather than
+/// buffered whole.
+fn append_within_limit(buffer: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
+    if buffer.len().saturating_add(chunk.len()) > limit {
+        return false;
+    }
+    buffer.extend_from_slice(chunk);
+    true
 }
 
 pub fn decode_logo(bytes: &[u8]) -> Result<Arc<RenderImage>, String> {
@@ -733,6 +752,34 @@ mod tests {
     }
 
     #[test]
+    fn the_export_picker_and_the_upload_resolve_the_same_organization() {
+        let ids = ["personal", "team", "client"];
+        assert_eq!(
+            share_organization_id(Some("client"), Some("team"), &ids).as_deref(),
+            Some("client")
+        );
+        // No export choice yet: the header's selection, not the first.
+        assert_eq!(
+            share_organization_id(None, Some("team"), &ids).as_deref(),
+            Some("team")
+        );
+        // An export choice for an organization the user has left.
+        assert_eq!(
+            share_organization_id(Some("left"), Some("team"), &ids).as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            share_organization_id(Some("left"), Some("gone"), &ids).as_deref(),
+            Some("personal")
+        );
+        assert_eq!(
+            share_organization_id(None, None, &ids).as_deref(),
+            Some("personal")
+        );
+        assert_eq!(share_organization_id(Some("team"), None, &[]), None);
+    }
+
+    #[test]
     fn availability_shows_a_cached_list_even_when_refreshing_or_offline() {
         use Availability::*;
         assert_eq!(availability(false, true, true), SignedOut);
@@ -826,6 +873,15 @@ mod tests {
             )["logo"],
             json!({ "action": "upload", "contentType": "image/png", "data": "AQID" })
         );
+    }
+
+    #[test]
+    fn logo_downloads_stop_at_the_limit() {
+        let mut buffer = Vec::new();
+        assert!(append_within_limit(&mut buffer, &[0; 6], 10));
+        assert!(append_within_limit(&mut buffer, &[0; 4], 10));
+        assert!(!append_within_limit(&mut buffer, &[0; 1], 10));
+        assert_eq!(buffer.len(), 10);
     }
 
     #[test]

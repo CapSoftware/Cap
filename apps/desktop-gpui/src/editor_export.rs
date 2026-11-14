@@ -306,20 +306,21 @@ impl ExportUi {
         {
             return;
         }
-        let stored = crate::organization::stored_selected_id();
-        let selected = stored
-            .as_deref()
-            .filter(|id| organizations.iter().any(|org| org.id == *id))
-            .map(str::to_string)
-            .or_else(|| organizations.first().map(|org| org.id.clone()));
-        if let Some(id) = selected {
+        if let Some(id) = self.share_organization_id(&organizations) {
             self.organization_id = Some(id);
             self.persist();
         }
     }
 
-    /// The editor's organization dropdown picked `id`: new shares go there,
-    /// as they did when the Tauri dropdown wrote the shared selection.
+    fn share_organization_id(&self, organizations: &[store::AuthOrganization]) -> Option<String> {
+        let ids: Vec<&str> = organizations.iter().map(|org| org.id.as_str()).collect();
+        crate::organization::share_organization_id(
+            self.organization_id.as_deref(),
+            crate::organization::stored_selected_id().as_deref(),
+            &ids,
+        )
+    }
+
     pub(crate) fn select_organization(&mut self, id: &str) {
         if self.organization_id.as_deref() == Some(id) {
             return;
@@ -1230,12 +1231,7 @@ impl EditorWindow {
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
-        let organization_id = ui.organization_id.clone().or_else(|| {
-            let organizations = store::auth_snapshot().organizations;
-            crate::organization::stored_selected_id()
-                .filter(|id| organizations.iter().any(|org| &org.id == id))
-                .or_else(|| organizations.first().map(|org| org.id.clone()))
-        });
+        let organization_id = ui.share_organization_id(&store::auth_snapshot().organizations);
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
@@ -2059,10 +2055,7 @@ impl EditorWindow {
                 && store::auth_snapshot().organizations.len() > 1,
             |this| {
                 let orgs = store::auth_snapshot().organizations;
-                let selected = ui
-                    .organization_id
-                    .clone()
-                    .or_else(|| orgs.first().map(|org| org.id.clone()));
+                let selected = ui.share_organization_id(&orgs);
                 let label = orgs
                     .iter()
                     .find(|org| Some(org.id.as_str()) == selected.as_deref())
@@ -2088,10 +2081,8 @@ impl EditorWindow {
                                 return;
                             }
                             if let Some(ui) = this.export.as_mut() {
-                                let current = ui
-                                    .organization_id
-                                    .as_deref()
-                                    .or(orgs.first().map(|org| org.id.as_str()));
+                                let current = ui.share_organization_id(&orgs);
+                                let current = current.as_deref();
                                 let index = orgs
                                     .iter()
                                     .position(|org| Some(org.id.as_str()) == current)
