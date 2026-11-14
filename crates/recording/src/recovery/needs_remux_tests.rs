@@ -20,16 +20,19 @@ fn encode_display(display: &Path, fragments: usize) {
             frame_rate: ffmpeg::Rational(10, 1),
         },
         SegmentedVideoEncoderConfig {
-            segment_duration: Duration::from_millis(100),
+            segment_duration: Duration::from_millis(300),
             ..Default::default()
         },
     )
     .unwrap();
-    for index in 0..fragments {
+    // Three frames per fragment, each fragment opening on a keyframe.
+    for index in 0..fragments * 3 {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
         frame.data_mut(0).fill(16 + (index % 200) as u8);
         frame.data_mut(1).fill(128);
-        frame.set_kind(ffmpeg::picture::Type::I);
+        if index % 3 == 0 {
+            frame.set_kind(ffmpeg::picture::Type::I);
+        }
         encoder
             .queue_frame(frame, Duration::from_millis(index as u64 * 100))
             .unwrap();
@@ -136,20 +139,26 @@ fn status(project: &Path) -> StudioRecordingStatus {
         .status()
 }
 
-/// Video packets the recorder wrote: the init segment and every fragment but
-/// `skip`, joined the way recovery joins them.
+/// Video packets in a remux of the untouched recording (the init segment and
+/// every fragment but `skip`), made outside the project with the same
+/// concatenation finalization uses, so recovery is held to exactly what the
+/// remux itself produces on this platform.
 fn recorded_frames(project: &Path, skip: Option<&str>) -> usize {
     let display = project.join(DISPLAY);
+    let fragments = fragment_names(&display)
+        .into_iter()
+        .filter(|name| Some(name.as_str()) != skip)
+        .map(|name| display.join(name))
+        .collect::<Vec<_>>();
     let scratch = tempfile::tempdir().unwrap();
-    let joined = scratch.path().join("joined.mp4");
-    let mut bytes = fs::read(display.join("init.mp4")).unwrap();
-    for name in fragment_names(&display) {
-        if Some(name.as_str()) != skip {
-            bytes.extend(fs::read(display.join(name)).unwrap());
-        }
-    }
-    fs::write(&joined, bytes).unwrap();
-    video_packets(&joined)
+    let reference = scratch.path().join("reference.mp4");
+    cap_enc_ffmpeg::remux::concatenate_m4s_segments_with_init_validated(
+        &display.join("init.mp4"),
+        &fragments,
+        &reference,
+    )
+    .unwrap();
+    video_packets(&reference)
 }
 
 fn remuxed_frames(project: &Path) -> usize {
