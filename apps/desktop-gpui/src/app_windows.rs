@@ -507,6 +507,39 @@ fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut A
         .detach();
 }
 
+#[derive(Default)]
+pub(crate) struct CaptureRequest(std::rc::Weak<()>);
+
+impl Global for CaptureRequest {}
+
+impl CaptureRequest {
+    pub(crate) fn begin(cx: &mut App) -> std::rc::Rc<()> {
+        let active = cx.default_global::<Self>();
+        active.0.upgrade().unwrap_or_else(|| {
+            let capture = std::rc::Rc::new(());
+            active.0 = std::rc::Rc::downgrade(&capture);
+            capture
+        })
+    }
+
+    pub(crate) fn in_flight(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .is_some_and(|active| active.0.strong_count() != 0)
+    }
+}
+
+pub(crate) fn capture_ui_in_flight(cx: &App) -> bool {
+    CaptureRequest::in_flight(cx)
+        || clean_capture_owned(cx)
+        || cx.try_global::<AppWindows>().is_some_and(|windows| {
+            !windows.overlays.is_empty()
+                || windows
+                    .main
+                    .read(cx)
+                    .is_ok_and(MainWindow::is_preparing_recording)
+        })
+}
+
 pub(crate) fn export_in_flight(cx: &App) -> bool {
     if !cx.has_global::<AppWindows>() {
         return false;
@@ -2043,6 +2076,9 @@ pub(crate) fn reject_unavailable_window(cx: &mut App) {
 /// cheaper to reason about and what the Tauri flow does (the webviews are
 /// recreated with a new `targetMode` query parameter).
 pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
+    if crate::updates::dialog_open(cx) {
+        return;
+    }
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
         return;
@@ -2084,6 +2120,9 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
 /// Must be reached through `cx.defer` from anything inside an entity update,
 /// same as [`open_target_overlays`].
 pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest, cx: &mut App) {
+    if crate::updates::dialog_open(cx) {
+        return;
+    }
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
         return;
@@ -4134,7 +4173,7 @@ pub fn handle_clean_capture_shortcut(state: global_hotkey::HotKeyState, cx: &mut
 /// engine started with the bar excluded from capture.
 pub fn begin_recording(mut config: StartConfig, cx: &mut App) {
     let session = RecordingSession::global(cx);
-    if session.read(cx).phase != Phase::Idle {
+    if crate::updates::dialog_open(cx) || session.read(cx).phase != Phase::Idle {
         return;
     }
     if session.read(cx).editor_recording_target().is_some() {
@@ -8166,6 +8205,41 @@ mod tests {
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn capture_ui_stays_busy_while_a_picker_is_open(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert!(!capture_ui_in_flight(cx));
+            let mut windows = test_app_windows(Vec::new());
+            windows
+                .overlays
+                .push(("1".parse().unwrap(), WindowHandle::new(u64::MAX.into())));
+            cx.set_global(windows);
+            assert!(capture_ui_in_flight(cx));
+            cx.global_mut::<AppWindows>().overlays.clear();
+            assert!(!capture_ui_in_flight(cx));
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn capture_ui_stays_busy_until_all_capture_requests_finish(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert!(!capture_ui_in_flight(cx));
+            let first = CaptureRequest::begin(cx);
+            let second = CaptureRequest::begin(cx);
+            assert!(capture_ui_in_flight(cx));
+            drop(first);
+            assert!(capture_ui_in_flight(cx));
+            drop(second);
+            assert!(!capture_ui_in_flight(cx));
+            let next = CaptureRequest::begin(cx);
+            assert!(capture_ui_in_flight(cx));
+            drop(next);
+            assert!(!capture_ui_in_flight(cx));
+        });
     }
 
     #[cfg(target_os = "linux")]
