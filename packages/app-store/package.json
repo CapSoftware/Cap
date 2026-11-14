@@ -1,0 +1,20 @@
+{
+	"name": "@cap/app-store",
+	"private": true,
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./validate": "./src/validate.ts"
+	},
+	"scripts": {
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"effect": "^3.18.4"
+	},
+	"devDependencies": {
+		"vitest": "^3.2.0"
+	}
+}

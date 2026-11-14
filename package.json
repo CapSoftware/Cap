@@ -9,6 +9,7 @@
 		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
 		"analytics:posthog-growth": "dotenv -e .env -- node scripts/analytics/posthog-growth-audit.mjs",
 		"analytics:setup": "dotenv -e .env -- node scripts/analytics/setup-analytics.js",
+		"app-store": "bun packages/app-store/src/cli.ts",
 		"analytics:check": "dotenv -e .env -- node scripts/analytics/check-analytics.js",
 		"analytics:delete-all": "dotenv -e .env -- node scripts/analytics/delete-all-data.js",
 		"analytics:populate-test": "dotenv -e .env -- node scripts/analytics/populate-test-data.js",

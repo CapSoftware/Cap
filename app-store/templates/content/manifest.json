@@ -1,0 +1,18 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "my-app",
+	"name": "My App",
+	"version": "1.0.0",
+	"description": "Describe what your app adds to Cap in one short sentence.",
+	"author": { "name": "Your Name", "github": "your-github-username" },
+	"license": "MIT",
+	"categories": ["backgrounds"],
+	"backgrounds": [
+		{
+			"id": "ocean",
+			"name": "Ocean",
+			"gradient": { "from": "#0EA5E9", "to": "#1E3A8A", "angle": 135 }
+		}
+	]
+}

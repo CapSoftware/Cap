@@ -1,0 +1,27 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "my-app",
+	"name": "My App",
+	"version": "1.0.0",
+	"description": "Describe what your app does with Caps in one short sentence.",
+	"author": { "name": "Your Name", "github": "your-github-username" },
+	"license": "MIT",
+	"categories": ["productivity"],
+	"privacyPolicy": "https://example.com/privacy",
+	"connection": {
+		"url": "https://my-app.example.com/cap",
+		"permissions": ["cap.transcript"],
+		"events": ["cap.ready", "cap.transcript.ready"],
+		"settings": [
+			{
+				"key": "apiKey",
+				"type": "secret",
+				"label": "API key",
+				"description": "Find this in your account settings.",
+				"required": true
+			}
+		],
+		"actions": [{ "id": "send", "title": "Send to My App", "target": "cap" }]
+	}
+}

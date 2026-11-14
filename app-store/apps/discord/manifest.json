@@ -1,0 +1,36 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "discord",
+	"name": "Discord",
+	"version": "1.0.0",
+	"description": "Post new Caps to a Discord channel automatically, or share any Cap to Discord in one click.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["communication"],
+	"keywords": ["chat", "community", "notifications"],
+	"privacyPolicy": "https://cap.so/privacy",
+	"support": "https://cap.so/support",
+	"connection": {
+		"url": "/api/app-store/first-party/discord",
+		"events": ["cap.ready"],
+		"settings": [
+			{
+				"key": "webhookUrl",
+				"type": "secret",
+				"label": "Channel webhook URL",
+				"description": "In Discord, open the channel's settings, then Integrations, Webhooks, New Webhook, and copy its URL.",
+				"placeholder": "https://discord.com/api/webhooks/...",
+				"required": true
+			},
+			{
+				"key": "postNewCaps",
+				"type": "toggle",
+				"label": "Post every new Cap",
+				"description": "Share each new Cap in the channel as soon as it finishes uploading.",
+				"default": false
+			}
+		],
+		"actions": [{ "id": "post", "title": "Post to Discord", "target": "cap" }]
+	}
+}

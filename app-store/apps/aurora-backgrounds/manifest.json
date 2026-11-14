@@ -1,0 +1,36 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "aurora-backgrounds",
+	"name": "Aurora",
+	"version": "1.0.0",
+	"description": "Eight soft, glowing gradient backgrounds that make any recording feel calm and polished.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["backgrounds"],
+	"keywords": ["gradient", "wallpaper", "mesh"],
+	"backgrounds": [
+		{ "id": "dawn", "name": "Dawn", "image": "backgrounds/dawn.jpg" },
+		{ "id": "lagoon", "name": "Lagoon", "image": "backgrounds/lagoon.jpg" },
+		{ "id": "ember", "name": "Ember", "image": "backgrounds/ember.jpg" },
+		{ "id": "meadow", "name": "Meadow", "image": "backgrounds/meadow.jpg" },
+		{ "id": "dusk", "name": "Dusk", "image": "backgrounds/dusk.jpg" },
+		{ "id": "glacier", "name": "Glacier", "image": "backgrounds/glacier.jpg" },
+		{ "id": "orchid", "name": "Orchid", "image": "backgrounds/orchid.jpg" },
+		{
+			"id": "midnight",
+			"name": "Midnight",
+			"image": "backgrounds/midnight.jpg"
+		},
+		{
+			"id": "sunset-fade",
+			"name": "Sunset Fade",
+			"gradient": { "from": "#FF7E5F", "to": "#6A3093", "angle": 135 }
+		},
+		{
+			"id": "deep-sea",
+			"name": "Deep Sea",
+			"gradient": { "from": "#0F2027", "to": "#2C5364", "angle": 160 }
+		}
+	]
+}
