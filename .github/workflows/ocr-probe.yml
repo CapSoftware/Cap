@@ -1,0 +1,20 @@
+name: OCR Vision probe
+on:
+  push:
+    branches: [ci-probe/ocr-vision]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sw_vers && sysctl -n machdep.cpu.brand_string hw.memsize
+      - run: swiftc -O probe/fixtures.swift -o fixtures && ./fixtures fx && ls -la fx
+      - run: swiftc -O probe/vnprobe.swift -o vnprobe
+      - name: cold
+        run: ./vnprobe fx/ocr-lines.png fx/blank.png fx/mixed-2x.png fx/tall.png fx/dense-8k.png
+      - name: warm
+        run: ./vnprobe fx/ocr-lines.png fx/blank.png fx/mixed-2x.png fx/tall.png fx/dense-8k.png
