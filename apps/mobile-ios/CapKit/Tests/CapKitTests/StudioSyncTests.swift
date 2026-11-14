@@ -270,7 +270,7 @@ import Testing
         #expect(duration >= 3.9)
     }
 
-    /// A full-size export holds only a few frames at a time.
+    /// A full-size export holds only a few frames at a time, however long the video.
     @Test func exportMemoryStaysFlat() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "studio-memory-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -298,7 +298,9 @@ import Testing
         sampler.cancel()
         let high = await sampler.value
         print("STUDIO_BENCH full-size export \(Int(result.size.width))x\(Int(result.size.height)) \(String(format: "%.1f", result.duration)) s in \(String(format: "%.2f", result.seconds)) s (\(String(format: "%.1f", result.duration / result.seconds))x), memory \(Int(before.current)) MB before, \(Int(high)) MB highest during, \(Int(high - before.current)) MB added")
-        #expect(high - before.current < 200)
+        // Measured 133-163 MB added on an M4 with hardware codecs and about 245 MB on CI's virtual Macs, which encode in
+        // software. Frames piling up over this 600-frame export would add gigabytes, which is what this catches.
+        #expect(high - before.current < 400)
     }
 
     @Test func recordedRangesSkipGaps() {
