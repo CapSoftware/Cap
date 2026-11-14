@@ -18,8 +18,6 @@ import {
 // This file is imported by the processing state, which the workflow bundles,
 // so it must not import anything that needs a Node module.
 
-// Every number that decides which videos are encoded in slices, and how.
-//
 // A ladder job spends about five seconds before its first frame (download,
 // probe, encoder start) and then encodes at roughly 6 to 15 times real time.
 // Under two minutes the whole ladder is done in 13 to 25 seconds, so slicing
@@ -160,6 +158,27 @@ export function slicedFileName(
 	return `${file.slice(0, dot)}-${slice}-${token}${file.slice(dot)}`;
 }
 
+const SLICED_MEDIA_FILE = /^[A-Za-z0-9]+-\d+-[A-Za-z0-9_-]+\.m4s$/;
+
+export function isSlicedMediaFile(file: string): boolean {
+	return SLICED_MEDIA_FILE.test(file);
+}
+
+// Slices viewers were shown before the video fell back to one whole job.
+// Players that loaded their playlists then keep asking for these files.
+export function supersededSlicedHls(
+	state: DeveloperVideoProcessingState,
+): { output: string; slices: FinishedSlice[]; hasAudio: boolean } | null {
+	const { sliced } = state;
+	if (!sliced || sliced.state !== "abandoned" || sliced.exposed !== true) {
+		return null;
+	}
+	const slices = playableSlices(sliced);
+	return slices.length > 0
+		? { output: sliced.output, slices, hasAudio: sliced.hasAudio }
+		: null;
+}
+
 export type FinishedSlice = DeveloperVideoSlice & {
 	job: { state: "complete"; output: string };
 	result: DeveloperVideoSliceResult;
@@ -290,7 +309,9 @@ export function slicedHlsMasterVariants(
 export function slicedHlsRenditions(
 	sliced: DeveloperVideoSlicedHls,
 ): DeveloperVideoRendition[] {
-	const audio = sliced.hasAudio ? HLS_AUDIO_BITRATE : 0;
+	const audio = sliced.hasAudio
+		? (sliced.slices[0]?.result?.audioBitrate ?? HLS_AUDIO_BITRATE)
+		: 0;
 	return mergeSliceRenditions(
 		finishedSlices(sliced).map(({ slice }) => slice),
 	).map((rendition) => ({

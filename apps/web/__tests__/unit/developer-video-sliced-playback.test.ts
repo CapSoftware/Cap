@@ -332,6 +332,26 @@ describe("when the growing ladder is not offered", () => {
 		expect(await response.text()).not.toContain("#EXT-X-ENDLIST");
 	});
 
+	it("still serves the slices' media to players that loaded them once that job is in", async () => {
+		serve(
+			{ ...growing(), state: "abandoned" },
+			{
+				state: "complete",
+				output: "whole",
+			},
+		);
+
+		const slice = await play("1080p-1-b.m4s");
+		const wholeMedia = await play("1080p.m4s");
+
+		expect(slice.headers.get("location")).toBe(
+			`https://cdn/${FOLDER}/hls/1080p-1-b.m4s?sig`,
+		);
+		expect(wholeMedia.headers.get("location")).toBe(
+			`https://cdn/${FOLDER.replace(/[^/]+$/, "whole")}/hls/1080p.m4s?sig`,
+		);
+	});
+
 	it("is not found once that job has failed too", async () => {
 		serve(
 			{ ...growing(), state: "abandoned" },

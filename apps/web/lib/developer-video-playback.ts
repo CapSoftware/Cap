@@ -24,7 +24,11 @@ import {
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
 import { slicedHlsPlaylistText } from "./developer-video-sliced-ladder";
-import { slicedHlsPlayback } from "./developer-video-slices";
+import {
+	isSlicedMediaFile,
+	slicedHlsPlayback,
+	supersededSlicedHls,
+} from "./developer-video-slices";
 import {
 	developerVideoUrlAnswersAnyOrigin,
 	readDeveloperVideoText,
@@ -617,7 +621,14 @@ async function playableVideoResponse(
 	}
 	const keys = keysFor(hlsOutput);
 	if (MEDIA_FILE_PATTERN.test(file)) {
-		return redirectTo(`${keys.hlsPrefix}${file}`, request);
+		const superseded = isSlicedMediaFile(file)
+			? supersededSlicedHls(processing)
+			: null;
+		const prefix =
+			superseded && superseded.output !== hlsOutput
+				? keysFor(superseded.output).hlsPrefix
+				: keys.hlsPrefix;
+		return redirectTo(`${prefix}${file}`, request);
 	}
 
 	const isMaster = file === DEVELOPER_VIDEO_MASTER_PLAYLIST;
