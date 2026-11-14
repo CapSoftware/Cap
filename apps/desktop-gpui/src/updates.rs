@@ -219,6 +219,7 @@ pub(crate) fn work_in_flight(cx: &mut App) -> bool {
         || crate::app_windows::export_in_flight(cx)
         || crate::import::imports_in_flight(cx)
         || crate::transcription::work_in_flight()
+        || crate::recordings_overlay::work_in_flight(cx)
 }
 
 pub(crate) fn status(cx: &App) -> UpdateStatus {

@@ -19,6 +19,7 @@ use std::{
 };
 
 use cap_project::{RecordingMeta, SharingMeta, StudioRecordingMeta};
+use cap_utils::export_resources::{DiskBudget, ExportResources};
 use gpui::{
     AnyElement, App, AppContext as _, AsyncApp, Bounds, Context, Entity, FontWeight, Global, Hsla,
     InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, Pixels, Render,
@@ -84,7 +85,6 @@ impl ActionState {
         matches!(self, Self::Busy(..))
     }
 
-    /// `actionProgressPercentage`, as a fraction.
     pub fn progress(&self) -> f32 {
         match self {
             Self::Idle | Self::Failed(..) => 0.,
@@ -128,8 +128,6 @@ impl ActionState {
         })
     }
 
-    /// The line under the bar: the save prompt while the panel is up, the
-    /// error after a failure, the percentage otherwise.
     pub fn message(&self, kind: MediaKind) -> Option<String> {
         match self {
             Self::Idle => None,
@@ -146,8 +144,6 @@ impl ActionState {
     }
 }
 
-/// What a cleanly stopped Studio recording does next, after any automation
-/// rule has resolved `postStudioRecordingBehaviour`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StudioCompletion {
     OpenEditor,
@@ -163,9 +159,6 @@ pub fn studio_completion(behaviour: crate::store::PostStudioBehaviour) -> Studio
     }
 }
 
-/// The organization a share uploads to: the one picked in the editor's export
-/// dialog while the account still belongs to it, else the first one, the
-/// editor's `pick_default_organization`.
 pub fn share_organization(saved: Option<&str>, organizations: &[String]) -> Option<String> {
     saved
         .filter(|id| organizations.iter().any(|org| org == id))
@@ -180,14 +173,11 @@ pub fn stack_height(cards: usize) -> f32 {
     cards as f32 * CARD_HEIGHT + (cards - 1) as f32 * CARD_GAP + WINDOW_PADDING * 2.
 }
 
-/// How many cards fit in a work area this tall. Always at least one.
 pub fn max_cards(available_height: f32) -> usize {
     let room = available_height - EDGE_OFFSET * 2. - WINDOW_PADDING * 2. + CARD_GAP;
     ((room / (CARD_HEIGHT + CARD_GAP)).floor() as usize).max(1)
 }
 
-/// The window for `cards` cards, the lowest one `EDGE_OFFSET` in from the
-/// bottom-left corner of the work area (the Tauri stack sat in that corner).
 pub fn stack_bounds(work_area: Bounds<Pixels>, cards: usize) -> Bounds<Pixels> {
     let width = px(CARD_WIDTH + WINDOW_PADDING * 2.);
     let height = px(stack_height(cards.max(1))).min(work_area.size.height);
@@ -199,8 +189,6 @@ pub fn stack_bounds(work_area: Bounds<Pixels>, cards: usize) -> Bounds<Pixels> {
     }
 }
 
-/// Which entries to drop so `limit` remain: the oldest ones that are not in
-/// the middle of an action. Entries are newest first.
 pub fn overflow(states: &[bool], limit: usize) -> Vec<usize> {
     let mut excess = states.len().saturating_sub(limit);
     let mut dropped = Vec::new();
@@ -268,7 +256,9 @@ impl Entry {
 pub struct Overlay {
     entries: Vec<Entry>,
     next_id: u64,
-    hidden_for_capture: bool,
+    hidden_for_recording: bool,
+    hidden_for_screenshot: bool,
+    emptied_for_screenshot: bool,
     window: Option<WindowHandle<OverlayView>>,
     shown_cards: usize,
     card_limit: Option<usize>,
@@ -296,15 +286,12 @@ fn existing_model(cx: &App) -> Option<Entity<Overlay>> {
         .map(|global| global.0.clone())
 }
 
-/// A cleanly stopped Studio recording, for the "Show in overlay" behaviour.
 pub fn show_studio_recording(project_dir: PathBuf, cx: &mut App) {
     model(cx).update(cx, |overlay, cx| {
         overlay.add(project_dir, MediaKind::Recording, cx)
     });
 }
 
-/// A screenshot finished (or failed): the stack comes back, and a new
-/// screenshot joins it when it is already showing cards.
 pub fn screenshot_captured(png: Option<&Path>, cx: &mut App) {
     let Some(model) = existing_model(cx) else {
         return;
@@ -312,15 +299,21 @@ pub fn screenshot_captured(png: Option<&Path>, cx: &mut App) {
     model.update(cx, |overlay, cx| overlay.screenshot_captured(png, cx));
 }
 
-/// Hides the stack for a capture. Returns whether it was on screen, so the
-/// caller can give the compositor a beat before grabbing pixels.
-pub fn hide_for_capture(cx: &mut App) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    Recording,
+    Screenshot,
+}
+
+/// Returns whether the stack was on screen, so a screenshot can give the
+/// compositor a beat to drop it before grabbing pixels.
+pub fn hide_for(capture: Capture, cx: &mut App) -> bool {
     let Some(model) = existing_model(cx) else {
         return false;
     };
     let visible = model.read(cx).window.is_some();
     if let Some(handle) = model.update(cx, |overlay, cx| {
-        overlay.set_hidden_for_capture(true, cx);
+        overlay.set_hidden(capture, true, cx);
         overlay.window.take()
     }) {
         close_window(handle, cx);
@@ -328,10 +321,46 @@ pub fn hide_for_capture(cx: &mut App) -> bool {
     visible
 }
 
-pub fn show_after_capture(cx: &mut App) {
+pub fn show_after(capture: Capture, cx: &mut App) {
     if let Some(model) = existing_model(cx) {
-        model.update(cx, |overlay, cx| overlay.set_hidden_for_capture(false, cx));
+        model.update(cx, |overlay, cx| overlay.set_hidden(capture, false, cx));
     }
+}
+
+pub fn work_in_flight(cx: &App) -> bool {
+    existing_model(cx).is_some_and(|model| {
+        model
+            .read(cx)
+            .entries
+            .iter()
+            .any(|entry| entry.state.is_busy())
+    })
+}
+
+/// Wayland keeps a closing window on screen for its close animation, which
+/// can outlast the screenshot's 150 ms settle, so the stack first presents an
+/// empty frame the way the picker overlays do in
+/// `app_windows::empty_overlays_for_screenshot`.
+#[cfg(target_os = "linux")]
+pub fn empty_for_screenshot(cx: &mut App) -> Option<tokio::sync::oneshot::Receiver<()>> {
+    let model = existing_model(cx)?;
+    let handle = model.read(cx).window?;
+    model.update(cx, |overlay, cx| {
+        overlay.emptied_for_screenshot = true;
+        cx.notify();
+    });
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    handle
+        .update(cx, |_, window, cx| {
+            cx.notify();
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |_, _| {
+                    let _ = sender.send(());
+                });
+            });
+        })
+        .ok()?;
+    Some(receiver)
 }
 
 fn close_window(handle: WindowHandle<OverlayView>, cx: &mut App) {
@@ -344,7 +373,7 @@ fn sync_window(model: &Entity<Overlay>, cx: &mut App) {
     let (wanted, cards, window, shown) = {
         let overlay = model.read(cx);
         (
-            !overlay.entries.is_empty() && !overlay.hidden_for_capture,
+            !overlay.entries.is_empty() && !overlay.hidden(),
             overlay.entries.len(),
             overlay.window,
             overlay.shown_cards,
@@ -417,6 +446,7 @@ fn open_window(model: &Entity<Overlay>, cards: usize, cx: &mut App) {
         overlay.window = Some(handle);
         overlay.shown_cards = cards;
     });
+    tracing::info!(cards, "recordings overlay shown");
     let native = handle
         .update(cx, |_, window, _| {
             platform::apply_panel_behavior(
@@ -462,8 +492,6 @@ fn resize_window(
     }
 }
 
-/// Grows or shrinks the stack's window keeping its bottom edge where it is,
-/// `fit_controls_to_issue`'s frame arithmetic.
 #[cfg(any(target_os = "macos", windows))]
 fn fit_window_height(native: &platform::NativeWindow, height: f64, scale: f32) {
     let (x, y, width, current) = platform::window_frame(native);
@@ -483,12 +511,23 @@ fn fit_window_height(native: &platform::NativeWindow, height: f64, scale: f32) {
 }
 
 impl Overlay {
-    fn set_hidden_for_capture(&mut self, hidden: bool, cx: &mut Context<Self>) {
-        if self.hidden_for_capture == hidden {
+    fn hidden(&self) -> bool {
+        self.hidden_for_recording || self.hidden_for_screenshot
+    }
+
+    fn set_hidden(&mut self, capture: Capture, hidden: bool, cx: &mut Context<Self>) {
+        let flag = match capture {
+            Capture::Recording => &mut self.hidden_for_recording,
+            Capture::Screenshot => &mut self.hidden_for_screenshot,
+        };
+        if *flag == hidden {
             return;
         }
-        self.hidden_for_capture = hidden;
-        if !hidden {
+        *flag = hidden;
+        if !hidden && capture == Capture::Screenshot {
+            self.emptied_for_screenshot = false;
+        }
+        if !self.hidden() {
             self.prune_missing();
         }
         cx.notify();
@@ -500,7 +539,7 @@ impl Overlay {
         {
             self.add(png.to_path_buf(), MediaKind::Screenshot, cx);
         }
-        self.set_hidden_for_capture(false, cx);
+        self.set_hidden(Capture::Screenshot, false, cx);
     }
 
     fn set_card_limit(&mut self, limit: usize, cx: &mut Context<Self>) {
@@ -891,7 +930,11 @@ fn finish(
     cancel: &AtomicBool,
     cx: &mut AsyncApp,
 ) {
-    let cancelled = cancel.load(Ordering::Acquire);
+    let cancelled = cancel.load(Ordering::Acquire)
+        && !result
+            .as_ref()
+            .err()
+            .is_some_and(|error| cap_utils::export_resources::is_resource_stop(error));
     match &result {
         Ok(()) => crate::app_sounds::play_notification(),
         Err(error) if !cancelled => {
@@ -918,9 +961,6 @@ fn finish(
     .ok();
 }
 
-/// Renders the recording with the Tauri overlay's settings (MP4, 60 fps,
-/// 1080p, Web compression) into `destination`, or into the project's own
-/// output file that `upload_exported_video` reads.
 async fn render_for_project(
     this: &WeakEntity<Overlay>,
     id: u64,
@@ -937,30 +977,61 @@ async fn render_for_project(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create the export folder: {error}"))?;
     }
+    let resources = ExportResources::new(vec![DiskBudget {
+        path: save_path.clone(),
+        description: "your export drive",
+        estimated_bytes: 0,
+    }]);
+    let checked = {
+        let resources = resources.clone();
+        gpui_tokio::Tokio::spawn(cx, async move { resources.check().await })
+            .await
+            .map_err(|error| error.to_string())??
+    };
+    if let Some(message) = checked
+        && std::env::var_os("CAP_GPUI_AUTO_EXPORT").is_none()
+        && !platform::confirm_dialog(
+            tr::editor::export::resources::title(),
+            &message,
+            tr::editor::export::resources::proceed(),
+            tr::common::go_back(),
+            false,
+        )
+    {
+        cancel.store(true, Ordering::Release);
+        return Err("Export cancelled".into());
+    }
     let project = cap_project::ProjectConfiguration::load(project_path).unwrap_or_default();
     let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
     let (width, height) = OVERLAY_EXPORT_SIZE;
-    let export = gpui_tokio::Tokio::spawn(
-        cx,
-        crate::editor_export::run_export(
-            project_path.to_path_buf(),
-            project,
-            crate::editor_export::ExportFormatKind::Mp4,
-            false,
-            OVERLAY_EXPORT_FPS,
-            width,
-            height,
-            cap_export::mp4::ExportCompression::Web,
-            None,
-            None,
-            false,
-            false,
-            false,
-            Some(save_path),
-            progress_tx,
-            cancel.clone(),
-        ),
-    );
+    let export_project = project_path.to_path_buf();
+    let export_cancel = cancel.clone();
+    let export = gpui_tokio::Tokio::spawn(cx, async move {
+        let stopped = export_cancel.clone();
+        resources
+            .supervise(
+                crate::editor_export::run_export(
+                    export_project,
+                    project,
+                    crate::editor_export::ExportFormatKind::Mp4,
+                    false,
+                    OVERLAY_EXPORT_FPS,
+                    width,
+                    height,
+                    cap_export::mp4::ExportCompression::Web,
+                    None,
+                    None,
+                    false,
+                    false,
+                    false,
+                    Some(save_path),
+                    progress_tx,
+                    export_cancel,
+                ),
+                move || stopped.store(true, Ordering::Release),
+            )
+            .await
+    });
     loop {
         let mut latest = None;
         while let Ok(progress) = progress_rx.try_recv() {
@@ -1362,6 +1433,18 @@ impl OverlayView {
             .child(actions)
             .when_some(status, |this, (title, message, progress, state)| {
                 this.child(self.status_panel(id, title, message, progress, &state, cx))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(10.))
+                            .left(px(10.))
+                            .child(self.action_button(
+                                ("overlay-status-close", id),
+                                "icons/x.svg",
+                                tr::recordings_overlay::close(),
+                                cx.listener(move |this, _, _, cx| this.close(id, cx)),
+                            )),
+                    )
             })
             .into_any_element()
     }
@@ -1544,6 +1627,9 @@ impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme.refresh(window, cx, false);
         let cx: &Context<Self> = cx;
+        if self.model.read(cx).emptied_for_screenshot {
+            return div().size_full();
+        }
         let cards: Vec<AnyElement> = self
             .model
             .read(cx)

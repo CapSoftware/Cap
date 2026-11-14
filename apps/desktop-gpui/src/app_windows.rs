@@ -150,7 +150,10 @@ fn platform_display_for_capture(
     found
 }
 
-pub(crate) fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
+pub(crate) fn gpui_display_id(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<gpui::DisplayId> {
     #[cfg(target_os = "windows")]
     {
         target
@@ -624,7 +627,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             open_preparing_studio_editor(&session, cx);
         }
         if phase != Phase::Idle && last_phase == Phase::Idle {
-            crate::recordings_overlay::hide_for_capture(cx);
+            crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Recording, cx);
         }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             #[cfg(target_os = "linux")]
@@ -758,7 +761,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // net effect too, where `restart_recording` clears it and the
             // immediately-following `start_recording` puts it straight back.)
             restore_content_protection(cx);
-            crate::recordings_overlay::show_after_capture(cx);
+            crate::recordings_overlay::show_after(
+                crate::recordings_overlay::Capture::Recording,
+                cx,
+            );
         }
         last_phase = phase;
     })
@@ -7429,7 +7435,8 @@ fn open_controls(
 /// an overlay still on screen would be in the shot. Returns whether anything
 /// was up -- the caller's cue to wait the same 150ms the Tauri command waits.
 pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
-    let overlay_was_visible = crate::recordings_overlay::hide_for_capture(cx);
+    let overlay_was_visible =
+        crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Screenshot, cx);
     if cx.global::<AppWindows>().overlays.is_empty() {
         return overlay_was_visible;
     }
@@ -7458,10 +7465,11 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
         .iter()
         .map(|(_, handle)| *handle)
         .collect();
-    if overlays.is_empty() {
+    let recordings = crate::recordings_overlay::empty_for_screenshot(cx);
+    if overlays.is_empty() && recordings.is_none() {
         return None;
     }
-    let mut shown = Vec::new();
+    let mut shown: Vec<_> = recordings.into_iter().collect();
     for handle in overlays {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let scheduled = handle.update(cx, |view, window, cx| {

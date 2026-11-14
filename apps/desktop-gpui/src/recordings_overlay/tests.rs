@@ -237,15 +237,15 @@ fn a_screenshot_joins_only_a_stack_that_is_already_up(cx: &mut TestAppContext) {
     let overlay = cx.new(|_| Overlay::default());
 
     overlay.update(cx, |overlay, cx| {
-        overlay.set_hidden_for_capture(true, cx);
+        overlay.set_hidden(Capture::Screenshot, true, cx);
         overlay.screenshot_captured(Some(&screenshot), cx);
     });
     assert!(paths(&overlay, cx).is_empty());
-    assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden_for_capture));
+    assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden()));
 
     overlay.update(cx, |overlay, cx| {
         overlay.add(recording.clone(), MediaKind::Recording, cx);
-        overlay.set_hidden_for_capture(true, cx);
+        overlay.set_hidden(Capture::Screenshot, true, cx);
         overlay.screenshot_captured(Some(&screenshot), cx);
     });
     assert_eq!(paths(&overlay, cx), vec![screenshot.clone(), recording]);
@@ -253,11 +253,11 @@ fn a_screenshot_joins_only_a_stack_that_is_already_up(cx: &mut TestAppContext) {
     assert_eq!(kind, MediaKind::Screenshot);
 
     overlay.update(cx, |overlay, cx| {
-        overlay.set_hidden_for_capture(true, cx);
+        overlay.set_hidden(Capture::Screenshot, true, cx);
         overlay.screenshot_captured(None, cx);
     });
     assert_eq!(paths(&overlay, cx).len(), 2);
-    assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden_for_capture));
+    assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden()));
 }
 
 #[gpui::test]
@@ -273,11 +273,13 @@ fn coming_back_from_a_capture_drops_recordings_deleted_meanwhile(cx: &mut TestAp
         overlay.add(busy.clone(), MediaKind::Recording, cx);
         let id = overlay.entries[0].id;
         assert!(overlay.begin(id, ActionKind::Share, Stage::Uploading(0.), cx));
-        overlay.set_hidden_for_capture(true, cx);
+        overlay.set_hidden(Capture::Screenshot, true, cx);
     });
     std::fs::remove_dir_all(&deleted).unwrap();
     std::fs::remove_dir_all(&busy).unwrap();
-    overlay.update(cx, |overlay, cx| overlay.set_hidden_for_capture(false, cx));
+    overlay.update(cx, |overlay, cx| {
+        overlay.set_hidden(Capture::Screenshot, false, cx)
+    });
     assert_eq!(paths(&overlay, cx), vec![busy, kept]);
 }
 
@@ -372,4 +374,31 @@ fn the_card_limit_keeps_a_busy_card_over_an_idle_newer_one(cx: &mut TestAppConte
         overlay.add(newest.clone(), MediaKind::Recording, cx);
     });
     assert_eq!(paths(&overlay, cx), vec![newest, oldest]);
+}
+
+#[gpui::test]
+fn a_screenshot_during_a_recording_keeps_the_stack_hidden(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recording = bundle(&dir, "recording");
+    let screenshot = dir.path().join("shot.cap").join("shot.png");
+    std::fs::create_dir_all(screenshot.parent().unwrap()).unwrap();
+    std::fs::write(&screenshot, b"png").unwrap();
+    let overlay = cx.new(|_| Overlay::default());
+    overlay.update(cx, |overlay, cx| {
+        overlay.add(recording.clone(), MediaKind::Recording, cx);
+        overlay.set_hidden(Capture::Recording, true, cx);
+        overlay.set_hidden(Capture::Screenshot, true, cx);
+        overlay.screenshot_captured(Some(&screenshot), cx);
+    });
+    assert!(overlay.read_with(cx, |overlay, _| overlay.hidden()));
+    assert_eq!(paths(&overlay, cx), vec![screenshot, recording]);
+    overlay.update(cx, |overlay, cx| {
+        overlay.set_hidden(Capture::Screenshot, true, cx);
+        overlay.screenshot_captured(None, cx);
+    });
+    assert!(overlay.read_with(cx, |overlay, _| overlay.hidden()));
+    overlay.update(cx, |overlay, cx| {
+        overlay.set_hidden(Capture::Recording, false, cx)
+    });
+    assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden()));
 }

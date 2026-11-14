@@ -410,11 +410,12 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
         sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
-        // Show Cap rather than the editor, so the end of the recording
-        // reshows the main window, and no startup screen to take its place.
-        sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        // The Instant "Show Cap" outcome, so the end of the recording reshows
+        // the main window, and no startup screen to take its place.
+        sandbox.set_general("disableAutoOpenLinks", json!(true));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(true));
         sandbox.set_general("hasCompletedStartup", json!(true));
-        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
         wait_for_app(
             &sandbox,
             &app,
@@ -451,6 +452,42 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
             "{behaviour}: {log}"
         );
     }
+}
+
+/// "Show in overlay" (`showOverlay`, as 0.6.0 stored it) puts the finished
+/// Studio recording in the floating overlay and leaves the main window,
+/// hidden at start, out of the way.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_studio_overlay_keeps_the_main_window_hidden() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("mainWindowRecordingStartBehaviour", json!("close"));
+    sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+    sandbox.set_general("hasCompletedStartup", json!(true));
+    let app = sandbox.launch("overlay", &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the recordings overlay",
+        Duration::from_secs(120),
+        || {
+            let log = sandbox.log("overlay");
+            log.contains("recordings overlay shown")
+                && log.contains("auto-record main window after the recording")
+        },
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("overlay"));
+    let after = log
+        .lines()
+        .find(|line| line.contains("auto-record main window after the recording"))
+        .unwrap_or_else(|| panic!("no state after the recording: {log}"));
+    assert!(after.contains("visible=false"), "{log}");
+    assert!(log.contains("recordings overlay shown cards=1"), "{log}");
+    assert_eq!(sandbox.projects().len(), 1, "{log}");
 }
 
 /// The After an Instant recording outcome decides whether the main window,
