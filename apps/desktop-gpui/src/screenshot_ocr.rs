@@ -146,6 +146,7 @@ pub fn layout_stops(
         spans.push((cursor..text.len(), cursor_x, right.max(cursor_x)));
     }
 
+    let end_x = spans.last().map_or(left, |(_, _, span_right)| *span_right);
     let mut stops = Vec::with_capacity(text.len() + 1);
     for (range, span_left, span_right) in spans {
         let chars: Vec<(usize, char)> = text[range.clone()]
@@ -181,10 +182,7 @@ pub fn layout_stops(
     }
     stops.push(Stop {
         byte: text.len(),
-        x: stops
-            .last()
-            .map_or(left, |last| last.x)
-            .max(cursor_x.min(right)),
+        x: end_x,
     });
 
     let mut floor = f64::NEG_INFINITY;
@@ -299,16 +297,6 @@ impl TextLayer {
         Some(self.caret_in(entry, point.0))
     }
 
-    pub fn position_on(
-        &self,
-        visible: &[VisibleLine],
-        point: (f64, f64),
-        slop: f64,
-    ) -> Option<TextPosition> {
-        let entry = &visible[self.line_at(visible, point, slop)?];
-        Some(self.caret_in(entry, point.0))
-    }
-
     /// The run of same-class characters the caret touches -- a word, a run of
     /// spaces, or one piece of punctuation -- clamped to what is visible.
     pub fn word_at(
@@ -324,11 +312,9 @@ impl TextLayer {
         } else {
             index
         };
-        let at = |index: usize| {
-            (TextPosition {
-                line: visible.line,
-                index,
-            })
+        let at = |index: usize| TextPosition {
+            line: visible.line,
+            index,
         };
         let Some(class) = line.char_at(probe).map(char_class) else {
             return (at(index), at(index));
@@ -1385,7 +1371,21 @@ fn recognize_layer(path: &Path, text_system: &gpui::TextSystem) -> Result<TextLa
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    impl TextLayer {
+        fn position_on(
+            &self,
+            visible: &[VisibleLine],
+            point: (f64, f64),
+            slop: f64,
+        ) -> Option<TextPosition> {
+            let entry = &visible[self.line_at(visible, point, slop)?];
+            Some(self.caret_in(entry, point.0))
+        }
+    }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
@@ -1417,7 +1417,7 @@ mod tests {
     }
 
     fn whole(layer: &TextLayer) -> Vec<VisibleLine> {
-        layer.visible_lines(rect(0., 0., 10_000., 10_000.))
+        layer.visible_lines(rect(0., 0., 1e9, 1e9))
     }
 
     #[test]
@@ -1702,5 +1702,107 @@ mod tests {
         assert_eq!(rects.len(), 2_000);
         assert_eq!(near.map(|position| position.line), Some(1_999));
         assert!(elapsed.as_millis() < 500, "took {elapsed:?}");
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/ocr")
+            .join(name)
+    }
+
+    /// The real engine on a committed fixture: every line found, in reading
+    /// order, with each word box inside its line box, and Select All copying
+    /// the three lines back out.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn the_platform_engine_reads_the_fixture_in_order() {
+        let lines = match recognize_file(&fixture("ocr-lines.png")) {
+            Ok(lines) => lines,
+            Err(error) if cfg!(windows) && error.contains("not available") => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+            Err(error) => panic!("recognition failed: {error}"),
+        };
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["Hello Cap world", "second line here", "Copy this text 42"]
+        );
+        for line in &lines {
+            assert!(!line.words.is_empty(), "{line:?}");
+            for word in &line.words {
+                assert!(word.bounds.x >= line.bounds.x - 2., "{word:?} in {line:?}");
+                assert!(
+                    word.bounds.x + word.bounds.width <= line.bounds.x + line.bounds.width + 2.,
+                    "{word:?} in {line:?}"
+                );
+            }
+        }
+        let layer = layer(lines);
+        let visible = whole(&layer);
+        let last = &layer.lines[2];
+        assert_eq!(
+            layer.selected_text(&visible, at(0, 0), at(2, last.char_count())),
+            "Hello Cap world\nsecond line here\nCopy this text 42"
+        );
+        let cap = layer.position_on(
+            &visible,
+            (layer.lines[0].stops[7].x + 1., layer.lines[0].bounds.y + 5.),
+            0.,
+        );
+        let entry = &visible[0];
+        let (start, end) = layer.word_at(entry, cap.unwrap());
+        assert_eq!(layer.selected_text(&visible, start, end), "Cap");
+    }
+
+    /// `CAP_OCR_MEASURE_DIR=<dir of PNGs> cargo test ... measure_recognition
+    /// -- --ignored --nocapture` prints recognition and layout time per file.
+    #[test]
+    #[ignore]
+    fn measure_recognition() {
+        let dir = std::env::var("CAP_OCR_MEASURE_DIR").expect("CAP_OCR_MEASURE_DIR");
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let started = Instant::now();
+            let lines = match recognize_file(&path) {
+                Ok(lines) => lines,
+                Err(error) => {
+                    println!(
+                        "{}: error after {} ms: {error}",
+                        path.display(),
+                        started.elapsed().as_millis()
+                    );
+                    continue;
+                }
+            };
+            let recognized = started.elapsed();
+            let words: usize = lines.iter().map(|line| line.words.len()).sum();
+            let preview: Vec<String> = lines
+                .iter()
+                .take(14)
+                .map(|line| line.text.clone())
+                .collect();
+            let layout_started = Instant::now();
+            let layer = layer(lines);
+            let visible = whole(&layer);
+            let all = layer.selected_text(&visible, at(0, 0), at(usize::MAX, usize::MAX));
+            println!(
+                "{}: lines={} words={} recognize_ms={} layout_ms={} chars={}\n  {:?}",
+                path.file_name().unwrap().to_string_lossy(),
+                layer.lines.len(),
+                words,
+                recognized.as_millis(),
+                layout_started.elapsed().as_millis(),
+                all.chars().count(),
+                preview
+            );
+        }
     }
 }
