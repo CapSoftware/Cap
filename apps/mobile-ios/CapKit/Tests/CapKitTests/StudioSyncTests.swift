@@ -373,6 +373,33 @@ import Testing
         #expect(camera.gaps?.count == 1)
     }
 
+    /// When one file fails, recording stops but the healthy file is still closed properly, keeping its picture.
+    @Test func aFailureStillClosesTheHealthyFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "studio-fail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "camera.mp4")
+        let writer = try StudioTrackWriter(url: url, settings: .init(kind: .camera, audio: false))
+        var format: CMVideoFormatDescription?
+        for index in 0..<(30 * 4) {
+            if index == 30 * 2 { writer.markFailed() }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferCreate(kCFAllocatorDefault, 180, 320, kCVPixelFormatType_32BGRA, StudioRenderer.bufferAttributes as CFDictionary, &buffer)
+            if format == nil { CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: buffer!, formatDescriptionOut: &format) }
+            var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30), presentationTimeStamp: CMTime(value: CMTimeValue(600 + index), timescale: 30), decodeTimeStamp: .invalid)
+            var sample: CMSampleBuffer?
+            CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: buffer!, formatDescription: format!, sampleTiming: &timing, sampleBufferOut: &sample)
+            while !writer.isReadyForVideo { try await Task.sleep(for: .milliseconds(1)) }
+            writer.appendVideo(sample!)
+        }
+        #expect(writer.failed)
+        let result = try await withCheckedThrowingContinuation { continuation in writer.finish(at: nil) { continuation.resume(with: $0) } }
+        // Frames after the failure are refused; the two seconds before it are closed into a complete file.
+        #expect(abs(result - 2) < 0.05)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        #expect(abs(duration - 2) < 0.05)
+    }
+
     @Test func recordedRangesSkipGaps() {
         let track = StudioProject.Track(file: "c", offset: 1, duration: 10, gaps: [EditRange(start: 6, end: 7), EditRange(start: 2, end: 3), EditRange(start: 9.5, end: 12)])
         #expect(track.recorded == [EditRange(start: 0, end: 2), EditRange(start: 3, end: 6), EditRange(start: 7, end: 9.5)])

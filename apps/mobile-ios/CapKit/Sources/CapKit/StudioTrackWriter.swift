@@ -77,6 +77,8 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
     private var audioStarted: CMTime?
     private var audioEnd: CMTime = .invalid
     private var finished = false
+    /// Off once either file fails: nothing more is appended, but `finish` still closes whatever is healthy.
+    private var accepting = true
     private let state = Mutex<State>(State())
     private let clock: CMClock?
     private let onStart: (@Sendable (StudioTrackInfo) -> Void)?
@@ -195,7 +197,7 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
     }
 
     public func appendVideo(_ buffer: CMSampleBuffer) {
-        guard !finished else { return }
+        guard !finished, accepting else { return }
         let time = CMSampleBufferGetPresentationTimeStamp(buffer)
         guard time.isValid, !lastVideo.isValid || time > lastVideo else { return }
         if started == nil {
@@ -236,14 +238,13 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
         }
     }
 
-    private func markFailed() {
-        finished = true
-        lastSample = nil
+    func markFailed() {
+        accepting = false
         state.withLock { $0.failed = true }
     }
 
     public func appendAudio(_ buffer: CMSampleBuffer) {
-        guard !finished, let audio, let audioWriter else { return }
+        guard !finished, accepting, let audio, let audioWriter else { return }
         let time = CMSampleBufferGetPresentationTimeStamp(buffer)
         let length = CMSampleBufferGetDuration(buffer)
         guard time.isValid else { return }
@@ -312,14 +313,23 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
     /// `stop` carries a still screen, which sends no new frames, to the moment recording stopped.
     public func finish(at stop: CMTime? = nil, _ completion: @escaping @Sendable (Result<Double, any Error>) -> Void) {
         guard !finished else {
-            // A writer that failed mid-recording keeps its fragments; report what reached the disk.
-            finishAudio { _ in completion(.success(self.duration)) }
+            completion(.success(duration))
             return
         }
         finished = true
+        // A failed file is left as it is: its fragments up to the failure still play, and cancelling would delete it.
         guard started != nil, let video, writer.status == .writing else {
-            writer.cancelWriting()
-            finishAudio { _ in completion(.success(0)) }
+            let failed = writer.status == .failed
+            let error = writer.error
+            finishAudio { audioError in
+                if failed {
+                    completion(.failure(error ?? Failure.cantWrite))
+                } else if let audioError {
+                    completion(.failure(audioError))
+                } else {
+                    completion(.success(self.duration))
+                }
+            }
             return
         }
         if let stop, let lastSample, lastVideo.isValid, CMTimeSubtract(stop, lastVideo).seconds > frameDuration.seconds * 2,
@@ -347,7 +357,6 @@ public final class StudioTrackWriter: RecordingSink, @unchecked Sendable {
     /// Reports the sound file's error, if closing it failed. Its fragments up to then still play.
     private func finishAudio(_ done: @escaping @Sendable ((any Error)?) -> Void) {
         guard let audioWriter, let audio, audioStarted != nil, audioWriter.status == .writing else {
-            if let audioWriter, audioWriter.status == .writing { audioWriter.cancelWriting() }
             let failed = audioWriter?.status == .failed
             done(failed ? (audioWriter?.error ?? Failure.cantWrite) : nil)
             return
