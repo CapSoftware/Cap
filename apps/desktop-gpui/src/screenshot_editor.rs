@@ -1178,7 +1178,7 @@ impl ScreenshotEditorWindow {
             self.schedule_save(window, cx);
         }
         self.refresh_mask_overlays(window, cx);
-        self.start_text_recognition(cx);
+        self.start_text_recognition(window, cx);
         cx.notify();
     }
 

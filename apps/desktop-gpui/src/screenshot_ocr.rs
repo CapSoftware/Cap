@@ -10,6 +10,7 @@
 use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use gpui::IntoElement as _;
@@ -535,7 +536,7 @@ fn scale_rect(rect: Rect, sx: f64, sy: f64) -> Rect {
 }
 
 /// Decode, fit, recognise, and map the boxes back to source pixels.
-pub fn recognize_file(path: &Path) -> Result<Vec<RecognizedLine>, String> {
+pub fn recognize_file(path: &Path, cancel: &AtomicBool) -> Result<Vec<RecognizedLine>, String> {
     let decoded = image::open(path)
         .map_err(|error| error.to_string())?
         .to_rgba8();
@@ -559,11 +560,7 @@ pub fn recognize_file(path: &Path) -> Result<Vec<RecognizedLine>, String> {
     for pixel in bgra.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
-    let lines = platform::recognize(OcrImage {
-        bgra,
-        width: fit_width,
-        height: fit_height,
-    })?;
+    let lines = recognize_tiled(&bgra, fit_width, fit_height, cancel)?;
     if (fit_width, fit_height) == (width, height) {
         return Ok(lines);
     }
@@ -586,6 +583,252 @@ pub fn recognize_file(path: &Path) -> Result<Vec<RecognizedLine>, String> {
         .collect())
 }
 
+/// Vision scales the whole image down to its own working size before it
+/// reads it, so on a large capture ordinary text shrinks below what it can
+/// see (an 8K capture of 22px text comes back empty). Past the threshold the
+/// image is read in overlapping tiles and the pieces are stitched back.
+fn recognize_tiled(
+    bgra: &[u8],
+    width: u32,
+    height: u32,
+    cancel: &AtomicBool,
+) -> Result<Vec<RecognizedLine>, String> {
+    let tiles = match platform::TILING {
+        Some(tiling) if width.max(height) > tiling.threshold => {
+            tile_rects(width, height, tiling.side, tiling.overlap)
+        }
+        _ => vec![(0, 0, width, height)],
+    };
+    if tiles.len() == 1 {
+        return platform::recognize(OcrImage {
+            bgra: bgra.to_vec(),
+            width,
+            height,
+        });
+    }
+    let mut lines = Vec::new();
+    for tile in tiles {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        let found = platform::recognize(OcrImage {
+            bgra: crop_bgra(bgra, width, tile),
+            width: tile.2,
+            height: tile.3,
+        })?;
+        lines.extend(place_tile_lines(found, tile, (width, height)));
+    }
+    Ok(merge_tile_lines(lines))
+}
+
+/// Tiles of `side` (clamped to the image) overlapping by at least
+/// `overlap`, the last one in each direction flush with the far edge.
+pub fn tile_rects(width: u32, height: u32, side: u32, overlap: u32) -> Vec<(u32, u32, u32, u32)> {
+    let starts = |length: u32| -> Vec<u32> {
+        if length <= side {
+            return vec![0];
+        }
+        let step = side.saturating_sub(overlap).max(1);
+        let mut starts = Vec::new();
+        let mut start = 0;
+        while start + side < length {
+            starts.push(start);
+            start += step;
+        }
+        starts.push(length - side);
+        starts
+    };
+    let xs = starts(width);
+    let ys = starts(height);
+    ys.iter()
+        .flat_map(|y| {
+            xs.iter()
+                .map(move |x| (*x, *y, side.min(width), side.min(height)))
+        })
+        .collect()
+}
+
+fn crop_bgra(bgra: &[u8], width: u32, (x, y, w, h): (u32, u32, u32, u32)) -> Vec<u8> {
+    let row = width as usize * 4;
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+    for line in y as usize..(y + h) as usize {
+        let start = line * row + x as usize * 4;
+        out.extend_from_slice(&bgra[start..start + w as usize * 4]);
+    }
+    out
+}
+
+/// Tile lines into image space, without the ones the tile's inner top or
+/// bottom edge cut through: the overlap is taller than a line, so the
+/// neighbouring tile holds each of those whole.
+pub fn place_tile_lines(
+    lines: Vec<RecognizedLine>,
+    (x, y, w, h): (u32, u32, u32, u32),
+    image: (u32, u32),
+) -> Vec<RecognizedLine> {
+    const EDGE: f64 = 2.;
+    let top_inner = y > 0;
+    let bottom_inner = y + h < image.1;
+    let offset = |rect: Rect| Rect {
+        x: rect.x + f64::from(x),
+        y: rect.y + f64::from(y),
+        ..rect
+    };
+    lines
+        .into_iter()
+        .filter(|line| {
+            !(top_inner && line.bounds.y <= EDGE)
+                && !(bottom_inner && line.bounds.y + line.bounds.height >= f64::from(h) - EDGE)
+        })
+        .map(|line| RecognizedLine {
+            bounds: offset(line.bounds),
+            words: line
+                .words
+                .into_iter()
+                .map(|word| RecognizedWord {
+                    bounds: offset(word.bounds),
+                    range: word.range,
+                })
+                .collect(),
+            text: line.text,
+        })
+        .collect()
+}
+
+fn overlap(a_start: f64, a_len: f64, b_start: f64, b_len: f64) -> f64 {
+    ((a_start + a_len).min(b_start + b_len) - a_start.max(b_start)).max(0.)
+}
+
+fn union(a: Rect, b: Rect) -> Rect {
+    let left = a.x.min(b.x);
+    let top = a.y.min(b.y);
+    Rect {
+        x: left,
+        y: top,
+        width: (a.x + a.width).max(b.x + b.width) - left,
+        height: (a.y + a.height).max(b.y + b.height) - top,
+    }
+}
+
+struct Piece {
+    text: String,
+    bounds: Rect,
+}
+
+/// Stitches lines read from overlapping tiles: pieces of one line seen by
+/// two tiles join on their word boxes (a word both saw is kept once, the
+/// taller then wider reading winning, since a tile edge clips glyphs), and
+/// the result is put in reading order, row by row, left to right.
+pub fn merge_tile_lines(lines: Vec<RecognizedLine>) -> Vec<RecognizedLine> {
+    let mut rows: Vec<(Rect, Vec<Piece>)> = Vec::new();
+    for line in lines {
+        let pieces: Vec<Piece> = if line.words.is_empty() {
+            vec![Piece {
+                text: line.text.trim().to_string(),
+                bounds: line.bounds,
+            }]
+        } else {
+            line.words
+                .iter()
+                .filter_map(|word| {
+                    Some(Piece {
+                        text: line.text.get(word.range.clone())?.to_string(),
+                        bounds: word.bounds,
+                    })
+                })
+                .collect()
+        };
+        let bounds = line.bounds;
+        let row = rows.iter_mut().find(|(row, _)| {
+            let min_height = row.height.min(bounds.height);
+            overlap(row.y, row.height, bounds.y, bounds.height) >= min_height * 0.6
+                && overlap(row.x, row.width, bounds.x, bounds.width) > 0.
+        });
+        let Some((row, existing)) = row else {
+            rows.push((bounds, pieces));
+            continue;
+        };
+        *row = union(*row, bounds);
+        for piece in pieces {
+            let twin = existing.iter_mut().find(|other| {
+                let min_width = other.bounds.width.min(piece.bounds.width);
+                let min_height = other.bounds.height.min(piece.bounds.height);
+                overlap(
+                    other.bounds.x,
+                    other.bounds.width,
+                    piece.bounds.x,
+                    piece.bounds.width,
+                ) > min_width * 0.5
+                    && overlap(
+                        other.bounds.y,
+                        other.bounds.height,
+                        piece.bounds.y,
+                        piece.bounds.height,
+                    ) > min_height * 0.5
+            });
+            match twin {
+                Some(other) => {
+                    let taller = piece.bounds.height > other.bounds.height * 1.1;
+                    let shorter = other.bounds.height > piece.bounds.height * 1.1;
+                    if taller || (!shorter && piece.bounds.width > other.bounds.width) {
+                        *other = piece;
+                    }
+                }
+                None => existing.push(piece),
+            }
+        }
+    }
+
+    let mut merged: Vec<RecognizedLine> = rows
+        .into_iter()
+        .filter_map(|(_, mut pieces)| {
+            pieces.retain(|piece| !piece.text.is_empty());
+            pieces.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x));
+            let mut text = String::new();
+            let mut words = Vec::new();
+            let mut bounds: Option<Rect> = None;
+            for piece in pieces {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                let start = text.len();
+                text.push_str(&piece.text);
+                words.push(RecognizedWord {
+                    range: start..text.len(),
+                    bounds: piece.bounds,
+                });
+                bounds = Some(bounds.map_or(piece.bounds, |rect| union(rect, piece.bounds)));
+            }
+            Some(RecognizedLine {
+                text,
+                bounds: bounds?,
+                words,
+            })
+        })
+        .collect();
+
+    merged.sort_by(|a, b| {
+        (a.bounds.y + a.bounds.height / 2.).total_cmp(&(b.bounds.y + b.bounds.height / 2.))
+    });
+    let mut ordered = Vec::with_capacity(merged.len());
+    let mut row: Vec<RecognizedLine> = Vec::new();
+    for line in merged {
+        let joins = row.first().is_some_and(|first| {
+            let first_center = first.bounds.y + first.bounds.height / 2.;
+            let center = line.bounds.y + line.bounds.height / 2.;
+            (center - first_center).abs() < first.bounds.height.min(line.bounds.height) * 0.5
+        });
+        if !joins {
+            row.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x));
+            ordered.append(&mut row);
+        }
+        row.push(line);
+    }
+    row.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x));
+    ordered.append(&mut row);
+    ordered
+}
+
 /// Byte ranges of the whitespace-separated words in `text`.
 pub fn word_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
@@ -606,9 +849,23 @@ pub fn word_ranges(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+pub struct Tiling {
+    pub threshold: u32,
+    pub side: u32,
+    pub overlap: u32,
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{OcrImage, RecognizedLine, RecognizedWord, Rect, word_ranges};
+    use super::{OcrImage, RecognizedLine, RecognizedWord, Rect, Tiling, word_ranges};
+
+    /// 2880px wide captures read whole on macOS 15 and 26; 3456px lost a
+    /// third of their lines on 15, and 4K and 5K lost most or all of them.
+    pub const TILING: Option<Tiling> = Some(Tiling {
+        threshold: 2560,
+        side: 2048,
+        overlap: 256,
+    });
 
     pub fn max_side() -> Result<u32, String> {
         Ok(u32::MAX)
@@ -745,7 +1002,7 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{OcrImage, RecognizedLine, RecognizedWord, Rect};
+    use super::{OcrImage, RecognizedLine, RecognizedWord, Rect, Tiling};
     use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
     use windows::Media::Ocr::OcrEngine;
     use windows::Storage::Streams::DataWriter;
@@ -764,6 +1021,8 @@ mod platform {
             .map_err(|error| format!("Windows OCR runtime failed: {error}"))?;
         Ok(RuntimeGuard)
     }
+
+    pub const TILING: Option<Tiling> = None;
 
     pub fn max_side() -> Result<u32, String> {
         let _runtime = runtime()?;
@@ -861,7 +1120,9 @@ mod platform {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
-    use super::{OcrImage, RecognizedLine};
+    use super::{OcrImage, RecognizedLine, Tiling};
+
+    pub const TILING: Option<Tiling> = None;
 
     pub fn max_side() -> Result<u32, String> {
         Err("OCR is only available on macOS and Windows".to_string())
@@ -910,6 +1171,13 @@ pub(crate) struct OcrState {
     drag: Option<TextDrag>,
     visible: std::cell::RefCell<Option<(VisibleKey, Arc<Vec<VisibleLine>>)>>,
     layer_bounds: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for OcrState {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 impl OcrState {
@@ -925,6 +1193,21 @@ fn rect_key(rect: Rect) -> VisibleKey {
         rect.width.to_bits(),
         rect.height.to_bits(),
     )
+}
+
+struct FrameStats {
+    phase: &'static str,
+    started: Instant,
+    last: Instant,
+    seconds: f64,
+    intervals: Vec<f64>,
+}
+
+fn frame_stats_seconds() -> Option<f64> {
+    std::env::var("CAP_GPUI_AUTO_SCREENSHOT_TEXT_STATS")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.)
 }
 
 fn text_system_advance(text_system: &gpui::TextSystem) -> impl FnMut(char) -> f64 + '_ {
@@ -977,7 +1260,7 @@ impl ScreenshotEditorWindow {
     /// own thread: Windows needs a clean multithreaded apartment, and a
     /// multi-second Vision pass should not hold a pool thread. A window that
     /// closes first drops the task, and the thread's late result goes nowhere.
-    pub(crate) fn start_text_recognition(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_text_recognition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !SUPPORTED || !matches!(self.ocr.status, OcrStatus::NotStarted) {
             return;
         }
@@ -986,18 +1269,20 @@ impl ScreenshotEditorWindow {
             return;
         };
         let text_system = cx.text_system().clone();
+        let cancel = self.ocr.cancel.clone();
         let (tx, rx) = flume::bounded(1);
         let spawned = std::thread::Builder::new()
             .name("screenshot-ocr".to_string())
             .spawn(move || {
-                let _ = tx.send(recognize_layer(&path, &text_system));
+                let _ = tx.send(recognize_layer(&path, &text_system, &cancel));
             });
         if let Err(error) = spawned {
             tracing::warn!(%error, "screenshot text recognition could not start");
             self.ocr.status = OcrStatus::Unavailable;
             return;
         }
-        let task = cx.spawn(async move |this, cx| {
+        self.start_text_frame_stats("recognizing", window, cx);
+        let task = cx.spawn_in(window, async move |this, cx| {
             let status = match rx.recv_async().await {
                 Ok(Ok(layer)) => OcrStatus::Ready(Arc::new(layer)),
                 Ok(Err(error)) => {
@@ -1006,14 +1291,85 @@ impl ScreenshotEditorWindow {
                 }
                 Err(_) => OcrStatus::Unavailable,
             };
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 this.ocr.status = status;
                 this.ocr.visible.borrow_mut().take();
+                if frame_stats_seconds().is_some() && this.select_all_text(cx) {
+                    let chars = this.selected_text().map_or(0, |text| text.chars().count());
+                    let copied = this.copy_selected_text(window, cx);
+                    tracing::info!(chars, copied, "auto text selection");
+                    this.start_text_frame_stats("selected", window, cx);
+                }
                 cx.notify();
             })
             .ok();
         });
         self.ocr.status = OcrStatus::Running { _task: task };
+    }
+
+    /// Harness only (`CAP_GPUI_AUTO_SCREENSHOT_TEXT_STATS=<seconds>`): log
+    /// frame intervals while recognition runs, then select and copy all the
+    /// text and log them again with the whole highlight on screen.
+    fn start_text_frame_stats(
+        &mut self,
+        phase: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(seconds) = frame_stats_seconds() else {
+            return;
+        };
+        let started = Instant::now();
+        self.text_frame_stats_tick(
+            FrameStats {
+                phase,
+                started,
+                last: started,
+                seconds,
+                intervals: Vec::new(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn text_frame_stats_tick(
+        &mut self,
+        mut stats: FrameStats,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = Instant::now();
+        if stats.last != stats.started {
+            stats
+                .intervals
+                .push(now.duration_since(stats.last).as_secs_f64() * 1000.);
+        }
+        stats.last = now;
+        if now.duration_since(stats.started).as_secs_f64() >= stats.seconds {
+            let intervals = &mut stats.intervals;
+            intervals.sort_by(f64::total_cmp);
+            let at = |share: f64| {
+                intervals
+                    .get(((intervals.len() as f64 - 1.) * share).round() as usize)
+                    .copied()
+                    .unwrap_or(0.)
+            };
+            tracing::info!(
+                phase = stats.phase,
+                frames = intervals.len(),
+                p50_ms = format!("{:.2}", at(0.5)),
+                p99_ms = format!("{:.2}", at(0.99)),
+                max_ms = format!("{:.2}", at(1.)),
+                lines = self.text_layer().map_or(0, |layer| layer.lines.len()),
+                "screenshot frame stats"
+            );
+            return;
+        }
+        cx.on_next_frame(window, move |this, window, cx| {
+            this.text_frame_stats_tick(stats, window, cx);
+        });
+        cx.notify();
     }
 
     fn source_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
@@ -1352,9 +1708,13 @@ impl ScreenshotEditorWindow {
     }
 }
 
-fn recognize_layer(path: &Path, text_system: &gpui::TextSystem) -> Result<TextLayer, String> {
+fn recognize_layer(
+    path: &Path,
+    text_system: &gpui::TextSystem,
+    cancel: &AtomicBool,
+) -> Result<TextLayer, String> {
     let started = Instant::now();
-    let lines = recognize_file(path)?;
+    let lines = recognize_file(path, cancel)?;
     let recognized = started.elapsed();
     let words: usize = lines.iter().map(|line| line.words.len()).sum();
     let line_count = lines.len();
@@ -1579,7 +1939,7 @@ mod tests {
             line("ghijkl", rect(0., 20., 60., 10.)),
             line("mnopqr", rect(0., 40., 60., 10.)),
         ]);
-        let crop = rect(20., 18., 25., 20.);
+        let crop = rect(20., 18., 24., 20.);
         let visible = layer.visible_lines(crop);
         assert_eq!(
             visible,
@@ -1696,12 +2056,104 @@ mod tests {
         let visible = whole(&layer);
         let text = layer.selected_text(&visible, at(0, 0), at(1_999, 38));
         let rects = layer.selection_rects(&visible, at(0, 0), at(1_999, 38));
-        let near = layer.position_near(&visible, (150., 20_000.));
+        let near = layer.position_near(&visible, (150., 1e6));
         let elapsed = started.elapsed();
         assert_eq!(text.lines().count(), 2_000);
         assert_eq!(rects.len(), 2_000);
         assert_eq!(near.map(|position| position.line), Some(1_999));
         assert!(elapsed.as_millis() < 500, "took {elapsed:?}");
+    }
+
+    fn worded(text: &str, x: f64, y: f64, char_width: f64, height: f64) -> RecognizedLine {
+        let words: Vec<RecognizedWord> = word_ranges(text)
+            .into_iter()
+            .map(|range| RecognizedWord {
+                bounds: rect(
+                    x + range.start as f64 * char_width,
+                    y,
+                    range.len() as f64 * char_width,
+                    height,
+                ),
+                range,
+            })
+            .collect();
+        RecognizedLine {
+            text: text.to_string(),
+            bounds: rect(x, y, text.len() as f64 * char_width, height),
+            words,
+        }
+    }
+
+    #[test]
+    fn tiles_cover_the_image_with_the_overlap_and_end_flush() {
+        assert_eq!(tile_rects(1000, 800, 2048, 256), vec![(0, 0, 1000, 800)]);
+        let tiles = tile_rects(7680, 4320, 2048, 256);
+        let xs: Vec<u32> = tiles.iter().filter(|t| t.1 == 0).map(|t| t.0).collect();
+        assert_eq!(xs, vec![0, 1792, 3584, 5376, 5632]);
+        let ys: Vec<u32> = tiles.iter().filter(|t| t.0 == 0).map(|t| t.1).collect();
+        assert_eq!(ys, vec![0, 1792, 2272]);
+        assert!(tiles.iter().all(|t| t.2 == 2048 && t.3 == 2048));
+        assert!(tiles.iter().all(|t| t.0 + t.2 <= 7680 && t.1 + t.3 <= 4320));
+        let tall = tile_rects(1600, 12_000, 2048, 256);
+        assert!(tall.iter().all(|t| t.0 == 0 && t.2 == 1600));
+        assert_eq!(tall.last().unwrap().1 + 2048, 12_000);
+    }
+
+    #[test]
+    fn tile_lines_move_to_image_space_and_lines_cut_by_an_inner_edge_go() {
+        let lines = vec![
+            worded("top cut", 10., 0., 10., 20.),
+            worded("whole", 10., 100., 10., 20.),
+            worded("bottom cut", 10., 2030., 10., 18.),
+        ];
+        let placed = place_tile_lines(lines, (500, 1000, 2048, 2048), (4000, 5000));
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].bounds, rect(510., 1100., 50., 20.));
+        assert_eq!(placed[0].words[0].bounds, rect(510., 1100., 50., 20.));
+
+        let edge_of_image = place_tile_lines(
+            vec![worded("first", 0., 0., 10., 20.)],
+            (0, 0, 2048, 2048),
+            (2048, 2048),
+        );
+        assert_eq!(edge_of_image.len(), 1);
+    }
+
+    #[test]
+    fn a_line_two_tiles_both_cut_is_stitched_once() {
+        let left = worded("alpha bravo char", 0., 50., 10., 20.);
+        let mut right = worded("charlie delta echo", 100., 50., 10., 20.);
+        right.words[0].bounds.x = 120.;
+        right.words[0].bounds.width = 70.;
+        let merged = merge_tile_lines(vec![left, right]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "alpha bravo charlie delta echo");
+        let words: Vec<&str> = merged[0]
+            .words
+            .iter()
+            .map(|word| &merged[0].text[word.range.clone()])
+            .collect();
+        assert_eq!(words, vec!["alpha", "bravo", "charlie", "delta", "echo"]);
+    }
+
+    #[test]
+    fn a_line_both_tiles_read_whole_is_kept_once_and_clipped_glyphs_lose() {
+        let whole = worded("same line", 0., 10., 10., 20.);
+        let clipped = worded("sarne line", 0., 14., 10., 12.);
+        let merged = merge_tile_lines(vec![clipped, whole]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "same line");
+    }
+
+    #[test]
+    fn stitched_lines_read_row_by_row_then_left_to_right() {
+        let merged = merge_tile_lines(vec![
+            worded("right one", 3000., 10., 10., 20.),
+            worded("second row", 0., 60., 10., 20.),
+            worded("left one", 0., 12., 10., 20.),
+        ]);
+        let texts: Vec<&str> = merged.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, vec!["left one", "right one", "second row"]);
     }
 
     fn fixture(name: &str) -> PathBuf {
@@ -1716,7 +2168,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn the_platform_engine_reads_the_fixture_in_order() {
-        let lines = match recognize_file(&fixture("ocr-lines.png")) {
+        let lines = match recognize_file(&fixture("ocr-lines.png"), &AtomicBool::new(false)) {
             Ok(lines) => lines,
             Err(error) if cfg!(windows) && error.contains("not available") => {
                 eprintln!("skipping: {error}");
@@ -1756,6 +2208,42 @@ mod tests {
         assert_eq!(layer.selected_text(&visible, start, end), "Cap");
     }
 
+    /// Wider than the tiling threshold on macOS, so it goes through tiles: the
+    /// first tile cuts the middle sentence and the second reads it whole, and
+    /// it must come back once, whole, between the other two.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn the_platform_engine_stitches_a_tiled_capture() {
+        let lines = match recognize_file(&fixture("ocr-tiled.png"), &AtomicBool::new(false)) {
+            Ok(lines) => lines,
+            Err(error) if cfg!(windows) && error.contains("not available") => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+            Err(error) => panic!("recognition failed: {error}"),
+        };
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Top left heading",
+                "This sentence crosses the tile overlap",
+                "Bottom right footer"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_recognition_stops_before_reading() {
+        let Some(tiling) = platform::TILING else {
+            return;
+        };
+        assert!(3000 > tiling.threshold);
+        let bgra = vec![255; 3000 * 1200 * 4];
+        let result = recognize_tiled(&bgra, 3000, 1200, &AtomicBool::new(true));
+        assert_eq!(result.unwrap_err(), "cancelled");
+    }
+
     /// `CAP_OCR_MEASURE_DIR=<dir of PNGs> cargo test ... measure_recognition
     /// -- --ignored --nocapture` prints recognition and layout time per file.
     #[test]
@@ -1771,7 +2259,7 @@ mod tests {
         paths.sort();
         for path in paths {
             let started = Instant::now();
-            let lines = match recognize_file(&path) {
+            let lines = match recognize_file(&path, &AtomicBool::new(false)) {
                 Ok(lines) => lines,
                 Err(error) => {
                     println!(
