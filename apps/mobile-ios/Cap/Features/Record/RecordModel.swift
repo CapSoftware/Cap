@@ -32,6 +32,8 @@ final class RecordModel {
     @ObservationIgnored private var limitTask: Task<Void, Never>?
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var wantsCamera = true
+    var captureMode: CaptureMode = .instant
+    @ObservationIgnored private var studio: (writer: StudioTrackWriter, projectId: String, store: StudioStore)?
 
     init(session: SessionModel, folderId: String?) {
         self.session = session
@@ -51,7 +53,7 @@ final class RecordModel {
         return false
     }
 
-    var limit: TimeInterval? { session.isPro ? nil : RecordingLimits.freeDuration }
+    var limit: TimeInterval? { session.isPro || captureMode == .studio ? nil : RecordingLimits.freeDuration }
     var upgradeURL: URL { session.services.environment.upgradeURL }
 
     // MARK: Camera
@@ -129,6 +131,10 @@ final class RecordModel {
 
     func record() {
         guard phase == .ready else { return }
+        if captureMode == .studio {
+            recordStudio()
+            return
+        }
         let recordings = session.services.recordings
         let job = RecordingJob(
             userId: session.credentials.userId,
@@ -176,6 +182,10 @@ final class RecordModel {
     }
 
     func stop() async {
+        if studio != nil {
+            await stopStudio()
+            return
+        }
         guard isRecording, !stopping, let jobId else { return }
         stopping = true
         limitTask?.cancel()
@@ -218,6 +228,15 @@ final class RecordModel {
     }
 
     func discard() {
+        if let studio {
+            self.studio = nil
+            Usage.track("recording_discarded", ["mode": "studio", "reason": "cancelled"])
+            UIApplication.shared.isIdleTimerDisabled = false
+            capture.cancelRecording()
+            studio.store.delete(studio.projectId)
+            phase = .ready
+            return
+        }
         guard isRecording || phase == .finishing, let jobId else { return }
         Usage.track("recording_discarded", ["mode": "camera", "reason": "cancelled"])
         limitTask?.cancel()
@@ -234,6 +253,78 @@ final class RecordModel {
         if let id = capId.flatMap(CapID.init) {
             try? await session.api.deleteCap(id)
         }
+    }
+
+    // MARK: Studio
+
+    private func recordStudio() {
+        let projectId = UUID().uuidString.lowercased()
+        let store = StudioSession.shared.store
+        guard store.hasRoomToRecord() else {
+            session.toasts.show("Free up at least 1 GB on this iPhone to record in Studio Mode.", systemImage: "externaldrive.badge.exclamationmark", style: .info)
+            return
+        }
+        let writer: StudioTrackWriter
+        do {
+            let directory = store.directory(for: projectId)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            writer = try StudioTrackWriter(url: directory.appending(path: "camera.mp4"), settings: .init(kind: .camera, audio: hasMicrophone), clock: capture.captureClock) { started in
+                // Noted as soon as picture or sound starts, so a recording cut short by a crash can still be recovered.
+                var pending = started
+                pending.duration = 0
+                pending.audio?.duration = 0
+                try? pending.save(as: "camera", in: directory)
+            }
+        } catch {
+            session.toasts.show(error: error)
+            return
+        }
+        studio = (writer, projectId, store)
+        stopping = false
+        RecordingCoordinator.shared.activeModel = self
+        capture.beginRecording(writer)
+        phase = .recording(startedAt: .now)
+        Usage.track("recording_started", ["mode": "studio_camera", "microphone": .bool(hasMicrophone)])
+        UIApplication.shared.isIdleTimerDisabled = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        // A file that can't take more (a full disk) ends the recording, keeping what was written.
+        limitTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, let studio = self.studio else { return }
+                if studio.writer.failed {
+                    self.session.toasts.show("Recording stopped because this iPhone is out of space. What was recorded is kept.", systemImage: "externaldrive.badge.exclamationmark", style: .info)
+                    await self.stopStudio()
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopStudio() async {
+        guard let studio, isRecording, !stopping else { return }
+        stopping = true
+        limitTask?.cancel()
+        phase = .finishing
+        UIApplication.shared.isIdleTimerDisabled = false
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let result = await withCheckedContinuation { continuation in
+            capture.endRecording { continuation.resume(returning: $0) }
+        }
+        self.studio = nil
+        phase = .ready
+        guard var info = studio.writer.info else {
+            studio.store.delete(studio.projectId)
+            session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
+            return
+        }
+        if let duration = try? result.get(), duration > 0 { info.duration = duration }
+        guard info.duration >= Self.minimumDuration else {
+            studio.store.delete(studio.projectId)
+            session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
+            return
+        }
+        await StudioSession.shared.cameraRecordingFinished(projectId: studio.projectId, in: studio.store, camera: info)
     }
 
     private func writerFailed(_ error: any Error) {

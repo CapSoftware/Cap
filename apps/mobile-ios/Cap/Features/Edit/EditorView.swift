@@ -9,10 +9,13 @@ struct EditorView: View {
 
     @State private var confirmingDiscard = false
     @State private var confirmingRestore = false
+    @State private var tool: EditorTool = .trim
+    @State private var export = EditorExport()
+    @Environment(SessionModel.self) private var session
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
-    enum EditorOutcome { case cancelled, saved, restored }
+    enum EditorOutcome { case cancelled, saved, restored, rendered }
 
     var body: some View {
         NavigationStack {
@@ -33,24 +36,15 @@ struct EditorView: View {
                 case .ready:
                     content
                 }
+                if export.isRunning {
+                    ExportProgressCard(progress: export.progress, title: export.title) { export.cancel() }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
-            .navigationTitle("Edit")
+            .animation(.easeOut(duration: 0.2), value: export.isRunning)
+            .navigationTitle(model.isStudio ? "Studio" : "Edit")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        if model.hasChanges { confirmingDiscard = true } else { finish(.cancelled) }
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task { if await model.save() { finish(.saved) } }
-                    } label: {
-                        if model.isSaving { ProgressView() } else { Text("Save") }
-                    }
-                    .disabled(!model.hasChanges || model.isSaving)
-                }
-            }
+            .toolbar { toolbar }
         }
         .preferredColorScheme(.dark)
         .task {
@@ -64,7 +58,10 @@ struct EditorView: View {
             #endif
             await model.load()
         }
-        .onDisappear { model.close() }
+        .onDisappear {
+            export.cancel()
+            model.close()
+        }
         .confirmationDialog("Discard your changes?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
             Button("Discard changes", role: .destructive) { finish(.cancelled) }
             Button("Keep editing", role: .cancel) {}
@@ -77,12 +74,49 @@ struct EditorView: View {
         } message: {
             Text("Every edit made to this Cap is undone. Comments stay where they are.")
         }
-        .alert("Couldn't save the edit", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
+        .alert("Couldn't save the edit", isPresented: Binding(get: { model.errorMessage != nil || export.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil; export.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(model.errorMessage ?? "")
+            Text(model.errorMessage ?? export.errorMessage ?? "")
         }
-        .interactiveDismissDisabled(model.hasChanges)
+        .interactiveDismissDisabled(model.hasChanges || export.isRunning)
+    }
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            if model.isStudio {
+                Button("Done") { finish(.cancelled) }
+                    .disabled(export.isRunning)
+            } else {
+                Button("Cancel") {
+                    if model.hasChanges { confirmingDiscard = true } else { finish(.cancelled) }
+                }
+                .disabled(export.isRunning)
+            }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            if model.isStudio {
+                Menu {
+                    Button("Share as a Cap", systemImage: "link") { share() }
+                    Button("Save to Photos", systemImage: "square.and.arrow.down") { saveToPhotos() }
+                } label: {
+                    Text("Share")
+                } primaryAction: {
+                    share()
+                }
+                .disabled(model.phase != .ready || export.isRunning)
+                .accessibilityIdentifier("editor-share")
+            } else {
+                Button {
+                    if model.needsRender { share() } else { Task { if await model.save() { finish(.saved) } } }
+                } label: {
+                    // A styled edit renders on the phone and uploads as a new Cap; the original stays as it is.
+                    if model.isSaving { ProgressView() } else { Text(model.needsRender ? "Save as New" : "Save") }
+                }
+                .disabled(!model.hasChanges || model.isSaving || export.isRunning)
+            }
+        }
     }
 
     private func finish(_ outcome: EditorOutcome) {
@@ -90,28 +124,53 @@ struct EditorView: View {
         onFinished(outcome)
     }
 
-    private var content: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                ForEach(model.players.indices, id: \.self) { index in
-                    EditorPlayerSurface(player: model.players[index]) { model.metrics.mark("firstFrame") }
-                        .zIndex(index == model.activePlayer ? 1 : 0)
-                }
-                EditorPlayerSurface(player: model.sourcePlayer)
-                    .zIndex(model.showsSource ? 2 : -1)
+    private func share() {
+        Task {
+            if await export.share(model, session: session) { finish(.rendered) }
+        }
+    }
+
+    private func saveToPhotos() {
+        Task {
+            if await export.saveToPhotos(model) {
+                session.toasts.show("Saved to Photos", systemImage: "checkmark.circle.fill")
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityHidden(true)
+        }
+    }
 
-            Text("\(CapFormat.timestamp(model.outputTime)) / \(CapFormat.timestamp(model.displayedTimeline.outputDuration))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Edited length \(CapFormat.timestamp(model.displayedTimeline.outputDuration))")
-                .opacity(model.isTrimming ? 0 : 1)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 16)
+    private var tools: [EditorTool] {
+        EditorTool.allCases.filter { tool in
+            switch tool {
+            case .camera: model.hasCamera && model.hasScreen
+            default: true
+            }
+        }
+    }
 
-            if wide {
+    private var content: some View {
+        VStack(spacing: 14) {
+            EditorPreview(model: model, outlinesCamera: tool == .camera)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, model.renderSize.width > model.renderSize.height ? 0 : 12)
+
+            HStack {
+                if model.needsRender {
+                    let size = model.exportSize
+                    Text(verbatim: "\(Int(size.width))×\(Int(size.height))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Renders at \(Int(size.width)) by \(Int(size.height))")
+                }
+                Spacer()
+                Text("\(CapFormat.timestamp(model.outputTime)) / \(CapFormat.timestamp(model.displayedTimeline.outputDuration))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Edited length \(CapFormat.timestamp(model.displayedTimeline.outputDuration))")
+            }
+            .opacity(model.isTrimming ? 0 : 1)
+            .padding(.horizontal, 16)
+
+            if wide, tool == .trim {
                 HStack(spacing: 10) {
                     historyTools
                     EditorTimeline(model: model)
@@ -119,21 +178,46 @@ struct EditorView: View {
                     clipTools
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 8)
             } else {
                 EditorTimeline(model: model)
                     .padding(.horizontal, 15)
+            }
 
+            panel
+                .frame(height: tool == .trim && wide ? 0 : EditorPanels.height(for: tool), alignment: .top)
+                .frame(maxWidth: 640)
+                .clipped()
+
+            if tools.count > 1 {
+                EditorToolBar(tools: tools, selection: $tool)
+                    .padding(.bottom, 4)
+            }
+        }
+        .sensoryFeedback(.impact(weight: .medium), trigger: model.timeline.clips.count)
+    }
+
+    @ViewBuilder
+    private var panel: some View {
+        switch tool {
+        case .trim:
+            if !wide {
                 HStack(spacing: 10) {
                     historyTools
                     Spacer()
                     clipTools
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                .padding(.top, 4)
             }
+        case .background:
+            BackgroundPanel(model: model)
+        case .frame:
+            FramePanel(model: model)
+        case .camera:
+            CameraPanel(model: model)
+        case .music:
+            MusicPanel(model: model)
         }
-        .sensoryFeedback(.impact(weight: .medium), trigger: model.timeline.clips.count)
     }
 
     private var wide: Bool {
@@ -507,7 +591,7 @@ private struct FilmStrip: View {
     let size: CGSize
 
     var body: some View {
-        let tile = max(12, size.height * model.videoAspect)
+        let tile = max(12, size.height * model.sourceAspect)
         let scale = track.pointsPerSecond
         let span = scale > 0 ? Double(tile) / scale : 0
         let low = max(0, track.time(for: -Double(inset)))

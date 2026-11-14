@@ -157,6 +157,7 @@ struct MainTabView: View {
     @State private var analyticsPath: [Route] = []
     @State private var settingsPath: [Route] = []
     @State private var recorder: RecorderRequest?
+    @State private var studio = StudioSession.shared
     @State private var capModels = CapDetailModels()
     @State private var heldLayout: CapsLayout?
 
@@ -182,6 +183,10 @@ struct MainTabView: View {
         .fullScreenCover(item: $recorder) { request in
             RecordView(session: session, folderId: request.folderId)
         }
+        // From a notification while the recorder isn't up; the recorder shows the editor itself.
+        .fullScreenCover(item: Binding(get: { recorder == nil ? studio.editing : nil }, set: { studio.editing = $0 })) { project in
+            StudioEditorCover(project: project, session: session)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .capOpenRecorder)) { note in
             guard recorder == nil else { return }
             recorder = RecorderRequest(folderId: note.object as? String)
@@ -201,6 +206,7 @@ struct MainTabView: View {
         }
         .onAppear {
             RecordingCoordinator.shared.session = session
+            studio.attach(session)
             let coordinator = RecordingCoordinator.shared
             coordinator.collectFinishedScreenRecording(showHome: false)
             // A fresh launch after a recording stopped while Cap was away.
@@ -253,6 +259,10 @@ struct MainTabView: View {
             settingsPath = [.profile]
         case ("analytics", let id?):
             if let capId = CapID(id) { homePath = [.capAnalytics(capId, title: "Walkthrough: the new Cap 0.6.2 editor")] }
+        case ("studio", let directory?):
+            // A folder with screen.mp4 and/or camera.mp4, opened as a Studio project for tests and measurements.
+            studio.attach(session)
+            StudioDebug.openFixture(URL(fileURLWithPath: directory))
         default:
             break
         }
