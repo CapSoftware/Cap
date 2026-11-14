@@ -14,7 +14,8 @@ jobs:
       - run: sw_vers && sysctl -n machdep.cpu.brand_string hw.memsize
       - run: swiftc -O probe/fixtures.swift -o fixtures && ./fixtures fx && ls -la fx
       - run: swiftc -O probe/vnprobe.swift -o vnprobe
-      - name: cold
+      - name: warm-up
         run: ./vnprobe fx/ocr-lines.png fx/blank.png fx/mixed-2x.png fx/tall.png fx/dense-8k.png
-      - name: warm
-        run: ./vnprobe fx/ocr-lines.png fx/blank.png fx/mixed-2x.png fx/tall.png fx/dense-8k.png
+      - run: swiftc -O probe/vnmodes.swift -o vnmodes
+      - name: modes
+        run: ./vnmodes fx/mixed-2x.png fx/tall.png fx/dense-8k.png
