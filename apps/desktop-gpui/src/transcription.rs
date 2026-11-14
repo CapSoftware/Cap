@@ -3536,6 +3536,53 @@ mod tests {
     }
 
     #[test]
+    fn a_refinement_moves_caption_words_corrected_into_one() {
+        let input = vec![caption(
+            "segment-0",
+            1.0,
+            2.3,
+            &[("so", 1.0, 1.4), ("it", 2.0, 2.1), ("'s", 2.1, 2.3)],
+        )];
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: input.clone(),
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let words = &mut project.captions.as_mut().unwrap().segments[0].words;
+        words.truncate(1);
+        words.push(CaptionWord {
+            text: "its".into(),
+            start: 2.0,
+            end: 2.3,
+        });
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                1.05,
+                2.25,
+                &[("so", 1.05, 1.3), ("it", 2.05, 2.15), ("'s", 2.15, 2.25)],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let words: Vec<(&str, f32, f32)> = project.captions.as_ref().unwrap().segments[0]
+            .words
+            .iter()
+            .map(|word| (word.text.as_str(), word.start, word.end))
+            .collect();
+        assert_eq!(words, [("so", 1.05, 1.3), ("its", 2.05, 2.25)]);
+    }
+
+    #[test]
     fn a_refinement_leaves_a_word_retimed_by_hand_where_it_was_put() {
         let mut project = cut_project();
         let input = project.captions.as_ref().unwrap().segments.clone();

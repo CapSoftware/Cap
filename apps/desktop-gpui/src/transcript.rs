@@ -62,8 +62,6 @@ impl WordSelection {
     }
 }
 
-/// The word being corrected in place, found again by its text and start if
-/// the transcript is rebuilt while the field is open.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WordEditor {
     pub word: usize,
@@ -260,6 +258,15 @@ impl TranscriptState {
             .is_none_or(|doc| doc.signature != signature)
         {
             let doc = TranscriptDoc::build(captions);
+            if let Some(editing) = self.editing.as_mut() {
+                match word_edit::locate(&doc.words, editing.word, &editing.text, editing.start) {
+                    Some(word) => {
+                        editing.word = word;
+                        editing.start = doc.words[word].start;
+                    }
+                    None => self.editing = None,
+                }
+            }
             let scroll = self.doc.is_some().then(|| self.list.logical_scroll_top());
             self.list.reset(doc.paragraphs.len());
             if let Some(scroll) = scroll.filter(|_| !doc.paragraphs.is_empty()) {

@@ -2571,6 +2571,60 @@ mod word_edit_ui {
     }
 
     #[gpui::test]
+    fn the_open_field_follows_its_word_when_the_transcript_is_rebuilt(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(2, window, cx);
+            let segment = &mut editor.project.captions.as_mut().unwrap().segments[0];
+            segment.words.insert(
+                0,
+                cap_project::CaptionWord {
+                    text: "Hey".into(),
+                    start: 0.2,
+                    end: 0.5,
+                },
+            );
+            editor.transcript.dirty = true;
+            editor.transcript_refresh();
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(3));
+
+            editor.transcript_step_word_edit(true, window, cx);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(4));
+            assert_eq!(
+                editor
+                    .transcript
+                    .edit_input
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .text(),
+                "four"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_triple_click_on_the_field_still_selects_the_sentence(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(3, window, cx);
+            assert!(editor.transcript_select_from_field(3, window, cx));
+            assert!(editor.transcript.editing.is_none());
+            assert_eq!(
+                editor.transcript.selection.map(WordSelection::range),
+                Some(2..5)
+            );
+
+            editor.transcript_begin_word_edit(3, window, cx);
+            type_text(editor, "for", cx);
+            assert!(!editor.transcript_select_from_field(3, window, cx));
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(3));
+        });
+    }
+
+    #[gpui::test]
     fn a_correction_is_one_undo_step(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = fixture(cx);
         editor.update_in(cx, |editor, window, cx| {

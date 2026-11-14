@@ -135,49 +135,58 @@ pub struct RefinedCaptions {
     /// Each input word's refined times, for captions edited while the
     /// refinement ran.
     retimed: HashMap<WordKey, (f32, f32)>,
-    /// The same keyed by time alone, so a word whose spelling was corrected
-    /// while the refinement ran still moves. Times two input words share are
-    /// left out.
-    retimed_by_time: HashMap<(u32, u32), (f32, f32)>,
+    /// Refined starts and ends keyed by the input word boundary they replace,
+    /// so a word corrected while the refinement ran, or several caption words
+    /// corrected into one, still moves when it starts and ends on input word
+    /// boundaries. A boundary two input words share is left out.
+    refined_starts: HashMap<u32, f32>,
+    refined_ends: HashMap<u32, f32>,
 }
 
 impl RefinedCaptions {
     pub fn new(input: &[CaptionSegment], segments: Vec<CaptionSegment>) -> Self {
         let retimed = match_retimes(input, &segments);
+        let (refined_starts, refined_ends) = refined_boundaries(input, &retimed);
         Self {
             input_signature: words_signature(input),
-            retimed_by_time: retimes_by_time(input, &retimed),
             retimed,
+            refined_starts,
+            refined_ends,
             segments,
         }
     }
 
     fn retime_of(&self, word: &CaptionWord) -> Option<(f32, f32)> {
-        self.retimed
-            .get(&word_key(word))
-            .or_else(|| {
-                self.retimed_by_time
-                    .get(&(word.start.to_bits(), word.end.to_bits()))
-            })
-            .copied()
+        if let Some(times) = self.retimed.get(&word_key(word)) {
+            return Some(*times);
+        }
+        let start = *self.refined_starts.get(&word.start.to_bits())?;
+        let end = *self.refined_ends.get(&word.end.to_bits())?;
+        (start <= end).then_some((start, end))
     }
 }
 
-fn retimes_by_time(
+fn refined_boundaries(
     input: &[CaptionSegment],
     retimed: &HashMap<WordKey, (f32, f32)>,
-) -> HashMap<(u32, u32), (f32, f32)> {
-    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+) -> (HashMap<u32, f32>, HashMap<u32, f32>) {
+    let mut starts: HashMap<u32, usize> = HashMap::new();
+    let mut ends: HashMap<u32, usize> = HashMap::new();
     for word in input.iter().flat_map(|segment| &segment.words) {
-        *uses
-            .entry((word.start.to_bits(), word.end.to_bits()))
-            .or_default() += 1;
+        *starts.entry(word.start.to_bits()).or_default() += 1;
+        *ends.entry(word.end.to_bits()).or_default() += 1;
     }
-    retimed
-        .iter()
-        .map(|((_, start, end), times)| ((*start, *end), *times))
-        .filter(|(time, _)| uses.get(time) == Some(&1))
-        .collect()
+    let mut refined_starts = HashMap::new();
+    let mut refined_ends = HashMap::new();
+    for ((_, start, end), (refined_start, refined_end)) in retimed {
+        if starts.get(start) == Some(&1) {
+            refined_starts.insert(*start, *refined_start);
+        }
+        if ends.get(end) == Some(&1) {
+            refined_ends.insert(*end, *refined_end);
+        }
+    }
+    (refined_starts, refined_ends)
 }
 
 /// Pairs each input word with the refined word that has its text, in order.

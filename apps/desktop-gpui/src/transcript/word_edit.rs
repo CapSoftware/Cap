@@ -4,8 +4,6 @@ use cap_project::{CaptionWord, CaptionsData};
 
 use super::model::{Word, word_sources};
 
-/// How far a word may have moved, by a refinement landing while it was being
-/// edited, and still be found again by its text.
 const LOCATE_WINDOW: f64 = 1.0;
 
 fn is_spoken(text: &str) -> bool {
@@ -113,8 +111,6 @@ fn retime(tokens: &[&str], spoken: &[(f32, f32)], start: f32, end: f32) -> Vec<C
         .collect()
 }
 
-/// Finds a word again after the transcript was rebuilt under it: at `hint`
-/// when nothing moved, otherwise the nearest word with the same text.
 pub fn locate(words: &[Word], hint: usize, text: &str, start: f64) -> Option<usize> {
     if words
         .get(hint)

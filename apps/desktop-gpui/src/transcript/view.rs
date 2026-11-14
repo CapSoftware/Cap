@@ -393,9 +393,6 @@ impl ParagraphPainter {
 }
 
 impl ParagraphPainter {
-    /// The correction field, laid over the word it edits: the same type size
-    /// and baseline as the paragraph, on the panel's own surface so the
-    /// original spelling does not show through.
     fn word_field(
         &self,
         anchor: WordAnchor,
@@ -420,6 +417,22 @@ impl ParagraphPainter {
             .border_1()
             .border_color(palette.accent)
             .shadow(theme.editor.pop_shadow())
+            .capture_any_mouse_down({
+                let editor = editor.clone();
+                move |event, window, cx| {
+                    if event.button != MouseButton::Left || event.click_count < 3 {
+                        return;
+                    }
+                    let selected = editor
+                        .update(cx, |this, cx| {
+                            this.transcript_select_from_field(event.click_count, window, cx)
+                        })
+                        .unwrap_or(false);
+                    if selected {
+                        cx.stop_propagation();
+                    }
+                }
+            })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let Some(direction) = ui::keyboard_nav::direction(&event.keystroke) else {
@@ -1355,7 +1368,6 @@ impl EditorWindow {
         input
     }
 
-    /// Opens `word` for correcting in place, its text selected.
     pub(super) fn transcript_begin_word_edit(
         &mut self,
         word: usize,
@@ -1386,6 +1398,7 @@ impl EditorWindow {
         self.transcript.edit_anchor.set(anchor);
         input.update(cx, |input, cx| {
             input.set_text(text, cx);
+            input.clear_history();
             input.focus_and_select_all(window, cx);
         });
         self.transcript.selection = Some(WordSelection::single(word));
@@ -1395,9 +1408,6 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    /// Writes the open correction into the captions as one undo step and
-    /// closes the field. Returns the word it landed on, found again if the
-    /// transcript was rebuilt while the field was open.
     pub(super) fn transcript_commit_word_edit(
         &mut self,
         window: &mut Window,
@@ -1450,8 +1460,42 @@ impl EditorWindow {
         Some(word)
     }
 
-    /// Tab and Shift-Tab in the correction field: keep the edit and move on
-    /// to the next or previous word that plays.
+    /// The second click of a triple-click opens the field under the pointer,
+    /// so the third lands on it. While nothing has been typed it still means
+    /// sentence (or, with a fourth, paragraph) selection.
+    pub(super) fn transcript_select_from_field(
+        &mut self,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (Some(doc), Some(editing), Some(input)) = (
+            self.transcript.doc.clone(),
+            self.transcript.editing.clone(),
+            self.transcript.edit_input.clone(),
+        ) else {
+            return false;
+        };
+        if input.read(cx).text() != editing.text || editing.word >= doc.words.len() {
+            return false;
+        }
+        self.transcript.editing = None;
+        window.focus(&self.transcript.focus, cx);
+        let unit = if click_count >= 4 {
+            DragUnit::Paragraph
+        } else {
+            DragUnit::Sentence
+        };
+        let origin = unit_bounds(&doc, editing.word, unit);
+        self.transcript.selection = Some(WordSelection {
+            anchor: origin.0,
+            focus: origin.1,
+        });
+        self.transcript.drag = Some(WordDrag { unit, origin });
+        self.invalidate_transcript(cx);
+        true
+    }
+
     pub(super) fn transcript_step_word_edit(
         &mut self,
         forward: bool,

@@ -159,10 +159,7 @@ fn flatten(
                 if spoken {
                     previous.end = previous.end.max(end);
                 }
-                if let Some(last) = sources
-                    .as_mut()
-                    .and_then(|sources| sources.last_mut())
-                {
+                if let Some(last) = sources.as_mut().and_then(|sources| sources.last_mut()) {
                     last.push(source);
                 }
             }
