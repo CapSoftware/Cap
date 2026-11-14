@@ -97,6 +97,7 @@ screenshot = "Capture d'écran"
 studio = "Studio"
 
 [settings.nav]
+apps = "Apps"
 automations = "Automatisations"
 changelog = "Nouveautés"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "Envoyez le lien de partage à Slack, Discord ou votre propre webh
 name = "Prévenir Slack quand vous partagez"
 
 [main]
+app_action_done = "Terminé"
 delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"
 delete_screenshot_confirm = "Voulez-vous vraiment supprimer cette capture d'écran ?"
 
@@ -2329,6 +2331,7 @@ cursor = "Curseur"
 keyboard = "Clavier"
 
 [editor.sidebar.wallpaper_theme]
+apps = "Apps"
 blue = "Bleu"
 cities = "Villes"
 dark = "Sombre"
@@ -3284,3 +3287,27 @@ verification_failed = "La vérification de l'enregistrement a échoué : {status
 
 [message.cli]
 binary_missing = "CLI intégrée introuvable dans {path}"
+
+[settings.apps]
+available_title = "Disponibles"
+browse_web = "Ouvrir sur le web"
+description = "Ajoutez des arrière-plans, des styles de sous-titres, des looks colorimétriques et des connexions. Les apps installées suivent votre compte sur le web et sur tous vos appareils."
+empty = "Aucune app n’est disponible pour le moment."
+failed = "Impossible de charger l’App Store. Vérifiez votre connexion et réessayez."
+install = "Installer"
+installed = "Installée"
+installed_title = "Installées"
+loading = "Chargement des apps…"
+managed_by_org = "Installée pour {organization}"
+paused = "En pause"
+platform_desktop = "Bureau"
+platform_web = "Web"
+remove = "Retirer"
+retry = "Réessayer"
+review = "Demande plus d’accès"
+set_up = "Configurer sur le web"
+sign_in_hint = "Connectez-vous pour synchroniser vos apps entre vos appareils et utiliser les apps qui se connectent à d’autres services."
+title = "Apps"
+
+[editor.app_store]
+from_apps = "De vos apps"

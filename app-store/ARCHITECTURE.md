@@ -33,7 +33,7 @@ apps/desktop-gpui/     Store page in Settings, catalog sync, content and actions
 |---|---|---|---|
 | `backgrounds` | Content | Desktop | Editor background picker, in an Apps tab |
 | `captionStyles` | Content | Desktop | Editor caption presets |
-| `colorLooks` | Content | Desktop | Editor colour presets |
+| `colorLooks` | Content | Desktop | Editor color presets |
 | `connection.events` | Connection | Author's server | Signed event delivery after Cap events |
 | `connection.actions` | Connection | Author's server | Cap menus on web and desktop ("Send to Notion") |
 | `connection.settings` | Connection | Cap | A settings form Cap renders at install, on web and desktop |

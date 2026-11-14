@@ -97,6 +97,7 @@ screenshot = "Captura de pantalla"
 studio = "Studio"
 
 [settings.nav]
+apps = "Apps"
 automations = "Automatizaciones"
 changelog = "Novedades"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "Envía el enlace para compartir a Slack, Discord o tu propio webh
 name = "Avisar a Slack cuando compartas algo"
 
 [main]
+app_action_done = "Listo"
 delete_recording_confirm = "¿Seguro que quieres eliminar esta grabación?"
 delete_screenshot_confirm = "¿Seguro que quieres eliminar esta captura de pantalla?"
 
@@ -2329,6 +2331,7 @@ cursor = "Cursor"
 keyboard = "Teclado"
 
 [editor.sidebar.wallpaper_theme]
+apps = "Apps"
 blue = "Azul"
 cities = "Ciudades"
 dark = "Oscuro"
@@ -3284,3 +3287,27 @@ verification_failed = "La verificación de la grabación ha fallado: {status}"
 
 [message.cli]
 binary_missing = "No se encontró la CLI incluida en {path}"
+
+[settings.apps]
+available_title = "Disponibles"
+browse_web = "Abrir en la web"
+description = "Añade fondos, estilos de subtítulos, looks de color y conexiones. Las apps que instalas siguen a tu cuenta en la web y en todos tus dispositivos."
+empty = "No hay apps disponibles en este momento."
+failed = "No se pudo cargar la App Store. Revisa tu conexión e inténtalo de nuevo."
+install = "Instalar"
+installed = "Instalada"
+installed_title = "Instaladas"
+loading = "Cargando apps…"
+managed_by_org = "Instalada para {organization}"
+paused = "En pausa"
+platform_desktop = "Escritorio"
+platform_web = "Web"
+remove = "Quitar"
+retry = "Reintentar"
+review = "Pide más acceso"
+set_up = "Configurar en la web"
+sign_in_hint = "Inicia sesión para sincronizar tus apps entre dispositivos y usar apps que se conectan con otros servicios."
+title = "Apps"
+
+[editor.app_store]
+from_apps = "De tus apps"

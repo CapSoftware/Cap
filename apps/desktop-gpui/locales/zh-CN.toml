@@ -97,6 +97,7 @@ screenshot = "截图"
 studio = "Studio"
 
 [settings.nav]
+apps = "应用"
 automations = "自动化"
 changelog = "更新日志"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "将分享链接发送到 Slack、Discord 或你自己的 Webhook�
 name = "分享内容时通知 Slack"
 
 [main]
+app_action_done = "完成"
 delete_recording_confirm = "确定要删除这段录制吗？"
 delete_screenshot_confirm = "确定要删除这张截图吗？"
 
@@ -2329,6 +2331,7 @@ cursor = "光标"
 keyboard = "键盘"
 
 [editor.sidebar.wallpaper_theme]
+apps = "应用"
 blue = "蓝色"
 cities = "城市"
 dark = "深色"
@@ -3284,3 +3287,27 @@ verification_failed = "录制验证失败：{status}"
 
 [message.cli]
 binary_missing = "未在 {path} 找到内置的 CLI 程序"
+
+[settings.apps]
+available_title = "可用"
+browse_web = "在网页中打开"
+description = "添加背景、字幕样式、色彩风格和连接。你安装的应用会跟随账户，在网页和每台设备上可用。"
+empty = "目前没有可用的应用。"
+failed = "无法加载 App Store。请检查网络连接后重试。"
+install = "安装"
+installed = "已安装"
+installed_title = "已安装"
+loading = "正在加载应用…"
+managed_by_org = "已为 {organization} 安装"
+paused = "已暂停"
+platform_desktop = "桌面端"
+platform_web = "网页"
+remove = "移除"
+retry = "重试"
+review = "请求更多访问权限"
+set_up = "在网页中设置"
+sign_in_hint = "登录后，你的应用会在所有设备间同步，还能使用连接其他服务的应用。"
+title = "应用"
+
+[editor.app_store]
+from_apps = "来自你的应用"

@@ -45,7 +45,7 @@ export const Semver = Schema.String.pipe(
 
 export const HexColor = Schema.String.pipe(
 	Schema.pattern(/^#[0-9A-Fa-f]{6}$/, {
-		message: () => "must be a hex colour like #1E90FF",
+		message: () => "must be a hex color like #1E90FF",
 	}),
 );
 

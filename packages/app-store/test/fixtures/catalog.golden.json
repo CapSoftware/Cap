@@ -1,0 +1,160 @@
+{
+	"catalogVersion": 1,
+	"revision": "926185e4ee87043a6bcf8d31e70941e7",
+	"apps": [
+		{
+			"apiVersion": 1,
+			"id": "fixture-connection",
+			"name": "Fixture Connection",
+			"version": "2.0.0",
+			"description": "A connection with settings, events and actions.",
+			"author": {
+				"name": "Fixture",
+				"github": "fixture"
+			},
+			"firstParty": false,
+			"license": "Apache-2.0",
+			"categories": ["productivity"],
+			"keywords": [],
+			"privacyPolicy": "https://fixture.dev/privacy",
+			"icon": {
+				"url": "/app-store/fixture-connection/2c77fa2f6853700c29f9735324d65138.png",
+				"sha256": "2c77fa2f6853700c29f9735324d6513825a8d0af2f68f44d1ffd76ccdf35d2b9",
+				"bytes": 27,
+				"width": 512,
+				"height": 512
+			},
+			"screenshots": [],
+			"readme": "# Fixture Connection\n\nFixture app.",
+			"platforms": ["web", "desktop"],
+			"backgrounds": [],
+			"captionStyles": [],
+			"colorLooks": [],
+			"connection": {
+				"url": "https://fixture.dev/cap",
+				"permissions": ["cap.transcript"],
+				"events": ["cap.ready", "cap.transcript.ready"],
+				"settings": [
+					{
+						"key": "token",
+						"label": "Token",
+						"required": true,
+						"type": "secret"
+					},
+					{
+						"key": "mode",
+						"label": "Mode",
+						"type": "select",
+						"options": [
+							{
+								"value": "all",
+								"label": "All"
+							}
+						],
+						"default": "all"
+					},
+					{
+						"key": "enabled",
+						"label": "Enabled",
+						"type": "toggle",
+						"default": true
+					}
+				],
+				"actions": [
+					{
+						"id": "send",
+						"title": "Send to Fixture",
+						"target": "cap"
+					}
+				]
+			},
+			"contentHash": "11322c83abab0ad550615f98fd33eab34ef000ab606622d0d830272e44a22154"
+		},
+		{
+			"apiVersion": 1,
+			"id": "fixture-content",
+			"name": "Fixture Content",
+			"version": "1.2.3",
+			"description": "Every kind of content an app can add.",
+			"author": {
+				"name": "Fixture",
+				"github": "fixture"
+			},
+			"firstParty": false,
+			"license": "MIT",
+			"categories": ["backgrounds", "captions", "color"],
+			"keywords": [],
+			"icon": {
+				"url": "/app-store/fixture-content/4a240b27b3a4d337236a812deba84d70.png",
+				"sha256": "4a240b27b3a4d337236a812deba84d709be1198527bfb256a609d7acab2a7ed1",
+				"bytes": 24,
+				"width": 512,
+				"height": 512
+			},
+			"screenshots": [],
+			"readme": "# Fixture Content\n\nFixture app.",
+			"platforms": ["desktop"],
+			"backgrounds": [
+				{
+					"kind": "image",
+					"id": "photo",
+					"name": "Photo",
+					"image": {
+						"url": "/app-store/fixture-content/e76ae1b899c30659e91c4e13fa13d141.jpg",
+						"sha256": "e76ae1b899c30659e91c4e13fa13d141e6fb24f917d2490f276bbb4eff3c12c4",
+						"bytes": 37,
+						"width": 2560,
+						"height": 1440
+					}
+				},
+				{
+					"kind": "gradient",
+					"id": "sunset",
+					"name": "Sunset",
+					"from": "#FF7E5F",
+					"to": "#6A3093",
+					"angle": 135
+				},
+				{
+					"kind": "color",
+					"id": "ink",
+					"name": "Ink",
+					"color": "#111827"
+				}
+			],
+			"captionStyles": [
+				{
+					"id": "bold",
+					"name": "Bold",
+					"description": "Big and bold",
+					"fontWeight": 700,
+					"size": 64,
+					"color": "#FFFFFF",
+					"backgroundColor": "#000000",
+					"backgroundOpacity": 0,
+					"outline": true,
+					"outlineColor": "#000000",
+					"highlightColor": "#FFD43B",
+					"activeWordHighlight": true,
+					"highlightStyle": "pill",
+					"animation": "pop",
+					"uppercase": true,
+					"fadeDuration": 0.12
+				}
+			],
+			"colorLooks": [
+				{
+					"id": "warm",
+					"name": "Warm",
+					"values": {
+						"temperature": 0.3,
+						"splitTone": -0.1,
+						"vignette": 0.2
+					}
+				}
+			],
+			"contentHash": "86ab657f98fac8d58f07d4302806796ddec85a48c4241bb977285cdf504fae78"
+		}
+	],
+	"blocked": []
+}

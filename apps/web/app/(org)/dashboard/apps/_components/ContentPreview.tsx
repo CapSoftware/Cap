@@ -195,9 +195,9 @@ export function ContentPreview({
 				</section>
 			)}
 			{colorLooks.length > 0 && (
-				<section aria-label="Colour looks" className="flex flex-col gap-3">
+				<section aria-label="Color looks" className="flex flex-col gap-3">
 					<h2 className="text-[13px] font-medium text-gray-12">
-						{colorLooks.length} colour looks
+						{colorLooks.length} color looks
 					</h2>
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 						{colorLooks.map((look) => (

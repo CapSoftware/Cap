@@ -4,7 +4,7 @@
 	"id": "film-looks",
 	"name": "Film Looks",
 	"version": "1.0.0",
-	"description": "Six colour looks inspired by film stock, from warm golden hour to cool night shoots.",
+	"description": "Six color looks inspired by film stock, from warm golden hour to cool night shoots.",
 	"author": { "name": "Cap", "github": "CapSoftware" },
 	"license": "MIT",
 	"categories": ["color"],
@@ -39,7 +39,7 @@
 		{
 			"id": "matte",
 			"name": "Matte",
-			"description": "Lifted blacks and muted colour",
+			"description": "Lifted blacks and muted color",
 			"values": {
 				"contrast": -0.1,
 				"saturation": -0.18,
@@ -61,7 +61,7 @@
 		{
 			"id": "pop",
 			"name": "Pop",
-			"description": "Clean, punchy and colourful",
+			"description": "Clean, punchy and colorful",
 			"values": { "exposure": 0.04, "contrast": 0.14, "saturation": 0.28 }
 		},
 		{

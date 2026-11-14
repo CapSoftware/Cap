@@ -445,6 +445,78 @@ pub fn preset_preview(preset: &ColorPreset, width: u32, height: u32) -> Arc<Rend
     )]))
 }
 
+/// A look from an installed app as grade values. The manifest schema already
+/// bounds every field; the clamps keep a hand-edited cache from producing
+/// values the sliders cannot show.
+pub fn look_grade(values: &crate::app_store::LookValues) -> GradeValues {
+    let bipolar = |value: Option<f32>| value.unwrap_or(0.).clamp(-1., 1.);
+    let unipolar = |value: Option<f32>| value.unwrap_or(0.).clamp(0., 1.);
+    GradeValues {
+        intensity: values.intensity.unwrap_or(1.).clamp(0., 1.),
+        exposure: bipolar(values.exposure),
+        contrast: bipolar(values.contrast),
+        saturation: bipolar(values.saturation),
+        temperature: bipolar(values.temperature),
+        tint: bipolar(values.tint),
+        fade: unipolar(values.fade),
+        split_tone: bipolar(values.split_tone),
+        vignette: unipolar(values.vignette),
+        grain: unipolar(values.grain),
+    }
+}
+
+/// CSS-style filters that approximate a grade for its preview tile. The
+/// built-in presets carry hand-tuned filters; app looks only carry values.
+pub fn look_filters(values: &GradeValues) -> Vec<Filter> {
+    let amount = |value: f32| value * values.intensity;
+    let temperature = amount(values.temperature);
+    let mut filters = vec![
+        Filter::Brightness(1. + amount(values.exposure) * 0.5),
+        Filter::Contrast(1. + amount(values.contrast) - amount(values.fade) * 0.25),
+        Filter::Saturate((1. + amount(values.saturation)).max(0.)),
+    ];
+    if temperature > 0. {
+        filters.push(Filter::Sepia(temperature * 0.5));
+    }
+    let hue = (if temperature < 0. {
+        temperature * 25.
+    } else {
+        0.
+    }) - amount(values.tint) * 12.;
+    if hue.abs() > f32::EPSILON {
+        filters.push(Filter::HueRotate(hue));
+    }
+    filters
+}
+
+fn app_look_image(key: &str, values: &GradeValues) -> Arc<RenderImage> {
+    static CACHE: std::sync::Mutex<Vec<(String, GradeValues, Arc<RenderImage>)>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some((_, _, image)) = cache
+        .iter()
+        .find(|(cached_key, cached_values, _)| cached_key == key && cached_values == values)
+    {
+        return image.clone();
+    }
+    let rgba = cap_gpui_kernels::texture::preset_preview_bgra(
+        &look_filters(values),
+        None,
+        values.vignette * values.intensity,
+        values.grain,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+    );
+    let image = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+        rgba
+    )]));
+    if cache.len() >= 64 {
+        cache.remove(0);
+    }
+    cache.push((key.to_string(), *values, image.clone()));
+    image
+}
+
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
@@ -476,12 +548,21 @@ impl EditorWindow {
         let Some(preset) = COLOR_CORRECTION_PRESETS.get(index) else {
             return;
         };
-        let values = preset.values;
-        let id = preset.id;
+        self.apply_color_values(target, preset.id.to_string(), preset.values, window, cx);
+    }
+
+    fn apply_color_values(
+        &mut self,
+        target: GradeTarget,
+        id: String,
+        values: GradeValues,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.edit_project("color-preset", window, cx, move |project| {
             let grade = Self::grade_mut(project, target);
             let next = ColorCorrection {
-                preset: id.to_string(),
+                preset: id,
                 intensity: values.intensity,
                 exposure: values.exposure,
                 contrast: values.contrast,
@@ -625,17 +706,117 @@ impl EditorWindow {
                 }),
         );
 
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(ui::Field::section(&theme, tr::editor::color::title()).child(tiles))
-            .child(self.slider_field(
-                GradeSlider::Grain.label(),
-                crate::editor_sidebar::SliderKey::Grade(target, GradeSlider::Grain),
-                "%",
-                cx,
-            ));
+        let app_looks: Vec<(String, SharedString, Option<SharedString>, GradeValues)> =
+            crate::app_store::try_get(cx)
+                .map(|store| {
+                    store
+                        .color_looks()
+                        .into_iter()
+                        .map(|(app_id, look)| {
+                            (
+                                format!("app:{app_id}:{}", look.id),
+                                SharedString::from(look.name),
+                                look.description.map(SharedString::from),
+                                look_grade(&look.values),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        let mut field = ui::Field::section(&theme, tr::editor::color::title()).child(tiles);
+        if !app_looks.is_empty() {
+            field = field
+                .child(
+                    div()
+                        .pt(px(4.))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::app_store::from_apps()),
+                )
+                .child(
+                    div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+                        app_looks
+                            .into_iter()
+                            .map(|(id, name, description, values)| {
+                                let selected = active == id;
+                                let image = app_look_image(&id, &values);
+                                let apply_id = id.clone();
+                                div()
+                                    .id(SharedString::from(format!("grade-{}-{id}", target.key())))
+                                    .w(px(122.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .p(px(6.))
+                                    .rounded(px(8.))
+                                    .bg(self.panel_bg())
+                                    .border_1()
+                                    .border_color(if selected {
+                                        Hsla::from(theme.blue_9)
+                                    } else {
+                                        Hsla::from(theme.gray_3)
+                                    })
+                                    .when(selected, |this| {
+                                        this.shadow(vec![gpui::BoxShadow {
+                                            color: Hsla::from(theme.blue_9),
+                                            offset: gpui::point(px(0.), px(0.)),
+                                            blur_radius: px(0.),
+                                            spread_radius: px(1.),
+                                            inset: false,
+                                        }])
+                                    })
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .h(px(60.75))
+                                            .rounded(px(6.))
+                                            .overflow_hidden()
+                                            .child(
+                                                img(image)
+                                                    .size_full()
+                                                    .object_fit(gpui::ObjectFit::Fill),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(2.))
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(Hsla::from(theme.gray_12))
+                                            .child(name),
+                                    )
+                                    .when_some(description, |this, description| {
+                                        this.tooltip(move |_window, cx| {
+                                            ui::Tooltip::new(&theme, description.clone()).view(cx)
+                                        })
+                                    })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.apply_color_values(
+                                            target,
+                                            apply_id.clone(),
+                                            values,
+                                            window,
+                                            cx,
+                                        );
+                                    }))
+                            }),
+                    ),
+                );
+        }
+
+        let mut section =
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(14.))
+                .child(field)
+                .child(self.slider_field(
+                    GradeSlider::Grain.label(),
+                    crate::editor_sidebar::SliderKey::Grade(target, GradeSlider::Grain),
+                    "%",
+                    cx,
+                ));
 
         // `<Show when={props.target === "screen"}>` (`:151`).
         if target == GradeTarget::Screen {

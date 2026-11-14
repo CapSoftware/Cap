@@ -97,6 +97,7 @@ screenshot = "スクリーンショット"
 studio = "Studio"
 
 [settings.nav]
+apps = "アプリ"
 automations = "オートメーション"
 changelog = "変更履歴"
 cli = "CLI"
@@ -971,6 +972,7 @@ description = "共有リンクをSlack、Discord、または独自のWebhookに�
 name = "共有したらSlackに知らせる"
 
 [main]
+app_action_done = "完了"
 delete_recording_confirm = "この録画を削除してもよろしいですか？"
 delete_screenshot_confirm = "このスクリーンショットを削除してもよろしいですか？"
 
@@ -2329,6 +2331,7 @@ cursor = "カーソル"
 keyboard = "キーボード"
 
 [editor.sidebar.wallpaper_theme]
+apps = "アプリ"
 blue = "ブルー"
 cities = "都市"
 dark = "ダーク"
@@ -3284,3 +3287,27 @@ verification_failed = "録画の確認に失敗しました：{status}"
 
 [message.cli]
 binary_missing = "{path}に同梱のCLIが見つかりません"
+
+[settings.apps]
+available_title = "利用可能"
+browse_web = "Webで開く"
+description = "背景、字幕スタイル、カラールック、連携を追加できます。インストールしたアプリはアカウントに紐づき、Webとすべてのデバイスで使えます。"
+empty = "現在利用できるアプリはありません。"
+failed = "App Storeを読み込めませんでした。接続を確認してもう一度お試しください。"
+install = "インストール"
+installed = "インストール済み"
+installed_title = "インストール済み"
+loading = "アプリを読み込んでいます…"
+managed_by_org = "{organization}向けにインストール済み"
+paused = "一時停止中"
+platform_desktop = "デスクトップ"
+platform_web = "Web"
+remove = "削除"
+retry = "再試行"
+review = "追加のアクセスを求めています"
+set_up = "Webで設定"
+sign_in_hint = "サインインすると、アプリをすべてのデバイスで同期でき、他のサービスと連携するアプリも使えます。"
+title = "アプリ"
+
+[editor.app_store]
+from_apps = "インストールしたアプリ"

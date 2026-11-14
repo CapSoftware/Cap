@@ -1,6 +1,6 @@
 # Build a Cap App
 
-Cap Apps add things to Cap: backgrounds and caption styles in the editor, colour looks, and connections that send Caps to the tools people already use. Every app lives in this folder, and opening a pull request is how you publish one.
+Cap Apps add things to Cap: backgrounds and caption styles in the editor, color looks, and connections that send Caps to the tools people already use. Every app lives in this folder, and opening a pull request is how you publish one.
 
 People install an app once from the App Store, on the web or in Cap Desktop, and it works everywhere they use Cap.
 
@@ -64,7 +64,7 @@ Presets in the editor's caption panel. Every field is required so a style always
 ]
 ```
 
-### Colour looks
+### Color looks
 
 Presets in the editor's Color tab. Leave out any value you do not want to change.
 
