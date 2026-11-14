@@ -4,8 +4,8 @@
 //! Cues come from the caption track the renderer draws, which is already
 //! projected through cuts, clip speeds, transitions and fullscreen holds, and
 //! are shaped the way the renderer shows them: fillers it hides are left out,
-//! a caption ends where it stops being drawn, and where two captions overlap
-//! only the one on screen is kept.
+//! a caption lasts while it is drawn or fading out, and where two captions
+//! overlap only the one on screen is kept.
 
 use cap_project::caption_words::caption_display_segment;
 use cap_project::{CaptionTrackSegment, MAX_CAPTION_WORD_DURATION, ProjectConfiguration};
@@ -74,39 +74,134 @@ fn cue_text(text: &str) -> String {
         .join("\n")
 }
 
+/// Disjoint, sorted time ranges.
+#[derive(Default)]
+struct Covered(Vec<(f64, f64)>);
+
+impl Covered {
+    fn uncovered(&self, (start, end): (f64, f64)) -> Vec<(f64, f64)> {
+        let mut pieces = Vec::new();
+        let mut cursor = start;
+        let first = self.0.partition_point(|range| range.1 <= start);
+        for &(from, until) in &self.0[first..] {
+            if from >= end || cursor >= end {
+                break;
+            }
+            if from > cursor {
+                pieces.push((cursor, from));
+            }
+            cursor = cursor.max(until);
+        }
+        if cursor < end {
+            pieces.push((cursor, end));
+        }
+        pieces
+    }
+
+    fn add(&mut self, (start, end): (f64, f64)) {
+        let first = self.0.partition_point(|range| range.1 < start);
+        let mut last = first;
+        let (mut from, mut until) = (start, end);
+        while let Some(&(other_from, other_until)) = self.0.get(last) {
+            if other_from > until {
+                break;
+            }
+            from = from.min(other_from);
+            until = until.max(other_until);
+            last += 1;
+        }
+        self.0.splice(first..last, [(from, until)]);
+    }
+}
+
+struct Shown {
+    drawn: (f64, f64),
+    fading: (f64, f64),
+    text: String,
+}
+
+/// Mirrors `find_active_caption_segment`: at any moment the first caption in
+/// track order that is drawn there wins, and a fade-out shows only where no
+/// caption is drawn, again first in track order.
 pub(crate) fn cues(project: &ProjectConfiguration) -> Vec<Cue> {
     let (Some(captions), Some(timeline)) = (&project.captions, &project.timeline) else {
         return Vec::new();
     };
-    let hide_fillers = captions.settings.hides_fillers();
-    let mut shown: Vec<(f64, f64, String)> =
-        timeline
-            .caption_segments
-            .iter()
-            .filter_map(|segment| {
-                let display = caption_display_segment(segment, hide_fillers)?;
-                let (start, end) = (display.start, drawn_until(&display));
-                let text = cue_text(&display.text);
-                (start.is_finite() && end.is_finite() && end > start && !text.is_empty())
-                    .then_some((start.max(0.0), end, text))
-            })
-            .collect();
-    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let settings = &captions.settings;
+    let hide_fillers = settings.hides_fillers();
+    let shown: Vec<Shown> = timeline
+        .caption_segments
+        .iter()
+        .filter_map(|segment| {
+            let display = caption_display_segment(segment, hide_fillers)?;
+            let start = display.start.max(segment.start).max(0.0);
+            let end = drawn_until(&display).min(drawn_until(segment));
+            let fade = f64::from(
+                display
+                    .fade_duration_override
+                    .unwrap_or(settings.fade_duration),
+            )
+            .max(0.0);
+            let text = cue_text(&display.text);
+            (start.is_finite() && end.is_finite() && end > start && !text.is_empty()).then_some(
+                Shown {
+                    drawn: (start, end),
+                    fading: (end, if fade.is_finite() { end + fade } else { end }),
+                    text,
+                },
+            )
+        })
+        .collect();
 
-    let mut cues = Vec::with_capacity(shown.len());
-    let mut covered = f64::NEG_INFINITY;
-    for (start, end, text) in shown {
-        let visible = start.max(covered);
-        covered = covered.max(end);
-        let start_ms = milliseconds(visible);
-        let end_ms = milliseconds(end);
-        if end_ms > start_ms {
-            cues.push(Cue {
+    let mut pieces: Vec<(f64, f64, usize)> = Vec::new();
+    let mut drawn = Covered::default();
+    for (index, caption) in shown.iter().enumerate() {
+        pieces.extend(
+            drawn
+                .uncovered(caption.drawn)
+                .into_iter()
+                .map(|(from, until)| (from, until, index)),
+        );
+        drawn.add(caption.drawn);
+    }
+    let mut fading = Covered::default();
+    for (index, caption) in shown.iter().enumerate() {
+        if caption.fading.1 <= caption.fading.0 {
+            continue;
+        }
+        for piece in drawn.uncovered(caption.fading) {
+            pieces.extend(
+                fading
+                    .uncovered(piece)
+                    .into_iter()
+                    .map(|(from, until)| (from, until, index)),
+            );
+        }
+        fading.add(caption.fading);
+    }
+    pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut cues: Vec<Cue> = Vec::with_capacity(shown.len());
+    let mut last: Option<(usize, f64)> = None;
+    for (from, until, index) in pieces {
+        let start_ms = milliseconds(from);
+        let end_ms = milliseconds(until);
+        if end_ms <= start_ms {
+            continue;
+        }
+        match (last, cues.last_mut()) {
+            (Some((previous, previous_end)), Some(cue))
+                if previous == index && (from - previous_end).abs() < 1e-9 =>
+            {
+                cue.end_ms = end_ms;
+            }
+            _ => cues.push(Cue {
                 start_ms,
                 end_ms,
-                text,
-            });
+                text: shown[index].text.clone(),
+            }),
         }
+        last = Some((index, until));
     }
     cues
 }
@@ -209,8 +304,8 @@ mod tests {
         assert_eq!(
             cues(&project),
             [
-                cue(1000, 2000, "line one\nline two"),
-                cue(3000, 4000, "שלום עולם 👋🏽 你好、世界 e\u{0301}")
+                cue(1000, 2150, "line one\nline two"),
+                cue(3000, 4150, "שלום עולם 👋🏽 你好、世界 e\u{0301}")
             ]
         );
     }
@@ -228,9 +323,49 @@ mod tests {
             [
                 cue(1000, 5000, "first"),
                 cue(5000, 7000, "second"),
-                cue(7000, 8000, "third")
+                cue(7000, 8150, "third")
             ]
         );
+    }
+
+    #[test]
+    fn the_earlier_caption_in_the_track_wins_even_when_it_shows_later() {
+        let mut project = track(serde_json::json!([
+            { "id": "a", "start": 8.0, "end": 10.0, "text": "um first",
+              "words": [
+                { "text": "um", "start": 8.0, "end": 8.4 },
+                { "text": "first", "start": 9.2, "end": 10.0 }
+              ] },
+            { "id": "b", "start": 8.5, "end": 10.5, "text": "second" }
+        ]));
+        project.captions.as_mut().unwrap().settings.filler_language = Some("en".into());
+        assert_eq!(
+            cues(&project),
+            [
+                cue(8500, 9200, "second"),
+                cue(9200, 10000, "first"),
+                cue(10000, 10650, "second")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fade_out_lasts_until_the_next_caption_or_its_own_length() {
+        let mut project = track(serde_json::json!([
+            { "id": "a", "start": 1.0, "end": 2.0, "text": "slow", "fadeDurationOverride": 0.5 },
+            { "id": "b", "start": 2.2, "end": 3.0, "text": "none", "fadeDurationOverride": 0.0 },
+            { "id": "c", "start": 4.0, "end": 5.0, "text": "default" }
+        ]));
+        assert_eq!(
+            cues(&project),
+            [
+                cue(1000, 2200, "slow"),
+                cue(2200, 3000, "none"),
+                cue(4000, 5150, "default")
+            ]
+        );
+        project.captions.as_mut().unwrap().settings.fade_duration = 0.0;
+        assert_eq!(cues(&project)[2], cue(4000, 5000, "default"));
     }
 
     #[test]
@@ -247,7 +382,7 @@ mod tests {
         ]));
         let settings = &mut project.captions.as_mut().unwrap().settings;
         settings.filler_language = Some("en".into());
-        let linger = (2.0 + f64::from(MAX_CAPTION_WORD_DURATION)) * 1000.0;
+        let linger = (2.0 + f64::from(MAX_CAPTION_WORD_DURATION) + 0.15) * 1000.0;
         assert_eq!(
             cues(&project),
             [cue(1500, linger.round() as u64, "so this")]
@@ -285,7 +420,7 @@ mod tests {
         cap_project::synchronize_captions(&mut project, &[10.0]);
         assert_eq!(
             cues(&project),
-            [cue(500, 1500, "fast"), cue(4000, 5000, "after the card")]
+            [cue(500, 1650, "fast"), cue(4000, 5150, "after the card")]
         );
         assert!(cues(&ProjectConfiguration::default()).is_empty());
     }
@@ -305,7 +440,7 @@ mod tests {
         let text = format(&cues, CaptionFormat::Vtt);
         let elapsed = started.elapsed();
         assert_eq!(cues.len(), 4_000);
-        assert!(text.contains("4000\n02:06:38.100 --> 02:06:39.600\ncaption 3999\n"));
+        assert!(text.contains("4000\n02:06:38.100 --> 02:06:39.750\ncaption 3999\n"));
         assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
     }
 }

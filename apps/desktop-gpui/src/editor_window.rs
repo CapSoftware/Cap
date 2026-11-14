@@ -7653,7 +7653,6 @@ impl EditorWindow {
         self.open_toolbar_menu(ToolbarMenu::CaptionDownload, trigger_bounds, window, cx);
     }
 
-    /// Saves the captions as a subtitle file timed to the edited video.
     pub(crate) fn download_captions(
         &mut self,
         format: crate::caption_export::CaptionFormat,
