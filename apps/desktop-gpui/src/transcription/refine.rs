@@ -135,16 +135,49 @@ pub struct RefinedCaptions {
     /// Each input word's refined times, for captions edited while the
     /// refinement ran.
     retimed: HashMap<WordKey, (f32, f32)>,
+    /// The same keyed by time alone, so a word whose spelling was corrected
+    /// while the refinement ran still moves. Times two input words share are
+    /// left out.
+    retimed_by_time: HashMap<(u32, u32), (f32, f32)>,
 }
 
 impl RefinedCaptions {
     pub fn new(input: &[CaptionSegment], segments: Vec<CaptionSegment>) -> Self {
+        let retimed = match_retimes(input, &segments);
         Self {
             input_signature: words_signature(input),
-            retimed: match_retimes(input, &segments),
+            retimed_by_time: retimes_by_time(input, &retimed),
+            retimed,
             segments,
         }
     }
+
+    fn retime_of(&self, word: &CaptionWord) -> Option<(f32, f32)> {
+        self.retimed
+            .get(&word_key(word))
+            .or_else(|| {
+                self.retimed_by_time
+                    .get(&(word.start.to_bits(), word.end.to_bits()))
+            })
+            .copied()
+    }
+}
+
+fn retimes_by_time(
+    input: &[CaptionSegment],
+    retimed: &HashMap<WordKey, (f32, f32)>,
+) -> HashMap<(u32, u32), (f32, f32)> {
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for word in input.iter().flat_map(|segment| &segment.words) {
+        *uses
+            .entry((word.start.to_bits(), word.end.to_bits()))
+            .or_default() += 1;
+    }
+    retimed
+        .iter()
+        .map(|((_, start, end), times)| ((*start, *end), *times))
+        .filter(|(time, _)| uses.get(time) == Some(&1))
+        .collect()
 }
 
 /// Pairs each input word with the refined word that has its text, in order.
@@ -194,7 +227,7 @@ pub fn apply_refined_captions(
         for segment in &mut captions.segments {
             let mut moved = false;
             for word in &mut segment.words {
-                if let Some(&(start, end)) = refined.retimed.get(&word_key(word))
+                if let Some((start, end)) = refined.retime_of(word)
                     && (word.start, word.end) != (start, end)
                 {
                     (word.start, word.end) = (start, end);

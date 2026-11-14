@@ -3531,8 +3531,33 @@ mod tests {
             .collect();
         assert_eq!(
             words,
-            vec![("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yeah", 2.0, 3.0)]
+            vec![("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yeah", 2.1, 2.6)]
         );
+    }
+
+    #[test]
+    fn a_refinement_leaves_a_word_retimed_by_hand_where_it_was_put() {
+        let mut project = cut_project();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        let word = &mut project.captions.as_mut().unwrap().segments[0].words[2];
+        (word.text, word.start, word.end) = ("yeah".to_string(), 2.2, 2.9);
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                0.6,
+                2.6,
+                &[("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yes", 2.1, 2.6)],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let last = project.captions.as_ref().unwrap().segments[0]
+            .words
+            .last()
+            .map(|word| (word.text.clone(), word.start, word.end));
+        assert_eq!(last, Some(("yeah".to_string(), 2.2, 2.9)));
     }
 
     #[test]
