@@ -276,8 +276,6 @@ pub struct CaptionPreset {
     pub fade_duration: f32,
 }
 
-/// What applying a caption preset writes, from a built-in preset or from a
-/// style an installed app contributes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaptionPresetValues {
     pub id: String,

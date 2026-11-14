@@ -1,9 +1,3 @@
-//! Backgrounds contributed by installed App Store apps, shown as an Apps
-//! sub-tab of the wallpaper grid. Images apply as a wallpaper source pointing
-//! at the verified file in the App Store cache; gradients and colors apply
-//! as the matching built-in source, so a project never depends on the app
-//! staying installed for those.
-
 use gpui::App;
 
 use super::*;

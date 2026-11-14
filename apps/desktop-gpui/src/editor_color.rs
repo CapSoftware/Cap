@@ -445,9 +445,6 @@ pub fn preset_preview(preset: &ColorPreset, width: u32, height: u32) -> Arc<Rend
     )]))
 }
 
-/// A look from an installed app as grade values. The manifest schema already
-/// bounds every field; the clamps keep a hand-edited cache from producing
-/// values the sliders cannot show.
 pub fn look_grade(values: &crate::app_store::LookValues) -> GradeValues {
     let bipolar = |value: Option<f32>| value.unwrap_or(0.).clamp(-1., 1.);
     let unipolar = |value: Option<f32>| value.unwrap_or(0.).clamp(0., 1.);
@@ -465,8 +462,6 @@ pub fn look_grade(values: &crate::app_store::LookValues) -> GradeValues {
     }
 }
 
-/// CSS-style filters that approximate a grade for its preview tile. The
-/// built-in presets carry hand-tuned filters; app looks only carry values.
 pub fn look_filters(values: &GradeValues) -> Vec<Filter> {
     let amount = |value: f32| value * values.intensity;
     let temperature = amount(values.temperature);
