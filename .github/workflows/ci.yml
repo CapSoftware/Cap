@@ -458,6 +458,7 @@ jobs:
           GPUI_REQUIRE_TEST_DEVICE: "1"
         run: |
           cargo +1.95.0 test -p gpui --lib stream
+          cargo +1.95.0 test -p gpui --lib mirror_tests
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
