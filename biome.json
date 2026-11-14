@@ -15,7 +15,8 @@
 			"!capcodec/**/*.sh",
 			"!capcodec/**/*.jsonl",
 			"!capcodec/**/*.pyc",
-			"!capcodec/capcodec.bundle"
+			"!capcodec/capcodec.bundle",
+			"!**/*.icon"
 		],
 		"ignoreUnknown": false
 	},
