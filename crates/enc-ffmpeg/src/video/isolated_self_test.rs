@@ -61,7 +61,11 @@ impl Request {
                 .iter()
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
                 .collect(),
-            pixel_format: input_config.pixel_format.name().to_owned(),
+            pixel_format: input_config
+                .pixel_format
+                .descriptor()
+                .map_or("none", |descriptor| descriptor.name())
+                .to_owned(),
             width: input_config.width,
             height: input_config.height,
             time_base: (input_config.time_base.0, input_config.time_base.1),
