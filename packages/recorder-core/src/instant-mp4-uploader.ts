@@ -123,6 +123,7 @@ const postJson = async <TResponse>(
 	body: Record<string, unknown>,
 	api: RecorderApiOptions = {},
 	defaultTimeoutMs: number = DEFAULT_API_REQUEST_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<TResponse> => {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -137,7 +138,10 @@ const postJson = async <TResponse>(
 		headers,
 		credentials: api.credentials ?? (api.authToken ? "omit" : "same-origin"),
 		body: JSON.stringify({ ...body, ...api.extraBody }),
-		signal: AbortSignal.timeout(api.requestTimeoutMs ?? defaultTimeoutMs),
+		signal: AbortSignal.any([
+			...(signal ? [signal] : []),
+			AbortSignal.timeout(api.requestTimeoutMs ?? defaultTimeoutMs),
+		]),
 	});
 
 	if (!response.ok) {
@@ -199,6 +203,7 @@ const presignMultipartPart = async (
 	partNumber: number,
 	subpath: string,
 	api: RecorderApiOptions,
+	signal: AbortSignal,
 ): Promise<{ url: string; provider: "s3" | "googleDrive" }> => {
 	const result = await postJson<{
 		presignedUrl: string;
@@ -212,6 +217,8 @@ const presignMultipartPart = async (
 			subpath,
 		},
 		api,
+		DEFAULT_API_REQUEST_TIMEOUT_MS,
+		signal,
 	);
 
 	if (!result.presignedUrl) {
@@ -224,22 +231,21 @@ const presignMultipartPart = async (
 	};
 };
 
-const sleep = (delayMs: number) =>
-	new Promise<void>((resolve) => {
-		setTimeout(resolve, delayMs);
-	});
-
 const completeMultipartUpload = async (
 	videoId: VideoId,
 	uploadId: string,
 	parts: UploadedPartPayload[],
 	meta: MultipartCompletePayload,
 	api: RecorderApiOptions,
-	shouldAbort: () => boolean = () => false,
+	signal: AbortSignal,
+	waitForRetryDelay: (delayMs: number) => Promise<void>,
 ): Promise<{ processingStarted: boolean }> => {
 	let sawTransientFailure = false;
 
 	for (let attempt = 1; attempt <= MAX_COMPLETE_ATTEMPTS; attempt += 1) {
+		if (signal.aborted) {
+			throw new MultipartCompletionUncertainError(new CancelledUploadError());
+		}
 		try {
 			const response = await postJson<{
 				success: boolean;
@@ -258,6 +264,7 @@ const completeMultipartUpload = async (
 				},
 				api,
 				COMPLETE_REQUEST_TIMEOUT_MS,
+				signal,
 			);
 
 			if (response.success !== true) {
@@ -280,15 +287,17 @@ const completeMultipartUpload = async (
 			}
 
 			sawTransientFailure = true;
-			if (attempt >= MAX_COMPLETE_ATTEMPTS || shouldAbort()) {
+			if (attempt >= MAX_COMPLETE_ATTEMPTS || signal.aborted) {
 				throw new MultipartCompletionUncertainError(error);
 			}
-			await sleep(
+			await waitForRetryDelay(
 				Math.min(
 					COMPLETE_RETRY_MAX_DELAY_MS,
 					COMPLETE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
 				),
-			);
+			).catch((error: unknown) => {
+				throw new MultipartCompletionUncertainError(error);
+			});
 		}
 	}
 
@@ -345,6 +354,7 @@ export class InstantRecordingUploader {
 	private finalTotalBytes: number | null = null;
 	private readonly chunkStates = new Map<number, ChunkUploadState>();
 	private readonly activeRequests = new Map<number, XMLHttpRequest>();
+	private readonly requestController = new AbortController();
 	private readonly retryTimeouts = new Set<number>();
 	private readonly retryWaiters = new Set<
 		(error: CancelledUploadError) => void
@@ -821,6 +831,7 @@ export class InstantRecordingUploader {
 			partNumber,
 			this.subpath,
 			this.api,
+			this.requestController.signal,
 		);
 
 		const etag = await this.uploadBlobWithProgress({
@@ -1048,7 +1059,8 @@ export class InstantRecordingUploader {
 				subpath: options.subpath,
 			},
 			this.api,
-			() => this.cancelled,
+			this.requestController.signal,
+			(delayMs) => this.waitForRetryDelay(delayMs),
 		).catch((error: unknown) => {
 			if (
 				this.completionUncertain ||
@@ -1059,6 +1071,9 @@ export class InstantRecordingUploader {
 			}
 			throw error;
 		});
+		if (this.cancelled) {
+			throw new MultipartCompletionUncertainError(new CancelledUploadError());
+		}
 		this.processingStarted = completionResult.processingStarted;
 
 		this.finished = true;
@@ -1079,6 +1094,7 @@ export class InstantRecordingUploader {
 		if (this.finished) return;
 		this.cancelled = true;
 		this.finished = true;
+		this.requestController.abort(new CancelledUploadError());
 		this.bufferedChunks = [];
 		this.bufferedBytes = 0;
 		this.clearRetryTimeouts();
