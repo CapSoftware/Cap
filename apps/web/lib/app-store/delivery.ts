@@ -230,8 +230,10 @@ async function actionRowsForCap(userId: User.UserId, record: CapRecord) {
 	const capOrganization = organizations.find(
 		(org) => org.id === record.video.orgId,
 	);
-	const ownsCap = record.video.ownerId === userId;
-	if (!ownsCap && !capOrganization) return [];
+	// Actions send the Cap's details to another service, so only its owner can
+	// run them. Organization membership alone does not grant access to a
+	// private Cap.
+	if (record.video.ownerId !== userId) return [];
 
 	const scopes = [
 		and(
@@ -254,9 +256,7 @@ async function actionRowsForCap(userId: User.UserId, record: CapRecord) {
 	return rows.filter((row) => {
 		if (row.scope === "user") {
 			return (
-				row.userId === userId &&
-				ownsCap &&
-				memberMayInstallConnections(capOrganization)
+				row.userId === userId && memberMayInstallConnections(capOrganization)
 			);
 		}
 		return !!capOrganization && row.organizationId === capOrganization.id;
