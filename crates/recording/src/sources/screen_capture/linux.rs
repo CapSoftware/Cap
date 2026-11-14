@@ -1820,6 +1820,7 @@ impl AudioSource for SystemAudioSource {
             tx,
             ctx,
             X11Capture::audio_info().channels,
+            None,
         );
         async move {
             let inner = setup

@@ -1178,6 +1178,14 @@ starting = "Iniciando"
 [controls.marker]
 add = "Añadir marcador"
 
+[controls.settings]
+locked = "No se puede cambiar en esta grabación"
+not_in_recording = "No está en esta grabación"
+open = "Ajustes de grabación"
+show_camera_preview = "Mostrar vista previa de la cámara"
+switch_failed = "No se pudo cambiar a {device}. La grabación continúa."
+switching = "Cambiando…"
+
 [camera]
 waiting_title = "Esperando acceso a la cámara"
 

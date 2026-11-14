@@ -3158,6 +3158,13 @@ pub mod synthetic {
                 .map_err(|error| anyhow::anyhow!("synthetic microphone lock: {error}"))
         }
 
+        /// Stops the feed actor, the way a feed whose device process died
+        /// stops answering.
+        pub async fn kill(&self) {
+            self.feed.kill();
+            self.feed.wait_for_shutdown().await;
+        }
+
         /// Takes the device away the way the app does when it disappears or
         /// is deselected (`RemoveInput`); a locked feed defers it.
         pub async fn remove_input(&self) {

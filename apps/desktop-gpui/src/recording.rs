@@ -112,6 +112,34 @@ pub struct ActiveRecording {
     /// Keeps the library from deleting this folder until the recording, and
     /// any clone a stop future holds, is gone.
     _in_progress: Arc<crate::library::RecordingInProgress>,
+    started_with_camera: bool,
+    camera_only: bool,
+    microphone_switch: Option<cap_recording::sources::MicrophoneSwitch>,
+    /// The feed a mid-recording microphone switch opened. Replacing it drops
+    /// (and stops) the one before.
+    switched_microphone: Arc<Mutex<Option<SwitchedMicrophone>>>,
+}
+
+pub(crate) struct SwitchedMicrophone {
+    _feed: Arc<RecordingOwnedFeed<MicrophoneFeed>>,
+    _errors: flume::Receiver<cpal::StreamError>,
+}
+
+pub(crate) struct OpenedMicrophone {
+    pub lock: Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
+    feed: Arc<RecordingOwnedFeed<MicrophoneFeed>>,
+    errors: flume::Receiver<cpal::StreamError>,
+}
+
+/// Opens `label` on a feed of its own, outside any recording, so a switch
+/// only touches the recording once the device is known to work.
+pub(crate) async fn open_microphone(
+    label: &str,
+    settings: Option<microphone::MicrophoneDeviceSettings>,
+    meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
+) -> anyhow::Result<OpenedMicrophone> {
+    let (feed, lock, errors) = setup_microphone(label, settings, meter).await?;
+    Ok(OpenedMicrophone { lock, feed, errors })
 }
 
 #[cfg(target_os = "linux")]
@@ -835,6 +863,39 @@ impl ActiveRecording {
             Handle::Studio(handle) => handle.done_fut(),
             Handle::Instant(handle) => handle.done_fut(),
         }
+    }
+
+    pub(crate) fn studio_handle(&self) -> Option<studio_recording::ActorHandle> {
+        match &self.handle {
+            Handle::Studio(handle) => Some(handle.clone()),
+            Handle::Instant(_) => None,
+        }
+    }
+
+    pub(crate) fn microphone_switch(&self) -> Option<cap_recording::sources::MicrophoneSwitch> {
+        self.microphone_switch.clone()
+    }
+
+    pub(crate) fn started_with_camera(&self) -> bool {
+        self.started_with_camera
+    }
+
+    pub(crate) fn camera_only(&self) -> bool {
+        self.camera_only
+    }
+
+    /// Keeps the feed a microphone switch moved the recording onto alive for
+    /// as long as the recording, releasing the one it replaced.
+    pub(crate) fn adopt_switched_microphone(&self, opened: OpenedMicrophone) {
+        let previous = self
+            .switched_microphone
+            .lock()
+            .unwrap()
+            .replace(SwitchedMicrophone {
+                _feed: opened.feed,
+                _errors: opened.errors,
+            });
+        drop(previous);
     }
 
     /// Marks `at` in a Studio recording and returns the new marker count.
@@ -2684,6 +2745,10 @@ async fn start_attempt_with_upload(
         }
     };
 
+    let microphone_switch = match &handle {
+        Handle::Instant(handle) => handle.microphone_switch(),
+        Handle::Studio(_) => None,
+    };
     #[cfg(target_os = "linux")]
     let instant_completion = instant_upload
         .as_ref()
@@ -2712,6 +2777,10 @@ async fn start_attempt_with_upload(
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
         _in_progress: in_progress,
+        started_with_camera: config.camera.is_some(),
+        camera_only: matches!(config.target, ScreenCaptureTarget::CameraOnly),
+        microphone_switch,
+        switched_microphone: Arc::new(Mutex::new(None)),
     })
 }
 

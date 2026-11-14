@@ -40,7 +40,7 @@ use crate::{
 
 /// Matches the Tauri `InProgressRecording` window and
 /// `fake_window.rs` position math.
-pub const CONTROLS_WIDTH: f32 = 320.;
+pub const CONTROLS_WIDTH: f32 = 352.;
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
 /// inside its frame, so without an issue to show the window is only this
@@ -306,6 +306,10 @@ pub struct AppWindows {
     /// Where the camera bubble sat before a window picker parked it inside the
     /// highlighted window -- see [`CameraPark`].
     pub camera_park: CameraPark,
+    /// The recording bar's "Show camera preview" turned the bubble off. It
+    /// is hidden, not closed, so a Studio capture keeps excluding the same
+    /// window when it comes back.
+    camera_preview_hidden: bool,
     #[cfg(target_os = "linux")]
     clean_capture: Option<CleanCaptureUi>,
     #[cfg(target_os = "linux")]
@@ -575,6 +579,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main_closed_by_user: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
+        camera_preview_hidden: false,
         #[cfg(target_os = "linux")]
         clean_capture: None,
         #[cfg(target_os = "linux")]
@@ -630,6 +635,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             }
             close_controls(&session, cx);
             close_target_overlays(cx);
+            if cx.global::<AppWindows>().camera_preview_hidden {
+                set_camera_preview_shown(true, cx);
+            }
             #[cfg(target_os = "linux")]
             if !restore_clean_capture_ui(cx) {
                 return;
@@ -3094,6 +3102,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
+        camera_preview_hidden: _,
         #[cfg(target_os = "linux")]
             clean_capture: _,
         #[cfg(target_os = "linux")]
@@ -4409,6 +4418,7 @@ pub fn open_camera_window(cx: &mut App) {
 }
 
 pub fn close_camera_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().camera_preview_hidden = false;
     if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
         #[cfg(not(target_os = "macos"))]
         if let Some(previous) = handle
@@ -7234,6 +7244,55 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn camera_window_id(cx: &mut App) -> Option<scap_targets::WindowId> {
+    camera_window_number(cx).and_then(|number| number.to_string().parse().ok())
+}
+
+pub(crate) fn camera_preview_shown(cx: &App) -> bool {
+    let windows = cx.global::<AppWindows>();
+    windows.camera.is_some() && !windows.camera_preview_hidden
+}
+
+/// The bar's "Show camera preview". Hides and shows the bubble in place;
+/// Linux has no native hide for it, so there it closes and reopens.
+pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        if shown {
+            open_camera_window(cx);
+        }
+        return;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let _ = handle;
+        if !shown {
+            close_camera_window(cx);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if cx.global::<AppWindows>().camera_preview_hidden != shown {
+            return;
+        }
+        cx.global_mut::<AppWindows>().camera_preview_hidden = !shown;
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        if let Some(native) = native {
+            cx.spawn(async move |_| {
+                if shown {
+                    platform::order_front_native(&native);
+                } else {
+                    platform::hide_native(&native);
+                }
+            })
+            .detach();
+        }
+    }
+}
+
 fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
@@ -7293,15 +7352,11 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
-/// Grow the bar's window upward to make room for an issue card above the
-/// bar, or shrink it back to the bar alone, leaving the bar where it is.
-/// `setFrame` re-enters gpui, so call this from a task.
-pub(crate) fn fit_controls_to_issue(native: &platform::NativeWindow, issue: bool, scale: f32) {
-    let height = f64::from(if issue {
-        CONTROLS_HEIGHT
-    } else {
-        CONTROLS_BAR_HEIGHT
-    });
+/// Grow the bar's window upward to `height` to make room for the cards above
+/// the bar (an issue, the settings panel), or shrink it back, leaving the bar
+/// where it is. `setFrame` re-enters gpui, so call this from a task.
+pub(crate) fn fit_controls(native: &platform::NativeWindow, height: f32, scale: f32) {
+    let height = f64::from(height);
     let (x, y, width, current) = platform::window_frame(native);
     if width <= 0. {
         return;
@@ -8163,6 +8218,7 @@ mod tests {
             main_closed_by_user: false,
             editor_hidden_for_picker: None,
             camera_park: CameraPark::default(),
+            camera_preview_hidden: false,
             clean_capture: None,
             clean_capture_generation: 0,
         }

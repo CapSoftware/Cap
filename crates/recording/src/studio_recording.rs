@@ -1256,6 +1256,31 @@ impl Message<SetCameraFeed> for Actor {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct AddExcludedWindows(Vec<scap_targets::WindowId>);
+
+#[cfg(target_os = "macos")]
+impl Message<AddExcludedWindows> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: AddExcludedWindows,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match self.state.as_ref() {
+            Some(ActorState::Recording { .. }) => {
+                bail!("Pause the recording before changing excluded windows")
+            }
+            Some(ActorState::Paused { .. }) => {
+                self.segment_factory.add_excluded_windows(msg.0);
+                Ok(())
+            }
+            None => Err(anyhow!("Recording no longer active")),
+        }
+    }
+}
+
 pub struct IsPaused;
 
 impl Message<IsPaused> for Actor {
@@ -2173,6 +2198,17 @@ impl ActorHandle {
         camera_feed: Option<Arc<CameraFeedLock>>,
     ) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
+    }
+
+    #[cfg(target_os = "macos")]
+    /// Keeps windows opened mid-recording (a reopened camera bubble) out of
+    /// the segments recorded after the next resume.
+    pub async fn add_excluded_windows(
+        &self,
+        windows: Vec<scap_targets::WindowId>,
+    ) -> anyhow::Result<()> {
+        self.actor_ref.ask(AddExcludedWindows(windows)).await?;
+        Ok(())
     }
 
     pub async fn is_paused(&self) -> anyhow::Result<bool> {
@@ -3294,6 +3330,15 @@ impl SegmentPipelineFactory {
 
     pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
         self.base_inputs.camera_feed = camera_feed;
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn add_excluded_windows(&mut self, windows: Vec<scap_targets::WindowId>) {
+        for window in windows {
+            if !self.base_inputs.excluded_windows.contains(&window) {
+                self.base_inputs.excluded_windows.push(window);
+            }
+        }
     }
 
     pub fn camera_device_id(&self) -> Option<String> {

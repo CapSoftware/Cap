@@ -191,13 +191,36 @@ fn count_nonzero_samples(frame: &ffmpeg::frame::Audio) -> Option<(u64, u64)> {
 pub struct Microphone {
     #[cfg(windows)]
     capture_scope: crate::output_pipeline::PipelineBuildScope,
-    #[cfg(windows)]
-    subscription: Arc<microphone::RecordingSubscription>,
     #[cfg(target_os = "linux")]
     required_health: Option<RequiredMicrophoneHealth>,
     info: AudioInfo,
-    _lock: Arc<MicrophoneFeedLock>,
+    // Holds the current feed lock for the source's lifetime; Windows also
+    // reads it to retire the current subscription.
+    _binding: SharedMicrophoneBinding,
     cancel: CancellationToken,
+}
+
+/// The feed a running microphone source reads from. A [`MicrophoneSwitch`]
+/// replaces it mid-recording, so teardown always releases the current one.
+struct MicrophoneBinding {
+    lock: Arc<MicrophoneFeedLock>,
+    #[cfg(windows)]
+    subscription: Arc<microphone::RecordingSubscription>,
+}
+
+type SharedMicrophoneBinding = Arc<std::sync::Mutex<MicrophoneBinding>>;
+
+impl Microphone {
+    #[cfg(windows)]
+    fn current_subscription(
+        &self,
+    ) -> (
+        Arc<MicrophoneFeedLock>,
+        Arc<microphone::RecordingSubscription>,
+    ) {
+        let binding = self._binding.lock().unwrap();
+        (binding.lock.clone(), binding.subscription.clone())
+    }
 }
 
 // The detached bridge tasks hold clones of the feed lock and only exit via
@@ -208,11 +231,54 @@ pub struct Microphone {
 impl Drop for Microphone {
     fn drop(&mut self) {
         #[cfg(windows)]
-        if let Some(error) = self.subscription.retire() {
+        if let Some(error) = self.current_subscription().1.retire() {
             self.capture_scope.fail_required(error);
         }
         self.cancel.cancel();
     }
+}
+
+pub struct MicrophoneSwitchRequest {
+    lock: Arc<MicrophoneFeedLock>,
+    reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+}
+
+/// Moves a running microphone source onto another, already open feed. The
+/// recording keeps its audio track and timeline; only where the samples come
+/// from changes. Opening the new device is the caller's job, so a device that
+/// fails to open never touches the recording.
+#[derive(Clone)]
+pub struct MicrophoneSwitch(flume::Sender<MicrophoneSwitchRequest>);
+
+impl MicrophoneSwitch {
+    pub fn channel() -> (Self, flume::Receiver<MicrophoneSwitchRequest>) {
+        let (tx, rx) = flume::bounded(1);
+        (Self(tx), rx)
+    }
+
+    pub async fn switch(&self, lock: Arc<MicrophoneFeedLock>) -> anyhow::Result<()> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.0
+            .send_async(MicrophoneSwitchRequest { lock, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("The recording's microphone is no longer running"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("The recording's microphone stopped while switching"))?
+    }
+}
+
+async fn next_switch_request(
+    requests: &mut Option<flume::Receiver<MicrophoneSwitchRequest>>,
+) -> Option<MicrophoneSwitchRequest> {
+    let Some(receiver) = requests.as_ref() else {
+        return std::future::pending().await;
+    };
+    let request = receiver.recv_async().await.ok();
+    if request.is_none() {
+        *requests = None;
+    }
+    request
 }
 
 #[derive(Debug, Error)]
@@ -369,6 +435,7 @@ impl Microphone {
         mut audio_tx: mpsc::Sender<AudioFrame>,
         ctx: &mut crate::SetupCtx,
         target_channels: usize,
+        switch_requests: Option<flume::Receiver<MicrophoneSwitchRequest>>,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
         let health_tx = ctx.health_tx().clone();
         let digital_silence_ms = ctx.digital_silence_ms();
@@ -377,16 +444,27 @@ impl Microphone {
         #[cfg(windows)]
         let source_cancel = ctx.stop_token().child_token();
         #[cfg(windows)]
-        let subscription = feed_lock.recording_subscription(source_cancel.clone());
+        // Retiring a subscription cancels its token. Each one gets a child of the
+        // source's token so a microphone switch can retire the old subscription
+        // without stopping the source.
+        let subscription = feed_lock.recording_subscription(source_cancel.child_token());
+        let binding: SharedMicrophoneBinding = Arc::new(std::sync::Mutex::new(MicrophoneBinding {
+            lock: feed_lock.clone(),
+            #[cfg(windows)]
+            subscription: subscription.clone(),
+        }));
         #[cfg(windows)]
         {
             capture_scope.register_token(source_cancel.clone());
             let scope = capture_scope.clone();
             let cancel = source_cancel.clone();
-            let subscription = subscription.clone();
-            let feed = feed_lock.clone();
+            let binding = binding.clone();
             ctx.tasks().spawn("microphone-owned-producers", async move {
                 cancel.cancelled().await;
+                let (feed, subscription) = {
+                    let binding = binding.lock().unwrap();
+                    (binding.lock.clone(), binding.subscription.clone())
+                };
                 finish_recording_subscription(&scope, &feed, subscription).await
             });
         }
@@ -477,9 +555,9 @@ impl Microphone {
                 let frame_counter = mic_frame_counter.clone();
                 let drop_counter = mic_drop_counter.clone();
                 let silence_counter = mic_silence_counter.clone();
-                let feed_lock = feed_lock.clone();
+                let mut feed_lock = feed_lock.clone();
                 #[cfg(not(windows))]
-                let device_name = device_name.clone();
+                let mut device_name = device_name.clone();
                 let health_tx = health_tx.clone();
                 let cancel = cancel.clone();
                 let recording_muted = recording_muted.clone();
@@ -487,9 +565,13 @@ impl Microphone {
                 #[cfg(windows)]
                 let capture_scope = capture_scope.clone();
                 #[cfg(windows)]
-                let subscription = subscription.clone();
+                let mut subscription = subscription.clone();
                 #[cfg(target_os = "linux")]
                 let required_health = required_health.clone();
+                let binding = binding.clone();
+                let mut switch_requests = switch_requests;
+                let mut rx = rx;
+                let mut reconnect_settings = reconnect_settings;
                 async move {
                     let mut digital_silence = DigitalSilenceDetector::new(
                         audio_info.sample_rate * audio_info.channels as u32,
@@ -520,6 +602,95 @@ impl Microphone {
                         let recv_result = tokio::select! {
                             biased;
                             _ = cancel.cancelled() => break,
+                            request = next_switch_request(&mut switch_requests) => {
+                                let Some(MicrophoneSwitchRequest { lock: next, reply }) = request else {
+                                    continue;
+                                };
+                                let (next_tx, next_rx) = flume::bounded(128);
+                                #[cfg(target_os = "linux")]
+                                if required_health.is_some() {
+                                    let _ = reply.send(Err(anyhow::anyhow!(
+                                        "This recording's microphone cannot be switched"
+                                    )));
+                                    continue;
+                                }
+                                #[cfg(windows)]
+                                let next_subscription = next.recording_subscription(cancel.child_token());
+                                #[cfg(windows)]
+                                let attached = next
+                                    .attach_recording_subscription(
+                                        next_subscription.clone(),
+                                        next_tx,
+                                        health_tx.clone(),
+                                        "microphone-feed:recording".into(),
+                                    )
+                                    .await;
+                                #[cfg(not(windows))]
+                                let attached = next
+                                    .ask(microphone::AddRecordingSender {
+                                        sender: next_tx,
+                                        health_tx: health_tx.clone(),
+                                        label: "microphone-feed:recording".to_string(),
+                                    })
+                                    .await
+                                    .map_err(|error| anyhow::anyhow!("{error}"));
+                                if let Err(error) = attached {
+                                    warn!(%error, "Microphone switch could not attach to the new feed");
+                                    let _ = reply.send(Err(error));
+                                    continue;
+                                }
+                                let previous = std::mem::replace(
+                                    &mut *binding.lock().unwrap(),
+                                    MicrophoneBinding {
+                                        lock: next.clone(),
+                                        #[cfg(windows)]
+                                        subscription: next_subscription.clone(),
+                                    },
+                                );
+                                let previous_name = previous.lock.device_name().to_string();
+                                #[cfg(windows)]
+                                {
+                                    let MicrophoneBinding {
+                                        lock: previous_lock,
+                                        subscription: previous_subscription,
+                                    } = previous;
+                                    let _ = previous_subscription.retire();
+                                    if let Err(error) = previous_lock
+                                        .detach_recording_subscription(previous_subscription)
+                                        .await
+                                    {
+                                        warn!(%error, "Detaching the previous microphone after a switch");
+                                    }
+                                    subscription = next_subscription;
+                                }
+                                #[cfg(not(windows))]
+                                drop(previous);
+                                rx = next_rx;
+                                feed_lock = next;
+                                let next_info = feed_lock.audio_info();
+                                reconnect_settings = microphone::MicrophoneDeviceSettings {
+                                    sample_rate: Some(next_info.sample_rate),
+                                    channels: u16::try_from(next_info.channels).ok(),
+                                };
+                                #[cfg(not(windows))]
+                                {
+                                    device_name = feed_lock.device_name().to_string();
+                                }
+                                reconnect_attempts = 0;
+                                next_reconnect_after = MIC_RECONNECT_AFTER;
+                                if silence_mode {
+                                    silence_start = Some(Instant::now());
+                                }
+                                info!(
+                                    from = %previous_name,
+                                    to = %feed_lock.device_name(),
+                                    source_rate = next_info.sample_rate,
+                                    source_channels = next_info.channels,
+                                    "Microphone source switched"
+                                );
+                                let _ = reply.send(Ok(()));
+                                continue;
+                            }
                             r = tokio::time::timeout(silence_timeout, rx.recv_async()) => r,
                         };
                         match recv_result {
@@ -939,10 +1110,8 @@ impl Microphone {
             Ok(Self {
                 #[cfg(windows)]
                 capture_scope,
-                #[cfg(windows)]
-                subscription,
                 info: audio_info,
-                _lock: feed_lock,
+                _binding: binding,
                 #[cfg(target_os = "linux")]
                 required_health,
                 cancel,
@@ -972,6 +1141,7 @@ impl AudioSource for Microphone {
             audio_tx,
             ctx,
             usize::from(MICROPHONE_TARGET_CHANNELS),
+            None,
         )
     }
 
@@ -985,16 +1155,14 @@ impl AudioSource for Microphone {
             health.stop();
         }
         #[cfg(windows)]
-        if let Some(error) = self.subscription.retire() {
+        let (feed, subscription) = self.current_subscription();
+        #[cfg(windows)]
+        if let Some(error) = subscription.retire() {
             self.capture_scope.fail_required(error);
         }
         self.cancel.cancel();
         #[cfg(windows)]
         let scope = self.capture_scope.clone();
-        #[cfg(windows)]
-        let feed = self._lock.clone();
-        #[cfg(windows)]
-        let subscription = self.subscription.clone();
         async move {
             #[cfg(windows)]
             {
@@ -1005,6 +1173,42 @@ impl AudioSource for Microphone {
                 Ok(())
             }
         }
+    }
+}
+
+/// A [`Microphone`] that a [`MicrophoneSwitch`] can move onto another feed
+/// while it records.
+pub struct SwitchableMicrophone(Microphone);
+
+pub struct SwitchableMicrophoneConfig {
+    pub lock: Arc<MicrophoneFeedLock>,
+    pub switch_requests: flume::Receiver<MicrophoneSwitchRequest>,
+}
+
+impl AudioSource for SwitchableMicrophone {
+    type Config = SwitchableMicrophoneConfig;
+
+    fn setup(
+        config: Self::Config,
+        audio_tx: mpsc::Sender<AudioFrame>,
+        ctx: &mut crate::SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
+        let setup = Microphone::setup_with_channels(
+            config.lock,
+            audio_tx,
+            ctx,
+            usize::from(MICROPHONE_TARGET_CHANNELS),
+            Some(config.switch_requests),
+        );
+        async move { setup.await.map(Self) }
+    }
+
+    fn audio_info(&self) -> AudioInfo {
+        self.0.audio_info()
+    }
+
+    fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.0.stop()
     }
 }
 
@@ -2005,5 +2209,195 @@ mod digital_silence_tests {
         )
         .await;
         assert!(digital_silence_ms.is_some_and(|ms| ms >= 5_000));
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+    use crate::{
+        feeds::microphone::synthetic::SyntheticMicrophone,
+        output_pipeline::{AudioMuxer, Muxer, OutputPipeline, TaskPool},
+    };
+    use cap_timestamp::Timestamp;
+
+    type Captured = Arc<std::sync::Mutex<Vec<f32>>>;
+
+    struct CapturingMuxer(Captured);
+
+    impl Muxer for CapturingMuxer {
+        type Config = Captured;
+
+        async fn setup(
+            captured: Captured,
+            _: std::path::PathBuf,
+            _: Option<cap_media_info::VideoInfo>,
+            _: Option<AudioInfo>,
+            _: Arc<AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self(captured))
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for CapturingMuxer {
+        fn send_audio_frame(&mut self, frame: AudioFrame, _: Duration) -> anyhow::Result<()> {
+            let data = frame.inner.data(0);
+            let samples = frame.inner.samples();
+            let peak = data
+                .chunks_exact(4)
+                .take(samples)
+                .map(|bytes| f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]).abs())
+                .fold(0.0f32, f32::max);
+            self.0.lock().unwrap().push(peak);
+            Ok(())
+        }
+    }
+
+    async fn push_for(
+        mic: &SyntheticMicrophone,
+        value: f32,
+        format: (u32, u16),
+        start: Instant,
+        offset: Duration,
+        length: Duration,
+    ) {
+        let (rate, channels) = format;
+        let frames_per_chunk = (rate / 100) as usize;
+        let chunk = vec![value; frames_per_chunk * usize::from(channels)];
+        let chunks = (length.as_secs_f64() * 100.0).round() as usize;
+        for index in 0..chunks {
+            let at = start + offset + Duration::from_millis(10 * index as u64);
+            mic.push(&chunk, Timestamp::Instant(at)).await;
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    async fn settle(captured: &Captured, predicate: impl Fn(&[f32]) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if predicate(&captured.lock().unwrap()) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the muxer never saw the expected audio"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_running_source_moves_to_a_device_with_a_different_format_and_releases_the_old_one() {
+        let built_in = SyntheticMicrophone::spawn("built-in", 48_000, 1);
+        let headset = SyntheticMicrophone::spawn("headset", 44_100, 2);
+        let (switch, switch_requests) = MicrophoneSwitch::channel();
+        let captured = Captured::default();
+        let temp = tempfile::tempdir().unwrap();
+        let pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
+            .with_audio_source::<SwitchableMicrophone>(SwitchableMicrophoneConfig {
+                lock: Arc::new(built_in.lock().await.unwrap()),
+                switch_requests,
+            })
+            .build::<CapturingMuxer>(captured.clone())
+            .await
+            .unwrap();
+
+        let start = Instant::now();
+        push_for(
+            &built_in,
+            0.1,
+            (48_000, 1),
+            start,
+            Duration::ZERO,
+            Duration::from_millis(300),
+        )
+        .await;
+        settle(&captured, |peaks| {
+            peaks.iter().any(|peak| (*peak - 0.1).abs() < 0.02)
+        })
+        .await;
+
+        switch
+            .switch(Arc::new(headset.lock().await.unwrap()))
+            .await
+            .unwrap();
+        assert!(
+            built_in.lock().await.is_ok(),
+            "the recording must let go of the microphone it switched away from"
+        );
+
+        push_for(
+            &headset,
+            0.35,
+            (44_100, 2),
+            start,
+            Duration::from_millis(300),
+            Duration::from_millis(300),
+        )
+        .await;
+        settle(&captured, |peaks| peaks.iter().any(|peak| *peak > 0.3)).await;
+
+        built_in
+            .push(&[0.95; 480], Timestamp::Instant(Instant::now()))
+            .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        pipeline.stop().await.unwrap();
+
+        let peaks = captured.lock().unwrap().clone();
+        let first_switched = peaks.iter().position(|peak| *peak > 0.3).unwrap();
+        assert!(
+            peaks[..first_switched].iter().all(|peak| *peak < 0.2),
+            "audio before the switch comes from the first microphone"
+        );
+        assert!(
+            peaks.iter().all(|peak| *peak < 0.8),
+            "the old microphone's samples never reach the recording after the switch"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_switch_that_cannot_attach_leaves_the_current_microphone_recording() {
+        let built_in = SyntheticMicrophone::spawn("built-in", 48_000, 1);
+        let unplugged = SyntheticMicrophone::spawn("unplugged", 48_000, 1);
+        let unplugged_lock = Arc::new(unplugged.lock().await.unwrap());
+        unplugged.kill().await;
+        let (switch, switch_requests) = MicrophoneSwitch::channel();
+        let captured = Captured::default();
+        let temp = tempfile::tempdir().unwrap();
+        let pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
+            .with_audio_source::<SwitchableMicrophone>(SwitchableMicrophoneConfig {
+                lock: Arc::new(built_in.lock().await.unwrap()),
+                switch_requests,
+            })
+            .build::<CapturingMuxer>(captured.clone())
+            .await
+            .unwrap();
+
+        assert!(switch.switch(unplugged_lock).await.is_err());
+
+        let start = Instant::now();
+        push_for(
+            &built_in,
+            0.4,
+            (48_000, 1),
+            start,
+            Duration::ZERO,
+            Duration::from_millis(200),
+        )
+        .await;
+        settle(&captured, |peaks| {
+            peaks.iter().any(|peak| (*peak - 0.4).abs() < 0.02)
+        })
+        .await;
+        assert!(
+            built_in.lock().await.is_err(),
+            "the recording still holds the microphone it never left"
+        );
+        pipeline.stop().await.unwrap();
     }
 }
