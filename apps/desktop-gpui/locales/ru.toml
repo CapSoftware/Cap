@@ -1,0 +1,3237 @@
+[common]
+add = "Добавить"
+back = "Назад"
+cancel = "Отмена"
+choose_allow_prompt = "Выберите «Разрешить» в запросе macOS."
+close = "Закрыть"
+copied = "Скопировано"
+dismiss = "Закрыть"
+go_back = "Вернуться"
+loading = "Загрузка..."
+no = "Нет"
+ok = "ОК"
+reset = "Сбросить"
+reset_to_default = "Восстановить настройки по умолчанию"
+save = "Сохранить"
+search = "Поиск"
+yes = "Да"
+
+[menu.app]
+about = "О Cap"
+hide = "Скрыть Cap"
+hide_others = "Скрыть остальные"
+quit = "Выйти из Cap"
+services = "Службы"
+settings = "Настройки…"
+
+[menu.about]
+licensed = "Лицензия AGPL-3.0"
+website = "Сайт"
+commit = "Коммит"
+
+[menu.file]
+open_prompt = "Открыть запись"
+close_window = "Закрыть окно"
+title = "Файл"
+open_file = "Открыть файл…"
+open_recent = "Открыть недавний"
+import_media = "Импортировать медиа…"
+
+[menu.edit]
+copy = "Копировать"
+cut = "Вырезать"
+paste = "Вставить"
+redo = "Повторить"
+select_all = "Выбрать всё"
+title = "Правка"
+undo = "Отменить"
+
+[menu.view]
+enter_full_screen = "На весь экран"
+title = "Вид"
+
+[menu.window]
+close_window = "Закрыть окно"
+minimize = "Свернуть"
+title = "Окно"
+zoom = "Масштабировать"
+
+[menu.help]
+title = "Помощь"
+feedback = "Оставить отзыв…"
+changelog = "Список изменений"
+dashboard = "Панель управления"
+documentation = "Документация"
+faq = "Частые вопросы"
+self_hosting = "Свой сервер"
+help_center = "Справочный центр"
+system_status = "Состояние системы"
+discord = "Присоединиться к сообществу Discord"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "Проверить обновления"
+download = "Скачать обновление…"
+checking = "Проверка обновлений…"
+downloading = "Загрузка обновления…"
+restart = "Перезапустить для обновления…"
+
+[tray]
+import_media = "Импортировать медиа..."
+no_recent_items = "Нет недавних записей"
+open_main_window = "Открыть главное окно"
+previous = "Недавние"
+recording_mode = "Режим записи"
+quit = "Выйти из Cap"
+record_area = "Записать область"
+record_display = "Записать экран"
+record_window = "Записать окно"
+request_permissions = "Запросить разрешения"
+screenshot_area = "Снимок области"
+screenshot_display = "Снимок экрана"
+screenshot_window = "Снимок окна"
+select_mode = "Выбрать режим"
+settings = "Настройки"
+take_screenshot = "Сделать снимок экрана"
+tooltip_recording = "Cap — остановить запись"
+upload_logs = "Отправить журналы"
+version = "Cap v{version}"
+view_all_recordings = "Все записи"
+view_all_screenshots = "Все снимки экрана"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "Снимок экрана"
+studio = "Studio"
+
+[settings.nav]
+automations = "Автоматизация"
+changelog = "Список изменений"
+cli = "CLI"
+experimental = "Экспериментальные"
+feedback = "Обратная связь"
+general = "Общие"
+integrations = "Интеграции"
+license = "Тариф и лицензия"
+quality = "Качество записи"
+recordings = "Записи"
+screenshots = "Снимки экрана"
+shortcuts = "Горячие клавиши"
+transcription = "Расшифровка"
+
+[settings.general.language]
+description = "Выберите язык интерфейса Cap."
+label = "Язык приложения"
+system_default = "Системный ({language})"
+title = "Язык"
+
+[settings.general.appearance]
+dark = "Тёмная"
+description = "Используйте системную тему или выберите оформление."
+light = "Светлая"
+system = "Системная"
+title = "Оформление"
+
+[settings.general.app]
+description = "Выберите, как Cap отображается в системе."
+title = "Приложение"
+
+[settings.general.app.dock_icon]
+description = "Показывать Cap в Dock, даже когда все окна закрыты."
+label = "Всегда показывать значок в Dock"
+
+[settings.general.app.notifications]
+description = "Показывать уведомления о копировании в буфер обмена, сохранении файлов и других событиях. Возможно, потребуется разрешить уведомления Cap в системных настройках."
+label = "Системные уведомления"
+
+[settings.general.recording]
+description = "Поведение во время и после записи."
+title = "Запись"
+
+[settings.general.recording.countdown]
+description = "Задержка перед началом записи."
+label = "Обратный отсчёт"
+off = "Выкл."
+seconds_10 = "10 секунд"
+seconds_3 = "3 секунды"
+seconds_5 = "5 секунд"
+
+[settings.general.recording.confirm_without_mic]
+description = "Запрашивать подтверждение, если микрофон не выбран или недоступен."
+label = "Подтверждать запись без микрофона"
+
+[settings.general.recording.studio_sound]
+description = "Автоматически очищать звук микрофона. Эту функцию можно отключить для любой записи в редакторе."
+label = "Studio Sound для новых записей"
+
+[settings.general.recording.main_window_start]
+description = "Что происходит с главным окном при начале записи."
+label = "Главное окно при начале записи"
+
+[settings.general.recording.window_capture]
+description = "Как записывается выбранное окно. Режим «Только окно» записывает его отдельно, располагая по центру и отслеживая перемещения; режим «Область экрана» записывает занимаемую им часть экрана."
+label = "Способ записи окна"
+
+[settings.general.recording.post_deletion]
+description = "Нужно ли повторно открывать окно записи."
+label = "После удаления записи"
+
+[settings.general.recording.delete_after_upload]
+description = "Cap удаляет локальный файл после успешной загрузки."
+label = "Удалить записи Instant после загрузки"
+
+[settings.general.recording.crash_recovery]
+description = "Записывать фрагменты, которые можно восстановить после сбоя или отключения питания. При записи файлы будут немного больше."
+label = "Запись с восстановлением после сбоя"
+
+[settings.general.recording.custom_cursor]
+description = "Записывать курсор отдельно, чтобы настроить его размер и сглаживание в редакторе."
+label = "Отдельная запись курсора (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Автоматически добавлять масштабирование при щелчках мышью в записях Studio."
+label = "Автомасштабирование при щелчках"
+
+[settings.general.recording.default_zoom]
+description = "Масштаб новых и автоматически созданных сегментов."
+label = "Масштаб по умолчанию"
+
+[settings.general.recording.capture_keyboard]
+description = "Записывать нажатия клавиш для последующего отображения в редакторе."
+label = "Записывать нажатия клавиш"
+
+[settings.general.recording.notch_overlay]
+description = "Автоматически восстанавливать вырез экрана на новых записях, если он полностью входит в выбранную область. Внешние экраны, частичные области и записи окон не изменяются. Настройку можно изменить для каждой записи в редакторе."
+label = "Отображать вырез MacBook на записях экрана"
+
+[settings.general.recording.max_fps]
+description = "Максимальная частота кадров для захвата экрана."
+description_high = "Максимальная частота кадров записи экрана. Высокие значения могут вызывать пропуск кадров или повышать нагрузку на процессор."
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (рекомендуется)"
+label = "Максимальная частота кадров"
+
+[settings.general.recording.marker_sound]
+description = "Воспроизводить короткий звук при добавлении маркера во время записи Studio. Микрофон или системное аудио могут его записать."
+label = "Звук при добавлении маркера"
+
+[settings.general.storage]
+choose_folder = "Выберите папку"
+default_location = "По умолчанию (Application Support)"
+description = "Где Cap сохраняет ваши записи."
+title = "Хранилище"
+
+[settings.general.project_name]
+available_placeholders = "Доступные переменные"
+description = "Шаблон используется для новых записей и экспортируемых файлов."
+title = "Имя проекта по умолчанию"
+
+[settings.general.project_name.placeholders]
+date_time = "Дата и время"
+date_values = "дата записи"
+mode_values = "\"studio\", \"instant\" или \"screenshot\""
+random = "Случайное значение"
+random_values = "10 шестнадцатеричных символов, допустимых в имени файла; используйте {{random:N}} для длины от 1 до 32."
+recording_mode = "Режим записи"
+recording_mode_values = "«Studio», «Instant», или «Screenshot»"
+target = "Источник"
+target_kind_values = "«Display», «Window» или «Area»"
+target_name_values = "Имя монитора или название окна."
+time_values = "Время записи"
+
+[settings.general.excluded_windows]
+description = "Скрывать окна в записях."
+empty = "Окна в настоящее время не исключены."
+missing_body = "Окна камеры, настроек или записи могут отображаться на записи экрана как чёрные прямоугольники. Не исключены: {names}."
+missing_title = "Рекомендуемые окна Cap не исключены"
+restore = "Восстановить"
+title = "Исключенные окна"
+
+[settings.general.updates]
+description = "Выберите, какую сборку Cap вы получите."
+nightly_description = "Новейшие сборки автоматически обновляются в фоне, когда вы не записываете и не экспортируете видео. Могут работать нестабильно."
+nightly_switch_back = "Переключение на Stable вернет вас к последней стабильной версии, которая может быть старше вашей текущей сборки."
+stable_description = "Версионные релизы (рекомендуется)"
+title = "Обновления"
+
+[settings.general.updates.channel]
+description = "Канал выпусков, из которого Cap получает обновления."
+label = "Канал обновлений"
+
+[settings.general.updates.download_policy]
+auto = "Авто"
+description = "Выберите, загружает ли Cap обновления автоматически."
+label = "Загрузка обновлений"
+manual = "Спрашивать"
+never = "Никогда"
+
+[settings.general.self_host]
+confirm_change = "Вы уверены, что хотите изменить URL-адрес сервера на {origin}? Вам нужно будет войти снова."
+description = "Измените это, только если вы используете свой собственный экземпляр Cap Web."
+server_url = "URL сервера Cap"
+title = "Свой сервер"
+update = "Обновить"
+
+[settings.general.privacy]
+title = "Конфиденциальность"
+
+[settings.general.privacy.telemetry]
+description = "Cap использует анонимную телеметрию для повышения надёжности и исправления ошибок. Мы не собираем содержимое записей, названия окон, пути к файлам или личные данные."
+label = "Отправлять анонимную телеметрию"
+
+[settings.prompt]
+ok = "Хорошо"
+
+[settings.sidebar]
+account = "Учётная запись"
+cancel_sign_in = "Отменить вход"
+check_for_updates = "Проверить обновления"
+checking_for_updates = "Проверка обновлений..."
+click_to_sign_in = "Нажмите, чтобы войти"
+downloading = "Загрузка v{version}…"
+downloading_progress = "Загрузка v{version}… {percent}%"
+installing = "Установка v{version}..."
+previous_versions = "Просмотреть предыдущие версии"
+restart_to_update = "Перезапустить для обновления до v{version}"
+sign_in = "Войти"
+sign_out = "Выйти"
+signed_in = "Вход выполнен"
+
+[settings.recordings]
+corrupted_body = "Произошла ошибка записи, поэтому с этим файлом могут возникнуть проблемы в редакторе. Если не удаётся восстановить файл, обратитесь в поддержку."
+corrupted_title = "Запись потенциально повреждена"
+delete = "Удалить"
+description = "Управляйте своими записями и выполняйте действия."
+edit = "Редактировать"
+empty_library = "Записи не найдены"
+failed = "Ошибка записи"
+import = "Импорт"
+in_progress = "Идёт запись"
+load_more = "Загрузить больше"
+open_bundle = "Открыть пакет записи"
+open_link = "Открыть ссылку"
+retry_upload = "Повторить загрузку"
+show_all = "Показать все"
+title = "Записи"
+
+[settings.recordings.empty]
+all = "Нет записей"
+all_matching = "Подходящие записи не найдены"
+instant = "Нет записей Instant"
+instant_matching = "Подходящие записи Instant не найдены"
+studio = "Нет записей Studio"
+studio_matching = "Подходящие записи Studio не найдены"
+
+[settings.screenshots]
+copy = "Скопировать в буфер обмена"
+delete = "Удалить"
+description = "Управляйте скриншотами и выполняйте действия."
+empty = "Нет снимков экрана"
+empty_library = "Скриншоты не найдены"
+empty_matching = "Подходящие снимки экрана не найдены"
+import = "Импортировать изображение"
+load_more = "Загрузить больше"
+open_folder = "Открыть папку"
+save_as = "Сохранить как"
+title = "Скриншоты"
+
+[settings.quality]
+save_failed = "Не удалось сохранить настройки записи. Попробуйте ещё раз."
+
+[settings.quality.studio]
+balanced = "Сбалансированное"
+balanced_description = "Чёткое изображение при разумном размере файла. Подходит для большинства записей."
+compatibility = "Меньший размер файлов"
+compatibility_description = "Экономит место на диске. Мелкие детали могут стать менее чёткими, особенно при записи камеры."
+description = "Сохраняются на компьютере для редактирования. Размер экспорта выбирается позже в редакторе."
+recommended = "Рекомендуется"
+title = "Записи Studio"
+ultra = "Максимальная детализация"
+ultra_description = "Сохраняет максимум деталей для интенсивного редактирования. Занимает больше всего места."
+
+[settings.quality.instant]
+description = "Загружаются во время записи, поэтому ссылка готова сразу после остановки. Для наилучшего качества используйте Studio: запись ведётся в максимальном разрешении экрана, а экспорт доступен до 4K."
+free_plan = "720p по бесплатному тарифу. Cap Pro записывает до 4K."
+max_resolution = "Максимальное разрешение"
+res_1080p = "Чёткий текст при разумном размере загружаемого файла."
+res_1440p = "Дополнительные детали для больших экранов с высоким разрешением."
+res_4k = "Максимальная детализация. Лучше всего подходит для быстрого соединения."
+res_720p = "Небольшие файлы загружаются быстрее всего."
+title = "Записи Instant"
+
+[settings.quality.sharing]
+auto_open = "Автоматически открывать ссылки"
+auto_open_description = "Открывать ссылку в браузере после завершения загрузки."
+title = "Публикация"
+
+[settings.options.studio_quality]
+balanced = "Сбалансированное"
+compatibility = "Совместимость"
+ultra = "Максимальное"
+
+[settings.options.main_window_start]
+close = "Закрыть"
+minimise = "Свернуть"
+
+[settings.options.window_capture]
+focused_window = "Только окно"
+screen_region = "Область экрана"
+
+[settings.options.post_studio]
+do_nothing = "Ничего не делать"
+open_editor = "Открыть редактор"
+show_cap = "Показать Cap"
+
+[settings.options.post_screenshot]
+copy = "Скопировать в буфер обмена"
+copy_and_open_editor = "Скопировать и открыть редактор"
+do_nothing = "Ничего не делать"
+open_editor = "Открыть редактор"
+
+[settings.options.post_deletion]
+do_nothing = "Ничего не делать"
+reopen = "Снова открыть окно записи"
+
+[settings.options.preview_quality]
+full = "Полный"
+half = "Половина"
+quarter = "Четверть"
+
+[settings.shortcuts]
+blocked_while_recording = "Нельзя изменить сочетания клавиш, пока запись использует клавишу остановки. Сначала остановите запись."
+cancelling_description = "Для скриншотов и записей, запущенных сочетанием клавиш или из трея."
+cancelling_title = "Отмена"
+needs_modifier_macos = "Добавьте ⌘, ⌃ или ⌥, чтобы сочетание клавиш не мешало вводу текста."
+needs_modifier_other = "Добавьте Ctrl, Alt или Win, чтобы сочетание не мешало вводу текста."
+record_shortcut = "Задать сочетание клавиш"
+recording_description = "Запустите запись, не открывая Cap."
+recording_hint = "Нажмите клавиши, которые вы хотите использовать. Esc отменяет, Delete удаляет."
+recording_title = "Запись"
+saved = "Сохранено. Нажмите {keys} в любом приложении, чтобы {effect}."
+saved_moved = "Сохранено. Нажмите {keys} в любом приложении, чтобы {effect}. Сочетание удалено из «{shortcut}»."
+screenshots_description = "Сочетания клавиш работают в любом приложении. Нажмите на сочетание, чтобы изменить его."
+screenshots_title = "Скриншоты"
+type_shortcut = "Введите сочетание клавиш…"
+unavailable = "Это сочетание уже используется другой программой или системой. Нажмите, чтобы выбрать другое."
+unsupported_key = "Эту клавишу нельзя использовать в сочетании. Попробуйте букву, цифру или клавишу F."
+while_recording_title = "Во время записи"
+
+[settings.shortcuts.after_screenshot]
+hint = "Для каждого скриншота, созданного сочетанием клавиш или в Cap"
+title = "После скриншота"
+
+[settings.shortcuts.after_studio]
+hint = "После остановки"
+title = "После записи Studio"
+
+[settings.shortcuts.after_instant]
+hint = "Ссылка всегда копируется"
+title = "После записи Instant"
+
+[settings.shortcuts.on_cancel]
+hint = "Esc или закрытие окна выбора"
+title = "При отмене"
+
+[settings.shortcuts.outcome]
+cancel_show_cap = "Показать Cap"
+cancel_show_cap_hint = "Вернуться к записи"
+cancel_stay_hidden = "Оставаться скрытым"
+cancel_stay_hidden_hint = "Если Cap не был открыт"
+instant_copy_link = "Только скопировать ссылку"
+instant_copy_link_hint = "Ничего не открывается"
+instant_open_link = "Открыть ссылку"
+instant_open_link_hint = "В вашем браузере"
+instant_show_cap = "Показать Cap"
+instant_show_cap_hint = "Вернуться к записи"
+saved_to_library = "Сохранено в библиотеке"
+screenshot_copy = "Копировать"
+screenshot_copy_and_edit = "Копировать и редактировать"
+screenshot_copy_and_edit_hint = "Оба сразу"
+screenshot_copy_hint = "Вставить куда угодно"
+screenshot_do_nothing = "Ничего не делать"
+screenshot_open_editor = "Открыть редактор"
+screenshot_open_editor_hint = "Сначала добавить аннотации"
+studio_do_nothing = "Ничего не делать"
+studio_open_editor = "Открыть редактор"
+studio_open_editor_hint = "Редактировать сразу"
+studio_show_cap = "Показать Cap"
+studio_show_cap_hint = "Вернуться к записи"
+
+[settings.shortcuts.label]
+add_marker = "Добавить маркер"
+cycle_mode = "Сменить режим записи"
+fallback = "Сочетание клавиш"
+open_picker = "Открыть окно выбора записи"
+pause = "Пауза или возобновление"
+record_area = "Записать область"
+record_display = "Записать экран"
+record_window = "Записать окно"
+restart = "Начать запись заново"
+screenshot_area = "Снимок области"
+screenshot_display = "Скриншот дисплея"
+screenshot_window = "Скриншот окна"
+start_instant = "Начать запись Instant"
+start_studio = "Начать запись Studio"
+stop = "Прекратить запись"
+
+[settings.shortcuts.effect]
+add_marker = "отметить этот момент в записи Studio"
+cycle_mode = "переключиться между режимами Studio, Instant и скриншота"
+instant_copy = "записать выбранный экран или окно в режиме Instant и скопировать ссылку после остановки"
+instant_copy_and_open = "записать выбранный экран или окно в режиме Instant, а затем скопировать и открыть ссылку после остановки"
+open_picker = "открыть Cap и выбрать источник записи"
+pause = "приостановить текущую запись или возобновить ее"
+picker_area_instant = "выбрать область и записать её в режиме Instant"
+picker_area_screenshot = "выбрать область и сделать её скриншот"
+picker_area_studio = "выбрать область и записать её в режиме Studio"
+picker_display_instant = "выбрать экран и записать его в режиме Instant"
+picker_display_screenshot = "выбрать экран и сделать его скриншот"
+picker_display_studio = "выбрать экран и записать его в режиме Studio"
+picker_window_instant = "выбрать окно и записать его в режиме Instant"
+picker_window_screenshot = "выбрать окно и сделать его скриншот"
+picker_window_studio = "выбрать окно и записать его в режиме Studio"
+restart = "удалить текущий дубль и начать заново"
+screenshot_area_copy = "выбрать область и скопировать её в буфер обмена"
+screenshot_area_copy_and_open_editor = "выбрать область, скопировать её и открыть редактор"
+screenshot_area_open_editor = "выбрать область и открыть её в редакторе"
+screenshot_area_save = "выбрать область и сохранить её в библиотеке, ничего не открывая"
+screenshot_display_copy = "сделать скриншот экрана под указателем и скопировать его в буфер обмена"
+screenshot_display_copy_and_open_editor = "сделать скриншот экрана под указателем, скопировать его и открыть редактор"
+screenshot_display_open_editor = "сделать скриншот экрана под указателем и открыть его в редакторе"
+screenshot_display_save = "сохранить скриншот экрана под указателем в библиотеке, ничего не открывая"
+screenshot_window_copy = "сделать скриншот окна под указателем и скопировать его в буфер обмена"
+screenshot_window_copy_and_open_editor = "сделать скриншот окна под указателем, скопировать его и открыть редактор"
+screenshot_window_open_editor = "сделать скриншот окна под указателем и открыть его в редакторе"
+screenshot_window_save = "сохранить скриншот окна под указателем в библиотеке, ничего не открывая"
+stop = "остановить текущую запись"
+studio = "записать выбранный экран или окно в режиме Studio"
+studio_open_editor = "записать выбранный экран или окно в режиме Studio и открыть редактор после остановки"
+
+[settings.shortcuts.sentence]
+add_marker = "Отметьте этот момент в записи Studio."
+cycle_mode = "Переключитесь между режимами Studio, Instant и Screenshot."
+instant_copy = "Запишите выбранный экран или окно в режиме Instant и скопируйте ссылку после остановки."
+instant_copy_and_open = "Запишите выбранный экран или окно в режиме Instant, а затем скопируйте и откройте его ссылку для обмена, когда вы остановитесь."
+open_picker = "Откройте Cap, чтобы вы могли выбрать, что записывать."
+pause = "Приостановите текущую запись или возобновите ее."
+picker_area_instant = "Выберите область, затем запишите ее в режиме Instant."
+picker_area_screenshot = "Выберите область, затем сделайте скриншот."
+picker_area_studio = "Выберите область, затем запишите ее в режиме Studio."
+picker_display_instant = "Выберите дисплей, затем запишите его в режиме Instant."
+picker_display_screenshot = "Выберите дисплей, затем сделайте скриншот."
+picker_display_studio = "Выберите дисплей, затем запишите его в режиме Studio."
+picker_window_instant = "Выберите окно, затем запишите его в режиме Instant."
+picker_window_screenshot = "Выберите окно, затем сделайте скриншот."
+picker_window_studio = "Выберите окно, затем запишите его в режиме Studio."
+restart = "Выбросьте текущий дубль и начните снова."
+screenshot_area_copy = "Выберите область и скопируйте ее в свой буфер обмена."
+screenshot_area_copy_and_open_editor = "Выберите область, скопируйте её и откройте редактор."
+screenshot_area_open_editor = "Выберите область и откройте ее в редакторе."
+screenshot_area_save = "Выберите область и сохраните ее в библиотеке, ничего не открывая."
+screenshot_display_copy = "Захватите дисплей под указателем и скопируйте его в свой буфер обмена."
+screenshot_display_copy_and_open_editor = "Сделайте скриншот экрана под указателем, скопируйте его и откройте редактор."
+screenshot_display_open_editor = "Сделайте скриншот экрана под указателем и откройте его в редакторе."
+screenshot_display_save = "Захватите дисплей под указателем и сохраните его в библиотеке, ничего не открывая."
+screenshot_window_copy = "Захватите окно под указателем и скопируйте его в свой буфер обмена."
+screenshot_window_copy_and_open_editor = "Сделайте скриншот окна под указателем, скопируйте его и откройте редактор."
+screenshot_window_open_editor = "Сделайте скриншот окна под указателем и откройте его в редакторе."
+screenshot_window_save = "Захватите окно под указателем и сохраните его в библиотеке, ничего не открывая."
+stop = "Остановите текущую запись."
+studio = "Запишите выбранный экран или окно в режиме Studio."
+studio_open_editor = "Запишите выбранный экран или окно в режиме Studio, а затем откройте редактор при остановке."
+
+[settings.cli]
+command = "Команда"
+copy = "Копировать"
+description = "Установите команду Cap для терминалов, агентов, скриптов и локальной автоматизации."
+install = "Установить CLI"
+installed = "установленный"
+installing = "Установка..."
+installs_command = "Приложение устанавливает локальную команду {command}, которая запускает встроенную утилиту CLI."
+load_failed = "Не удалось загрузить статус CLI: {error}"
+not_installed = "Не установлен"
+path_configured = "Команда cap добавлена в PATH. Перезапустите терминал или выполните сейчас:"
+path_missing = "Добавьте {path} в PATH, чтобы использовать cap в новом терминале."
+remove = "Удалить"
+removing = "Удаление..."
+repair = "Восстановить"
+repairing = "Восстановление..."
+retry = "Повторить"
+target = "Цель"
+title = "Командная линия"
+
+[settings.transcription]
+active_title = "Активные подсказки"
+applied_note = "Эти подсказки используются при создании субтитров в редакторе."
+clear = "Очистить"
+count = { other = "Элементов: {count}" }
+description = "Добавьте имена, варианты написания, домены и предпочтения по использованию заглавных букв для создания субтитров."
+placeholder = "Добавить термин"
+saved = "Сохранено"
+saving = "Сохранение..."
+terms_description = "Добавьте один термин за раз, чтобы уменьшить опечатки и ошибки форматирования."
+terms_title = "Запомненные термины"
+title = "Транскрипция"
+
+[settings.experimental]
+muxer = "Мультиплексор в отдельном процессе"
+muxer_description = "Запускать мультиплексор фрагментированного MP4 в отдельном процессе, чтобы его сбой не прервал запись. Требуется встроенный исполняемый файл cap-muxer."
+reliability = "Надежность"
+
+[settings.feedback]
+app_version = "Версия приложения"
+capture_support = "Поддержка захвата"
+capture_supported = "Запись экрана: поддерживается"
+capture_unsupported = "Захват экрана: не поддерживается"
+community_description = "У вас есть вопросы, вы хотите поделиться идеями или просто потусоваться? Присоединяйтесь к сообществу Cap Discord"
+community_title = "Присоединяйтесь к сообществу"
+debug_description = "Загрузите свои журналы, чтобы помочь нам диагностировать проблемы с Cap. Личная информация не включается."
+debug_title = "Информация об отладке"
+description = "Помогите нам улучшить Cap, отправив обратную связь или сообщив об ошибках. Мы займемся этим."
+join_discord = "Присоединяйтесь к Discord"
+operating_system = "Операционная система"
+placeholder = "Расскажите, что вы думаете о Cap"
+submit = "Отправить отзыв"
+submit_failed = "Не удалось отправить отзыв"
+submitting = "Отправка..."
+system_loading = "Загрузка системной информации..."
+system_title = "Системная информация"
+thanks = "Спасибо за обратную связь!"
+title = "обратная связь"
+upload_interrupted = "Загрузка была прервана"
+upload_logs = "Отправить журналы"
+upload_sent = "Отправлено. Спасибо, это помогает нам найти проблему."
+uploading = "Загрузка..."
+
+[settings.feedback.diagnostic]
+confirm_body = "Cap покажет на экране мигающий тест и будет воспроизводить громкие сигналы около {seconds} секунд для каждого режима записи. Снимите наушники, установите слышимую громкость и не пользуйтесь компьютером до завершения теста."
+confirm_title = "Проводить диагностику?"
+description = "Записывает короткий тест с миганием и звуковыми сигналами, измеряет рассинхронизацию изображения и звука и собирает сведения о дисплеях, камерах, микрофонах, свободном месте и настройках записи. Данные не отправляются без вашего разрешения."
+mic_description = "Запишите также звук микрофона и проверьте, что он вовремя улавливает сигналы. Понадобятся динамики, звук которых слышен микрофону."
+mic_label = "Тест микрофона"
+mode_description = "Выберите режим для проверки. При выборе обоих сначала проверяется Studio, затем Instant."
+mode_label = "Режим записи"
+no_cli = "Утилита командной строки Cap не найдена рядом с этой сборкой, поэтому отчёт будет содержать только сведения о системе."
+no_cli_sync = "Утилита командной строки Cap не найдена рядом с этой сборкой, поэтому тест синхронизации не удалось запустить."
+run = "Запустить диагностику"
+run_again = "Запустить снова"
+send = "Отправить в Cap"
+sending = "Отправка..."
+show_file = "Показать файл"
+stop_recording_first = "Остановите текущую запись перед запуском диагностики."
+title = "Диагностический отчет"
+try_again = "Попробуйте еще раз"
+warning_body = "Полноэкранное окно мигает чёрным и белым, а динамики воспроизводят сигналы частотой 1 кГц. Cap записывает тест и измеряет рассинхронизацию изображения и звука. Не пользуйтесь компьютером во время теста. Проверка обоих режимов занимает несколько минут."
+warning_title = "Тест захватывает экран и создает шум."
+
+[settings.feedback.diagnostic.verdict]
+environment_only = "ТОЛЬКО ОКРУЖЕНИЕ"
+fail = "ОШИБКА"
+inconclusive = "НЕТ РЕЗУЛЬТАТА"
+pass = "УСПЕШНО"
+warn = "ПРЕДУПРЕЖДЕНИЕ"
+
+[settings.sign_in_required]
+body = "Войдите, чтобы продолжить. Вы также можете написать на hello@cap.so или присоединиться к нашему Discord: cap.link/discord"
+title = "Требуется вход"
+
+[settings.changelog]
+fetch_failed = "Не удалось загрузить список изменений"
+loading = "Загрузка списка изменений..."
+new = "НОВОЕ"
+version = "Версия {version} - {date}"
+
+[settings.license]
+activate = "Активировать лицензию"
+activating = "Активация..."
+active_title = "Лицензия Desktop"
+checking = "Проверка…"
+deactivate = "Деактивировать лицензию"
+description = "Ваш тариф Cap и лицензия для компьютера в одном месте."
+desktop_description = "Лицензия для компьютера разрешает коммерческую запись и редактирование. Cap Pro добавляет облачную публикацию и совместную работу."
+desktop_name = "Лицензия для компьютера"
+expires = "истекает"
+explore_description = "Сравните текущие цены и все, что включено на нашем сайте."
+explore_desktop = "Лицензия для компьютера · Коммерческое использование приложения для записи и редактирования."
+explore_pro = "Cap Pro · Лицензия для компьютера, облачная публикация, функции ИИ и совместная работа."
+explore_title = "Обзор тарифов"
+free_description = "Записывайте и редактируйте локально для личного использования. Выберите платный тариф для коммерческого использования или дополнительных облачных функций."
+have_key = "У вас есть лицензионный ключ?"
+key = "Лицензионный ключ"
+no_instance = "Идентификатор не найден"
+opens_pricing = "Открывает cap.so/pricing в браузере."
+placeholder = "Лицензионный ключ"
+plan_title = "Ваш тариф"
+pro_description = "Ваша учётная запись включает облачную публикацию, функции Pro и лицензию для коммерческого использования на компьютере."
+refresh = "Обновить сведения о тарифе"
+refresh_failed = "Не удалось обновить сведения о тарифе. Попробуйте ещё раз."
+save_failed = "Не удалось сохранить лицензию"
+sign_in_hint = "Уже есть Cap Pro? Войдите в свою учетную запись с боковой панели."
+title = "Тариф и лицензия"
+view_pricing = "Тарифы и цены ↗"
+
+[settings.integrations]
+configure = "конфигурировать"
+description = "Настройка интеграций для расширения функциональности Cap и подключения к сторонним сервисам."
+google_drive_description = "Подключите Google Drive для загрузки новых видео с доступом по ссылке. Cap хранит новые видео в закрытой папке Cap на вашем диске и предоставляет к ним доступ через Cap после обычной проверки прав."
+managed = "Управляется вашей организацией"
+managed_by = "Управляется вашей организацией: {organization}"
+request_timed_out = "Истекло время ожидания запроса"
+s3_description = "Подключите собственный бакет S3 для полного контроля над хранением данных. Все новые видео с доступом по ссылке будут автоматически загружаться в настроенный бакет S3, сохраняя за вами полный контроль над содержимым. Подходит организациям с особыми требованиями к хранению данных."
+s3_name = "Настройки S3"
+title = "Интеграции"
+upgrade = "Перейти на Pro"
+
+[settings.integrations.s3]
+access_key = "Идентификатор ключа доступа"
+bucket = "Имя бакета"
+configuration = "конфигурация"
+delete_failed = "Не удалось удалить конфигурацию S3"
+deleted = "Конфигурация S3 успешно удалена"
+endpoint = "Конечная точка"
+fetch_failed = "Не удалось получить конфигурацию S3"
+guide = "Руководство по настройке хранилища"
+guide_intro = "Настройка и подключение бакета к Cap займут меньше 10 минут. Для начала откройте {guide}."
+other_provider = "Другие совместимые с S3"
+provider = "Поставщик хранилища"
+region = "регион"
+remove = "Удалить настройки"
+removing = "Удаление..."
+save_failed = "Не удалось сохранить конфигурацию S3"
+saved = "Конфигурация S3 успешно сохранена"
+saving = "Сохранение..."
+secret_key = "Секретный ключ доступа"
+test = "Проверить подключение"
+test_failed = "Не удалось проверить подключение к S3. Проверьте настройки и сетевое соединение."
+test_ok = "Настройки S3 проверены. Подключение работает."
+test_timeout = "Время ожидания проверки подключения истекло через 5 секунд. Проверьте адрес конечной точки и сетевое соединение."
+testing = "Тестирование..."
+
+[settings.integrations.gdrive]
+active = "Активный"
+active_for_uploads = "Активен для новых загрузок"
+cached = "В кэше: {time}"
+connect = "Подключить Google Drive"
+connect_failed = "Не удалось запустить соединение Google Drive"
+connected_inactive = "Подключен, но не активен"
+connection_description = "Google Drive хранит новые загрузки в частной папке Cap на вашем диске. Существующие видео Cap и S3 продолжают использовать свое текущее хранилище."
+connection_title = "Подключение"
+disconnect = "отключить"
+disconnect_failed = "Не удалось отключить Google Drive"
+disconnected = "Google Диск отключен"
+drive_files = "Файлы на диске"
+finish_in_browser = "Завершите подключение Google Drive в браузере, затем вернитесь сюда и обновите данные."
+not_connected = "Не подключен"
+opening = "Открытие..."
+refresh = "Обновить"
+refreshing = "Обновление..."
+remaining = "Осталось"
+set_active_failed = "Не удалось изменить активное хранилище"
+storage = "Хранилище"
+test = "Тест"
+test_failed = "Тест подключения Google Drive провалился"
+testing = "Тестирование..."
+trash = "Корзина"
+updated = "Обновлено: {time}"
+use_drive = "Использовать Google Drive"
+use_s3 = "Использовать S3"
+used = "Использовано: {usage}"
+used_of = "Использовано {usage} из {limit}"
+waiting = "В ожидании..."
+working = "Подключение Google Drive работает"
+working_for = "Подключение Google Drive работает для {email}"
+
+[settings.automations]
+action_no_effect = "Это действие не оказывает никакого эффекта на выбранный триггер."
+add_action = "Добавить действие"
+add_condition = "Добавить условие"
+auto_name_empty = "Автоматизация {trigger}"
+browse = "Обзор"
+check_compatibility = "Проверьте совместимость"
+compatibility_checked = "Проверка совместимости: эта автоматизация еще не работает в Cap. Сохраненные правила остаются доступными для Cap CLI. Никаких действий не предпринималось."
+condition_never_matches = "Это условие никогда не совпадает с выбранным триггером."
+copy_link = "Скопировать ссылку в буфер обмена"
+dangerous = "В Cap CLI эта автоматизация выполняет команды или отправляет сетевые запросы с вашими правами. Используйте только проверенные значения."
+delete = "Удалить"
+description = "Правила используются совместно с Cap CLI. Cap сохраняет эти правила, но еще не запускает автоматизацию."
+empty_description = "Выберите шаблон ниже, чтобы начать одним нажатием, или создайте автоматизацию с нуля."
+empty_title = "Автоматизации пока нет"
+enabled = "включенный"
+match_all = "Все условия"
+match_any = "Любое условие"
+name = "Имя"
+new = "Новая автоматизация"
+no_presets = "Шаблонов пока нет — сначала создайте их в редакторе."
+only_if = "ВЫПОЛНЯТЬ, ЕСЛИ"
+open_in_browser = "Открыть в браузере"
+retry_save = "Повторить сохранение"
+run_through_shell = "Запустить через командную оболочку"
+save_failed = "Не удалось сохранить автоматизацию. Ваши изменения не были сохранены."
+start_from_scratch = "Начните с нуля"
+summary_empty = "{trigger} → действий пока нет"
+templates_description = "Добавьте готовую автоматизацию одним нажатием. Затем её можно настроить."
+templates_title = "Шаблоны"
+then = "ЗАТЕМ ВЫПОЛНИТЬ"
+title = "автоматизация"
+when = "Когда это происходит"
+
+[settings.automations.status]
+disabled_saved = "Выключено · Сохранено"
+disabled_unsaved = "Выключено · Не сохранено"
+enabled_saved = "Включено · Сохранено"
+enabled_unsaved = "Включено · Не сохранено"
+
+[settings.automations.field]
+arguments = "Аргументы (через пробел)"
+body = "тело"
+body_template = "Шаблон содержимого (необязательно)"
+compression = "Сжатие"
+destination = "Папка назначения (необязательно, пустая = папка проекта)"
+filename = "Шаблон имени файла (необязательно)"
+folder = "папка"
+format = "Формат"
+frame_rate = "Частота кадров"
+method = "метод"
+organization = "ID организации (необязательно)"
+preset = "Шаблон"
+program = "Программа"
+resolution = "Разрешение"
+source = "Источник"
+title = "Название"
+url = "URL"
+
+[settings.automations.placeholder]
+organization_id = "ID организации"
+project_folder = "Папка проекта"
+window_title = "например, Slack"
+
+[settings.automations.clipboard]
+original = "Исходная запись"
+rendered = "Отредактировано / обработано"
+
+[settings.automations.target]
+area = "Область"
+display = "дисплей"
+window = "окно"
+
+[settings.automations.compression]
+maximum = "максимум"
+potato = "картофель"
+social = "социальный"
+web = "Интернет"
+
+[settings.automations.trigger.screenshot_taken]
+label = "При создании скриншота"
+noun = "Скриншот"
+phrase = "Скриншот сделан"
+runs = "Выполняется при создании каждого скриншота."
+
+[settings.automations.trigger.studio_finished]
+label = "При завершении записи Studio"
+noun = "Запись Studio"
+phrase = "Запись Studio заканчивается"
+runs = "Выполняется при завершении каждой записи Studio."
+
+[settings.automations.trigger.instant_finished]
+label = "При завершении записи Instant"
+noun = "Запись Instant"
+phrase = "Запись Instant заканчивается"
+runs = "Выполняется при завершении каждой записи Instant."
+
+[settings.automations.trigger.recording_started]
+label = "При начале записи"
+noun = "Начало записи"
+phrase = "Запись начинается"
+runs = "Выполняется при начале каждой записи."
+
+[settings.automations.trigger.upload_completed]
+label = "При завершении загрузки"
+noun = "Загрузка"
+phrase = "Загрузка завершается"
+runs = "Выполняется при завершении каждой загрузки."
+
+[settings.automations.trigger.video_imported]
+label = "При импорте видео"
+noun = "Импорт"
+phrase = "Видео импортировано"
+runs = "Выполняется при импорте каждого видео."
+
+[settings.automations.trigger.recording_deleted]
+label = "При удалении записи"
+noun = "Удаление"
+phrase = "Запись удалена"
+runs = "Выполняется при удалении каждой записи."
+
+[settings.automations.action.copy_to_clipboard]
+label = "Скопировать в буфер обмена"
+noun = "Буфер обмена"
+short = "Скопировать в буфер обмена"
+
+[settings.automations.action.save_to_location]
+label = "Сохранить в папку"
+noun = "папка"
+short = "Сохранить в папке"
+
+[settings.automations.action.export]
+label = "Экспорт с профилем"
+noun = "Экспорт"
+short = "Экспорт"
+
+[settings.automations.action.upload]
+label = "Загрузить и скопировать ссылку"
+noun = "Загрузка"
+short = "Загрузить и скопировать ссылку"
+
+[settings.automations.action.reveal]
+label = "Показать в файловом менеджере"
+noun = "Показать"
+short = "Показать в файловом менеджере"
+
+[settings.automations.action.open_file]
+label = "Открыть файл"
+noun = "Открыть"
+short = "Открыть файл"
+
+[settings.automations.action.ocr]
+label = "Распознавать текст (OCR) в буфер обмена"
+noun = "Текст"
+short = "Скопировать текст (OCR)"
+
+[settings.automations.action.notify]
+label = "Показать уведомление"
+noun = "Уведомить"
+short = "Уведомить"
+
+[settings.automations.action.open_editor]
+label = "Открыть редактор"
+noun = "редактор"
+short = "Открыть редактор"
+
+[settings.automations.action.skip_editor]
+label = "Пропустить редактор (без интерфейса)"
+noun = "Пропустить редактор"
+short = "Пропустить редактор"
+
+[settings.automations.action.apply_preset]
+label = "Применить шаблон редактора"
+noun = "Шаблон"
+short = "Применить шаблон"
+
+[settings.automations.action.run_command]
+label = "Запустить команду"
+noun = "Команда"
+short = "Запустить команду"
+
+[settings.automations.action.webhook]
+label = "Отправить webhook"
+noun = "Вебхук"
+short = "Отправить webhook"
+
+[settings.automations.action.delete_local_files]
+label = "Удалить локальные файлы"
+noun = "Удалить"
+short = "Удалить локальные файлы"
+
+[settings.automations.condition]
+capture_target = "Источник записи"
+duration_at_least = "Продолжительность не менее (секунд)"
+duration_at_most = "Продолжительность максимум (секунды)"
+organization = "Организация"
+recording_mode = "Режим записи"
+window_title = "Заголовок окна содержит"
+
+[settings.automations.template.copy_screenshot]
+description = "Создайте скриншот, и он сразу будет готов к вставке."
+name = "Автокопирование новых скриншотов в буфер обмена"
+
+[settings.automations.template.ocr_screenshot]
+description = "Cap читает текст на скриншоте и копирует его для вас."
+name = "Извлечь текст из скриншотов"
+
+[settings.automations.template.save_screenshot]
+description = "Отправьте каждый новый скриншот прямо в выбранную вами папку."
+name = "Сохранять скриншоты в папку"
+
+[settings.automations.template.reveal_screenshot]
+description = "Откройте каждый скриншот в Finder в тот момент, когда вы его сделаете."
+name = "Открывать расположение каждого скриншота"
+
+[settings.automations.template.export_studio]
+description = "Создавать MP4 сразу после завершения записи Studio."
+name = "Автоэкспорт после завершения записи"
+
+[settings.automations.template.upload_share]
+description = "После завершения записи ссылка будет в буфере обмена."
+name = "Загрузить и скопировать ссылку"
+
+[settings.automations.template.notify_upload]
+body = "Запись готова к публикации."
+description = "Получайте уведомление на рабочем столе, когда запись готова к публикации."
+name = "Уведомлять о завершении загрузки"
+
+[settings.automations.template.webhook_share]
+description = "Отправьте ссылку на Slack, Discord или свой собственный веб-хук."
+name = "Уведомлять Slack при публикации"
+
+[main]
+delete_recording_confirm = "Вы уверены, что хотите удалить эту запись?"
+delete_screenshot_confirm = "Вы уверены, что хотите удалить этот скриншот?"
+
+[main.clean_capture]
+title = "Чистая запись"
+
+[main.clip]
+add_to_project = "Добавить в текущий проект"
+record_new = "Записать новый клип"
+
+[main.device]
+camera = "Камера"
+fallback_camera = "Камера"
+heading = "Выберите камеру и микрофон"
+microphone = "Микрофон"
+no_camera = "Нет камеры"
+no_cameras = "Камеры не найдены"
+no_matching_cameras = "Нет подходящих камер"
+no_matching_microphones = "Нет подходящих микрофонов"
+no_microphone = "Нет микрофона"
+no_microphones = "Микрофоны не найдены"
+system_audio_off = "Без системного звука"
+system_audio_on = "Записывать звук ОС"
+
+[main.device.access]
+allow_access = "Разрешить доступ"
+camera_denied = "Cap не может использовать камеру. Разрешите доступ к ней в системных настройках."
+camera_needed = "Cap требуется ваше разрешение на использование камеры."
+microphone_denied = "Cap не может использовать микрофон. Разрешите доступ к нему в системных настройках."
+microphone_needed = "Cap требуется ваше разрешение на использование микрофона."
+open_system_settings = "Открыть системные настройки"
+turn_on_in_settings = "Включить в системе"
+
+[main.device.format]
+apply_failed = "Не удалось применить формат устройства: {error}"
+applying = "Применение формата..."
+available = "Доступно: {format}"
+camera_changed = "Камера изменилась или отключена. Откройте её настройки формата заново."
+channels = { other = "Каналов: {count}" }
+current = "Текущий: {format}"
+default = "По умолчанию"
+loading = "Загрузка форматов..."
+mono = "Моно"
+preferred = "Предпочтительный формат"
+save_failed = "Не удалось сохранить формат устройства. Попробуйте ещё раз."
+stereo = "Стерео"
+
+[main.device.pill]
+allow = "Разрешить"
+allow_in_settings = "Разрешить в системе"
+asking = "Запрос…"
+not_connected = "Не подключен"
+off = "Выкл."
+on = "Вкл."
+
+[main.error]
+camera_only_needs_camera = "Для записи только камеры необходимо её выбрать."
+copy = "Скопировать ошибку"
+devices_not_ready = "Устройства записи не готовы. Откройте окно записи и попробуйте ещё раз."
+title = "Что-то пошло не так"
+
+[main.header]
+changelog = "Список изменений"
+help = "Помощь и обзор"
+recordings = "Записи"
+screenshots = "Скриншоты"
+settings = "Настройки"
+teleprompter = "Суфлёр"
+
+[main.library]
+clips = { other = "Клипов: {count}" }
+copy_screenshot_failed = "Не удалось скопировать скриншот"
+import_recordings = "Импорт"
+import_screenshots = "Импортировать изображение"
+importing = "Импорт"
+no_matching_recordings = "Подходящие записи не найдены"
+no_matching_screenshots = "Подходящие снимки экрана не найдены"
+no_recordings = "Записей пока нет"
+no_screenshots = "Скриншотов пока нет"
+recordings_description = "Здесь появятся записи экрана. Начните запись!"
+screenshots_description = "Здесь появятся снимки экрана. Сделайте снимок!"
+view_all_recordings = "Все записи"
+view_all_screenshots = "Все снимки экрана"
+
+[main.mic_warning]
+body = "В этой записи не будет вашего голоса. Выберите микрофон или продолжите без него."
+dont_show_again = "Больше не показывать"
+record_without = "Записать без микрофона"
+save_failed = "Не удалось сохранить настройку. Попробуйте ещё раз или снимите флажок."
+title = "Микрофон не обнаружен"
+
+[main.mode]
+info_tooltip = "Информация о режиме записи"
+
+[main.mode.header]
+instant = "Режим Instant"
+screenshot = "Режим скриншота"
+studio = "Режим Studio"
+
+[main.mode.hover]
+instant = "Режим Instant"
+instant_description = "Рендеринг не нужен — видео загружается во время записи, и ссылка готова сразу после остановки."
+quality_settings = "Настройки качества"
+screenshot = "Режим скриншота"
+screenshot_description = "Создавайте снимки и добавляйте аннотации."
+studio = "Режим Studio"
+studio_description = "Сохраняет запись на компьютере и открывает редактор после остановки. Качество записи можно выбрать в настройках."
+
+[main.mode.info]
+current = "Текущий"
+title = "Режимы записи"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "Скриншот"
+studio = "Studio"
+
+[main.plan]
+commercial = "Коммерческий"
+personal = "Личный"
+
+[main.recording]
+cancel = "Отменить запись"
+paused_notice = "Запись приостановлена. Cap скроется перед её возобновлением."
+resume = "Продолжить"
+starting = "Начало..."
+starts_in = "Запись начнётся через {remaining}"
+stop = "Остановить запись"
+stopping = "Остановка..."
+
+[main.recovery]
+discard = "Удалить"
+duration_minutes = "~{minutes} мин"
+duration_minutes_seconds = "~{minutes} мин {seconds} с"
+duration_seconds = "~{seconds} с"
+recover = "Восстановить"
+segments = { other = "Сегментов: {count}" }
+segments_with_duration = { other = "Сегментов: {count} · {duration}" }
+title = "Неполная запись"
+
+[main.recovery.error]
+nothing_saved = "До остановки записи видео не было сохранено, поэтому восстанавливать нечего. Файлы остаются в {path}."
+rebuild_failed = "Cap не удалось восстановить эту запись ({error}). Ничего не удалено; исходные файлы находятся в {path}."
+storage = "Недостаточно свободного места для восстановления записи ({error}). Освободите место и снова нажмите «Восстановить». Ничего не удалено; файлы находятся в {path}."
+
+[main.sign_in]
+message = "Instant загружает видео во время записи, поэтому ссылка для доступа будет готова сразу после остановки."
+not_now = "Не сейчас"
+open_browser_again = "Открыть браузер снова"
+pending_message = "Завершите вход в Cap в браузере. После этого Cap вернётся к этому экрану и откроет окно записи."
+sign_in = "Войти"
+timed_out = "Время ожидания входа истекло. Попробуйте ещё раз."
+title = "Войдите, чтобы использовать режим Instant"
+use_studio = "Использовать Studio"
+waiting = "Ожидание браузера"
+
+[main.storage]
+blocked = "На диске для записи доступно только {available} ГБ. Освободите место: для записи необходимо не менее 512 МБ."
+can_start = "На диске для записи доступно только {available} ГБ. Если место будет заканчиваться, Cap автоматически остановит запись и сохранит её."
+check_failed = "Не удалось проверить хранилище записей: {error}"
+record_anyway = "Записать всё равно"
+title = "Недостаточно места"
+
+[main.target]
+area = "Область"
+camera_only = "Только камера"
+choose_display = "Выберите дисплей"
+choose_window = "Выберите окно"
+display = "Экран"
+heading = "Выберите источник захвата"
+no_displays = "Экраны не найдены"
+no_matching_displays = "Подходящие экраны не найдены"
+no_matching_windows = "Нет подходящих окон"
+no_windows = "Окна не найдены"
+window = "Окно"
+
+[controls]
+disk_full_resume = "Недостаточно места на диске для продолжения. Освободите место и повторите попытку или нажмите «Остановить», чтобы сохранить запись."
+low_storage = "Мало места на диске. Cap скоро остановит запись, чтобы сохранить её."
+paused_for_sleep = "Запись приостановлена, поскольку Mac перешёл в режим сна. Возобновите её, когда будете готовы, или нажмите «Остановить», чтобы сохранить."
+
+[controls.confirm]
+delete = "Удалить"
+delete_message = "Вы уверены, что хотите удалить запись?"
+delete_title = "Подтвердить удаление"
+restart = "Перезапустить"
+restart_message = "Перезапустить запись? Текущая запись будет удалена."
+restart_title = "Подтвердить перезапуск"
+
+[controls.pause]
+pause = "Приостановить запись"
+pausing = "Приостановка записи…"
+resume = "Продолжить запись"
+resuming = "Возобновление записи…"
+unconfirmed = "Не удалось подтвердить состояние записи. Нажмите «Остановить»."
+
+[controls.stop]
+error = "Ошибка"
+paused = "Пауза"
+pausing = "Пауза..."
+resuming = "Продолж..."
+saving = "Сохран…"
+starting = "Запуск"
+
+[controls.marker]
+add = "Добавить маркер"
+
+[camera]
+waiting_title = "В ожидании доступа к камере"
+
+[camera.effects]
+blur_message = "Фон камеры не размыт."
+blur_title = "Фоновое размытие недоступно"
+both_message = "Фон камеры не размыт, а изображение не отражено по горизонтали."
+both_title = "Эффекты камеры недоступны"
+mirror_message = "Предпросмотр камеры не отражён по горизонтали."
+mirror_title = "Зеркальное отражение недоступно"
+
+[camera.issue]
+access_message = "Нажмите, чтобы позволить Cap использовать вашу камеру в настройках системы."
+access_title = "Доступ к камере необходим"
+generic = "Не удалось запустить выбранную камеру. Выберите другую камеру или переподключите эту."
+invalid_format = "Камера не предоставила поддерживаемый формат записи."
+not_found = "Эта камера больше недоступна. Проверьте её подключение и системные разрешения."
+start_failed = "Системе не удалось запустить камеру. Возможно, она недоступна или используется другим приложением."
+timeout = "Камера не передала ни одного кадра. Возможно, она закрыта, отключена, чем-то прикрыта или используется другим приложением."
+unavailable_title = "Камера недоступна"
+
+[camera.blur]
+light = "Слабое"
+heavy = "Сильное"
+cutout = "Вырезание"
+
+[onboarding.customize]
+footer = "Измените любой из них в любое время в настройках"
+subtitle = "Настройте всё: от сочетаний клавиш до хранилища. Cap подстроится под ваши задачи."
+title = "Сделайте Cap своим"
+
+[onboarding.customize.domain]
+description = "Используйте свой собственный домен для общих ссылок вместо cap.so"
+title = "Пользовательский домен"
+
+[onboarding.customize.preferences]
+description = "FPS, качество, таймер обратного отсчета, эффекты курсора и многое другое"
+title = "Настройки записи"
+
+[onboarding.customize.s3]
+description = "Подключите собственный S3-совместимый бакет для полного контроля над записями"
+title = "Пользовательское хранилище S3"
+
+[onboarding.customize.shortcuts]
+description = "Глобальные горячие клавиши для записи, снимков экрана и переключения режимов"
+title = "Сочетания клавиш"
+
+[onboarding.demo]
+background = "ФОН"
+copied = "Скопировано!"
+copied_to_clipboard = "Скопировано в буфер обмена"
+copy = "Копировать"
+editor = "Редактор Cap"
+export = "Экспорт"
+export_complete = "Экспорт завершен!"
+exporting = "Экспорт..."
+link_ready = "Ссылка готова!"
+save = "Сохранить"
+start_recording = "Начать запись"
+stopped = "Остановлено"
+style = "Стиль"
+
+[onboarding.demo.steps]
+beautify = "Оформить"
+edit = "Редактировать"
+record = "Записать"
+select_area = "Выберите область"
+share_link = "Поделиться ссылкой"
+stop = "Остановить"
+
+[onboarding.error]
+save_progress = "Не удалось сохранить прогресс настройки. Попробуйте ещё раз."
+save_sound = "Не удалось сохранить настройку звука."
+
+[onboarding.faq]
+pricing = "Посмотреть тарифные планы"
+pricing_link = "Посмотреть тарифы ↗"
+subtitle = "Все, что вам нужно знать, чтобы начать."
+title = "Часто задаваемые вопросы"
+
+[onboarding.faq.free]
+answer = "Cap бесплатен для личного пользования. Для команд и коммерческого использования ознакомьтесь с нашими тарифными планами."
+question = "Cap можно использовать бесплатно?"
+
+[onboarding.faq.instant_vs_studio]
+answer = "В режиме Instant видео загружается во время записи — после остановки сразу появится ссылка. Режим Studio записывает локально в полном качестве и позволяет добавить фон, эффекты и другие элементы перед публикацией."
+question = "В чем разница между Instant и Studio?"
+
+[onboarding.faq.sharing]
+answer = "В режиме Instant ссылка создаётся автоматически после остановки записи. В режиме Studio экспортируйте отредактированное видео и поделитесь им через облако Cap или сохраните локально."
+question = "Как поделиться записью?"
+
+[onboarding.faq.shortcuts]
+answer = "Откройте «Настройки → Горячие клавиши», чтобы изменить сочетания клавиш в любое время."
+question = "Можно ли изменить горячие клавиши позже?"
+
+[onboarding.faq.storage]
+answer = "Все записи хранятся на вашем компьютере. В режиме Instant они также загружаются в облако Cap. Управлять хранилищем можно в настройках."
+question = "Где хранятся мои записи?"
+
+[onboarding.modes.instant]
+description = "Видео загружается во время записи. Остановите запись и сразу получите ссылку для доступа."
+feature_1 = "Мгновенная ссылка"
+feature_2 = "Фоновая загрузка"
+feature_3 = "Расшифровка и краткое содержание с помощью ИИ"
+feature_4 = "Воспроизведение в браузере"
+tagline = "Записывайте и делитесь за секунды"
+title = "Режим Instant"
+
+[onboarding.modes.screenshot]
+description = "Делайте снимки экрана одной горячей клавишей, добавляйте аннотации и фоны, затем сразу копируйте снимки или делитесь ими."
+feature_1 = "Быстрый снимок горячей клавишей"
+feature_2 = "Инструменты аннотации и рисования"
+feature_3 = "Красивые фоны"
+feature_4 = "Копировать, сохранять или делиться"
+tagline = "Снимайте и оформляйте мгновенно"
+title = "Режим скриншота"
+
+[onboarding.modes.studio]
+description = "Записывайте локально в полном качестве, а затем добавляйте фон, отступы, эффекты курсора и многое другое во встроенном редакторе."
+feature_1 = "Локальная запись в полном качестве"
+feature_2 = "Встроенный редактор и эффекты"
+feature_3 = "Собственный фон и отступы"
+feature_4 = "Экспорт или публикация после редактирования"
+tagline = "Профессиональные инструменты редактирования"
+title = "Режим Studio"
+
+[onboarding.nav]
+back = "←  Назад"
+continue_to_cap = "Перейти к Cap"
+keyboard_hint = "Нажмите Enter ↵ или используйте стрелки ← →"
+next = "Продолжить"
+permissions_needed = "Предоставьте необходимые разрешения, чтобы продолжить"
+relaunch = "Перезапустить Cap"
+skip = "Пропустить обзор"
+start = "Начать работу с Cap"
+
+[onboarding.overview]
+subtitle = "Скорость, качество студийной записи или быстрый снимок экрана — для всего этого в Cap есть подходящий режим."
+title = "Одно приложение для любых задач"
+
+[onboarding.toggle]
+subtitle = "Переключайте режимы одним нажатием в главном окне Cap."
+title = "Переключайте режимы в любое время"
+
+[onboarding.welcome]
+click_or_press = "Нажмите здесь или нажмите"
+get_started = "Начать"
+space_key = "Пробел"
+tagline = "Приложение для записи экрана с открытым исходным кодом."
+
+[auth]
+sign_in_failed = "Не удалось войти"
+
+[diagnostics]
+already_running = "Диагностика уже выполняется."
+mode_both = "Оба"
+
+[diagnostics.error]
+create_folder = "Не удалось создать папку диагностики: {error}"
+exited = "Самопроверка завершилась со статусом {status}"
+no_output = "Самопроверка не выдала поток данных"
+serialize = "Не удалось сериализовать отчет: {error}"
+start_failed = "Не удалось запустить {program}: {error}"
+upload_logs = "Не удалось загрузить журналы: {error}"
+upload_status = "Ошибка загрузки, статус: {status}"
+wait_failed = "Не удалось дождаться завершения самопроверки: {error}"
+write_failed = "Не удалось записать {path}: {error}"
+
+[diagnostics.stage]
+analyzing = "Анализ записи..."
+analyzing_instant = "Анализ моментальной записи..."
+analyzing_studio = "Анализ студийной записи..."
+cancelling = "Отмена..."
+collecting = "Сбор системной информации..."
+done = "Завершение проверки синхронизации..."
+exporting = "Экспорт записи..."
+exporting_instant = "Экспорт записи Instant..."
+exporting_studio = "Экспорт студийной записи..."
+finalizing = "Завершение записи..."
+finalizing_instant = "Завершение мгновенной записи..."
+finalizing_studio = "Завершение записи Studio..."
+pattern = "Воспроизведение тестового шаблона..."
+pattern_instant = "Воспроизведение тестового шаблона Instant..."
+pattern_studio = "Воспроизведение тестового шаблона Studio..."
+preparing = "Подготовка теста..."
+preparing_instant = "Подготовка мгновенного теста..."
+preparing_studio = "Подготовка студийного теста..."
+recording = "Запись теста..."
+recording_instant = "Запись мгновенного теста..."
+recording_studio = "Запись студийного теста..."
+starting = "Запуск диагностики..."
+
+[dialog]
+no_microphone_body = "Ваш голос не попадёт в эту запись."
+open_recording_failed = "Не удалось открыть запись: {error}"
+
+[dialog.capture]
+approve_shortcut = "Подтвердите сочетание клавиш для записи или нажмите значок остановки Cap в системном трее, когда он появится. Запись ещё не началась."
+area_unavailable = "Выбранная область изменилась или больше недоступна. Выберите её снова."
+camera_needs_x11 = "Наложения камеры Instant требуют рабочего стола X11 в Linux"
+camera_notice = "Cap скроет предпросмотр камеры и элементы управления. Выбранная камера продолжит записывать видео на отдельную редактируемую дорожку."
+camera_notice_instant = "Cap скроет предпросмотр и элементы управления. Камера будет отображаться на месте предпросмотра с выбранной формой и эффектами. Убедитесь, что предпросмотр целиком находится в области записи. При открытии Cap запись Instant остановится, прежде чем появятся элементы управления."
+camera_outside_area = "Перед началом записи Instant переместите окно предпросмотра камеры целиком в область записи"
+camera_preview_closed = "Перед записью Instant откройте предпросмотр выбранной камеры"
+cleanup_incomplete = "Завершение записи выполнено не полностью: {error}. Начать новую запись нельзя."
+devices_changed = "Выбранные устройства изменились. Начните заново, чтобы подтвердить новые источники записи."
+devices_changed_before_start = "Выбранные устройства изменились до начала записи. Начните заново, чтобы подтвердить источники записи."
+shortcut_conflict = "Ctrl+Shift+F9 назначено другому действию Cap. Измените сочетание клавиш перед записью."
+shortcut_description = "Начать или остановить запись Cap"
+shortcut_hint = "Нажмите и отпустите {shortcut}, чтобы начать запись. Используйте то же сочетание для остановки. Временное сочетание не изменяет настройки."
+tray_stop_hint = "Нажмите значок остановки Cap в системном трее, чтобы начать запись. Нажмите его ещё раз, чтобы остановить. Запись не начнётся до нажатия."
+window_unavailable = "Выбранное окно больше не доступно. Выберите его снова."
+
+[dialog.clipboard]
+copy_file = "Не удалось скопировать файл в буфер обмена: {error}"
+copy_file_failed = "Не удалось скопировать файл в буфер обмена"
+copy_image = "Не удалось скопировать изображение в буфер обмена: {error}"
+copy_image_failed = "Не удалось скопировать изображение в буфер обмена"
+not_a_file = "Только файлы могут быть скопированы в буфер обмена"
+unavailable = "Буфер обмена недоступен"
+unavailable_error = "Буфер обмена недоступен: {error}"
+
+[dialog.delete_recording]
+already_deleting = "Эта запись уже удаляется."
+close_failed = "Не удалось закрыть редактор: {error}"
+editor_changed = "Редактор изменился во время подтверждения удаления. Запись не удалена."
+editor_closed = "Редактор уже закрылся. Запись не была удалена."
+failed = "Не удалось удалить запись: {error}"
+failed_title = "Не удалось удалить запись"
+finishing_body = "Cap ждёт завершения обработки записи, прежде чем удалить её."
+finishing_title = "Удаление ещё не завершено"
+in_use = "Эта запись все еще используется. Завершите или отмените загрузку и попробуйте снова: {error}"
+outside_library = "Эта запись находится за пределами библиотеки записей. Её файлы не изменены."
+recording_active = "Завершите или отмените запись перед удалением этого проекта."
+retained_title = "Запись сохранена"
+
+[dialog.file]
+audio_filter = "Аудио"
+busy = "Диалог выбора файла уже открыт. Завершите его или отмените, прежде чем повторить попытку."
+export_filter = "Экспорт"
+failed = "Не удалось завершить выбор файла: {error}"
+images_filter = "Изображения"
+unavailable_title = "Диалог выбора файла недоступен"
+unconfirmed = "Cap не удалось подтвердить закрытие диалога выбора файла. Закройте все такие диалоги и перезапустите Cap, прежде чем повторить попытку."
+
+[dialog.mode_select]
+instant = "Поделитесь ссылкой сразу после записи. Загрузка идёт во время записи."
+screenshot = "Делайте снимки экрана и добавляйте аннотации."
+studio = "Локальная запись в максимальном качестве для последующего редактирования."
+subtitle = "Выберите, как вы хотите захватить экран"
+title = "Выберите режим записи"
+
+[dialog.storage]
+stopped_kept = "Запись остановлена из-за нехватки места. Её файлы сохранены. Освободите место и восстановите запись ниже."
+stopped_saved = "Запись остановлена из-за нехватки места и сохранена."
+stopping = "Мало места. Останавливаем и сохраняем запись…"
+
+[dialog.teleprompter]
+cue_markers = "Маркеры подсказок"
+hidden = "Это окно скрыто от записей Cap."
+mirror = "Отразить текст"
+paused = "Прокрутка приостановлена вместе с записью"
+placeholder = "Вставьте или введите текст…"
+words_per_minute = "{wpm} слов/мин"
+
+[dialog.quit]
+canceled = "Выход отменён: {error}. Cap останется открытым, чтобы вы могли завершить или восстановить запись."
+files_kept = "Всё записанное останется в папке записи."
+keep_open = "Оставить Cap открытым"
+pending = "Выход отменён, поскольку завершение записи ещё не окончено. Cap останется открытым. Когда станет доступна кнопка «Остановить», нажмите её и повторите попытку выхода."
+quit_anyway = "Выйти всё равно"
+still_open = "Cap остается открытым"
+unconfirmed = "Выход отменён, поскольку не удалось подтвердить завершение записи. Cap останется открытым. Нажмите «Остановить» и повторите попытку выхода."
+
+[dialog.update]
+already_getting = "Cap уже готовит версию {version}."
+available = "Доступна версия Cap {version}. Cap загрузит её в фоне и сообщит, когда она будет готова к установке."
+busy = "Завершите запись, экспорт, загрузку, импорт или транскрипцию перед обновлением Cap."
+busy_title = "Cap выполняет задачу"
+check_failed = "Не удалось проверить наличие обновлений: {error}"
+download = "Скачать"
+download_failed = "Не удалось скачать версию {version}: {error}"
+failed = "{message}\n\nВы всегда можете скачать последнюю версию с Cap.so/download."
+install_failed = "Не удалось установить версию {version}: {error}"
+later = "Позже"
+no_update = "Вы уже используете последнюю версию Cap."
+no_update_title = "Обновлений нет"
+not_now = "Не сейчас"
+package_not_installed = "Пакет не установлен. Подтвердите системный запрос или установите пакет с Cap.so/download."
+ready = "Cap {version} готов к установке. Перезапустите Cap для завершения обновления."
+restart_now = "Перезапустить сейчас"
+title = "Обновление Cap"
+
+[import]
+error_title = "Ошибка импорта"
+image_failed = "Не удалось импортировать изображение: {error}"
+unsupported = "Неподдерживаемый медиафайл."
+video_failed = "Не удалось импортировать видео: {error}"
+
+[import.filter]
+image = "Файлы изображений"
+media = "Медиафайлы"
+video = "Видеофайлы"
+
+[import.progress]
+analyzing = "Анализ видеофайла..."
+complete = "Импорт завершён!"
+converting = "Преобразование видео... {percent}%"
+image = "Импорт изображения..."
+metadata = "Создание метаданных проекта..."
+starting = "Начало преобразования..."
+
+[overlay]
+display_fallback = "Дисплей {id}"
+countdown_title = "Отсчет времени записи"
+countdown_body = "Подождите несколько секунд после нажатия «Пуск», прежде чем начнется запись."
+mode_title = "Изменение режима записи"
+mode_body = "Instant сразу после остановки даёт ссылку для публикации. Studio записывает видео в полном качестве для редактирования."
+
+[overlay.area]
+draw = "Нарисуйте область"
+free_ratio = "Свободное"
+hint = "Нажмите и перетащите, чтобы выбрать область"
+minimum_size = "Минимальный размер {width} x {height}"
+too_small = "{width} x {height} слишком мал"
+more_ratios_title = "Больше пропорций"
+more_ratios_body = "Зафиксируйте соотношение сторон области, например 4:3, 9:16 или 21:9."
+reset_title = "Сбросить выделение"
+reset_body = "Очистите область, чтобы вы могли нарисовать новую."
+fill_title = "Заполнить дисплей"
+fill_body = "Увеличить область до размера экрана с сохранением пропорций."
+fit_window_hint = "Или щелкните окно, чтобы подогнать область к нему."
+drag_to_move = "Перетащите для перемещения"
+locked = "Зафиксировано"
+lock_title = "Зафиксировать область"
+lock_body = "Сохраните эту область для следующего раза и защитите её от случайного перетаскивания."
+lock_needs_area = "Сначала выделите область, затем зафиксируйте её."
+unlock_title = "Снять фиксацию области"
+unlock_body = "Разрешить перемещение, изменение размера и повторное выделение области."
+locked_title = "Область зафиксирована"
+locked_body = "Нажмите, чтобы снять фиксацию и снова перемещать, изменять размер или выделять область."
+
+[overlay.camera_only]
+description = "Запись с использованием только камеры и микрофона"
+select_camera = "Пожалуйста, выберите камеру"
+
+[overlay.device]
+camera_allow = "Разрешить доступ к камере..."
+camera_turn_on = "Включите доступ к камере в настройках..."
+microphone_allow = "Разрешить доступ к микрофону..."
+microphone_turn_on = "Включите доступ к микрофону в настройках..."
+
+[overlay.start]
+instant = "Режим Instant — запись с доступом по ссылке"
+instant_sign_in = "Режим Instant — войдите, чтобы начать запись"
+sign_in = "Войдите, чтобы использовать"
+start_recording = "Начать запись"
+studio = "Режим Studio — локальная запись и редактирование"
+take_screenshot = "Сделать скриншот"
+
+[overlay.window]
+size_title = "Изменение размера окна"
+size_body = "Перед записью измените размер окна, указав соотношение сторон или точные размеры."
+size_needs_accessibility_title = "Для изменения размера нужен универсальный доступ"
+size_needs_accessibility_body = "Включите универсальный доступ для Cap в системных настройках, чтобы изменять размеры окон других приложений."
+size_unavailable_title = "Размер недоступен"
+size_unavailable_body = "Wayland не позволяет приложениям изменять размер окон других приложений."
+focus_title = "Режим фокусировки"
+focus_on = "Запись только этого окна"
+focus_off = "Запишите только это окно"
+focus_enable = "Включить режим фокусировки"
+focus_disable = "Выключить режим фокусировки"
+focus_body = "Записывается только содержимое этого окна. Другие окна, даже расположенные поверх него, и остальная часть экрана не попадут в видео."
+focus_body_instant_camera = "При использовании камеры Instant продолжает записывать область экрана, чтобы камера оставалась в видео."
+center_title = "По центру экрана"
+center_description = "Переместите окно в середину, когда вы его выберете."
+
+[permission.guide]
+accessibility_body = "Перетащите его в список «Универсальный доступ» выше и убедитесь, что переключатель включён."
+screen_body = "Перетащите его в список «Запись экрана и системного аудио» выше и убедитесь, что переключатель включён."
+title = "Перетащите Cap в список"
+
+[permission.name]
+accessibility = "Доступность"
+camera = "Камера"
+microphone = "Микрофон"
+screen_recording = "Запись с экрана"
+
+[permission.onboarding]
+open_settings_again = "Снова открыть системные настройки"
+skip = "Пока пропустить"
+switch_on_title = "Включите Cap в системных настройках"
+
+[permission.onboarding.accessibility]
+allow = "Разрешить универсальный доступ"
+body = "Универсальный доступ позволяет Cap отслеживать щелчки и курсор только на этом Mac, чтобы автоматическое приближение знало, куда направляться."
+done_body = "Автоматическое приближение может следовать за щелчками."
+done_title = "Универсальный доступ включён"
+title = "Пусть Cap следит за вашим курсором"
+
+[permission.onboarding.all_set]
+body = "У Cap есть всё необходимое. Далее — краткий обзор возможностей."
+regained = "Спасибо. Cap снова может вести запись."
+title = "Всё готово"
+
+[permission.onboarding.camera]
+allow = "Разрешить камеру"
+body = "Покажите себя в углу ваших записей. Пропустите, если вам это не нужно."
+done_body = "Вы можете добавить камеру к любой записи."
+done_title = "Камера включена"
+title = "Пусть Cap увидит вас"
+
+[permission.onboarding.checklist]
+lede = "Сначала macOS попросит вас предоставить несколько разрешений. Это займёт всего минуту."
+regained_lede = "Некоторые разрешения отключены в системных настройках. Включите их, чтобы продолжить запись."
+regained_title = "Cap нужно восстановить разрешение"
+title = "Давайте подготовим Cap"
+
+[permission.onboarding.hint]
+drag_into_list = "Перетащите Cap с панели под системными настройками в список. Уже в списке? Просто включите его."
+find_in_list = "Найдите Cap в списке и включите его. Если macOS сначала показала запрос, выберите «Открыть системные настройки»."
+no_prompt = "Запрос не появился? Включите Cap в системных настройках."
+open_settings = "Откройте настройки системы, найдите Cap в списке и включите его."
+turned_off = "Ранее разрешение было отключено. Включите Cap в системных настройках или пока пропустите этот шаг."
+
+[permission.onboarding.microphone]
+allow = "Разрешить микрофон"
+body = "Добавьте свой голос в записи. Вы можете пропустить это и включить позже."
+done_body = "Ваш голос может быть в ваших записях."
+done_title = "Микрофон включен"
+title = "Пусть Cap услышит вас"
+
+[permission.onboarding.relaunch]
+body = "macOS включит запись экрана после перезапуска Cap. Вы вернётесь к этому шагу."
+button = "Перезапустить"
+hint = "Включили разрешение, но ничего не происходит? Перезапустите Cap, чтобы применить его."
+later = "macOS применит разрешение после перезапуска Cap. Вы сможете сделать это позже."
+title = "Осталось перезапустить Cap"
+
+[permission.onboarding.screen]
+allow = "Разрешить запись экрана"
+body = "Разрешение на запись экрана позволяет Cap записывать дисплеи, окна и системный звук."
+done_body = "Cap может записывать ваш экран."
+done_title = "Запись экрана включена"
+title = "Разрешите Cap записывать экран"
+
+[permission.onboarding.status]
+allowed = "Разрешено"
+off = "Выключено в системных настройках"
+optional = "Необязательно"
+required = "Обязательно"
+skipped = "Пока пропущено"
+
+[permission.onboarding.waiting]
+prompt = "Выберите «Разрешить» в запросе macOS"
+system_settings = "Ожидание системных настроек"
+
+[screenshot_editor]
+loading_preview = "Загрузка предварительного просмотра..."
+zoom_in = "Увеличить"
+zoom_out = "Уменьшить"
+
+[screenshot_editor.annotation]
+default_text = "Текст"
+done = "Сделано"
+fill = "Заливка"
+intensity = "Интенсивность"
+mask_style = "Стиль"
+pixelate = "Пикселизация"
+stroke = "Обводка"
+transparent = "Прозрачный"
+
+[screenshot_editor.aspect]
+auto = "Авто"
+classic = "Классика ⋅4:3"
+square = "Квадрат ⋅1:1"
+tall = "Высокие ⋅3:4"
+vertical = "Вертикальный ⋅9:16"
+wide = "Широкий ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "Анимированный градиент визуализируется как неподвижное изображение для скриншотов. Выберите другой фон, чтобы заменить его."
+blur_title = "Размытие фона"
+choose_image = "Нажмите, чтобы выбрать или перетащить изображение"
+color = "Цвет"
+gradient = "Градиент"
+image = "Изображение"
+image_files = "Изображение"
+image_title = "Фоновое изображение"
+wallpaper = "Обои"
+
+[screenshot_editor.corner]
+rounded = "Округлый"
+squircle = "Скруглённый квадрат"
+style = "СТИЛЬ УГЛОВ"
+
+[screenshot_editor.crop]
+full = "Полный"
+loading_frame = "Загрузка кадра…"
+position = "Позиция"
+
+[screenshot_editor.error]
+encode = "Не удалось закодировать экспорт скриншотов: {error}"
+load_meta = "Не удалось загрузить метаданные скриншота: {error}"
+load_metadata = "Не удалось загрузить метаданные скриншота: {error}"
+no_image = "PNG не найден в {path}"
+not_screenshot = "Это не пакет скриншота"
+open_image = "Не удалось открыть изображение: {error}"
+renderer_failed = "Рендер GPU не удалось запустить: {error}"
+renderer_not_running = "Рендер скриншотов не работает"
+renderer_stopped = "Рендер остановился до завершения экспорта"
+save_project = "Ошибка сохранения проекта: {error}"
+serialize = "Не удалось сериализовать настройки снимка экрана: {error}"
+sign_in_to_share = "Войдите в Cap в вашем браузере, а затем снова поделитесь"
+too_large = "Размер изображения превышает максимум: {width}x{height}"
+upgrade_required = "Для этой функции требуется более дорогой тариф"
+upload_task = "Загрузка не удалась: {error}"
+
+[screenshot_editor.header]
+aspect_ratio = "Соотношение сторон"
+copy = "Скопировать в буфер обмена"
+crop_image = "Обрезать изображение"
+more_actions = "Больше действий"
+
+[screenshot_editor.layers]
+empty = "Слоёв пока нет"
+empty_hint = "Используйте инструменты выше, чтобы добавить аннотации"
+reorder_hint = "Перетащите, чтобы изменить порядок • Верхний слой — спереди"
+title = "слои"
+
+[screenshot_editor.menu]
+delete = "Удалить"
+open_folder = "Открыть папку"
+
+[screenshot_editor.share]
+create_link = "Создать ссылку для доступа"
+preparing = "Подготовка загрузки"
+rendering = "Обработка скриншота"
+uploading = "Загрузка скриншота"
+
+[screenshot_editor.style]
+advanced_shadow = "Расширенные настройки теней"
+background = "Фон"
+blur = "Размытие"
+border = "Рамка"
+color = "Цвет"
+corner_rounding = "Закругление углов"
+opacity = "Непрозрачность"
+padding = "Отступ"
+rounding = "Округление"
+shadow = "Тень"
+size_label = "Размер"
+width = "Ширина"
+
+[screenshot_editor.toast]
+copied = "Скриншот скопирован в буфер обмена!"
+link_copied = "Ссылка скопирована в буфер обмена"
+saved = "Скриншот сохранен!"
+
+[screenshot_editor.tool]
+arrow = "Стрелка"
+circle = "Круг"
+draw = "рисовать"
+mask = "Маска"
+rectangle = "прямоугольник"
+select = "Выбрать"
+text_label = "Текст"
+
+[transcription.download]
+complete = "Загрузка завершена"
+failed = "Не удалось скачать: {error}"
+file_progress = "Загрузка {file}: {percent}%"
+preparing = "Подготовка к загрузке модели"
+progress = "Загрузка модели: {percent}%"
+
+[transcription.error]
+intel_mac = "Модели Parakeet не доступны на Intel Mac. Используйте модель Whisper"
+model_load = "Не удалось загрузить модель субтитров. Попробуйте скачать её заново"
+model_missing = "Модель субтитров не найдена. Сначала скачайте её"
+no_audio = "Аудио не найдено в видеофайле"
+unsupported_language = "Модели «Рекомендуемая» и «Высокая точность» распознают только английский и 24 других европейских языка. Скачайте малую или среднюю модель, чтобы создать субтитры на этом языке"
+
+[upload.status]
+failed = "Загрузка требует внимания"
+paused = "Загрузка приостановлена"
+prepared = "Загрузка подготовлена"
+processing = "Обработка загрузки"
+retrying = "Загрузка будет повторена"
+sign_in = "Войдите, чтобы повторить загрузку"
+uploaded = "Загружено"
+uploading = "Загрузка"
+
+[editor.audio.library]
+add_hint = "Добавьте аудио, музыку или другие звуки в ваше видео."
+add_title = "Добавить аудио"
+change_hint = "Выберите другую дорожку для этого сегмента"
+change_title = "Изменить звук"
+done = "Готово"
+import = "Импортировать файл"
+
+[editor.color]
+apply_to_cursor = "Применить к курсору"
+fine_tune = "Точная настройка цветов"
+title = "Коррекция цвета"
+
+[editor.color.preset.cinematic]
+description = "Бирюзовые тени и оранжевые светлые участки с лёгкой зернистостью"
+name = "кинематографический"
+
+[editor.color.preset.dreamy]
+description = "Мягкие воздушные пастельные цвета с осветлёнными тенями"
+name = "мечтательный"
+
+[editor.color.preset.frost]
+description = "Холодные чёткие тона с приглушёнными цветами"
+name = "мороз"
+
+[editor.color.preset.golden]
+description = "Теплое золотое сияние"
+name = "золотой"
+
+[editor.color.preset.midnight]
+description = "Тёмные бирюзовые тона с приглушёнными цветами"
+name = "Полночь"
+
+[editor.color.preset.noir]
+description = "Контрастное чёрно-белое изображение с сильной зернистостью"
+name = "Нуар"
+
+[editor.color.preset.none]
+description = "Исходные цвета, без цветокоррекции"
+name = "Нет"
+
+[editor.color.preset.vintage]
+description = "Выцветший тёплый плёночный вид с мягким контрастом"
+name = "винтажный"
+
+[editor.color.preset.vivid]
+description = "Повышенная насыщенность и контрастность"
+name = "яркая"
+
+[editor.color.slider]
+contrast = "контраст"
+exposure = "экспозиция"
+fade = "Затухание"
+grain = "зерно"
+saturation = "насыщение"
+split_tone = "Раздельное тонирование"
+strength = "Интенсивность"
+temperature = "температура"
+tint = "Оттенок"
+vignette = "Виньетка"
+
+[editor.crop]
+aspect_ratio = "Соотношение сторон"
+center = "Центр"
+dimensions = "Размер"
+editing_style = "Изменяется только стиль {number}"
+editing_style_override = "Изменяется только стиль {number} · Сохранение включает переопределение фона"
+free = "Свободное"
+full = "Полный"
+hint = "Перетащите для перемещения · Стрелки для точной настройки · Удерживайте {key}, чтобы отключить привязку"
+loading_frame = "Загрузка кадра…"
+position = "Позиция"
+preview = "Предварительный просмотр"
+rendering_preview = "Обработка предпросмотра…"
+snap_to_ratios = "Привязка к пропорциям"
+style_changed = "Этот стиль изменился при обрезке. Отмените действие и снова откройте обрезку."
+title = "Обрезка"
+
+[editor.panel]
+delete = "Удалить"
+done = "Готово"
+duration = "Продолжительность"
+edge_in = "Начало"
+edge_out = "Конец"
+enabled = "включенный"
+fade_duration = "Длительность затухания"
+flip_horizontally = "Отразить по горизонтали"
+flip_vertically = "Отразить по вертикали"
+name = "Имя"
+opacity = "Непрозрачность"
+
+[editor.panel.audio]
+change = "Изменить"
+change_hint = "Нажмите, чтобы изменить трек"
+fade_in = "Плавное появление"
+fade_out = "Плавное затухание"
+fallback_name = "Аудио"
+title = "Аудио {number}"
+volume = "Громкость"
+
+[editor.panel.camera3d]
+already_still = "Это уже неподвижный кадр"
+amount = "Интенсивность"
+angles = "углы"
+auto_scene = "Автосцена"
+auto_scene_tooltip = "Пересоздаёт все 3D-кадры на дорожке"
+bokeh = "Боке"
+camera = "Камера"
+delete_tooltip = "Удалить этот ракурс"
+depth_blur = "Размытие глубины"
+distance = "расстояние"
+drag_to_orbit = "Перетащите для вращения"
+ease_in = "Плавное начало"
+ease_out = "Плавное завершение"
+end_same_as_start = "Конец — то же самое, что начало"
+fine_tune = "Точная настройка"
+focus = "Фокус"
+header = "3D-кадр · {look} · {duration} с"
+hold_opening = "Сохранить начальное положение на протяжении всего кадра"
+lens = "Объектив"
+look_title = "Вид"
+motion_style = "Стиль движения"
+moves = "Движения"
+nothing_to_swap = "В неподвижном кадре нечего менять местами"
+play_shot = "Воспроизвести кадр"
+play_shot_tooltip = "Воспроизвести этот кадр"
+pose_end = "Конец: {time}"
+pose_start = "Начало: {time}"
+reset_camera = "Сброс камеры"
+roll = "Крен"
+rotate_x = "Поворот X"
+rotate_y = "Вращение Y"
+shift_x = "Сдвиг X"
+shift_y = "Сдвиг Y"
+shots = { other = "Сцен: {count}" }
+still_shot = "Неподвижный кадр"
+swap = "Поменять начало и конец местами"
+timing_advanced = "Время и дополнительные настройки"
+timing_summary = "{easing} · объектив {fov}"
+
+[editor.panel.camera3d.blur]
+angle = "угол"
+falloff = "Спад"
+focus_size = "Размер фокуса"
+focus_x = "Фокус X"
+focus_y = "Фокусировка Y"
+position = "Позиция"
+scan = "Сканирование"
+strength = "Интенсивность"
+
+[editor.panel.camera3d.easing]
+ease_in = "Плавное начало"
+ease_out = "Плавное завершение"
+linear = "линейный"
+smooth = "Плавно"
+
+[editor.panel.camera3d.focus_mode]
+directional = "направленный"
+radial = "Радиальный"
+tilt_shift = "Тилт-шифт"
+
+[editor.panel.camera3d.look]
+center = "Центр"
+close_up = "Крупный план"
+drift_down = "Плавно вниз"
+glide_across = "Скольжение поперёк"
+low_angle = "Нижний ракурс"
+perspective = "Перспектива"
+pull_back = "Отдаление"
+rising_sweep = "Восходящий пролёт"
+slide_by = "Скольжение мимо"
+spotlight = "Прожектор"
+tilt_away = "Наклон в сторону"
+top_down = "Сверху вниз"
+unfold = "Разворачивание"
+
+[editor.panel.camera3d.sequence]
+product_tour = "Обзор продукта"
+punch_in = "Приближение"
+showcase = "Витрина"
+
+[editor.panel.camera3d.shot]
+custom = "Своё движение"
+still = "Неподвижный кадр"
+
+[editor.panel.caption]
+title = "Субтитр {number}"
+
+[editor.panel.font]
+system_mono = "Системный моноширинный"
+system_sans = "Системный без засечек"
+system_serif = "Системный с засечками"
+
+[editor.panel.font_weight]
+black = "Сверхжирный"
+bold = "Жирный"
+custom = "Свой вариант ({weight})"
+extra_bold = "Очень жирный"
+light = "Тонкий"
+medium = "Средний"
+regular = "Обычный"
+semibold = "Полужирный"
+
+[editor.panel.image]
+arrange = "Расположить на холсте"
+arrange_help = "Перетащите изображение, чтобы переместить его. Вытяните угол, чтобы изменить размер, или используйте контроль вращения ниже, чтобы повернуть его."
+center = "По центру холста"
+lock_aspect = "Зафиксировать пропорции"
+missing = "Файл изображения отсутствует. Замените его, чтобы восстановить этот сегмент, сохраняя его время и преобразования."
+replace = "Заменить изображение"
+rotation = "вращение"
+rounding = "Округление"
+
+[editor.panel.keyboard]
+title = "Клавиатура {number}"
+
+[editor.panel.mask]
+blur = "Размытие"
+effect = "Эффект"
+highlight = "Выделение"
+outside_darkness = "Затемнение за пределами маски"
+pixel_size = "Размер пикселя"
+pixelate = "Пикселизация"
+sensitive = "чувствительный"
+title = "Маска {number}"
+
+[editor.panel.scene]
+camera_layout = "Расположение камеры"
+camera_position = "Положение камеры"
+camera_zoom = "Масштаб камеры"
+screen_position = "Позиция экрана"
+screen_zoom = "Масштаб экрана"
+transition = "Переход"
+
+[editor.panel.scene.description]
+camera_only = "Показывает только изображение с камеры"
+default = "Показывает как экран, так и камеру"
+floating = "Экран и камера расположены рядом в виде скруглённых карточек на фоне"
+hide_camera = "Показывает только запись экрана"
+split_screen = "Экран и камера расположены рядом (вертикально при портретной ориентации)"
+
+[editor.panel.scene.mode]
+camera_only = "Только камера"
+default = "По умолчанию"
+floating = "плавающий"
+hide_camera = "Скрыть камеру"
+split_screen = "Разделенный экран"
+
+[editor.panel.style]
+camera_only_background = "Фон сцены «Только камера»"
+camera_only_help = "Используйте сцену «Только камера». Отступ показывает фон вокруг камеры."
+camera_only_padding = "Отступ сцены «Только камера»"
+crop_height = "высота"
+crop_left = "Левый"
+crop_title = "Обрезка экрана (пиксели источника)"
+crop_top = "Сверху"
+crop_width = "Ширина"
+edit_background = "Изменить фон и рамку"
+edit_camera = "Редактировать камеру"
+edit_cursor = "Изменить курсор"
+help = "Переопределения действуют только в этом сегменте. Включите группу, чтобы скопировать её общие настройки."
+reset_crop = "Сбросить обрезку"
+
+[editor.panel.style_presets]
+apply = "Применить"
+create = "Сохранить"
+create_title = "Сохранить пресет стиля"
+custom = "Пользовательский стиль"
+default_badge = "По умолчанию"
+delete = "Удалить"
+delete_confirm = "Удалить \"{name}\"? Предметы, которые уже используют этот стиль, сохраняют его."
+delete_title = "Удалить шаблон стиля"
+empty = "Пока нет сохранённых пресетов"
+empty_help = "Сохраните стиль для повторного использования в любом проекте."
+font_missing = "{font} не установлен на этом компьютере, поэтому вместо него используется {fallback}."
+move_down = "Переместить вниз"
+move_up = "Переместить вверх"
+remove_default = "Отменить использование по умолчанию"
+rename = "Переименовать"
+rename_title = "Переименовать шаблон стиля"
+save = "Сохранить стиль как шаблон"
+save_failed = "Не удалось сохранить шаблоны. Cap не может записать файл настроек."
+set_default = "Использовать по умолчанию"
+tooltip = "Шаблоны стилей"
+update = "Обновить текущим стилем"
+
+[editor.panel.style_presets.captions]
+default_name = "Мой стиль субтитров"
+use_for_new = "Использовать для новых субтитров"
+used_for_new = "Этот стиль применяется к новым субтитрам"
+
+[editor.panel.style_presets.mask]
+applied_all = "Применено ко всем маскам ({number})"
+apply_all = "Применить ко всем маскам ({number})"
+default_name = "Мой стиль маски"
+use_for_new = "Использовать для новых масок"
+used_for_new = "Новые маски используют этот стиль."
+
+[editor.panel.style_presets.shape]
+applied_all = "Применено ко всем фигурам ({number})"
+apply_all = "Применить ко всем фигурам ({number})"
+default_name = "Мой стиль фигур"
+use_for_new = "Использовать для новых фигур"
+used_for_new = "Этот стиль применяется к новым фигурам"
+
+[editor.panel.style_presets.style]
+applied_all = "Применено ко всем сегментам стиля ({number})"
+apply_all = "Применить ко всем сегментам стиля ({number})"
+default_name = "Мой стиль"
+use_for_new = "Использовать для новых сегментов стиля"
+used_for_new = "Этот стиль применяется к новым сегментам стиля"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "Применено ко всем текстовым сегментам ({number})"
+apply_all = "Применить ко всем текстовым сегментам ({number})"
+default_name = "Мой стиль текста"
+use_for_new = "Использовать для нового текста"
+used_for_new = "Новый текст использует этот стиль"
+
+[editor.panel.text_animation]
+bounce = "Отскок"
+fade = "Затухание"
+letters = "Буквы"
+none = "Нет"
+pop = "Появление"
+slide_down = "Сдвиг вниз"
+slide_left = "Сдвиг влево"
+slide_right = "Сдвиг вправо"
+slide_up = "Сдвиг вверх"
+tracking = "Межбуквенный интервал"
+typewriter = "Печатная машинка"
+wipe = "Вытеснение"
+words = "Слова"
+zoom = "Зум"
+
+[editor.panel.text_background]
+box_shape = "Прямоугольник"
+highlight = "Выделение"
+none = "Нет"
+pill = "Скруглённая плашка"
+
+[editor.panel.text_layout]
+fullscreen = "Полный экран"
+overlay = "наложение"
+
+[editor.panel.text_preset.group]
+all = "Все"
+callouts = "Выноски"
+code = "Код"
+lower_thirds = "Нижняя треть"
+statements = "Утверждения"
+titles = "Заголовки"
+
+[editor.panel.text_preset.name]
+caption = "Субтитр"
+cinematic = "кинематографический"
+code = "Код"
+gradient = "Градиент"
+headline = "Заголовок"
+highlight = "Выделение"
+kicker = "Кикер"
+label = "этикетка"
+lower_third = "Нижняя треть"
+name_tag = "Именная плашка"
+neon = "неоновый"
+quote = "Цитата"
+stat = "Крупная цифра"
+sticker = "наклейка"
+title = "Название"
+typewriter = "Печатная машинка"
+
+[editor.panel.text_preset.sample]
+caption = "Запись с Cap"
+cinematic = "Глава первая"
+gradient = "Красивый текст"
+headline = "Выпускайте быстрее"
+highlight = "Важная часть"
+kicker = "Новая функция"
+label = "Подсказка"
+name_tag = "Ричи - основатель"
+neon = "Сияйте"
+quote = "«Пусть всё выглядит просто»"
+sticker = "Бум!"
+title = "Знакомьтесь: Cap"
+typewriter = "Печатаем текст…"
+
+[editor.panel.text_segment]
+animation = "Анимация"
+background = "Фон"
+color = "Цвет"
+font = "шрифт"
+font_size = "Размер"
+fullscreen_help = "Приостанавливает видео на время показа текста, затем продолжает воспроизведение с того же места."
+glow = "сияние"
+gradient = "Градиент"
+layout = "планировка"
+letter_spacing = "Межбуквенный интервал"
+line_height = "Межстрочный интервал"
+look = "Оформление"
+outline = "контур"
+screen_transition = "Переход экрана"
+shadow = "Тень"
+style = "Стиль"
+title = "Текст {number}"
+
+[editor.panel.timing]
+end = "Конец"
+start = "Начало"
+title = "Время"
+to = "до"
+
+[editor.panel.zoom]
+amount = "Степень приближения"
+auto = "Авто"
+auto_help = "Автоматический зум следует за курсором вокруг экрана."
+auto_locked = "Для автоматического режима требуется запись курсора. Включите «Запись пользовательского курсора (Studio)» в разделе «Настройки → Общие»."
+how_it_works = "Как это работает?"
+manual = "Ручной"
+manual_help = "Ручной зум остается на фиксированном месте, которое вы выбираете ниже."
+mixed = "смешанный"
+mode = "Режим масштабирования"
+positions_mixed = "Сегменты приближают разные точки. Перетащите их, чтобы выбрать одну точку для всех."
+title = "Масштаб {number}"
+
+[editor.side_panel]
+style = "Стиль"
+
+[editor.sidebar]
+desktop_import_failed = "Не удалось импортировать обои рабочего стола"
+importing_image = "Импорт изображения..."
+
+[editor.sidebar.animated_gradient]
+add_colour = "Добавить цвет"
+colours = "Цвета"
+delete = "Удалить"
+delete_failed = "Не удалось удалить градиент. Попробуйте ещё раз."
+fine_tune = "Точная настройка"
+limit_reached = { other = "Можно сохранить не более {count} градиентов. Удалите один, чтобы добавить другой." }
+motion = "Движение"
+name_placeholder = "Назовите этот градиент"
+name_required = "Введите имя для этого градиента."
+presets = "Предустановки"
+randomize = "рандомизировать"
+remember_failed = "Не удалось сохранить настройки анимированного градиента."
+remove_colour = "Удалить цвет"
+reset_tooltip = "Сбросить точные настройки"
+save_failed = "Не удалось сохранить этот градиент. Попробуйте ещё раз."
+save_tooltip = "Сохранить текущий градиент"
+saved = "Сохранено"
+still = "Неподвижный"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "контраст"
+curvature = "искривление"
+detail = "Детализация"
+direction = "направление"
+exposure = "экспозиция"
+flow_scale = "Шкала потока"
+flow_strength = "Сила потока"
+grain_amount = "Количество зерна"
+grain_size = "Размер зерна"
+highlights = "Света"
+motion_speed = "Скорость движения"
+relief = "Рельеф"
+ripple_size = "Размер ряби"
+shading = "затенение"
+vibrance = "Красочность"
+
+[editor.sidebar.animated_gradient.group]
+animation = "Анимация"
+colour = "цвет"
+flow = "Поток"
+lighting = "Освещение"
+texture = "текстура"
+
+[editor.sidebar.background]
+title = "Фон"
+
+[editor.sidebar.border]
+color = "Цвет рамки"
+opacity = "Непрозрачность рамки"
+title = "Рамка"
+width = "Ширина рамки"
+
+[editor.sidebar.corner]
+rounded = "Округлый"
+squircle = "Скруглённый квадрат"
+title = "Стиль углов"
+
+[editor.sidebar.cursor]
+circle = "Круг"
+click_ripple = "Волна при щелчке"
+color = "Цвет"
+default = "По умолчанию"
+description_circle = "Заменяет все формы курсора кругом."
+description_default = "Сохраняет формы курсора и внешний вид от вашей записи."
+description_macos = "Классический внешний вид macOS. Пользовательские курсоры сохраняют свою записанную форму."
+description_tahoe = "Внешний вид macOS Tahoe. Пользовательские курсоры сохраняют записанную форму."
+description_windows = "Внешний вид Windows. Пользовательские курсоры сохраняют свою записанную форму."
+duration = "Продолжительность"
+recorded = "Записанные курсоры"
+recorded_tooltip = "Записано с помощью этого курсора"
+ripple_size = "Размер"
+strength = "Интенсивность"
+
+[editor.sidebar.desktop]
+import = "Импортировать обои рабочего стола"
+importing = "Импорт..."
+prompt = "Используйте обои с вашего рабочего стола"
+reimport = "Импортировать заново"
+
+[editor.sidebar.gradient]
+angle = "угол"
+from = "из"
+grain_scale = "Шкала зерна"
+noise = "Шум"
+to = "До"
+
+[editor.sidebar.image]
+prompt = "Нажмите, чтобы выбрать или перетащить изображение"
+
+[editor.sidebar.layout]
+background_blur = "Размытие фона"
+custom_position = "Произвольное положение экрана (перетащено на холсте)"
+motion_blur = "Размытие движения"
+padding = "Отступ"
+rounded_corners = "Закругленные углы"
+title = "планировка"
+
+[editor.sidebar.notch]
+description = "Добавляет вырез MacBook поверх записи. Для записи, сделанной на Mac с вырезом, используются его размеры; в остальных случаях настройте размеры ниже."
+height = "Высота выреза"
+position = "Положение выреза"
+title = "Вырез MacBook"
+width = "Ширина выреза"
+
+[editor.sidebar.shadow]
+advanced = "Расширенные настройки теней"
+blur = "Размытие"
+opacity = "Непрозрачность"
+shadow_size = "Размер"
+title = "Тень"
+
+[editor.sidebar.source]
+animated = "анимированный"
+color = "Цвет"
+desktop = "рабочий стол"
+gradient = "Градиент"
+image = "Изображение"
+none = "Нет"
+wallpaper = "обои"
+
+[editor.sidebar.style_group]
+back = "Вернуться в Стиль"
+background = "Фон и рамка"
+camera = "Камера"
+cursor = "Курсор"
+editing_note = "Редактировать только этот сегмент. Глобальные настройки неизменны."
+title = "Стиль {number} · {group}"
+
+[editor.sidebar.tab]
+audio = "Аудио"
+background = "Фон"
+camera = "Камера"
+captions = "Субтитры"
+cursor = "Курсор"
+keyboard = "Клавиатура"
+
+[editor.sidebar.wallpaper_theme]
+blue = "голубой"
+cities = "Города"
+dark = "темный"
+orange = "Оранжевый"
+purple = "фиолетовый"
+
+[editor.canvas]
+camera = "Камера"
+camera_follows_zoom = "Размер камеры меняется при приближении — перетащите для перемещения"
+captions = "Субтитры"
+edit_zoom = "Редактировать зум"
+image = "Изображение"
+mask = "Маска"
+screen = "экран"
+screen_locked = "Экран заблокирован, пока активно приближение"
+shape = "Фигура"
+text_item = "Текст"
+
+[editor.clips]
+append_error = "Не удалось добавить клип: {message}"
+append_error_title = "Ошибка записи"
+cap_filter = "Запись Cap"
+clip = "Клип {number}"
+count = { other = "Клипов: {count}" }
+empty_description = "Запишите или импортируйте клип, и он появится здесь."
+empty_title = "Пока нет клипов"
+import = "Импорт"
+import_error = "Не удалось импортировать клип: {message}"
+import_error_title = "Ошибка импорта"
+import_existing = "Существующая запись"
+import_mp4 = "MP4 видео..."
+importing = "Импорт…"
+mp4_filter = "Видео MP4"
+prepare_controls_failed = "Не удалось подготовить элементы управления записью: {error}"
+record = "Записать"
+record_new = "Записать новый клип"
+save_before_recording_failed = "Не удалось сохранить текущий проект перед записью: {error}"
+split = "Разделить {number}"
+title = "Клипы"
+
+[editor.clips.error]
+cancelled = "Импорт отменен"
+cannot_decode = "Невозможно декодировать видео {path}: {error}"
+in_use = "Невозможно импортировать, пока эта запись используется: {error}"
+instant_source = "Записи Instant пока нельзя импортировать в проект"
+instant_target = "Записи в режиме Instant нельзя редактировать"
+into_itself = "Невозможно импортировать запись в себя"
+missing_video = "Видеофайл не найден: {path}"
+no_duration = "У импортированного видео некорректная длительность"
+not_a_project = "Выберите папку проекта Cap"
+source_empty = "У проекта Cap нет сегментов записи"
+source_failed = "Ошибка исходного проекта Cap: {error}"
+source_recording = "В исходном проекте Cap запись ещё продолжается"
+source_unimportable = "У проекта Cap нет импортируемых сегментов записи"
+unfinished_target = "Завершите или восстановите запись перед импортом клипа"
+unsupported_video = "Неподдерживаемый видеофайл: {path}"
+
+[editor.export]
+back = "Вернуться к редактору"
+existing_link_description = "Повторная загрузка заменит видео по этой ссылке последней отредактированной версией. Все, у кого есть ссылка, увидят обновлённое видео."
+existing_link_title = "Обновить существующую ссылку"
+failed = "Ошибка экспорта"
+fps = "{fps} FPS"
+frames = { other = "Кадры: {rendered} / {count}" }
+generating_preview = "Создание предпросмотра…"
+link_unavailable_cursor = "Экспорт одного курсора можно сохранить только в файл или буфер обмена."
+link_unavailable_transparent = "Видео с прозрачным фоном можно сохранить только в файл или буфер обмена."
+organization = "Организация"
+preview = "Предварительный просмотр"
+preview_info = "Это обработанный кадр видео. Измените настройки, чтобы увидеть качество итогового экспорта."
+preview_unavailable = "Предварительный просмотр недоступен"
+reupload = "Загрузить повторно"
+reupload_tooltip = "Загрузить последнюю версию видео по той же ссылке"
+reupload_transparent = "Для публикации по ссылке необходим непрозрачный фон"
+sign_in_required = "Вы должны войти, чтобы поделиться записями"
+task_failed = "Не удалось выполнить экспорт"
+title = "Экспорт"
+upgrade_message = "Для этой функции нужен платный тариф"
+upgrade_title = "Требуется платный тариф"
+upload_failed = "Не удалось загрузить запись"
+
+[editor.export.advanced]
+bits_per_pixel = "Биты на пиксель"
+cursor_only = "Экспортировать только курсор"
+cursor_only_description = "Сохраняет движения и щелчки курсора на прозрачном фоне"
+custom_bitrate = "Использование пользовательского битрейта"
+force_ffmpeg = "Использовать декодер FFmpeg"
+force_ffmpeg_description = "Не использовать аппаратный декодер (автоматическое переключение включено)"
+title = "Дополнительно"
+transparent_mov = "Экспортируется как MOV с прозрачным фоном. Файлы имеют большой размер и подходят для монтажа или композитинга."
+
+[editor.export.cta]
+cancel_sign_in = "Отменить вход"
+clipboard = "Экспорт в буфер обмена"
+create_link = "Создать ссылку"
+file = "Экспорт в файл"
+reupload = "Обновить видео по ссылке"
+sign_in = "Войти, чтобы поделиться"
+
+[editor.export.destination]
+clipboard = "Буфер обмена"
+file = "Файл"
+link = "Ссылка для доступа"
+
+[editor.export.done]
+copy_link = "Копировать ссылку"
+instant_hint = "Используйте Instant для следующей записи, если хотите получить ссылку сразу после остановки."
+link_copied = "Ссылка скопирована"
+open_file = "Открыть файл"
+open_link = "Открыть ссылку"
+retry_copy = "Повторить копирование"
+reuploaded = "Обновлённое видео доступно по той же ссылке"
+uploaded = "Видео Cap успешно загружено"
+
+[editor.export.estimate]
+gigabytes = "~{value} ГБ"
+gigabytes_range = "~{lower}–{upper} ГБ"
+hours = "~{value} ч"
+hours_range = "~{lower}–{upper} ч"
+megabytes = "~{value} МБ"
+megabytes_range = "~{lower}–{upper} МБ"
+minutes = "~{value} мин"
+minutes_range = "~{lower}–{upper} мин"
+seconds = "~{value} с"
+seconds_range = "~{lower}–{upper} с"
+under_megabyte = "< 1 МБ"
+under_second = "< 1 с"
+
+[editor.export.optimize]
+description = "Повторное программное кодирование существенно уменьшает размер файла, но занимает больше времени"
+title = "Оптимизировать размер файла"
+
+[editor.export.phase]
+clipboard_failed = "Экспорт завершён; не удалось скопировать в буфер обмена"
+complete = "Экспорт завершён"
+copied = "Скопировано в буфер обмена"
+copying_to_clipboard = "Копирование в буфер обмена"
+rendering_cursor = "Обработка дорожки курсора"
+rendering_gif = "Обработка GIF"
+rendering_video = "Обработка видео"
+reupload_complete = "Повторная загрузка завершена"
+reuploading = "Обновление видео по ссылке"
+saving_to_file = "Сохранение в файл"
+starting = "Подготовка экспорта"
+upload_complete = "Загрузка завершена"
+uploading = "Создание ссылки"
+
+[editor.export.quality]
+larger = "Файл больше"
+maximum = "Максимальное"
+potato = "Минимальное"
+smaller = "Файл меньше"
+social = "Соцсети"
+web = "Для веба"
+
+[editor.export.resources]
+proceed = "Всё равно продолжить"
+title = "Проверить ресурсы для экспорта"
+
+[editor.export.section]
+destination = "Место сохранения"
+format = "Формат"
+frame_rate = "Частота кадров"
+quality = "Качество"
+resolution = "Разрешение"
+
+[editor.export.stats]
+calculating = "Вычисление..."
+duration = "Продолжительность"
+estimated_size = "Предполагаемый размер"
+export_time = "Время экспорта"
+output = "Результат"
+output_value = "{width}×{height} · {fps} кадр/с"
+refining_size = "Уточнение размера…"
+refining_time = "Уточнение времени..."
+unavailable = "Недоступно"
+
+[editor.export.turbo]
+title = "Турбоэкспорт"
+description = "Значительно ускоряет экспорт, используя все ядра процессора и видеокарту"
+warning = "До завершения экспорта используются все ядра процессора, видеокарта и в несколько раз больше памяти. Другие приложения могут замедлиться, а компьютер — нагреться и шуметь."
+
+[editor.modal]
+cancel_export = "Отменить экспорт"
+cancel_export_message = "Вы уверены, что хотите отменить экспорт?"
+cancel_export_title = "Отменить экспорт?"
+keep_exporting = "Продолжить экспорт"
+recording_retained = "Запись сохранена"
+
+[editor.tabs.audio]
+isolation_balanced = "сбалансированный"
+isolation_balanced_description = "Более четкая изоляция с естественными голосовыми деталями."
+isolation_light = "Слабая"
+isolation_light_description = "Сохраняет больше исходного звучания голоса и помещения."
+isolation_strong = "сильный"
+isolation_strong_description = "Сильнее подавляет шум. Может изменить звучание голоса."
+mic_volume = "Громкость микрофона"
+mute = "Отключить звук"
+stereo_mode = "Стереорежим микрофона"
+studio_sound_description = "Уменьшает фоновый шум и уравновешивает уровень голоса."
+studio_sound_save_failed = "Не удалось сохранить Studio Sound по умолчанию"
+system_volume = "Громкость системного звука"
+title = "Настройки звука"
+use_for_new = "Использовать для новых записей"
+
+[editor.tabs.audio.stereo]
+mono_left = "Моно L"
+mono_right = "Моно R"
+stereo = "Стерео"
+
+[editor.tabs.camera]
+advanced_shadow = "Расширенные настройки теней"
+background = "Фон"
+corner_style = "Стиль углов"
+custom_position = "Произвольное положение (перетащено на холсте)"
+hide = "Скрыть камеру"
+keep_size_during_zoom = "Сохраняйте оригинальный размер при увеличении"
+mirror = "Отразить камеру"
+position = "Позиция"
+reset = "сброс"
+rounded_corners = "Закругленные углы"
+shadow = "Тень"
+shadow_blur = "Размытие"
+shadow_opacity = "Непрозрачность"
+shape_label = "Фигура"
+size_during_zoom = "Размер при приближении"
+size_label = "Размер"
+title = "Камера"
+
+[editor.tabs.camera.blur]
+heavy = "Сильное размытие"
+light = "Слабое размытие"
+off = "Выключено"
+remove = "Удалить фон"
+
+[editor.tabs.camera.shape]
+source = "Источник"
+square = "Квадрат"
+
+[editor.tabs.captions]
+active_word_highlight = "Выделение текущего слова"
+animation_section = "Анимация"
+animation_style = "Стиль анимации"
+background_color = "Цвет фона"
+background_opacity = "Непрозрачность фона"
+background_settings = "Настройки фона"
+beta = "бета"
+delete = "Удалить"
+deleting = "Удаление..."
+download = "Скачать модель {model}"
+download_note = "Модель нужно скачать только один раз. Все субтитры хранятся локально."
+downloading = "Загрузка {model}... {percent}%"
+fade_duration = "Длительность затухания"
+font_family = "Шрифт"
+font_settings = "Настройки шрифтов"
+font_weight = "Насыщенность шрифта"
+generate = "Создать субтитры"
+generate_failed = "Не удалось создать субтитры: {reason}"
+generating = "Создание..."
+highlight_color = "Цвет выделения"
+highlight_note = "Это первая версия субтитров в Cap. В некоторых случаях выделение текущего слова может быть неточным. Мы работаем над исправлением и выпустим его в следующих версиях."
+highlight_style = "Стиль выделения"
+horizontal_position = "Горизонтальная позиция"
+intel_unavailable = "Модели субтитров Parakeet недоступны на Mac с процессорами Intel. Модели Whisper по-прежнему доступны."
+keep_open = "Не закрывайте Cap во время загрузки модели. При перезагрузке редактор автоматически подключится к загрузке."
+language_label = "Язык"
+model_downloaded = "Модель {model} загружена"
+model_label = "Модель"
+position = "Позиция"
+refining_word_timings = "Уточнение времени слов…"
+regenerate = "Создать субтитры заново"
+reset_position = "Сбросить положение"
+show_filler_words = "Показывать слова-паразиты"
+size_label = "Размер"
+style = "Стиль"
+text_color = "Цвет текста"
+title = "Субтитры"
+uppercase = "Прописные буквы"
+vertical_position = "Вертикальная позиция"
+
+[editor.tabs.captions.animation]
+bounce = "Отскок"
+none = "Нет"
+pop = "Появление"
+
+[editor.tabs.captions.highlight]
+color = "Цвет"
+pill = "Скруглённая плашка"
+
+[editor.tabs.captions.language]
+ar = "арабский"
+auto = "Автообнаружить"
+bn = "бенгальский"
+de = "немецкий"
+en = "английский"
+es = "испанский"
+fa = "персидский"
+fr = "французский"
+gu = "Гуджарати"
+he = "иврит"
+hi = "хинди"
+it = "итальянский"
+ja = "японский"
+ko = "корейский"
+mr = "Маратхи"
+nl = "голландский"
+pa = "Пенджаби"
+pl = "польский"
+pt = "португальский"
+ru = "русский"
+sk = "словацкий"
+ta = "тамильский"
+te = "телугу"
+tr = "турецкий"
+ur = "Урду"
+zh = "китайский"
+
+[editor.tabs.captions.model]
+high_accuracy = "Высокая точность"
+high_accuracy_description = "Больше размер загрузки, выше точность"
+medium = "средний"
+medium_description = "Медленнее, точнее"
+recommended = "Рекомендуется"
+recommended_description = "Лучший баланс для большинства записей"
+small = "маленький"
+small_description = "Наименьший размер загрузки"
+
+[editor.tabs.captions.preset]
+classic = "Классика"
+classic_description = "Текст на сплошном скруглённом фоне."
+highlight = "Выделение"
+highlight_description = "Жирный текст прописными буквами и плашка за текущим словом."
+karaoke = "Караоке"
+karaoke_description = "Слова загораются синхронно с речью."
+minimal = "Минимальный"
+minimal_description = "Текст с тонким контуром без фона."
+pop = "Появление"
+pop_description = "Появляющийся текст прописными буквами с ярким акцентом."
+
+[editor.tabs.corner]
+rounded = "Округлый"
+squircle = "Скруглённый квадрат"
+
+[editor.tabs.cursor]
+friction = "трение"
+hide_when_idle = "Скрывать при бездействии"
+inactivity_delay = "Задержка бездействия"
+mass = "Масса"
+movement_style = "Стиль движения курсора"
+show = "Показать курсор"
+size_label = "Размер"
+smooth_movement = "Плавное движение"
+style_label = "Стиль курсора"
+svg_cursors = "Качественные SVG-курсоры"
+tension = "напряженность"
+tilt = "наклон"
+
+[editor.tabs.cursor.style]
+fast = "Быстро"
+fast_description = "Быстрое, точное следование"
+mellow = "Мягкий"
+mellow_description = "Сбалансированное, естественное движение"
+slow = "Медленно"
+slow_description = "Длительное плавное движение"
+smooth = "гладкий"
+smooth_description = "Мягкое плавное движение"
+
+[editor.tabs.keyboard]
+animation = "Анимация"
+background_color = "Цвет фона"
+background_opacity = "Непрозрачность фона"
+background_settings = "Настройки фона"
+behavior = "поведение"
+beta = "бета"
+changed_during_generation = "Во время создания изменилась временная шкала или настройки клавиатуры. Попробуйте ещё раз."
+empty_description = "Нажмите «Создать сегменты клавиатуры», чтобы создать сегменты из записанных нажатий клавиш."
+empty_title = "Пока нет сегментов клавиатуры."
+fade_duration = "Длительность затухания"
+font_family = "Шрифт"
+font_settings = "Настройки шрифтов"
+font_weight = "Насыщенность шрифта"
+generate = "Создать сегменты клавиатуры"
+generating = "Создание сегментов клавиатуры..."
+grouping_threshold = "Групповой порог"
+linger_duration = "Длительность отображения"
+load_failed = "Не удалось загрузить данные записи: {error}"
+no_presses = "Записанные нажатия клавиш не найдены."
+position = "Позиция"
+regenerate = "Создать сегменты клавиатуры заново"
+show_modifiers = "Показать модификаторы"
+show_special_keys = "Показывать специальные клавиши"
+size_label = "Размер"
+text_color = "Цвет текста"
+timeline_unavailable = "Временная шкала проекта недоступна."
+timeline_unreadable = "Не удалось прочитать временную шкалу проекта."
+title = "Показать клавиатуру"
+uppercase = "Прописные буквы"
+
+[editor.tabs.position]
+bottom_center = "Нижний центр"
+bottom_left = "Внизу слева"
+bottom_right = "Внизу справа"
+manual = "Ручной"
+top_center = "Сверху по центру"
+top_left = "Верхний левый"
+top_right = "Верхний справа"
+
+[editor.tabs.sync]
+auto_description = "Cap автоматически рассчитал эти смещения для синхронизации звука с видео. Измените их, если звук по-прежнему не совпадает."
+auto_synced = "Синхронизировано автоматически"
+camera = "Смещение камеры"
+clip = "Клип {number}"
+description = "Настройте смещение источников, если звук или камера не синхронизированы с записью экрана."
+microphone = "Смещение микрофона"
+system_audio = "Смещение системного звука"
+title = "синхронизация"
+
+[editor.tabs.weight]
+bold = "Жирный"
+medium = "Средний"
+normal = "Обычный"
+
+[editor.tabs.font]
+system_sans_serif = "Системный без засечек"
+system_serif = "Системный с засечками"
+system_monospace = "Системный моноширинный"
+
+[editor.shape]
+title = "Фигура {number}"
+stroke = "Обводка"
+width = "Ширина"
+fill = "Заливка"
+fill_opacity = "Непрозрачность заливки"
+corner_radius = "Радиус углов"
+arrowhead = "Наконечник стрелки"
+number = "Номер"
+look = "Оформление"
+shadow = "Тень"
+animation = "Анимация"
+draw = "Нарисовать фигуру"
+toolbar = "Фигуры"
+draw_hint = "Перетащите по области предпросмотра, чтобы нарисовать фигуру. Нажмите, чтобы разместить её."
+decrease = "уменьшать"
+increase = "увеличение"
+
+[editor.shape.kinds]
+arrow = "Стрелка"
+line = "линия"
+rectangle = "прямоугольник"
+ellipse = "Эллипс"
+highlight = "Выделение"
+badge = "Шаг"
+
+[editor.shape.heads]
+filled = "Залитый"
+open = "Открытый"
+double = "двойной"
+
+[editor.shape.animations]
+none = "Нет"
+fade = "Затухание"
+scale = "масштаб"
+draw = "Прорисовка"
+
+[editor.timeline]
+add_shot = "Добавить кадр"
+add_shot_with_look = "Добавить кадр · {look} · {seconds} с"
+paused = "Приостановлено"
+title = "Временная шкала"
+
+[editor.timeline.empty]
+add_audio = "Добавить аудио"
+add_scene = "Добавить сцену"
+audio = "Добавить фоновую музыку или импортировать собственное аудио"
+captions = "Нет субтитров"
+keyboard = "Никаких клавишных событий"
+scene = "Переключайте расположение экрана и камеры"
+
+[editor.timeline.picker]
+audio = "Добавьте фоновую музыку или импортируйте свой собственный звук."
+caption = "Автоматически создайте субтитры из записи."
+clip = "Ваши записи с экрана."
+image = "Добавьте изображение в свою запись."
+keyboard = "Отображайте нажатия клавиш на экране по мере ввода."
+mask = "Размойте или закройте конфиденциальные области экрана."
+scene = "Переключайте расположение экрана и камеры."
+scene_unavailable = "Для использования сцен записывайте с камерой."
+shape = "Добавьте к записи стрелки, прямоугольники, круги и выделения."
+style = "Изменяйте фон, настройки камеры и курсора в нужные моменты."
+text_overlay = "Добавьте пользовательские текстовые наложения и заголовки на холст."
+three_d = "Наклоните сцену в 3D-перспективе."
+zoom = "Плавное приближение вслед за действиями."
+
+[editor.timeline.remove]
+audio = "Удалить звуковую дорожку."
+captions = "Удалить дорожку субтитров."
+clip = "Удалить дорожку клипов."
+image = "Удалить дорожку изображений."
+keyboard = "Удалить дорожку клавиатуры."
+mask = "Удалить дорожку масок."
+scene = "Удалить дорожку сцен."
+shape = "Удалить дорожку фигур."
+style = "Удалить дорожку стилей."
+text_track = "Удалить текстовую дорожку."
+three_d = "Удалить 3D-дорожку."
+zoom = "Удалить дорожку приближения."
+
+[editor.timeline.scene]
+camera_only = "Только камера"
+default = "По умолчанию"
+floating = "плавающий"
+hide_camera = "Скрыть камеру"
+split_screen = "Разделенный экран"
+
+[editor.timeline.segment]
+audio = "Аудио"
+automatic_zoom = "Автоматическое приближение"
+caption = "Субтитр"
+clip = "Клип"
+cursor_hidden = "Курсор скрыт"
+highlight = "Выделение"
+label = "Метка"
+manual_zoom = "Ручное приближение"
+muted = "приглушенный"
+numbered_clip = "Клип {number}"
+sensitive = "чувствительный"
+
+[editor.timeline.track]
+audio = "Аудио"
+captions = "Субтитры"
+clip = "Клип"
+image = "Изображение"
+keyboard = "Клавиатура"
+mask = "Маска"
+scene = "сцена"
+shape = "Фигура"
+style = "Стиль"
+text_track = "Текст"
+video = "Видео"
+zoom = "Зум"
+
+[editor.transcript]
+cleanup = "Очистить"
+cleanup_tooltip = "Удалить слова-паразиты и сократить паузы"
+delete_matches = "Удалить все"
+delete_matches_tooltip = "Вырезать все совпадения из видео"
+empty_description = "Расшифруйте запись на этом компьютере, затем редактируйте видео через текст расшифровки."
+empty_title = "Расшифровки пока нет"
+hint = "Нажмите на слово, чтобы перейти к нему. Выберите слова и нажмите Удалить, чтобы вырезать их из видео."
+next_match = "Следующее совпадение"
+no_audio = "Эта запись не имеет аудио для транскрибирования."
+previous_match = "Предыдущее совпадение"
+restore_blocked = "Эта часть вырезана на временной шкале. Отмените действие или перетащите край клипа, чтобы вернуть её."
+restore_hint = { other = "Нажмите, чтобы восстановить слова: {count}" }
+restore_transition = "Удалите переход рядом с этим разрезом, чтобы восстановить его."
+search = "Найти"
+search_count = "{current} из {total}"
+search_none = "Нет совпадений"
+search_placeholder = "Найти в транскрипте"
+seconds = "{value} с"
+selection = { other = "Выбрано слов: {count}, {seconds} с" }
+selection_cut = { other = "Выбрано вырезанных слов: {count}. Нажмите Delete, чтобы восстановить их." }
+skipped_hold = { other = "Пропущено вырезаний: {count}. Полноэкранная текстовая карточка удерживает соответствующие кадры." }
+skipped_last_clip = "Нельзя удалить последний клип."
+skipped_transition = { other = "Пропущено вырезаний: {count}. Они затрагивают переходы." }
+title = "Расшифровка"
+transcribe = "Расшифровать"
+transcribing = "Расшифровка…"
+words = { other = "Слов: {count}" }
+
+[editor.transcript.fillers]
+discourse = "Слова-паразиты"
+discourse_hint = "например, «ну», «значит», «вот»"
+false_start = "Незаконченные фразы"
+false_start_hint = "Мы должны, нам нужно"
+hesitation = "колебания"
+hesitation_hint = "Эм, ммм"
+keep = "Оставить"
+listen = "Прослушать"
+none = "В этих категориях не осталось слов-паразитов"
+remove = "Удалить"
+remove_all = { other = "Удалить: {count}" }
+repetition = "Повторяющиеся слова"
+repetition_hint = "например, «я, я», «это, это»"
+title = "Слова-паразиты"
+
+[editor.transcript.pauses]
+apply = "Сократить"
+keep = "Сократить до"
+longer_than = "Паузы длиннее"
+none = "Таких длинных пауз нет"
+summary = { other = "Пауз: {count}, экономия: {seconds} с" }
+title = "Паузы"
+
+[editor.window]
+audio_filter = "Аудио"
+audio_segment_changed = "Этот звуковой сегмент изменился. Выберите его и снова укажите замену."
+crop = "Обрезка"
+crop_tooltip = "Обрезать видео"
+no_room_for_3d_shot = "Нет места для ещё одного 3D-кадра"
+redo = "Повторить"
+save_failed = "Не удалось сохранить {path}. Не закрывайте редактор и попробуйте ещё раз: {error}"
+undo = "Отменить"
+
+[editor.window.add_track]
+button = "Добавить трек"
+hide_3d = "Скрыть 3D-трек."
+hint = "Выберите трек для добавления в свою временную шкалу."
+
+[editor.window.aspect]
+auto = "Авто"
+classic = "Классика"
+classic_ratio = "Классика ⋅4:3"
+square = "Квадрат"
+square_ratio = "Квадрат ⋅1:1"
+tall = "Высокий"
+tall_ratio = "Высокие ⋅3:4"
+tooltip = "Соотношение сторон"
+vertical = "вертикальный"
+vertical_ratio = "Вертикальный ⋅9:16"
+wide = "Широкий"
+wide_ratio = "Широкий ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "Не удалось скопировать аудиофайл: {error}"
+directory_failed = "Не удалось создать аудио каталог: {error}"
+no_extension = "Аудиофайл не имеет расширения"
+not_found = "Не найден аудиофайл: {path}"
+unsupported = "Неподдерживаемый аудио формат: .{extension}"
+
+[editor.window.busy]
+clip_import = "Дождитесь окончания импорта клипа до закрытия или удаления этой записи."
+export = "Дождитесь окончания экспорта или его отмены до закрытия или удаления этой записи."
+opening = "Дождитесь открытия записи, прежде чем удалить её."
+save_before_delete_failed = "Не удалось сохранить запись перед ее удалением: {error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ Добавить кадр"
+auto_scene = "Автосцена"
+how_many = "Сколько кадров?"
+prompt = "Добавьте кинематографичные 3D-кадры в запись"
+
+[editor.window.clip_menu]
+audio = "Аудио"
+cursor = "Курсор"
+delete = "Удалить клип"
+delete_only_clip = "Не могу удалить единственный клип"
+hide_cursor = "Скрыть курсор"
+hide_cursor_description = "Скрывается во время воспроизведения этого клипа"
+keep_pitch = "Сохранить высоту тона"
+match_speed = "Согласовать скорость"
+merge_next = "Объединить со следующим клипом"
+merge_previous = "Объединить с предыдущим клипом"
+mute = "Выключить звук"
+mute_clip = "Выключить звук клипа"
+mute_clip_description = "Отключить звук этого клипа"
+rename = "Переименовать клип"
+speed = "Скорость"
+split = "Разделить в позиции воспроизведения"
+split_hint = "Переместите указатель воспроизведения в этот клип"
+volume = "Громкость"
+transition = "Переход"
+transition_none = "Нет"
+transition_seconds = "{seconds} с"
+
+[editor.window.clip_menu.merge_blocker]
+edge = "Нет клипа с той стороны"
+different_recording = "Разные записи"
+gap = "Между ними были вырезаны кадры"
+speed = "Сначала выровняйте скорость клипов"
+
+[editor.window.frame]
+add_tooltip = "Добавить рамку"
+browser = "браузер"
+browser_description = "Оформление браузера с адресной строкой"
+button = "Рамка"
+dark = "темный"
+global = "Общая рамка · Применяется там, где стиль наследует фон."
+heading = "Рамка"
+light = "Светлая"
+macbook_description = "Рамка ноутбука вокруг записи"
+macos_description = "Оформление окна с кнопками управления macOS"
+none = "Нет"
+none_description = "Показать запись как есть"
+style_changed = "Этот стиль изменился. Закройте и снова откройте настройки рамки."
+style_only = "Только стиль {index} · Общие настройки не изменятся."
+style_only_override = "Только стиль {index} · Редактирование включает переопределение фона."
+theme = "Тема"
+title = "Название"
+url = "URL"
+window_title_placeholder = "Название окна"
+windows_description = "Строка заголовка с кнопками управления окном"
+
+[editor.window.header]
+delete_recording = "Удалить запись"
+export = "Экспорт"
+open_bundle = "Открыть пакет записи"
+presets = "Предустановки"
+
+[editor.window.image]
+changed = "Изображение изменилось при выборе замены. Выберите его и попробуйте еще раз."
+filter = "Изображения"
+recording_unavailable = "Запись для этого изображения больше недоступна. Откройте проект заново."
+
+[editor.window.open]
+damaged = "Видеотреки этой записи открыть не удалось. Пакет выглядит поврежденным."
+failed = "Не удалось открыть эту запись"
+media_failed = "Не удалось прочитать медиафайлы этой записи: {error}"
+meta_failed = "Не удалось загрузить метаданные записи: {error}"
+no_segments = "В записи нет сегментов. Возможно, сначала её нужно восстановить."
+not_found = "Видеофайл по пути {path} не найден!"
+not_studio = "Невозможно редактировать нестудийные записи"
+
+[editor.window.presets]
+apply = "Применить"
+create = "Создать"
+create_new = "Создать новый шаблон"
+create_title = "Создать шаблон"
+default = "По умолчанию"
+default_badge = "По умолчанию"
+delete = "Удалить"
+delete_confirm = "Вы уверены, что хотите удалить \"{name}\"?"
+delete_title = "Удалить пресет"
+name_placeholder = "Название шаблона"
+none_saved = "Нет сохраненных предустановок"
+rename = "Переименовать"
+rename_title = "Переименовать шаблон"
+save_settings = "Сохранить настройки в шаблон"
+set_default = "Использовать по умолчанию"
+
+[editor.window.preview]
+full = "Полный"
+half = "Половина"
+label = "Предварительный просмотр"
+quarter = "Четверть"
+
+[editor.window.text_menu]
+copy_style = "Скопировать стиль"
+copy_style_first = "Сначала скопируйте стиль"
+delete_segment = "Удалить текстовый сегмент"
+delete_segments = "Удалить текстовые сегменты"
+paste_style = "Вставить стиль"
+paste_style_all = "Применить стиль ко всем выбранным сегментам"
+segments = { other = "Текстовых сегментов: {count}" }
+untitled = "Текст"
+
+[editor.window.title]
+not_saved = "Название не сохранилось"
+not_saved_message = "{error}\n\nВаш заголовок все еще в редакторе. Попробуйте сохранить его снова."
+read_failed = "Не удалось прочитать название записи для {path}: {error}"
+save_failed = "Не удалось сохранить название записи для {path}: {error}"
+
+[editor.window.track]
+clear_all = "Очистить всё"
+delete = "Удалить"
+
+[editor.window.transition]
+title = "Переход"
+add = "Добавить переход"
+duration = "Продолжительность"
+seconds_unit = "с"
+remove = "Удалить переход"
+cross_fade = "Плавное наложение"
+fade_through_black = "Через чёрный"
+fade_through_white = "Через белый"
+push_left = "Сдвиг влево"
+push_right = "Сдвиг вправо"
+push_up = "Сдвиг вверх"
+push_down = "Сдвиг вниз"
+wipe_left = "Вытеснение влево"
+wipe_right = "Вытеснение вправо"
+wipe_up = "Вытеснение вверх"
+wipe_down = "Вытеснение вниз"
+zoom = "Зум"
+
+[editor.window.transport]
+done_splitting = "Завершить разделение"
+play_pause = "Воспроизвести / приостановить видео"
+speed = "Скорость предпросмотра"
+split = "Разделить"
+split_tooltip = "Нажмите на сегмент, чтобы разделить его. Esc — завершить."
+zoom_in = "Увеличить"
+zoom_out = "Уменьшить"
+
+[editor.window.zoom_lane]
+generate = "генерировать"
+generating = "Создание…"
+no_clicks = "Щелчки для масштабирования не найдены. Проведите по дорожке, чтобы добавить масштабирование."
+prompt = "Добавить приближения автоматически"
+
+[editor.markers]
+add = "Добавить маркер"
+button = { other = "Маркеров: {count}" }
+default_name = "Маркер {number}"
+delete = "Удалить маркер"
+done = "Готово"
+edit = "Редактировать маркер"
+empty = "Маркеров пока нет. Нажмите M, чтобы отметить позицию воспроизведения, или добавляйте маркеры во время записи."
+hidden = { other = "Маркеров в вырезанных частях: {count}." }
+next = "Следующий маркер"
+previous = "Предыдущий маркер"
+split = "Разделить клипы по маркерам"
+stack = { other = "Маркеров рядом: {count}. Нажмите, чтобы их просмотреть." }
+title = "Маркеры"
+
+[ui]
+coming_soon = "Скоро"
+
+[ui.selection]
+audio = { other = "Выбрано аудиосегментов: {count}" }
+caption = { other = "Выбрано сегментов субтитров: {count}" }
+delete = "Удалить"
+done = "Готово"
+image = { other = "Выбрано сегментов изображений: {count}" }
+keyboard = { other = "Выбрано сегментов клавиатуры: {count}" }
+mask = { other = "Выбрано сегментов масок: {count}" }
+scene = { other = "Выбрано сегментов сцен: {count}" }
+segments = { other = "Выбрано сегментов: {count}" }
+select_all = "Выберите все"
+shape = { other = "Выбрано фигур: {count}" }
+style = { other = "Выбрано сегментов стиля: {count}" }
+text_segments = { other = "Выбрано текстовых сегментов: {count}" }
+three_d = { other = "Выбрано 3D-сегментов: {count}" }
+zoom = { other = "Выбрано: {count}" }
+zoom_all = { other = "Выбрано всё: {count}" }
+zoom_some = { other = "Выбрано: {count} из {total}" }
+
+[message.recording]
+task_failed = "Ошибка задачи записи."
+startup_failed = "Не удалось запустить запись"
+ended_unexpectedly = "Запись закончилась неожиданно."
+stop_task_failed_plain = "Не удалось остановить запись."
+stop_not_acknowledged = "Остановка записи не подтверждена"
+capture_state_timed_out = "Истекло время ожидания подтверждения состояния записи"
+pause_not_acknowledged = "Изменение состояния паузы записи не подтверждено"
+cleanup_unconfirmed_files_kept = "Очистка после записи не подтверждена. Локальные файлы сохранены; нажмите Ctrl+Shift+F9, чтобы повторить остановку."
+cleanup_unconfirmed_retry = "Очистка после записи не подтверждена; повторите остановку."
+discard_not_acknowledged = "Остановка записи Studio при отмене не подтверждена; локальная запись сохранена"
+window_still_resizing = "Размер окна всё ещё изменяется. Попробуйте начать запись снова."
+startup_cancelled = "Запуск записи отменён; локальные файлы сохранены"
+instant_cleanup_unconfirmed = "Очистка после записи Instant не подтверждена; локальные файлы сохранены"
+finalization_no_result = "Завершение записи не дало результата. Ваши файлы сохранены."
+stopped_metadata_unsaved = "Запись остановлена, но сохранить метаданные не удалось; локальные файлы сохранены"
+discard_stop_unconfirmed = "Остановка записи Studio при отмене не подтверждена; локальные файлы сохранены"
+discard_unconfirmed = "Отмена записи Studio не подтверждена; локальные файлы сохранены"
+crashed_before_capture = "Cap закрылся до того, как запись началась."
+capture_state_failed = "Не удалось подтвердить состояние захвата: {error}"
+completion_task_failed = "Ошибка завершения записи: {error}"
+stop_task_failed = "Не удалось остановить запись: {error}"
+control_task_failed = "Ошибка управления записью: {error}"
+restart_hide_failed = "При перезапуске не удалось скрыть окна Cap: {error}"
+discard_task_failed = "Не удалось отменить запись Studio: {error}; очистка не подтверждена"
+cancel_task_failed = "Не удалось отменить запись: {error}. Очистка не подтверждена; повторите остановку."
+then_cleanup_unconfirmed_shortcut = "{error}. Очистка после записи не подтверждена. Нажмите Ctrl+Shift+F9, чтобы повторить остановку."
+then_cleanup_unconfirmed_control = "{error}. Очистка после записи не подтверждена. Повторите остановку с помощью кнопки записи."
+then_shutdown_unconfirmed = "{error}. Завершение Studio по-прежнему не подтверждено; запись и файлы сохранены."
+then_use_stop_if_unsafe = "{error}. Остановите запись, если её нельзя безопасно продолжать."
+then_use_stop_control = "{error}. Остановите запись с помощью кнопки остановки."
+then_discard_stopped = "{error}; отмена или перезапуск остановлены, локальная запись сохранена"
+then_files_preserved = "{error}. Файлы незавершённой записи сохранены."
+then_cleanup_retry = "{error}. Очистка не подтверждена; повторите остановку."
+low_storage_preserved = "Недостаточно места. Файлы записи сохранены в {path}. Освободите место, затем восстановите запись в Cap."
+
+[message.permission]
+unavailable = "Доступ {permission} недоступен. Разрешите Cap в настройках системы > Конфиденциальность и безопасность > {permission}, затем выберите устройство снова."
+
+[message.upload]
+offline = "оффлайн"
+authentication_expired = "Срок аутентификации истек"
+no_audio_intent_review = "Для этой старой записи не сохранены настройки звука; проверьте их перед повторной попыткой"
+legacy_no_account = "Для этой старой загрузки не сохранены учётная запись и настройки звука. Локальная запись сохранена."
+verification_timed_out = "Истекло время ожидания проверки в облаке; локальная запись сохранена"
+verification_failed_retry = "Не удалось проверить запись в облаке; сохранённая запись будет загружена повторно"
+must_save_first = "Чтобы возобновить загрузку, сначала сохраните запись локально"
+sign_in_original = "Войдите в исходную учётную запись и на исходный сервер, чтобы повторить попытку"
+sign_in_again = "Войдите снова, чтобы загрузить эту запись"
+needs_upgrade = "Для записи Instant требуется более дорогой тариф"
+changed_during = "Локальная запись изменилась во время загрузки"
+changed_after = "Локальная запись изменилась после загрузки; она сохранена"
+already_queued = "Эта запись уже стоит в очереди для загрузки"
+paused = "Загрузка приостановлена; локальная запись сохранена"
+worker_failed = "Ошибка процесса загрузки; локальная запись сохранена"
+empty = "Сохраненная запись пуста"
+no_resumable_state = "Нет данных для возобновления загрузки этой записи"
+verification_failed = "Не удалось проверить запись: {status}"
+
+[message.cli]
+binary_missing = "Исполняемый файл CLI не найден по пути {path}"
