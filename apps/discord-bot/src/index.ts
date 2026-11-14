@@ -188,7 +188,7 @@ app.post(
 
 		switch (body.type) {
 			case "release-ready": {
-				await fetch(
+				const response = await fetch(
 					`https://discord.com/api/v10/webhooks/${DISCORD_APP_ID}/${interaction.token}/messages/@original`,
 					{
 						method: "PATCH",
@@ -202,10 +202,15 @@ app.post(
 					},
 				);
 
+				if (!response.ok)
+					return new Response("Failed to update Discord message", {
+						status: 502,
+					});
+
 				return new Response("Successfully updated message", { status: 200 });
 			}
 			case "release-done": {
-				await fetch(
+				const response = await fetch(
 					`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`,
 					{
 						method: "POST",
@@ -222,6 +227,11 @@ app.post(
 						},
 					},
 				);
+
+				if (!response.ok)
+					return new Response("Failed to send Discord message", {
+						status: 502,
+					});
 
 				return new Response("Successfully sent message", { status: 200 });
 			}
