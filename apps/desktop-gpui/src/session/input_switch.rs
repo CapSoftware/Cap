@@ -508,7 +508,7 @@ async fn attach_selection(
             .await?;
             #[cfg(target_os = "macos")]
             {
-                let bubble = cx.update(crate::app_windows::camera_window_id)?;
+                let bubble = cx.update(crate::app_windows::camera_window_id);
                 if let Some(bubble) = bubble {
                     let exclude = handle.clone();
                     gpui_tokio::Tokio::spawn_result(cx, async move {

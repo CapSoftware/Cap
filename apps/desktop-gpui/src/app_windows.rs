@@ -3102,6 +3102,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
+        camera_preview_hidden: _,
         #[cfg(target_os = "linux")]
             clean_capture: _,
         #[cfg(target_os = "linux")]
