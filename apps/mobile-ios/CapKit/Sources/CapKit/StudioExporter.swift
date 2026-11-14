@@ -34,6 +34,7 @@ public final class StudioExporter: @unchecked Sendable {
     private let cancelled = Flag()
     private var reader: AVAssetReader?
     private var writer: AVAssetWriter?
+    private var pumps: Pumps?
 
     public init() {}
 
@@ -41,6 +42,7 @@ public final class StudioExporter: @unchecked Sendable {
         _ = cancelled.raise()
         reader?.cancelReading()
         writer?.cancelWriting()
+        pumps?.finishAll()
     }
 
     public func export(_ built: StudioComposition, to url: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> Result {
@@ -116,24 +118,28 @@ public final class StudioExporter: @unchecked Sendable {
 
         let total = max(built.duration, 0.001)
         let cancelled = cancelled
-        nonisolated(unsafe) let pumpWriter = writer
         nonisolated(unsafe) let pumpReader = reader
-        func pump(_ output: AVAssetReaderOutput, into input: AVAssetWriterInput, label: String, reportsProgress: Bool) async {
+        // A writer that is cancelled or fails stops asking for data, so a pump waiting for room would never hear
+        // again. Every pump can be ended from outside: by `cancel()`, or by the other pump failing.
+        let pumps = Pumps()
+        self.pumps = pumps
+        if cancelled.isRaised { pumps.finishAll() }
+        @Sendable func pump(_ output: AVAssetReaderOutput, into input: AVAssetWriterInput, label: String, reportsProgress: Bool) async {
             nonisolated(unsafe) let output = output
             nonisolated(unsafe) let input = input
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                guard let handle = pumps.add(continuation) else { return }
                 let queue = DispatchQueue(label: "so.cap.mobile.studio.export.\(label)")
-                let done = Flag()
                 input.requestMediaDataWhenReady(on: queue) {
                     while input.isReadyForMoreMediaData {
+                        if handle.isFinished { return }
                         if cancelled.isRaised || pumpReader.status != .reading {
-                            input.markAsFinished()
-                            if done.raise() { continuation.resume() }
+                            pumps.finishAll()
                             return
                         }
                         guard let sample = output.copyNextSampleBuffer() else {
                             input.markAsFinished()
-                            if done.raise() { continuation.resume() }
+                            handle.finish()
                             return
                         }
                         if reportsProgress {
@@ -141,20 +147,40 @@ public final class StudioExporter: @unchecked Sendable {
                             if time.isFinite { progress?(min(1, time / total)) }
                         }
                         if !input.append(sample) {
-                            if done.raise() { continuation.resume() }
+                            pumps.finishAll()
                             return
                         }
                     }
                 }
             }
-            _ = pumpWriter
         }
 
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await pump(videoOutput, into: videoInput, label: "video", reportsProgress: true) }
-            if let audioPair {
-                group.addTask { await pump(audioPair.0, into: audioPair.1, label: "audio", reportsProgress: false) }
+        // An encoder that fails on its own leaves both inputs waiting with nothing to report it.
+        nonisolated(unsafe) let watchedWriter = writer
+        let watchdog = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                if watchedWriter.status == .failed || watchedWriter.status == .cancelled {
+                    pumps.finishAll()
+                    return
+                }
             }
+        }
+        defer { watchdog.cancel() }
+
+        // Each output and input is only ever touched by its own pump.
+        nonisolated(unsafe) let videoFeed = (videoOutput as AVAssetReaderOutput, videoInput)
+        nonisolated(unsafe) let audioFeed = audioPair.map { ($0.0 as AVAssetReaderOutput, $0.1) }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await pump(videoFeed.0, into: videoFeed.1, label: "video", reportsProgress: true) }
+            if let audioFeed {
+                group.addTask { await pump(audioFeed.0, into: audioFeed.1, label: "audio", reportsProgress: false) }
+            }
+        }
+        self.pumps = nil
+        if writer.status == .failed {
+            reader.cancelReading()
+            throw writer.error ?? Failure.cantWrite
         }
 
         if cancelled.isRaised {
@@ -174,7 +200,6 @@ public final class StudioExporter: @unchecked Sendable {
     }
 }
 
-/// Set once from any thread.
 final class Flag: Sendable {
     private let value = Atomic<Bool>(false)
 
@@ -184,4 +209,48 @@ final class Flag: Sendable {
     }
 
     var isRaised: Bool { value.load(ordering: .acquiring) }
+}
+
+/// The exporter's feeding loops, each ended exactly once from whichever side gets there first.
+final class Pumps: @unchecked Sendable {
+    final class Handle: @unchecked Sendable {
+        private let done = Flag()
+        fileprivate let continuation: CheckedContinuation<Void, Never>
+
+        fileprivate init(_ continuation: CheckedContinuation<Void, Never>) {
+            self.continuation = continuation
+        }
+
+        var isFinished: Bool { done.isRaised }
+
+        func finish() {
+            if done.raise() { continuation.resume() }
+        }
+    }
+
+    private let lock = NSLock()
+    private var handles: [Handle] = []
+    private var ended = false
+
+    /// Nil, with the continuation already resumed, once everything has been ended.
+    func add(_ continuation: CheckedContinuation<Void, Never>) -> Handle? {
+        let handle = Handle(continuation)
+        lock.lock()
+        let isEnded = ended
+        if !isEnded { handles.append(handle) }
+        lock.unlock()
+        if isEnded {
+            handle.finish()
+            return nil
+        }
+        return handle
+    }
+
+    func finishAll() {
+        lock.lock()
+        ended = true
+        let all = handles
+        lock.unlock()
+        for handle in all { handle.finish() }
+    }
 }
