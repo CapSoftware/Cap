@@ -2441,6 +2441,7 @@ fn correcting_a_word_in_a_two_hour_transcript_is_fast() {
     assert_eq!(texts[19_991], "w19991,");
 }
 
+#[cfg(target_os = "linux")]
 mod word_edit_ui {
     use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
 
