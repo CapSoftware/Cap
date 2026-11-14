@@ -177,13 +177,12 @@ impl RunningEvents {
     }
 
     fn claim(&'static self, trigger: Trigger, key: String) -> Option<RunningEvent> {
-        self.lock()
-            .insert((trigger, key.clone()))
-            .then_some(RunningEvent {
-                events: self,
-                trigger,
-                key,
-            })
+        let claimed = self.lock().insert((trigger, key.clone()));
+        claimed.then(|| RunningEvent {
+            events: self,
+            trigger,
+            key,
+        })
     }
 }
 
