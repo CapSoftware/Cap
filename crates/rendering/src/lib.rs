@@ -57,6 +57,7 @@ mod recorded_cursor_assets;
 mod scene;
 mod segment_timing;
 mod shape;
+mod silence_scenes;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
@@ -227,6 +228,7 @@ use mask::interpolate_masks;
 use scene::*;
 pub use shape::PreparedShape;
 use shape::prepare_shapes;
+pub use silence_scenes::{ClipSpeech, regenerate_silence_scenes};
 use takeover::InterpolatedTakeover;
 pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
@@ -6700,6 +6702,7 @@ mod style_image_tests {
             split_layout: None,
             transition_in: 0.0,
             transition_out: 0.0,
+            from_silence: false,
         });
         timeline.image_segments.push(ImageSegment {
             start: 0.7,
@@ -11158,6 +11161,7 @@ mod project_uniforms_tests {
                 split_layout: None,
                 transition_in: 0.5,
                 transition_out: 0.5,
+                from_silence: false,
             }];
             cases.push((name, split, short, frame_number));
         }

@@ -393,6 +393,7 @@ pub enum CameraSlider {
     ShadowSize,
     ShadowOpacity,
     ShadowBlur,
+    SilenceDelay,
 }
 
 impl CameraSlider {
@@ -409,6 +410,7 @@ impl CameraSlider {
             | Self::ShadowSize
             | Self::ShadowOpacity
             | Self::ShadowBlur => false,
+            Self::SilenceDelay => true,
         }
     }
 
@@ -417,6 +419,10 @@ impl CameraSlider {
             // `minValue={20} maxValue={80} step={0.1}` (`:3204-3206`).
             Self::Size => (20., 80., 0.1),
             Self::ZoomSize => (10., 100., 0.1),
+            Self::SilenceDelay => {
+                let (min, max) = ProjectConfiguration::CAMERA_SILENCE_DELAY_RANGE;
+                (min, max, 0.1)
+            }
             _ => (0., 100., 0.1),
         }
     }
@@ -432,6 +438,9 @@ impl CameraSlider {
             Self::ShadowSize => shadow.map_or(UI_SHADOW_FALLBACK.size, |s| s.size),
             Self::ShadowOpacity => shadow.map_or(UI_SHADOW_FALLBACK.opacity, |s| s.opacity),
             Self::ShadowBlur => shadow.map_or(UI_SHADOW_FALLBACK.blur, |s| s.blur),
+            Self::SilenceDelay => project
+                .camera_silence_delay
+                .unwrap_or(ProjectConfiguration::CAMERA_SILENCE_DELAY_DEFAULT),
         }
     }
 }
@@ -1253,6 +1262,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if slider == CameraSlider::SilenceDelay {
+            self.set_camera_silence_delay(value, window, cx);
+            return;
+        }
         self.edit_project_with_rebuild(
             slider.changes_timeline_model(),
             "camera-slider",
@@ -1279,6 +1292,7 @@ impl EditorWindow {
                         }
                         camera.advanced_shadow = Some(shadow);
                     }
+                    CameraSlider::SilenceDelay => {}
                 }
                 true
             },
@@ -1575,6 +1589,11 @@ impl EditorWindow {
                         ),
                 ),
             )
+            .children(
+                self.summary()
+                    .is_some_and(|summary| summary.has_microphone)
+                    .then(|| self.render_camera_silence(cx)),
+            )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.slider_field(
@@ -1674,6 +1693,45 @@ impl EditorWindow {
                     )
                     .into_any_element()
             }))
+            .into_any_element()
+    }
+
+    fn render_camera_silence(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let enabled = self.project.camera_silence_delay.is_some();
+        let enabling = self.enabling_camera_silence();
+        let toggle = ui::Subfield::plain(&theme, tr::editor::tabs::camera::hide_when_silent())
+            .child(
+                ui::Toggle::plain(
+                    &theme,
+                    "camera-hide-when-silent",
+                    enabled || enabling,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_camera_silence(window, cx);
+                })),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(toggle)
+            .when(enabling || self.pending_silence_delay().is_some(), |column| {
+                column.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::camera::finding_silences()),
+                )
+            })
+            .when(enabled, |column| {
+                column.child(self.slider_field(
+                    tr::editor::tabs::camera::silence_delay(),
+                    SliderKey::Camera(CameraSlider::SilenceDelay),
+                    "s",
+                    cx,
+                ))
+            })
             .into_any_element()
     }
 

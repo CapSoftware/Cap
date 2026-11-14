@@ -2079,6 +2079,7 @@ pub fn default_scene_segment(start: f64, end: f64) -> SceneSegment {
         split_layout: None,
         transition_in: 0.3,
         transition_out: 0.3,
+        from_silence: false,
     }
 }
 

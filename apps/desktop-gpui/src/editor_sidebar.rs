@@ -1313,6 +1313,9 @@ impl EditorWindow {
             // Every grade slider is `Math.round(value * 100)` in the UI and
             // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
             SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
+            SliderKey::Camera(CameraSlider::SilenceDelay) => self
+                .pending_silence_delay()
+                .unwrap_or_else(|| CameraSlider::SilenceDelay.read(&project)),
             SliderKey::Camera(slider) => slider.read(&project),
             SliderKey::Audio(slider) => slider.read(&project),
             SliderKey::ClipVolume(index) => self

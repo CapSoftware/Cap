@@ -381,6 +381,7 @@ mod tests {
             split_layout: None,
             transition_in: transition,
             transition_out: transition,
+            from_silence: false,
         }
     }
 
@@ -406,6 +407,7 @@ mod tests {
                     end: 2.0 + duration,
                     mode,
                     transition_out: 2.0,
+                    from_silence: false,
                     ..camera_scene(0.3)
                 }];
                 let before = values(scene_at(2.0 - 1e-6, &segments));
