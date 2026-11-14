@@ -1050,6 +1050,10 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::bind_window(window, cx);
+        if cx.has_global::<crate::app_store::AppStore>() {
+            cx.observe_global_in::<crate::app_store::AppStore>(window, |_, _, cx| cx.notify())
+                .detach();
+        }
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]

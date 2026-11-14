@@ -19,6 +19,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const ICON_THUMBNAIL: u32 = 96;
 const BACKGROUND_THUMBNAIL: u32 = 256;
 const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
+const CAP_ACTIONS_RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncState {
@@ -49,6 +50,7 @@ pub struct AppStore {
     account: Option<String>,
     cap_actions: HashMap<String, Vec<CapAction>>,
     cap_actions_pending: BTreeSet<String>,
+    cap_actions_failed: HashMap<String, Instant>,
     assets: HashMap<String, PathBuf>,
     thumbnails: HashMap<String, Arc<RenderImage>>,
     last_refresh: Option<Instant>,
@@ -724,6 +726,7 @@ pub fn account_changed(cx: &mut App) {
         store.account = None;
         store.cap_actions.clear();
         store.cap_actions_pending.clear();
+        store.cap_actions_failed.clear();
     });
     refresh(cx);
 }
@@ -752,7 +755,14 @@ pub fn request_cap_actions(cap_ids: Vec<String>, cx: &mut App) {
     }
     let wanted: Vec<String> = cap_ids
         .into_iter()
-        .filter(|id| !store.cap_actions.contains_key(id) && !store.cap_actions_pending.contains(id))
+        .filter(|id| {
+            !store.cap_actions.contains_key(id)
+                && !store.cap_actions_pending.contains(id)
+                && store
+                    .cap_actions_failed
+                    .get(id)
+                    .is_none_or(|failed| failed.elapsed() >= CAP_ACTIONS_RETRY)
+        })
         .collect();
     if wanted.is_empty() {
         return;
@@ -771,6 +781,7 @@ pub fn request_cap_actions(cap_ids: Vec<String>, cx: &mut App) {
     cx.update_global::<AppStore, _>(|store, _| {
         store.cap_actions_pending.extend(wanted.iter().cloned());
     });
+    let requested = wanted.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let task = cx.update(|cx| {
             gpui_tokio::Tokio::spawn(cx, async move {
@@ -782,20 +793,32 @@ pub fn request_cap_actions(cap_ids: Vec<String>, cx: &mut App) {
                             Ok(response) if response.status().is_success() => response
                                 .json::<ServerCapActions>()
                                 .await
-                                .map(|body| body.actions)
-                                .unwrap_or_default(),
-                            _ => Vec::new(),
+                                .ok()
+                                .map(|body| body.actions),
+                            _ => None,
                         };
                     loaded.push((cap_id, actions));
                 }
                 loaded
             })
         });
-        let loaded = task.await.unwrap_or_default();
+        let loaded = task.await.unwrap_or_else(|_| {
+            requested
+                .iter()
+                .map(|cap_id| (cap_id.clone(), None))
+                .collect()
+        });
         cx.update(|cx| {
             cx.update_global::<AppStore, _>(|store, _| {
+                for cap_id in &requested {
+                    store.cap_actions_pending.remove(cap_id);
+                }
                 for (cap_id, actions) in loaded {
-                    store.cap_actions_pending.remove(&cap_id);
+                    let Some(actions) = actions else {
+                        store.cap_actions_failed.insert(cap_id, Instant::now());
+                        continue;
+                    };
+                    store.cap_actions_failed.remove(&cap_id);
                     store.cap_actions.insert(
                         cap_id,
                         actions
