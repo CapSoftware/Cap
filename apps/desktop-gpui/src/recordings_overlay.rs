@@ -21,7 +21,7 @@ use std::{
 use cap_project::{RecordingMeta, SharingMeta, StudioRecordingMeta};
 use cap_utils::export_resources::{DiskBudget, ExportResources};
 use gpui::{
-    AnyElement, App, AppContext as _, AsyncApp, Bounds, Context, Entity, FontWeight, Global, Hsla,
+    AnyElement, App, AppContext as _, AsyncApp, Bounds, Context, Entity, FontWeight, Global,
     InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, Pixels, Render,
     SharedString, StatefulInteractiveElement as _, Styled, StyledImage as _, Subscription, Task,
     WeakEntity, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point,
@@ -141,21 +141,6 @@ impl ActionState {
             Self::Failed(_, message) => Some(crate::i18n::messages::localize(message)),
             _ => Some(format!("{}%", (self.progress() * 100.).floor() as u32)),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StudioCompletion {
-    OpenEditor,
-    ShowOverlay,
-    StayOutOfTheWay,
-}
-
-pub fn studio_completion(behaviour: crate::store::PostStudioBehaviour) -> StudioCompletion {
-    match behaviour {
-        crate::store::PostStudioBehaviour::OpenEditor => StudioCompletion::OpenEditor,
-        crate::store::PostStudioBehaviour::ShowOverlay => StudioCompletion::ShowOverlay,
-        crate::store::PostStudioBehaviour::DoNothing => StudioCompletion::StayOutOfTheWay,
     }
 }
 

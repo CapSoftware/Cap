@@ -3,23 +3,6 @@ use std::sync::atomic::Ordering;
 use gpui::{AppContext as _, Bounds, TestAppContext, point, px, size};
 
 use super::*;
-use crate::store::PostStudioBehaviour;
-
-#[test]
-fn every_studio_behaviour_has_one_completion() {
-    assert_eq!(
-        studio_completion(PostStudioBehaviour::OpenEditor),
-        StudioCompletion::OpenEditor
-    );
-    assert_eq!(
-        studio_completion(PostStudioBehaviour::ShowOverlay),
-        StudioCompletion::ShowOverlay
-    );
-    assert_eq!(
-        studio_completion(PostStudioBehaviour::DoNothing),
-        StudioCompletion::StayOutOfTheWay
-    );
-}
 
 #[test]
 fn share_uses_the_saved_organization_only_while_it_is_still_yours() {

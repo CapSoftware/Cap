@@ -540,7 +540,7 @@ async fn real_app_overlay_actions_copy_share_retry_export_and_edit() {
         "every overlay action",
         Duration::from_secs(300),
         || {
-            let log = sandbox.log("actions");
+            let log = without_ansi(&sandbox.log("actions"));
             log.contains("kind=Save ok=true") && log.contains("editor window opened")
         },
     )
