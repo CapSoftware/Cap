@@ -73,6 +73,17 @@ impl Sandbox {
         std::fs::write(path, serde_json::to_vec(&store).unwrap()).unwrap();
     }
 
+    fn set_store(&self, key: &str, value: Value) {
+        let path = self.root.path().join("store");
+        let mut store: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        store[key] = value;
+        std::fs::write(path, serde_json::to_vec(&store).unwrap()).unwrap();
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.path().join(name)
+    }
+
     fn launch(&self, name: &str, env: &[(&str, &str)]) -> App {
         let binary = std::env::var("CAP_GPUI_REAL_APP_BIN")
             .expect("set CAP_GPUI_REAL_APP_BIN to the built cap-gpui binary");
@@ -976,4 +987,273 @@ async fn real_app_pipeline_failure_stops_and_keeps_its_media() {
             );
         }
     }
+}
+
+fn automation_rule(id: &str, trigger: &str, actions: Value) -> Value {
+    json!({ "id": id, "name": id, "enabled": true, "trigger": trigger, "actions": actions })
+}
+
+fn shell(script: String) -> Value {
+    json!({ "type": "runCommand", "program": "/bin/sh", "args": ["-c", script] })
+}
+
+fn export_action(destination: Value) -> Value {
+    json!({ "type": "export", "profile": {
+        "format": "mp4", "fps": 30, "resolutionBase": { "x": 1280, "y": 720 },
+        "compression": "potato", "presetName": null
+    }, "destination": destination })
+}
+
+fn exported_mp4(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "mp4"))
+}
+
+fn video_seconds(path: &Path) -> f64 {
+    let input = ffmpeg::format::input(path).unwrap();
+    assert!(
+        input.streams().best(ffmpeg::media::Type::Video).is_some(),
+        "{} has no video",
+        path.display()
+    );
+    input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
+}
+
+/// The flow a user reported broken after the update: a Studio recording is
+/// compressed into another folder and the original removed. A second rule on
+/// the same trigger runs too, and a disabled one does not.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_compresses_then_deletes_a_studio_recording() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let compressed = sandbox.path("compressed");
+    let second = sandbox.path("second-rule-ran");
+    let disabled = sandbox.path("disabled-rule-ran");
+    let mut off = automation_rule(
+        "off",
+        "studioRecordingFinished",
+        json!([shell(format!("touch '{}'", disabled.display()))]),
+    );
+    off["enabled"] = json!(false);
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("compress", "studioRecordingFinished", json!([
+                { "type": "skipEditor" },
+                export_action(json!({ "customPath": { "dir": compressed } })),
+                { "type": "deleteLocalFiles" }
+            ])),
+            off,
+            automation_rule("second", "studioRecordingFinished", json!([
+                shell(format!("touch '{}'", second.display()))
+            ])),
+        ]}),
+    );
+    let app = sandbox.launch("compress", &[("CAP_GPUI_AUTO_RECORD", "studio:5")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the compressed copy and the second rule",
+        Duration::from_secs(240),
+        || second.exists() && exported_mp4(&compressed).is_some() && sandbox.projects().is_empty(),
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("compress"));
+    let export = exported_mp4(&compressed).unwrap();
+    let seconds = video_seconds(&export);
+    assert!(seconds > 3.0, "the compressed copy is only {seconds}s");
+    assert!(!disabled.exists(), "a disabled rule ran:\n{log}");
+    assert!(
+        log.contains("automation: deleting local recording"),
+        "the recording was not removed by the rule:\n{log}"
+    );
+}
+
+/// Delete local files keeps the recording when its export landed inside the
+/// recording, and when the export before it failed. A later rule still runs.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_keeps_the_recording_when_the_copy_is_not_safe() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let last = sandbox.path("last-rule-ran");
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("inside", "studioRecordingFinished", json!([
+                { "type": "skipEditor" },
+                export_action(json!("projectFolder")),
+                { "type": "deleteLocalFiles" }
+            ])),
+            automation_rule("failed", "studioRecordingFinished", json!([
+                export_action(json!({ "customPath": { "dir": "/dev/null/cannot-exist" } })),
+                { "type": "deleteLocalFiles" }
+            ])),
+            automation_rule("last", "studioRecordingFinished", json!([
+                shell(format!("touch '{}'", last.display()))
+            ])),
+        ]}),
+    );
+    let app = sandbox.launch("unsafe", &[("CAP_GPUI_AUTO_RECORD", "studio:5")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the last rule",
+        Duration::from_secs(240),
+        || last.exists(),
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("unsafe"));
+    let projects = sandbox.projects();
+    assert_eq!(projects.len(), 1, "{projects:?}\n{log}");
+    assert!(media_files(&projects[0]) > 0, "media lost:\n{log}");
+    assert!(
+        log.contains("inside the folder that would be deleted"),
+        "the in-folder export was not refused:\n{log}"
+    );
+    assert!(
+        log.contains("export did not succeed"),
+        "the failed export was not refused:\n{log}"
+    );
+    assert!(
+        !log.contains("automation: deleting local recording"),
+        "{log}"
+    );
+}
+
+/// Quitting while a rule runs never deletes, and the next launch does not
+/// pick the rule up again.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_quit_mid_rule_keeps_the_recording() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let started = sandbox.path("rule-started");
+    let compressed = sandbox.path("compressed");
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("slow", "studioRecordingFinished", json!([
+                { "type": "skipEditor" },
+                shell(format!("touch '{}'; sleep 60", started.display())),
+                export_action(json!({ "customPath": { "dir": compressed } })),
+                { "type": "deleteLocalFiles" }
+            ])),
+        ]}),
+    );
+    let app = sandbox.launch("quit", &[("CAP_GPUI_AUTO_RECORD", "studio:5")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the slow rule to start",
+        Duration::from_secs(180),
+        || started.exists(),
+    )
+    .await;
+    kill(app);
+    let relaunch = sandbox.launch("relaunch", &[]);
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    kill(relaunch);
+    let projects = sandbox.projects();
+    assert_eq!(projects.len(), 1, "{projects:?}");
+    assert!(media_files(&projects[0]) > 0);
+    assert!(exported_mp4(&compressed).is_none());
+    assert!(!without_ansi(&sandbox.log("relaunch")).contains("Running automation rule"));
+}
+
+/// Instant rules get the share link, and with "delete after upload" on the
+/// folder stays until the upload-completed rules that read it are done.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_upload_rules_finish_before_cleanup() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("deleteInstantRecordingsAfterUpload", json!(true));
+    let link = sandbox.path("instant-link");
+    let copied = sandbox.path("copied");
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("link", "instantRecordingFinished", json!([
+                shell(format!("printf %s \"$CAP_SHARE_LINK\" > '{}'", link.display()))
+            ])),
+            automation_rule("copy", "uploadCompleted", json!([
+                shell(format!("sleep 3; cp -R \"$CAP_PROJECT_PATH\" '{}'", copied.display()))
+            ])),
+        ]}),
+    );
+    let app = sandbox.launch("instant", &[("CAP_GPUI_AUTO_RECORD", "instant:5")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the copy rule and the cleanup",
+        Duration::from_secs(240),
+        || copied.join("recording-meta.json").exists() && sandbox.projects().is_empty(),
+    )
+    .await;
+    kill(app);
+    let video = mock.created();
+    assert_eq!(video.len(), 1, "{video:?}");
+    let shared = std::fs::read_to_string(&link).unwrap();
+    assert!(shared.ends_with(&format!("/s/{}", video[0])), "{shared}");
+    assert!(
+        media_files(&copied) > 0,
+        "the folder was removed under the rule"
+    );
+}
+
+/// Screenshot rules run for every capture, including one that reuses the
+/// path of a capture a rule already deleted, and a copy saved elsewhere is
+/// what lets the capture go.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_runs_for_every_screenshot() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let saved = sandbox.path("saved");
+    let runs = sandbox.path("runs");
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("save", "screenshotTaken", json!([
+                { "type": "skipEditor" },
+                { "type": "saveToLocation", "dir": saved, "filenameTemplate": "{datetime}.png" },
+                { "type": "deleteLocalFiles" }
+            ])),
+            automation_rule("count", "screenshotTaken", json!([
+                shell(format!("echo \"$CAP_IMAGE_PATH\" >> '{}'", runs.display()))
+            ])),
+        ]}),
+    );
+    let lines = || {
+        std::fs::read_to_string(&runs)
+            .unwrap_or_default()
+            .lines()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+    };
+    for capture in 1..=2 {
+        let name = format!("shot-{capture}");
+        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", "screenshot")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the screenshot rules",
+            Duration::from_secs(120),
+            || lines().len() == capture,
+        )
+        .await;
+        kill(app);
+    }
+    for image in lines() {
+        assert!(!image.exists(), "{} was kept", image.display());
+    }
+    let copies = std::fs::read_dir(&saved).unwrap().count();
+    assert!(copies >= 1, "no saved copies");
 }
