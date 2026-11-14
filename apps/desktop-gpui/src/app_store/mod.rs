@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{App, AsyncApp, Global, RenderImage};
+use gpui::{App, AsyncApp, BorrowAppContext, Global, RenderImage};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -366,9 +366,7 @@ pub fn refresh(cx: &mut App) {
     });
     let local = read_local_installs();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let Ok(task) = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, sync(local))) else {
-            return;
-        };
+        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, sync(local)));
         let result = task.await.unwrap_or(SyncResult {
             catalog: None,
             installations: None,
@@ -397,7 +395,7 @@ pub fn refresh(cx: &mut App) {
                 true
             })
         });
-        if applied.unwrap_or(false) {
+        if applied {
             load_assets(cx).await;
         }
     })
@@ -501,7 +499,7 @@ async fn adopt_local_installs(local: &BTreeSet<String>) {
 /// Downloads every asset installed apps need, plus every catalog icon, and
 /// decodes thumbnails off the main thread.
 async fn load_assets(cx: &mut AsyncApp) {
-    let Ok(Some((catalog, installed, known))) = cx.update(|cx| {
+    let Some((catalog, installed, known)) = cx.update(|cx| {
         cx.try_global::<AppStore>().and_then(|store| {
             store.catalog.clone().map(|catalog| {
                 (
@@ -528,7 +526,7 @@ async fn load_assets(cx: &mut AsyncApp) {
     if wanted.is_empty() {
         return;
     }
-    let Ok(task) = cx.update(|cx| {
+    let task = cx.update(|cx| {
         gpui_tokio::Tokio::spawn(cx, async move {
             let client = auth::api_client().ok()?;
             let mut loaded = Vec::new();
@@ -561,9 +559,7 @@ async fn load_assets(cx: &mut AsyncApp) {
             }
             Some(loaded)
         })
-    }) else {
-        return;
-    };
+    });
     let Ok(Some(loaded)) = task.await else {
         return;
     };
@@ -576,8 +572,7 @@ async fn load_assets(cx: &mut AsyncApp) {
                 }
             }
         });
-    })
-    .ok();
+    });
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -612,7 +607,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
     let id = app.id.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let body = json!({ "appId": id, "scope": "user" });
-        let Ok(task) = cx.update(|cx| {
+        let task = cx.update(|cx| {
             gpui_tokio::Tokio::spawn(cx, async move {
                 auth::authed_request(
                     reqwest::Method::POST,
@@ -622,9 +617,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
                 .await
                 .map(|response| response.status())
             })
-        }) else {
-            return;
-        };
+        });
         let status = task.await.ok().and_then(Result::ok);
         if !status.is_some_and(|status| status.is_success() || status.as_u16() == 409) {
             tracing::warn!(?status, app = %id, "App Store install failed");
@@ -634,8 +627,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
                 store.pending.remove(&id);
             });
             refresh(cx);
-        })
-        .ok();
+        });
     })
     .detach();
     Some(InstallOutcome::Installed)
@@ -669,15 +661,13 @@ pub fn uninstall(app_id: String, cx: &mut App) {
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
         let path = format!("/api/app-store/installations/{}", installation.id);
-        let Ok(task) = cx.update(|cx| {
+        let task = cx.update(|cx| {
             gpui_tokio::Tokio::spawn(cx, async move {
                 auth::authed_request(reqwest::Method::DELETE, &path, None)
                     .await
                     .map(|response| response.status())
             })
-        }) else {
-            return;
-        };
+        });
         let status = task.await.ok().and_then(Result::ok);
         if !status.is_some_and(|status| status.is_success()) {
             tracing::warn!(?status, app = %app_id, "App Store uninstall failed");
@@ -687,8 +677,7 @@ pub fn uninstall(app_id: String, cx: &mut App) {
                 store.pending.remove(&app_id);
             });
             refresh(cx);
-        })
-        .ok();
+        });
     })
     .detach();
 }
