@@ -25,6 +25,8 @@ use tokio_util::{
 };
 use tracing::{debug, error, info, warn};
 
+mod system_audio;
+
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 
@@ -287,12 +289,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         debug!(buffer_size = buffer_size, "Screen capture buffer size");
         let (video_tx, video_rx) = flume::bounded(buffer_size);
         let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        let (mut audio_tx, audio_rx) = if self.system_audio {
-            let (tx, rx) = mpsc::channel(128);
-            (Some(tx), Some(rx))
-        } else {
-            (None, None)
-        };
         let system_audio_drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let system_audio_frame_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
@@ -306,6 +302,15 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             })
             .transpose()?;
         let captures_window = window_filter.is_some();
+        let output_device_audio =
+            self.system_audio && !captures_window && cidre::api::macos_available("14.2");
+        let screen_capture_audio = self.system_audio && !output_device_audio;
+        let (mut audio_tx, audio_rx) = if screen_capture_audio {
+            let (tx, rx) = mpsc::channel(128);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
 
         let content_filter = match window_filter {
             Some(filter) => filter,
@@ -341,6 +346,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             "Screen capture queue depth"
         );
 
+        // Disabling SCK audio delays the first video frame and breaks failed-resume cleanup.
+        // Output-device capture discards these audio callbacks instead of encoding them.
         let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
             .with_width(size.width() as usize)
             .with_height(size.height() as usize)
@@ -595,16 +602,22 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 rebuild_params: rebuild_params.clone(),
                 stall_health_rx: Some(stall_health_rx),
             },
-            audio_rx.map(|rx| {
-                SystemAudioSourceConfig(
-                    ChannelAudioSourceConfig::new(self.audio_info(), rx),
-                    capturer,
-                    error_rx,
-                    system_audio_frame_counter,
-                    system_audio_drop_counter,
-                    rebuild_params,
-                )
-            }),
+            if output_device_audio {
+                Some(SystemAudioSourceConfig::OutputDevice(
+                    OutputAudioSourceConfig { capturer },
+                ))
+            } else {
+                audio_rx.map(|rx| {
+                    SystemAudioSourceConfig::ScreenCaptureKit(ScreenCaptureKitAudioSourceConfig(
+                        ChannelAudioSourceConfig::new(self.audio_info(), rx),
+                        capturer,
+                        error_rx,
+                        system_audio_frame_counter,
+                        system_audio_drop_counter,
+                        rebuild_params,
+                    ))
+                })
+            },
         ))
     }
 }
@@ -623,6 +636,7 @@ pub struct CaptureError(pub arc::R<ns::Error>);
 
 struct Capturer {
     started: Arc<AtomicBool>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
     capturer: Arc<scap_screencapturekit::Capturer>,
 }
 
@@ -630,6 +644,7 @@ impl Clone for Capturer {
     fn clone(&self) -> Self {
         Self {
             started: self.started.clone(),
+            lifecycle: self.lifecycle.clone(),
             capturer: self.capturer.clone(),
             // error_rx: self.error_rx.resubscribe(),
         }
@@ -640,6 +655,7 @@ impl Capturer {
     fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
         Self {
             started: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::default(),
             capturer,
         }
     }
@@ -649,26 +665,23 @@ impl Capturer {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
-        if self
-            .started
-            .compare_exchange(
-                false,
-                true,
-                atomic::Ordering::Relaxed,
-                atomic::Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            self.capturer
-                .start()
-                .await
-                .map_err(|err| anyhow!(format!("{err}")))?;
-        }
-
-        Ok(())
+        let this = self.clone();
+        output_pipeline::spawn_capture_task(async move {
+            let _guard = this.lifecycle.lock().await;
+            if !this.started.load(atomic::Ordering::Relaxed) {
+                this.capturer
+                    .start()
+                    .await
+                    .map_err(|err| anyhow!(format!("{err}")))?;
+                this.started.store(true, atomic::Ordering::Relaxed);
+            }
+            Ok(())
+        })
+        .await?
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
+        let _guard = self.lifecycle.lock().await;
         if self
             .started
             .compare_exchange(
@@ -1311,19 +1324,18 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     Ok(capturer)
 }
 
-pub struct SystemAudioSourceConfig(
-    ChannelAudioSourceConfig,
-    Capturer,
-    broadcast::Receiver<arc::R<ns::Error>>,
-    Arc<AtomicU64>,
-    Arc<AtomicU64>,
-    Arc<CapturerRebuildParams>,
-);
+pub enum SystemAudioSourceConfig {
+    ScreenCaptureKit(ScreenCaptureKitAudioSourceConfig),
+    OutputDevice(OutputAudioSourceConfig),
+}
 
-pub struct SystemAudioSource {
-    inner: ChannelAudioSource,
+pub struct OutputAudioSourceConfig {
     capturer: Capturer,
-    cancel_token: CancellationToken,
+}
+
+pub enum SystemAudioSource {
+    ScreenCaptureKit(ScreenCaptureKitAudioSource),
+    OutputDevice(system_audio::OutputAudioSource),
 }
 
 impl output_pipeline::AudioSource for SystemAudioSource {
@@ -1333,11 +1345,70 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         config: Self::Config,
         tx: mpsc::Sender<AudioFrame>,
         ctx: &mut SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + Send + 'static {
+        match config {
+            SystemAudioSourceConfig::ScreenCaptureKit(config) => {
+                ScreenCaptureKitAudioSource::setup(config, tx, ctx)
+                    .map(|result| result.map(Self::ScreenCaptureKit))
+                    .left_future()
+            }
+            SystemAudioSourceConfig::OutputDevice(config) => {
+                system_audio::OutputAudioSource::setup(config, tx, ctx)
+                    .map(|result| result.map(Self::OutputDevice))
+                    .right_future()
+            }
+        }
+    }
+
+    fn audio_info(&self) -> AudioInfo {
+        match self {
+            Self::ScreenCaptureKit(source) => source.audio_info(),
+            Self::OutputDevice(source) => source.audio_info(),
+        }
+    }
+
+    async fn start(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::ScreenCaptureKit(source) => source.start().await,
+            Self::OutputDevice(source) => source.start().await,
+        }
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::ScreenCaptureKit(source) => source.stop().await,
+            Self::OutputDevice(source) => source.stop().await,
+        }
+    }
+}
+
+pub struct ScreenCaptureKitAudioSourceConfig(
+    ChannelAudioSourceConfig,
+    Capturer,
+    broadcast::Receiver<arc::R<ns::Error>>,
+    Arc<AtomicU64>,
+    Arc<AtomicU64>,
+    Arc<CapturerRebuildParams>,
+);
+
+pub struct ScreenCaptureKitAudioSource {
+    inner: ChannelAudioSource,
+    capturer: Capturer,
+    cancel_token: CancellationToken,
+}
+
+impl output_pipeline::AudioSource for ScreenCaptureKitAudioSource {
+    type Config = ScreenCaptureKitAudioSourceConfig;
+
+    fn setup(
+        config: Self::Config,
+        tx: mpsc::Sender<AudioFrame>,
+        ctx: &mut SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
     where
         Self: Sized,
     {
-        let SystemAudioSourceConfig(
+        let ScreenCaptureKitAudioSourceConfig(
             channel_config,
             capturer,
             mut error_rx,
