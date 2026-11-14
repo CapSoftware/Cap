@@ -1657,8 +1657,6 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
-    /// The header's organization dropdown, its brand settings dialog and the
-    /// colour inputs' brand colour menus.
     pub(crate) organization: crate::editor_organization::OrganizationUi,
     style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
@@ -3906,7 +3904,9 @@ impl EditorWindow {
         if !is_playback_shortcut(
             &event.keystroke,
             ui::text_input_has_focus(window, cx),
-            self.sidebar.menu.is_some() || self.toolbar_menu.is_some(),
+            self.sidebar.menu.is_some()
+                || self.toolbar_menu.is_some()
+                || self.organization.dialog_open(),
         ) {
             return;
         }
@@ -4127,6 +4127,12 @@ impl EditorWindow {
             return;
         }
         if ui::text_input_has_focus(window, cx) {
+            return;
+        }
+        // The brand dialog is modal but leaves focus on the editor root, so
+        // Backspace or Cmd-Z would otherwise edit the project behind it.
+        if self.organization.dialog_open() {
+            cx.stop_propagation();
             return;
         }
         if self.marker_key(&event.keystroke, window, cx) {

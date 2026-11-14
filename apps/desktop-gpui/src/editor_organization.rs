@@ -104,6 +104,10 @@ impl OrganizationUi {
         self.snapshot.borrow_mut().take();
     }
 
+    pub(crate) fn dialog_open(&self) -> bool {
+        self.dialog.is_some()
+    }
+
     pub(crate) fn has_open_overlay(&self) -> bool {
         self.menu.is_some() || self.brand_menu.is_some() || self.dialog.is_some()
     }
@@ -196,8 +200,6 @@ impl EditorWindow {
         )
     }
 
-    /// The selected organization's brand colours, which every colour input
-    /// offers as swatches.
     pub(crate) fn brand_swatches(&self) -> Vec<(BrandColorKey, [u8; 3])> {
         self.organization
             .snapshot()
@@ -727,7 +729,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// Escape: the innermost organization overlay closes first.
     pub(crate) fn dismiss_organization_overlay(&mut self, cx: &mut Context<Self>) -> bool {
         if self.organization.brand_menu.take().is_some() || self.organization.menu.take().is_some()
         {
