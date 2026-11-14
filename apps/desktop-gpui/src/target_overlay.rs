@@ -361,12 +361,15 @@ pub(crate) mod probe_frames {
     }
 }
 
+/// Shift turns snapping off as it did in 0.6.0, alongside this app's ⌘
+/// (Ctrl elsewhere).
 fn snap_off(modifiers: &gpui::Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.platform
-    } else {
-        modifiers.control
-    }
+    modifiers.shift
+        || if cfg!(target_os = "macos") {
+            modifiers.platform
+        } else {
+            modifiers.control
+        }
 }
 
 fn render_thirds(crop: AreaRect) -> impl IntoElement {
@@ -498,6 +501,10 @@ impl TargetSelect {
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
+        #[cfg(target_os = "macos")]
+        cx.background_executor()
+            .spawn(async { import_legacy_area_selection() })
+            .detach();
         select
     }
 
@@ -806,6 +813,199 @@ fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> O
     (locked_display == display.to_string())
         .then(|| bounds.clamped(display_size))
         .filter(|bounds| bounds.is_valid_for(min))
+}
+
+/// `snapToRatio`, on unless turned off, as in 0.6.0.
+fn stored_area_snap_to_ratio() -> bool {
+    crate::store::store_section(AREA_SELECTION_STORE)
+        .get("snapToRatio")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn store_area_snap_to_ratio(enabled: bool) {
+    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+        section.insert("snapToRatio".into(), enabled.into());
+        true
+    });
+}
+
+/// The `localStorage` key 0.6.0 kept its area preferences under
+/// (`AREA_SELECTION_STORAGE_KEY` in `utils/area-selection.ts`). Same shape
+/// as [`AREA_SELECTION_STORE`]: `locked`, `screenId`, `bounds` (logical
+/// points on that display), `aspectRatio` and `snapToRatio`.
+const LEGACY_AREA_SELECTION_KEY: &str = "target-select-area-preferences-v1";
+
+const AREA_SELECTION_KEYS: [&str; 5] =
+    ["locked", "screenId", "bounds", "aspectRatio", "snapToRatio"];
+
+/// Fill in the preferences this app has never written from what 0.6.0 left
+/// behind. Keys this app already holds win. `snapToRatio` is always written,
+/// so the import runs once.
+fn merge_legacy_area_selection(
+    section: &mut serde_json::Map<String, serde_json::Value>,
+    legacy: Option<&serde_json::Value>,
+) -> bool {
+    if section.contains_key("snapToRatio") {
+        return false;
+    }
+    if let Some(legacy) = legacy.and_then(serde_json::Value::as_object) {
+        for key in AREA_SELECTION_KEYS {
+            if section.contains_key(key) {
+                continue;
+            }
+            match (key, legacy.get(key)) {
+                (_, None | Some(serde_json::Value::Null)) => {}
+                ("snapToRatio" | "locked", Some(value)) if !value.is_boolean() => {}
+                (_, Some(value)) => {
+                    section.insert(key.into(), value.clone());
+                }
+            }
+        }
+    }
+    section.entry("snapToRatio").or_insert(true.into());
+    true
+}
+
+/// A WebKit `localStorage` value: UTF-16LE text, read out of SQLite as hex.
+fn decode_webkit_storage_hex(hex: &str) -> Option<String> {
+    let hex = hex.trim();
+    if hex.is_empty() || hex.len() % 4 != 0 {
+        return None;
+    }
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).ok()
+}
+
+/// 0.6.0's area preferences, from the Tauri webview's `localStorage`
+/// databases (`~/Library/WebKit/so.cap.desktop/WebsiteData`), newest first.
+#[cfg(target_os = "macos")]
+fn legacy_area_selection() -> Option<serde_json::Value> {
+    let home = std::env::var_os("HOME")?;
+    legacy_area_selection_in(
+        &std::path::Path::new(&home).join("Library/WebKit/so.cap.desktop/WebsiteData"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_area_selection_in(root: &std::path::Path) -> Option<serde_json::Value> {
+    let mut databases = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() && depth < 4 {
+                pending.push((path, depth + 1));
+            } else if kind.is_file()
+                && path.file_name().is_some_and(|name| {
+                    name == "localstorage.sqlite3"
+                        || name.to_string_lossy().ends_with(".localstorage")
+                })
+            {
+                let modified = entry.metadata().and_then(|meta| meta.modified()).ok();
+                databases.push((modified, path));
+            }
+        }
+    }
+    databases.sort_by(|a, b| b.0.cmp(&a.0));
+    databases.into_iter().find_map(|(_, path)| {
+        let output = std::process::Command::new("/usr/bin/sqlite3")
+            .arg("-readonly")
+            .arg("-cmd")
+            .arg(".timeout 500")
+            .arg(&path)
+            .arg(format!(
+                "SELECT hex(value) FROM ItemTable WHERE key = '{LEGACY_AREA_SELECTION_KEY}'"
+            ))
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        let text = decode_webkit_storage_hex(&String::from_utf8_lossy(&output.stdout))?;
+        serde_json::from_str(&text).ok()
+    })
+}
+
+/// Brings a 0.6.0 user's locked area, ratio and snap setting across once.
+/// 0.6.1 to 0.6.3 never read them, so a locked area looked forgotten.
+#[cfg(target_os = "macos")]
+fn import_legacy_area_selection() {
+    if crate::store::store_section(AREA_SELECTION_STORE).contains_key("snapToRatio") {
+        return;
+    }
+    let legacy = legacy_area_selection();
+    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+        merge_legacy_area_selection(section, legacy.as_ref())
+    });
+}
+
+/// Within this many points a free draw is too small to snap, as in 0.6.0's
+/// `boundsTooSmall`.
+const RATIO_SNAP_MIN: f32 = 30.;
+
+/// 0.6.0's snap to ratios: a free draw or corner resize within 1% of a
+/// common ratio lands on it exactly, pivoting on the fixed corner `anchor`.
+/// The height leads, as it did there, unless an edge or window snap is
+/// holding the vertical edge (`held_x`), and then the width leads instead so
+/// that snap survives. Holding both, or a result that would leave the
+/// display, does not snap.
+fn snap_area_to_ratio(
+    rect: AreaRect,
+    anchor: (f32, f32),
+    display_size: (f32, f32),
+    held_x: bool,
+    held_y: bool,
+) -> Option<(AreaRect, (u32, u32))> {
+    if rect.width <= RATIO_SNAP_MIN || rect.height <= RATIO_SNAP_MIN || (held_x && held_y) {
+        return None;
+    }
+    let ratio = crate::editor_crop::find_closest_ratio(
+        f64::from(rect.width),
+        f64::from(rect.height),
+        crate::editor_crop::RATIO_SNAP_THRESHOLD,
+    )?;
+    let value = ratio_value(ratio);
+    let (width, height) = if held_x {
+        (rect.width.round(), (rect.width / value).round())
+    } else {
+        ((rect.height * value).round(), rect.height.round())
+    };
+    let left_of_anchor = rect.x < anchor.0;
+    let above_anchor = rect.y < anchor.1;
+    let snapped = AreaRect {
+        x: if left_of_anchor {
+            anchor.0 - width
+        } else {
+            anchor.0
+        },
+        y: if above_anchor {
+            anchor.1 - height
+        } else {
+            anchor.1
+        },
+        width,
+        height,
+    };
+    const EPSILON: f32 = 0.01;
+    (snapped.x >= -EPSILON
+        && snapped.y >= -EPSILON
+        && snapped.right() <= display_size.0 + EPSILON
+        && snapped.bottom() <= display_size.1 + EPSILON)
+        .then_some((snapped, ratio))
 }
 
 const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
@@ -1191,6 +1391,10 @@ pub struct OverlayWindow {
     snap_guides: Vec<SnapGuide>,
     /// The aspect ratio a drawn or resized area keeps, `None` for free.
     area_ratio: Option<(u32, u32)>,
+    /// `snapToRatio`: free draws and corner resizes snap to common ratios.
+    area_snap_to_ratio: bool,
+    /// The ratio a free draw or corner resize snapped to, for the badge.
+    area_snapped: Option<(u32, u32)>,
     area_locked: bool,
     area_snap: Vec<NormRect>,
     area_windows_requested: bool,
@@ -1384,6 +1588,8 @@ impl OverlayWindow {
             drag: None,
             snap_guides: Vec::new(),
             area_ratio: stored_area_ratio(),
+            area_snap_to_ratio: stored_area_snap_to_ratio(),
+            area_snapped: None,
             area_locked: locked_area.is_some(),
             area_snap: area_snap_rects(controls_work_area, &[], logical),
             area_windows_requested: false,
@@ -1429,6 +1635,7 @@ impl OverlayWindow {
             return;
         }
         self.crop = Some(crop.clamped(self.display_size));
+        self.area_snapped = None;
         self.sync_area_camera(cx);
         cx.notify();
     }
@@ -3177,6 +3384,11 @@ impl OverlayWindow {
             }
             if interactive && self.area_locked {
                 root = root.child(self.render_locked_badge(shown, cx));
+            } else if let Some(ratio) = self
+                .area_snapped
+                .filter(|_| interactive && self.area_ratio.is_none())
+            {
+                root = root.child(self.render_snapped_ratio(shown, ratio));
             }
         }
 
@@ -3679,6 +3891,39 @@ impl OverlayWindow {
             )
     }
 
+    /// The ratio a free area snapped to, in the crop dialog's badge.
+    fn render_snapped_ratio(&self, crop: AreaRect, ratio: (u32, u32)) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .absolute()
+            .left(px(crop.x))
+            .top(px(crop.y))
+            .w(px(crop.width))
+            .h(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .h(px(18.))
+                    .w(px(44.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_1()
+                    .border_color(gpui::hsla(0., 0., 1., 0.7))
+                    .bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 0., 0.5)
+                    } else {
+                        gpui::hsla(0., 0., 1., 0.5)
+                    })
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_12))
+                    .child(format!("{}:{}", ratio.0, ratio.1)),
+            )
+    }
+
     fn render_area_size(&self, crop: AreaRect) -> impl IntoElement {
         const HEIGHT: f32 = 24.;
         const GAP: f32 = 8.;
@@ -3754,6 +3999,7 @@ impl OverlayWindow {
             AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => Some(start),
         };
         self.snap_guides.clear();
+        self.area_snapped = None;
         self.sync_area_camera(cx);
         cx.notify();
         true
@@ -3909,6 +4155,7 @@ impl OverlayWindow {
     }
 
     fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.area_snap_to_ratio = stored_area_snap_to_ratio();
         let items = self.aspect_menu_items();
         self.mode_menu = None;
         self.countdown_menu = None;
@@ -3918,8 +4165,9 @@ impl OverlayWindow {
         cx.notify();
     }
 
+    /// The ratios the chips leave out, then 0.6.0's "Snap to ratios" toggle.
     fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
-        more_area_ratios()
+        let mut items = more_area_ratios()
             .into_iter()
             .map(|ratio| {
                 crate::ui::MenuItem::new(
@@ -3927,7 +4175,12 @@ impl OverlayWindow {
                     self.area_ratio == Some(ratio),
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        items.push(crate::ui::MenuItem::new(
+            tr::editor::crop::snap_to_ratios(),
+            self.area_snap_to_ratio,
+        ));
+        items
     }
 
     fn render_aspect_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -3952,11 +4205,21 @@ impl OverlayWindow {
 
     fn choose_aspect(&mut self, index: usize, cx: &mut Context<Self>) {
         self.aspect_menu = None;
-        if let Some(ratio) = more_area_ratios().get(index) {
+        let ratios = more_area_ratios();
+        if let Some(ratio) = ratios.get(index) {
             self.set_area_ratio(Some(*ratio), cx);
+        } else if index == ratios.len() {
+            self.set_area_snap_to_ratio(!self.area_snap_to_ratio, cx);
         } else {
             cx.notify();
         }
+    }
+
+    fn set_area_snap_to_ratio(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.area_snap_to_ratio = enabled;
+        self.area_snapped = None;
+        store_area_snap_to_ratio(enabled);
+        cx.notify();
     }
 
     fn displayed_crop(&mut self, window: &Window) -> Option<AreaRect> {
@@ -3985,6 +4248,7 @@ impl OverlayWindow {
         };
         self.reshape = Some((from, Instant::now()));
         self.crop = Some(to.clamped(self.display_size));
+        self.area_snapped = None;
         self.persist_locked_area();
         self.sync_area_camera(cx);
         cx.notify();
@@ -4001,6 +4265,7 @@ impl OverlayWindow {
         }
         self.reshape = None;
         self.crop = None;
+        self.area_snapped = None;
         self.sync_area_camera(cx);
         cx.notify();
     }
@@ -4009,6 +4274,7 @@ impl OverlayWindow {
     /// around its centre, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
         self.area_ratio = ratio;
+        self.area_snapped = None;
         store_area_ratio(ratio);
         if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
             self.reshape_area(
@@ -4500,6 +4766,8 @@ impl OverlayWindow {
         }
         let point = (f32::from(position.x), f32::from(position.y));
         self.snap_guides.clear();
+        // Another display's overlay may have flipped it since this one opened.
+        self.area_snap_to_ratio = stored_area_snap_to_ratio();
         // Mid-reshape, `crop` is where the selection is going, not where it
         // is drawn; a grab has to land on what the user sees.
         if let (Some(crop), Some((from, started))) = (self.crop, self.reshape.take()) {
@@ -4534,6 +4802,7 @@ impl OverlayWindow {
                     width: 0.,
                     height: 0.,
                 });
+                self.area_snapped = None;
                 Some(AreaDrag::Draw {
                     anchor: point,
                     previous,
@@ -4542,6 +4811,32 @@ impl OverlayWindow {
         };
         self.sync_area_camera(cx);
         cx.notify();
+    }
+
+    fn snap_free_area_to_ratio(
+        &self,
+        rect: AreaRect,
+        anchor: (f32, f32),
+        guides: Vec<SnapGuide>,
+        free: bool,
+        snapped: &mut Option<(u32, u32)>,
+    ) -> (AreaRect, Vec<SnapGuide>) {
+        if free || !self.area_snap_to_ratio {
+            return (rect, guides);
+        }
+        let held_x = guides
+            .iter()
+            .any(|guide| matches!(guide.axis, GuideAxis::V));
+        let held_y = guides
+            .iter()
+            .any(|guide| matches!(guide.axis, GuideAxis::H));
+        match snap_area_to_ratio(rect, anchor, self.display_size, held_x, held_y) {
+            Some((rect, ratio)) => {
+                *snapped = Some(ratio);
+                (rect, guides)
+            }
+            None => (rect, guides),
+        }
     }
 
     fn area_mouse_move(&mut self, position: Point<Pixels>, free: bool, cx: &mut Context<Self>) {
@@ -4553,6 +4848,8 @@ impl OverlayWindow {
         let y = f32::from(position.y).clamp(0., self.display_size.1);
 
         let ratio = self.area_ratio.map(ratio_value);
+        let moving = matches!(drag, AreaDrag::Move { .. });
+        let mut snapped = None;
         let (next, guides) = match (drag, ratio) {
             (AreaDrag::Draw { anchor, .. }, Some(ratio)) => (
                 area_from_anchor_with_ratio(*anchor, (x, y), ratio, self.display_size),
@@ -4584,15 +4881,13 @@ impl OverlayWindow {
                 } else {
                     snap_area_point((x, y), self.display_size, &self.area_snap)
                 };
-                (
-                    AreaRect {
-                        x: anchor.0.min(x),
-                        y: anchor.1.min(y),
-                        width: (x - anchor.0).abs(),
-                        height: (y - anchor.1).abs(),
-                    },
-                    guides,
-                )
+                let rect = AreaRect {
+                    x: anchor.0.min(x),
+                    y: anchor.1.min(y),
+                    width: (x - anchor.0).abs(),
+                    height: (y - anchor.1).abs(),
+                };
+                self.snap_free_area_to_ratio(rect, *anchor, guides, free, &mut snapped)
             }
             (AreaDrag::Move { grab, start }, _) => {
                 let moved = AreaRect {
@@ -4634,20 +4929,37 @@ impl OverlayWindow {
                 if handle.south() {
                     bottom = y;
                 }
-                (
-                    AreaRect {
-                        x: left.min(right),
-                        y: top.min(bottom),
-                        width: (right - left).abs(),
-                        height: (bottom - top).abs(),
-                    },
-                    guides,
-                )
+                let rect = AreaRect {
+                    x: left.min(right),
+                    y: top.min(bottom),
+                    width: (right - left).abs(),
+                    height: (bottom - top).abs(),
+                };
+                if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
+                    );
+                    self.snap_free_area_to_ratio(rect, anchor, guides, free, &mut snapped)
+                } else {
+                    (rect, guides)
+                }
             }
         };
 
         self.crop = Some(next);
         self.snap_guides = guides;
+        if !moving {
+            self.area_snapped = snapped;
+        }
         // Mouse events outrun the display: the camera follows on the next
         // frame, once, rather than once per event.
         self.area_camera_pending = true;
@@ -4677,6 +4989,7 @@ impl OverlayWindow {
             // the window under it instead.
             if clicked || crop.width < 2. || crop.height < 2. {
                 self.crop = None;
+                self.area_snapped = None;
                 if clicked {
                     self.fit_area_to_window_at((f32::from(position.x), f32::from(position.y)), cx);
                 }
@@ -5259,5 +5572,304 @@ mod tests {
         assert_eq!(rects.len(), 1);
         assert!((rects[0].x - 0.8).abs() < 1e-6);
         assert!((rects[0].w - 0.2).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod snap_to_ratio_tests {
+    use super::*;
+    use crate::editor_crop::COMMON_RATIOS;
+
+    fn rect_from(anchor: (f32, f32), direction: (f32, f32), width: f32, height: f32) -> AreaRect {
+        AreaRect {
+            x: if direction.0 < 0. {
+                anchor.0 - width
+            } else {
+                anchor.0
+            },
+            y: if direction.1 < 0. {
+                anchor.1 - height
+            } else {
+                anchor.1
+            },
+            width,
+            height,
+        }
+    }
+
+    /// The fixed corner of `rect` when it was dragged from `anchor`.
+    fn pinned_corner(rect: AreaRect, direction: (f32, f32)) -> (f32, f32) {
+        (
+            if direction.0 < 0. {
+                rect.right()
+            } else {
+                rect.x
+            },
+            if direction.1 < 0. {
+                rect.bottom()
+            } else {
+                rect.y
+            },
+        )
+    }
+
+    #[test]
+    fn a_free_area_near_every_ratio_snaps_onto_it_from_every_corner() {
+        let directions = [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)];
+        // Logical sizes of a Retina laptop, a 1x 1440p display and a portrait one.
+        for display in [(1512., 982.), (2560., 1440.), (1080., 1920.)] {
+            let anchor = (display.0 / 2., display.1 / 2.);
+            for (a, b) in COMMON_RATIOS {
+                for ratio in [(a, b), (b, a)] {
+                    let value = ratio_value(ratio);
+                    let height = 200.;
+                    for offset in [-0.008, 0.005] {
+                        let width = height * (value + offset);
+                        for direction in directions {
+                            let rect = rect_from(anchor, direction, width, height);
+                            let (snapped, landed) =
+                                snap_area_to_ratio(rect, anchor, display, false, false)
+                                    .unwrap_or_else(|| panic!("{ratio:?} {direction:?} {rect:?}"));
+                            assert!((ratio_value(landed) - value).abs() < 1e-6, "{landed:?}");
+                            assert_eq!(snapped.height, height);
+                            assert!(
+                                (snapped.width / snapped.height - value).abs()
+                                    <= 0.5 / snapped.height,
+                                "{ratio:?} {snapped:?}"
+                            );
+                            assert_eq!(pinned_corner(snapped, direction), anchor);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_area_far_from_any_ratio_stays_as_drawn() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 100.,
+            y: 100.,
+            width: 612.,
+            height: 600.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(rect, (100., 100.), display, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn a_very_small_area_never_snaps() {
+        let display = (1920., 1080.);
+        let tiny = AreaRect {
+            x: 10.,
+            y: 10.,
+            width: 30.,
+            height: 30.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(tiny, (10., 10.), display, false, false),
+            None
+        );
+        let just_big_enough = AreaRect {
+            width: 31.,
+            height: 31.,
+            ..tiny
+        };
+        assert_eq!(
+            snap_area_to_ratio(just_big_enough, (10., 10.), display, false, false)
+                .map(|(_, ratio)| ratio),
+            Some((1, 1))
+        );
+    }
+
+    #[test]
+    fn an_edge_snap_on_one_axis_survives_the_ratio_snap() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 0.,
+            y: 0.,
+            width: 640.,
+            height: 361.,
+        };
+        let (height_led, _) = snap_area_to_ratio(rect, (0., 0.), display, false, false).unwrap();
+        assert_eq!((height_led.width, height_led.height), (642., 361.));
+        let (width_held, _) = snap_area_to_ratio(rect, (0., 0.), display, true, false).unwrap();
+        assert_eq!((width_held.width, width_held.height), (640., 360.));
+        assert_eq!(
+            snap_area_to_ratio(rect, (0., 0.), display, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn a_ratio_snap_that_would_leave_the_display_is_skipped() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 1002.,
+            y: 100.,
+            width: 918.,
+            height: 517.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(rect, (1002., 100.), display, false, false),
+            None
+        );
+        let fits = AreaRect { x: 1000., ..rect };
+        let (snapped, _) = snap_area_to_ratio(fits, (1000., 100.), display, false, false).unwrap();
+        assert!(snapped.right() <= display.0);
+    }
+
+    fn legacy_060() -> serde_json::Value {
+        serde_json::json!({
+            "locked": true,
+            "screenId": "2",
+            "bounds": { "x": 120, "y": 80, "width": 1280, "height": 720 },
+            "aspectRatio": [16, 9],
+            "snapToRatio": false,
+        })
+    }
+
+    #[test]
+    fn a_060_users_area_preferences_come_across_once() {
+        let mut section = serde_json::Map::new();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        assert_eq!(serde_json::Value::Object(section.clone()), legacy_060());
+        // Already imported: nothing changes, even if 0.6.0 writes again.
+        let mut changed = legacy_060();
+        changed["snapToRatio"] = true.into();
+        assert!(!merge_legacy_area_selection(&mut section, Some(&changed)));
+        assert_eq!(section["snapToRatio"], false);
+    }
+
+    #[test]
+    fn what_063_saved_wins_over_060() {
+        let mut section = serde_json::json!({
+            "aspectRatio": [4, 3],
+            "locked": false,
+            "screenId": "1",
+            "bounds": { "x": 0, "y": 0, "width": 400, "height": 300 },
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        assert_eq!(section["aspectRatio"], serde_json::json!([4, 3]));
+        assert_eq!(section["locked"], false);
+        assert_eq!(section["screenId"], "1");
+        assert_eq!(section["snapToRatio"], false);
+    }
+
+    #[test]
+    fn no_060_preferences_means_snapping_stays_on() {
+        let mut section = serde_json::Map::new();
+        assert!(merge_legacy_area_selection(&mut section, None));
+        assert_eq!(
+            serde_json::Value::Object(section),
+            serde_json::json!({ "snapToRatio": true })
+        );
+        let mut section = serde_json::Map::new();
+        let broken = serde_json::json!({ "locked": "yes", "snapToRatio": 0, "aspectRatio": null });
+        assert!(merge_legacy_area_selection(&mut section, Some(&broken)));
+        assert_eq!(
+            serde_json::Value::Object(section),
+            serde_json::json!({ "snapToRatio": true })
+        );
+    }
+
+    #[test]
+    fn webkit_storage_values_decode_from_utf16() {
+        assert_eq!(
+            decode_webkit_storage_hex("6C006900670068007400\n").as_deref(),
+            Some("light")
+        );
+        assert_eq!(decode_webkit_storage_hex(""), None);
+        assert_eq!(decode_webkit_storage_hex("6C0"), None);
+        assert_eq!(decode_webkit_storage_hex("ZZ00"), None);
+    }
+
+    struct TempStore(std::path::PathBuf);
+
+    impl TempStore {
+        fn new(contents: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cap-area-selection-{}.json",
+                crate::store::new_uuid_v4()
+            ));
+            std::fs::write(&path, contents).unwrap();
+            crate::store::set_test_tauri_store_path(Some(path.clone()));
+            Self(path)
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            crate::store::set_test_tauri_store_path(None);
+        }
+    }
+
+    #[test]
+    fn an_imported_060_lock_reopens_on_its_display() {
+        let store = TempStore::new(r#"{"general_settings":{"enableNotifications":true}}"#);
+        assert!(stored_area_snap_to_ratio());
+        crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+            merge_legacy_area_selection(section, Some(&legacy_060()))
+        });
+        assert!(!stored_area_snap_to_ratio());
+        assert_eq!(stored_area_ratio(), Some((16, 9)));
+        let display = "2".parse::<DisplayId>().unwrap();
+        let other = "1".parse::<DisplayId>().unwrap();
+        let expected = AreaRect {
+            x: 120.,
+            y: 80.,
+            width: 1280.,
+            height: 720.,
+        };
+        assert_eq!(
+            locked_area_for(&display, (1512., 982.), AREA_MIN_SIZE),
+            Some(expected)
+        );
+        assert_eq!(locked_area_for(&other, (1512., 982.), AREA_MIN_SIZE), None);
+        store_area_snap_to_ratio(true);
+        assert!(stored_area_snap_to_ratio());
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store.0).unwrap()).unwrap();
+        assert_eq!(written["general_settings"]["enableNotifications"], true);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_060_webview_database_is_found_and_read() {
+        let root = std::env::temp_dir().join(format!("cap-webkit-{}", crate::store::new_uuid_v4()));
+        let dir = root.join("Default/salt/salt/LocalStorage");
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = legacy_060().to_string();
+        let hex = json
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(dir.join("localstorage.sqlite3"))
+            .arg(format!(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);\
+                 INSERT INTO ItemTable VALUES ('cap-theme', X'6C006900670068007400');\
+                 INSERT INTO ItemTable VALUES ('{LEGACY_AREA_SELECTION_KEY}', X'{hex}');"
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root), Some(legacy_060()));
+        assert_eq!(legacy_area_selection_in(&root.join("missing")), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
