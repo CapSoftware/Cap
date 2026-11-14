@@ -1896,7 +1896,7 @@ impl ScreenshotEditorWindow {
         }
     }
 
-    fn preview_mouse_down(
+    pub(crate) fn preview_mouse_down(
         &mut self,
         event: &MouseDownEvent,
         window: &mut Window,
@@ -2691,7 +2691,12 @@ impl ScreenshotEditorWindow {
 
     /// `Editor.tsx:56-176` plus `Header.tsx:49-82` and `Preview.tsx:195-219`,
     /// which are three `window` listeners over there and one handler here.
-    fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if event.is_held {
             return;
         }

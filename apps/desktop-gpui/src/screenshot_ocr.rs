@@ -1729,6 +1729,230 @@ fn recognize_layer(
     Ok(layer)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod editor_tests {
+    use gpui::{
+        AppContext as _, Entity, InteractiveElement as _, IntoElement, Modifiers, MouseButton,
+        ParentElement as _, Render, Styled as _, div, point, px,
+    };
+
+    use super::*;
+
+    struct View {
+        editor: Entity<ScreenshotEditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.editor.update(cx, |editor, cx| {
+                div()
+                    .size_full()
+                    .track_focus(&editor.focus)
+                    .on_key_down(cx.listener(ScreenshotEditorWindow::on_key))
+            })
+        }
+    }
+
+    fn line(text: &str, x: f64, y: f64) -> RecognizedLine {
+        RecognizedLine {
+            text: text.to_string(),
+            bounds: Rect {
+                x,
+                y,
+                width: text.chars().count() as f64 * 10.,
+                height: 20.,
+            },
+            words: Vec::new(),
+        }
+    }
+
+    /// A 400x200 screenshot shown at 1:1 with no padding, so screen, frame
+    /// and source pixels coincide, and three recognised lines on it.
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<ScreenshotEditorWindow>, &mut gpui::VisualTestContext) {
+        let project = tempfile::tempdir().unwrap();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor =
+                cx.new(|cx| ScreenshotEditorWindow::new(project.path().into(), window, cx));
+            editor.update(cx, |editor, cx| {
+                editor.project.background.padding = 0.;
+                editor.frame_size = (400., 200.);
+                editor.image_size = Some((400, 200));
+                editor.ocr.status = OcrStatus::Ready(Arc::new(TextLayer::build(
+                    vec![
+                        line("Hello Cap world", 10., 10.),
+                        line("second line", 10., 50.),
+                        line("right side", 250., 100.),
+                    ],
+                    &mut |_| 1.,
+                )));
+                editor.ocr.layer_bounds.set(Some(Bounds {
+                    origin: point(px(0.), px(0.)),
+                    size: gpui::size(px(400.), px(200.)),
+                }));
+                window.focus(&editor.focus, cx);
+            });
+            View {
+                editor,
+                _project: project,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn press(
+        editor: &Entity<ScreenshotEditorWindow>,
+        cx: &mut gpui::VisualTestContext,
+        button: MouseButton,
+        at: (f32, f32),
+        click_count: usize,
+    ) {
+        let event = MouseDownEvent {
+            button,
+            position: point(px(at.0), px(at.1)),
+            modifiers: Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        };
+        editor.update_in(cx, |editor, window, cx| {
+            if button == MouseButton::Right {
+                editor.text_context_menu(&event, window, cx);
+            } else {
+                editor.preview_mouse_down(&event, window, cx);
+            }
+        });
+    }
+
+    fn drag_to(
+        editor: &Entity<ScreenshotEditorWindow>,
+        cx: &mut gpui::VisualTestContext,
+        at: (f32, f32),
+    ) {
+        editor.update(cx, |editor, cx| {
+            editor.text_drag_to(point(px(at.0), px(at.1)), cx);
+            editor.text_drag_end(cx);
+        });
+    }
+
+    fn clipboard(cx: &mut gpui::VisualTestContext) -> Option<String> {
+        cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    #[gpui::test]
+    fn a_drag_across_lines_copies_the_text_with_the_shortcut(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        press(&editor, cx, MouseButton::Left, (70., 20.), 1);
+        drag_to(&editor, cx, (68., 60.));
+        assert!(editor.read_with(cx, |editor, _| editor.has_text_selection()));
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("Cap world\nsecond"));
+    }
+
+    #[gpui::test]
+    fn select_all_copies_every_line_and_escape_clears_it(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(
+            clipboard(cx).as_deref(),
+            Some("Hello Cap world\nsecond line\nright side")
+        );
+        cx.simulate_keystrokes("escape");
+        assert!(!editor.read_with(cx, |editor, _| editor.has_text_selection()));
+    }
+
+    #[gpui::test]
+    fn double_and_triple_clicks_take_a_word_and_a_line(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        press(&editor, cx, MouseButton::Left, (75., 20.), 2);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selected_text()),
+            Some("Cap".to_string())
+        );
+        editor.update(cx, |editor, cx| editor.text_drag_end(cx));
+        press(&editor, cx, MouseButton::Left, (40., 60.), 3);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selected_text()),
+            Some("second line".to_string())
+        );
+    }
+
+    #[gpui::test]
+    fn a_press_off_the_text_clears_the_selection_and_pans(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        cx.simulate_keystrokes("ctrl-a");
+        press(&editor, cx, MouseButton::Left, (200., 180.), 1);
+        assert!(!editor.read_with(cx, |editor, _| editor.has_text_selection()));
+    }
+
+    #[gpui::test]
+    fn drawing_tools_never_start_a_text_selection(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update(cx, |editor, _| editor.tool = Tool::Rectangle);
+        editor.update(cx, |editor, cx| {
+            let event = MouseDownEvent {
+                button: MouseButton::Left,
+                position: point(px(70.), px(20.)),
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            };
+            assert!(!editor.text_mouse_down(&event, cx));
+        });
+        assert!(!editor.read_with(cx, |editor, _| editor.has_text_selection()));
+        cx.simulate_keystrokes("ctrl-a");
+        assert!(!editor.read_with(cx, |editor, _| editor.has_text_selection()));
+    }
+
+    #[gpui::test]
+    fn right_click_selects_the_word_and_its_menu_copies_it(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        press(&editor, cx, MouseButton::Right, (290., 110.), 1);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selected_text()),
+            Some("right".to_string())
+        );
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(clipboard(cx).as_deref(), Some("right"));
+    }
+
+    #[gpui::test]
+    fn crop_limits_what_select_all_takes(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update(cx, |editor, _| {
+            editor.project.background.crop = Some(cap_project::Crop {
+                position: cap_project::XY { x: 200, y: 80 },
+                size: cap_project::XY { x: 200, y: 120 },
+            });
+            editor.frame_size = (200., 120.);
+            editor.ocr.layer_bounds.set(Some(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: gpui::size(px(200.), px(120.)),
+            }));
+        });
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("right side"));
+        press(&editor, cx, MouseButton::Left, (125., 30.), 2);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selected_text()),
+            Some("side".to_string())
+        );
+    }
+
+    #[gpui::test]
+    fn a_text_press_drops_the_annotation_selection(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update(cx, |editor, _| {
+            editor.selected_annotation = Some("gone".to_string());
+        });
+        press(&editor, cx, MouseButton::Left, (70., 20.), 1);
+        assert!(editor.read_with(cx, |editor, _| editor.selected_annotation.is_none()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
