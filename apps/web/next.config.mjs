@@ -45,6 +45,7 @@ const nextConfig = {
 		"/infra/llms-full.txt": ["./content/docs/api/*.mdx"],
 	},
 	transpilePackages: [
+		"@cap/app-store",
 		"@cap/ui",
 		"@cap/utils",
 		"@cap/web-api-contract",

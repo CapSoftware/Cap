@@ -8,6 +8,17 @@
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
+		"@cap/web#build": {
+			"inputs": [
+				"**/*.ts",
+				"**/*.tsx",
+				"!node_modules/**",
+				"$TURBO_ROOT$/app-store/**",
+				"$TURBO_ROOT$/packages/app-store/src/**"
+			],
+			"dependsOn": ["^build"],
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
+		},
 		"@cap/chrome-extension#build": {
 			"inputs": [
 				"**/*.ts",

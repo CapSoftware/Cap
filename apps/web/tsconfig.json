@@ -44,6 +44,7 @@
 	"include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
 	"exclude": ["node_modules"],
 	"references": [
+		{ "path": "../../packages/app-store" },
 		{ "path": "../../packages/database" },
 		{ "path": "../../packages/env" },
 		{ "path": "../../packages/recorder-core" },

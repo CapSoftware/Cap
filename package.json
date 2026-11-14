@@ -28,7 +28,7 @@
 		"format": "bun run biome check --write",
 		"lint": "bun run biome lint",
 		"gpui:build": "dotenv -e .env -- node scripts/bundle-gpui.mjs",
-		"typecheck": "bun run --cwd apps/web next typegen && tsc-rs -b",
+		"typecheck": "bun run --cwd apps/web app-store:catalog && bun run --cwd apps/web next typegen && tsc-rs -b",
 		"test": "turbo run test",
 		"test:web": "bun run --filter=@cap/web test",
 		"test:discover": "bun run with-env cargo run -p cap-test -- discover",
