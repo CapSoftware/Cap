@@ -182,14 +182,6 @@ impl AppStore {
         ids
     }
 
-    pub fn is_installed(&self, app_id: &str) -> bool {
-        self.local_installs.contains(app_id)
-            || self
-                .installations
-                .iter()
-                .any(|installation| installation.app_id == app_id)
-    }
-
     pub fn installed_apps(&self) -> Vec<&CatalogApp> {
         let Some(catalog) = self.catalog.as_deref() else {
             return Vec::new();
@@ -579,7 +571,6 @@ async fn load_assets(cx: &mut AsyncApp) {
 pub enum InstallOutcome {
     Installed,
     OpenedWeb,
-    Failed(String),
 }
 
 /// Installs for the signed-in account, or into the local list when signed
