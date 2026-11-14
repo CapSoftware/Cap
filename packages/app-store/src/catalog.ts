@@ -138,7 +138,7 @@ export type CatalogFile = { path: string; bytes: Uint8Array };
 
 export type BuildCatalogOptions = {
 	assetBaseUrl: string;
-	blocked?: BlockedApp[];
+	blocked?: readonly BlockedApp[];
 };
 
 export function buildCatalog(

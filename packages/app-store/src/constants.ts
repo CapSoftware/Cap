@@ -66,13 +66,12 @@ export const CONNECTION_PERMISSIONS = [
 	"cap.summary",
 	"cap.comments",
 ] as const;
-export type ConnectionPermission = (typeof CONNECTION_PERMISSIONS)[number];
 
 export const BASE_PERMISSION_DESCRIPTION =
 	"Title, share link, owner name, length and creation time of Caps it can see";
 
 export const CONNECTION_PERMISSION_DESCRIPTIONS: Record<
-	ConnectionPermission,
+	(typeof CONNECTION_PERMISSIONS)[number],
 	string
 > = {
 	"cap.transcript": "Transcripts",
@@ -81,7 +80,7 @@ export const CONNECTION_PERMISSION_DESCRIPTIONS: Record<
 };
 
 export const EVENT_REQUIRED_PERMISSION: Partial<
-	Record<CapEventType, ConnectionPermission>
+	Record<CapEventType, (typeof CONNECTION_PERMISSIONS)[number]>
 > = {
 	"cap.transcript.ready": "cap.transcript",
 	"cap.summary.ready": "cap.summary",

@@ -221,6 +221,7 @@ export const ConnectionAction = Schema.Struct({
 export type ConnectionAction = typeof ConnectionAction.Type;
 
 export const ConnectionPermission = Schema.Literal(...CONNECTION_PERMISSIONS);
+export type ConnectionPermission = typeof ConnectionPermission.Type;
 export const CapEvent = Schema.Literal(...CAP_EVENTS);
 
 export const FIRST_PARTY_CONNECTION_PREFIX = "/api/app-store/first-party/";
