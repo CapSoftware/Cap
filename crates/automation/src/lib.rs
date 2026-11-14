@@ -271,6 +271,22 @@ pub trait AutomationHost: Send + Sync {
         &self,
         ctx: &TriggerContext,
     ) -> impl std::future::Future<Output = Result<(), String>> + Send;
+
+    /// Called before `DeleteLocalFiles` runs, once the upload checks have passed, with the action
+    /// that came right before it in the same rule. A host that returns an error keeps the files.
+    fn verify_before_delete(
+        &self,
+        _ctx: &TriggerContext,
+        _preceding: Option<PrecedingAction<'_>>,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send {
+        std::future::ready(Ok(()))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PrecedingAction<'a> {
+    pub action: &'a Action,
+    pub succeeded: bool,
 }
 
 pub struct RunResult {
@@ -343,16 +359,16 @@ pub async fn run<H: AutomationHost>(
                 continue;
             }
 
-            let result = if matches!(action, Action::DeleteLocalFiles)
-                && requires_upload_verification
-            {
-                if remaining_uploads > 0 {
+            let result = if matches!(action, Action::DeleteLocalFiles) {
+                let authorized = if !requires_upload_verification {
+                    Ok(())
+                } else if remaining_uploads > 0 {
                     Err("Upload has not finished; local recording retained".to_string())
                 } else if upload_failed {
                     Err("Upload failed; local recording retained".to_string())
                 } else {
                     match host.upload_is_verified(ctx).await {
-                        Ok(true) => execute_action(host, action, ctx).await,
+                        Ok(true) => Ok(()),
                         Ok(false) => Err(
                             "Upload submitted, but remote verification is unavailable; local recording retained"
                                 .to_string(),
@@ -361,6 +377,22 @@ pub async fn run<H: AutomationHost>(
                             "Upload verification failed; local recording retained: {error}"
                         )),
                     }
+                };
+                match authorized {
+                    Ok(()) => {
+                        let preceding =
+                            action_results
+                                .last()
+                                .map(|previous: &ActionResult| PrecedingAction {
+                                    action: &previous.action,
+                                    succeeded: previous.success,
+                                });
+                        match host.verify_before_delete(ctx, preceding).await {
+                            Ok(()) => execute_action(host, action, ctx).await,
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Err(error) => Err(error),
                 }
             } else {
                 execute_action(host, action, ctx).await

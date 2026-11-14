@@ -435,6 +435,7 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    pub studio_behaviour: Option<crate::store::PostStudioBehaviour>,
     /// An instant recording stopped cleanly and its share link was handed
     /// out. Taken by the phase observer, which brings the main window back
     /// only for the "Show Cap" Instant outcome.
@@ -510,6 +511,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            studio_behaviour: None,
             finished_instant: false,
             deleted_recording: false,
             preparing_studio_editor: None,
@@ -1035,6 +1037,7 @@ impl RecordingSession {
         let done = active.done_fut();
         self.active = Some(active);
         self.phase = Phase::Recording { paused: false };
+        crate::automation::recording_started(&project_dir);
         // A fresh mic lock always starts unmuted.
         self.mic_muted = false;
         self.started_at = Some(Instant::now());
@@ -1244,6 +1247,15 @@ impl RecordingSession {
             return;
         };
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
+        let instant_video_id = active.instant_video_id().map(ToString::to_string);
+        let studio_behaviour = (self.mode() == Some(recording::RecordingMode::Studio)).then(|| {
+            crate::automation::studio_editor_behaviour(
+                &active.project_dir,
+                self.elapsed(),
+                crate::store::GeneralSettings::load().post_studio_recording_behaviour,
+            )
+        });
+        self.studio_behaviour = studio_behaviour;
         #[cfg(target_os = "linux")]
         let stop_owner = RecordingOwner {
             generation: self.recording_generation,
@@ -1291,8 +1303,7 @@ impl RecordingSession {
             low_storage,
             recording_failed,
             self.editor_recording_target.is_some(),
-            crate::store::GeneralSettings::load().post_studio_recording_behaviour
-                == crate::store::PostStudioBehaviour::OpenEditor,
+            self.studio_behaviour == Some(crate::store::PostStudioBehaviour::OpenEditor),
         ) {
             let (publisher, finalization) = recording::StudioFinalization::channel(
                 studio_project_path.clone(),
@@ -1451,7 +1462,8 @@ impl RecordingSession {
                             this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
-                            this.finished_studio = Some(project_dir);
+                            this.finished_studio = Some(project_dir.clone());
+                            crate::automation::studio_recording_finished(project_dir);
                         } else if let Some(link) = instant_share_url {
                             if defer_share_until_success
                                 && !low_storage
@@ -1461,6 +1473,13 @@ impl RecordingSession {
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
                             this.finished_instant = !low_storage;
+                            if !low_storage {
+                                crate::automation::instant_recording_finished(
+                                    project_dir,
+                                    Some(link.clone()),
+                                    instant_video_id,
+                                );
+                            }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }

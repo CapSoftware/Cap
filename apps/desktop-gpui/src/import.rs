@@ -661,6 +661,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
 
     sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "video import complete");
+    crate::automation::video_imported(project_path.clone());
 }
 
 /// `start_image_import` (`import.rs:1899-2017`).

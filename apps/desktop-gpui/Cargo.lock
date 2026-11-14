@@ -1398,6 +1398,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-automation"
+version = "0.1.0"
+dependencies = [
+ "cap-project",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-camera"
 version = "0.1.0"
 dependencies = [
@@ -1544,6 +1559,7 @@ dependencies = [
  "block2 0.6.2",
  "bytes",
  "cap-audio",
+ "cap-automation",
  "cap-camera",
  "cap-camera-effects",
  "cap-cli-install",
@@ -1585,6 +1601,7 @@ dependencies = [
  "libc",
  "lyon_tessellation",
  "minisign-verify",
+ "notify-rust",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
@@ -1597,6 +1614,7 @@ dependencies = [
  "resvg 0.45.1",
  "rfd",
  "rodio",
+ "same-file",
  "sanitize-filename",
  "scap-targets",
  "semver",

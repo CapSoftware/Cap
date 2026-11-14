@@ -7951,6 +7951,18 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
+    pub(crate) fn apply_preset_config(
+        &mut self,
+        config: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let next = crate::presets::apply_preset(config, &self.project)
+            .ok_or_else(|| "The preset could not be read".to_string())?;
+        self.apply_project_preset(next, window, cx);
+        Ok(())
+    }
+
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
