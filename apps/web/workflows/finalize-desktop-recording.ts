@@ -9,6 +9,7 @@ import { Option } from "effect";
 import { getStepMetadata, sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { emitCapReadySafely } from "@/lib/app-store/events";
 import { observeDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
 import {
 	attachRemoteJob,
@@ -956,6 +957,7 @@ async function queueFinalizedRecordingTranscription(
 				),
 		]);
 		if (!owner || !video) return true;
+		await emitCapReadySafely(Video.VideoId.make(videoId));
 		const result = await transcribeVideo(
 			Video.VideoId.make(videoId),
 			userId,

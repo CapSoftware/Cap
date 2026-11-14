@@ -27,6 +27,18 @@ export const appStoreEventId = (
 		.digest("hex")
 		.slice(0, 32)}`;
 
+export const CAP_READY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function isNewRecording(
+	video: Pick<typeof videos.$inferSelect, "createdAt" | "metadata">,
+	now: number = Date.now(),
+) {
+	if (video.metadata?.loomImportRun || video.metadata?.loomImportUpload) {
+		return false;
+	}
+	return now - video.createdAt.getTime() <= CAP_READY_MAX_AGE_MS;
+}
+
 async function startJobs(jobs: AppStoreDeliveryJob[]) {
 	const started = await Promise.allSettled(
 		jobs.map((job) => start(deliverAppStoreRequestWorkflow, [job])),
@@ -46,11 +58,17 @@ export async function emitAppStoreEvent(
 	options: { commentId?: string } = {},
 ): Promise<number> {
 	const [video] = await db()
-		.select({ ownerId: videos.ownerId, orgId: videos.orgId })
+		.select({
+			ownerId: videos.ownerId,
+			orgId: videos.orgId,
+			createdAt: videos.createdAt,
+			metadata: videos.metadata,
+		})
 		.from(videos)
 		.where(eq(videos.id, videoId))
 		.limit(1);
 	if (!video) return 0;
+	if (type === "cap.ready" && !isNewRecording(video)) return 0;
 
 	const scopes = [
 		and(
@@ -140,3 +158,21 @@ export function announceLifecycle(
 export function announceInBackground(label: string, work: Promise<unknown>) {
 	runInBackground(label, work);
 }
+
+export async function emitAppStoreEventSafely(
+	type: CapEventType,
+	videoId: Video.VideoId,
+	options: { commentId?: string } = {},
+) {
+	try {
+		await emitAppStoreEvent(type, videoId, options);
+	} catch (error) {
+		console.error(`[app-store] ${type} failed`, {
+			videoId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+export const emitCapReadySafely = (videoId: Video.VideoId) =>
+	emitAppStoreEventSafely("cap.ready", videoId);

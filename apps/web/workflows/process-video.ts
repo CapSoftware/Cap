@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { emitCapReadySafely } from "@/lib/app-store/events";
 import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
@@ -432,6 +433,8 @@ async function queueProcessedVideoTranscription(
 			.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 		if (!owner) return;
+
+		await emitCapReadySafely(Video.VideoId.make(videoId));
 
 		const result = await transcribeVideo(
 			Video.VideoId.make(videoId),

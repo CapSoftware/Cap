@@ -10,6 +10,7 @@ import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
+import { announceAppStoreEvent } from "@/lib/app-store/events";
 import { queueNotificationPush } from "@/lib/mobile-push";
 
 export type NotificationType = Notification["type"];
@@ -70,6 +71,15 @@ export async function createNotification(
 		if (!videoExists) {
 			console.error("Video not found for videoId:", notification.videoId);
 			throw new Error(`Video not found for videoId: ${notification.videoId}`);
+		}
+
+		if (
+			(notification.type === "comment" || notification.type === "reply") &&
+			notification.comment?.id
+		) {
+			announceAppStoreEvent("cap.comment.created", videoExists.id, {
+				commentId: notification.comment.id,
+			});
 		}
 
 		const [ownerResult] = await db()
