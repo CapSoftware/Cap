@@ -274,7 +274,7 @@ pub struct EditorInstance {
         watch::Receiver<ProjectConfiguration>,
     ),
     pub segment_medias: Arc<Vec<SegmentMedia>>,
-    music_cache: Arc<std::sync::Mutex<crate::MusicTracks>>,
+    music_loader: crate::MusicLoader,
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
@@ -588,21 +588,11 @@ impl EditorInstance {
             audio_output.prewarm();
         }
 
-        let music_cache = Arc::new(std::sync::Mutex::new(crate::MusicTracks::new()));
+        let music_loader = crate::MusicLoader::new(project_path.clone());
         if has_music {
             let project = project.clone();
-            let project_path = project_path.clone();
-            let cache = Arc::clone(&music_cache);
-            tokio::task::spawn_blocking(move || {
-                let mut cache = cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                drop(crate::load_music_tracks(
-                    &project,
-                    &project_path,
-                    &mut cache,
-                ));
-            });
+            let music_loader = music_loader.clone();
+            tokio::task::spawn_blocking(move || drop(music_loader.load(&project)));
         }
 
         let recordings = match preloaded_recordings {
@@ -684,7 +674,7 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
-            music_cache,
+            music_loader,
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
@@ -814,7 +804,7 @@ impl EditorInstance {
             preview_tx,
             project_config: self.project_config.clone(),
             segment_medias: self.segment_medias.clone(),
-            music_cache: self.music_cache.clone(),
+            music_loader: self.music_loader.clone(),
             meta: self.meta.clone(),
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
@@ -910,17 +900,10 @@ impl EditorInstance {
     /// imported-audio waveforms read their samples through this so they share
     /// playback's decode cache instead of decoding the files a second time.
     pub async fn load_music_tracks_for(&self, project: ProjectConfiguration) -> crate::MusicTracks {
-        let project_path = self.project_path.clone();
-        let cache = self.music_cache.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let mut cache = cache
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            crate::load_music_tracks(&project, &project_path, &mut cache)
-        })
-        .await
-        .unwrap_or_default()
+        let music_loader = self.music_loader.clone();
+        tokio::task::spawn_blocking(move || music_loader.load(&project))
+            .await
+            .unwrap_or_default()
     }
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
@@ -981,6 +964,7 @@ impl EditorInstance {
             let playback = playback::Playback {
                 segment_medias: self.segment_medias.clone(),
                 music: music.clone(),
+                music_loader: self.music_loader.clone(),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
