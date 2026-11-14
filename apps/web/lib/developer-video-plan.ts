@@ -218,7 +218,7 @@ export function hlsPlaylistDuration(playlist: string): number {
 }
 
 export function ladderMatchesMaster(
-	renditions: DeveloperVideoRendition[],
+	renditions: { name: string }[],
 	master: string,
 ): boolean {
 	const playlists = new Set(hlsMasterVariantPlaylists(master));
