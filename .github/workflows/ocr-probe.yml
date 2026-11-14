@@ -18,4 +18,4 @@ jobs:
         run: ./vnprobe fx/ocr-lines.png fx/blank.png fx/mixed-2x.png fx/tall.png fx/dense-8k.png
       - run: swiftc -O probe/vnmodes.swift -o vnmodes
       - name: modes
-        run: ./vnmodes fx/retina-3456x2234.png fx/studio-5120x2880.png fx/uhd-1x-3840x2160.png fx/uhd-2x-small-3840x2160.png
+        run: ./vnmodes fx/mixed-2x.png fx/retina-3456x2234.png fx/studio-5120x2880.png fx/uhd-1x-3840x2160.png fx/uhd-2x-small-3840x2160.png fx/dense-8k.png fx/tall.png

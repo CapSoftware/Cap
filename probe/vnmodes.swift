@@ -1,43 +1,50 @@
 import AppKit
 import Vision
 
-// usage: vnmodes <png>...  Tries default, explicit minimumTextHeight values,
-// and tiling, and prints lines found and time for each.
-func run(_ img: CGImage, minHeight: Float?) throws -> [VNRecognizedTextObservation] {
-    let req = VNRecognizeTextRequest()
-    req.recognitionLevel = .accurate
-    req.usesLanguageCorrection = true
-    req.revision = VNRecognizeTextRequestRevision3
-    req.automaticallyDetectsLanguage = true
-    if let m = minHeight { req.minimumTextHeight = m }
-    try VNImageRequestHandler(cgImage: img, options: [:]).perform([req])
-    return req.results ?? []
+setvbuf(stdout, nil, _IOLBF, 0)
+
+// usage: vnmodes <png>...  Whole-image pass, then the tiling screenshot_ocr.rs
+// uses (2048 tiles, 256 overlap, last tile flush with the far edge).
+func run(_ img: CGImage) -> Int {
+    autoreleasepool {
+        let req = VNRecognizeTextRequest()
+        req.recognitionLevel = .accurate
+        req.usesLanguageCorrection = true
+        req.revision = VNRecognizeTextRequestRevision3
+        req.automaticallyDetectsLanguage = true
+        do { try VNImageRequestHandler(cgImage: img, options: [:]).perform([req]) } catch {
+            print("  error \(error)")
+            return 0
+        }
+        return req.results?.count ?? 0
+    }
+}
+
+func starts(_ length: Int, _ side: Int, _ overlap: Int) -> [Int] {
+    if length <= side { return [0] }
+    var out: [Int] = []
+    var s = 0
+    while s + side < length { out.append(s); s += side - overlap }
+    out.append(length - side)
+    return out
 }
 
 for path in CommandLine.arguments.dropFirst() {
-    let src = NSImage(contentsOfFile: path)!.cgImage(forProposedRect: nil, context: nil, hints: nil)!
     let name = (path as NSString).lastPathComponent
-    for m: Float? in [nil] {
-        let t = Date()
-        let r = (try? run(src, minHeight: m)) ?? []
-        print("\(name) min=\(m.map { "\($0)" } ?? "default"): lines=\(r.count) \(Int(Date().timeIntervalSince(t) * 1000))ms sample=\(r.prefix(2).map { $0.topCandidates(1).first?.string ?? "" })")
+    guard let src = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        print("\(name): cannot load"); continue
     }
-    for side in [2048] {
-        let t = Date()
-        var lines = 0
-        let step = side * 9 / 10
-        var y = 0
-        while y < src.height {
-            var x = 0
-            while x < src.width {
-                let rect = CGRect(x: x, y: y, width: min(side, src.width - x), height: min(side, src.height - y))
-                if let tile = src.cropping(to: rect) { lines += ((try? run(tile, minHeight: nil)) ?? []).count }
-                if x + side >= src.width { break }
-                x += step
-            }
-            if y + side >= src.height { break }
-            y += step
+    var t = Date()
+    let whole = run(src)
+    print("\(name) \(src.width)x\(src.height) whole: lines=\(whole) \(Int(Date().timeIntervalSince(t) * 1000))ms")
+    t = Date()
+    var lines = 0
+    var tiles = 0
+    for y in starts(src.height, 2048, 256) {
+        for x in starts(src.width, 2048, 256) {
+            let rect = CGRect(x: x, y: y, width: min(2048, src.width), height: min(2048, src.height))
+            if let tile = src.cropping(to: rect) { lines += run(tile); tiles += 1 }
         }
-        print("\(name) tiles=\(side): lines=\(lines) \(Int(Date().timeIntervalSince(t) * 1000))ms")
     }
+    print("\(name) tiled(\(tiles)): lines=\(lines) \(Int(Date().timeIntervalSince(t) * 1000))ms")
 }
