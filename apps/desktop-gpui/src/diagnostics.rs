@@ -51,7 +51,6 @@ const KEEP_REPORTS: usize = 5;
 /// window feel endless.
 pub const DEFAULT_DURATION_SECS: u64 = 20;
 
-/// The Settings > Feedback "Test duration" choices, as 0.6.0 offered them.
 pub const DURATION_CHOICES_SECS: &[u64] = &[DEFAULT_DURATION_SECS, 40, 60];
 
 /// `CAP_GPUI_SELFTEST_BIN`: an explicit path to the `cap` binary, which wins
