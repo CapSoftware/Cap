@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use cap_project::{
-    CaptionSegment, CaptionWord, CaptionsData, ClipTransition, ClipTransitionType,
+    CaptionSegment, CaptionSettings, CaptionWord, CaptionsData, ClipTransition, ClipTransitionType,
     ProjectConfiguration, TextLayout, TimelineConfiguration,
 };
 
@@ -54,7 +54,10 @@ fn captions(words: &[(&str, f64, f64)]) -> CaptionsData {
         .collect();
     CaptionsData {
         segments,
-        settings: Default::default(),
+        settings: CaptionSettings {
+            filler_language: Some("en".to_string()),
+            ..Default::default()
+        },
         source_timed: true,
     }
 }
@@ -142,6 +145,56 @@ fn flattening_folds_punctuation_and_sorts() {
     let texts: Vec<_> = words.iter().map(|word| word.text.as_str()).collect();
     assert_eq!(texts, ["hello,", "world", "again.", "it's"]);
     assert!(close(words[3].end, 2.2));
+}
+
+#[test]
+fn filler_cleanup_respects_the_transcription_language() {
+    for (language, expected_removed) in [("de", false), ("en", true)] {
+        let data = captions(&[
+            ("Er", 0.0, 0.3),
+            ("ist", 0.3, 0.5),
+            ("in", 0.5, 0.7),
+            ("Berlin", 0.7, 1.2),
+        ]);
+        let durations = [2.0];
+        let mut project = ProjectConfiguration::default();
+        crate::transcription::apply_caption_result(
+            &mut project,
+            data.segments,
+            language,
+            &durations,
+            2.0,
+        );
+        let (doc, edl) = model(&project, &durations);
+        let runs: Vec<_> = doc
+            .fillers
+            .iter()
+            .map(|filler| filler.words.clone())
+            .collect();
+        let cuts = plan_word_cuts(&doc, None, Some(&edl.kept), &runs);
+        apply_source_cuts(timeline_mut(&mut project), &durations, &cuts);
+
+        assert_eq!(
+            kept(&project, &durations),
+            [!expected_removed, true, true, true],
+            "cleanup must respect the selected language {language}"
+        );
+    }
+}
+
+#[test]
+fn filler_language_changes_invalidate_the_transcript_document() {
+    let mut data = captions(&[("um", 0.0, 0.3), ("hello", 0.4, 0.8)]);
+    data.settings.filler_language = None;
+    let unknown = super::model::captions_signature(Some(&data));
+    assert!(TranscriptDoc::build(&data).fillers.is_empty());
+
+    data.settings.filler_language = Some("en".to_string());
+    assert_ne!(super::model::captions_signature(Some(&data)), unknown);
+    assert_eq!(TranscriptDoc::build(&data).fillers.len(), 1);
+
+    data.settings.show_filler_words = true;
+    assert_eq!(TranscriptDoc::build(&data).fillers.len(), 1);
 }
 
 #[test]

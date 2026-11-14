@@ -74,7 +74,10 @@ fn seeded_captions(words: usize, duration: f64) -> cap_project::CaptionsData {
                 words: chunk.to_vec(),
             })
             .collect(),
-        settings: Default::default(),
+        settings: cap_project::CaptionSettings {
+            filler_language: Some("en".to_string()),
+            ..Default::default()
+        },
         source_timed: true,
     }
 }
