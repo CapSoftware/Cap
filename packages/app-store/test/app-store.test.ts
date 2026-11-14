@@ -10,7 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCatalog, platformsFor } from "../src/catalog";
+import { buildCatalog } from "../src/build";
+import { platformsFor } from "../src/catalog";
 import { connectionUrlProblem } from "../src/connection-url";
 import { readImageInfo } from "../src/image-info";
 import { type Manifest, parseManifest } from "../src/manifest";

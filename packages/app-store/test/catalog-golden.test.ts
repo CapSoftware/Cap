@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCatalog } from "../src/catalog";
+import { buildCatalog } from "../src/build";
 import type { ImageInfo } from "../src/image-info";
 import { type Manifest, parseManifest } from "../src/manifest";
 import { contentHashOf, type LoadedApp } from "../src/validate";

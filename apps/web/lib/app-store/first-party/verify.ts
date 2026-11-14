@@ -1,6 +1,7 @@
 import "server-only";
 
-import { type CapRequest, verifyCapRequest } from "@cap/app-store";
+import type { CapRequest } from "@cap/app-store";
+import { verifyCapRequest } from "@cap/app-store/signing";
 import { appStorePublicKeys } from "../signing";
 
 export type VerifiedCapRequest =

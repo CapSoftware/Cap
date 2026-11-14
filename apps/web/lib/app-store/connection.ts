@@ -2,11 +2,10 @@ import "server-only";
 
 import {
 	type CapRequest,
-	type CapRequestKind,
 	CONNECTION_TIMEOUT_MS,
 	isFirstPartyConnectionUrl,
-	signCapRequest,
 } from "@cap/app-store";
+import { type CapRequestKind, signCapRequest } from "@cap/app-store/signing";
 import { nanoId } from "@cap/database/helpers";
 import { serverEnv } from "@cap/env";
 import { checkWebhookUrl } from "@/lib/developer-webhook-delivery";

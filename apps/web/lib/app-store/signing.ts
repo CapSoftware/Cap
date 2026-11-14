@@ -1,6 +1,6 @@
 import "server-only";
 
-import { type CapSigningKey, deriveSigningKey } from "@cap/app-store";
+import { type CapSigningKey, deriveSigningKey } from "@cap/app-store/signing";
 import { serverEnv } from "@cap/env";
 
 let cached: { secret: string; key: CapSigningKey } | null = null;

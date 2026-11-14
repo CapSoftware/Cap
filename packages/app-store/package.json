@@ -6,6 +6,8 @@
 	"types": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
+		"./build": "./src/build.ts",
+		"./signing": "./src/signing.ts",
 		"./validate": "./src/validate.ts"
 	},
 	"scripts": {

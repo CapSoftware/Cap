@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSONSchema, Schema } from "effect";
-import { BlockedApp, buildCatalog } from "./catalog";
+import { buildCatalog } from "./build";
+import { BlockedApp } from "./catalog";
 import { Manifest } from "./manifest";
 import {
 	type BaseApp,

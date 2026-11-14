@@ -1,4 +1,4 @@
-import { signCapRequest } from "@cap/app-store";
+import { signCapRequest } from "@cap/app-store/signing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
