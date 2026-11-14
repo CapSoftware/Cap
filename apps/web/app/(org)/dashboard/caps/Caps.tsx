@@ -95,6 +95,14 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const moveLocation = { type: "personal" } as const;
+	const selectionPageRef = useRef(page);
+
+	useEffect(() => {
+		if (selectionPageRef.current !== page) {
+			selectionPageRef.current = page;
+			setSelectedCaps([]);
+		}
+	}, [page]);
 
 	useCapsMoved((ids) =>
 		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),

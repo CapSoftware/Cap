@@ -7,6 +7,7 @@ import {
 	PaginationNext,
 	PaginationPrevious,
 } from "@cap/ui";
+import Link from "next/link";
 import { getPaginationItems } from "./pagination-items";
 
 interface CapPaginationProps {
@@ -26,6 +27,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 				{currentPage > 1 && (
 					<PaginationItem>
 						<PaginationPrevious
+							as={Link}
 							className="h-10 bg-transparent hover:bg-gray-4"
 							href={hrefForPage(currentPage - 1)}
 						/>
@@ -37,6 +39,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 					) : (
 						<PaginationItem key={item}>
 							<PaginationLink
+								as={Link}
 								className={
 									item === currentPage
 										? "h-10 min-w-10"
@@ -53,6 +56,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 				{currentPage < totalPages && (
 					<PaginationItem>
 						<PaginationNext
+							as={Link}
 							className="h-10 bg-transparent hover:bg-gray-4"
 							href={hrefForPage(currentPage + 1)}
 						/>
