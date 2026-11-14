@@ -815,7 +815,6 @@ fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> O
         .filter(|bounds| bounds.is_valid_for(min))
 }
 
-/// `snapToRatio`, on unless turned off, as in 0.6.0.
 fn stored_area_snap_to_ratio() -> bool {
     crate::store::store_section(AREA_SELECTION_STORE)
         .get("snapToRatio")
@@ -834,19 +833,30 @@ fn store_area_snap_to_ratio(enabled: bool) {
 /// (`AREA_SELECTION_STORAGE_KEY` in `utils/area-selection.ts`). Same shape
 /// as [`AREA_SELECTION_STORE`]: `locked`, `screenId`, `bounds` (logical
 /// points on that display), `aspectRatio` and `snapToRatio`.
+#[cfg(any(target_os = "macos", test))]
 const LEGACY_AREA_SELECTION_KEY: &str = "target-select-area-preferences-v1";
 
+#[cfg(any(target_os = "macos", test))]
 const AREA_SELECTION_KEYS: [&str; 5] =
     ["locked", "screenId", "bounds", "aspectRatio", "snapToRatio"];
 
+/// Its own key, so an ordinary preference write before the import ran can
+/// never be mistaken for one.
+#[cfg(any(target_os = "macos", test))]
+const LEGACY_IMPORTED: &str = "legacyImported";
+
 /// Fill in the preferences this app has never written from what 0.6.0 left
-/// behind. Keys this app already holds win. `snapToRatio` is always written,
-/// so the import runs once.
+/// behind. Keys this app already holds win.
+#[cfg(any(target_os = "macos", test))]
 fn merge_legacy_area_selection(
     section: &mut serde_json::Map<String, serde_json::Value>,
     legacy: Option<&serde_json::Value>,
 ) -> bool {
-    if section.contains_key("snapToRatio") {
+    if section
+        .get(LEGACY_IMPORTED)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
         return false;
     }
     if let Some(legacy) = legacy.and_then(serde_json::Value::as_object) {
@@ -863,11 +873,12 @@ fn merge_legacy_area_selection(
             }
         }
     }
-    section.entry("snapToRatio").or_insert(true.into());
+    section.insert(LEGACY_IMPORTED.into(), true.into());
     true
 }
 
 /// A WebKit `localStorage` value: UTF-16LE text, read out of SQLite as hex.
+#[cfg(any(target_os = "macos", test))]
 fn decode_webkit_storage_hex(hex: &str) -> Option<String> {
     let hex = hex.trim();
     if hex.is_empty() || hex.len() % 4 != 0 {
@@ -886,16 +897,20 @@ fn decode_webkit_storage_hex(hex: &str) -> Option<String> {
 
 /// 0.6.0's area preferences, from the Tauri webview's `localStorage`
 /// databases (`~/Library/WebKit/so.cap.desktop/WebsiteData`), newest first.
+/// `Err` when a database could not be read, so the import is tried again on
+/// the next launch rather than recorded as done.
 #[cfg(target_os = "macos")]
-fn legacy_area_selection() -> Option<serde_json::Value> {
-    let home = std::env::var_os("HOME")?;
+fn legacy_area_selection() -> Result<Option<serde_json::Value>, ()> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(None);
+    };
     legacy_area_selection_in(
         &std::path::Path::new(&home).join("Library/WebKit/so.cap.desktop/WebsiteData"),
     )
 }
 
 #[cfg(target_os = "macos")]
-fn legacy_area_selection_in(root: &std::path::Path) -> Option<serde_json::Value> {
+fn legacy_area_selection_in(root: &std::path::Path) -> Result<Option<serde_json::Value>, ()> {
     let mut databases = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0)];
     while let Some((dir, depth)) = pending.pop() {
@@ -921,7 +936,8 @@ fn legacy_area_selection_in(root: &std::path::Path) -> Option<serde_json::Value>
         }
     }
     databases.sort_by(|a, b| b.0.cmp(&a.0));
-    databases.into_iter().find_map(|(_, path)| {
+    let mut unreadable = false;
+    for (_, path) in databases {
         let output = std::process::Command::new("/usr/bin/sqlite3")
             .arg("-readonly")
             .arg("-cmd")
@@ -932,24 +948,47 @@ fn legacy_area_selection_in(root: &std::path::Path) -> Option<serde_json::Value>
             ))
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|output| output.status.success())?;
-        let text = decode_webkit_storage_hex(&String::from_utf8_lossy(&output.stdout))?;
-        serde_json::from_str(&text).ok()
-    })
+            .output();
+        let output = match output {
+            Ok(output) if output.status.success() => output,
+            _ => {
+                unreadable = true;
+                continue;
+            }
+        };
+        let hex = String::from_utf8_lossy(&output.stdout);
+        if hex.trim().is_empty() {
+            continue;
+        }
+        return Ok(
+            decode_webkit_storage_hex(&hex).and_then(|text| serde_json::from_str(&text).ok())
+        );
+    }
+    if unreadable { Err(()) } else { Ok(None) }
 }
 
 /// Brings a 0.6.0 user's locked area, ratio and snap setting across once.
-/// 0.6.1 to 0.6.3 never read them, so a locked area looked forgotten.
+/// 0.6.1 to 0.6.3 never read them, so a locked area looked forgotten. The
+/// startup task and the first picker both come through here, and the picker
+/// waits for an import already under way so it opens with the result.
 #[cfg(target_os = "macos")]
 fn import_legacy_area_selection() {
-    if crate::store::store_section(AREA_SELECTION_STORE).contains_key("snapToRatio") {
-        return;
-    }
-    let legacy = legacy_area_selection();
-    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
-        merge_legacy_area_selection(section, legacy.as_ref())
+    static IMPORT: std::sync::Once = std::sync::Once::new();
+    IMPORT.call_once(|| {
+        if crate::store::store_section(AREA_SELECTION_STORE)
+            .get(LEGACY_IMPORTED)
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            return;
+        }
+        let Ok(legacy) = legacy_area_selection() else {
+            tracing::warn!("0.6.0 area preferences could not be read; trying again next launch");
+            return;
+        };
+        crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+            merge_legacy_area_selection(section, legacy.as_ref())
+        });
     });
 }
 
@@ -1391,9 +1430,7 @@ pub struct OverlayWindow {
     snap_guides: Vec<SnapGuide>,
     /// The aspect ratio a drawn or resized area keeps, `None` for free.
     area_ratio: Option<(u32, u32)>,
-    /// `snapToRatio`: free draws and corner resizes snap to common ratios.
     area_snap_to_ratio: bool,
-    /// The ratio a free draw or corner resize snapped to, for the badge.
     area_snapped: Option<(u32, u32)>,
     area_locked: bool,
     area_snap: Vec<NormRect>,
@@ -1563,6 +1600,8 @@ impl OverlayWindow {
                 height: logical.1,
             })
             .clamped(logical);
+        #[cfg(target_os = "macos")]
+        import_legacy_area_selection();
         let locked_area = locked_area_for(
             &display.id(),
             logical,
@@ -3891,7 +3930,6 @@ impl OverlayWindow {
             )
     }
 
-    /// The ratio a free area snapped to, in the crop dialog's badge.
     fn render_snapped_ratio(&self, crop: AreaRect, ratio: (u32, u32)) -> impl IntoElement {
         let theme = self.theme;
         div()
@@ -4165,7 +4203,6 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    /// The ratios the chips leave out, then 0.6.0's "Snap to ratios" toggle.
     fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
         let mut items = more_area_ratios()
             .into_iter()
@@ -5739,7 +5776,9 @@ mod snap_to_ratio_tests {
             &mut section,
             Some(&legacy_060())
         ));
-        assert_eq!(serde_json::Value::Object(section.clone()), legacy_060());
+        let mut expected = legacy_060();
+        expected[LEGACY_IMPORTED] = true.into();
+        assert_eq!(serde_json::Value::Object(section.clone()), expected);
         // Already imported: nothing changes, even if 0.6.0 writes again.
         let mut changed = legacy_060();
         changed["snapToRatio"] = true.into();
@@ -5773,16 +5812,36 @@ mod snap_to_ratio_tests {
         let mut section = serde_json::Map::new();
         assert!(merge_legacy_area_selection(&mut section, None));
         assert_eq!(
-            serde_json::Value::Object(section),
-            serde_json::json!({ "snapToRatio": true })
+            serde_json::Value::Object(section.clone()),
+            serde_json::json!({ "legacyImported": true })
         );
+        assert!(!merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
         let mut section = serde_json::Map::new();
         let broken = serde_json::json!({ "locked": "yes", "snapToRatio": 0, "aspectRatio": null });
         assert!(merge_legacy_area_selection(&mut section, Some(&broken)));
         assert_eq!(
             serde_json::Value::Object(section),
-            serde_json::json!({ "snapToRatio": true })
+            serde_json::json!({ "legacyImported": true })
         );
+    }
+
+    #[test]
+    fn a_snap_toggle_before_the_import_does_not_suppress_it() {
+        let mut section = serde_json::json!({ "snapToRatio": true })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        assert_eq!(section["snapToRatio"], true);
+        assert_eq!(section["locked"], true);
+        assert_eq!(section["aspectRatio"], serde_json::json!([16, 9]));
+        assert_eq!(section[LEGACY_IMPORTED], true);
     }
 
     #[test]
@@ -5868,8 +5927,26 @@ mod snap_to_ratio_tests {
             .status()
             .unwrap();
         assert!(status.success());
-        assert_eq!(legacy_area_selection_in(&root), Some(legacy_060()));
-        assert_eq!(legacy_area_selection_in(&root.join("missing")), None);
+        assert_eq!(legacy_area_selection_in(&root), Ok(Some(legacy_060())));
+        assert_eq!(legacy_area_selection_in(&root.join("missing")), Ok(None));
+
+        // A file that is not a database is an unreadable one: the import
+        // stays due rather than being recorded as done.
+        let broken = root.join("broken/LocalStorage");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("localstorage.sqlite3"), b"not sqlite").unwrap();
+        assert_eq!(legacy_area_selection_in(&root.join("broken")), Err(()));
+
+        // A database without the key is simply no preferences.
+        let other = root.join("other/LocalStorage");
+        std::fs::create_dir_all(&other).unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(other.join("localstorage.sqlite3"))
+            .arg("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root.join("other")), Ok(None));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
