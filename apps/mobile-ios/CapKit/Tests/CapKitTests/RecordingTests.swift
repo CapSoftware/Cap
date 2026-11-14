@@ -243,9 +243,12 @@ final class CompletionLog: Sendable {
 
         // A file may only be gone once job.json on disk already says it was uploaded, or a crash in
         // between would find a pending segment with nothing to upload.
+        // Files are looked at before job.json: a file gone by then must be marked uploaded in any later save, whereas
+        // reading job.json first can race an upload finishing between the two reads.
         func checkInvariant() throws {
+            let missing = segments.filter { !FileManager.default.fileExists(atPath: directory.appending(path: $0.fileName).path(percentEncoded: false)) }
             let saved = try? CapJSON.decoder().decode(RecordingJob.self, from: Data(contentsOf: directory.appending(path: "job.json")))
-            for segment in segments where !FileManager.default.fileExists(atPath: directory.appending(path: segment.fileName).path(percentEncoded: false)) {
+            for segment in missing {
                 let state = saved?.segments.first { $0.subpath == segment.subpath }?.state
                 #expect(state == .uploaded, "\(segment.fileName) was deleted before its upload was saved")
             }
