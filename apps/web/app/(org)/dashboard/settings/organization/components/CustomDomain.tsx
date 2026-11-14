@@ -1,18 +1,16 @@
 import { Button } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
-import {
-	faCheckCircle,
-	faExclamationCircle,
-	faGlobe,
-	faX,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheckCircle } from "@fortawesome/free-solid-svg-icons/faCheckCircle";
+import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faX } from "@fortawesome/free-solid-svg-icons/faX";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";

@@ -4,16 +4,14 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
-import {
-	faCopy,
-	faEllipsis,
-	faFolderTree,
-	faGlobe,
-	faPencil,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faFolderTree } from "@fortawesome/free-solid-svg-icons/faFolderTree";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faPencil } from "@fortawesome/free-solid-svg-icons/faPencil";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { type RefObject, useRef } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface FoldersDropdownProps {
 	id: string;
@@ -24,6 +22,7 @@ interface FoldersDropdownProps {
 	public: boolean;
 	onPublicToggle: () => void;
 	onCopyPublicLink: () => void;
+	canEdit: boolean;
 	canMove: boolean;
 	onMove: () => void;
 }
@@ -35,10 +34,13 @@ export const FoldersDropdown = ({
 	public: isPublic,
 	onPublicToggle,
 	onCopyPublicLink,
+	canEdit,
 	canMove,
 	onMove,
 }: FoldersDropdownProps) => {
 	const renameRequestedRef = useRef(false);
+
+	if (!canEdit && !isPublic) return null;
 
 	return (
 		<DropdownMenu>
@@ -82,48 +84,51 @@ export const FoldersDropdown = ({
 						icon: typeof faPencil;
 						onClick: () => void | Promise<void>;
 					};
-					const items: FolderDropdownItem[] = [
-						{
-							label: "Rename",
-							icon: faPencil,
-							onClick: () => {
-								renameRequestedRef.current = true;
-								setIsRenaming(true);
-								setTimeout(() => {
-									nameRef.current?.focus();
-									nameRef.current?.select();
-								}, 0);
-							},
-						},
-						{
-							label: isPublic ? "Make private" : "Make public",
-							icon: faGlobe,
-							onClick: onPublicToggle,
-						},
-						...(isPublic
-							? [
-									{
-										label: "Copy public link",
-										icon: faCopy,
-										onClick: onCopyPublicLink,
+					const copyLink: FolderDropdownItem[] = isPublic
+						? [
+								{
+									label: "Copy public link",
+									icon: faCopy,
+									onClick: onCopyPublicLink,
+								},
+							]
+						: [];
+					const items: FolderDropdownItem[] = canEdit
+						? [
+								{
+									label: "Rename",
+									icon: faPencil,
+									onClick: () => {
+										renameRequestedRef.current = true;
+										setIsRenaming(true);
+										setTimeout(() => {
+											nameRef.current?.focus();
+											nameRef.current?.select();
+										}, 0);
 									},
-								]
-							: []),
-						...(canMove
-							? [
-									{
-										label: "Move",
-										icon: faFolderTree,
-										onClick: onMove,
-									},
-								]
-							: []),
-						{
-							label: "Delete",
-							icon: faTrash,
-							onClick: () => setConfirmDeleteFolderOpen(true),
-						},
-					];
+								},
+								{
+									label: isPublic ? "Make private" : "Make public",
+									icon: faGlobe,
+									onClick: onPublicToggle,
+								},
+								...copyLink,
+								...(canMove
+									? [
+											{
+												label: "Move",
+												icon: faFolderTree,
+												onClick: onMove,
+											},
+										]
+									: []),
+								{
+									label: "Delete",
+									icon: faTrash,
+									onClick: () => setConfirmDeleteFolderOpen(true),
+								},
+							]
+						: copyLink;
 					return items.map((item) => (
 						<DropdownMenuItem
 							key={item.label}

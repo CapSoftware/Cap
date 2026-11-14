@@ -173,7 +173,7 @@ fn files_matching(dir: &Path, suffix: &str) -> Vec<std::path::PathBuf> {
                 .collect()
         })
         .unwrap_or_default();
-    out.sort();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut out);
     out
 }
 

@@ -1,10 +1,10 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faTerminal } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faTerminal } from "@fortawesome/free-solid-svg-icons/faTerminal";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { buildLoomAgentMigrationPrompt } from "@/lib/loom-agent-prompt";
 
 export function LoomAgentPromptRow({

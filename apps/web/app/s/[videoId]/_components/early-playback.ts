@@ -3,6 +3,8 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { setFullLength } from "./early-length";
 
+export { formatClock } from "@/lib/player-time";
+
 // The playlist only holds what has uploaded, so a seek past it is held until
 // that part arrives instead of letting the browser clamp it to the end.
 
@@ -112,16 +114,6 @@ export function isAtUploadEdge({
 		readyState < 3 &&
 		currentTime >= mediaEnd - 1
 	);
-}
-
-export function formatClock(seconds: number): string {
-	const whole = Math.max(0, Math.floor(seconds));
-	const hours = Math.floor(whole / 3600);
-	const minutes = Math.floor((whole % 3600) / 60);
-	const secs = String(whole % 60).padStart(2, "0");
-	return hours > 0
-		? `${hours}:${String(minutes).padStart(2, "0")}:${secs}`
-		: `${minutes}:${secs}`;
 }
 
 export function useEarlyPlayback({

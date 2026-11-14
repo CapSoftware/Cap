@@ -2,19 +2,17 @@
 
 import { Button } from "@cap/ui";
 import { type Folder, PublicCollection } from "@cap/web-domain";
-import {
-	faCheck,
-	faCopy,
-	faGlobe,
-	faSliders,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faSliders } from "@fortawesome/free-solid-svg-icons/faSliders";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { setCollectionLogo } from "@/actions/collections/logo";
 import { setSpaceCollectionVisibility } from "@/actions/collections/visibility";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
