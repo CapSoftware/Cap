@@ -287,7 +287,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::dialog::capture::source_lost(),
             "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved.",
         ),
-        (tr::dialog::capture::source_lost_title(), "Recording stopped"),
+        (
+            tr::dialog::capture::source_lost_title(),
+            "Recording stopped",
+        ),
         (
             tr::dialog::storage::stopped_kept(),
             "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.",

@@ -1845,8 +1845,7 @@ impl Pipeline {
                 // are cancelled with it, so without a completion the app would keep showing a
                 // live recording that captures nothing.
                 #[cfg(target_os = "macos")]
-                if required && res.is_ok() && !stopping.load(std::sync::atomic::Ordering::Acquire)
-                {
+                if required && res.is_ok() && !stopping.load(std::sync::atomic::Ordering::Acquire) {
                     warn!(?track, "Studio screen capture ended before Stop");
                     completion_tx.send_if_modified(|current| {
                         if current.is_none() {

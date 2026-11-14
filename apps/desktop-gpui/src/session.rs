@@ -2194,7 +2194,9 @@ fn sleep_action(
 /// lost what it was capturing: the display slept or went away, the window
 /// closed, or sharing was stopped from the menu bar. Everything captured so far
 /// is intact, so the recording is stopped and saved instead of failed.
-fn capture_ended_cleanly<E>(outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>) -> bool {
+fn capture_ended_cleanly<E>(
+    outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>,
+) -> bool {
     cfg!(target_os = "macos") && matches!(outcome, Ok(Ok(())))
 }
 
