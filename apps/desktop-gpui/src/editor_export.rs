@@ -2900,7 +2900,7 @@ impl EditorWindow {
                                 .label(tr::editor::export::done::open_file())
                                 .on_click(move |_, _, cx| {
                                     if let Some(path) = &path {
-                                        library::open_with_system(path, cx);
+                                        library::open_output(path, cx);
                                     }
                                 }),
                             )
