@@ -56,6 +56,7 @@ const FORMATTED: &[&str] = &[
     "transcription.download.file_progress",
     "transcription.download.progress",
     "dialog.quit.canceled",
+    "dialog.startup.failed",
     "dialog.update.already_getting",
     "dialog.update.available",
     "dialog.update.check_failed",
@@ -836,6 +837,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language",
         ),
         (tr::dialog::quit::still_open(), "Cap is still open"),
+        (tr::dialog::startup::failed_title(), "Cap couldn't start"),
+        (tr::dialog::startup::quit_and_reopen(), "Quit and Reopen"),
+        (
+            tr::dialog::startup::unresponsive(),
+            "Cap is already running but isn't responding. Quit that copy and open Cap again?",
+        ),
+        (
+            tr::dialog::startup::unresponsive_title(),
+            "Cap isn't responding",
+        ),
         (
             tr::dialog::quit::files_kept(),
             "Everything recorded so far stays in the recording's folder.",
@@ -1176,6 +1187,10 @@ fn update_and_quit_messages_format_like_the_code_they_replaced() {
         (
             tr::dialog::update::failed(error),
             format!("{error}\n\nYou can always download the latest version from Cap.so/download."),
+        ),
+        (
+            tr::dialog::startup::failed(error, "C:\\logs"),
+            format!("{error}\n\nDetails were saved in C:\\logs."),
         ),
     ];
     for (translated, literal) in pairs {
