@@ -1699,8 +1699,10 @@ reorder_hint = "ドラッグで並べ替え • 上 = 最前面"
 title = "レイヤー"
 
 [screenshot_editor.menu]
+copy_text = "テキストをコピー"
 delete = "削除"
 open_folder = "フォルダを開く"
+select_all_text = "すべてのテキストを選択"
 
 [screenshot_editor.share]
 create_link = "共有リンクを作成"
@@ -1726,6 +1728,7 @@ width = "幅"
 copied = "スクリーンショットをクリップボードにコピーしました！"
 link_copied = "共有リンクをクリップボードにコピーしました"
 saved = "スクリーンショットを保存しました！"
+text_copied = "テキストをクリップボードにコピーしました"
 
 [screenshot_editor.tool]
 arrow = "矢印"

@@ -1699,8 +1699,10 @@ reorder_hint = "क्रम बदलने के लिए खींचें
 title = "लेयर"
 
 [screenshot_editor.menu]
+copy_text = "टेक्स्ट कॉपी करें"
 delete = "हटाएँ"
 open_folder = "फ़ोल्डर खोलें"
+select_all_text = "पूरा टेक्स्ट चुनें"
 
 [screenshot_editor.share]
 create_link = "शेयर करने लायक लिंक बनाएँ"
@@ -1726,6 +1728,7 @@ width = "चौड़ाई"
 copied = "स्क्रीनशॉट क्लिपबोर्ड पर कॉपी हो गया!"
 link_copied = "शेयर लिंक क्लिपबोर्ड पर कॉपी हो गया"
 saved = "स्क्रीनशॉट सहेज लिया गया!"
+text_copied = "टेक्स्ट क्लिपबोर्ड पर कॉपी हो गया"
 
 [screenshot_editor.tool]
 arrow = "ऐरो"

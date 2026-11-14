@@ -1860,7 +1860,7 @@ impl TextInput {
 /// accent in the shipping app and gpui exposes no query for it, so this is the
 /// same macOS blue the toggles already deviate to, at the 30 % a focused
 /// `<input>`'s selection paints at.
-fn selection_tint() -> Hsla {
+pub(crate) fn selection_tint() -> Hsla {
     Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT), 0.30)
 }
 

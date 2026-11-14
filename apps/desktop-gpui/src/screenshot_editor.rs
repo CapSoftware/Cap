@@ -619,12 +619,14 @@ impl Anchor {
     ];
 }
 
-/// The three `KSelect` / `KDropdownMenu` popups on the chrome.
+/// The chrome's `KSelect` / `KDropdownMenu` popups, and the recognised
+/// text's context menu.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuKind {
     Aspect,
     More,
     CornerStyle,
+    Text,
 }
 
 /// The screenshot editor's border fallback -- `BorderPopover.tsx:42-45`,
@@ -955,6 +957,8 @@ pub struct ScreenshotEditorWindow {
     layers_panel_open: bool,
     /// The crop dialog ([`crate::screenshot_crop`]). `None` means closed.
     pub(crate) crop: Option<crate::screenshot_crop::ScreenshotCropDialog>,
+    /// The recognised text layer ([`crate::screenshot_ocr`]).
+    pub(crate) ocr: crate::screenshot_ocr::OcrState,
     active_popover: Option<Popover>,
     menu: Option<(MenuKind, ui::MenuState)>,
     anchors: HashMap<Anchor, BoundsCell>,
@@ -1038,6 +1042,7 @@ impl ScreenshotEditorWindow {
                 .screenshot_layers_panel_open
                 .unwrap_or(false),
             crop: None,
+            ocr: Default::default(),
             active_popover: None,
             menu: None,
             anchors: Anchor::ALL
@@ -1173,6 +1178,7 @@ impl ScreenshotEditorWindow {
             self.schedule_save(window, cx);
         }
         self.refresh_mask_overlays(window, cx);
+        self.start_text_recognition(cx);
         cx.notify();
     }
 
@@ -1348,7 +1354,7 @@ impl ScreenshotEditorWindow {
         cx.notify();
     }
 
-    fn toast_success(
+    pub(crate) fn toast_success(
         &mut self,
         message: impl Into<String>,
         window: &mut Window,
@@ -1906,6 +1912,14 @@ impl ScreenshotEditorWindow {
             if self.active_popover.take().is_some() {
                 cx.notify();
             }
+            self.clear_text_selection(cx);
+            return;
+        }
+        if event.button == MouseButton::Left && self.text_mouse_down(event, cx) {
+            self.active_popover = None;
+            self.menu = None;
+            window.focus(&self.focus, cx);
+            cx.notify();
             return;
         }
         if event.button != MouseButton::Left && event.button != MouseButton::Middle {
@@ -2511,6 +2525,20 @@ impl ScreenshotEditorWindow {
                 ui::MenuItem::new(tr::screenshot_editor::menu::open_folder(), false),
                 ui::MenuItem::new(tr::screenshot_editor::menu::delete(), false),
             ],
+            MenuKind::Text => {
+                let mut items = Vec::new();
+                if self.has_text_selection() {
+                    items.push(ui::MenuItem::new(
+                        tr::screenshot_editor::menu::copy_text(),
+                        false,
+                    ));
+                }
+                items.push(ui::MenuItem::new(
+                    tr::screenshot_editor::menu::select_all_text(),
+                    false,
+                ));
+                items
+            }
             MenuKind::CornerStyle => Self::CORNER_STYLES
                 .iter()
                 .map(|style| {
@@ -2535,6 +2563,19 @@ impl ScreenshotEditorWindow {
                     0 => crate::library::reveal_path(&self.bundle.join("original.png"), cx),
                     1 => self.delete_screenshot(window, cx),
                     _ => {}
+                }
+                cx.notify();
+            }
+            MenuKind::Text => {
+                let copy = self.has_text_selection();
+                self.menu = None;
+                match (copy, index) {
+                    (true, 0) => {
+                        self.copy_selected_text(window, cx);
+                    }
+                    _ => {
+                        self.select_all_text(cx);
+                    }
                 }
                 cx.notify();
             }
@@ -2600,6 +2641,20 @@ impl ScreenshotEditorWindow {
     pub(crate) fn dismiss_chrome_popups(&mut self) {
         self.active_popover = None;
         self.menu = None;
+    }
+
+    /// The recognised-text context menu, at the pointer like a real one.
+    pub(crate) fn open_text_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = self.menu_items(MenuKind::Text);
+        self.menu = Some((MenuKind::Text, ui::MenuState::new(position, &items)));
+        self.active_popover = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     fn toggle_popover(&mut self, popover: Popover, window: &mut Window, cx: &mut Context<Self>) {
@@ -2703,8 +2758,13 @@ impl ScreenshotEditorWindow {
                 }
                 "c" => {
                     cx.stop_propagation();
-                    if !self.copy_selected_annotation(cx) {
+                    if !self.copy_selected_annotation(cx) && !self.copy_selected_text(window, cx) {
                         self.export_image(ExportDestination::Clipboard, window, cx);
+                    }
+                }
+                "a" => {
+                    if self.select_all_text(cx) {
+                        cx.stop_propagation();
                     }
                 }
                 "v" => {
@@ -2747,6 +2807,10 @@ impl ScreenshotEditorWindow {
             "escape" => {
                 if self.active_popover.take().is_some() || self.menu.take().is_some() {
                     cx.notify();
+                    return;
+                }
+                if self.has_text_selection() {
+                    self.clear_text_selection(cx);
                     return;
                 }
                 self.set_tool(Tool::Select, cx);
@@ -4162,6 +4226,14 @@ impl ScreenshotEditorWindow {
                             this.preview_mouse_down(event, window, cx);
                         }),
                     )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            if this.text_context_menu(event, window, cx) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
                     .on_scroll_wheel(cx.listener(
                         |this, event: &gpui::ScrollWheelEvent, window, cx| {
                             this.preview_wheel(event, window, cx);
@@ -4230,6 +4302,7 @@ impl ScreenshotEditorWindow {
                                             ])
                                         })
                                         .child(img(frame).size_full())
+                                        .children(self.render_text_layer())
                                         .children(self.render_annotation_layer(
                                             geometry.scaled,
                                             image_rect,
@@ -4564,6 +4637,7 @@ impl Render for ScreenshotEditorWindow {
             )
             .children(self.render_annotation_config_bar(cx))
             .children(self.render_annotation_overlays(window, cx))
+            .children(self.render_text_drag_layer(cx))
             .children(self.render_popover(window, cx))
             .children(self.render_menu(cx))
             // The crop dialog is a modal over everything except the toasts
