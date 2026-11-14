@@ -1387,9 +1387,15 @@ export async function sweepSupersededDeveloperVideoOutputs(
 			? sliced
 			: null;
 	const slicedFiles = new Set<string>();
+	// Media of slices viewers were shown before a fallback stays, with each
+	// slice's own playlists, which delivery metering reads to count its seconds.
 	const superseded = supersededSlicedHls(processing);
 	if (superseded) {
-		const { hlsPrefix } = slicedHlsKeys(video, encodeId, superseded.output);
+		const { hlsPrefix, slicePrefix } = slicedHlsKeys(
+			video,
+			encodeId,
+			superseded.output,
+		);
 		for (const file of slicedHlsMediaFiles({
 			video,
 			encodeId,
@@ -1397,6 +1403,7 @@ export async function sweepSupersededDeveloperVideoOutputs(
 			ended: true,
 		})) {
 			slicedFiles.add(`${hlsPrefix}${file}`);
+			slicedFiles.add(`${slicePrefix}${file.replace(/\.m4s$/, ".m3u8")}`);
 		}
 	}
 	if (slicedOutput) {

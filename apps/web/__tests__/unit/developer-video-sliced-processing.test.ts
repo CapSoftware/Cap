@@ -1015,7 +1015,9 @@ describe("a slice that fails twice", () => {
 		) => boolean;
 		expect(keep(`${FOLDER}/hls/1080p-0-${latest(0).token}.m4s`)).toBe(true);
 		expect(keep(`${FOLDER}/hls/audio-0-${latest(0).token}.m4s`)).toBe(true);
-		expect(keep(`${FOLDER}/slices/1080p-0-${latest(0).token}.m3u8`)).toBe(
+		expect(keep(`${FOLDER}/slices/1080p-0-${latest(0).token}.m3u8`)).toBe(true);
+		expect(keep(`${FOLDER}/slices/audio-0-${latest(0).token}.m3u8`)).toBe(true);
+		expect(keep(`${FOLDER}/slices/master-0-${latest(0).token}.m3u8`)).toBe(
 			false,
 		);
 		expect(
