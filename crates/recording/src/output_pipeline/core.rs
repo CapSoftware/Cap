@@ -3985,16 +3985,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                         );
                         let duration = shift_from_origin(duration, is_first_frame, origin_lead);
-                        timestamp_span.record(duration);
 
                         let duplicate = frame.duplicate();
-                        match muxer.lock().await.send_video_frame(frame, duration) {
-                            Ok(()) => last_frame = duplicate,
-                            Err(e) => {
-                                warn!("Error processing drained frame: {e}");
-                                skipped += 1;
-                            }
-                        }
+                        muxer
+                            .lock()
+                            .await
+                            .send_video_frame(frame, duration)
+                            .map_err(|error| video_mux_send_error(frame_count, error))?;
+                        timestamp_span.record(duration);
+                        last_frame = duplicate;
                     }
                     Ok(None) => break,
                     Err(_) => {
@@ -8914,6 +8913,115 @@ mod tests {
                 48_000,
                 2,
             )
+        }
+
+        struct StopFrameVideoSource {
+            sender: Option<mpsc::Sender<TestVideoFrame>>,
+            timestamps: Timestamps,
+        }
+
+        impl VideoSource for StopFrameVideoSource {
+            type Config = Timestamps;
+            type Frame = TestVideoFrame;
+
+            async fn setup(
+                timestamps: Self::Config,
+                sender: mpsc::Sender<Self::Frame>,
+                _: &mut SetupCtx,
+            ) -> anyhow::Result<Self> {
+                Ok(Self {
+                    sender: Some(sender),
+                    timestamps,
+                })
+            }
+
+            fn video_info(&self) -> VideoInfo {
+                test_video_info()
+            }
+
+            fn start(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
+                async {
+                    self.sender
+                        .as_mut()
+                        .unwrap()
+                        .send(TestVideoFrame {
+                            timestamp: Timestamp::Instant(self.timestamps.instant()),
+                        })
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            }
+
+            fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
+                async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    if let Some(mut sender) = self.sender.take() {
+                        sender
+                            .send(TestVideoFrame {
+                                timestamp: Timestamp::Instant(
+                                    self.timestamps.instant() + Duration::from_millis(33),
+                                ),
+                            })
+                            .await?;
+                    }
+                    Ok(())
+                }
+                .boxed()
+            }
+        }
+
+        #[tokio::test]
+        async fn pipeline_stop_surfaces_video_mux_failure_during_drain() {
+            for fail_after_frame in [2, u64::MAX] {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let timestamps = Timestamps::now();
+                let pipeline = OutputPipeline::builder(temp_dir.path().join("video.mp4"))
+                    .with_video::<StopFrameVideoSource>(timestamps)
+                    .with_timestamps(timestamps)
+                    .build::<FailingVideoMuxer>(FailingVideoMuxerConfig {
+                        fail_after_frame,
+                        fail_audio_after_frame: u64::MAX,
+                    })
+                    .await
+                    .unwrap();
+                let mut first = pipeline.first_timestamp_watch();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while first.borrow_and_update().is_none() {
+                        first.changed().await.unwrap();
+                    }
+                })
+                .await
+                .unwrap();
+                let done = pipeline.done_fut();
+                let span = pipeline.video_timestamp_span.clone();
+
+                let stopped = tokio::time::timeout(Duration::from_secs(5), pipeline.stop())
+                    .await
+                    .unwrap();
+                if fail_after_frame == 2 {
+                    let error = stopped
+                        .err()
+                        .expect("Stop must report the rejected tail frame");
+                    assert!(
+                        error.to_string().contains(
+                            "Video muxer stopped accepting frames at frame 2: video mux send failed"
+                        ),
+                        "{error:#}"
+                    );
+                    assert!(
+                        done.await
+                            .unwrap_err()
+                            .to_string()
+                            .contains("Video muxer stopped accepting frames at frame 2")
+                    );
+                    assert_eq!(span.get(), Some((Duration::ZERO, Duration::ZERO)));
+                } else {
+                    assert_eq!(stopped.unwrap().video_frame_count, 2);
+                    done.await.unwrap();
+                    assert!(span.get().unwrap().1 > Duration::ZERO);
+                }
+            }
         }
 
         #[tokio::test]
