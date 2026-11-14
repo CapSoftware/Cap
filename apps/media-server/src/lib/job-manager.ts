@@ -163,6 +163,7 @@ export interface Job {
 	// A ladder for a Cap Infra video at the 1440p or 2160p tier, which keeps the
 	// GPU encoder busy on its own.
 	infraHeavyLadder?: boolean;
+	infraMp4?: boolean;
 }
 
 const jobs = new Map<string, Job>();
@@ -384,6 +385,14 @@ export function getActiveInfraHeavyLadderCount(): number {
 	return count;
 }
 
+export function getActiveInfraMp4Count(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.infraMp4 && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
 export function infraCapacityAllows(input: {
 	effectiveMax: number;
 	active: number;
@@ -391,7 +400,10 @@ export function infraCapacityAllows(input: {
 	heavyLadder: boolean;
 	reservedSlots?: number;
 	maxHeavyLadders?: number;
+	slice?: boolean;
+	activeInfraMp4s?: number;
 }): boolean {
+	if (input.slice && (input.activeInfraMp4s ?? 0) > 0) return false;
 	const reservedSlots = input.reservedSlots ?? INFRA_RESERVED_SLOTS;
 	const maxHeavyLadders = input.maxHeavyLadders ?? MAX_INFRA_HEAVY_LADDERS;
 	const reserved = Math.min(reservedSlots, Math.max(0, input.effectiveMax - 1));
@@ -399,12 +411,37 @@ export function infraCapacityAllows(input: {
 	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
 }
 
-export function canAcceptNewInfraVideoProcess(heavyLadder: boolean): boolean {
+// The slices of one long Infra video arrive several at a time, so a slice
+// leaves at least half of the worker's slots free instead of only the
+// reserved ones, and stays off a worker that is making an Infra MP4: the MP4
+// is sent before the slices and must finish as fast as it would beside a
+// whole-video ladder, which runs on a worker of its own. A slice turned away
+// is sent again by its caller and reaches another worker through the load
+// balancer.
+export function infraSliceReservedSlots(
+	effectiveMax: number,
+	reservedSlots = INFRA_RESERVED_SLOTS,
+): number {
+	return Math.max(reservedSlots, Math.ceil(effectiveMax / 2));
+}
+
+export function canAcceptNewInfraVideoProcess(
+	heavyLadder: boolean,
+	slice = false,
+): boolean {
+	const { effectiveMax } = getSystemResources();
 	return infraCapacityAllows({
-		effectiveMax: getSystemResources().effectiveMax,
+		effectiveMax,
 		active: getActiveVideoProcessCount(),
 		activeHeavyLadders: getActiveInfraHeavyLadderCount(),
 		heavyLadder,
+		...(slice
+			? {
+					reservedSlots: infraSliceReservedSlots(effectiveMax),
+					slice,
+					activeInfraMp4s: getActiveInfraMp4Count(),
+				}
+			: {}),
 	});
 }
 
