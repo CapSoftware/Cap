@@ -58,6 +58,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Build, Test, Develop
 - Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.
+- `env-setup` prompts in a terminal. Without one (agents, CI), pass `bun run env-setup --apps desktop`, or `--apps web --docker` for the web app with Docker's MySQL and MinIO; it won't replace an existing `.env` unless you add `--force`.
 - Dev: `bun run dev` (web+desktop). Desktop only: `bun run dev:desktop`. Web only: `bun run dev:web` or `cd apps/web && bun run dev`.
 - Build: `bun run build` (Turbo). Desktop release: `bun run gpui:build <target>` on the target platform.
 - DB: `bun run db:generate` → `bun run db:push` → `bun run db:studio`.
