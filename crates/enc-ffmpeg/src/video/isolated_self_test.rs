@@ -325,6 +325,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn register_test_host() {
         let host = test_host();
         register_host(host.program, host.args);
