@@ -343,9 +343,13 @@ pub(crate) mod tests {
         Request::new(codec, &options, &config, width, height, 0.3, None)
     }
 
-    fn run_child(request: &Request, fault: Option<&str>, timeout: Duration) -> Result<(), String> {
-        let env: Vec<(&str, &str)> = fault.map(|fault| (FAULT_ENV, fault)).into_iter().collect();
-        run_with(&test_host(), request, timeout, &env)
+    fn run_child(request: &Request, timeout: Duration) -> Result<(), String> {
+        run_with(&test_host(), request, timeout, &[])
+    }
+
+    #[cfg(debug_assertions)]
+    fn run_faulting_child(request: &Request, fault: &str, timeout: Duration) -> Result<(), String> {
+        run_with(&test_host(), request, timeout, &[(FAULT_ENV, fault)])
     }
 
     #[test]
@@ -363,47 +367,44 @@ pub(crate) mod tests {
     #[test]
     fn isolated_self_test_outcomes() {
         let odd = gray_request("libx264", 1438, 812);
-        assert_eq!(run_child(&odd, None, CHILD_TIMEOUT), Ok(()));
+        assert_eq!(run_child(&odd, CHILD_TIMEOUT), Ok(()));
 
-        let crashed = run_child(&odd, Some("access_violation"), CHILD_TIMEOUT).unwrap_err();
-        assert!(
-            crashed.starts_with("encoder crashed its isolated self-test process"),
-            "{crashed}"
-        );
-
-        let aborted = run_child(&odd, Some("abort"), CHILD_TIMEOUT).unwrap_err();
-        assert!(
-            aborted.starts_with("encoder crashed its isolated self-test process"),
-            "{aborted}"
-        );
-
-        assert_eq!(
-            run_child(&odd, Some("fail"), CHILD_TIMEOUT),
-            Err("injected self-test failure".to_string())
-        );
-        assert_eq!(
-            run_child(&odd, Some("access_violation:h264_mf"), CHILD_TIMEOUT),
-            Ok(())
-        );
-        assert_eq!(
-            run_child(&odd, Some("fail:libx264"), CHILD_TIMEOUT),
-            Err("injected self-test failure".to_string())
-        );
-
-        let started = Instant::now();
-        let hung = run_child(&odd, Some("hang"), Duration::from_secs(2)).unwrap_err();
-        assert!(hung.contains("did not finish"), "{hung}");
-        assert!(started.elapsed() < Duration::from_secs(10));
-
-        let missing = run_child(
-            &gray_request("h264_not_an_encoder", 64, 64),
-            None,
-            CHILD_TIMEOUT,
-        );
+        let missing = run_child(&gray_request("h264_not_an_encoder", 64, 64), CHILD_TIMEOUT);
         assert_eq!(
             missing,
             Err("encoder h264_not_an_encoder not found".to_string())
         );
+    }
+
+    /// Fault injection only exists in debug builds.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn isolated_self_test_survives_injected_faults() {
+        let odd = gray_request("libx264", 1438, 812);
+        for fault in ["access_violation", "abort"] {
+            let crashed = run_faulting_child(&odd, fault, CHILD_TIMEOUT).unwrap_err();
+            assert!(
+                crashed.starts_with("encoder crashed its isolated self-test process"),
+                "{fault}: {crashed}"
+            );
+        }
+        assert_eq!(
+            run_faulting_child(&odd, "fail", CHILD_TIMEOUT),
+            Err("injected self-test failure".to_string())
+        );
+        assert_eq!(
+            run_faulting_child(&odd, "access_violation:h264_mf", CHILD_TIMEOUT),
+            Ok(())
+        );
+        assert_eq!(
+            run_faulting_child(&odd, "fail:libx264", CHILD_TIMEOUT),
+            Err("injected self-test failure".to_string())
+        );
+
+        let started = Instant::now();
+        let hung = run_faulting_child(&odd, "hang", Duration::from_secs(2)).unwrap_err();
+        assert!(hung.contains("did not finish"), "{hung}");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]
