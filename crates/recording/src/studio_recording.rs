@@ -140,7 +140,9 @@ fn persist_segment_input_events(
     keyboard_path: Option<&Path>,
     failure: &mut Option<anyhow::Error>,
 ) -> (Cursors, u32) {
-    if let Some(path) = cursor_path {
+    if let Some(path) = cursor_path
+        && !(path.is_file() && response.clicks.is_empty() && response.moves.is_empty())
+    {
         let result = serde_json::to_string_pretty(&CursorEvents {
             clicks: response.clicks,
             moves: response.moves,
@@ -4045,6 +4047,30 @@ mod tests {
         persist_segment_input_events(response, None, Some(temp.path()), &mut failure);
         assert_eq!(failure.unwrap().to_string(), "retained media error");
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn sidecar_preserves_incrementally_flushed_cursor_file_when_drained() {
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("cursor.json");
+        let flushed = CursorEvents {
+            clicks: Vec::new(),
+            moves: vec![cap_project::CursorMoveEvent {
+                active_modifiers: Vec::new(),
+                cursor_id: "0".into(),
+                time_ms: 42.0,
+                x: 0.5,
+                y: 0.5,
+            }],
+        };
+        std::fs::write(&cursor, serde_json::to_vec(&flushed).unwrap()).unwrap();
+        let mut response = sidecar_response();
+        response.keyboard_presses.clear();
+        let mut failure = None;
+        persist_segment_input_events(response, Some(&cursor), None, &mut failure);
+        assert!(failure.is_none());
+        let saved = CursorEvents::load_from_file(&cursor).unwrap();
+        assert_eq!(saved.moves, flushed.moves);
     }
 
     #[test]
