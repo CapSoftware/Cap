@@ -2509,6 +2509,133 @@ impl MainWindow {
         self.start_recording_config(config, cx);
     }
 
+    pub(crate) fn start_recording_with_target_and_permit(
+        &mut self,
+        target: ScreenCaptureTarget,
+        excluded_windows: Vec<scap_targets::WindowId>,
+        confirmed_without_microphone: bool,
+        permit: RecordingStartPermit,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.recording_start_is_current(&permit, cx) {
+            self.finish_recording_start(&permit);
+            return;
+        }
+        let editor_flow = self.session.read(cx).editor_recording_target().is_some();
+        let mode = if editor_flow {
+            recording::RecordingMode::Studio
+        } else {
+            match self.recording_mode(cx) {
+                Some(mode) => mode,
+                None => {
+                    self.finish_recording_start(&permit);
+                    return;
+                }
+            }
+        };
+        if mode == recording::RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
+            self.finish_recording_start(&permit);
+            let kind = match &target {
+                ScreenCaptureTarget::Display { .. } => TargetType::Display,
+                ScreenCaptureTarget::Window { .. } => TargetType::Window,
+                ScreenCaptureTarget::Area { .. } => TargetType::Area,
+                ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
+            };
+            self.show_sign_in_prompt(kind, cx);
+            cx.defer(app_windows::show_main_window);
+            return;
+        }
+        if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
+            self.finish_recording_start(&permit);
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::camera_only_needs_camera().into());
+                cx.notify();
+            });
+            if editor_flow {
+                cx.defer(app_windows::abort_editor_recording_flow);
+            }
+            return;
+        }
+        if self.enumerating
+            || self.device_format_pending.is_some()
+            || self.pending_device_restore.camera_id.is_some()
+            || self.pending_device_restore.microphone_name.is_some()
+        {
+            self.finish_recording_start(&permit);
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::devices_not_ready().into());
+                cx.notify();
+            });
+            return;
+        }
+
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
+            let feeds = Feeds::global(cx);
+            feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
+            let feeds = feeds.read(cx);
+            (
+                feeds.camera_actor(),
+                feeds.mic_actor(),
+                feeds.mic_meter(),
+                feeds.input_readiness(),
+                feeds.requested_device_settings(),
+            )
+        };
+        let (microphone, mic_feed) = if confirmed_without_microphone {
+            (None, None)
+        } else {
+            (
+                self.microphone.as_ref().map(|mic| mic.name.clone()),
+                mic_feed,
+            )
+        };
+        let config = recording::StartConfig {
+            mode,
+            target,
+            device_settings,
+            input_readiness,
+            microphone,
+            camera: self.camera_id.clone(),
+            system_audio: self.system_audio,
+            excluded_windows,
+            camera_feed,
+            mic_feed,
+            mic_meter,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
+            start_gate: None,
+        };
+
+        if let Ok(value) = serde_json::to_value(&config.target)
+            && !crate::store::set_store_setting(crate::store::RECORDING_SETTINGS, "target", value)
+        {
+            tracing::warn!("saving the last recording target failed");
+        }
+
+        if !confirmed_without_microphone {
+            let microphone_available = config.microphone.as_ref().is_some_and(|name| {
+                self.devices
+                    .microphones
+                    .iter()
+                    .any(|device| &device.name == name)
+            });
+            if !microphone_available
+                && crate::store::GeneralSettings::load().confirm_without_microphone
+            {
+                self.microphone_warning = Some(MicrophoneWarning {
+                    config,
+                    permit,
+                    dont_show_again: false,
+                    error: None,
+                });
+                cx.defer(app_windows::show_main_window);
+                cx.notify();
+                return;
+            }
+        }
+        self.check_storage_before_start(config, false, permit, cx);
+    }
+
     pub(crate) fn start_recording_config(
         &mut self,
         config: recording::StartConfig,
@@ -2567,6 +2694,32 @@ impl MainWindow {
         Ok(permit)
     }
 
+    pub(crate) fn prepare_default_recording_start(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<RecordingStartPermit, String> {
+        if self.enumerating
+            || self.device_format_pending.is_some()
+            || self.pending_device_restore.camera_id.is_some()
+            || self.pending_device_restore.microphone_name.is_some()
+        {
+            let message: String = tr::main::error::devices_not_ready().into();
+            self.session.update(cx, |session, cx| {
+                session.error = Some(message.clone());
+                cx.notify();
+            });
+            return Err(message);
+        }
+        let permit = RecordingStartPermit::prepare(
+            self.session.read(cx).phase,
+            app_windows::clean_capture_owned(cx),
+            self.checking_storage || self.deep_link_start.is_some(),
+        )?;
+        self.checking_storage = true;
+        self.deep_link_start = Some(permit.clone());
+        Ok(permit)
+    }
+
     pub(crate) fn cancel_deep_link_start(&mut self) {
         self.microphone_warning = None;
         if RecordingStartPermit::cancel_current(&mut self.deep_link_start) {
@@ -2606,7 +2759,11 @@ impl MainWindow {
         self.check_storage_before_start(config, false, permit, cx);
     }
 
-    fn recording_start_is_current(&self, permit: &RecordingStartPermit, cx: &gpui::App) -> bool {
+    pub(crate) fn recording_start_is_current(
+        &self,
+        permit: &RecordingStartPermit,
+        cx: &gpui::App,
+    ) -> bool {
         self.session.read(cx).phase == Phase::Idle
             && self
                 .deep_link_start
