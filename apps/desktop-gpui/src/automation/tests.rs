@@ -349,19 +349,49 @@ fn rules_choose_the_screenshot_editor_and_skip_wins() {
         ),
         Some(true)
     );
-    let deletes = rule(
-        "compress",
-        Trigger::StudioRecordingFinished,
-        true,
-        vec![export_action(), Action::DeleteLocalFiles],
+    let studio = |actions: Vec<Action>| {
+        editor_choice(
+            &store(vec![rule(
+                "r",
+                Trigger::StudioRecordingFinished,
+                true,
+                actions,
+            )]),
+            Trigger::StudioRecordingFinished,
+            &TriggerContext::new(),
+        )
+    };
+    let compress = Action::Export {
+        profile: ExportProfile {
+            format: ExportFormat::Mp4,
+            fps: 30,
+            resolution_base: cap_project::XY { x: 1280, y: 720 },
+            compression: Some(AutomationExportCompression::Potato),
+            preset_name: None,
+        },
+        destination: ExportDestination::CustomPath {
+            dir: "/exports".into(),
+        },
+    };
+    assert_eq!(
+        studio(vec![compress, Action::DeleteLocalFiles]),
+        Some(false)
     );
     assert_eq!(
-        editor_choice(
-            &store(vec![deletes]),
-            Trigger::StudioRecordingFinished,
-            &TriggerContext::new()
-        ),
+        studio(vec![
+            save_action(Path::new("/shots")),
+            Action::DeleteLocalFiles
+        ]),
         Some(false)
+    );
+    assert_eq!(studio(vec![Action::DeleteLocalFiles]), None);
+    assert_eq!(
+        studio(vec![export_action(), Action::DeleteLocalFiles]),
+        None
+    );
+    assert_eq!(
+        studio(vec![Action::DeleteLocalFiles, Action::OpenEditor]),
+        Some(true)
     );
 }
 

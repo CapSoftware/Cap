@@ -479,23 +479,45 @@ pub fn screenshot_editor_choice(
     )
 }
 
-/// A rule that deletes the capture keeps the editor closed too: the delete
-/// is refused while an editor has the capture open, so a saved
-/// "export, then delete" rule would otherwise never delete.
+/// A rule that can delete the capture keeps the editor closed too: the
+/// delete is refused while an editor has the capture open, so a saved
+/// "export, then delete" rule would otherwise never delete. A delete with no
+/// copy right before it never runs, so it leaves the editor alone.
 fn editor_choice(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContext) -> Option<bool> {
     let matched = cap_automation::evaluate(store, &trigger, ctx);
-    let any = |wanted: fn(&Action) -> bool| {
-        matched
+    let any = |wanted: fn(&[Action]) -> bool| matched.iter().any(|(_, actions)| wanted(actions));
+    if any(|actions| {
+        actions
             .iter()
-            .any(|(_, actions)| actions.iter().any(wanted))
-    };
-    if any(|action| matches!(action, Action::SkipEditor | Action::DeleteLocalFiles)) {
+            .any(|action| matches!(action, Action::SkipEditor))
+            || can_delete(actions)
+    }) {
         Some(false)
-    } else if any(|action| matches!(action, Action::OpenEditor)) {
+    } else if any(|actions| {
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::OpenEditor))
+    }) {
         Some(true)
     } else {
         None
     }
+}
+
+/// Whether a rule has a Delete local files that `verify_before_delete` could
+/// let through: one right after an Export to a chosen folder or a Save to
+/// location.
+fn can_delete(actions: &[Action]) -> bool {
+    actions.windows(2).any(|pair| {
+        matches!(pair[1], Action::DeleteLocalFiles)
+            && matches!(
+                pair[0],
+                Action::Export {
+                    destination: ExportDestination::CustomPath { .. },
+                    ..
+                } | Action::SaveToLocation { .. }
+            )
+    })
 }
 
 pub fn screenshot_taken(image_path: PathBuf, target: ScreenshotTarget) {
