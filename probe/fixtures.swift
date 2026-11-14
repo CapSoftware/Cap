@@ -92,4 +92,22 @@ render("ocr-lines.png", 720, 240) { cg in
     text("second line here", 30, 130, 32, in: cg)
     text("Copy this text 42", 30, 200, 32, in: cg)
 }
+
+// 6. Realistic full-display captures with ordinary body text.
+func page(_ name: String, _ w: Int, _ h: Int, body: CGFloat) {
+    render(name, w, h) { cg in
+        var y = body * 3
+        var n = 1
+        repeat {
+            text("Line \(n): Settings, recordings and shared links appear here as usual", body * 2, y, body, in: cg)
+            text("Column two item \(n)", CGFloat(w) * 0.62, y, body, in: cg)
+            y += body * 1.6
+            n += 1
+        } while y < CGFloat(h) - body * 2
+    }
+}
+page("retina-3456x2234.png", 3456, 2234, body: 26)
+page("studio-5120x2880.png", 5120, 2880, body: 26)
+page("uhd-1x-3840x2160.png", 3840, 2160, body: 14)
+page("uhd-2x-small-3840x2160.png", 3840, 2160, body: 22)
 print("ok")

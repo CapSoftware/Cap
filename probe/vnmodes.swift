@@ -17,12 +17,12 @@ func run(_ img: CGImage, minHeight: Float?) throws -> [VNRecognizedTextObservati
 for path in CommandLine.arguments.dropFirst() {
     let src = NSImage(contentsOfFile: path)!.cgImage(forProposedRect: nil, context: nil, hints: nil)!
     let name = (path as NSString).lastPathComponent
-    for m: Float? in [nil, 0, 0.002, 0.005] {
+    for m: Float? in [nil] {
         let t = Date()
         let r = (try? run(src, minHeight: m)) ?? []
         print("\(name) min=\(m.map { "\($0)" } ?? "default"): lines=\(r.count) \(Int(Date().timeIntervalSince(t) * 1000))ms sample=\(r.prefix(2).map { $0.topCandidates(1).first?.string ?? "" })")
     }
-    for side in [2048, 3072] {
+    for side in [2048] {
         let t = Date()
         var lines = 0
         let step = side * 9 / 10
