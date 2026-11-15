@@ -5996,7 +5996,7 @@ impl EditorWindow {
                     ui::ButtonSize::Sm,
                 )
                 .icon("icons/diamond.svg")
-                .label("Add keyframe")
+                .label(tr::editor::panel::keyframes::add())
                 .disabled(!inside)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let now = this.preview_or_playhead();
@@ -6010,7 +6010,7 @@ impl EditorWindow {
                     ui::ButtonVariant::Gray,
                     ui::ButtonSize::Sm,
                 )
-                .label("Clear")
+                .label(tr::editor::panel::keyframes::clear())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.keyframe_action(target, KeyframeAction::Clear, window, cx);
                 }))
@@ -6019,10 +6019,7 @@ impl EditorWindow {
             div()
                 .text_size(px(12.))
                 .text_color(Hsla::from(theme.editor.text_3))
-                .child(
-                    "Add a keyframe, move the playhead, then drag the overlay or change its \
-                     opacity. It animates smoothly between keyframes.",
-                )
+                .child(tr::editor::panel::keyframes::hint())
                 .into_any_element()
         } else {
             div()
@@ -6102,7 +6099,7 @@ impl EditorWindow {
                 }))
                 .into_any_element()
         };
-        ui::Field::section(&theme, "Keyframes")
+        ui::Field::section(&theme, tr::editor::panel::keyframes::title())
             .child(
                 div()
                     .flex()
