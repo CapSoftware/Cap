@@ -96,6 +96,13 @@ impl CursorSpringPresets {
     }
 }
 
+/// The recorder stores device_query's 1-based button numbers, so the primary
+/// (left) button is 1. Slot 0 is never pressed there; it is accepted as
+/// primary too so hand-written event files that count from 0 keep working.
+fn is_primary_button(cursor_num: u8) -> bool {
+    cursor_num <= 1
+}
+
 struct CursorSpringContext<'a> {
     clicks: &'a [CursorClickEvent],
     next_click_index: usize,
@@ -115,7 +122,7 @@ impl<'a> CursorSpringContext<'a> {
         while let Some(click) = self.clicks.get(self.next_click_index)
             && click.time_ms <= time_ms
         {
-            if click.cursor_num == 0 {
+            if is_primary_button(click.cursor_num) {
                 self.primary_button_down = click.down;
             }
             self.next_click_index += 1;
@@ -847,7 +854,7 @@ mod tests {
         CursorClickEvent {
             active_modifiers: vec![],
             cursor_id: "primary".into(),
-            cursor_num: 0,
+            cursor_num: 1,
             time_ms,
             down,
         }
@@ -882,9 +889,54 @@ mod tests {
 
     fn secondary_click_event(time_ms: f64, down: bool) -> CursorClickEvent {
         CursorClickEvent {
-            cursor_num: 1,
+            cursor_num: 2,
             ..click_event(time_ms, down)
         }
+    }
+
+    #[test]
+    fn recorded_and_zero_based_primary_buttons_both_start_a_drag() {
+        for cursor_num in [0, 1] {
+            let clicks = vec![
+                CursorClickEvent {
+                    cursor_num,
+                    ..click_event(100.0, true)
+                },
+                CursorClickEvent {
+                    cursor_num,
+                    ..click_event(900.0, false)
+                },
+            ];
+            let mut context = CursorSpringContext::new(&clicks);
+            context.advance_to(300.0);
+            assert_eq!(context.profile(300.0), SpringProfile::Drag, "{cursor_num}");
+        }
+
+        let clicks = vec![secondary_click_event(100.0, true)];
+        let mut context = CursorSpringContext::new(&clicks);
+        context.advance_to(300.0);
+        assert_eq!(context.profile(300.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn a_drag_does_not_aim_at_a_press_after_its_release() {
+        // Pressed at 300ms, released at 1200ms, then a click elsewhere at
+        // 1400ms: mid-drag the target stays on the pointer.
+        let clicks = vec![
+            click_event(300.0, true),
+            click_event(1200.0, false),
+            click_event(1400.0, true),
+        ];
+        let mut context = CursorSpringContext::new(&clicks);
+        context.advance_to(1000.0);
+        assert!(context.anticipated_press(1000.0).is_none());
+        assert_eq!(context.profile(1000.0), SpringProfile::Drag);
+
+        context.advance_to(1250.0);
+        assert_eq!(
+            context.anticipated_press(1250.0).map(|click| click.time_ms),
+            Some(1400.0)
+        );
     }
 
     #[test]
