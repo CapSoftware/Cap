@@ -221,6 +221,11 @@ impl CursorActor {
 }
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+/// How often the cursor image is checked while the pointer is still. Apps
+/// change the cursor under a resting pointer (a link under it, a loading
+/// state, a text field gaining focus); without a check the recording keeps
+/// the old shape until the pointer next moves.
+const STATIONARY_SHAPE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 #[cfg(target_os = "linux")]
 fn prefers_wayland_portal_cursor() -> bool {
@@ -748,6 +753,7 @@ pub fn spawn_cursor_recorder(
         let mut last_cursor_id: Option<String> = None;
         let mut last_cursor_image = None;
         let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
+        let mut last_shape_check = Instant::now();
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -813,15 +819,26 @@ pub fn spawn_cursor_recorder(
             #[cfg(any(windows, target_os = "macos"))]
             let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
-            // The cursor image only labels this tick's move and click events,
-            // and reading it builds a full TIFF of every representation
-            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
-            // record neither.
+            // Reading the cursor image builds a full TIFF of every
+            // representation (~0.5 ms, ~580 KB on a Retina Mac), so a still
+            // pointer only compares the cheap fingerprint, and only every
+            // STATIONARY_SHAPE_CHECK_INTERVAL. The TIFF is built only for a
+            // shape that has not been registered yet.
             let buttons_changed = buttons_changed(
                 &last_mouse_state.button_pressed,
                 &mouse_state.button_pressed,
             );
-            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
+            let previous_cursor_id = last_cursor_id.clone();
+            let sample_image = should_sample_cursor_image(
+                position_changed,
+                buttons_changed,
+                previous_cursor_id.is_some(),
+                last_shape_check.elapsed() >= STATIONARY_SHAPE_CHECK_INTERVAL,
+            );
+            if sample_image {
+                last_shape_check = Instant::now();
+            }
+            let cursor_id = if !sample_image {
                 last_cursor_id.clone()
             } else {
                 // While the pointer moves the shape rarely changes, so compare
@@ -857,7 +874,10 @@ pub fn spawn_cursor_recorder(
                 continue;
             };
 
-            if position_changed {
+            // Playback takes the drawn shape from move events only, so a shape
+            // change under a still pointer is written as a move to the same
+            // position.
+            if records_cursor_move(position_changed, previous_cursor_id.as_deref(), &cursor_id) {
                 let cropped_norm_pos = position
                     .relative_to_display(display)
                     .and_then(|p| p.normalize())
@@ -948,6 +968,28 @@ pub fn spawn_cursor_recorder(
         thread: Some(thread),
         rx: rx.shared(),
     }
+}
+
+/// Whether this tick reads the cursor image: always when it records a move or
+/// a click, or before any shape is known, and otherwise at the stationary
+/// check interval.
+fn should_sample_cursor_image(
+    position_changed: bool,
+    buttons_changed: bool,
+    has_cursor_id: bool,
+    stationary_check_due: bool,
+) -> bool {
+    position_changed || buttons_changed || !has_cursor_id || stationary_check_due
+}
+
+/// Whether this tick writes a move event: when the pointer moved, or when it
+/// stayed put and its shape changed from the last known one.
+fn records_cursor_move(
+    position_changed: bool,
+    previous_cursor_id: Option<&str>,
+    cursor_id: &str,
+) -> bool {
+    position_changed || previous_cursor_id.is_some_and(|previous| previous != cursor_id)
 }
 
 /// Whether any button present in both samples changed state: the same pairs
@@ -1768,6 +1810,29 @@ fn get_cursor_data() -> Option<CursorData> {
         };
         LAST_CURSOR.set(Some((handle, data.clone())));
         Some(data)
+    }
+}
+
+#[cfg(test)]
+mod stationary_shape_tests {
+    use super::{records_cursor_move, should_sample_cursor_image};
+
+    #[test]
+    fn a_still_pointer_checks_its_shape_only_when_the_check_is_due() {
+        assert!(!should_sample_cursor_image(false, false, true, false));
+        assert!(should_sample_cursor_image(false, false, true, true));
+        assert!(should_sample_cursor_image(true, false, true, false));
+        assert!(should_sample_cursor_image(false, true, true, false));
+        assert!(should_sample_cursor_image(false, false, false, false));
+    }
+
+    #[test]
+    fn a_shape_change_under_a_still_pointer_is_recorded_as_a_move() {
+        assert!(records_cursor_move(false, Some("1"), "2"));
+        assert!(!records_cursor_move(false, Some("1"), "1"));
+        assert!(!records_cursor_move(false, None, "1"));
+        assert!(records_cursor_move(true, Some("1"), "1"));
+        assert!(records_cursor_move(true, None, "1"));
     }
 }
 
