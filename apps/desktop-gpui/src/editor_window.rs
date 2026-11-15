@@ -10966,7 +10966,7 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "editor-history")
                             .left_icon("icons/history.svg")
-                            .tooltip(&theme, "History")
+                            .tooltip(&theme, tr::editor::window::history::title())
                             .disabled(!self.project_ready() || self.history.len() < 2)
                             .pressed(self.history_menu.is_some())
                             .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {

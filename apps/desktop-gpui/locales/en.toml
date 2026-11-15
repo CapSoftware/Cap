@@ -3145,6 +3145,49 @@ wipe_up = { text = "Wipe up", context = "Transition type: an edge sweeping upwar
 wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping downward uncovers the next clip." }
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
+[editor.window.history]
+title = { text = "History", context = "Tooltip of the editor header button that opens the list of undo steps." }
+opened = { text = "Opened project", context = "First row of the History menu: the state the project opened in." }
+earlier = { text = "Earlier changes", context = "First row of the History menu once the oldest undo steps were dropped." }
+edit = { text = "Edit", context = "History menu row for a change Cap cannot name." }
+split_clip = "Split clip"
+added = { text = "Added {item}", context = "History menu row. {item} is a lowercase noun from editor.window.history.item, such as zoom." }
+deleted = { text = "Deleted {item}", context = "History menu row. {item} is a lowercase noun from editor.window.history.item, such as zoom." }
+edited = { text = "Edited {item}", context = "History menu row. {item} is a lowercase noun from editor.window.history.item, such as zoom." }
+changed = { text = "Changed {item}", context = "History menu row. {item} is a lowercase noun from editor.window.history.setting, such as background." }
+
+[editor.window.history.item]
+clip = "clip"
+zoom = "zoom"
+text_item = "text"
+image = "image"
+audio_clip = "audio clip"
+mask = "mask"
+scene = "scene"
+style = "style"
+keyboard_segment = "keyboard segment"
+caption = "caption"
+three_d = "3D segment"
+shape = "shape"
+transition = "transition"
+
+[editor.window.history.setting]
+aspect_ratio = "aspect ratio"
+background = "background"
+camera = "camera"
+audio = "audio"
+cursor = "cursor"
+hotkeys = "hotkeys"
+captions = "captions"
+keyboard = "keyboard display"
+clips = "clip settings"
+annotations = "annotations"
+motion_blur = "motion blur"
+screen_movement = "screen movement"
+color_correction = "color correction"
+markers = "markers"
+track_order = "track order"
+
 [editor.window.transport]
 done_splitting = "Done splitting"
 play_pause = "Play/Pause video"

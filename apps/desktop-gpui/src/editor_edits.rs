@@ -34,6 +34,7 @@ use cap_project::{
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
+use crate::i18n::tr;
 
 // ---------------------------------------------------------------------------
 // Selection
@@ -283,9 +284,9 @@ impl ProjectHistory {
     /// History menu opens) so `record` never pays for the diff.
     pub fn labels(&self) -> Vec<String> {
         let first = if self.trimmed {
-            "Earlier changes"
+            tr::editor::window::history::earlier()
         } else {
-            "Opened project"
+            tr::editor::window::history::opened()
         };
         std::iter::once(first.to_string())
             .chain(
@@ -327,7 +328,7 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
     let (Ok(serde_json::Value::Object(before)), Ok(serde_json::Value::Object(after))) =
         (serde_json::to_value(before), serde_json::to_value(after))
     else {
-        return "Edit".to_string();
+        return tr::editor::window::history::edit().to_string();
     };
     let empty = serde_json::Map::new();
     let before_timeline = before
@@ -359,56 +360,74 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
         .or_else(|| changed.iter().find(|key| counted(key)))
         .or_else(|| changed.first());
     if let Some(key) = pick {
-        let name = match key.as_str() {
-            "segments" => "clip",
-            "zoomSegments" => "zoom",
-            "textSegments" => "text",
-            "imageSegments" => "image",
-            "audioSegments" => "audio clip",
-            "maskSegments" => "mask",
-            "sceneSegments" => "scene",
-            "styleSegments" => "style",
-            "keyboardSegments" => "keyboard segment",
-            "captionSegments" => "caption",
-            "camera3dSegments" => "3D segment",
-            "transitions" => "transition",
-            other => other,
+        let Some(item) = timeline_item(key) else {
+            return tr::editor::window::history::edit().to_string();
         };
         let (before_count, after_count) = (
             count(before_timeline.get(*key)),
             count(after_timeline.get(*key)),
         );
         return match after_count.cmp(&before_count) {
-            std::cmp::Ordering::Greater if key.as_str() == "segments" => "Split clip".to_string(),
-            std::cmp::Ordering::Greater => format!("Added {name}"),
-            std::cmp::Ordering::Less => format!("Deleted {name}"),
-            std::cmp::Ordering::Equal => format!("Edited {name}"),
+            std::cmp::Ordering::Greater if key.as_str() == "segments" => {
+                tr::editor::window::history::split_clip().to_string()
+            }
+            std::cmp::Ordering::Greater => tr::editor::window::history::added(item),
+            std::cmp::Ordering::Less => tr::editor::window::history::deleted(item),
+            std::cmp::Ordering::Equal => tr::editor::window::history::edited(item),
         };
     }
     let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
     keys.sort();
     keys.dedup();
-    for key in keys {
-        if key == "timeline" || before.get(key) == after.get(key) {
-            continue;
+    keys.into_iter()
+        .filter(|key| key.as_str() != "timeline" && before.get(*key) != after.get(*key))
+        .find_map(|key| settings_item(key))
+        .map_or_else(
+            || tr::editor::window::history::edit().to_string(),
+            tr::editor::window::history::changed,
+        )
+}
+
+fn timeline_item(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "segments" => tr::editor::window::history::item::clip(),
+        "zoomSegments" => tr::editor::window::history::item::zoom(),
+        "textSegments" => tr::editor::window::history::item::text_item(),
+        "imageSegments" => tr::editor::window::history::item::image(),
+        "audioSegments" => tr::editor::window::history::item::audio_clip(),
+        "maskSegments" => tr::editor::window::history::item::mask(),
+        "sceneSegments" => tr::editor::window::history::item::scene(),
+        "styleSegments" => tr::editor::window::history::item::style(),
+        "keyboardSegments" => tr::editor::window::history::item::keyboard_segment(),
+        "captionSegments" => tr::editor::window::history::item::caption(),
+        "camera3dSegments" => tr::editor::window::history::item::three_d(),
+        "shapeSegments" => tr::editor::window::history::item::shape(),
+        "transitions" => tr::editor::window::history::item::transition(),
+        _ => return None,
+    })
+}
+
+fn settings_item(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "aspectRatio" => tr::editor::window::history::setting::aspect_ratio(),
+        "background" => tr::editor::window::history::setting::background(),
+        "camera" => tr::editor::window::history::setting::camera(),
+        "audio" => tr::editor::window::history::setting::audio(),
+        "cursor" => tr::editor::window::history::setting::cursor(),
+        "hotkeys" => tr::editor::window::history::setting::hotkeys(),
+        "captions" => tr::editor::window::history::setting::captions(),
+        "keyboard" => tr::editor::window::history::setting::keyboard(),
+        "clips" => tr::editor::window::history::setting::clips(),
+        "annotations" => tr::editor::window::history::setting::annotations(),
+        "screenMotionBlur" => tr::editor::window::history::setting::motion_blur(),
+        "screenMovementSpring" => tr::editor::window::history::setting::screen_movement(),
+        "colorCorrection" => tr::editor::window::history::setting::color_correction(),
+        "markers" => tr::editor::window::history::setting::markers(),
+        "overlayOrder" | "overlayOrderWithShapes" => {
+            tr::editor::window::history::setting::track_order()
         }
-        let name = match key.as_str() {
-            "aspectRatio" => "aspect ratio".to_string(),
-            "inOut" => "in/out range".to_string(),
-            other => other
-                .chars()
-                .flat_map(|c| {
-                    if c.is_uppercase() {
-                        vec![' ', c.to_ascii_lowercase()]
-                    } else {
-                        vec![c]
-                    }
-                })
-                .collect(),
-        };
-        return format!("Changed {name}");
-    }
-    "Edit".to_string()
+        _ => return None,
+    })
 }
 
 /// Compares the JSON the two configs save as, stopping at the first differing
