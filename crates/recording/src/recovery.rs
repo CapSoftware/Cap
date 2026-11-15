@@ -278,6 +278,45 @@ impl RecoveryManager {
         Self::remux_with_preparing(&completed.project_path, Some(job))
     }
 
+    /// Whether a fragmented Studio recording holds footage that reading its
+    /// track directories directly (the editor reads `init.mp4` and the
+    /// top-level `segment_*.m4s`) would leave out: the restart groups a
+    /// respawned display muxer wrote under `display/respawn-*`, or a pending
+    /// `segment_*.m4s.tmp` that recovery rescues. Such a recording has to go
+    /// through recovery, which joins all of it.
+    pub fn has_media_beyond_direct_read(project_path: &Path, meta: &StudioRecordingMeta) -> bool {
+        let StudioRecordingMeta::MultipleSegments { inner } = meta else {
+            return false;
+        };
+        let pending = |dir: &Path| {
+            fragment_entries(dir).any(|(path, name)| {
+                fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                    && is_salvageable_pending(dir, &path, true)
+            })
+        };
+        inner.segments.iter().any(|segment| {
+            let display = segment.display.path.to_path(project_path);
+            let restarted = display.is_dir()
+                && Self::respawn_directories(&display)
+                    .iter()
+                    .any(|(_, respawn)| {
+                        fragment_entries(respawn).any(|(_, name)| {
+                            fragment_index_with_suffix(&name, ".m4s").is_some()
+                                || fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                        })
+                    });
+            restarted
+                || std::iter::once(display)
+                    .chain(
+                        segment
+                            .camera
+                            .as_ref()
+                            .map(|camera| camera.path.to_path(project_path)),
+                    )
+                    .any(|dir| dir.is_dir() && pending(&dir))
+        })
+    }
+
     /// Settles any recovery an earlier run left part way: an interrupted
     /// publication rolls back to the original layout, and original media an
     /// older build left in a `.recovery-*` backup moves back into the

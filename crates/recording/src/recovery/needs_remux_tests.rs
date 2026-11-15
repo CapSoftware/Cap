@@ -9,6 +9,12 @@ use std::fs;
 const DISPLAY: &str = "content/segments/segment-0/display";
 
 fn encode_display(display: &Path, fragments: usize) {
+    encode_display_from(display, fragments, 0);
+}
+
+/// Encodes fragments whose first frame is `first_second` into the recording,
+/// the way a respawned muxer continues the timeline.
+fn encode_display_from(display: &Path, fragments: usize, first_second: u64) {
     ffmpeg::init().unwrap();
     let mut encoder = SegmentedVideoEncoder::init(
         display.to_path_buf(),
@@ -37,7 +43,7 @@ fn encode_display(display: &Path, fragments: usize) {
             frame.set_kind(ffmpeg::picture::Type::I);
         }
         encoder
-            .queue_frame(frame, Duration::from_secs(index as u64))
+            .queue_frame(frame, Duration::from_secs(first_second + index as u64))
             .unwrap();
     }
     encoder.finish().unwrap();
@@ -147,8 +153,11 @@ fn status(project: &Path) -> StudioRecordingStatus {
 /// concatenation finalization uses, so recovery is held to exactly what the
 /// remux itself produces on this platform.
 fn recorded_frames(project: &Path, skip: Option<&str>) -> usize {
-    let display = project.join(DISPLAY);
-    let fragments = fragment_names(&display)
+    reference_frames(&project.join(DISPLAY), skip)
+}
+
+fn reference_frames(display: &Path, skip: Option<&str>) -> usize {
+    let fragments = fragment_names(display)
         .into_iter()
         .filter(|name| Some(name.as_str()) != skip)
         .map(|name| display.join(name))
@@ -711,4 +720,69 @@ fn restoration_never_follows_a_linked_content_directory_out_of_the_recording() {
     assert_eq!(listing(&outside), outside_files);
     assert!(workspace.join("original-segments").is_dir());
     assert!(!workspace.join("displaced-segments").exists());
+}
+
+fn studio(project: &Path) -> StudioRecordingMeta {
+    RecordingMeta::load_for_project(project)
+        .unwrap()
+        .studio_meta()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn restart_groups_and_pending_fragments_are_footage_a_direct_read_misses() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let plain = needs_remux_project(temporary.path(), "plain", 10);
+    assert!(!RecoveryManager::has_media_beyond_direct_read(
+        &plain,
+        &studio(&plain)
+    ));
+    fs::create_dir(plain.join(DISPLAY).join("respawn-1")).unwrap();
+    assert!(
+        !RecoveryManager::has_media_beyond_direct_read(&plain, &studio(&plain)),
+        "an empty restart directory holds no footage"
+    );
+
+    let restarted = needs_remux_project(temporary.path(), "restarted", 10);
+    encode_display_from(&restarted.join(DISPLAY).join("respawn-1"), 8, 20);
+    assert!(RecoveryManager::has_media_beyond_direct_read(
+        &restarted,
+        &studio(&restarted)
+    ));
+
+    let pending = needs_remux_project(temporary.path(), "pending", 10);
+    let display = pending.join(DISPLAY);
+    fs::rename(
+        display.join("segment_010.m4s"),
+        display.join("segment_010.m4s.tmp"),
+    )
+    .unwrap();
+    assert!(RecoveryManager::has_media_beyond_direct_read(
+        &pending,
+        &studio(&pending)
+    ));
+}
+
+#[test]
+fn recovering_a_restarted_recording_keeps_the_footage_of_every_muxer() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = needs_remux_project(temporary.path(), "restarted Café", 10);
+    let respawn = project.join(DISPLAY).join("respawn-1");
+    encode_display_from(&respawn, 8, 20);
+    let first = recorded_frames(&project, None);
+    let second = reference_frames(&respawn, None);
+
+    let incomplete = RecoveryManager::inspect_recording(&project).unwrap();
+    RecoveryManager::salvage(&incomplete).unwrap();
+
+    assert_eq!(remuxed_frames(&project), first + second);
+    let output = project.join("content/segments/segment-0/display.mp4");
+    let duration = ffmpeg::format::input(&output).unwrap().duration() as f64
+        / f64::from(ffmpeg::ffi::AV_TIME_BASE);
+    assert!(
+        duration >= 34.0,
+        "both muxers' footage, 36 s in all, is in the recovered recording: {duration}"
+    );
 }
