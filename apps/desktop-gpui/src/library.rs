@@ -638,7 +638,7 @@ fn is_storage_full(error: &cap_recording::recovery::RecoveryError) -> bool {
 /// anything. Complete recordings, the recording being captured right now and
 /// bundles outside the library are left alone, and so is a recording that
 /// still needs its remux but `opens_as_is` (the editor reads its fragments
-/// directly, as it always has).
+/// directly, as it always has) and holds no footage that direct read skips.
 pub fn recover_interrupted_for_editing(
     project_path: &Path,
     active_recording: Option<&Path>,
@@ -684,7 +684,12 @@ fn recover_interrupted_for_editing_in(
     };
     let interrupted = match studio.status() {
         StudioRecordingStatus::Complete => false,
-        StudioRecordingStatus::NeedsRemux => !opens_as_is(project_path),
+        // The editor reads only the top-level fragments, so footage from a
+        // restarted muxer or a pending fragment needs recovery to join it.
+        StudioRecordingStatus::NeedsRemux => {
+            RecoveryManager::has_media_beyond_direct_read(project_path, studio)
+                || !opens_as_is(project_path)
+        }
         StudioRecordingStatus::Failed { .. } | StudioRecordingStatus::InProgress => true,
     };
     if !interrupted {
@@ -3538,6 +3543,31 @@ mod tests {
                     .starts_with(".recovery-")),
             "a failed recovery leaves no copy behind"
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_recording_whose_muxer_restarted_goes_through_recovery_instead_of_opening_part_of_it() {
+        let root = temp_dir("needs-remux-restarted");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = std::slice::from_ref(&recordings);
+        let bundle = needs_remux_bundle(&recordings, "restarted");
+        let respawn = bundle.join("content/segments/segment-0/display/respawn-1");
+        std::fs::create_dir_all(&respawn).unwrap();
+        std::fs::write(respawn.join("init.mp4"), vec![0u8; 128]).unwrap();
+        std::fs::write(respawn.join("segment_001.m4s"), complete_m4s_fragment()).unwrap();
+        let before = bundle_files(&bundle);
+
+        // The editor would read only the footage before the restart, so it is
+        // not even asked; recovery runs, and failing, changes nothing.
+        let error = recover_interrupted_for_editing_in(dirs, &bundle, None, |_| {
+            panic!("a restarted recording must not open from its first muxer alone")
+        })
+        .unwrap_err();
+        assert!(error.contains("Nothing was deleted"), "{error}");
+        assert_eq!(bundle_files(&bundle), before);
 
         std::fs::remove_dir_all(root).unwrap();
     }
