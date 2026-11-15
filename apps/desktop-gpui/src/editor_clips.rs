@@ -1347,7 +1347,14 @@ impl EditorWindow {
         }
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
-            tracing::error!("failed to persist the project config before append: {error}");
+            tracing::error!(
+                recording = %recording_dir.display(),
+                "failed to persist the project config before append; leaving the recording in the library: {error}"
+            );
+            let message = tr::editor::clips::save_before_append_failed(error);
+            cx.spawn(async move |_, _| show_append_error(&message))
+                .detach();
+            return;
         }
         self.clips.importing = true;
         cx.notify();

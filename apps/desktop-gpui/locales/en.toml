@@ -2366,6 +2366,7 @@ mp4_filter = { text = "MP4 Video", context = "File type filter name in the file 
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
 record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
+save_before_append_failed = "Could not save the current project, so the new recording was not added. It is still in your library: {error}"
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
 title = "Clips"
