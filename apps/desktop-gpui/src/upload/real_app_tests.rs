@@ -824,12 +824,16 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
 #[cfg(target_os = "macos")]
 async fn losing_the_capture_source_stops_and_saves(
     case: &str,
+    settings: &[(&str, Value)],
     env: impl Fn(&str) -> Vec<(String, String)>,
     lose: impl Fn(&str),
 ) {
     for mode in ["instant", "studio"] {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
+        for (key, value) in settings {
+            sandbox.set_general(key, value.clone());
+        }
         let name = format!("{case}-{mode}");
         let auto = if mode == "studio" {
             "studio:30"
@@ -922,6 +926,7 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
     }
     losing_the_capture_source_stops_and_saves(
         "display-sleep",
+        &[],
         |_| Vec::new(),
         |_| {
             assert!(
@@ -938,7 +943,9 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
     .await;
 }
 
-/// The recorded window goes away because the app that owns it quits.
+/// The recorded window goes away because the app that owns it quits. Only a
+/// focused-window capture loses its source; a screen-region capture of a
+/// window keeps recording that region of the screen.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
@@ -946,6 +953,7 @@ async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
     let documents = tempfile::tempdir().unwrap();
     losing_the_capture_source_stops_and_saves(
         "window-closed",
+        &[("windowCaptureStyle", json!("focusedWindow"))],
         |mode| {
             let title = format!("cap-capture-target-{mode}-{}", std::process::id());
             let document = documents.path().join(&title);
