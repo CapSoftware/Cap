@@ -10651,13 +10651,12 @@ mod project_uniforms_tests {
         let mut constants = cursor_test_constants().await;
         let size = XY::new(320, 180);
         constants.options.screen_size = size;
-        // The pointer rests until 3s, then moves 5px and 5px more. A move to
-        // the exact same position is a shape change, not movement, so each
-        // resume step changes the position, by whole pixels and without
-        // motion blur or tilt so the circle covers the same pixels wherever
-        // it is.
+        // The pointer rests until 3s, then resumes. A move to the exact same
+        // position is a shape change, not movement, so the resume changes the
+        // recorded position, by far less than the f32 the cursor is drawn at
+        // resolves, so every frame draws the circle in the same place.
         let events = CursorEvents {
-            moves: [(0.0, 0.5), (3000.0, 0.515625), (3050.0, 0.53125)]
+            moves: [(0.0, 0.5), (3000.0, 0.5 + 1e-9), (3050.0, 0.5 + 2e-9)]
                 .into_iter()
                 .map(|(time, x)| cursor_move(time, x, 0.5))
                 .collect(),
@@ -10665,8 +10664,6 @@ mod project_uniforms_tests {
         };
         let mut project = ProjectConfiguration::default();
         project.cursor.raw = true;
-        project.cursor.motion_blur = 0.0;
-        project.cursor.rotation_amount = 0.0;
         project.cursor.set_cursor_type(CursorType::Circle);
         project.cursor.hide_when_idle = true;
         project.cursor.hide_when_idle_delay = 0.5;
