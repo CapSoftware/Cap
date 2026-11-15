@@ -1,5 +1,5 @@
 use cidre::{
-    arc, cm, cv, define_obj_type, dispatch, ns, objc,
+    arc, blocks, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
 
@@ -136,6 +136,18 @@ impl Capturer {
 
     pub async fn stop(&self) -> Result<(), arc::R<ns::Error>> {
         self.stream.stop().await
+    }
+
+    /// Sends `config` to the running stream. The returned future holds no
+    /// reference to `config`, which is not `Sync`, so a `Send` task can await
+    /// it after letting `config` go.
+    pub fn update_cfg(
+        &self,
+        config: &sc::StreamCfg,
+    ) -> blocks::Completion<Result<(), arc::R<ns::Error>>> {
+        let (future, mut block) = blocks::ok();
+        self.stream.update_cfg_ch_block(config, Some(&mut block));
+        future
     }
 }
 
