@@ -90,11 +90,11 @@ export function s3DeliveryLogSource(
 }
 
 export const storageDeliveryResolver: DeliveryResolver = {
-	async hls(playlistKey) {
+	async hls(playlistKey, mediaName) {
 		const text = await readDeveloperVideoText(playlistKey);
 		const name = playlistKey.slice(playlistKey.lastIndexOf("/") + 1);
 		return text
-			? parseHlsByteRanges(text, name.replace(/\.m3u8$/, ".m4s"))
+			? parseHlsByteRanges(text, mediaName ?? name.replace(/\.m3u8$/, ".m4s"))
 			: null;
 	},
 	async video({ videoId }) {
