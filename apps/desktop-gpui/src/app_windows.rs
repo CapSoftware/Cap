@@ -605,6 +605,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
                 crate::tray::refresh_previous(cx);
+                crate::recordings_overlay::thumbnails_written(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });

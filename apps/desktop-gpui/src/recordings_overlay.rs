@@ -346,6 +346,19 @@ fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
     .detach();
 }
 
+/// A Studio stop shows its card before `recording::write_bundle_thumbnail`
+/// writes `screenshots/display.jpg`, so each written thumbnail fills in the
+/// cards still waiting for one.
+pub fn thumbnails_written(cx: &mut App) {
+    if let Some(model) = existing_model(cx) {
+        model.update(cx, |overlay, cx| overlay.fill_thumbnails(cx));
+    }
+}
+
+fn recording_thumbnail(project_dir: &Path) -> Option<PathBuf> {
+    Some(crate::library::bundle_thumbnail_path(project_dir)).filter(|path| path.exists())
+}
+
 pub fn screenshot_captured(png: Option<&Path>, cx: &mut App) {
     let Some(model) = existing_model(cx) else {
         return;
@@ -601,6 +614,19 @@ impl Overlay {
         self.enforce_limit(cx);
     }
 
+    fn fill_thumbnails(&mut self, cx: &mut Context<Self>) {
+        let mut filled = false;
+        for entry in &mut self.entries {
+            if entry.kind == MediaKind::Recording && entry.thumbnail.is_none() {
+                entry.thumbnail = recording_thumbnail(&entry.path);
+                filled |= entry.thumbnail.is_some();
+            }
+        }
+        if filled {
+            cx.notify();
+        }
+    }
+
     fn enforce_limit(&mut self, _cx: &mut Context<Self>) {
         let Some(limit) = self.card_limit else {
             return;
@@ -629,9 +655,7 @@ impl Overlay {
         let id = self.next_id;
         self.next_id += 1;
         let thumbnail = match kind {
-            MediaKind::Recording => {
-                Some(path.join("screenshots").join("display.jpg")).filter(|path| path.exists())
-            }
+            MediaKind::Recording => recording_thumbnail(&path),
             MediaKind::Screenshot => Some(path.clone()),
         };
         let bundle = match kind {

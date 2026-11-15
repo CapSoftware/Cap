@@ -211,6 +211,26 @@ fn recordings_stack_newest_first_and_never_twice(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_thumbnail_written_after_the_card_appears_fills_it_in(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recording = bundle(&dir, "recording");
+    let overlay = cx.new(|_| Overlay::default());
+    overlay.update(cx, |overlay, cx| {
+        overlay.add(recording.clone(), MediaKind::Recording, cx)
+    });
+    let thumbnail = |cx: &mut TestAppContext| {
+        overlay.read_with(cx, |overlay, _| overlay.entries[0].thumbnail.clone())
+    };
+    assert_eq!(thumbnail(cx), None);
+
+    let written = crate::library::bundle_thumbnail_path(&recording);
+    std::fs::create_dir_all(written.parent().unwrap()).unwrap();
+    std::fs::write(&written, b"jpeg").unwrap();
+    overlay.update(cx, |overlay, cx| overlay.fill_thumbnails(cx));
+    assert_eq!(thumbnail(cx), Some(written));
+}
+
+#[gpui::test]
 fn a_screenshot_joins_only_a_stack_that_is_already_up(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let screenshot = dir.path().join("shot.cap").join("shot.png");
