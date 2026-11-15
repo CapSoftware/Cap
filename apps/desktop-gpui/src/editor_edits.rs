@@ -1850,6 +1850,30 @@ pub fn cut_clip_range(
     RangeCut::Applied
 }
 
+fn ripple_insert_overlay_keyframes(
+    keyframes: &mut cap_project::OverlayKeyframes,
+    start: f64,
+    end: f64,
+    boundary: f64,
+    shift: f64,
+) {
+    if start >= boundary || end <= boundary {
+        return;
+    }
+    let local = boundary - start;
+    for time in keyframes
+        .position
+        .iter_mut()
+        .chain(&mut keyframes.size)
+        .map(|key| &mut key.time)
+        .chain(keyframes.opacity.iter_mut().map(|key| &mut key.time))
+    {
+        if *time >= local {
+            *time += shift;
+        }
+    }
+}
+
 pub fn ripple_insert_output_tracks(
     timeline: &mut TimelineConfiguration,
     boundary: f64,
@@ -1857,9 +1881,27 @@ pub fn ripple_insert_output_tracks(
 ) {
     use crate::editor_clips::{ripple_keyboard_track, ripple_track};
     ripple_track(&mut timeline.style_segments, boundary, shift);
+    for segment in &mut timeline.image_segments {
+        ripple_insert_overlay_keyframes(
+            &mut segment.keyframes,
+            segment.start,
+            segment.end,
+            boundary,
+            shift,
+        );
+    }
     ripple_track(&mut timeline.image_segments, boundary, shift);
     ripple_track(&mut timeline.zoom_segments, boundary, shift);
     ripple_track(&mut timeline.scene_segments, boundary, shift);
+    for segment in &mut timeline.text_segments {
+        ripple_insert_overlay_keyframes(
+            &mut segment.keyframes,
+            segment.start,
+            segment.end,
+            boundary,
+            shift,
+        );
+    }
     ripple_track(&mut timeline.text_segments, boundary, shift);
     ripple_track(&mut timeline.shape_segments, boundary, shift);
     ripple_track(&mut timeline.caption_segments, boundary, shift);
@@ -3366,6 +3408,33 @@ mod tests {
         let text = &timeline.text_segments[0];
         assert_eq!((text.start, text.end), (10.0, 18.0));
         assert_eq!(text.keyframes.times(), vec![6.0]);
+    }
+
+    #[test]
+    fn inserting_time_inside_a_keyed_overlay_moves_its_later_keys() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [{ "start": 10.0, "end": 20.0, "content": "Hi" }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.image_segments.push(keyed_image());
+        let text = &mut timeline.text_segments[0];
+        text.keyframes.set_opacity(2.0, 1.0);
+        text.keyframes.set_opacity(8.0, 0.0);
+
+        ripple_insert_output_tracks(timeline, 15.0, 3.0);
+
+        let text = &timeline.text_segments[0];
+        assert_eq!((text.start, text.end), (10.0, 23.0));
+        assert_eq!(text.keyframes.times(), vec![2.0, 11.0]);
+        let image = &timeline.image_segments[0];
+        assert_eq!((image.start, image.end), (10.0, 23.0));
+        assert_eq!(image.keyframes.times(), vec![2.0, 8.0, 11.0]);
     }
 
     #[test]
