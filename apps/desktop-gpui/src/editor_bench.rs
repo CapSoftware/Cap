@@ -78,10 +78,17 @@ impl Scenario {
                 view.seek_fraction(FOLLOW_START_FRACTION, window, cx);
                 view.toggle_play(window, cx);
             }
-            Self::Clean | Self::WheelAtEdge => {
+            Self::Clean => {
                 if view.playing {
                     view.stop_for_measurement(cx);
                 }
+                view.bench_zoom_to(view.total_duration(), cx);
+            }
+            Self::WheelAtEdge => {
+                if view.playing {
+                    view.stop_for_measurement(cx);
+                }
+                view.seek_to_time(0., cx);
                 view.bench_zoom_to(view.total_duration(), cx);
             }
             Self::CaptionDownload => {
