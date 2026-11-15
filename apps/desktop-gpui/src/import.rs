@@ -1127,7 +1127,7 @@ fn transcode_video(
 
     let mut video_frame = ffmpeg::frame::Video::empty();
     let mut audio_frame = ffmpeg::frame::Audio::empty();
-    let mut scaler: Option<ffmpeg::software::scaling::Context> = None;
+    let mut scaler: Option<ImportScaler> = None;
     let mut frames_processed = 0u64;
     let mut audio_samples_processed = 0u64;
     let mut last_progress = 0.0;
@@ -1374,59 +1374,148 @@ fn pixel_format_is_rgb(format: avformat::Pixel) -> bool {
     })
 }
 
-/// Makes an RGB source encode with the BT.709 matrix the stream is tagged
-/// with (swscale defaults to BT.601), as `cap_enc_ffmpeg` does for its RGB
-/// input. Y'CbCr sources keep swscale's defaults: it never changes their
-/// matrix, and their range comes from the pixel format (see
-/// [`full_range_pixel_format`]).
-fn configure_scaler_color(
-    scaler: &mut ffmpeg::software::scaling::Context,
-    source: SourceColor,
-) -> Result<(), String> {
-    if !source.rgb {
-        return Ok(());
-    }
-    let result = unsafe {
-        let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
-        ffmpeg::ffi::sws_setColorspaceDetails(
-            scaler.as_mut_ptr(),
-            bt709,
-            1,
-            bt709,
-            0,
-            0,
-            1 << 16,
-            1 << 16,
-        )
-    };
-    if result < 0 {
-        return Err(format!(
-            "Failed to configure the scaler colour: {}",
-            ffmpeg::Error::from(result)
-        ));
-    }
-    Ok(())
+/// A swscale context built with the source range set before it initialises.
+/// Swscale picks a plain copy for matching formats at init and ignores a
+/// range changed afterwards, and `ffmpeg-next` only builds initialised
+/// contexts, so the options go in through the C API here.
+struct ImportScaler {
+    context: *mut ffmpeg::ffi::SwsContext,
+    input: (avformat::Pixel, u32, u32, bool),
+    output: (avformat::Pixel, u32, u32),
 }
 
-/// The full-range twin of an 8-bit planar Y'CbCr format. Swscale only scales
-/// range when the formats say the ranges differ: a full-range frame labelled
-/// with the limited format would be copied as is.
-fn full_range_pixel_format(format: avformat::Pixel) -> Option<avformat::Pixel> {
-    match format {
-        avformat::Pixel::YUV420P => Some(avformat::Pixel::YUVJ420P),
-        avformat::Pixel::YUV422P => Some(avformat::Pixel::YUVJ422P),
-        avformat::Pixel::YUV444P => Some(avformat::Pixel::YUVJ444P),
-        avformat::Pixel::YUV440P => Some(avformat::Pixel::YUVJ440P),
-        avformat::Pixel::YUV411P => Some(avformat::Pixel::YUVJ411P),
-        _ => None,
+impl ImportScaler {
+    fn new(
+        input: (avformat::Pixel, u32, u32, bool),
+        output: (avformat::Pixel, u32, u32),
+        rgb: bool,
+    ) -> Result<Self, String> {
+        let (input_format, input_width, input_height, full_range) = input;
+        let (output_format, output_width, output_height) = output;
+        let context = unsafe { ffmpeg::ffi::sws_alloc_context() };
+        if context.is_null() {
+            return Err("Failed to create scaler".to_string());
+        }
+        let scaler = Self {
+            context,
+            input,
+            output,
+        };
+        let options: [(&std::ffi::CStr, i64); 9] = [
+            (c"srcw", i64::from(input_width)),
+            (c"srch", i64::from(input_height)),
+            (
+                c"src_format",
+                ffmpeg::ffi::AVPixelFormat::from(input_format) as i64,
+            ),
+            (c"dstw", i64::from(output_width)),
+            (c"dsth", i64::from(output_height)),
+            (
+                c"dst_format",
+                ffmpeg::ffi::AVPixelFormat::from(output_format) as i64,
+            ),
+            (
+                c"sws_flags",
+                i64::from(ffmpeg::software::scaling::Flags::BILINEAR.bits()),
+            ),
+            (c"src_range", i64::from(full_range)),
+            (c"dst_range", 0),
+        ];
+        for (name, value) in options {
+            let status =
+                unsafe { ffmpeg::ffi::av_opt_set_int(context.cast(), name.as_ptr(), value, 0) };
+            if status < 0 {
+                return Err(format!(
+                    "Failed to configure the scaler ({}): {}",
+                    name.to_string_lossy(),
+                    ffmpeg::Error::from(status)
+                ));
+            }
+        }
+        let status = unsafe {
+            ffmpeg::ffi::sws_init_context(context, std::ptr::null_mut(), std::ptr::null_mut())
+        };
+        if status < 0 {
+            return Err(format!(
+                "Failed to create scaler: {}",
+                ffmpeg::Error::from(status)
+            ));
+        }
+        // RGB input encodes with the BT.709 matrix the stream is tagged with
+        // (swscale defaults to BT.601), as `cap_enc_ffmpeg` does. Y'CbCr input
+        // keeps its matrix: swscale never converts it between Y'CbCr formats.
+        if rgb {
+            let status = unsafe {
+                let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+                ffmpeg::ffi::sws_setColorspaceDetails(
+                    context,
+                    bt709,
+                    1,
+                    bt709,
+                    0,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                )
+            };
+            if status < 0 {
+                return Err(format!(
+                    "Failed to configure the scaler colour: {}",
+                    ffmpeg::Error::from(status)
+                ));
+            }
+        }
+        Ok(scaler)
+    }
+
+    fn run(
+        &mut self,
+        frame: &ffmpeg::frame::Video,
+        output: &mut ffmpeg::frame::Video,
+    ) -> Result<(), String> {
+        let (format, width, height) = self.output;
+        if frame.width() != self.input.1
+            || frame.height() != self.input.2
+            || output.format() != format
+            || output.width() != width
+            || output.height() != height
+        {
+            return Err("Transcoding failed: scaler size changed".to_string());
+        }
+        let status = unsafe {
+            ffmpeg::ffi::sws_scale(
+                self.context,
+                (*frame.as_ptr()).data.as_ptr() as *const *const _,
+                (*frame.as_ptr()).linesize.as_ptr() as *const _,
+                0,
+                self.input.2 as std::os::raw::c_int,
+                (*output.as_mut_ptr()).data.as_ptr(),
+                (*output.as_mut_ptr()).linesize.as_ptr() as *mut _,
+            )
+        };
+        if status < 0 {
+            return Err(format!(
+                "Transcoding failed: {}",
+                ffmpeg::Error::from(status)
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ImportScaler {
+    fn drop(&mut self) {
+        unsafe { ffmpeg::ffi::sws_freeContext(self.context) };
     }
 }
 
 /// The scaler half of the packet loop (`import.rs:1200-1241`), targeting the
-/// encoder's negotiated pixel format instead of a hardcoded YUV420P.
+/// encoder's negotiated pixel format instead of a hardcoded YUV420P. The
+/// scaler is rebuilt whenever a frame's format, size or range differs from
+/// the one it was built for.
 fn convert_for_encode(
     frame: &ffmpeg::frame::Video,
-    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    scaler: &mut Option<ImportScaler>,
     pixel_format: avformat::Pixel,
     width: u32,
     height: u32,
@@ -1447,45 +1536,18 @@ fn convert_for_encode(
         });
     }
 
-    // A full-range frame in a limited-range format is relabelled with the
-    // full-range twin (same planes) so the scaler converts its range.
-    let relabelled = full_range
-        .then(|| full_range_pixel_format(frame.format()))
-        .flatten()
-        .map(|format| {
-            let mut reference = ffmpeg::frame::Video::empty();
-            let status =
-                unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
-            if status < 0 {
-                reference = frame.clone();
-            }
-            unsafe {
-                (*reference.as_mut_ptr()).format = ffmpeg::ffi::AVPixelFormat::from(format) as i32;
-            }
-            reference
-        });
-    let input = relabelled.as_ref().unwrap_or(frame);
-
-    if scaler.is_none() {
-        let mut context = ffmpeg::software::scaling::Context::get(
-            input.format(),
-            input.width(),
-            input.height(),
-            pixel_format,
-            width,
-            height,
-            ffmpeg::software::scaling::Flags::BILINEAR,
-        )
-        .map_err(|e| format!("Failed to create scaler: {e}"))?;
-        configure_scaler_color(&mut context, color)?;
-        *scaler = Some(context);
+    let input = (frame.format(), frame.width(), frame.height(), full_range);
+    let output = (pixel_format, width, height);
+    let reusable = scaler
+        .as_ref()
+        .is_some_and(|scaler| scaler.input == input && scaler.output == output);
+    if !reusable {
+        *scaler = Some(ImportScaler::new(input, output, color.rgb)?);
     }
     let scaler = scaler.as_mut().expect("just created");
 
     let mut scaled = ffmpeg::frame::Video::new(pixel_format, width, height);
-    scaler
-        .run(input, &mut scaled)
-        .map_err(|e| format!("Transcoding failed: {e}"))?;
+    scaler.run(frame, &mut scaled)?;
     scaled.set_pts(frame.pts());
     Ok(scaled)
 }
@@ -2587,6 +2649,72 @@ mod tests {
                 "chroma {u} {v}"
             );
         }
+    }
+
+    #[test]
+    fn ten_bit_full_range_frames_are_scaled_to_limited_range() {
+        let color = SourceColor::new(
+            avformat::Pixel::YUV420P10LE,
+            ffmpeg::color::Space::BT709,
+            ffmpeg::color::Range::JPEG,
+            12,
+        );
+        for (luma, expected) in [(1023u16, 235u8), (0, 16)] {
+            let mut frame = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P10LE, 16, 12);
+            for (plane, value) in [(0, luma), (1, 512), (2, 512)] {
+                for sample in frame.data_mut(plane).chunks_mut(2) {
+                    sample.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            frame.set_color_range(ffmpeg::color::Range::JPEG);
+            let mut scaler = None;
+            let converted =
+                convert_for_encode(&frame, &mut scaler, avformat::Pixel::YUV420P, 16, 12, color)
+                    .unwrap();
+            let [y, u, v] = first_sample(&converted);
+            assert!(y.abs_diff(expected) <= 1, "Y {y} for 10-bit {luma}");
+            assert!(
+                u.abs_diff(128) <= 1 && v.abs_diff(128) <= 1,
+                "chroma {u} {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_change_mid_stream_rebuilds_the_scaler() {
+        // Resized (anamorphic) frames always go through the scaler; a frame
+        // that flips to full range must not abort the import.
+        let color = limited_bt709();
+        let mut scaler = None;
+        let limited = yuv_frame(avformat::Pixel::YUV420P, [235, 128, 128]);
+        let converted = convert_for_encode(
+            &limited,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            20,
+            12,
+            color,
+        )
+        .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
+
+        let mut full = yuv_frame(avformat::Pixel::YUV420P, [255, 128, 128]);
+        full.set_color_range(ffmpeg::color::Range::JPEG);
+        let converted =
+            convert_for_encode(&full, &mut scaler, avformat::Pixel::YUV420P, 20, 12, color)
+                .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
+
+        let converted = convert_for_encode(
+            &limited,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            20,
+            12,
+            color,
+        )
+        .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
     }
 
     #[test]
