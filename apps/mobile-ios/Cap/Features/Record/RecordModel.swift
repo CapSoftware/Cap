@@ -32,6 +32,7 @@ final class RecordModel {
     @ObservationIgnored private var limitTask: Task<Void, Never>?
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var wantsCamera = true
+    @ObservationIgnored private var rotationAngle: CGFloat = 90
 
     init(session: SessionModel, folderId: String?) {
         self.session = session
@@ -120,6 +121,13 @@ final class RecordModel {
         }
     }
 
+    /// A recording keeps the shape it started with; turning the device applies once it ends.
+    func setRotationAngle(_ angle: CGFloat) {
+        rotationAngle = angle
+        guard !isRecording, phase != .finishing else { return }
+        capture.setRotationAngle(angle)
+    }
+
     func teardown() {
         if isRecording { discard() }
         capture.stop()
@@ -130,10 +138,11 @@ final class RecordModel {
     func record() {
         guard phase == .ready else { return }
         let recordings = session.services.recordings
+        let format = CameraCapture.format(rotationAngle: rotationAngle)
         let job = RecordingJob(
             userId: session.credentials.userId,
             title: Self.title(for: .now),
-            format: .init(width: CameraCapture.format.width, height: CameraCapture.format.height, fps: CameraCapture.format.fps),
+            format: .init(width: format.width, height: format.height, fps: format.fps),
             organizationId: session.organizationId,
             folderId: folderId,
             hasAudio: hasMicrophone
@@ -143,7 +152,7 @@ final class RecordModel {
         do {
             writer = try SegmentWriter(
                 directory: recordings.directory(for: jobId),
-                video: CameraCapture.format,
+                video: format,
                 audio: hasMicrophone,
                 onSegment: { segment in recordings.add(segment, to: jobId) },
                 onFailure: { [weak self] error in
@@ -200,7 +209,7 @@ final class RecordModel {
             RecordingUploads.markActive(jobId, false)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
             await throwAway(jobId)
-            phase = .ready
+            becomeReady()
             return
         }
         // Hand over before clearing the active flag, or a resume pass in between would treat it as a crash.
@@ -214,7 +223,7 @@ final class RecordModel {
         // Stays on the recorder: the upload carries on in the list while the next one is recorded.
         RecentRecordings.shared.stopped(jobId: jobId, kind: .camera)
         RecordingCoordinator.shared.cameraRecordingStopped()
-        phase = .ready
+        becomeReady()
     }
 
     func discard() {
@@ -224,8 +233,13 @@ final class RecordModel {
         UIApplication.shared.isIdleTimerDisabled = false
         capture.cancelRecording()
         RecordingUploads.markActive(jobId, false)
-        phase = .ready
+        becomeReady()
         Task { await throwAway(jobId) }
+    }
+
+    private func becomeReady() {
+        phase = .ready
+        capture.setRotationAngle(rotationAngle)
     }
 
     private func throwAway(_ jobId: String) async {
