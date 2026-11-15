@@ -2646,4 +2646,62 @@ mod word_edit_ui {
             assert_eq!(texts(editor), ["One", "two.", "Tree", "four", "five"]);
         });
     }
+
+    /// Lays `text` out 60px wide in the test text system (6px per character,
+    /// 20px lines) and returns each span's field anchor as (x, y, width).
+    fn anchors(
+        cx: &mut gpui::TestAppContext,
+        text: &'static str,
+        spans: &[std::ops::Range<usize>],
+    ) -> Vec<(f32, f32, f32)> {
+        use gpui::{ParentElement, Styled, StyledText, point, px, size};
+
+        let cx = cx.add_empty_window();
+        let styled = StyledText::new(text);
+        let layout = styled.layout().clone();
+        cx.draw(point(px(0.), px(0.)), size(px(60.), px(200.)), |_, _| {
+            div()
+                .w(px(60.))
+                .text_size(px(10.))
+                .line_height(px(20.))
+                .child(styled)
+        });
+        spans
+            .iter()
+            .map(|span| {
+                let anchor = crate::transcript::view::word_anchor(&layout, span.clone()).unwrap();
+                (
+                    f32::from(anchor.origin.x),
+                    f32::from(anchor.origin.y),
+                    f32::from(anchor.width),
+                )
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn the_field_opens_on_the_line_a_wrapped_word_starts(cx: &mut gpui::TestAppContext) {
+        // "one two " fills the first line, so "three" opens the second.
+        assert_eq!(
+            anchors(cx, "one two three four", &[0..3, 4..7, 8..13, 14..18]),
+            [
+                (0., 0., 18.),
+                (24., 0., 18.),
+                (0., 20., 30.),
+                (36., 20., 24.)
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn a_word_longer_than_the_line_gets_the_rest_of_its_first_line(cx: &mut gpui::TestAppContext) {
+        assert_eq!(
+            anchors(cx, "ab cdefghijklmnop", &[0..2, 3..17]),
+            [(0., 0., 12.), (0., 20., 60.)]
+        );
+        assert_eq!(
+            anchors(cx, "abcdefghijklmnop qr", &[0..16]),
+            [(0., 0., 60.)]
+        );
+    }
 }

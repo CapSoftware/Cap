@@ -182,13 +182,27 @@ struct ParagraphPainter {
     edit_anchor: Rc<Cell<Option<WordAnchor>>>,
 }
 
-fn word_anchor(layout: &TextLayout, span: Range<usize>) -> Option<WordAnchor> {
+pub(super) fn word_anchor(layout: &TextLayout, span: Range<usize>) -> Option<WordAnchor> {
     let bounds = layout.bounds();
-    let start = layout.position_for_index(span.start)?;
-    let width = layout
-        .position_for_index(span.end)
-        .filter(|end| end.y == start.y && end.x > start.x)
-        .map_or(px(EDIT_MIN_WIDTH), |end| end.x - start.x);
+    let mut start = layout.position_for_index(span.start)?;
+    let first = layout.text().get(span.clone())?.chars().next()?;
+    // gpui places an index that sits on a soft wrap at the end of the line
+    // above, so a word that opens a wrapped line starts at the left edge of
+    // the line its first character is on.
+    let after_first = layout.position_for_index(span.start + first.len_utf8())?;
+    if after_first.y > start.y {
+        start = Point {
+            x: bounds.origin.x,
+            y: after_first.y,
+        };
+    }
+    let width = match layout.position_for_index(span.end) {
+        Some(end) if end.y == start.y && end.x > start.x => end.x - start.x,
+        // A word longer than the line wraps itself: the field covers the
+        // rest of the line it starts on.
+        Some(end) if end.y > start.y => (bounds.right() - start.x).max(px(EDIT_MIN_WIDTH)),
+        _ => px(EDIT_MIN_WIDTH),
+    };
     Some(WordAnchor {
         origin: start - bounds.origin,
         width,
