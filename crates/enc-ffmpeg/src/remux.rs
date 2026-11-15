@@ -179,6 +179,38 @@ fn write_concat_list(fragments: &[PathBuf], concat_list: &Path) -> Result<(), Re
     Ok(())
 }
 
+/// FFmpeg resolves the concat list's relative entries against the list's path
+/// as a URL, and in a Windows verbatim path (`\\?\C:\...`) the `?` starts a
+/// query, so every entry resolves to a file that does not exist. The list is
+/// opened by its ordinary form instead; FFmpeg adds its own long-path prefix
+/// when it opens files.
+fn concat_list_url_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let root = match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => Some(format!("{}:\\", drive as char)),
+                Prefix::VerbatimUNC(server, share) => Some(format!(
+                    "\\\\{}\\{}\\",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                )),
+                _ => None,
+            };
+            if let Some(root) = root {
+                let mut plain = PathBuf::from(root);
+                plain.extend(
+                    components.filter(|component| !matches!(component, Component::RootDir)),
+                );
+                return plain;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 fn open_input_with_format(
     path: &Path,
     format_name: &str,
@@ -192,6 +224,7 @@ fn open_input_with_format(
             return Err(RemuxError::ConcatDemuxerNotFound);
         }
 
+        let path = concat_list_url_path(path);
         let path_text = path.to_str().ok_or_else(|| {
             RemuxError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1572,6 +1605,34 @@ mod tests {
                     .contains(".validated-combined-")
             );
         }
+    }
+
+    #[test]
+    fn concat_lists_open_without_the_windows_verbatim_prefix() {
+        #[cfg(windows)]
+        {
+            use std::path::{Path, PathBuf};
+            for (verbatim, plain) in [
+                (
+                    r"\\?\C:\Users\a b\Café 録画\display.concat.txt",
+                    r"C:\Users\a b\Café 録画\display.concat.txt",
+                ),
+                (
+                    r"\\?\UNC\server\share\x\list.txt",
+                    r"\\server\share\x\list.txt",
+                ),
+                (r"C:\plain\list.txt", r"C:\plain\list.txt"),
+            ] {
+                assert_eq!(
+                    super::concat_list_url_path(Path::new(verbatim)),
+                    PathBuf::from(plain)
+                );
+            }
+        }
+        let plain = std::path::Path::new("/recordings/Cap Café/display.concat.txt");
+        #[cfg(not(windows))]
+        assert_eq!(super::concat_list_url_path(plain), plain);
+        let _ = plain;
     }
 
     #[test]
