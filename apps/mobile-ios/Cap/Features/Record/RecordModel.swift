@@ -24,6 +24,8 @@ final class RecordModel {
     private(set) var position: AVCaptureDevice.Position = .front
     private(set) var hasMicrophone = false
     private(set) var isFlipping = false
+    /// The angle the running recording was started at. It can turn half a turn, never between portrait and landscape.
+    private(set) var recordingRotationAngle: CGFloat?
 
     @ObservationIgnored let capture = CameraCapture()
     @ObservationIgnored private let session: SessionModel
@@ -121,10 +123,14 @@ final class RecordModel {
         }
     }
 
-    /// A recording keeps the shape it started with; turning the device applies once it ends.
+    /// A recording keeps the shape it started with, so a quarter turn waits until it ends. A half turn, or a flip to a
+    /// camera mounted the other way up, still applies, which keeps the picture upright.
     func setRotationAngle(_ angle: CGFloat) {
         rotationAngle = angle
-        guard !isRecording, phase != .finishing else { return }
+        if let recording = recordingRotationAngle {
+            guard CameraCapture.sameShape(angle, recording) else { return }
+            recordingRotationAngle = angle
+        }
         capture.setRotationAngle(angle)
     }
 
@@ -164,6 +170,7 @@ final class RecordModel {
             return
         }
         self.jobId = jobId
+        recordingRotationAngle = rotationAngle
         stopping = false
         RecordingUploads.markActive(jobId, true)
         RecordingCoordinator.shared.activeModel = self
@@ -239,6 +246,7 @@ final class RecordModel {
 
     private func becomeReady() {
         phase = .ready
+        recordingRotationAngle = nil
         capture.setRotationAngle(rotationAngle)
     }
 

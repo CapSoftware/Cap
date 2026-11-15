@@ -24,8 +24,16 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
 
     /// Upright frames are 1080×1920 at 90° or 270°, and 1920×1080 at 0° or 180° (the open iPhone Duo held sideways).
     static func format(rotationAngle: CGFloat) -> SegmentWriter.VideoFormat {
-        guard Int(rotationAngle.rounded()) % 180 == 0 else { return format }
+        guard isLandscape(rotationAngle) else { return format }
         return SegmentWriter.VideoFormat(width: format.height, height: format.width, fps: format.fps, bitrate: format.bitrate)
+    }
+
+    static func isLandscape(_ rotationAngle: CGFloat) -> Bool {
+        Int(rotationAngle.rounded()) % 180 == 0
+    }
+
+    static func sameShape(_ angle: CGFloat, _ other: CGFloat) -> Bool {
+        isLandscape(angle) == isLandscape(other)
     }
 
     struct Configuration: Sendable {
@@ -180,7 +188,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         }
     }
 
-    /// Frames change shape with the angle, so it's only set while nothing is being recorded.
+    /// While recording, only an angle that keeps the frame's shape belongs here.
     func setRotationAngle(_ angle: CGFloat) {
         sessionQueue.async { [self] in
             guard rotationAngle != angle else { return }
