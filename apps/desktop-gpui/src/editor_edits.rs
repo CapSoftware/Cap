@@ -1322,13 +1322,12 @@ fn renumber_track_names(
         })
         .collect();
     names.retain(|key, _| !key.starts_with(&prefix));
-    let mut next_empty = kept_lanes.len() as u32;
     for (lane, name) in named {
         let new_lane = match kept_lanes.iter().position(|kept| *kept == lane) {
-            Some(position) => position as u32,
+            Some(position) => position,
             None => {
-                next_empty += 1;
-                next_empty - 1
+                let kept_below = kept_lanes.iter().filter(|kept| **kept < lane).count();
+                kept_lanes.len() + lane as usize - kept_below
             }
         };
         names.insert(format!("{prefix}{new_lane}"), name);
@@ -3369,6 +3368,34 @@ mod tests {
                 ("audio:1", "Voice"),
                 ("style:0", "Intro")
             ]
+        );
+    }
+
+    #[test]
+    fn deleting_a_segment_keeps_the_gaps_between_empty_named_lanes() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 30.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 0.0, "end": 5.0, "track": 0, "path": "voice.mp3", "name": "Voice", "duration": 5.0 },
+                    { "start": 6.0, "end": 9.0, "track": 0, "path": "voice.mp3", "name": "Voice", "duration": 3.0 }
+                ]
+            },
+            "trackNames": { "audio:2": "Music" }
+        }));
+        assert!(delete_segments_with_names(
+            &mut project,
+            TrackKind::Audio,
+            &[1]
+        ));
+        assert_eq!(
+            project
+                .track_names
+                .iter()
+                .map(|(key, name)| (key.as_str(), name.as_str()))
+                .collect::<Vec<_>>(),
+            [("audio:2", "Music")]
         );
     }
 
