@@ -5,6 +5,7 @@ import {
 	DEVELOPER_VIDEO_MP4_FILE,
 	DEVELOPER_VIDEO_POSTER_FILE,
 } from "./developer-video-plan";
+import { slicedHlsPlayback } from "./developer-video-slices";
 import {
 	developerVideoIsTakenDown,
 	developerVideoPublicMetadata,
@@ -47,7 +48,9 @@ export function developerVideoOutputs(
 		return { hls: false, mp4: false, poster: false };
 	}
 	return {
-		hls: processing.hls.state === "complete",
+		hls:
+			processing.hls.state === "complete" ||
+			slicedHlsPlayback(processing) !== null,
 		mp4: processing.mp4.state === "complete",
 		poster: processing.poster !== null,
 	};
