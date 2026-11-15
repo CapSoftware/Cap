@@ -3124,6 +3124,11 @@ save_failed = "无法保存 {path} 的录制标题：{error}"
 clear_all = "全部清除"
 delete = "删除"
 
+[editor.window.track_rename]
+title = "重命名轨道"
+placeholder = "轨道名称"
+confirm = "重命名"
+
 [editor.window.transition]
 title = "转场"
 add = "添加转场"

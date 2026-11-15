@@ -2142,11 +2142,7 @@ impl EditorWindow {
             },
         ));
         let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
-        let track_name_input = cx.new(|cx| {
-            let mut input = ui::TextInputState::single_line(window, cx);
-            input.set_placeholder("Track name");
-            input
-        });
+        let track_name_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         text_events.push(cx.subscribe_in(
             &track_name_input,
             window,
@@ -8109,6 +8105,7 @@ impl EditorWindow {
             .unwrap_or_else(|| row.kind.label().to_string());
         self.track_rename = Some(row);
         self.track_name_input.update(cx, |input, cx| {
+            input.set_placeholder(tr::editor::window::track_rename::placeholder());
             input.set_text(current, cx);
             input.focus_and_select_all(window, cx);
         });
@@ -8185,7 +8182,7 @@ impl EditorWindow {
                                 .text_size(px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(Hsla::from(theme.editor.text_1))
-                                .child("Rename track"),
+                                .child(tr::editor::window::track_rename::title()),
                         )
                         .child(
                             ui::TextInput::plain(&theme, "track-name", &self.track_name_input)
@@ -8207,7 +8204,7 @@ impl EditorWindow {
                                         ui::ButtonVariant::Gray,
                                         ui::ButtonSize::Md,
                                     )
-                                    .label("Cancel")
+                                    .label(tr::common::cancel())
                                     .on_click(cx.listener(
                                         |this, _, _window, cx| {
                                             this.track_rename = None;
@@ -8222,7 +8219,7 @@ impl EditorWindow {
                                         ui::ButtonVariant::Blue,
                                         ui::ButtonSize::Md,
                                     )
-                                    .label("Rename")
+                                    .label(tr::editor::window::track_rename::confirm())
                                     .on_click(cx.listener(
                                         |this, _, window, cx| {
                                             this.commit_track_rename(window, cx);

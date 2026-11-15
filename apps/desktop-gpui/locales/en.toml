@@ -3126,6 +3126,11 @@ save_failed = "Could not save the recording title for {path}: {error}"
 clear_all = "Clear all"
 delete = "Delete"
 
+[editor.window.track_rename]
+title = { text = "Rename track", context = "Title of the dialog opened by double-clicking a timeline lane label." }
+placeholder = "Track name"
+confirm = "Rename"
+
 [editor.window.transition]
 title = { text = "Transition", context = "Title of the popover that edits the transition between two clips." }
 add = { text = "Add transition", context = "Tooltip on the + button at a cut between two clips on the timeline." }

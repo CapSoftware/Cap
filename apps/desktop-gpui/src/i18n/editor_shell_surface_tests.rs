@@ -1441,6 +1441,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::timeline::picker::shape(),
             "Draw arrows, boxes, circles and highlights over your recording.",
         ),
+        (tr::editor::window::track_rename::title(), "Rename track"),
+        (
+            tr::editor::window::track_rename::placeholder(),
+            "Track name",
+        ),
+        (tr::editor::window::track_rename::confirm(), "Rename"),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);

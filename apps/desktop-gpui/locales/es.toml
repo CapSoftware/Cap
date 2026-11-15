@@ -3124,6 +3124,11 @@ save_failed = "No se pudo guardar el título de la grabación de {path}: {error}
 clear_all = "Borrar todo"
 delete = "Eliminar"
 
+[editor.window.track_rename]
+title = "Renombrar pista"
+placeholder = "Nombre de la pista"
+confirm = "Renombrar"
+
 [editor.window.transition]
 title = "Transición"
 add = "Añadir transición"

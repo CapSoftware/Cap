@@ -3124,6 +3124,11 @@ save_failed = "Der Aufnahmetitel für {path} konnte nicht gespeichert werden: {e
 clear_all = "Alle entfernen"
 delete = "Löschen"
 
+[editor.window.track_rename]
+title = "Spur umbenennen"
+placeholder = "Spurname"
+confirm = "Umbenennen"
+
 [editor.window.transition]
 title = "Übergang"
 add = "Übergang hinzufügen"

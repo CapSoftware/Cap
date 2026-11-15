@@ -3124,6 +3124,11 @@ save_failed = "{path} का रिकॉर्डिंग टाइटल स�
 clear_all = "सब साफ़ करें"
 delete = "हटाएँ"
 
+[editor.window.track_rename]
+title = "ट्रैक का नाम बदलें"
+placeholder = "ट्रैक का नाम"
+confirm = "नाम बदलें"
+
 [editor.window.transition]
 title = "ट्रांज़िशन"
 add = "ट्रांज़िशन जोड़ें"
