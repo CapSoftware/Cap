@@ -41,8 +41,11 @@ export type DeliveryPart = [
 
 const ID = "[A-Za-z0-9_-]{1,64}";
 const DELIVERY_PATH = new RegExp(
-	`^/(developer/(${ID})/(${ID})/${ID}/${ID}/(?:hls/(360p|720p|1080p|1440p|2160p|audio)\\.m4s|(video)\\.mp4))$`,
+	`^/(developer/(${ID})/(${ID})/${ID}/${ID}/(?:hls/(360p|720p|1080p|1440p|2160p|audio)(?:-\\d+-${ID})?\\.m4s|(video)\\.mp4))$`,
 );
+// A ladder encoded in slices stores each slice's media as
+// <rendition>-<slice>-<attempt>.m4s next to the whole ladder's playlists.
+const SLICE_MEDIA_FILE = /^([A-Za-z0-9]+)-\d+-[A-Za-z0-9_-]+\.m4s$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DELIVERED_STATUSES = new Set(["200", "206"]);
 const TIERS = new Set<string>(DELIVERY_RENDITION_TIERS);
@@ -123,9 +126,11 @@ export function parseHlsByteRanges(
 	mediaName: string,
 ): HlsSegment[] | null {
 	const segments: HlsSegment[] = [];
+	// A ladder joined from slices lists one media file per slice. A range with
+	// no offset continues from the previous segment of the same file.
+	const nextOffsets = new Map<string, number>();
 	let duration: number | null = null;
-	let range: { start: number; length: number } | null = null;
-	let nextOffset = 0;
+	let range: { start: number | null; length: number } | null = null;
 	for (const raw of playlist.split(/\r?\n/)) {
 		const line = raw.trim();
 		if (line.length === 0) continue;
@@ -136,26 +141,23 @@ export function parseHlsByteRanges(
 		}
 		const byterange = /^#EXT-X-BYTERANGE:(\d+)(?:@(\d+))?$/.exec(line);
 		if (byterange) {
-			const start =
-				byterange[2] === undefined ? nextOffset : Number(byterange[2]);
-			range = { start, length: Number(byterange[1]) };
+			range = {
+				start: byterange[2] === undefined ? null : Number(byterange[2]),
+				length: Number(byterange[1]),
+			};
 			continue;
 		}
 		if (line.startsWith("#")) continue;
-		if (
-			line !== mediaName ||
-			range === null ||
-			duration === null ||
-			!Number.isFinite(duration)
-		) {
+		if (range === null || duration === null || !Number.isFinite(duration)) {
 			return null;
 		}
-		segments.push({
-			start: range.start,
-			end: range.start + range.length,
-			duration,
-		});
-		nextOffset = range.start + range.length;
+		const start = range.start ?? nextOffsets.get(line) ?? 0;
+		nextOffsets.set(line, start + range.length);
+		if (line === mediaName) {
+			segments.push({ start, end: start + range.length, duration });
+		} else if (!SLICE_MEDIA_FILE.test(line)) {
+			return null;
+		}
 		range = null;
 		duration = null;
 	}
@@ -317,7 +319,9 @@ export function ladderTopTier(
 }
 
 export interface DeliveryResolver {
-	hls(playlistKey: string): Promise<HlsSegment[] | null>;
+	// The segments `mediaName` holds in the playlist at `playlistKey`. Without
+	// a name, the media file named like the playlist.
+	hls(playlistKey: string, mediaName?: string): Promise<HlsSegment[] | null>;
 	video(request: {
 		videoId: string;
 		key: string;
@@ -343,7 +347,10 @@ export function cachedDeliveryResolver(
 		return entry;
 	};
 	return {
-		hls: (key) => remember(playlists, key, () => resolver.hls(key)),
+		hls: (key, mediaName) =>
+			remember(playlists, `${key}\n${mediaName ?? ""}`, () =>
+				resolver.hls(key, mediaName),
+			),
 		video: (request) =>
 			remember(videos, request.videoId, () => resolver.video(request)),
 	};
@@ -370,6 +377,27 @@ async function ownedVideo(
 	return video && video.appId === request.appId ? video : null;
 }
 
+// A slice's media is listed in the whole ladder's playlist once every slice is
+// in. Before that, only the slice's own playlist in the encode's slices folder
+// lists it, under the name the encoder gave it.
+async function hlsSegments(
+	request: DeliveryRequest,
+	resolver: DeliveryResolver,
+): Promise<HlsSegment[] | null> {
+	const folder = request.key.slice(0, request.key.lastIndexOf("/") + 1);
+	const file = request.key.slice(folder.length);
+	const slice = SLICE_MEDIA_FILE.exec(file);
+	if (!slice) return resolver.hls(request.key.replace(/\.m4s$/, ".m3u8"));
+	const [, rendition] = slice;
+	return (
+		(await resolver.hls(`${folder}${rendition}.m3u8`, file)) ??
+		(await resolver.hls(
+			`${folder.replace(/hls\/$/, "slices/")}${file.replace(/\.m4s$/, ".m3u8")}`,
+			`${rendition}.m4s`,
+		))
+	);
+}
+
 /**
  * Measurement only. HLS seconds are exact: a byte range maps to the playlist's
  * segments, and a range that covers part of a segment counts it pro rata by
@@ -394,7 +422,7 @@ export async function deliveredSeconds(
 			? { tier, seconds: request.bodyBytes / rate, method: "mp4-estimate" }
 			: { tier, seconds: 0, method: "no-rate" };
 	}
-	const segments = await resolver.hls(request.key.replace(/\.m4s$/, ".m3u8"));
+	const segments = await hlsSegments(request, resolver);
 	if (segments) {
 		return {
 			tier: request.kind,
