@@ -48,23 +48,15 @@ const DEFAULT_CLICK_SPRING: SpringMassDamperSimulationConfig = SpringMassDamperS
     friction: 40.0,
 };
 
-const DRAG_SPRING: SpringMassDamperSimulationConfig = SpringMassDamperSimulationConfig {
-    tension: 1000.0,
-    mass: 1.0,
-    friction: 40.0,
-};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SpringProfile {
     Default,
     Snappy,
-    Drag,
 }
 
 struct CursorSpringPresets {
     default: SpringMassDamperSimulationConfig,
     snappy: SpringMassDamperSimulationConfig,
-    drag: SpringMassDamperSimulationConfig,
 }
 
 impl CursorSpringPresets {
@@ -83,7 +75,6 @@ impl CursorSpringPresets {
         Self {
             default: base,
             snappy,
-            drag: DRAG_SPRING,
         }
     }
 
@@ -91,7 +82,6 @@ impl CursorSpringPresets {
         match profile {
             SpringProfile::Default => self.default,
             SpringProfile::Snappy => self.snappy,
-            SpringProfile::Drag => self.drag,
         }
     }
 }
@@ -129,12 +119,11 @@ impl<'a> CursorSpringContext<'a> {
         }
     }
 
-    /// A held primary button keeps the drag spring until it is released, so
-    /// a press of another button mid-drag cannot swap in the click spring.
+    /// The click spring stiffens toward an upcoming press. While the primary
+    /// button is held the pointer is dragging, so the cursor keeps the default
+    /// spring and follows it instead.
     fn profile(&self, time_ms: f64) -> SpringProfile {
-        if self.primary_button_down {
-            SpringProfile::Drag
-        } else if self.has_imminent_press(time_ms) {
+        if !self.primary_button_down && self.has_imminent_press(time_ms) {
             SpringProfile::Snappy
         } else {
             SpringProfile::Default
@@ -877,13 +866,16 @@ mod tests {
         let mut context = CursorSpringContext::new(&clicks);
 
         context.advance_to(280.0);
-        assert_eq!(context.profile(280.0), SpringProfile::Drag);
+        assert!(context.primary_button_down);
+        assert_eq!(context.profile(280.0), SpringProfile::Default);
 
         // The release 50ms ahead ends the drag; it is not a click to stiffen for.
         context.advance_to(450.0);
-        assert_eq!(context.profile(450.0), SpringProfile::Drag);
+        assert_eq!(context.profile(450.0), SpringProfile::Default);
+        assert!(context.anticipated_press(450.0).is_none());
 
         context.advance_to(620.0);
+        assert!(!context.primary_button_down);
         assert_eq!(context.profile(620.0), SpringProfile::Default);
     }
 
@@ -909,13 +901,13 @@ mod tests {
             ];
             let mut context = CursorSpringContext::new(&clicks);
             context.advance_to(300.0);
-            assert_eq!(context.profile(300.0), SpringProfile::Drag, "{cursor_num}");
+            assert!(context.primary_button_down, "{cursor_num}");
         }
 
         let clicks = vec![secondary_click_event(100.0, true)];
         let mut context = CursorSpringContext::new(&clicks);
         context.advance_to(300.0);
-        assert_eq!(context.profile(300.0), SpringProfile::Default);
+        assert!(!context.primary_button_down);
     }
 
     #[test]
@@ -930,7 +922,7 @@ mod tests {
         let mut context = CursorSpringContext::new(&clicks);
         context.advance_to(1000.0);
         assert!(context.anticipated_press(1000.0).is_none());
-        assert_eq!(context.profile(1000.0), SpringProfile::Drag);
+        assert_eq!(context.profile(1000.0), SpringProfile::Default);
 
         context.advance_to(1250.0);
         assert_eq!(
@@ -940,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn spring_context_keeps_drag_spring_when_another_button_is_pressed() {
+    fn a_press_of_another_button_mid_drag_is_not_anticipated() {
         let clicks = vec![
             click_event(100.0, true),
             secondary_click_event(400.0, true),
@@ -950,7 +942,7 @@ mod tests {
         let mut context = CursorSpringContext::new(&clicks);
 
         context.advance_to(300.0);
-        assert_eq!(context.profile(300.0), SpringProfile::Drag);
+        assert_eq!(context.profile(300.0), SpringProfile::Default);
         assert!(context.anticipated_press(300.0).is_none());
     }
 
@@ -1040,11 +1032,14 @@ mod tests {
     fn dragging_cursor_lands_on_the_release_point_without_overshoot() {
         // A hand slows down before letting go: ease in and out from x=0.15 at
         // 400ms to x=0.75 at 1200ms, released on arrival.
+        let pointer = |t: f64| {
+            let u = ((t - 400.0) / 800.0).clamp(0.0, 1.0);
+            0.15 + 0.6 * u * u * (3.0 - 2.0 * u)
+        };
         let moves = (0..=300)
             .map(|i| {
                 let t = f64::from(i) * 10.0;
-                let u = ((t - 400.0) / 800.0).clamp(0.0, 1.0);
-                cursor_move(t, 0.15 + 0.6 * u * u * (3.0 - 2.0 * u), 0.5)
+                cursor_move(t, pointer(t), 0.5)
             })
             .collect();
         let cursor = CursorEvents {
@@ -1052,16 +1047,17 @@ mod tests {
             clicks: vec![click_event(300.0, true), click_event(1200.0, false)],
         };
 
-        let at_release = smoothed_x(&cursor, 1200.0);
-        assert!(
-            (at_release - 0.75).abs() < 0.003,
-            "cursor at x={at_release:.4} when the drag ends at 0.75"
-        );
+        // It never overshoots the release point and settles on it shortly
+        // after.
         for t in (400..3000).step_by(5) {
             let x = smoothed_x(&cursor, f64::from(t));
-            assert!(x < 0.753, "overshoot to x={x:.4} at {t}ms");
+            assert!(x < 0.7505, "overshoot to x={x:.4} at {t}ms");
         }
-        assert!((smoothed_x(&cursor, 3000.0) - 0.75).abs() < 1e-3);
+        let settled = smoothed_x(&cursor, 1500.0);
+        assert!(
+            (settled - 0.75).abs() < 0.003,
+            "cursor at x={settled:.4} 300ms after the drag ends at 0.75"
+        );
     }
 
     #[test]
@@ -2044,7 +2040,11 @@ mod tests {
             let moves = decimate_cursor_moves(filtered.as_ref());
             for config in [
                 DEFAULT_CLICK_SPRING,
-                DRAG_SPRING,
+                SpringMassDamperSimulationConfig {
+                    tension: 1000.0,
+                    mass: 1.0,
+                    friction: 40.0,
+                },
                 SpringMassDamperSimulationConfig {
                     tension: 470.0,
                     mass: 3.0,
