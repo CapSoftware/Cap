@@ -31,6 +31,7 @@ struct RecordView: View {
                     position: model.position,
                     isLive: model.phase == .ready,
                     followsDevice: horizontalSizeClass == .regular && verticalSizeClass == .regular,
+                    recordingAngle: model.recordingRotationAngle,
                     onCaptureAngle: model.setRotationAngle
                 )
                     .ignoresSafeArea()
@@ -465,6 +466,7 @@ private struct CameraPreview: UIViewRepresentable {
     let isLive: Bool
     /// The open iPhone Duo turns with the device, so its camera does too. A phone's recorder stays portrait.
     let followsDevice: Bool
+    let recordingAngle: CGFloat?
     let onCaptureAngle: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> PreviewView {
@@ -477,6 +479,7 @@ private struct CameraPreview: UIViewRepresentable {
 
     func updateUIView(_ view: PreviewView, context: Context) {
         view.onCaptureAngle = onCaptureAngle
+        view.recordingAngle = recordingAngle
         view.update(followsDevice: followsDevice, position: position)
         view.keepUpright()
     }
@@ -485,10 +488,12 @@ private struct CameraPreview: UIViewRepresentable {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
         var onCaptureAngle: ((CGFloat) -> Void)?
+        var recordingAngle: CGFloat?
 
         private var followsDevice = false
         private var position: AVCaptureDevice.Position = .unspecified
         private var previewAngle: CGFloat = 90
+        private var captureAngle: CGFloat = 90
         private var coordinator: AVCaptureDevice.RotationCoordinator?
         private var observations: [NSKeyValueObservation] = []
 
@@ -521,6 +526,7 @@ private struct CameraPreview: UIViewRepresentable {
             coordinator = nil
             guard followsDevice, let device = videoDevice else {
                 previewAngle = 90
+                captureAngle = 90
                 keepUpright()
                 onCaptureAngle?(90)
                 return
@@ -537,7 +543,11 @@ private struct CameraPreview: UIViewRepresentable {
                 },
                 coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { @Sendable [weak self] coordinator, _ in
                     let angle = coordinator.videoRotationAngleForHorizonLevelCapture
-                    Task { @MainActor in self?.onCaptureAngle?(angle) }
+                    Task { @MainActor in
+                        self?.captureAngle = angle
+                        self?.onCaptureAngle?(angle)
+                        self?.keepUpright()
+                    }
                 },
             ]
         }
@@ -548,7 +558,9 @@ private struct CameraPreview: UIViewRepresentable {
                 .first { $0.hasMediaType(.video) }
         }
 
+        /// While recording, the preview turns only as far as the recording can, so it shows what is being saved.
         func keepUpright() {
+            if let recordingAngle, !CameraCapture.sameShape(captureAngle, recordingAngle) { return }
             guard let connection = previewLayer.connection, connection.videoRotationAngle != previewAngle, connection.isVideoRotationAngleSupported(previewAngle) else { return }
             connection.videoRotationAngle = previewAngle
         }
