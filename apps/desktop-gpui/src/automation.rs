@@ -352,10 +352,8 @@ pub fn instant_recording_finished(
     );
 }
 
-/// Every finished upload: the Instant queue once the upload is verified, a
-/// Studio share (from the editor or an Upload action) and a screenshot share.
-/// The queue calls it before its optional cleanup may remove the folder and
-/// keeps the folder until the returned run finishes.
+/// The Instant queue keeps the folder until the returned run finishes, since
+/// the rules may read it after the upload's optional cleanup would remove it.
 pub fn upload_completed(
     project_dir: &Path,
     share: Option<(String, String)>,
@@ -384,8 +382,6 @@ pub fn upload_completed(
     )
 }
 
-/// The Instant queue's share link for a verified upload, read from the
-/// recording's metadata while it is still on disk.
 pub fn instant_share(project_dir: &Path, video_id: &str) -> Option<(String, String)> {
     cap_project::RecordingMeta::load_for_project(project_dir)
         .ok()
@@ -504,9 +500,6 @@ fn editor_choice(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContex
     }
 }
 
-/// Whether a rule has a Delete local files that `verify_before_delete` could
-/// let through: one right after an Export to a chosen folder or a Save to
-/// location.
 fn can_delete(actions: &[Action]) -> bool {
     actions.windows(2).any(|pair| {
         matches!(pair[1], Action::DeleteLocalFiles)
@@ -528,9 +521,6 @@ pub fn screenshot_taken(image_path: PathBuf, target: ScreenshotTarget) {
     );
 }
 
-/// `studio_recording_editor_behaviour` in 0.6.0: a matching `SkipEditor`
-/// keeps both the editor and Cap's windows away, a matching `OpenEditor`
-/// opens the editor even when the setting says otherwise.
 pub fn studio_editor_behaviour(
     project_dir: &Path,
     elapsed: Duration,
@@ -1048,7 +1038,6 @@ fn verify_before_delete(
     }
 }
 
-/// A Save to location copy must be the whole source file.
 fn verify_copy(output: &Path, source: Option<&Path>) -> Result<(), String> {
     let source = source.ok_or("The saved file has no source to compare; local files kept")?;
     let expected = std::fs::metadata(source)
@@ -1338,7 +1327,6 @@ fn apply_filename_template(template: &str, ctx: &TriggerContext) -> String {
     result
 }
 
-/// 0.6.0's Notify: the filename variables, then the event's paths and link.
 fn notification_text(
     ctx: &TriggerContext,
     title_template: &str,

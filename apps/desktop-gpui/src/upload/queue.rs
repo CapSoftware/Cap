@@ -1234,13 +1234,13 @@ async fn remove_after_automations(project: PathBuf, automations: tokio::task::Jo
         tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because its automations did not finish");
         return;
     }
-    if let Err(error) = crate::library::ensure_not_open_in_editor(&project) {
-        tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because it is open in an editor");
-        return;
-    }
     let removed = tokio::task::spawn_blocking({
         let project = project.clone();
-        move || std::fs::remove_dir_all(project)
+        move || {
+            let _deleting = crate::library::ProjectBeingDeleted::begin(&project)
+                .map_err(std::io::Error::other)?;
+            std::fs::remove_dir_all(project)
+        }
     })
     .await;
     match removed {

@@ -6145,11 +6145,6 @@ fn action_applies_to_trigger(kind: ActionType, trigger: Trigger) -> bool {
     required.iter().any(|field| provided.contains(field))
 }
 
-/// The line under an action that explains when Cap runs it: Delete local
-/// files only runs right after an Export or Save to location that leaves a
-/// copy outside the recording, Notify follows the notifications setting, and
-/// text recognition is not available in Cap yet.
-/// The flag marks a warning.
 fn action_note(kind: ActionType, previous: Option<&Action>) -> Option<(&'static str, bool)> {
     match kind {
         ActionType::RecognizeTextToClipboard => {
