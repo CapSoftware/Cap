@@ -1,0 +1,51 @@
+1
+00:00:00,400 --> 00:00:04,950
+Welcome to the quarterly product update.
+
+2
+00:00:05,350 --> 00:00:09,178
+Today we will look at three
+
+3
+00:00:09,178 --> 00:00:09,842
+things.
+
+4
+00:00:09,842 --> 00:00:11,992
+New caption
+
+5
+00:00:13,842 --> 00:00:18,193
+First, the new editor makes trimming
+
+6
+00:00:18,193 --> 00:00:22,329
+a recording as easy as editing
+
+7
+00:00:22,329 --> 00:00:23,830
+a document.
+
+8
+00:00:24,230 --> 00:00:29,091
+Second, captions now export as
+
+9
+00:00:29,091 --> 00:00:33,871
+subtitle files for YouTube and Vimeo.
+
+10
+00:00:34,271 --> 00:00:38,706
+Third, the transcript lets you fix
+
+11
+00:00:38,706 --> 00:00:42,116
+any word the model misheard.
+
+12
+00:00:42,516 --> 00:00:46,780
+Thanks for watching, and see you
+
+13
+00:00:46,780 --> 00:00:48,441
+next month.

@@ -1,0 +1,14 @@
+light_window=2097158
+light_launch=ok
+light_word_edit=ok
+light_add_playhead=ok
+gap_runs=[] after=130 sample=(224, 243, 252)
+light_lane_click=missing
+dark_window=2097158
+dark_launch=ok
+dark_word_edit=ok
+dark_add_playhead=ok
+gap_runs=[(130, 165), (619, 675), (1344, 1551)] after=1076 sample=(79, 117, 71)
+dark_lane_click=ok x=1448
+saved_srt=ok
+saved_vtt=ok
