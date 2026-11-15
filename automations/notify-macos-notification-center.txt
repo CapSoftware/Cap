@@ -1,0 +1,17 @@
+Real app (debug build of this PR) on a Blacksmith macOS 15 runner, System notifications on, two saved Notify rules.
+
+App log:
+INFO cap_gpui::automation: automation action completed rule_id=started action="notify"
+INFO cap_gpui::automation: automation action completed rule_id=finished action="notify"
+
+Notification Center (~/Library/Group Containers/group.com.apple.usernoted/db2/db), newest first. Filed under Terminal because Cap is not installed on the runner (notify-rust's fallback for an unbundled binary):
+com.apple.terminal|816441181.155241
+com.apple.terminal|816441175.899975
+Studio recording saved at /var/folders/pm/cmklcsfj60nd7nfc79g8xmbc0000gn/T/tmp.kbUTU47j3C/recordings/Apple Virtual (Display) 2026-11-15 01.12 PM.cap
+Cap automation
+Recording started on 2026-11-15
+Cap automation
+
+Before the run the newest records were:
+com.apple.btmnotificationagent|816440773.11255
+com.apple.tips|803322966.017164
