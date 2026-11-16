@@ -1700,6 +1700,7 @@ impl CameraWindow {
         })();
         crate::recording::StudioCameraSnapshot {
             blur: self.state.background_blur,
+            shape: self.state.shape,
             placement,
         }
     }

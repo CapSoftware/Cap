@@ -36,6 +36,7 @@ runs:
           libasound2-dev \
           libasound2-plugins \
           pulseaudio-utils \
+          dbus-daemon \
           libdbus-1-dev \
           libudev-dev \
           libx11-dev \

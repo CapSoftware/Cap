@@ -76,4 +76,8 @@ xcodebuild test -project Cap.xcodeproj -scheme Cap -destination "platform=iOS Si
 
 ## Release notes
 
+Archive App Store and TestFlight builds with Xcode 27.1 or later. iOS decides how an app lays out on iPhone Duo from the SDK it was built with: anything older than the iOS 27.1 SDK runs letterboxed in compatibility mode on the open Duo and squeezed beside the status bar when folded, whatever the code does. A build phase on the `Cap` target fails Release device builds made with an older SDK. This is only the build SDK; the deployment target stays iOS 26.0.
+
+Release builds turn on Enhanced Security, which adds an `arm64e` slice. Xcode 27 builds local Swift packages for `arm64e` only when the workspace asks, so `Cap.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings` sets `iOSPackagesShouldBuildARM64e`. Without it, Release builds stop at `Unable to resolve module dependency: 'CapKit'`. App Store Connect also rejects iOS 27 SDK uploads whose Enhanced Security entitlements lack `com.apple.security.hardened-process.enhanced-security-version-string`, so `Cap.entitlements` sets it next to the integer `enhanced-security-version` that iOS 26 reads.
+
 The bundle identifier is `so.cap.mobile` under team `47B7FCLL43`, matching the App Store record the Expo app was prepared for. Associated Domains are not enabled yet because cap.so does not serve an `apple-app-site-association` file. `cap://s/<id>` links and pasted share links work today.

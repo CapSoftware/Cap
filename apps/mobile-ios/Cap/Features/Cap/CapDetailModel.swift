@@ -797,9 +797,7 @@ final class CapDetailModel {
             }
             let file = try await Self.downloadVideo(from: url, suggestedName: link.fileName)
             defer { try? FileManager.default.removeItem(at: file) }
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: file)
-            }
+            try await PhotoLibrary.addVideo(at: file)
             Usage.track("cap_saved_to_photos")
             session.toasts.show("Saved to Photos", systemImage: "checkmark.circle.fill")
         } catch {

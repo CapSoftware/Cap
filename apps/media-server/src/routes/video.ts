@@ -984,6 +984,7 @@ video.on("POST", ["/process", "/import"], async (c) => {
 
 	const jobId = generateJobId();
 	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	if (result.data.infra === true) job.infraMp4 = true;
 
 	void trackBackgroundTask(
 		withMediaTransfers(32 * 1024 ** 3, () =>
@@ -1062,7 +1063,10 @@ video.post("/ladder", async (c) => {
 	if (
 		!canAcceptNewVideoProcess() ||
 		(result.data.infra === true &&
-			!canAcceptNewInfraVideoProcess(infraHeavyLadder))
+			!canAcceptNewInfraVideoProcess(
+				infraHeavyLadder,
+				result.data.range !== undefined,
+			))
 	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);

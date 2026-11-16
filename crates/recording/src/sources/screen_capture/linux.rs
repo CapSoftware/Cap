@@ -44,6 +44,9 @@ mod x11_tests;
 #[cfg(test)]
 mod system_audio_channel_tests;
 
+#[cfg(test)]
+mod wayland_portal_tests;
+
 use frame_scaler::FrameScaler;
 
 #[derive(Debug)]
@@ -103,8 +106,49 @@ struct WaylandInputConfig {
 }
 
 struct WaylandPortalSession {
-    _proxy: Screencast<'static>,
-    _session: Session<'static, Screencast<'static>>,
+    session: Arc<Session<'static, Screencast<'static>>>,
+    _close_on_drop: tokio::sync::oneshot::Sender<()>,
+}
+
+impl WaylandPortalSession {
+    fn new(session: Session<'static, Screencast<'static>>) -> Self {
+        let session = Arc::new(session);
+        let (close_on_drop, dropped) = tokio::sync::oneshot::channel::<()>();
+        let close = {
+            let session = session.clone();
+            async move {
+                let _ = dropped.await;
+                let result = tokio::time::timeout(Duration::from_secs(3), session.close())
+                    .await
+                    .context("Wayland screen capture portal session close timed out")?;
+                if let Err(ashpd::Error::Portal(ashpd::PortalError::ZBus(
+                    ashpd::zbus::Error::MethodError(name, _, _),
+                ))) = &result
+                    && matches!(
+                        name.as_str(),
+                        "org.freedesktop.DBus.Error.UnknownObject"
+                            | "org.freedesktop.DBus.Error.UnknownMethod"
+                    )
+                {
+                    return Ok(());
+                }
+                result.context("close Wayland screen capture portal session")
+            }
+        };
+        if let Some(scope) = crate::output_pipeline::PipelineBuildScope::current() {
+            scope.spawn_cleanup(close);
+        } else {
+            drop(tokio::spawn(async move {
+                if let Err(error) = close.await {
+                    tracing::warn!(%error, "Could not close the Wayland screen capture portal session");
+                }
+            }));
+        }
+        Self {
+            session,
+            _close_on_drop: close_on_drop,
+        }
+    }
 }
 
 pub struct VideoSource {
@@ -412,6 +456,7 @@ async fn open_wayland_portal(
         .create_session()
         .await
         .context("create XDG Desktop Portal ScreenCast session")?;
+    let portal_session = WaylandPortalSession::new(session);
     let cursor_mode = if show_cursor {
         CursorMode::Embedded
     } else {
@@ -420,7 +465,7 @@ async fn open_wayland_portal(
 
     proxy
         .select_sources(
-            &session,
+            &portal_session.session,
             cursor_mode,
             wayland_source_type(source),
             false,
@@ -431,7 +476,7 @@ async fn open_wayland_portal(
         .context("select Wayland screen capture source")?;
 
     let response = proxy
-        .start(&session, None)
+        .start(&portal_session.session, None)
         .await
         .context("start Wayland screen capture portal request")?
         .response()
@@ -442,17 +487,14 @@ async fn open_wayland_portal(
         .cloned()
         .ok_or_else(|| anyhow!("Wayland screen capture portal did not return a stream"))?;
     let fd = proxy
-        .open_pipe_wire_remote(&session)
+        .open_pipe_wire_remote(&portal_session.session)
         .await
         .context("open PipeWire remote for Wayland screen capture")?;
 
     Ok(WaylandPortalCapture {
         stream,
         fd,
-        portal_session: WaylandPortalSession {
-            _proxy: proxy,
-            _session: session,
-        },
+        portal_session,
     })
 }
 

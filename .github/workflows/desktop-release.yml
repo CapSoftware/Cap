@@ -794,7 +794,8 @@ jobs:
             "Cap.exe", "cap-muxer.exe", "cap-cli.exe",
             "avcodec-61.dll", "avdevice-61.dll", "avfilter-10.dll", "avformat-61.dll",
             "avutil-59.dll", "postproc-58.dll", "swresample-5.dll", "swscale-8.dll",
-            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"
+            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll",
+            "msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll"
           )
           $forbiddenFiles = @("cap-gpui.exe", "cap-exporter.exe")
           foreach ($installer in $installers) {
