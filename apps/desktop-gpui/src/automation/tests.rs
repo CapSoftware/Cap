@@ -395,6 +395,33 @@ fn rules_choose_the_screenshot_editor_and_skip_wins() {
     );
 }
 
+#[test]
+fn only_a_screenshot_rule_that_can_delete_drops_the_overlay_card() {
+    let ctx = TriggerContext::new().with_capture_target(CaptureTargetKind::Window);
+    let deletes =
+        |rules: Vec<AutomationRule>| rules_delete(&store(rules), Trigger::ScreenshotTaken, &ctx);
+    let shot = |id: &str, enabled: bool, actions: Vec<Action>| {
+        rule(id, Trigger::ScreenshotTaken, enabled, actions)
+    };
+    let save_then_delete = vec![save_action(Path::new("/shots")), Action::DeleteLocalFiles];
+
+    assert!(!deletes(vec![]));
+    assert!(deletes(vec![shot("save", true, save_then_delete.clone())]));
+    assert!(!deletes(vec![shot("off", false, save_then_delete.clone())]));
+    assert!(!deletes(vec![shot(
+        "lone",
+        true,
+        vec![Action::DeleteLocalFiles]
+    )]));
+    assert!(!deletes(vec![shot("open", true, vec![Action::OpenEditor])]));
+    assert!(!deletes(vec![rule(
+        "studio",
+        Trigger::StudioRecordingFinished,
+        true,
+        save_then_delete,
+    )]));
+}
+
 #[tokio::test]
 async fn open_editor_leaves_an_editor_choice_already_made_alone() {
     for trigger in [Trigger::StudioRecordingFinished, Trigger::ScreenshotTaken] {

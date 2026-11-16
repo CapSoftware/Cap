@@ -1249,7 +1249,7 @@ async fn share_screenshot(
         .await
         .map_err(|error| format!("Could not read the screenshot: {error}"))?;
     let upload = gpui_tokio::Tokio::spawn(cx, async move {
-        crate::upload::upload_rendered_screenshot(bytes, "image/png", None).await
+        crate::upload::upload_rendered_screenshot(bytes, "image/png", None, None).await
     });
     let item = match upload.await {
         Ok(Ok(crate::upload::ScreenshotShareOutcome::Uploaded(item))) => item,

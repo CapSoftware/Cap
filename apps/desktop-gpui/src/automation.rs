@@ -585,6 +585,25 @@ pub fn screenshot_editor_choice(
     )
 }
 
+/// Whether a matching rule can delete this capture, so no recordings overlay
+/// card should point at a file that is about to go.
+pub fn screenshot_rule_deletes(target: Option<&ScreenshotTarget>, image_path: &Path) -> bool {
+    let (Some(target), Some(store)) = (target, store_for(Trigger::ScreenshotTaken)) else {
+        return false;
+    };
+    rules_delete(
+        &store,
+        Trigger::ScreenshotTaken,
+        &screenshot_context(image_path.to_path_buf(), target),
+    )
+}
+
+fn rules_delete(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContext) -> bool {
+    cap_automation::evaluate(store, &trigger, ctx)
+        .iter()
+        .any(|(_, actions)| can_delete(actions))
+}
+
 /// A rule that can delete the capture keeps the editor closed too: the
 /// delete is refused while an editor has the capture open, so a saved
 /// "export, then delete" rule would otherwise never delete. A delete with no

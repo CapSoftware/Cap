@@ -7518,8 +7518,14 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
-/// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, editor_choice: Option<bool>, cx: &mut App) {
+/// window if the picker had hidden it, since nothing else will. A capture an
+/// automation rule can delete gets no recordings overlay card.
+pub fn screenshot_finished(
+    captured: Option<PathBuf>,
+    editor_choice: Option<bool>,
+    rule_deletes: bool,
+    cx: &mut App,
+) {
     let Some(png) = captured else {
         crate::recordings_overlay::screenshot_captured(None, cx);
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
@@ -7529,7 +7535,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, editor_choice: Option<bool
         return;
     };
 
-    crate::recordings_overlay::screenshot_captured(Some(&png), cx);
+    crate::recordings_overlay::screenshot_captured((!rule_deletes).then_some(png.as_path()), cx);
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
         settings
