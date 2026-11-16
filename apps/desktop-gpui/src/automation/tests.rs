@@ -395,6 +395,49 @@ fn rules_choose_the_screenshot_editor_and_skip_wins() {
     );
 }
 
+#[tokio::test]
+async fn waiting_on_an_event_returns_once_its_rules_finish() {
+    let events: &'static RunningEvents = Box::leak(Box::new(RunningEvents::new()));
+    let project = event_key(Path::new("/recordings/a.cap"));
+    let wait = |trigger, key: String| {
+        tokio::time::timeout(Duration::from_millis(50), async move {
+            events.finished(trigger, &key).await
+        })
+    };
+
+    assert!(
+        wait(Trigger::StudioRecordingFinished, project.clone())
+            .await
+            .is_ok()
+    );
+    let running = events
+        .claim(Trigger::StudioRecordingFinished, project.clone())
+        .unwrap();
+    assert!(
+        wait(Trigger::StudioRecordingFinished, project.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        wait(Trigger::UploadCompleted, project.clone())
+            .await
+            .is_ok()
+    );
+    assert!(
+        wait(
+            Trigger::StudioRecordingFinished,
+            event_key(Path::new("/recordings/b.cap"))
+        )
+        .await
+        .is_ok()
+    );
+
+    let waiter = tokio::spawn(wait(Trigger::StudioRecordingFinished, project.clone()));
+    tokio::task::yield_now().await;
+    drop(running);
+    assert!(waiter.await.unwrap().is_ok());
+}
+
 #[test]
 fn only_a_screenshot_rule_that_can_delete_drops_the_overlay_card() {
     let ctx = TriggerContext::new().with_capture_target(CaptureTargetKind::Window);

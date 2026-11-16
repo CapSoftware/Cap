@@ -1087,6 +1087,13 @@ async fn render_for_project(
     cancel: &Arc<AtomicBool>,
     cx: &mut AsyncApp,
 ) -> Result<PathBuf, String> {
+    if destination.is_none() {
+        // A Studio rule can be rendering or uploading this same output file.
+        crate::automation::studio_rules_finished(project_path).await;
+        if cancel.load(Ordering::Acquire) {
+            return Err("Export cancelled".into());
+        }
+    }
     let meta = RecordingMeta::load_for_project(project_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     let save_path = destination.unwrap_or_else(|| meta.output_path());

@@ -163,17 +163,34 @@ fn has_enabled_rule(store: &AutomationsStore, trigger: Trigger) -> bool {
 /// while its run lasts, so a second report of the same event during the run
 /// (an upload finishing inside an Upload action, say) is dropped, and a later
 /// capture that reuses the path runs its rules again.
-struct RunningEvents(Mutex<HashSet<(Trigger, String)>>);
+struct RunningEvents {
+    events: Mutex<HashSet<(Trigger, String)>>,
+    released: tokio::sync::Notify,
+}
 
 impl RunningEvents {
     fn new() -> Self {
-        Self(Mutex::new(HashSet::new()))
+        Self {
+            events: Mutex::new(HashSet::new()),
+            released: tokio::sync::Notify::new(),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<(Trigger, String)>> {
-        self.0
+        self.events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn finished(&self, trigger: Trigger, key: &str) {
+        loop {
+            let mut released = std::pin::pin!(self.released.notified());
+            released.as_mut().enable();
+            if !self.lock().contains(&(trigger, key.to_string())) {
+                return;
+            }
+            released.await;
+        }
     }
 
     fn claim(&'static self, trigger: Trigger, key: String) -> Option<RunningEvent> {
@@ -197,6 +214,7 @@ impl Drop for RunningEvent {
         self.events
             .lock()
             .remove(&(self.trigger, std::mem::take(&mut self.key)));
+        self.events.released.notify_waiters();
     }
 }
 
@@ -291,6 +309,15 @@ pub fn studio_recording_finished(project_dir: PathBuf) {
         event_key(&project_dir),
         move |store| studio_context(project_dir, store),
     );
+}
+
+/// Returns once the rules a finished Studio recording started are done. They
+/// can render into the project's own export file or upload it, so anything
+/// else that writes that file waits for them first.
+pub async fn studio_rules_finished(project_dir: &Path) {
+    running_events()
+        .finished(Trigger::StudioRecordingFinished, &event_key(project_dir))
+        .await;
 }
 
 fn studio_context(project_dir: PathBuf, store: &AutomationsStore) -> TriggerContext {
