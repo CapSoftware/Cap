@@ -343,16 +343,20 @@ export const SharedCaps = ({
 					onOpenChange={setOpenNewFolderDialog}
 				/>
 			)}
-			<div className="flex flex-wrap gap-3 mb-10">
+			<div className="flex flex-wrap gap-2 items-center mb-10">
 				{spaceData && spaceMembers && (
 					<>
 						{canManageCurrentSpace && (
 							<Button
-								variant="gray"
+								variant="secondary"
 								size="sm"
+								className="gap-2 px-4 h-9"
 								onClick={() => setIsSpaceSettingsOpen(true)}
 							>
-								<FontAwesomeIcon className="size-3" icon={faGear} />
+								<FontAwesomeIcon
+									className="size-3 text-gray-10"
+									icon={faGear}
+								/>
 								Space settings
 							</Button>
 						)}
@@ -407,10 +411,13 @@ export const SharedCaps = ({
 					<Button
 						onClick={() => setOpenNewFolderDialog(true)}
 						size="sm"
-						variant="dark"
-						className="flex gap-2 items-center w-fit"
+						variant="secondary"
+						className="flex gap-2 items-center px-4 h-9 w-fit"
 					>
-						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+						<FontAwesomeIcon
+							className="size-3.5 text-gray-10"
+							icon={faFolderPlus}
+						/>
 						New folder
 					</Button>
 				)}
@@ -427,11 +434,11 @@ export const SharedCaps = ({
 
 			{data.length > 0 && (
 				<>
-					<h1 className="mb-4 text-2xl font-medium text-gray-12">
+					<h2 className="mb-5 text-lg font-semibold tracking-tight text-gray-12">
 						Videos and screenshots
-					</h1>
+					</h2>
 					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 							{data.map((cap) => {
 								return (
 									<SharedCapCard

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const context = vi.hoisted(() => ({
 	user: { id: "owner", email: "richie@cap.so" },
 	ownerId: "owner",
+	pathname: "/dashboard/caps",
 }));
 
 vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
@@ -15,6 +16,7 @@ vi.mock("@uidotdev/usehooks", () => ({
 }));
 vi.mock("next/navigation", () => ({
 	useRouter: () => ({ push: vi.fn() }),
+	usePathname: () => context.pathname,
 }));
 vi.mock("@/app/(org)/dashboard/_components/Navbar/server", () => ({
 	updateActiveOrganization: vi.fn(),
@@ -50,6 +52,7 @@ afterEach(() => {
 	container.remove();
 	context.user = { id: "owner", email: "richie@cap.so" };
 	context.ownerId = "owner";
+	context.pathname = "/dashboard/caps";
 });
 
 const hrefs = () => {
@@ -84,5 +87,15 @@ describe("dashboard mobile tabs", () => {
 		context.ownerId = "someone-else";
 
 		expect(hrefs()).not.toContain("/dashboard/infra");
+	});
+
+	it("marks only the tab for the current section as the current page", () => {
+		context.pathname = "/dashboard/folder/abc";
+
+		hrefs();
+		const current = Array.from(
+			container.querySelectorAll('a[aria-current="page"]'),
+		).map((link) => link.getAttribute("href"));
+		expect(current).toEqual(["/dashboard/caps"]);
 	});
 });

@@ -12,6 +12,8 @@ struct RecordView: View {
     @AppStorage("so.cap.mobile.recordMode") private var mode: RecordMode = .camera
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     private let upgrade = WebUpgrade.shared
 
@@ -24,7 +26,14 @@ struct RecordView: View {
             Color.black.ignoresSafeArea()
 
             if mode == .camera {
-                CameraPreview(session: model.capture.session, position: model.position, isLive: model.phase == .ready)
+                CameraPreview(
+                    session: model.capture.session,
+                    position: model.position,
+                    isLive: model.phase == .ready,
+                    followsDevice: horizontalSizeClass == .regular && verticalSizeClass == .regular,
+                    recordingAngle: model.recordingRotationAngle,
+                    onCaptureAngle: model.setRotationAngle
+                )
                     .ignoresSafeArea()
                     .opacity(model.phase == .ready || model.isRecording || model.phase == .finishing ? 1 : 0)
                     .animation(.easeOut(duration: 0.25), value: model.phase)
@@ -212,6 +221,7 @@ struct RecordView: View {
                 .accessibilityHidden(mode != .camera)
                 .accessibilityLabel(model.position == .front ? "Switch to back camera" : "Switch to front camera")
             }
+            .frame(maxWidth: 440)
             .padding(.horizontal, 36)
             .padding(.bottom, 24)
         }
@@ -454,6 +464,10 @@ private struct CameraPreview: UIViewRepresentable {
     /// Switching cameras or restarting the camera gives the layer a new connection, which then needs turning upright again.
     let position: AVCaptureDevice.Position
     let isLive: Bool
+    /// The open iPhone Duo turns with the device, so its camera does too. A phone's recorder stays portrait.
+    let followsDevice: Bool
+    let recordingAngle: CGFloat?
+    let onCaptureAngle: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
@@ -464,12 +478,24 @@ private struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ view: PreviewView, context: Context) {
+        view.onCaptureAngle = onCaptureAngle
+        view.recordingAngle = recordingAngle
+        view.update(followsDevice: followsDevice, position: position)
         view.keepUpright()
     }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        var onCaptureAngle: ((CGFloat) -> Void)?
+        var recordingAngle: CGFloat?
+
+        private var followsDevice = false
+        private var position: AVCaptureDevice.Position = .unspecified
+        private var previewAngle: CGFloat = 90
+        private var captureAngle: CGFloat = 90
+        private var coordinator: AVCaptureDevice.RotationCoordinator?
+        private var observations: [NSKeyValueObservation] = []
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -484,13 +510,59 @@ private struct CameraPreview: UIViewRepresentable {
         }
 
         @objc nonisolated func sessionStarted() {
-            Task { @MainActor in keepUpright() }
+            Task { @MainActor in follow() }
         }
 
+        func update(followsDevice: Bool, position: AVCaptureDevice.Position) {
+            guard followsDevice != self.followsDevice || position != self.position else { return }
+            self.followsDevice = followsDevice
+            self.position = position
+            follow()
+        }
+
+        /// The coordinator knows where each camera sits on the device, including the Duo's, so it supplies the angles.
+        private func follow() {
+            observations = []
+            coordinator = nil
+            guard followsDevice, let device = videoDevice else {
+                previewAngle = 90
+                captureAngle = 90
+                keepUpright()
+                onCaptureAngle?(90)
+                return
+            }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            self.coordinator = coordinator
+            observations = [
+                coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { @Sendable [weak self] coordinator, _ in
+                    let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+                    Task { @MainActor in
+                        self?.previewAngle = angle
+                        self?.keepUpright()
+                    }
+                },
+                coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { @Sendable [weak self] coordinator, _ in
+                    let angle = coordinator.videoRotationAngleForHorizonLevelCapture
+                    Task { @MainActor in
+                        self?.captureAngle = angle
+                        self?.onCaptureAngle?(angle)
+                        self?.keepUpright()
+                    }
+                },
+            ]
+        }
+
+        private var videoDevice: AVCaptureDevice? {
+            previewLayer.session?.inputs
+                .compactMap { ($0 as? AVCaptureDeviceInput)?.device }
+                .first { $0.hasMediaType(.video) }
+        }
+
+        /// While recording, the preview turns only as far as the recording can, so it shows what is being saved.
         func keepUpright() {
-            guard let connection = previewLayer.connection, connection.videoRotationAngle != 90, connection.isVideoRotationAngleSupported(90) else { return }
-            connection.videoRotationAngle = 90
+            if let recordingAngle, !CameraCapture.sameShape(captureAngle, recordingAngle) { return }
+            guard let connection = previewLayer.connection, connection.videoRotationAngle != previewAngle, connection.isVideoRotationAngleSupported(previewAngle) else { return }
+            connection.videoRotationAngle = previewAngle
         }
     }
 }
-
