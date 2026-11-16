@@ -421,11 +421,12 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
         sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
-        // Show Cap rather than the editor, so the end of the recording
-        // reshows the main window, and no startup screen to take its place.
-        sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        // The Instant "Show Cap" outcome, so the end of the recording reshows
+        // the main window, and no startup screen to take its place.
+        sandbox.set_general("disableAutoOpenLinks", json!(true));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(true));
         sandbox.set_general("hasCompletedStartup", json!(true));
-        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
         wait_for_app(
             &sandbox,
             &app,
@@ -462,6 +463,141 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
             "{behaviour}: {log}"
         );
     }
+}
+
+/// "Show in overlay" (`showOverlay`, as 0.6.0 stored it) puts the finished
+/// Studio recording in the floating overlay and leaves the main window,
+/// hidden at start, out of the way.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_studio_overlay_keeps_the_main_window_hidden() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("mainWindowRecordingStartBehaviour", json!("close"));
+    sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+    sandbox.set_general("hasCompletedStartup", json!(true));
+    let app = sandbox.launch("overlay", &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the recordings overlay",
+        Duration::from_secs(120),
+        || {
+            let log = sandbox.log("overlay");
+            log.contains("recordings overlay shown")
+                && log.contains("auto-record main window after the recording")
+        },
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("overlay"));
+    let after = log
+        .lines()
+        .find(|line| line.contains("auto-record main window after the recording"))
+        .unwrap_or_else(|| panic!("no state after the recording: {log}"));
+    assert!(after.contains("visible=false"), "{log}");
+    assert!(log.contains("recordings overlay shown cards=1"), "{log}");
+    assert_eq!(sandbox.projects().len(), 1, "{log}");
+}
+
+/// Every overlay action on a real Studio recording, driven in order by
+/// `CAP_GPUI_AUTO_RECORDINGS_OVERLAY`: Copy renders and puts the file on the
+/// clipboard; Share fails once on a server error, then Retry uploads to the
+/// organization picked in the export dialog and copies the link; Export
+/// renders to the chosen file; Edit opens the editor.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_overlay_actions_copy_share_retry_export_and_edit() {
+    let mock = MockCap::start(vec![rule(Route::Api("video/create"), Fault::Status(500))]).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+    sandbox.set_general("hasCompletedStartup", json!(true));
+    let store_path = sandbox.root.path().join("store");
+    let mut store: Value = serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+    store["auth"]["organizations"] = json!([
+        { "id": "org-first", "name": "First" },
+        { "id": "org-picked", "name": "Picked" },
+    ]);
+    std::fs::write(&store_path, serde_json::to_vec(&store).unwrap()).unwrap();
+    std::fs::write(
+        sandbox.root.path().join("gpui-state.json"),
+        serde_json::to_vec(&json!({ "export": {
+            "format": "Mp4", "fps": 30, "export_to": "link", "resolution": "1080p",
+            "compression": "Web", "optimize_filesize": false, "cursor_only": false,
+            "custom_bpp": null, "force_ffmpeg_decoder": false, "advanced_open": false,
+            "organization_id": "org-picked", "turbo": false, "gif_quality": null,
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let exported = sandbox.root.path().join("exported.mp4");
+    let exported_text = exported.to_string_lossy().to_string();
+    let app = sandbox.launch(
+        "actions",
+        &[
+            ("CAP_GPUI_AUTO_RECORD", "studio:3"),
+            (
+                "CAP_GPUI_AUTO_RECORDINGS_OVERLAY",
+                "copy,share,share,export,edit",
+            ),
+            ("CAP_GPUI_AUTO_EXPORT", exported_text.as_str()),
+        ],
+    );
+    wait_for_app(
+        &sandbox,
+        &app,
+        "every overlay action",
+        Duration::from_secs(300),
+        || {
+            let log = without_ansi(&sandbox.log("actions"));
+            log.contains("kind=Save ok=true") && log.contains("editor window opened")
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let clipboard = Command::new("pbpaste").output().unwrap();
+    kill(app);
+    let log = without_ansi(&sandbox.log("actions"));
+    let finished: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("recordings overlay action finished"))
+        .collect();
+    assert_eq!(finished.len(), 4, "{log}");
+    assert!(finished[0].contains("kind=Copy ok=true"), "{log}");
+    assert!(finished[1].contains("kind=Share ok=false"), "{log}");
+    assert!(finished[2].contains("kind=Share ok=true"), "{log}");
+    assert!(finished[3].contains("kind=Save ok=true"), "{log}");
+
+    let project = sandbox.projects().pop().expect("the recording");
+    let copied = project.join("output").join("result.mp4");
+    assert!(
+        log.contains(&format!(
+            "recordings overlay copies the render path={}",
+            copied.display()
+        )),
+        "{log}"
+    );
+    assert_eq!(&std::fs::read(&copied).unwrap()[4..8], b"ftyp");
+    assert_eq!(&std::fs::read(&exported).unwrap()[4..8], b"ftyp");
+
+    assert_eq!(mock.count("GET", "video/create"), 2);
+    assert_eq!(mock.created_orgs(), vec![Some("org-picked".to_string())]);
+    let link = meta(&project).unwrap()["sharing"]["link"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        link.ends_with(&format!("/s/{}", mock.created()[0])),
+        "{link}"
+    );
+    assert_eq!(String::from_utf8_lossy(&clipboard.stdout).trim(), link);
+
+    let edit = log
+        .find("recordings overlay auto action step=edit")
+        .expect("the edit step ran");
+    assert!(log[edit..].contains("editor window opened"), "{log}");
 }
 
 /// The After an Instant recording outcome decides whether the main window,
