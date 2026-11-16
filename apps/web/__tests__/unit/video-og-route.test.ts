@@ -141,6 +141,25 @@ describe("/api/video/og", () => {
 		expect(mocks.renders).toBe(0);
 	});
 
+	it("keeps a thumbnail version and drops everything else", async () => {
+		const GET = await loadRoute();
+		for (const [query, location] of [
+			["?v=lz9k2a&videoId=abc123", "/api/video/og?videoId=abc123&v=lz9k2a"],
+			["?videoId=abc123&v=lz9k2a&x=1", "/api/video/og?videoId=abc123&v=lz9k2a"],
+			["?videoId=abc123&v=..%2Fx", "/api/video/og?videoId=abc123"],
+			["?videoId=abc123&v=", "/api/video/og?videoId=abc123"],
+			["?videoId=abc123&v=UPPER", "/api/video/og?videoId=abc123"],
+		] as const) {
+			const response = await fetchOg(GET, query);
+			expect(response.status).toBe(308);
+			expect(response.headers.location).toBe(location);
+		}
+
+		const versioned = await fetchOg(GET, "?videoId=abc123&v=lz9k2a");
+		expect(versioned.status).toBe(200);
+		expect(mocks.lookups).toEqual(["abc123"]);
+	});
+
 	it("renders the preview URL the app generates for a public video", async () => {
 		mocks.videos.set("abc123", {
 			id: "abc123",

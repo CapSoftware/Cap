@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import { findScreenshotObjectKey, Storage } from "@cap/web-backend";
+import { getCustomThumbnailKey } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -27,7 +28,9 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 			const [bucket] = yield* Storage.getAccessForVideo(
 				decodeStorageVideo(video),
 			);
-			const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+			const publishedThumbnail =
+				getCustomThumbnailKey(video) ??
+				getPublishedRecordingThumbnailKey(video);
 			if (publishedThumbnail) {
 				screenshotUrl = yield* bucket.getSignedObjectUrl(publishedThumbnail);
 				return;

@@ -7,6 +7,7 @@ import { renderVideoOgStatus } from "@/lib/og/video-og";
 export const maxDuration = 30;
 
 const VIDEO_ID_PATTERN = /^[0-9A-Za-z_-]{1,64}$/;
+const THUMBNAIL_VERSION_PATTERN = /^[0-9a-z]{1,32}$/;
 
 export async function GET(req: NextRequest) {
 	const params = req.nextUrl.searchParams;
@@ -15,11 +16,18 @@ export async function GET(req: NextRequest) {
 		return renderVideoOgStatus("not-found");
 	}
 
-	if (Array.from(params.keys()).length > 1) {
+	// `v` only versions the URL so a new custom thumbnail misses every cache;
+	// anything else collapses to the canonical URL.
+	const version = params.get("v");
+	const canonical = new URLSearchParams({ videoId });
+	if (version && THUMBNAIL_VERSION_PATTERN.test(version)) {
+		canonical.set("v", version);
+	}
+	if (params.toString() !== canonical.toString()) {
 		return new Response(null, {
 			status: 308,
 			headers: {
-				Location: `${req.nextUrl.pathname}?${new URLSearchParams({ videoId })}`,
+				Location: `${req.nextUrl.pathname}?${canonical}`,
 			},
 		});
 	}
