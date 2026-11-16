@@ -79,6 +79,9 @@ vi.mock("@/app/(org)/dashboard/caps/components/EmptyCapState", () => ({
 vi.mock("@/app/(org)/dashboard/caps/components/FoldersSection", () => ({
 	FoldersSection: () => null,
 }));
+vi.mock("@/app/(org)/dashboard/caps/components/QuickActions", () => ({
+	QuickActions: () => null,
+}));
 
 const data: VideoData = [
 	{

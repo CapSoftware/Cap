@@ -17,11 +17,8 @@ import {
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { canManageSpace } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
-import {
-	BreadcrumbItem,
-	ClientMyCapsLink,
-	NewSubfolderButton,
-} from "../../../../folder/[id]/components";
+import { NewSubfolderButton } from "../../../../folder/[id]/components";
+import { FolderTopBarPath } from "../../../../folder/[id]/components/FolderTopBarPath";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
 import AddVideosButton from "./AddVideosButton";
 
@@ -114,7 +111,7 @@ const FolderPage = async (props: {
 
 		return (
 			<div>
-				<div className="flex gap-2 items-center mb-10">
+				<div className="flex flex-wrap gap-2 items-center mb-10">
 					{canManageCollection && (
 						<NewSubfolderButton
 							parentFolderId={params.folderId}
@@ -139,23 +136,7 @@ const FolderPage = async (props: {
 						}
 					/>
 				</div>
-				<div className="flex flex-wrap gap-3 items-center mb-6 w-full">
-					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink spaceId={params.spaceId} />
-						{breadcrumb.map((folder, index) => (
-							<div key={folder.id} className="flex items-center">
-								<p className="mx-2 text-gray-10">/</p>
-								<BreadcrumbItem
-									spaceId={params.spaceId}
-									id={folder.id}
-									name={folder.name}
-									color={folder.color}
-									isLast={index === breadcrumb.length - 1}
-								/>
-							</div>
-						))}
-					</div>
-				</div>
+				<FolderTopBarPath breadcrumb={breadcrumb} spaceId={params.spaceId} />
 				<FoldersSection
 					title="Subfolders"
 					scope={`space:${params.spaceId}`}
