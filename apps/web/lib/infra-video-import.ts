@@ -1177,7 +1177,12 @@ export async function runInfraVideoImport(
 		if (uploadId) {
 			await abortInfraUpload({ appId, videoId, uploadId }).catch(() => {});
 		}
-		if (
+		if (stop.code === "download_timeout") {
+			console.warn("[developer-import] Download ran out of time", {
+				videoId,
+				code: stop.code,
+			});
+		} else if (
 			!(error instanceof ImportStop) &&
 			!(error instanceof PublicMediaFetchError)
 		) {

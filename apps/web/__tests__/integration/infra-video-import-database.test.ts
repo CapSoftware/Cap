@@ -718,6 +718,34 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
+			it("still reports an unexpected download failure as an error", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: serving(mp4Bytes(40)),
+					writer: () => ({
+						put: async () => {
+							throw new Error("socket hang up");
+						},
+					}),
+					partBytes: 16,
+				});
+				expect(outcome).toBe("failed");
+				expect(error).toHaveBeenCalledWith(
+					"[developer-import] Download failed",
+					{
+						videoId,
+						code: "url_unreachable",
+						message: "socket hang up",
+					},
+				);
+				expect(warn).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
+			});
+
 			it("aborts the stored parts when completion fails for storage", async () => {
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
@@ -857,6 +885,8 @@ describe.runIf(Boolean(databaseUrl))(
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
 				const source = trickling();
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
 				const budgetMs = 300;
 				const started = Date.now();
 				const outcome = await runInfraVideoImport(videoId, {
@@ -875,6 +905,13 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 				const elapsed = Date.now() - started;
 				source.stop();
+				expect(warn).toHaveBeenCalledWith(
+					"[developer-import] Download ran out of time",
+					{ videoId, code: "download_timeout" },
+				);
+				expect(error).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
 				expect(outcome).toBe("failed");
 				expect(elapsed).toBeGreaterThanOrEqual(budgetMs);
 				expect(elapsed).toBeLessThan(budgetMs + 2_000);
