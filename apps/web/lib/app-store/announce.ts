@@ -29,11 +29,13 @@ export function announceAppStoreEvent(
 	videoId: Video.VideoId,
 	options: EventOptions = {},
 ): void {
-	const work = emit(type, videoId, options);
+	// Hand after() a callback, not a running promise, so the event lookup and
+	// the per-installation enqueues start once the response is sent instead of
+	// competing with the request that triggered them.
 	try {
-		after(work);
+		after(() => emit(type, videoId, options));
 	} catch {
-		void work;
+		void emit(type, videoId, options);
 	}
 }
 
