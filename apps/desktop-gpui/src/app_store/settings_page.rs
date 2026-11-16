@@ -224,6 +224,9 @@ impl SettingsWindow {
                     .rounded(px(8.))
                     .overflow_hidden()
                     .bg(theme.settings_fill())
+                    // A dark icon would otherwise vanish into a dark card.
+                    .border_1()
+                    .border_color(theme.settings_border())
                     .children(icon.map(|icon| img(icon).size_full().rounded(px(8.)))),
             )
             .child(
