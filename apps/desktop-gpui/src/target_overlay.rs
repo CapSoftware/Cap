@@ -830,7 +830,7 @@ fn more_area_ratios() -> Vec<(u32, u32)> {
 /// so a capture under their panes showed through it as hard-edged blocks;
 /// there the panes sit on the fallback fill, as they do where no capture
 /// is possible.
-fn backdrop_suits(mode: Option<TargetType>) -> bool {
+pub(crate) fn backdrop_suits(mode: Option<TargetType>) -> bool {
     match mode {
         None => false,
         Some(TargetType::Display | TargetType::Window) => !cfg!(windows),
@@ -1199,6 +1199,10 @@ pub struct OverlayWindow {
     /// moves once a frame) or a restored area.
     area_camera_pending: bool,
     recording_area: bool,
+    /// A screenshot is about to be taken: draw nothing. What this window last
+    /// showed is what a compositor animates away when it closes.
+    #[cfg(target_os = "linux")]
+    emptied_for_capture: bool,
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
     /// 2206-2210`). `Some` while it is open.
@@ -1386,6 +1390,8 @@ impl OverlayWindow {
             area_hover: None,
             area_camera_pending: locked_area.is_some(),
             recording_area: false,
+            #[cfg(target_os = "linux")]
+            emptied_for_capture: false,
             mode_menu: None,
             countdown_menu: None,
             aspect_menu: None,
@@ -1424,6 +1430,12 @@ impl OverlayWindow {
         }
         self.crop = Some(crop.clamped(self.display_size));
         self.sync_area_camera(cx);
+        cx.notify();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn empty_for_capture(&mut self, cx: &mut Context<Self>) {
+        self.emptied_for_capture = true;
         cx.notify();
     }
 
@@ -1630,9 +1642,19 @@ impl OverlayWindow {
                             .flatten()
                     })
             });
-            let image =
-                crate::overlay_backdrop::capture(native, camera.into_iter().collect(), display, cx)
-                    .await;
+            let overlay = this.clone();
+            let image = crate::overlay_backdrop::capture(
+                native,
+                camera.into_iter().collect(),
+                display,
+                move |cx| {
+                    overlay
+                        .read_with(cx, |overlay, _| overlay.recording_area)
+                        .unwrap_or(false)
+                },
+                cx,
+            )
+            .await;
             this.update(cx, |this, cx| {
                 this.backdrop_capturing = false;
                 this.backdrop_at = Some(started);
@@ -1774,6 +1796,10 @@ impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
         probe_frames::rendered(&self.display_id);
+        #[cfg(target_os = "linux")]
+        if self.emptied_for_capture {
+            return gpui::Empty.into_any_element();
+        }
         self.sync_appearance(window, cx);
         self.sync_inline_camera(window, cx);
         self.sync_backdrop(window, cx);

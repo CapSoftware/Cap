@@ -8,6 +8,22 @@ export function getSegmentPlaybackState(
 	return isCompletedRecordingManifest(manifest) ? "ready" : "incomplete";
 }
 
+// The desktop rewrites the manifest with every uploaded segment, so a progress
+// manifest this old belongs to a recording whose upload stopped. Long enough
+// to ride out a paused recording, short enough that an open viewer stops
+// reloading a playlist that will never grow.
+export const ABANDONED_SEGMENT_UPLOAD_MS = 30 * 60 * 1000;
+
+export function isAbandonedSegmentUpload(
+	manifestLastModified: Date | undefined,
+	now: number,
+): boolean {
+	if (!manifestLastModified) return false;
+	const modifiedAt = manifestLastModified.getTime();
+	if (!Number.isFinite(modifiedAt)) return false;
+	return now - modifiedAt > ABANDONED_SEGMENT_UPLOAD_MS;
+}
+
 type SegmentEntry = { index: number; duration: number };
 
 // Uploads finish out of order, so a progress manifest can list segment 12

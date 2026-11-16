@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowDown, ArrowRight } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { trackEvent } from "@/app/utils/analytics";
+import { DownloadCtaLink } from "@/components/download/DownloadCtaLink";
 import { Faq } from "@/components/pages/HomeTwo/Faq";
 import { htMono, htSans, htSerif } from "@/components/pages/HomeTwo/fonts";
 import { HeroSky } from "@/components/pages/HomeTwo/HeroSky";
@@ -17,13 +17,13 @@ import {
 	grainBg,
 	H_HERO,
 	H_SECTION,
-	MONO,
 	SHELL,
 } from "@/components/pages/HomeTwo/theme";
 import { homepageCopy } from "@/data/homepage-copy";
 import { ComparePlans } from "./ComparePlans";
 import { DesktopLicenseCard } from "./DesktopLicenseCard";
 import { EnterpriseCard } from "./EnterpriseCard";
+import { FreePlan } from "./FreePlan";
 import { ProCard } from "./ProCard";
 
 const PRICING_FAQ = [
@@ -66,9 +66,7 @@ const Hero = () => (
 				onClick={() => scrollTo("testimonials")}
 				className="group mt-8 inline-flex max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6]"
 			>
-				<span
-					className={`${MONO} hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111] sm:inline-block`}
-				>
+				<span className="hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111] sm:inline-block">
 					80,000+
 				</span>
 				<span className="truncate pl-2 sm:hidden">
@@ -88,9 +86,7 @@ const Hero = () => (
 								className="mx-2 size-[3px] rounded-full bg-[rgba(17,17,17,0.25)]"
 							/>
 						) : null}
-						<span
-							className={`${MONO} text-[11.5px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.55)]`}
-						>
+						<span className="text-[13px] leading-none text-[rgba(17,17,17,0.55)]">
 							{item}
 						</span>
 					</li>
@@ -117,33 +113,11 @@ const Plans = () => {
 		// biome-ignore lint/correctness/useUniqueElementIds: stable anchor target for the closing "Get Cap Pro" button
 		<section id="plans" className="relative -mt-[136px] px-5 lg:-mt-[152px]">
 			<div className="mx-auto max-w-[1120px]">
-				<div className="grid items-stretch gap-3 lg:grid-cols-3 lg:gap-4">
+				<FreePlan />
+				<div className="mt-3 grid items-stretch gap-3 lg:mt-4 lg:grid-cols-3 lg:gap-4">
 					<DesktopLicenseCard {...toggle("desktop")} />
 					<ProCard {...toggle("pro")} />
 					<EnterpriseCard {...toggle("enterprise")} />
-				</div>
-
-				<div className="mt-8 flex flex-col items-center justify-center gap-x-6 gap-y-2 text-center sm:flex-row">
-					<p
-						className={`${BODY_TEXT} text-[15.5px] text-[rgba(17,17,17,0.65)]`}
-					>
-						Just want to try it? Cap is free for personal use, with no time
-						limit on local recordings.
-					</p>
-					<Link
-						href="/download"
-						onClick={() =>
-							trackEvent("download_cta_clicked", {
-								source_page: "pricing",
-								cta_location: "under_plans",
-								target_url: "/download",
-							})
-						}
-						className="group inline-flex shrink-0 items-center gap-1.5 text-[14.5px] font-medium text-[#111111] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:decoration-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
-					>
-						Download free
-						<ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
-					</Link>
 				</div>
 			</div>
 		</section>
@@ -170,9 +144,13 @@ const Closing = () => (
 				>
 					Get Cap Pro
 				</button>
-				<Link href="/download" className={BTN_SECONDARY}>
+				<DownloadCtaLink
+					sourcePage="pricing"
+					ctaLocation="closing"
+					className={BTN_SECONDARY}
+				>
 					Download for free
-				</Link>
+				</DownloadCtaLink>
 			</div>
 			<p className="mt-6 text-[14px] text-[rgba(17,17,17,0.5)]">
 				Students save 30%.{" "}

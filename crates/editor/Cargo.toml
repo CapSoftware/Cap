@@ -63,3 +63,4 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_Media", "Wi
 [dev-dependencies]
 cap-audio = { path = "../audio", features = ["test-support"] }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+libc = "0.2"

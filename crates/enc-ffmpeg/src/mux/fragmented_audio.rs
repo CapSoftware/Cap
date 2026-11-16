@@ -40,6 +40,8 @@ pub enum FinishError {
     AlreadyFinished,
     #[error("{0}")]
     WriteTrailerFailed(ffmpeg::Error),
+    #[error("Output writer did not finish")]
+    StorageStalled(#[from] crate::mux::write_behind::StorageStalled),
 }
 
 fn option_result(value: i32) -> Result<(), ffmpeg::Error> {
@@ -178,7 +180,7 @@ impl FragmentedAudioFile {
                 },
                 |output: &mut AudioOutput, flush_result| (flush_result, output.0.write_trailer()),
             )
-            .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
+            .map_err(FinishError::StorageStalled)?;
         finish_result(flush_result, trailer_result)
     }
 }

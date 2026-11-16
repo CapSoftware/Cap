@@ -9,6 +9,7 @@ import { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import { runPromise } from "@/lib/server";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -149,10 +150,10 @@ export async function updateShareableLinkIconPreference({
 	await db()
 		.update(organizations)
 		.set({
-			settings: {
+			settings: organizationSettingsKeepingLinkOverride({
 				...(organization.settings ?? {}),
 				shareableLinkUseOrganizationIcon: useOrganizationIcon,
-			},
+			}),
 		})
 		.where(eq(organizations.id, organization.id));
 
@@ -169,10 +170,10 @@ export async function hideShareableLinkCapLogo(
 	await db()
 		.update(organizations)
 		.set({
-			settings: {
+			settings: organizationSettingsKeepingLinkOverride({
 				...(organization.settings ?? {}),
 				hideShareableLinkCapLogo: true,
-			},
+			}),
 		})
 		.where(eq(organizations.id, organization.id));
 

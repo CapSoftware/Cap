@@ -30,6 +30,9 @@ const FORMATTED: &[&str] = &[
     "main.recovery.duration_minutes",
     "main.recovery.duration_minutes_seconds",
     "main.recovery.duration_seconds",
+    "main.recovery.error.nothing_saved",
+    "main.recovery.error.rebuild_failed",
+    "main.recovery.error.storage",
     "main.recovery.segments",
     "main.recovery.segments_with_duration",
     "main.storage.blocked",
@@ -287,10 +290,15 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::pause::resuming(), "Resuming recording…"),
         (tr::controls::pause::pausing(), "Pausing recording…"),
         (tr::controls::pause::resume(), "Resume recording"),
+        (tr::controls::marker::add(), "Add marker"),
         (tr::controls::pause::pause(), "Pause recording"),
         (
             tr::controls::low_storage(),
             "Low storage. Cap will stop soon to save your recording.",
+        ),
+        (
+            tr::controls::paused_for_sleep(),
+            "Recording paused because your Mac went to sleep. Resume when you're ready, or press Stop to save it.",
         ),
         (
             tr::controls::disk_full_resume(),
@@ -629,6 +637,29 @@ fn main_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+}
+
+#[test]
+fn recovery_errors_name_the_folder_and_say_nothing_was_deleted() {
+    let path = "/Users/me/Cap/recording.cap";
+    assert_eq!(
+        tr::main::recovery::error::nothing_saved(path),
+        format!(
+            "No video was saved before this recording stopped, so there is nothing to recover. Its files are still in {path}."
+        )
+    );
+    assert_eq!(
+        tr::main::recovery::error::rebuild_failed("concat failed", path),
+        format!(
+            "Cap could not rebuild this recording (concat failed). Nothing was deleted, and the original files are in {path}."
+        )
+    );
+    assert_eq!(
+        tr::main::recovery::error::storage("No space left on device", path),
+        format!(
+            "There is not enough free space to recover this recording (No space left on device). Free up some space and press Recover again. Nothing was deleted, and the files are in {path}."
+        )
+    );
 }
 
 #[test]

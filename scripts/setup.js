@@ -153,10 +153,7 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
-			);
+			await expandArchive(ffmpegZipPath, targetDir);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
@@ -412,12 +409,18 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// 1.24.2 through 1.26 keep memory from every inference whose input changes: a
+// 30 minute Parakeet transcription peaked at 2.6 GB on 1.24.2 and 1.9 GB on
+// 1.30.1. Microsoft publishes no x86_64 macOS build after 1.23.2, so Intel Macs
+// stay on that release.
+const ONNX_RUNTIME_VERSION = "1.30.1";
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
 			? {
-					version: "1.24.2",
-					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+					version: ONNX_RUNTIME_VERSION,
+					name: `onnxruntime-osx-arm64-${ONNX_RUNTIME_VERSION}.tgz`,
 				}
 			: {
 					version: "1.23.2",
@@ -429,6 +432,9 @@ async function setupMacOSOnnxRuntime() {
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
 	const markerPath = path.join(outputDir, "asset.txt");
+	// Microsoft's dylib keeps ~12 MB of local symbols nothing in Cap reads; the
+	// marker changes with the preparation so a cached unstripped copy is redone.
+	const preparedMarker = `${asset.name}:stripped`;
 	const marker = await fs
 		.readFile(markerPath, "utf-8")
 		.then((value) => value.trim())
@@ -441,7 +447,7 @@ async function setupMacOSOnnxRuntime() {
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
-	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+	if (!(await fileExists(outputPath)) || marker !== preparedMarker) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
 		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
 		await fs.mkdir(outputDir, { recursive: true });
@@ -449,8 +455,11 @@ async function setupMacOSOnnxRuntime() {
 			path.join(extractDir, "lib", "libonnxruntime.dylib"),
 			outputPath,
 		);
+		// Local symbols only: the exported C API (OrtGetApiBase) that ort loads
+		// through is unchanged.
+		await execFile("strip", ["-x", outputPath]);
 		await signMacOSDylib(outputPath);
-		await fs.writeFile(markerPath, asset.name);
+		await fs.writeFile(markerPath, preparedMarker);
 		console.log("Prepared ONNX Runtime dylib");
 	} else {
 		console.log("Using cached ONNX Runtime dylib");
@@ -463,12 +472,12 @@ async function setupMacOSOnnxRuntime() {
 async function setupWindowsOnnxRuntime() {
 	const assets = {
 		x86_64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-x64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-x64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 		aarch64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-arm64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-arm64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 	};
 	const asset = assets[arch];
@@ -495,10 +504,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, targetDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -534,7 +540,7 @@ async function setupWindowsOnnxRuntime() {
 }
 
 async function setupLinuxOnnxRuntime() {
-	const version = "1.24.3";
+	const version = ONNX_RUNTIME_VERSION;
 	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
 	if (!platformArch)
 		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
@@ -618,10 +624,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -697,11 +700,50 @@ async function signMacOSDylib(filePath) {
 	);
 }
 
+async function expandArchive(archivePath, destination) {
+	// Under a pwsh parent, PSModulePath points Windows PowerShell at
+	// PowerShell 7's Archive module, which fails on .NET Framework without a
+	// non-zero exit, leaving nothing extracted.
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(
+			([key]) => key.toLowerCase() !== "psmodulepath",
+		),
+	);
+	await exec(
+		`$ErrorActionPreference = 'Stop'; Expand-Archive -Path "${archivePath}" -DestinationPath "${destination}" -Force`,
+		{ shell: "powershell.exe", env },
+	);
+}
+
 async function downloadBytes(url) {
-	const response = await fetch(url);
-	if (!response.ok)
-		throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
-	return response.arrayBuffer();
+	for (let attempt = 0; ; attempt++) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok)
+				throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+			return await response.arrayBuffer();
+		} catch (error) {
+			const cause = error instanceof Error ? error.cause : undefined;
+			const retryable =
+				cause instanceof Error &&
+				"code" in cause &&
+				[
+					"UND_ERR_CONNECT_TIMEOUT",
+					"UND_ERR_HEADERS_TIMEOUT",
+					"UND_ERR_SOCKET",
+					"ECONNRESET",
+					"ECONNREFUSED",
+					"ETIMEDOUT",
+					"EAI_AGAIN",
+					"ENOTFOUND",
+				].includes(String(cause.code));
+			if (attempt === 2 || !retryable) throw error;
+			console.warn(
+				`Download connection failed; retrying (${attempt + 2}/3): ${url}`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+		}
+	}
 }
 
 async function fileExists(path) {

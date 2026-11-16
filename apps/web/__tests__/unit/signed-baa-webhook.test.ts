@@ -947,9 +947,8 @@ describe("Signed BAA Payment Link webhooks", () => {
 			});
 			mockStripe.subscriptions.list.mockResolvedValue({ data: [pro] });
 			if (eventType.endsWith("deleted")) {
-				mockDbChain.limit.mockResolvedValueOnce([linkedRecord]);
-				mockDbChain.where
-					.mockReturnValueOnce(mockDbChain)
+				mockDbChain.limit
+					.mockResolvedValueOnce([linkedRecord])
 					.mockResolvedValueOnce([owner]);
 			} else {
 				mockDbChain.limit

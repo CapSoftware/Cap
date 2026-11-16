@@ -390,6 +390,9 @@ const normalizeAiStatus = (status: string | undefined) => {
 	}
 };
 
+const publicUploadErrorCode = (error: string | null) =>
+	error && /^[A-Z][A-Z0-9_]{2,63}$/.test(error) ? error : "PROCESSING_FAILED";
+
 const normalizeUploadStatus = (input: {
 	phase: string | null;
 	error: string | null;
@@ -400,7 +403,7 @@ const normalizeUploadStatus = (input: {
 		case "generating_thumbnail":
 			return processState("processing");
 		case "error":
-			return processState("error", input.error ?? "PROCESSING_FAILED", true);
+			return processState("error", publicUploadErrorCode(input.error), true);
 		case "complete":
 		case null:
 			return processState("complete");

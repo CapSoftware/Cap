@@ -415,3 +415,69 @@ fn failed_thumbnail_fails_the_attempt_and_the_retry_verifies() {
         assert_eq!(mock.confirmations().len(), 1);
     });
 }
+
+#[test]
+fn live_authentication_failure_survives_stop_and_retries_the_same_video() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_live_authentication_failure");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(Route::Api("/api/upload/signed"), Fault::Status(401)).times(2),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.phase = UploadPhase::Recording;
+        write_state(&project, &state).unwrap();
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let upload = start_instant_upload(
+            pending_video(&meta).unwrap(),
+            project.clone(),
+            Some(receiver),
+            Arc::new(Mutex::new(())),
+            Some(CompletionAuthorization::new()),
+        )
+        .unwrap();
+        sender.send(video[0].clone()).unwrap();
+        while !upload.segment_upload.as_ref().unwrap().is_finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            read_state(&project).unwrap().unwrap().phase,
+            UploadPhase::NeedsAuthentication
+        );
+        drop(sender);
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        manager.admit(project.clone(), upload, false).await.unwrap();
+        settle(&manager).await;
+        let mut state = read_state(&project).unwrap().unwrap();
+        assert_eq!(state.phase, UploadPhase::NeedsAuthentication, "{state:?}");
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("Authentication expired"),
+            "{state:?}"
+        );
+        assert!(state.next_retry_at.is_none());
+        assert!(state.can_retry());
+        assert!(mock.confirmations().is_empty());
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+
+        state.phase = UploadPhase::Pending;
+        state.attempt_count = 0;
+        write_state(&project, &state).unwrap();
+        launch(&manager, &project).await;
+        settle(&manager).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.count("GET", "/api/desktop/video/create"), 0);
+        assert_eq!(mock.deletes(), 0);
+    });
+}

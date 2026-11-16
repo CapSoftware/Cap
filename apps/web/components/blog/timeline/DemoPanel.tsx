@@ -36,7 +36,7 @@ export function DemoPanel({
 					<div className="min-w-0">
 						<div className="flex items-center gap-2">
 							<span className="inline-block size-1.5 shrink-0 rounded-full bg-blue-9" />
-							<span className="text-[11px] font-medium uppercase tracking-[0.08em] text-gray-10">
+							<span className="text-[12px] font-medium text-gray-10">
 								Interactive
 							</span>
 						</div>

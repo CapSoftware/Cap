@@ -17,12 +17,9 @@ import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
-import {
-	getPublishedRecordingCopyKeys,
-	getPublishedRecordingThumbnailKey,
-	isInternalRecordingKey,
-} from "../Storage/recording-output.ts";
+import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
+import { getDuplicateVideoMetadata, planVideoDuplicate } from "./duplicate.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
@@ -433,7 +430,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
-				const publishedKeys = new Set(getPublishedRecordingCopyKeys(video));
+				const plan = planVideoDuplicate(video);
 				const newVideoId = Video.VideoId.make(nanoId());
 				if (Option.isSome(yield* repo.getById(newVideoId))) {
 					return yield* Effect.fail(
@@ -458,7 +455,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						);
 					});
 				yield* Effect.gen(function* () {
-					for (const key of publishedKeys) yield* copyObject(key);
+					for (const key of plan.publishedKeys) yield* copyObject(key);
 					let continuationToken: string | undefined;
 					const seenTokens = new Set<string>();
 					do {
@@ -478,15 +475,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 									}),
 								);
 							}
-							if (
-								key.includes("/comments/") ||
-								isInternalRecordingKey(key) ||
-								publishedKeys.has(key) ||
-								(publishedKeys.size > 0 && key.startsWith(`${prefix}segments/`))
-							) {
-								continue;
-							}
-							yield* copyObject(key);
+							if (plan.copiesListedKey(key)) yield* copyObject(key);
 						}
 					} while (continuationToken);
 					publicationAttempted = true;
@@ -497,21 +486,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							orgId: video.orgId,
 							name: video.name,
 							public: video.public,
-							source:
-								publishedKeys.size > 0
-									? {
-											type:
-												video.source.type === "webMP4"
-													? "webMP4"
-													: "desktopMP4",
-										}
-									: video.source,
-							metadata: Option.map(video.metadata, (metadata) => {
-								const copied = { ...metadata };
-								delete copied.desktopRecordingUpload;
-								delete copied.customCreatedAt;
-								return copied;
-							}),
+							source: plan.source,
+							metadata: Option.map(video.metadata, getDuplicateVideoMetadata),
 							bucketId: video.bucketId,
 							storageIntegrationId: video.storageIntegrationId,
 							folderId: video.folderId,
@@ -604,9 +580,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						phase: automaticRetry ? "processing" : result.phase,
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
-						processingError: automaticRetry
-							? Option.none()
-							: Option.fromNullable(result.processingError),
+						processingError: Option.none(),
+						processingErrorKind: automaticRetry
+							? undefined
+							: Video.getUploadProgressErrorKind(result.processingError),
 						hasRawFallback: result.rawFileKey != null,
 						automaticRetry,
 					}),
@@ -676,6 +653,28 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
+					const folderId: RepoCreateVideoInput["folderId"] =
+						input.folderId ?? Option.none<Folder.FolderId>();
+					if (Option.isSome(folderId)) {
+						const requestedFolderId = folderId.value;
+						const [folder] = yield* db.use((db) =>
+							db
+								.select({ id: Db.folders.id })
+								.from(Db.folders)
+								.where(
+									Dz.and(
+										Dz.eq(Db.folders.id, requestedFolderId),
+										Dz.eq(Db.folders.organizationId, input.orgId),
+										Dz.eq(Db.folders.createdById, user.id),
+										Dz.isNull(Db.folders.spaceId),
+									),
+								)
+								.limit(1),
+						);
+						if (!folder)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+					}
+
 					const writable = yield* storage.getWritableAccessForUser(
 						user.id,
 						input.orgId,
@@ -683,8 +682,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
 						writable.storageIntegrationId;
-					const folderId: RepoCreateVideoInput["folderId"] =
-						input.folderId ?? Option.none<Folder.FolderId>();
 					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
 						input.width,
 					);
@@ -794,6 +791,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
+				options?: { publishedOnly?: boolean },
 			) {
 				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
@@ -808,6 +806,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						.where(Dz.eq(Db.videos.id, videoId)),
 				);
 
+				// Viewers who are not members only ever get the finished MP4: never a
+				// screenshot object, and nothing while an upload or processing is still
+				// running, when result.mp4 can hold the raw recording.
+				if (options?.publishedOnly) {
+					if (videoRow?.isScreenshot) return Option.none();
+					const [activeUpload] = yield* db.use((db) =>
+						db
+							.select({ phase: Db.videoUploads.phase })
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
+					);
+					if (activeUpload && activeUpload.phase !== "complete") {
+						return Option.none();
+					}
+					const published = Video.Video.getSource(video);
+					if (!(published instanceof Video.Mp4Source)) return Option.none();
+					const exists = yield* bucket.headObject(published.getFileKey()).pipe(
+						Effect.map((head) => (head.ContentLength ?? 0) > 0),
+						Effect.catchAll(() => Effect.succeed(false)),
+					);
+					if (!exists) return Option.none();
+					const fileName = `${video.name}.mp4`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						published.getFileKey(),
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
+				}
+
 				if (videoRow?.isScreenshot) {
 					const listResponse = yield* bucket.listObjects({
 						prefix: `${video.ownerId}/${video.id}/`,
@@ -817,11 +844,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 					if (!screenshotKey) return Option.none();
 					const extension = getFileExtensionFromKey(screenshotKey) ?? "jpg";
-					const downloadUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
-					return Option.some({
-						fileName: `${video.name}.${extension}`,
-						downloadUrl,
-					});
+					const fileName = `${video.name}.${extension}`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						screenshotKey,
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
 				}
 
 				const src = Video.Video.getSource(video);
@@ -835,14 +863,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Option.isSome(mp4Head) &&
 						(mp4Head.value.ContentLength ?? 0) > 0
 					) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
+						const fileName = `${video.name}.mp4`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
 							src.getFileKey(),
+							fileName,
 						);
 
-						return Option.some({
-							fileName: `${video.name}.mp4`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 
 					const [upload] = yield* db.use((db) =>
@@ -853,24 +880,27 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 
 					if (upload?.rawFileKey) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
-							upload.rawFileKey,
-						);
 						const extension =
 							getFileExtensionFromKey(upload.rawFileKey) ?? "mp4";
+						const fileName = `${video.name}.${extension}`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
+							upload.rawFileKey,
+							fileName,
+						);
 
-						return Option.some({
-							fileName: `${video.name}.${extension}`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 				}
 
 				if (!src) return Option.none();
 				if (!(src instanceof Video.Mp4Source)) return Option.none();
 
-				const downloadUrl = yield* bucket.getSignedObjectUrl(src.getFileKey());
-				return Option.some({ fileName: `${video.name}.mp4`, downloadUrl });
+				const fileName = `${video.name}.mp4`;
+				const downloadUrl = yield* bucket.getSignedDownloadUrl(
+					src.getFileKey(),
+					fileName,
+				);
+				return Option.some({ fileName, downloadUrl });
 			}),
 
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (

@@ -274,7 +274,7 @@ export const AgentScene = (props: SceneProps) => {
 					<span
 						className={classNames(
 							MONO,
-							"ml-3 text-[11px] uppercase tracking-[0.05em] text-[rgba(255,255,255,0.45)]",
+							"ml-3 text-[11px] text-[rgba(255,255,255,0.45)]",
 						)}
 					>
 						agent session · ~/checkout

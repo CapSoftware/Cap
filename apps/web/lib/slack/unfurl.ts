@@ -1,5 +1,6 @@
 import { Video } from "@cap/web-domain";
 import { parseCapShareUrl } from "@/lib/oembed";
+import { formatClock } from "@/lib/player-time";
 import {
 	getPublicShareVideo,
 	type PublicShareVideo,
@@ -41,10 +42,7 @@ const truncate = (value: string, maxLength: number) =>
 
 const formatDuration = (duration: number | null) => {
 	if (!duration || duration <= 0) return "Watch this recording on Cap";
-	const seconds = Math.round(duration);
-	const minutes = Math.floor(seconds / 60);
-	const remainder = seconds % 60;
-	return `Watch this ${minutes}:${remainder.toString().padStart(2, "0")} recording on Cap`;
+	return `Watch this ${formatClock(Math.round(duration))} recording on Cap`;
 };
 
 export const buildSlackVideoBlock = ({

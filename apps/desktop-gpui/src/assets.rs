@@ -68,6 +68,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "circle-plus.svg",
     "circle-x.svg",
     "enlarge.svg",
+    "flag.svg",
+    "flag-filled.svg",
     "eye-off.svg",
     "film-cut.svg",
     "flip-horizontal-2.svg",
@@ -118,6 +120,12 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
     "columns-2.svg",
+    // The Shape track's glyphs: Lucide's shapes, highlighter and a slash for
+    // the line, plus a numbered circle for the step badge.
+    "shapes.svg",
+    "highlighter.svg",
+    "slash.svg",
+    "circle-number.svg",
     "monitor-outline.svg",
     "music.svg",
     "panel-right.svg",
@@ -320,6 +328,7 @@ mod tests {
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
         include_str!("editor_window/scenes.rs"),
+        include_str!("editor_window/markers.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),

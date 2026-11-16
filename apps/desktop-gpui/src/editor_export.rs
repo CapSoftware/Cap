@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
-use cap_export::gif::GifExportSettings;
+use cap_export::gif::{GifExportSettings, GifQuality};
 use cap_export::mov::MovExportSettings;
 use cap_export::mp4::{ExportCompression, Mp4ExportSettings, turbo::TurboOptions};
 use cap_export::preview::{
@@ -128,7 +128,55 @@ impl ExportFormatKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GifQualityPreset {
+    Low,
+    Medium,
+    High,
+}
+
+impl GifQualityPreset {
+    const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Low => tr::editor::export::quality::gif_low(),
+            Self::Medium => tr::editor::export::quality::gif_medium(),
+            Self::High => tr::editor::export::quality::gif_high(),
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+
+    fn from_slug(slug: Option<&str>) -> Self {
+        match slug {
+            Some("Low") => Self::Low,
+            Some("Medium") => Self::Medium,
+            _ => Self::High,
+        }
+    }
+
+    fn settings(self) -> Option<GifQuality> {
+        let quality = match self {
+            Self::Low => 50,
+            Self::Medium => 70,
+            Self::High => return None,
+        };
+        Some(GifQuality {
+            quality: Some(quality),
+            fast: None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportResolution {
+    P480,
     P720,
     P1080,
     P4k,
@@ -137,6 +185,7 @@ pub enum ExportResolution {
 impl ExportResolution {
     fn label(self) -> &'static str {
         match self {
+            Self::P480 => "480p",
             Self::P720 => "720p",
             Self::P1080 => "1080p",
             Self::P4k => "4K",
@@ -145,6 +194,7 @@ impl ExportResolution {
 
     fn size(self) -> (u32, u32) {
         match self {
+            Self::P480 => (854, 480),
             Self::P720 => (1280, 720),
             Self::P1080 => (1920, 1080),
             Self::P4k => (3840, 2160),
@@ -153,6 +203,7 @@ impl ExportResolution {
 
     fn from_slug(slug: &str) -> Self {
         match slug {
+            "480p" => Self::P480,
             "1080p" => Self::P1080,
             "4K" | "4k" => Self::P4k,
             _ => Self::P720,
@@ -198,6 +249,7 @@ pub struct ExportUi {
     pub resolution: ExportResolution,
     pub fps: u32,
     pub compression: ExportCompression,
+    pub gif_quality: GifQualityPreset,
     pub optimize_filesize: bool,
     pub turbo: bool,
     pub cursor_only: bool,
@@ -274,6 +326,7 @@ impl ExportUi {
             advanced_open: false,
             organization_id: None,
             turbo: false,
+            gif_quality: None,
         });
         Self::from_preferences(prefs)
     }
@@ -290,6 +343,7 @@ impl ExportUi {
                 "Potato" => ExportCompression::Potato,
                 _ => ExportCompression::Maximum,
             },
+            gif_quality: GifQualityPreset::from_slug(prefs.gif_quality.as_deref()),
             optimize_filesize: prefs.optimize_filesize,
             turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
@@ -346,6 +400,7 @@ impl ExportUi {
             advanced_open: self.advanced_open,
             organization_id: self.organization_id.clone(),
             turbo: self.turbo,
+            gif_quality: Some(self.gif_quality.slug().to_string()),
         };
         store::update(|state| state.export = Some(prefs));
     }
@@ -368,7 +423,7 @@ impl ExportUi {
             ExportSettings::Gif(GifExportSettings {
                 fps: self.fps,
                 resolution_base,
-                quality: None,
+                quality: self.gif_quality.settings(),
             })
         } else {
             ExportSettings::Mp4(Mp4ExportSettings {
@@ -380,6 +435,15 @@ impl ExportUi {
                 optimize_filesize: self.optimize_filesize,
             })
         }
+    }
+
+    fn gif_preview_quality(&self) -> Option<GifQuality> {
+        (self.format == ExportFormatKind::Gif && !self.cursor_only).then(|| {
+            self.gif_quality.settings().unwrap_or(GifQuality {
+                quality: None,
+                fast: None,
+            })
+        })
     }
 
     fn is_custom_bpp(&self) -> bool {
@@ -559,7 +623,7 @@ impl EditorWindow {
                             ui.format = ExportFormatKind::Mp4;
                             ui.cursor_only = false;
                         }
-                        this.normalize_loaded_export_fps();
+                        this.normalize_loaded_export_options();
                         this.refresh_export_preview(window, cx);
                         cx.notify();
                     })),
@@ -586,7 +650,7 @@ impl EditorWindow {
         if ui.cursor_only && ui.destination == ExportDestination::Link {
             ui.destination = ExportDestination::File;
         }
-        self.normalize_export_fps(&mut ui);
+        self.normalize_export_options(&mut ui);
         self.export = Some(ui);
         self.subscribe_export_to_sign_in(window, cx);
         self.refresh_export_preview(window, cx);
@@ -641,51 +705,28 @@ impl EditorWindow {
         .detach();
     }
 
-    fn normalize_export_fps(&self, ui: &mut ExportUi) {
-        let allowed = self.export_fps_options(ui);
-        if !allowed.contains(&ui.fps) {
-            ui.fps = if ui.format == ExportFormatKind::Gif {
-                15
-            } else {
-                30
-            };
-        }
+    fn normalize_export_options(&self, ui: &mut ExportUi) {
+        normalize_export_options(ui, has_transparent_background(&self.project));
     }
 
-    fn normalize_loaded_export_fps(&mut self) {
-        let Some(ui) = self.export.as_mut() else {
-            return;
-        };
-        let gif = ui.format == ExportFormatKind::Gif;
-        let allowed = if gif && !ui.cursor_only {
-            &[10, 15, 20, 25, 30][..]
-        } else {
-            &[15, 30, 60][..]
-        };
-        if !allowed.contains(&ui.fps) {
-            ui.fps = if gif { 15 } else { 30 };
+    pub(crate) fn normalize_loaded_export_options(&mut self) {
+        let transparent = has_transparent_background(&self.project);
+        if let Some(ui) = self.export.as_mut() {
+            normalize_export_options(ui, transparent);
         }
     }
 
     fn export_fps_options(&self, ui: &ExportUi) -> &'static [u32] {
-        if ui.format == ExportFormatKind::Gif && !ui.cursor_only {
-            &[10, 15, 20, 25, 30]
-        } else {
-            &[15, 30, 60]
-        }
+        export_fps_options(ui.format, ui.cursor_only)
     }
 
     fn export_resolutions(&self, ui: &ExportUi) -> Vec<ExportResolution> {
-        let transparent = has_transparent_background(&self.project);
-        if ui.format == ExportFormatKind::Gif || transparent || ui.cursor_only {
-            vec![ExportResolution::P720, ExportResolution::P1080]
-        } else {
-            vec![
-                ExportResolution::P720,
-                ExportResolution::P1080,
-                ExportResolution::P4k,
-            ]
-        }
+        export_resolutions(
+            ui.format,
+            ui.cursor_only,
+            has_transparent_background(&self.project),
+        )
+        .to_vec()
     }
 
     fn refresh_export_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -712,6 +753,7 @@ impl EditorWindow {
             resolution_base: XY::new(width, height),
             compression_bpp: ui.bpp(),
             cursor_only: ui.cursor_only,
+            gif_quality: ui.gif_preview_quality(),
         };
         // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
         let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
@@ -874,6 +916,7 @@ impl EditorWindow {
         let (width, height) = ui.resolution.size();
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
+        let gif_quality = ui.gif_quality.settings();
         let optimize = ui.optimize_filesize;
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
@@ -989,6 +1032,7 @@ impl EditorWindow {
                     height,
                     compression,
                     custom_bpp,
+                    gif_quality,
                     optimize,
                     turbo,
                     force,
@@ -1164,6 +1208,7 @@ impl EditorWindow {
         let (width, height) = ui.resolution.size();
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
+        let gif_quality = ui.gif_quality.settings();
         let optimize = ui.optimize_filesize;
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
@@ -1234,6 +1279,7 @@ impl EditorWindow {
                             height,
                             compression,
                             custom_bpp,
+                            gif_quality,
                             optimize,
                             turbo,
                             force,
@@ -1772,6 +1818,10 @@ impl EditorWindow {
                         ui.format == ExportFormatKind::Mp4 && !ui.cursor_only,
                         |this| this.child(self.export_quality_field(ui, cx)),
                     )
+                    .when(
+                        ui.format == ExportFormatKind::Gif && !ui.cursor_only,
+                        |this| this.child(self.export_gif_quality_field(ui, cx)),
+                    )
                     .child(div().h(px(1.)).flex_none().bg(Hsla::from(editor.line)))
                     .child(self.export_advanced(ui, cx)),
             )
@@ -1923,6 +1973,9 @@ impl EditorWindow {
                     if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
                         ui.format = ExportFormatKind::Mp4;
                     }
+                }
+                this.normalize_loaded_export_options();
+                if let Some(ui) = this.export.as_mut() {
                     ui.persist();
                 }
                 this.refresh_export_preview(window, cx);
@@ -2102,7 +2155,7 @@ impl EditorWindow {
                             }
                         }
                     }
-                    this.normalize_loaded_export_fps();
+                    this.normalize_loaded_export_options();
                     if let Some(ui) = this.export.as_mut() {
                         ui.persist();
                     }
@@ -2233,6 +2286,48 @@ impl EditorWindow {
             .when(turbo_available(), |this| {
                 this.child(self.export_turbo_row(ui, cx))
             })
+    }
+
+    fn export_gif_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        self.export_section(tr::editor::export::section::quality(), "icons/gem.svg")
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-gif-quality",
+                    GifQualityPreset::ALL
+                        .iter()
+                        .map(|preset| {
+                            ui::SegmentOption::new(preset.label(), ui.gif_quality == *preset)
+                        })
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some(preset) = GifQualityPreset::ALL.get(*index).copied() else {
+                        return;
+                    };
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.gif_quality = preset;
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .px(px(2.))
+                    .text_size(px(10.5))
+                    .text_color(Hsla::from(editor.text_3))
+                    .child(tr::editor::export::quality::smaller())
+                    .child(tr::editor::export::quality::larger()),
+            )
     }
 
     fn export_toggle_row(
@@ -2409,6 +2504,9 @@ impl EditorWindow {
                             if ui.cursor_only && ui.destination == ExportDestination::Link {
                                 ui.destination = ExportDestination::File;
                             }
+                        }
+                        this.normalize_loaded_export_options();
+                        if let Some(ui) = this.export.as_mut() {
                             ui.persist();
                         }
                         this.refresh_export_preview(window, cx);
@@ -2894,6 +2992,13 @@ async fn confirm_export_resources(
     let result = async {
         let warning = check.map_err(|error| error.to_string())??;
         if let Some(message) = warning {
+            // The `CAP_GPUI_AUTO_EXPORT` hook runs unattended, so nobody is
+            // there to answer the prompt. It goes on as "Proceed anyway" would;
+            // a drive too full to export has already failed the check above.
+            if std::env::var_os("CAP_GPUI_AUTO_EXPORT").is_some() {
+                tracing::warn!(%message, "auto export proceeds past the resources warning");
+                return Ok(true);
+            }
             tracing::info!(%message, "export waits for the user to confirm its resources");
             #[cfg(target_os = "linux")]
             let confirmed = {
@@ -2974,6 +3079,7 @@ async fn confirm_export_resources(
         if !accepted {
             match result {
                 Err(error) if !ui.close_requested && !cancel.load(Ordering::Acquire) => {
+                    tracing::error!(error, "export stopped before it started");
                     ui.phase = ExportPhase::Failed;
                     ui.error = Some(error);
                 }
@@ -3063,6 +3169,55 @@ fn turbo_available() -> bool {
         && std::thread::available_parallelism().is_ok_and(|cores| cores.get() >= 8)
 }
 
+fn export_fps_options(format: ExportFormatKind, cursor_only: bool) -> &'static [u32] {
+    if format == ExportFormatKind::Gif && !cursor_only {
+        &[5, 10, 15, 20, 25, 30]
+    } else {
+        &[15, 30, 60]
+    }
+}
+
+fn export_resolutions(
+    format: ExportFormatKind,
+    cursor_only: bool,
+    transparent: bool,
+) -> &'static [ExportResolution] {
+    if cursor_only {
+        &[ExportResolution::P720, ExportResolution::P1080]
+    } else if format == ExportFormatKind::Gif {
+        &[
+            ExportResolution::P480,
+            ExportResolution::P720,
+            ExportResolution::P1080,
+        ]
+    } else if transparent {
+        &[ExportResolution::P720, ExportResolution::P1080]
+    } else {
+        &[
+            ExportResolution::P720,
+            ExportResolution::P1080,
+            ExportResolution::P4k,
+        ]
+    }
+}
+
+fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
+    if !export_fps_options(ui.format, ui.cursor_only).contains(&ui.fps) {
+        ui.fps = if ui.format == ExportFormatKind::Gif {
+            15
+        } else {
+            30
+        };
+    }
+    if !export_resolutions(ui.format, ui.cursor_only, transparent).contains(&ui.resolution) {
+        ui.resolution = if ui.resolution == ExportResolution::P4k {
+            ExportResolution::P1080
+        } else {
+            ExportResolution::P720
+        };
+    }
+}
+
 fn matches_compression(current: ExportCompression, expected: ExportCompression) -> bool {
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
@@ -3078,6 +3233,7 @@ async fn run_export(
     height: u32,
     compression: ExportCompression,
     custom_bpp: Option<f32>,
+    gif_quality: Option<GifQuality>,
     optimize: bool,
     turbo: bool,
     force: bool,
@@ -3136,7 +3292,7 @@ async fn run_export(
             GifExportSettings {
                 fps,
                 resolution_base: resolution,
-                quality: None,
+                quality: gif_quality,
             }
             .export(base, progress)
             .await
@@ -3228,7 +3384,9 @@ mod tests {
     }
 
     use super::{
-        ExportDestination, ExportPhase, ExportUi, cancel_matching_export, export_file_name,
+        ExportDestination, ExportFormatKind, ExportPhase, ExportResolution, ExportUi,
+        GifQualityPreset, cancel_matching_export, export_file_name, export_fps_options,
+        export_resolutions, normalize_export_options,
     };
     use crate::store::ExportPrefs;
     use std::path::PathBuf;
@@ -3251,7 +3409,114 @@ mod tests {
             advanced_open: false,
             organization_id: None,
             turbo: false,
+            gif_quality: None,
         })
+    }
+
+    #[test]
+    fn gif_exports_offer_smaller_options_that_other_formats_do_not() {
+        assert_eq!(
+            export_fps_options(ExportFormatKind::Gif, false),
+            [5, 10, 15, 20, 25, 30]
+        );
+        assert_eq!(
+            export_fps_options(ExportFormatKind::Mp4, false),
+            [15, 30, 60]
+        );
+        assert_eq!(
+            export_fps_options(ExportFormatKind::Gif, true),
+            [15, 30, 60]
+        );
+
+        for transparent in [false, true] {
+            assert_eq!(
+                export_resolutions(ExportFormatKind::Gif, false, transparent),
+                [
+                    ExportResolution::P480,
+                    ExportResolution::P720,
+                    ExportResolution::P1080
+                ]
+            );
+            for format in [ExportFormatKind::Gif, ExportFormatKind::Mp4] {
+                assert_eq!(
+                    export_resolutions(format, true, transparent),
+                    [ExportResolution::P720, ExportResolution::P1080]
+                );
+            }
+        }
+        assert_eq!(
+            export_resolutions(ExportFormatKind::Mp4, false, false),
+            [
+                ExportResolution::P720,
+                ExportResolution::P1080,
+                ExportResolution::P4k
+            ]
+        );
+    }
+
+    #[test]
+    fn gif_only_options_fall_back_when_the_format_changes() {
+        let mut ui = clipboard_export();
+        ui.format = ExportFormatKind::Gif;
+        ui.resolution = ExportResolution::P480;
+        ui.fps = 5;
+        normalize_export_options(&mut ui, false);
+        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P480, 5));
+
+        ui.format = ExportFormatKind::Mp4;
+        normalize_export_options(&mut ui, false);
+        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P720, 30));
+
+        ui.format = ExportFormatKind::Gif;
+        ui.resolution = ExportResolution::P480;
+        ui.fps = 5;
+        ui.cursor_only = true;
+        normalize_export_options(&mut ui, false);
+        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P720, 15));
+
+        ui.cursor_only = false;
+        ui.resolution = ExportResolution::P4k;
+        ui.fps = 60;
+        normalize_export_options(&mut ui, false);
+        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P1080, 15));
+    }
+
+    #[test]
+    fn only_gif_exports_preview_with_a_gif_palette() {
+        let mut ui = clipboard_export();
+        assert!(ui.gif_preview_quality().is_none());
+        ui.format = ExportFormatKind::Gif;
+        assert!(
+            ui.gif_preview_quality()
+                .is_some_and(|q| q.quality.is_none())
+        );
+        ui.gif_quality = GifQualityPreset::Low;
+        assert_eq!(ui.gif_preview_quality().and_then(|q| q.quality), Some(50));
+        ui.cursor_only = true;
+        assert!(ui.gif_preview_quality().is_none());
+    }
+
+    #[test]
+    fn gif_quality_defaults_to_the_encoder_default_and_round_trips() {
+        let ui = clipboard_export();
+        assert_eq!(ui.gif_quality, GifQualityPreset::High);
+        assert!(ui.gif_quality.settings().is_none());
+        assert_eq!(
+            GifQualityPreset::from_slug(Some("Sharp")),
+            GifQualityPreset::High
+        );
+
+        let mut qualities = Vec::new();
+        for preset in GifQualityPreset::ALL {
+            assert_eq!(GifQualityPreset::from_slug(Some(preset.slug())), preset);
+            qualities.push(
+                preset
+                    .settings()
+                    .and_then(|settings| settings.quality)
+                    .unwrap_or(90),
+            );
+        }
+        assert!(qualities.is_sorted_by(|a, b| a < b), "{qualities:?}");
     }
 
     #[test]

@@ -18,11 +18,8 @@ import { CollectionShareControl } from "../../_components/CollectionShareControl
 import { UploadCapButton } from "../../caps/components";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { WebRecorderDialog } from "../../caps/components/web-recorder-dialog/web-recorder-dialog";
-import {
-	BreadcrumbItem,
-	ClientMyCapsLink,
-	NewSubfolderButton,
-} from "./components";
+import { NewSubfolderButton } from "./components";
+import { FolderTopBarPath } from "./components/FolderTopBarPath";
 import FolderVideosSection from "./components/FolderVideosSection";
 
 const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
@@ -67,38 +64,24 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 
 		return (
 			<div>
-				<div className="flex flex-wrap gap-2 items-center mb-10">
-					<NewSubfolderButton parentFolderId={folderId} />
-					<UploadCapButton size="sm" />
-					<WebRecorderDialog />
-					<CollectionShareControl
-						kind="folder"
-						collectionId={folderId}
-						isPublic={share.folder.public}
-						canManage={share.canManage}
-						isPro={share.ownerIsPro}
-						settings={
-							share.canManage
-								? (share.folder.settings?.publicPage ?? null)
-								: null
-						}
-					/>
-				</div>
-				<div className="flex flex-wrap gap-3 items-center mb-6 w-full">
-					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink />
-
-						{breadcrumb.map((folder, index) => (
-							<div key={folder.id} className="flex items-center">
-								<p className="mx-2 text-gray-10">/</p>
-								<BreadcrumbItem
-									id={folder.id}
-									name={folder.name}
-									color={folder.color}
-									isLast={index === breadcrumb.length - 1}
-								/>
-							</div>
-						))}
+				<FolderTopBarPath breadcrumb={breadcrumb} />
+				<div className="mb-10 w-full">
+					<div className="flex flex-wrap gap-2 items-center">
+						<NewSubfolderButton parentFolderId={folderId} />
+						<UploadCapButton size="sm" />
+						<WebRecorderDialog />
+						<CollectionShareControl
+							kind="folder"
+							collectionId={folderId}
+							isPublic={share.folder.public}
+							canManage={share.canManage}
+							isPro={share.ownerIsPro}
+							settings={
+								share.canManage
+									? (share.folder.settings?.publicPage ?? null)
+									: null
+							}
+						/>
 					</div>
 				</div>
 

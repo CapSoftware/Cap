@@ -497,6 +497,16 @@ mod tests {
     }
 
     #[test]
+    fn manifest_marked_with_a_lost_encoder_tail_still_reads_as_complete() {
+        let manifest: Manifest = serde_json::from_str(
+            r#"{"version":5,"type":"m4s_segments","init_segment":"init.mp4","segments":[{"path":"segment_001.m4s","index":1,"duration":2.0,"is_complete":true,"file_size":1}],"total_duration":2.0,"is_complete":true,"encoder_tail_lost":true}"#,
+        )
+        .unwrap();
+        assert!(manifest.is_complete);
+        assert_eq!(manifest.segments.len(), 1);
+    }
+
+    #[test]
     fn upload_lock_defers_other_owners_and_survives_bundle_deletion() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("recording.cap");

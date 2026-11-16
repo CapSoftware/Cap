@@ -15,6 +15,8 @@ use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zx
 
 use super::{DisplayImpl, LogicalBounds, LogicalPosition, LogicalSize};
 
+const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Clone, Copy, Default)]
 struct OutputGeometry {
     position: (i32, i32),
@@ -108,7 +110,7 @@ pub(super) fn displays() -> Option<Vec<DisplayImpl>> {
         runtime.join(display)
     };
     let connection = Connection::from_socket(UnixStream::connect(socket).ok()?).ok()?;
-    query(&connection, Duration::from_millis(250))
+    query(&connection, QUERY_TIMEOUT)
 }
 
 fn output_uuid(name: &str) -> Option<uuid::Uuid> {
@@ -451,6 +453,45 @@ mod tests {
         let started = Instant::now();
         assert!(query(&connection, Duration::from_millis(20)).is_none());
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn busy_compositor_can_finish_display_enumeration_after_a_quarter_second() {
+        use std::io::{Read, Write};
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let responder = std::thread::spawn(move || -> std::io::Result<()> {
+            for reply in 0..2 {
+                loop {
+                    let mut header = [0u8; 8];
+                    server.read_exact(&mut header)?;
+                    let object = u32::from_ne_bytes(header[..4].try_into().unwrap());
+                    let message = u32::from_ne_bytes(header[4..].try_into().unwrap());
+                    let mut payload = vec![0; (message >> 16) as usize - header.len()];
+                    server.read_exact(&mut payload)?;
+                    if object != 1 || message & 0xffff != 0 {
+                        continue;
+                    }
+                    if reply == 0 {
+                        std::thread::sleep(Duration::from_millis(350));
+                    }
+                    let callback = u32::from_ne_bytes(payload[..4].try_into().unwrap());
+                    server.write_all(&callback.to_ne_bytes())?;
+                    server.write_all(&(12u32 << 16).to_ne_bytes())?;
+                    server.write_all(&0u32.to_ne_bytes())?;
+                    break;
+                }
+            }
+            let _ = finished_rx.recv();
+            Ok(())
+        });
+        let connection = Connection::from_socket(client).unwrap();
+        let result = query(&connection, QUERY_TIMEOUT);
+        drop(connection);
+        let _ = finished_tx.send(());
+        responder.join().unwrap().unwrap();
+        assert!(result.is_some());
     }
 
     #[test]
