@@ -151,7 +151,7 @@ export function AppStoreBrowser({
 				</div>
 			)}
 
-			<div className="flex flex-col gap-3 border-t border-gray-3 pt-5 md:flex-row md:items-center md:justify-between">
+			<div className="flex flex-col gap-3 border-t border-gray-3 pt-5 pb-24 max-lg:pb-40 md:flex-row md:items-center md:justify-between">
 				<p className="text-[12px] text-gray-9">
 					Want to build one? Apps are open source and live in the{" "}
 					<a
