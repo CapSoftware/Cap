@@ -44,7 +44,7 @@ export const FilterTabs = ({
 	return (
 		<div
 			ref={scrollContainerRef}
-			className="flex isolate overflow-x-auto relative gap-4 items-center px-6 border-r border-b border-l hide-scroll border-gray-3"
+			className="flex isolate overflow-x-auto relative gap-4 items-center px-5 border-b hide-scroll border-gray-3"
 		>
 			{Filters.map((filter) => (
 				<div key={filter} className="relative min-w-fit">

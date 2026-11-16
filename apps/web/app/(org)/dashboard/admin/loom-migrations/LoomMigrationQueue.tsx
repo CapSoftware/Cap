@@ -639,10 +639,7 @@ export function LoomMigrationQueue() {
 	return (
 		<div className="flex w-full max-w-5xl flex-col gap-5">
 			<div>
-				<h1 className="text-2xl font-medium text-gray-12">
-					Loom migration queue
-				</h1>
-				<p className="mt-2 text-sm text-gray-10">
+				<p className="text-sm text-gray-10">
 					Process Cap Pro concierge requests, reconcile every import, and update
 					customers here.
 				</p>
