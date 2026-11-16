@@ -710,15 +710,12 @@ export const ImportLoomPage = ({
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
 					Back to Import
 				</Link>
-				<div className="flex gap-4 items-start">
+				<div className="flex gap-4 items-center">
 					<div className="flex flex-shrink-0 justify-center items-center rounded-full size-12 bg-gray-3">
 						<LoomMark size={20} />
 					</div>
 					<div>
-						<h1 className="text-2xl font-medium text-gray-12">
-							Import from Loom
-						</h1>
-						<p className="mt-1 max-w-xl text-sm text-gray-10">
+						<p className="max-w-xl text-sm text-gray-10">
 							{canUseCsvImport
 								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
