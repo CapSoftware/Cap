@@ -6,7 +6,18 @@ import {
 	developerVideos,
 } from "@cap/database/schema";
 import type { DeveloperVideoResolutionTier } from "@cap/database/types";
-import { and, asc, count, eq, gt, isNull, lt, min } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	lt,
+	min,
+} from "drizzle-orm";
 import { apiErrorBody } from "@/lib/api-errors";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
 import { announceDeveloperVideoEvent } from "@/lib/developer-webhook-dispatch";
@@ -1166,7 +1177,12 @@ export async function runInfraVideoImport(
 		if (uploadId) {
 			await abortInfraUpload({ appId, videoId, uploadId }).catch(() => {});
 		}
-		if (
+		if (stop.code === "download_timeout") {
+			console.warn("[developer-import] Download ran out of time", {
+				videoId,
+				code: stop.code,
+			});
+		} else if (
 			!(error instanceof ImportStop) &&
 			!(error instanceof PublicMediaFetchError)
 		) {
@@ -1234,6 +1250,43 @@ async function reapImport(appId: string, videoId: string, cutoff: Date) {
 	return true;
 }
 
+// A video deleted while its import was downloading is the delete's to clean
+// up, so only the import row is closed: the video is not touched and no
+// event is sent.
+async function cancelDeletedImports(cutoff: Date) {
+	const deleted = await db()
+		.select({ videoId: developerVideoImports.videoId })
+		.from(developerVideoImports)
+		.innerJoin(
+			developerVideos,
+			eq(developerVideos.id, developerVideoImports.videoId),
+		)
+		.where(
+			and(
+				eq(developerVideoImports.state, "downloading"),
+				lt(developerVideoImports.startedAt, cutoff),
+				isNotNull(developerVideos.deletedAt),
+			),
+		)
+		.orderBy(asc(developerVideoImports.startedAt))
+		.limit(REAP_BATCH);
+	if (deleted.length === 0) return 0;
+	const [result] = await db()
+		.update(developerVideoImports)
+		.set({ state: "failed", errorCode: "cancelled", finishedAt: new Date() })
+		.where(
+			and(
+				inArray(
+					developerVideoImports.videoId,
+					deleted.map((row) => row.videoId),
+				),
+				eq(developerVideoImports.state, "downloading"),
+				lt(developerVideoImports.startedAt, cutoff),
+			),
+		);
+	return result.affectedRows;
+}
+
 export async function reapStalledImports(
 	now: Date = new Date(),
 ): Promise<{ reaped: number; failed: number }> {
@@ -1267,6 +1320,17 @@ export async function reapStalledImports(
 	}
 	let reaped = 0;
 	let failed = 0;
+	try {
+		reaped += await cancelDeletedImports(cutoff);
+	} catch (error) {
+		failed++;
+		console.error(
+			"[developer-import] Failed to close imports of deleted videos",
+			{
+				message: error instanceof Error ? error.message : String(error),
+			},
+		);
+	}
 	for (const { appId, videoId } of stalled) {
 		try {
 			if (await reapImport(appId, videoId, cutoff)) reaped++;
