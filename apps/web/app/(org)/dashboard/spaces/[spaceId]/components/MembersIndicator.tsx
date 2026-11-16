@@ -311,7 +311,7 @@ export const MembersIndicator = ({
 
 			{onAddVideos && (
 				<Button
-					variant="dark"
+					variant="blue"
 					size="sm"
 					className="gap-2 px-4 h-9"
 					onClick={onAddVideos}

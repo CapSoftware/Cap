@@ -89,12 +89,9 @@ export default function BrowseSpacesPage() {
 
 	return (
 		<>
-			<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-end mb-4 w-full">
+			<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-4 w-full">
 				<div className="min-w-0">
-					<h1 className="text-2xl font-semibold tracking-tight text-gray-12">
-						Spaces
-					</h1>
-					<p className="mt-1 text-sm text-gray-10">
+					<p className="text-sm text-gray-10">
 						Shared libraries for your teams and projects
 					</p>
 				</div>
@@ -179,7 +176,7 @@ export default function BrowseSpacesPage() {
 										/>
 										<span
 											title={space.name}
-											className="text-sm font-medium truncate text-gray-12 max-w-[104px] sm:max-w-[220px] xl:max-w-[min(34vw,480px)]"
+											className="text-sm font-medium leading-5 line-clamp-2 text-gray-12 [overflow-wrap:anywhere] max-w-[140px] sm:max-w-[260px] xl:max-w-[min(34vw,480px)]"
 										>
 											{space.name}
 										</span>
