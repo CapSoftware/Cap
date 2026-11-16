@@ -3427,7 +3427,11 @@ mod tests {
 
         project.timeline.as_mut().unwrap().caption_segments[0].text = String::new();
         write_caption_edit_to_source(&mut project, 0, &durations);
-        assert!(project.captions.as_ref().unwrap().segments[0].words.is_empty());
+        assert!(
+            project.captions.as_ref().unwrap().segments[0]
+                .words
+                .is_empty()
+        );
 
         project.timeline.as_mut().unwrap().caption_segments[0].text = "fresh take".into();
         write_caption_edit_to_source(&mut project, 0, &durations);
