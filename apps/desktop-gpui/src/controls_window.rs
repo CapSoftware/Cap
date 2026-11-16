@@ -19,6 +19,7 @@ use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
 use crate::{
     feeds::Feeds,
+    live_draw::{self, DrawMode, Tool},
     recording::RecordingMode,
     session::{Phase, RecordingSession},
     theme::Theme,
@@ -36,7 +37,10 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
-    issue_room: bool,
+    draw_mode: Entity<DrawMode>,
+    /// What the window is currently sized for above the bar: an issue card,
+    /// the drawing tools.
+    room: (bool, bool),
     /// Repaints the marker button once its acknowledgement has played out.
     _marker_settle: gpui::Task<()>,
     marker_seen: Option<std::time::Instant>,
@@ -70,13 +74,19 @@ impl ControlsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&session, window, |this, _, window, cx| {
-            this.fit_to_issue(window, cx);
+            this.fit_room(window, cx);
             this.settle_marker_acknowledgement(window, cx);
             let live = this.timer_is_live(cx);
             if live != this.ticking_live {
                 this.ticking_live = live;
                 this._tick = Self::spawn_tick(window, cx);
             }
+            cx.notify();
+        })
+        .detach();
+        let draw_mode = live_draw::mode(cx);
+        cx.observe_in(&draw_mode, window, |this, _, window, cx| {
+            this.fit_room(window, cx);
             cx.notify();
         })
         .detach();
@@ -99,14 +109,15 @@ impl ControlsWindow {
             _tick: gpui::Task::ready(()),
             ticking_live: false,
             level_bar,
-            issue_room: false,
+            draw_mode,
+            room: (false, false),
             _marker_settle: gpui::Task::ready(()),
             marker_seen: None,
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
         // Once the platform window is finished: an issue may already be up.
-        cx.defer_in(window, |this, window, cx| this.fit_to_issue(window, cx));
+        cx.defer_in(window, |this, window, cx| this.fit_room(window, cx));
         this
     }
 
@@ -126,18 +137,18 @@ impl ControlsWindow {
             })
     }
 
-    fn fit_to_issue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let issue = self.issue(cx).is_some();
-        if issue == self.issue_room {
+    fn fit_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let room = (self.issue(cx).is_some(), self.draw_mode.read(cx).drawing);
+        if room == self.room {
             return;
         }
-        self.issue_room = issue;
+        self.room = room;
         let Some(native) = crate::platform::native_window(window) else {
             return;
         };
         let scale = window.scale_factor();
         cx.spawn(async move |_, _| {
-            crate::app_windows::fit_controls_to_issue(&native, issue, scale);
+            crate::app_windows::fit_controls_to_issue(&native, room.0, room.1, scale);
         })
         .detach();
     }
@@ -236,16 +247,7 @@ impl ControlsWindow {
         let lit = session
             .marker_added_at()
             .is_some_and(|added| added.elapsed() < MARKER_ACKNOWLEDGEMENT);
-        let shortcut: Vec<String> = crate::store::hotkeys_raw()
-            .get(crate::store::RECORDING_MARKER_HOTKEY)
-            .and_then(crate::store::hotkey_from_value)
-            .map(|hotkey| {
-                crate::settings_pages::hotkey_display_keys(&hotkey)
-                    .iter()
-                    .map(|key| crate::settings_pages::hotkey_key_text(key).to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let shortcut = shortcut_keys(crate::store::RECORDING_MARKER_HOTKEY);
 
         let icon_color: gpui::Hsla = if !available {
             Theme::with_alpha(theme.gray_11, 0.5)
@@ -317,6 +319,178 @@ impl ControlsWindow {
                     }))
             })
             .into_any_element()
+    }
+
+    /// The pen: draw on screen. Lit while drawing; dimmed with the reason in
+    /// its tooltip where the recording cannot carry the strokes.
+    fn render_draw(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let availability = live_draw::availability(self.session.read(cx));
+        let available = availability.is_ok();
+        let drawing = self.draw_mode.read(cx).drawing;
+        let (label, keys) = if drawing {
+            (tr::controls::draw::stop(), vec!["Esc".to_string()])
+        } else if availability == Err(live_draw::Unavailable::WindowRecording) {
+            (tr::controls::draw::window_unavailable(), Vec::new())
+        } else {
+            (
+                tr::controls::draw::start(),
+                shortcut_keys(crate::store::DRAW_HOTKEY),
+            )
+        };
+        let icon_color: gpui::Hsla = if drawing {
+            theme.blue_9.into()
+        } else if available {
+            theme.gray_11.into()
+        } else {
+            Theme::with_alpha(theme.gray_11, 0.5)
+        };
+        div()
+            .id("draw")
+            .w(px(28.))
+            .h(px(32.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.))
+            .when(drawing, |this| this.bg(theme.blue_3))
+            .when(available && !drawing, |this| {
+                this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+            })
+            .child(
+                svg()
+                    .path("icons/pencil.svg")
+                    .size(px(18.))
+                    .text_color(icon_color),
+            )
+            .tooltip(move |_, cx| {
+                ui::Tooltip::new(&theme, label)
+                    .keys(keys.clone())
+                    .view(cx)
+            })
+            .when(available, |this| {
+                this.active(|style| style.bg(theme.blue_4))
+                    .on_click(|_, _, cx| live_draw::toggle(cx))
+            })
+            .into_any_element()
+    }
+
+    fn render_draw_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let mode = self.draw_mode.read(cx);
+        let (selected_tool, selected_color, has_ink) = (mode.tool, mode.color, mode.has_ink);
+        let divider = || {
+            div()
+                .w(px(1.))
+                .h(px(20.))
+                .mx(px(6.))
+                .flex_shrink_0()
+                .bg(theme.gray_5)
+        };
+        let tool_label = |tool: Tool| match tool {
+            Tool::Pen => tr::controls::draw::pen(),
+            Tool::Highlighter => tr::controls::draw::highlighter(),
+            Tool::Arrow => tr::controls::draw::arrow(),
+            Tool::Rectangle => tr::controls::draw::rectangle(),
+        };
+        let tools = Tool::ALL.into_iter().map(|tool| {
+            let selected = tool == selected_tool;
+            let label = tool_label(tool);
+            div()
+                .id(tool_id(tool))
+                .w(px(28.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .when(selected, |this| this.bg(theme.blue_3))
+                .when(!selected, |this| {
+                    this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+                        .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
+                })
+                .child(svg().path(tool.icon()).size(px(18.)).text_color(if selected {
+                    theme.blue_9
+                } else {
+                    theme.gray_11
+                }))
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
+                .on_click(move |_, _, cx| live_draw::set_tool(tool, cx))
+        });
+        let colors = live_draw::COLORS.iter().enumerate().map(|(index, color)| {
+            let selected = index == selected_color;
+            let swatch = gpui::rgb(*color);
+            div()
+                .id(("draw-color", index))
+                .w(px(20.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(move |_, _, cx| live_draw::set_color(index, cx))
+                .child(
+                    div()
+                        .size(px(20.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .border(px(2.))
+                        .border_color(if selected {
+                            Theme::with_alpha(theme.gray_12, 0.85)
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(
+                            div()
+                                .size(px(if selected { 12. } else { 14. }))
+                                .rounded_full()
+                                .bg(swatch)
+                                .border_1()
+                                .border_color(Theme::with_alpha(theme.gray_12, 0.15)),
+                        ),
+                )
+        });
+        let undo = self
+            .action_button("draw-undo", "icons/undo.svg", !has_ink)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::undo()).view(cx))
+            .when(has_ink, |this| this.on_click(|_, _, cx| live_draw::undo(cx)));
+        let clear = self
+            .action_button("draw-clear", "icons/eraser.svg", !has_ink)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::clear()).view(cx))
+            .when(has_ink, |this| this.on_click(|_, _, cx| live_draw::clear(cx)));
+
+        div()
+            .h(px(40.))
+            .mb(px(8.))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .p(px(4.))
+            .rounded(px(16.))
+            .bg(theme.gray_1)
+            .border_1()
+            .border_color(theme.gray_5)
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.1),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .children(tools)
+            .child(divider())
+            .children(colors)
+            .child(divider())
+            .child(undo)
+            .child(clear)
     }
 
     fn render_stop(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -530,6 +704,7 @@ impl ControlsWindow {
         let theme = self.theme;
         let session = self.session.read(cx);
         let studio = session.mode() == Some(RecordingMode::Studio);
+        let draw_offered = live_draw::offered(session);
         let paused = session.is_paused();
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
@@ -634,6 +809,9 @@ impl ControlsWindow {
                                     }))
                                 },
                             ))
+                            .when(draw_offered, |this| {
+                                this.child(self.render_draw(cx))
+                            })
                             // Studio's marker button takes the slot of the
                             // settings menu, which has no popover yet.
                             .child(if studio {
@@ -712,8 +890,34 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
+            .when(self.draw_mode.read(cx).drawing, |this| {
+                this.child(self.render_draw_tools(cx))
+            })
             .child(self.render_bar(cx))
     }
+}
+
+fn tool_id(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Pen => "draw-pen",
+        Tool::Highlighter => "draw-highlighter",
+        Tool::Arrow => "draw-arrow",
+        Tool::Rectangle => "draw-rectangle",
+    }
+}
+
+/// The keycaps of a stored shortcut, for a tooltip.
+fn shortcut_keys(action: &str) -> Vec<String> {
+    crate::store::hotkeys_raw()
+        .get(action)
+        .and_then(crate::store::hotkey_from_value)
+        .map(|hotkey| {
+            crate::settings_pages::hotkey_display_keys(&hotkey)
+                .iter()
+                .map(|key| crate::settings_pages::hotkey_key_text(key).to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn recording_issue_text(error: String) -> impl IntoElement + Styled {

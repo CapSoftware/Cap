@@ -3709,6 +3709,24 @@ impl SettingsWindow {
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
+        let keep_drawings = crate::live_draw::SUPPORTED.then(|| {
+            self.setting_row(
+                tr::settings::general::recording::keep_drawings::label(),
+                Some(tr::settings::general::recording::keep_drawings::description()),
+                self.toggle(
+                    "keep-drawings",
+                    tr::settings::general::recording::keep_drawings::label(),
+                    settings.keep_drawings,
+                    cx,
+                    |this, cx| {
+                        this.settings.keep_drawings = !this.settings.keep_drawings;
+                        let value = this.settings.keep_drawings;
+                        this.write_bool(store::KEEP_DRAWINGS_KEY, value, cx);
+                    },
+                )
+                .into_any_element(),
+            )
+        });
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3952,7 +3970,10 @@ impl SettingsWindow {
                         self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
                             .into_any_element(),
                     ),
-                ])
+                ]
+                .into_iter()
+                .chain(keep_drawings)
+                .collect())
                 .into_any_element(),
             ],
         )

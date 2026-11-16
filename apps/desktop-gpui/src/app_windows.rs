@@ -40,13 +40,20 @@ use crate::{
 
 /// Matches the Tauri `InProgressRecording` window and
 /// `fake_window.rs` position math.
-pub const CONTROLS_WIDTH: f32 = 320.;
+/// One button wider where the bar carries the draw button.
+pub const CONTROLS_WIDTH: f32 = if crate::live_draw::SUPPORTED {
+    352.
+} else {
+    320.
+};
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
 /// inside its frame, so without an issue to show the window is only this
 /// tall and the app under the empty space above the bar stays clickable.
 pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
 const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
+/// The drawing tools' row above the bar, with its gap.
+const CONTROLS_DRAW_TOOLS_HEIGHT: f32 = 48.;
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
@@ -589,6 +596,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
             cx.update(|cx| {
+                if crate::live_draw::escape(cx) {
+                    return;
+                }
                 if TargetSelect::global(cx).read(cx).mode.is_some() && !cancel_area_drags(cx) {
                     dismiss_target_overlays(cx);
                 }
@@ -618,8 +628,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
-        let markers = session.read(cx).markers_available();
-        crate::hotkeys::set_recording_scope(markers, cx);
+        let scopes = crate::hotkeys::RecordingScopes {
+            markers: session.read(cx).markers_available(),
+            drawing: crate::live_draw::availability(session.read(cx)).is_ok(),
+        };
+        crate::hotkeys::set_recording_scopes(scopes, cx);
+        if !recording {
+            crate::live_draw::end(cx);
+        }
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }
@@ -7295,15 +7311,16 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
-/// Grow the bar's window upward to make room for an issue card above the
-/// bar, or shrink it back to the bar alone, leaving the bar where it is.
-/// `setFrame` re-enters gpui, so call this from a task.
-pub(crate) fn fit_controls_to_issue(native: &platform::NativeWindow, issue: bool, scale: f32) {
-    let height = f64::from(if issue {
-        CONTROLS_HEIGHT
-    } else {
-        CONTROLS_BAR_HEIGHT
-    });
+/// Grow the bar's window upward to make room for an issue card or the
+/// drawing tools above the bar, or shrink it back to the bar alone, leaving
+/// the bar where it is. `setFrame` re-enters gpui, so call this from a task.
+pub(crate) fn fit_controls_to_issue(
+    native: &platform::NativeWindow,
+    issue: bool,
+    draw_tools: bool,
+    scale: f32,
+) {
+    let height = f64::from(controls_height(issue, draw_tools));
     let (x, y, width, current) = platform::window_frame(native);
     if width <= 0. {
         return;
@@ -7322,6 +7339,19 @@ pub(crate) fn fit_controls_to_issue(native: &platform::NativeWindow, issue: bool
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (native, x, y, current, height, scale);
+}
+
+fn controls_height(issue: bool, draw_tools: bool) -> f32 {
+    let base = if issue {
+        CONTROLS_HEIGHT
+    } else {
+        CONTROLS_BAR_HEIGHT
+    };
+    if draw_tools {
+        base + CONTROLS_DRAW_TOOLS_HEIGHT
+    } else {
+        base
+    }
 }
 
 /// Open the bar. Returns the native window number for capture exclusion.

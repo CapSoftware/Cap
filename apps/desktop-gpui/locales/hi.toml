@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (सुझाया गया)"
 label = "अधिकतम कैप्चर फ़्रेम रेट"
 
+[settings.general.recording.keep_drawings]
+description = "ड्रॉइंग तब तक रहती हैं जब तक आप उन्हें मिटा न दें। बंद होने पर, हर ड्रॉइंग बनाने के कुछ सेकंड बाद धुंधली हो जाती है।"
+label = "ड्रॉइंग स्क्रीन पर रखें"
+
 [settings.general.recording.marker_sound]
 description = "Studio रिकॉर्डिंग के दौरान मार्कर जोड़ने पर एक छोटी आवाज़ चलाता है। आपका माइक्रोफ़ोन या सिस्टम ऑडियो इसे रिकॉर्ड कर सकता है।"
 label = "मार्कर के लिए आवाज़ चलाएँ"
@@ -470,6 +474,7 @@ screenshot_window = "विंडो का स्क्रीनशॉट ल�
 start_instant = "Instant रिकॉर्डिंग शुरू करें"
 start_studio = "Studio रिकॉर्डिंग शुरू करें"
 stop = "रिकॉर्डिंग रोकें"
+toggle_drawing = "स्क्रीन पर ड्रॉ करें"
 
 [settings.shortcuts.effect]
 add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें"
@@ -503,6 +508,7 @@ screenshot_window_save = "पॉइंटर के नीचे की वि�
 stop = "मौजूदा रिकॉर्डिंग रोकें"
 studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें"
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें"
+toggle_drawing = "रिकॉर्डिंग के दौरान स्क्रीन पर ड्रॉ करना शुरू या बंद करें"
 
 [settings.shortcuts.sentence]
 add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें।"
@@ -536,6 +542,7 @@ screenshot_window_save = "पॉइंटर के नीचे की वि�
 stop = "मौजूदा रिकॉर्डिंग रोकें।"
 studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें।"
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें।"
+toggle_drawing = "रिकॉर्डिंग के दौरान स्क्रीन पर ड्रॉ करना शुरू या बंद करें।"
 
 [settings.cli]
 command = "कमांड"
@@ -1182,6 +1189,17 @@ starting = "शुरू हो रहा"
 
 [controls.marker]
 add = "मार्कर जोड़ें"
+
+[controls.draw]
+arrow = "तीर, ⇧ से 45° पर सीधा"
+clear = "सब मिटाएँ"
+highlighter = "हाइलाइटर, सीधी रेखा के लिए ⇧"
+pen = "पेन, सीधी रेखा के लिए ⇧"
+rectangle = "आयत, वर्ग के लिए ⇧"
+start = "स्क्रीन पर ड्रॉ करें"
+stop = "ड्रॉ करना बंद करें"
+undo = "पूर्ववत करें"
+window_unavailable = "ड्रॉइंग डिस्प्ले और एरिया रिकॉर्डिंग में काम करती है"
 
 [camera]
 waiting_title = "कैमरा एक्सेस का इंतज़ार है"

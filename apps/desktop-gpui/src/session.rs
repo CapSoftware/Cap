@@ -610,6 +610,12 @@ impl RecordingSession {
         self.last_config.as_ref().map(|config| config.mode)
     }
 
+    pub fn capture_target(
+        &self,
+    ) -> Option<&cap_recording::sources::screen_capture::ScreenCaptureTarget> {
+        self.last_config.as_ref().map(|config| &config.target)
+    }
+
     /// Studio recordings take markers while they capture or sit paused.
     /// Instant ones have no editor timeline to put a marker on.
     pub fn markers_available(&self) -> bool {

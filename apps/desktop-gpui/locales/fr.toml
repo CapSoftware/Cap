@@ -206,6 +206,10 @@ fps_30 = "30 i/s"
 fps_60 = "60 i/s (recommandé)"
 label = "Fréquence d'images maximale"
 
+[settings.general.recording.keep_drawings]
+description = "Les dessins restent jusqu'à ce que vous les effaciez. Sinon, chacun s'estompe quelques secondes après avoir été tracé."
+label = "Garder les dessins à l'écran"
+
 [settings.general.recording.marker_sound]
 description = "Émet un son bref lorsque vous ajoutez un repère pendant un enregistrement Studio. Votre micro ou le son du système peuvent l'enregistrer."
 label = "Émettre un son pour les repères"
@@ -470,6 +474,7 @@ screenshot_window = "Capturer une fenêtre"
 start_instant = "Démarrer un enregistrement Instant"
 start_studio = "Démarrer un enregistrement Studio"
 stop = "Arrêter l'enregistrement"
+toggle_drawing = "Dessiner à l'écran"
 
 [settings.shortcuts.effect]
 add_marker = "marquer ce moment dans un enregistrement Studio"
@@ -503,6 +508,7 @@ screenshot_window_save = "capturer la fenêtre sous votre pointeur et enregistre
 stop = "arrêter l'enregistrement en cours"
 studio = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio"
 studio_open_editor = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt"
+toggle_drawing = "commencer ou arrêter de dessiner à l'écran pendant l'enregistrement"
 
 [settings.shortcuts.sentence]
 add_marker = "Marquer ce moment dans un enregistrement Studio."
@@ -536,6 +542,7 @@ screenshot_window_save = "Capturer la fenêtre sous votre pointeur et enregistre
 stop = "Arrêter l'enregistrement en cours."
 studio = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio."
 studio_open_editor = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt."
+toggle_drawing = "Commencer ou arrêter de dessiner à l'écran pendant l'enregistrement."
 
 [settings.cli]
 command = "Commande"
@@ -1182,6 +1189,17 @@ starting = "Début"
 
 [controls.marker]
 add = "Ajouter un repère"
+
+[controls.draw]
+arrow = "Flèche, ⇧ aligne à 45°"
+clear = "Tout effacer"
+highlighter = "Surligneur, ⇧ pour une ligne droite"
+pen = "Stylo, ⇧ pour une ligne droite"
+rectangle = "Rectangle, ⇧ pour un carré"
+start = "Dessiner à l'écran"
+stop = "Arrêter de dessiner"
+undo = "Annuler"
+window_unavailable = "Le dessin fonctionne dans les enregistrements d'écran et de zone"
 
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
