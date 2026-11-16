@@ -1068,6 +1068,103 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (
+            tr::editor::window::organization::brand_colours(),
+            "Brand colours",
+        ),
+        (
+            tr::editor::window::organization::brand_settings(),
+            "Brand settings",
+        ),
+        (tr::editor::window::organization::button(), "Organization"),
+        (
+            tr::editor::window::organization::loading_description(),
+            "Fetching your organizations from Cap Web.",
+        ),
+        (
+            tr::editor::window::organization::loading_title(),
+            "Loading organizations",
+        ),
+        (tr::editor::window::organization::none(), "No organizations"),
+        (tr::editor::window::organization::remove(), "Remove"),
+        (
+            tr::editor::window::organization::remove_colour(),
+            "Remove colour",
+        ),
+        (tr::editor::window::organization::retry(), "Retry"),
+        (
+            tr::editor::window::organization::saved(),
+            "Organization branding updated",
+        ),
+        (tr::editor::window::organization::saving(), "Saving..."),
+        (tr::editor::window::organization::set(), "Set"),
+        (tr::editor::window::organization::sign_in(), "Sign In"),
+        (
+            tr::editor::window::organization::signed_out_description(),
+            "Sign in to choose an organization, edit its brand colours, and use them in Studio.",
+        ),
+        (
+            tr::editor::window::organization::signed_out_title(),
+            "Organization branding requires sign in",
+        ),
+        (
+            tr::editor::window::organization::unavailable_description(),
+            "Cap Web could not be reached. Check your connection and try again.",
+        ),
+        (
+            tr::editor::window::organization::unavailable_title(),
+            "Unable to load organizations",
+        ),
+        (tr::editor::window::organization::upload(), "Upload"),
+        (tr::editor::window::organization::color::accent(), "Accent"),
+        (
+            tr::editor::window::organization::color::background(),
+            "Background",
+        ),
+        (
+            tr::editor::window::organization::color::primary(),
+            "Primary",
+        ),
+        (
+            tr::editor::window::organization::color::secondary(),
+            "Secondary",
+        ),
+        (
+            tr::editor::window::organization::error::failed(),
+            "Failed to update organization branding",
+        ),
+        (
+            tr::editor::window::organization::error::forbidden(),
+            "Only organization admins and owners can edit branding",
+        ),
+        (
+            tr::editor::window::organization::error::logo_empty(),
+            "Logo file is empty",
+        ),
+        (
+            tr::editor::window::organization::error::logo_read_failed(),
+            "That file could not be read",
+        ),
+        (
+            tr::editor::window::organization::error::logo_too_large(),
+            "Logo file must be less than 1MB",
+        ),
+        (
+            tr::editor::window::organization::error::logo_unsupported(),
+            "Unsupported logo file type",
+        ),
+        (
+            tr::editor::window::organization::error::not_found(),
+            "This organization no longer exists",
+        ),
+        (
+            tr::editor::window::organization::error::offline(),
+            "Cap Web could not be reached. Check your connection and try again.",
+        ),
+        (
+            tr::editor::window::organization::error::signed_out(),
+            "Sign in again to edit branding",
+        ),
         (tr::editor::transcript::cleanup(), "Clean up"),
         (
             tr::editor::transcript::cleanup_tooltip(),

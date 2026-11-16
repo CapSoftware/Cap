@@ -3081,6 +3081,43 @@ no_segments = "录制没有分段。可能需要先恢复。"
 not_found = "找不到视频路径 {path}！"
 not_studio = "无法编辑非 Studio 录制"
 
+[editor.window.organization]
+brand_colours = "品牌颜色"
+brand_settings = "品牌设置"
+button = "组织"
+loading_description = "正在从 Cap Web 加载你的组织。"
+loading_title = "正在加载组织"
+none = "没有组织"
+remove = "移除"
+remove_colour = "移除颜色"
+retry = "重试"
+saved = "组织品牌已更新"
+saving = "正在保存..."
+set = "设置"
+sign_in = "登录"
+signed_out_description = "登录后即可选择组织、编辑品牌颜色，并在 Studio 中使用。"
+signed_out_title = "使用组织品牌需要登录"
+unavailable_description = "无法连接 Cap Web。请检查网络连接后重试。"
+unavailable_title = "无法加载组织"
+upload = "上传"
+
+[editor.window.organization.color]
+accent = "强调色"
+background = "背景色"
+primary = "主色"
+secondary = "辅色"
+
+[editor.window.organization.error]
+failed = "无法更新组织品牌"
+forbidden = "只有组织的管理员和所有者可以编辑品牌"
+logo_empty = "徽标文件为空"
+logo_read_failed = "无法读取该文件"
+logo_too_large = "徽标文件必须小于 1MB"
+logo_unsupported = "不支持的徽标文件类型"
+not_found = "该组织已不存在"
+offline = "无法连接 Cap Web。请检查网络连接后重试。"
+signed_out = "请重新登录以编辑品牌"
+
 [editor.window.presets]
 apply = "应用"
 create = "创建"

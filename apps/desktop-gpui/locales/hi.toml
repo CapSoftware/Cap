@@ -3081,6 +3081,43 @@ no_segments = "रिकॉर्डिंग में कोई सेगम�
 not_found = "वीडियो पाथ {path} नहीं मिला!"
 not_studio = "Studio के अलावा दूसरी रिकॉर्डिंग एडिट नहीं की जा सकतीं"
 
+[editor.window.organization]
+brand_colours = "ब्रांड रंग"
+brand_settings = "ब्रांड सेटिंग्स"
+button = "संगठन"
+loading_description = "Cap Web से आपके संगठन लोड हो रहे हैं।"
+loading_title = "संगठन लोड हो रहे हैं"
+none = "कोई संगठन नहीं"
+remove = "हटाएँ"
+remove_colour = "रंग हटाएँ"
+retry = "फिर से कोशिश करें"
+saved = "संगठन की ब्रांडिंग अपडेट हो गई"
+saving = "सेव हो रहा है..."
+set = "सेट करें"
+sign_in = "साइन इन करें"
+signed_out_description = "संगठन चुनने, उसके ब्रांड रंग बदलने और उन्हें Studio में इस्तेमाल करने के लिए साइन इन करें।"
+signed_out_title = "संगठन की ब्रांडिंग के लिए साइन इन ज़रूरी है"
+unavailable_description = "Cap Web तक नहीं पहुँच सके। अपना कनेक्शन जाँचें और फिर से कोशिश करें।"
+unavailable_title = "संगठन लोड नहीं हो सके"
+upload = "अपलोड करें"
+
+[editor.window.organization.color]
+accent = "एक्सेंट"
+background = "बैकग्राउंड"
+primary = "प्राइमरी"
+secondary = "सेकेंडरी"
+
+[editor.window.organization.error]
+failed = "संगठन की ब्रांडिंग अपडेट नहीं हो सकी"
+forbidden = "केवल संगठन के एडमिन और ओनर ब्रांडिंग बदल सकते हैं"
+logo_empty = "लोगो फ़ाइल खाली है"
+logo_read_failed = "वह फ़ाइल पढ़ी नहीं जा सकी"
+logo_too_large = "लोगो फ़ाइल 1MB से छोटी होनी चाहिए"
+logo_unsupported = "यह लोगो फ़ाइल प्रकार समर्थित नहीं है"
+not_found = "यह संगठन अब मौजूद नहीं है"
+offline = "Cap Web तक नहीं पहुँच सके। अपना कनेक्शन जाँचें और फिर से कोशिश करें।"
+signed_out = "ब्रांडिंग बदलने के लिए फिर से साइन इन करें"
+
 [editor.window.presets]
 apply = "लागू करें"
 create = "बनाएँ"

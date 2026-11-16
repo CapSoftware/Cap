@@ -70,6 +70,11 @@ impl SignIn {
         cx.global::<SignInGlobal>().0.clone()
     }
 
+    pub fn try_global(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<SignInGlobal>()
+            .map(|global| global.0.clone())
+    }
+
     pub fn is_pending(&self) -> bool {
         self.attempt.is_some()
     }

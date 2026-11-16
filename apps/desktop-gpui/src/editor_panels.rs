@@ -4959,7 +4959,16 @@ impl EditorWindow {
                 ),
             );
         }
-        row.into_any_element()
+        match self.render_brand_colors_trigger(target, cx) {
+            Some(trigger) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(row)
+                .child(trigger)
+                .into_any_element(),
+            None => row.into_any_element(),
+        }
     }
 
     /// One of the sidebar's plain text boxes: `px-3 py-2 rounded-lg border

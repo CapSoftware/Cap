@@ -35,6 +35,7 @@ mod editor_export;
 mod editor_hover_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
+mod editor_organization;
 mod editor_panels;
 mod editor_preparing;
 mod editor_shapes;
@@ -68,6 +69,7 @@ mod mode_select_window;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
+mod organization;
 mod overlay_backdrop;
 mod permission_guide;
 mod permissions;

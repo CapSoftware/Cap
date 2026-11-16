@@ -37,6 +37,7 @@ pub struct EditorButton {
     icon_size: Pixels,
     right_icon_size: Pixels,
     width: Option<Pixels>,
+    max_width: Option<Pixels>,
     /// `h-7` by default; the 3D panel's group-row actions are `h-6`.
     height: Pixels,
     padding_x: Pixels,
@@ -69,6 +70,7 @@ impl EditorButton {
             icon_size: px(16.),
             right_icon_size: px(10.),
             width: None,
+            max_width: None,
             height: px(28.),
             padding_x: px(7.),
             text_size: px(13.),
@@ -150,6 +152,11 @@ impl EditorButton {
         self
     }
 
+    pub fn max_width(mut self, width: Pixels) -> Self {
+        self.max_width = Some(width);
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -193,6 +200,7 @@ impl RenderOnce for EditorButton {
             icon_size,
             right_icon_size,
             width,
+            max_width,
             height,
             padding_x,
             text_size,
@@ -243,6 +251,7 @@ impl RenderOnce for EditorButton {
             .flex_shrink_0()
             .when(right_icon_end, |this| this.justify_between())
             .when_some(width, |this, width| this.w(width))
+            .when_some(max_width, |this, width| this.max_w(width))
             .text_size(text_size)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(foreground)
@@ -264,7 +273,12 @@ impl RenderOnce for EditorButton {
                         this.group_hover(group, move |style| style.text_color(color))
                     })
             }))
-            .children(label.map(|label| div().truncate().child(label)))
+            .children(label.map(|label| {
+                div()
+                    .truncate()
+                    .when(max_width.is_some(), |this| this.min_w_0())
+                    .child(label)
+            }))
             .children(right_icon.map(|icon| {
                 svg()
                     .path(icon)

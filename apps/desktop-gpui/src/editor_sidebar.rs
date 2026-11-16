@@ -756,6 +756,9 @@ pub enum ColorTarget {
     /// A shape's stroke and fill, per shape index.
     ShapeStroke(usize),
     ShapeFill(usize),
+    /// A colour in the organization brand settings dialog. It edits the
+    /// dialog's draft, never the project, so it takes no undo history.
+    Brand(crate::organization::BrandColorKey),
 }
 
 impl ColorTarget {
@@ -1685,7 +1688,7 @@ impl EditorWindow {
             picker.sat = sat;
             picker.val = val;
         }
-        if !self.sidebar.color_paused {
+        if !self.sidebar.color_paused && !matches!(target, ColorTarget::Brand(_)) {
             self.history.pause();
             self.sidebar.color_paused = true;
         }
@@ -1782,6 +1785,7 @@ impl EditorWindow {
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
             ColorTarget::CursorRipple => Some(project.cursor.ripple.color),
+            ColorTarget::Brand(key) => self.organization.brand_draft_color(key),
             _ => self.hex_string_for(target).and_then(|hex| {
                 hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             }),
@@ -1999,6 +2003,11 @@ impl EditorWindow {
                     true
                 })
             }
+            ColorTarget::Brand(key) => self.set_brand_draft(
+                key,
+                Some([color[0], color[1], color[2]].map(|channel| channel.min(255) as u8)),
+                cx,
+            ),
             _ => {}
         }
     }
@@ -3234,16 +3243,13 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(12.))
-            // The `RgbInput` row. `BrandColorsDropdown` sits under it and only
-            // renders when the signed-in organisation has brand colours
-            // (`BrandColorsDropdown.tsx:16`); there is no auth in this app, so
-            // it never renders -- which is also what a user without them sees.
             .child(self.render_rgb_input(
                 "background-color",
                 ColorTarget::BackgroundColor,
                 value,
                 cx,
             ))
+            .children(self.render_brand_colors_trigger(ColorTarget::BackgroundColor, cx))
             .child(
                 // The 17 presets: `flex flex-wrap gap-2`, `size-8 rounded-lg`.
                 div().flex().flex_row().flex_wrap().gap(px(8.)).children(
@@ -3585,6 +3591,10 @@ impl EditorWindow {
                     .child(label),
             )
             .child(self.render_rgb_input(id, target, value, cx))
+            .children(
+                self.render_brand_colors_trigger(target, cx)
+                    .map(|trigger| div().mt(px(8.)).child(trigger)),
+            )
     }
 
     // -- Corner style, border, notch, shadow -------------------------------
@@ -3660,12 +3670,19 @@ impl EditorWindow {
                     ))
                     .child(
                         ui::Field::stacked(&theme, tr::editor::sidebar::border::color()).child(
-                            self.render_rgb_input(
-                                "border-color",
-                                ColorTarget::BorderColor,
-                                color,
-                                cx,
-                            ),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.))
+                                .child(self.render_rgb_input(
+                                    "border-color",
+                                    ColorTarget::BorderColor,
+                                    color,
+                                    cx,
+                                ))
+                                .children(
+                                    self.render_brand_colors_trigger(ColorTarget::BorderColor, cx),
+                                ),
                         ),
                     )
                     .child(self.slider_field(

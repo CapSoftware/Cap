@@ -3083,6 +3083,43 @@ no_segments = "Recording has no segments. It may need to be recovered first."
 not_found = "Video path {path} not found!"
 not_studio = "Cannot edit non-studio recordings"
 
+[editor.window.organization]
+brand_colours = "Brand colours"
+brand_settings = "Brand settings"
+button = "Organization"
+loading_description = "Fetching your organizations from Cap Web."
+loading_title = "Loading organizations"
+none = "No organizations"
+remove = "Remove"
+remove_colour = "Remove colour"
+retry = "Retry"
+saved = "Organization branding updated"
+saving = "Saving..."
+set = "Set"
+sign_in = "Sign In"
+signed_out_description = "Sign in to choose an organization, edit its brand colours, and use them in Studio."
+signed_out_title = "Organization branding requires sign in"
+unavailable_description = "Cap Web could not be reached. Check your connection and try again."
+unavailable_title = "Unable to load organizations"
+upload = "Upload"
+
+[editor.window.organization.color]
+accent = "Accent"
+background = "Background"
+primary = "Primary"
+secondary = "Secondary"
+
+[editor.window.organization.error]
+failed = "Failed to update organization branding"
+forbidden = "Only organization admins and owners can edit branding"
+logo_empty = "Logo file is empty"
+logo_read_failed = "That file could not be read"
+logo_too_large = "Logo file must be less than 1MB"
+logo_unsupported = "Unsupported logo file type"
+not_found = "This organization no longer exists"
+offline = "Cap Web could not be reached. Check your connection and try again."
+signed_out = "Sign in again to edit branding"
+
 [editor.window.presets]
 apply = "Apply"
 create = "Create"

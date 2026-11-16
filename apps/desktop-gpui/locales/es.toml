@@ -3081,6 +3081,43 @@ no_segments = "La grabación no tiene segmentos. Puede que primero haya que recu
 not_found = "¡No se encontró la ruta de vídeo {path}!"
 not_studio = "Solo se pueden editar grabaciones Studio"
 
+[editor.window.organization]
+brand_colours = "Colores de marca"
+brand_settings = "Ajustes de marca"
+button = "Organización"
+loading_description = "Cargando tus organizaciones desde Cap Web."
+loading_title = "Cargando organizaciones"
+none = "No hay organizaciones"
+remove = "Quitar"
+remove_colour = "Quitar color"
+retry = "Reintentar"
+saved = "Marca de la organización actualizada"
+saving = "Guardando..."
+set = "Definir"
+sign_in = "Iniciar sesión"
+signed_out_description = "Inicia sesión para elegir una organización, editar sus colores de marca y usarlos en Studio."
+signed_out_title = "Inicia sesión para usar la marca de la organización"
+unavailable_description = "No se pudo conectar con Cap Web. Revisa tu conexión e inténtalo de nuevo."
+unavailable_title = "No se pudieron cargar las organizaciones"
+upload = "Subir"
+
+[editor.window.organization.color]
+accent = "Acento"
+background = "Fondo"
+primary = "Principal"
+secondary = "Secundario"
+
+[editor.window.organization.error]
+failed = "No se pudo actualizar la marca de la organización"
+forbidden = "Solo los administradores y propietarios de la organización pueden editar la marca"
+logo_empty = "El archivo del logotipo está vacío"
+logo_read_failed = "No se pudo leer ese archivo"
+logo_too_large = "El archivo del logotipo debe pesar menos de 1 MB"
+logo_unsupported = "Tipo de archivo de logotipo no compatible"
+not_found = "Esta organización ya no existe"
+offline = "No se pudo conectar con Cap Web. Revisa tu conexión e inténtalo de nuevo."
+signed_out = "Vuelve a iniciar sesión para editar la marca"
+
 [editor.window.presets]
 apply = "Aplicar"
 create = "Crear"

@@ -3081,6 +3081,43 @@ no_segments = "L'enregistrement n'a aucun segment. Il faut peut-être d'abord le
 not_found = "Chemin vidéo {path} introuvable !"
 not_studio = "Seuls les enregistrements Studio peuvent être modifiés"
 
+[editor.window.organization]
+brand_colours = "Couleurs de marque"
+brand_settings = "Paramètres de marque"
+button = "Organisation"
+loading_description = "Chargement de vos organisations depuis Cap Web."
+loading_title = "Chargement des organisations"
+none = "Aucune organisation"
+remove = "Supprimer"
+remove_colour = "Supprimer la couleur"
+retry = "Réessayer"
+saved = "Image de marque de l'organisation mise à jour"
+saving = "Enregistrement..."
+set = "Définir"
+sign_in = "Se connecter"
+signed_out_description = "Connectez-vous pour choisir une organisation, modifier ses couleurs de marque et les utiliser dans Studio."
+signed_out_title = "L'image de marque de l'organisation nécessite une connexion"
+unavailable_description = "Impossible de joindre Cap Web. Vérifiez votre connexion et réessayez."
+unavailable_title = "Impossible de charger les organisations"
+upload = "Importer"
+
+[editor.window.organization.color]
+accent = "Accent"
+background = "Arrière-plan"
+primary = "Principale"
+secondary = "Secondaire"
+
+[editor.window.organization.error]
+failed = "Impossible de mettre à jour l'image de marque de l'organisation"
+forbidden = "Seuls les administrateurs et les propriétaires de l'organisation peuvent modifier l'image de marque"
+logo_empty = "Le fichier du logo est vide"
+logo_read_failed = "Impossible de lire ce fichier"
+logo_too_large = "Le fichier du logo doit faire moins de 1 Mo"
+logo_unsupported = "Type de fichier de logo non pris en charge"
+not_found = "Cette organisation n'existe plus"
+offline = "Impossible de joindre Cap Web. Vérifiez votre connexion et réessayez."
+signed_out = "Reconnectez-vous pour modifier l'image de marque"
+
 [editor.window.presets]
 apply = "Appliquer"
 create = "Créer"
