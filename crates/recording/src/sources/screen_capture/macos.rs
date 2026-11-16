@@ -87,12 +87,12 @@ fn configure_window_capture(settings: &mut sc::StreamCfg) {
     }
 }
 
-/// What the stream reads. A display capture crops to `crop_bounds`; a window
-/// capture reads the window itself, inside its rounded corners, where
-/// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
+/// What the stream reads. A display capture crops to `crop_bounds` on the
+/// display; a window capture reads the same size from the window's own
+/// top-left corner, so Focus records every pixel a screen region would.
 fn source_rect(captures_window: bool, crop_bounds: super::CropBounds) -> cg::Rect {
     let (x, y) = if captures_window {
-        (super::WINDOW_CORNER_TRIM, super::WINDOW_CORNER_TRIM)
+        (0.0, 0.0)
     } else {
         (crop_bounds.position().x(), crop_bounds.position().y())
     };
@@ -1486,6 +1486,61 @@ mod tests {
             show_cursor: true,
             window,
         }
+    }
+
+    fn window_crop(
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        scale: f64,
+    ) -> super::super::CropBounds {
+        super::super::even_pixel_crop(
+            LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height)),
+            scale,
+        )
+    }
+
+    fn rect(rect: cg::Rect) -> (f64, f64, f64, f64) {
+        (
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        )
+    }
+
+    #[test]
+    fn focus_reads_the_whole_window_from_its_top_left() {
+        let crop = window_crop(100., 50., 920., 436., 1.0);
+        assert_eq!(rect(source_rect(true, crop)), (0., 0., 920., 436.));
+        assert_eq!(rect(source_rect(false, crop)), (100., 50., 920., 436.));
+    }
+
+    #[test]
+    fn focus_reads_as_many_pixels_as_a_screen_region_at_every_scale() {
+        for (scale, width, height) in [
+            (1.0, 701., 461.),
+            (2.0, 845., 753.5),
+            (1.5, 1280., 800.),
+            (2.0, 1512., 949.),
+        ] {
+            let crop = window_crop(37., 25., width, height, scale);
+            let (_, _, focus_width, focus_height) = rect(source_rect(true, crop));
+            let (_, _, region_width, region_height) = rect(source_rect(false, crop));
+            assert_eq!((focus_width, focus_height), (region_width, region_height));
+            assert!(width - focus_width < 2. / scale, "{scale}x {width} pt wide");
+            assert!(
+                height - focus_height < 2. / scale,
+                "{scale}x {height} pt tall"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_reads_a_partly_offscreen_window_from_its_top_left() {
+        let crop = window_crop(-1440., -120., 1440., 900., 2.0);
+        assert_eq!(rect(source_rect(true, crop)), (0., 0., 1440., 900.));
     }
 
     #[test]
