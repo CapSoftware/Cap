@@ -4,7 +4,7 @@ import {
 	developerVideoImports,
 	developerVideos,
 } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
 import {
@@ -992,7 +992,12 @@ describe.runIf(Boolean(databaseUrl))(
 						database()
 							.update(developerVideos)
 							.set({ status: "processing" })
-							.where(eq(developerVideos.id, videoId)),
+							.where(
+								and(
+									eq(developerVideos.id, videoId),
+									eq(developerVideos.status, "uploading"),
+								),
+							),
 					]);
 					expect(reaped.failed).toBe(0);
 					const video = await videoRow(videoId);
