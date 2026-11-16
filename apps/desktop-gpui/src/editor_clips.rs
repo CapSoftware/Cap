@@ -3799,6 +3799,7 @@ mod tests {
             let timeline = result.timeline.as_ref().unwrap();
             assert_eq!(timeline.segments.len(), 2);
             assert_eq!(timeline.segments[1].recording_clip, 1);
+            assert_eq!(timeline.segments[1].name.as_deref(), Some("source"));
             assert!(timeline.segments[1].end > 0.0);
             let mut without_append = result;
             let _ = without_append.timeline.as_mut().unwrap().segments.pop();
@@ -4629,6 +4630,42 @@ mod tests {
         };
         assert_eq!(inner.segments.len(), 2);
         assert!(meta.path(&inner.segments[1].display.path).is_file());
+    }
+
+    #[test]
+    fn imported_cap_projects_keep_their_clip_names() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("source.cap");
+        let source_segment = source.join("content/segments/segment-0");
+        std::fs::create_dir_all(&source_segment).unwrap();
+        std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+        std::fs::copy(
+            target.project.join("recording-meta.json"),
+            source.join("recording-meta.json"),
+        )
+        .unwrap();
+        let mut source_config = target.config.clone();
+        let mut named = segment(0, 0.0, 0.25);
+        named.name = Some("Intro".to_string());
+        source_config.timeline = Some(timeline(vec![named, segment(0, 0.25, 0.5)]));
+        source_config.write(&source).unwrap();
+
+        assert_eq!(
+            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            1
+        );
+        let config = ProjectConfiguration::load(&target.project).unwrap();
+        let names: Vec<_> = config
+            .timeline
+            .unwrap()
+            .segments
+            .into_iter()
+            .map(|segment| (segment.recording_clip, segment.name))
+            .collect();
+        assert_eq!(
+            names,
+            [(0, None), (1, Some("Intro".to_string())), (1, None)]
+        );
     }
 
     #[test]
