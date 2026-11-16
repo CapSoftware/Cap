@@ -37,7 +37,7 @@ export const CapCardAnalytics = Object.assign(
 			<CapCardAnalytics.Skeleton />
 		) : (
 			<Shell>
-				<div className="flex flex-wrap gap-4 items-center">
+				<div className="flex flex-wrap gap-3.5 items-center">
 					<Tooltip
 						content="View analytics"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
@@ -48,7 +48,9 @@ export const CapCardAnalytics = Object.assign(
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faEye}>
-								<span className="text-sm text-gray-12">{displayCount}</span>
+								<span className="text-[13px] tabular-nums text-gray-11">
+									{displayCount}
+								</span>
 							</IconItem>
 						</Link>
 					</Tooltip>
@@ -62,7 +64,9 @@ export const CapCardAnalytics = Object.assign(
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faComment}>
-								<span className="text-sm text-gray-12">{totalComments}</span>
+								<span className="text-[13px] tabular-nums text-gray-11">
+									{totalComments}
+								</span>
 							</IconItem>
 						</Link>
 					</Tooltip>
@@ -76,7 +80,9 @@ export const CapCardAnalytics = Object.assign(
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faSmile}>
-								<span className="text-sm text-gray-12">{totalReactions}</span>
+								<span className="text-[13px] tabular-nums text-gray-11">
+									{totalReactions}
+								</span>
 							</IconItem>
 						</Link>
 					</Tooltip>
@@ -86,9 +92,9 @@ export const CapCardAnalytics = Object.assign(
 						href={capAnalyticsHref(capId)}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="text-xs text-blue-600 hover:underline"
+						className="text-xs font-medium transition-colors text-gray-10 hover:text-gray-12"
 					>
-						View analytics
+						Analytics
 					</Link>
 				)}
 			</Shell>
@@ -105,7 +111,7 @@ export const CapCardAnalytics = Object.assign(
 );
 
 const Shell = (props: PropsWithChildren) => (
-	<div className="flex flex-wrap gap-4 items-center justify-between text-sm text-gray-60">
+	<div className="flex flex-wrap gap-4 justify-between items-center pt-3 text-sm border-t border-gray-3">
 		{props.children}
 	</div>
 );
@@ -115,8 +121,8 @@ const IconItem = forwardRef(
 		props: { icon: IconDefinition } & Pick<ComponentProps<"div">, "children">,
 		ref: ForwardedRef<HTMLDivElement>,
 	) => (
-		<div ref={ref} className="flex gap-2 items-center">
-			<FontAwesomeIcon className="text-gray-8 size-4" icon={props.icon} />
+		<div ref={ref} className="flex gap-1.5 items-center">
+			<FontAwesomeIcon className="text-gray-8 size-3.5" icon={props.icon} />
 			{props.children}
 		</div>
 	),

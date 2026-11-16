@@ -167,16 +167,16 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		params.spaceId === spaceId;
 
 	return (
-		<div className="flex flex-col mt-4">
+		<div className="flex flex-col mt-5">
 			<div
 				className={clsx(
-					"flex items-center mb-3",
+					"flex items-center mb-1 h-7",
 					sidebarCollapsed ? "justify-center" : "justify-between",
 				)}
 			>
 				<h2
 					className={clsx(
-						"text-sm font-medium truncate text-gray-12",
+						"pl-3 text-xs font-medium truncate text-gray-10",
 						sidebarCollapsed ? "hidden" : "flex",
 					)}
 				>
@@ -185,8 +185,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 				<Tooltip position="right" content="Create space">
 					<Button
 						className={clsx(
-							"p-0 min-w-[unset] hover:bg-gray-3",
-							sidebarCollapsed ? "size-8" : "size-7",
+							"p-0 min-w-[unset] rounded-lg bg-transparent border-transparent hover:bg-gray-3 hover:border-transparent",
+							sidebarCollapsed ? "size-8" : "size-6",
 						)}
 						variant="white"
 						onClick={() => {
@@ -195,8 +195,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 					>
 						<FontAwesomeIcon
 							className={clsx(
-								"text-gray-12",
-								sidebarCollapsed ? "size-4" : "size-3",
+								"text-gray-10",
+								sidebarCollapsed ? "size-3.5" : "size-3",
 							)}
 							icon={faPlus}
 						/>
@@ -219,22 +219,29 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 					className={clsx(
 						"relative border border-transparent transition z-3",
 						sidebarCollapsed
-							? "flex justify-center px-0 mb-2 items-center w-full size-10"
-							: "py-2 w-full px-3 mb-2",
+							? "flex justify-center px-0 mb-0.5 items-center w-full size-9"
+							: "h-9 w-full px-3 mb-0.5",
 						pathname.includes("/dashboard/spaces/browse")
-							? "bg-gray-3 pointer-events-none"
-							: "hover:bg-gray-2",
-						"flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden",
+							? "dashboard-nav-active pointer-events-none"
+							: "dashboard-nav-hover",
+						"flex items-center justify-start rounded-lg outline-none overflow-hidden",
 					)}
 				>
 					<LayersIcon
 						ref={layersIconRef}
-						className={clsx(sidebarCollapsed ? "text-gray-12" : "text-gray-10")}
-						size={sidebarCollapsed ? 18 : 14}
+						className={clsx(
+							pathname.includes("/dashboard/spaces/browse")
+								? "text-gray-12"
+								: "text-gray-10",
+						)}
+						size={sidebarCollapsed ? 18 : 16}
 					/>
 					<p
 						className={clsx(
-							"text-sm text-gray-12 truncate",
+							"text-sm truncate",
+							pathname.includes("/dashboard/spaces/browse")
+								? "font-medium text-gray-12"
+								: "text-gray-11",
 							sidebarCollapsed ? "hidden" : "ml-2.5",
 						)}
 					>
@@ -254,9 +261,9 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 						>
 							<li
 								className={clsx(
-									"relative transition-colors border border-transparent overflow-visible duration-150 rounded-xl mb-1.5",
+									"relative list-none transition-colors overflow-visible duration-150 rounded-lg mb-0.5",
 									activeSpaceParams(space.id)
-										? "hover:bg-gray-3 cursor-default"
+										? "cursor-default"
 										: "cursor-pointer",
 								)}
 								onDragOver={(e) => handleDragOver(e, space.id)}
@@ -267,7 +274,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 									<motion.div
 										layoutId="navlinks"
 										className={clsx(
-											"absolute rounded-xl bg-gray-3",
+											"absolute rounded-lg dashboard-nav-active",
 											sidebarCollapsed
 												? "inset-0 right-0 left-0 mx-auto"
 												: "inset-0",
@@ -284,7 +291,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 								<AnimatePresence>
 									{activeDropTarget === space.id && (
 										<motion.div
-											className="absolute inset-0 z-10 rounded-xl border transition-all duration-200 pointer-events-none border-blue-10 bg-gray-4"
+											className="absolute inset-0 z-10 rounded-lg border transition-all duration-200 pointer-events-none border-blue-9 bg-blue-3"
 											initial={{ opacity: 0 }}
 											animate={{ opacity: 1 }}
 											exit={{ opacity: 0 }}
@@ -295,12 +302,9 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 								<Link
 									href={`/dashboard/spaces/${space.id}`}
 									className={clsx(
-										"flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group",
-										sidebarCollapsed ? "justify-center" : "",
-										activeSpaceParams(space.id)
-											? "hover:bg-gray-3"
-											: "hover:bg-gray-2",
-										space.primary ? "h-10" : "h-fit",
+										"flex relative z-10 items-center px-3 h-9 truncate rounded-lg transition-colors group/space",
+										sidebarCollapsed ? "justify-center px-0" : "",
+										!activeSpaceParams(space.id) && "dashboard-nav-hover",
 									)}
 								>
 									<SignedImageUrl
@@ -311,12 +315,19 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 										)}
 										className={clsx(
 											"relative flex-shrink-0",
-											sidebarCollapsed ? "size-6" : "size-5",
+											sidebarCollapsed ? "size-6" : "size-[18px]",
 										)}
 									/>
 									{!sidebarCollapsed && (
 										<>
-											<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
+											<span
+												className={clsx(
+													"ml-2.5 text-sm truncate transition-colors group-hover/space:text-gray-12",
+													activeSpaceParams(space.id)
+														? "font-medium text-gray-12"
+														: "text-gray-11",
+												)}
+											>
 												{space.name}
 											</span>
 											{space.hasPassword && (
@@ -330,13 +341,13 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 													type="button"
 													onClick={(e) => handleDeleteSpace(e, space)}
 													className={
-														"flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
+														"flex justify-center items-center -mr-1.5 ml-auto rounded-md opacity-0 transition-all size-6 group-hover/space:opacity-100 focus-visible:opacity-100 hover:bg-gray-4"
 													}
 													aria-label={`Delete ${space.name} space`}
 												>
 													<FontAwesomeIcon
 														icon={faXmark}
-														className="size-3.5 text-gray-12"
+														className="size-3 text-gray-10"
 													/>
 												</button>
 											)}
@@ -406,7 +417,7 @@ const SpaceToggleControl = ({
 			<button
 				type="button"
 				onClick={() => setShowAllSpaces(true)}
-				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+				className="flex justify-between items-center px-3 w-full h-9 truncate rounded-lg transition-colors cursor-pointer text-gray-10 hover:text-gray-12 dashboard-nav-hover"
 			>
 				<span className="text-sm text-gray-10">+ {hiddenSpacesCount} more</span>
 				<ChevronDown size={16} className="ml-2" />
@@ -418,7 +429,7 @@ const SpaceToggleControl = ({
 			<button
 				type="button"
 				onClick={() => setShowAllSpaces(false)}
-				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+				className="flex justify-between items-center px-3 w-full h-9 truncate rounded-lg transition-colors cursor-pointer text-gray-10 hover:text-gray-12 dashboard-nav-hover"
 			>
 				<span className="text-sm text-gray-10">Show less</span>
 				<ChevronUp size={16} className="ml-2" />

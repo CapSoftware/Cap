@@ -12,6 +12,8 @@
 	<true/>
 	<key>com.apple.security.hardened-process.enhanced-security-version</key>
 	<integer>1</integer>
+	<key>com.apple.security.hardened-process.enhanced-security-version-string</key>
+	<string>1</string>
 	<key>com.apple.security.hardened-process.hardened-heap</key>
 	<true/>
 	<key>com.apple.security.hardened-process.dyld-ro</key>
