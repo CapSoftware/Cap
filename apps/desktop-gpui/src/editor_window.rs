@@ -7951,16 +7951,25 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
+    /// An automation's Apply preset. The preset is on disk when this returns,
+    /// not 250 ms later, because the rule's next action (an Export, say)
+    /// reads the project from disk straight away.
     pub(crate) fn apply_preset_config(
         &mut self,
         config: &serde_json::Value,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if !self.project_ready() {
+            return Err(crate::automation::EDITOR_LOADING.to_string());
+        }
         let next = crate::presets::apply_preset(config, &self.project)
             .ok_or_else(|| "The preset could not be read".to_string())?;
         self.apply_project_preset(next, window, cx);
-        Ok(())
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| tr::editor::window::save_failed(self.project_path.display(), error))
     }
 
     /// The built-in Default row: Cap's own look, with this project's timeline
@@ -14133,6 +14142,23 @@ mod tests {
             Ok(())
         );
         assert!(!project_path.exists());
+    }
+
+    /// An automation's Apply preset waits for an editor still loading its
+    /// project instead of reporting success for a preset it never applied.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_automation_preset_waits_for_the_editor_to_load(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let config = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let result = editor.update_in(cx, |editor, window, cx| {
+            editor.apply_preset_config(&config, window, cx)
+        });
+        assert_eq!(result, Err(crate::automation::EDITOR_LOADING.to_string()));
+        assert!(!project.path().join("project-config.json").exists());
     }
 
     /// An arrow held in the crop dialog keeps nudging every frame until its
