@@ -124,20 +124,20 @@ export function BreadcrumbItem({
 	if (isLast) {
 		return (
 			<div
-				className="flex gap-2 items-center px-2 min-w-0"
+				className={clsx(
+					"flex gap-1.5 items-center px-1 min-w-0 rounded-md",
+					isDragOver && "bg-gray-4",
+				)}
 				title={name}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 			>
-				<AllFolders color={color} className="size-5 shrink-0" />
+				<AllFolders color={color} className="size-4 shrink-0" />
 				<p
-					className={clsx(
-						"text-xl font-semibold tracking-tight truncate text-gray-12",
-						{
-							"opacity-70": isMoving,
-						},
-					)}
+					className={clsx("tracking-tight leading-6 truncate text-gray-12", {
+						"opacity-70": isMoving,
+					})}
 				>
 					{name}
 				</p>
@@ -151,8 +151,8 @@ export function BreadcrumbItem({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			title={name}
-			className={clsx("relative px-2 min-w-0", {
-				"rounded-lg bg-gray-5": isDragOver,
+			className={clsx("relative px-1 min-w-0 rounded-md", {
+				"bg-gray-4": isDragOver,
 				"opacity-70": isMoving,
 			})}
 		>
@@ -164,11 +164,10 @@ export function BreadcrumbItem({
 				}
 				className="flex relative z-10 gap-1.5 items-center min-w-0 transition-colors duration-200"
 			>
-				<AllFolders color={color} className="size-5 shrink-0" />
 				<p
 					className={clsx(
-						"text-lg truncate transition-colors duration-200 hover:text-gray-11",
-						isDragOver ? "text-gray-12" : "text-gray-9",
+						"tracking-tight leading-6 truncate transition-colors duration-200 hover:text-gray-12",
+						isDragOver ? "text-gray-12" : "text-gray-10",
 					)}
 				>
 					{name}
