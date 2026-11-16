@@ -195,6 +195,7 @@ export async function confirmSignedBaaPayment(
 		);
 	}
 	revalidatePath("/dashboard/settings/organization/billing");
+	revalidatePath("/dashboard/settings/organization/security");
 	return getSignedBaaStatus(organizationId);
 }
 
@@ -763,6 +764,7 @@ async function completeSignedBaa(
 
 	revalidatePath("/dashboard/settings/organization");
 	revalidatePath("/dashboard/settings/organization/billing");
+	revalidatePath("/dashboard/settings/organization/security");
 
 	return { success: true, emailSent };
 }

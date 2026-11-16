@@ -186,6 +186,67 @@ describe("runLoomImport", () => {
 				'<S d="0" /></SegmentTimeline>',
 			),
 		);
+		const emptyPlaylist = [
+			"#EXTM3U",
+			"#EXT-X-VERSION:3",
+			"#EXT-X-TARGETDURATION:0",
+			"#EXT-X-MEDIA-SEQUENCE:0",
+			"#EXT-X-PLAYLIST-TYPE:VOD",
+			"",
+			"#EXT-X-ENDLIST",
+		].join("\n");
+		await cp(hls, join(root, "hls-empty-audio"), { recursive: true });
+		await writeFile(
+			join(root, "hls-empty-audio", "stream2.m3u8"),
+			emptyPlaylist,
+		);
+		await cp(hls, join(root, "hls-empty"), { recursive: true });
+		for (const playlist of ["stream0.m3u8", "stream1.m3u8", "stream2.m3u8"])
+			await writeFile(join(root, "hls-empty", playlist), emptyPlaylist);
+		await cp(hls, join(root, "hls-torn-aac"), { recursive: true });
+		const tornSegment = join(root, "hls-torn-aac", "stream2-001.ts");
+		const segmentBytes = await readFile(tornSegment);
+		await writeFile(
+			tornSegment,
+			segmentBytes.subarray(0, segmentBytes.byteLength - 3 * 188 + 100),
+		);
+		const dashAudio = join(root, "dash-audio");
+		await mkdir(dashAudio);
+		ffmpeg(
+			[
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=550:sample_rate=48000",
+				"-t",
+				"6",
+				"-c:a",
+				"libopus",
+				"-f",
+				"dash",
+				"-seg_duration",
+				"2",
+				"-use_template",
+				"1",
+				"-use_timeline",
+				"1",
+				"-dash_segment_type",
+				"webm",
+				"manifest.mpd",
+			],
+			dashAudio,
+		);
+		const dashAudioManifest = await readFile(
+			join(dashAudio, "manifest.mpd"),
+			"utf8",
+		);
+		await writeFile(
+			join(dashAudio, "manifest.mpd"),
+			dashAudioManifest.replace(
+				/mediaPresentationDuration="[^"]*"/,
+				'mediaPresentationDuration="PT0.000S"',
+			),
+		);
 		await cp(hls, join(root, "hls-gap"), { recursive: true });
 		await rm(join(root, "hls-gap", "stream2-002.ts"));
 		await cp(hls, join(root, "hls-holes"), { recursive: true });
@@ -552,6 +613,80 @@ describe("runLoomImport", () => {
 		expect(uploads.get("opus-only/result.mp4")?.byteLength).toBeGreaterThan(
 			10_000,
 		);
+	}, 60_000);
+
+	test("imports a DASH recording that only has audio with a still video track", async () => {
+		const job = await run(
+			request(
+				"dash-audio",
+				`${base}/media/dash-audio/manifest.mpd?${SIGNATURE}`,
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.deferredSourceKey).toBeUndefined();
+		expect(job?.metadata).toMatchObject({
+			width: 1280,
+			height: 720,
+			videoCodec: "h264",
+			audioCodec: "aac",
+		});
+		expect(job?.metadata?.duration).toBeCloseTo(6, 0);
+	}, 60_000);
+
+	test("imports the video when the audio rendition has no segments", async () => {
+		const job = await run(
+			request(
+				"hls-empty-audio",
+				`${base}/media/hls-empty-audio/master.m3u8?${SIGNATURE}`,
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.metadata).toMatchObject({
+			width: 320,
+			videoCodec: "h264",
+			audioCodec: null,
+		});
+		expect(job?.metadata?.duration).toBeCloseTo(9, 0);
+		expect(
+			sourceRequests.some(
+				(path) =>
+					path.startsWith("/media/hls-empty-audio/") &&
+					path.includes("stream2-"),
+			),
+		).toBe(false);
+	}, 60_000);
+
+	test("still fails when the video rendition has no segments", async () => {
+		const job = await run(
+			request("hls-empty", `${base}/media/hls-empty/master.m3u8?${SIGNATURE}`),
+		);
+		expect(job?.phase).toBe("error");
+		expect(job?.error).toBe("HLS playlist has no media segments");
+	}, 60_000);
+
+	test("re-encodes AAC audio that cannot be stream copied", async () => {
+		const job = await run(
+			request(
+				"hls-torn-aac",
+				`${base}/media/hls-torn-aac/master.m3u8?${SIGNATURE}`,
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		expect(job?.metadata).toMatchObject({
+			width: 320,
+			videoCodec: "h264",
+			audioCodec: "aac",
+		});
+		const imported = join(root, "torn-aac.mp4");
+		await writeFile(
+			imported,
+			uploads.get("hls-torn-aac/result.mp4") ?? new Uint8Array(),
+		);
+		const output = probe(imported);
+		expect(Number(output.format.duration)).toBeCloseTo(9, 0);
+		expect(
+			streamStart(output, "audio") - streamStart(output, "video"),
+		).toBeCloseTo(0.25, 1);
 	}, 60_000);
 
 	test("fails VP9 sources that have nowhere to store the original", async () => {

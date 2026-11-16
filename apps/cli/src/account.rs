@@ -5,7 +5,9 @@ use reqwest::Method;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    OutputFormat, agent_client, caps::AgentClient, confirmation, credentials, resolve_format,
+    OutputFormat, agent_client,
+    caps::{AgentApiError, AgentClient},
+    confirmation, credentials, resolve_format,
 };
 
 #[derive(Args)]
@@ -100,7 +102,7 @@ struct AccountReferralsArgs {
 }
 
 impl AccountArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
         match self.command {
             AccountCommands::Get(args) => agent_client::read("/me", global_json, args.format).await,
             AccountCommands::Update(args) => {
@@ -124,7 +126,7 @@ impl AccountArgs {
                     body.insert("defaultOrganizationId".to_string(), Value::Null);
                 }
                 if body.is_empty() {
-                    return Err("Provide at least one account update".to_string());
+                    return Err("Provide at least one account update".to_string().into());
                 }
                 confirmation::require(args.yes, "Update the Cap account")?;
                 agent_client::mutate(Method::PATCH, "/me", &json!(body), global_json, args.format)
@@ -157,23 +159,27 @@ impl AccountArgs {
             },
             AccountCommands::Referrals(args) => {
                 confirmation::require(args.yes, "Open the Cap referral portal")?;
-                let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                let client = AgentClient::from_credentials()?;
                 let value = client
                     .mutate_json_confirmed(Method::POST, "/me/referrals", &json!({}))
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    .await?;
                 agent_client::open_browser_action(&value, args.no_open);
-                agent_client::print_value(&value, resolve_format(global_json, args.format))
+                Ok(agent_client::print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
             AccountCommands::SignOutAll(args) => {
                 confirmation::require(args.yes, "Sign out every Cap device and agent")?;
-                let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                let client = AgentClient::from_credentials()?;
                 let value = client
                     .mutate_json_confirmed(Method::POST, "/me/sign-out-all", &json!({}))
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    .await?;
                 credentials::delete_agent()?;
-                agent_client::print_value(&value, resolve_format(global_json, args.format))
+                Ok(agent_client::print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
         }
     }

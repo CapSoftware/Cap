@@ -29,7 +29,10 @@ pub(super) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     } else {
         let error = io::Error::last_os_error();
         if error.kind() == io::ErrorKind::Unsupported
-            || matches!(error.raw_os_error(), Some(libc::ENOSYS | libc::EINVAL))
+            || matches!(
+                error.raw_os_error(),
+                Some(libc::ENOSYS | libc::EINVAL | libc::ENOTSUP)
+            )
         {
             // Production recovery publishes the enclosing workspace only after all prefixes validate.
             copy_without_links(source, destination)
@@ -108,6 +111,50 @@ mod tests {
         std::fs::write(&source, b"replacement").unwrap();
         assert!(publish(&source, &destination).is_err());
         assert_eq!(std::fs::read(&source).unwrap(), b"replacement");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"complete prefix");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn publication_onto_exfat_keeps_existing_data() {
+        use std::process::Command;
+        struct Detach(std::path::PathBuf);
+        impl Drop for Detach {
+            fn drop(&mut self) {
+                let _ = Command::new("hdiutil")
+                    .args(["detach", "-quiet", "-force"])
+                    .arg(&self.0)
+                    .status();
+            }
+        }
+        let image = tempfile::tempdir().unwrap();
+        let disk = image.path().join("volume.dmg");
+        let mount = image.path().join("mount");
+        std::fs::create_dir(&mount).unwrap();
+        let attached = Command::new("hdiutil")
+            .args(["create", "-quiet", "-size", "16m", "-fs", "ExFAT"])
+            .args(["-volname", "CAPRECOVERY"])
+            .arg(&disk)
+            .status()
+            .is_ok_and(|status| status.success())
+            && Command::new("hdiutil")
+                .args(["attach", "-quiet", "-nobrowse", "-mountpoint"])
+                .arg(&mount)
+                .arg(&disk)
+                .status()
+                .is_ok_and(|status| status.success());
+        if !attached {
+            eprintln!("skipping: hdiutil could not attach an exFAT image");
+            return;
+        }
+        let _detach = Detach(mount.clone());
+        let source = mount.join("temporary");
+        let destination = mount.join("segment_001.m4s");
+        std::fs::write(&source, b"complete prefix").unwrap();
+        publish(&source, &destination).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"complete prefix");
+        std::fs::write(&source, b"replacement").unwrap();
+        assert!(publish(&source, &destination).is_err());
         assert_eq!(std::fs::read(&destination).unwrap(), b"complete prefix");
     }
 

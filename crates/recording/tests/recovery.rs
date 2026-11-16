@@ -739,10 +739,16 @@ fn test_recovery_error_types() {
         "NoRecoverableSegments error should format correctly"
     );
 
-    let meta_save_error = RecoveryError::MetaSave;
+    let meta_save_error = RecoveryError::MetaSave {
+        path: PathBuf::from("project.cap/recording-meta.json"),
+        source: std::io::Error::from_raw_os_error(32),
+    };
+    let message = format!("{meta_save_error}");
     assert!(
-        format!("{meta_save_error}").contains("Meta save failed"),
-        "MetaSave error should format correctly"
+        message.contains("Meta save failed")
+            && message.contains("recording-meta.json")
+            && message.contains("os error 32"),
+        "MetaSave error should name the path and the OS error: {message}"
     );
 
     let unplayable_error =

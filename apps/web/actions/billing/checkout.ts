@@ -7,6 +7,10 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { cookies, headers } from "next/headers";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
+import {
+	syncCustomerUsEin,
+	US_EIN_METADATA_KEY,
+} from "@/lib/checkout/customer-us-ein";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import {
@@ -28,6 +32,7 @@ import {
 	referralDiscountParams,
 } from "@/lib/checkout/referral";
 import { checkoutStripe } from "@/lib/checkout/stripe";
+import { formatUsEin } from "@/lib/checkout/us-ein";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
@@ -251,6 +256,56 @@ export async function changeProCheckoutPlan(input: {
 		return { ok: true };
 	} catch (error) {
 		console.error("Failed to change Cap Pro checkout plan:", error);
+		return { ok: false };
+	}
+}
+
+// Stripe's checkout tax ID collection has no US type (updateTaxIdInfo with
+// us_ein never settles), so the EIN rides on the session and is attached to
+// the customer directly: now when the session already has one, so the first
+// invoice carries it, otherwise by the checkout.session.completed webhook.
+export async function setProCheckoutUsEin(input: {
+	clientSecret: string;
+	ein: string;
+}): Promise<UpdateCheckoutResult> {
+	if (!customCheckoutEnabled() || typeof input.ein !== "string") {
+		return { ok: false };
+	}
+	const ein = input.ein.trim() ? formatUsEin(input.ein) : null;
+	if (input.ein.trim() && !ein) return { ok: false };
+	const sessionId =
+		typeof input.clientSecret === "string"
+			? sessionIdFromClientSecret(input.clientSecret)
+			: null;
+	if (!sessionId) return { ok: false };
+
+	try {
+		const session =
+			await checkoutStripe().checkout.sessions.retrieve(sessionId);
+		if (
+			!session.client_secret ||
+			!secretsMatch(session.client_secret, input.clientSecret) ||
+			session.status !== "open" ||
+			session.metadata?.checkoutUi !== "elements"
+		) {
+			return { ok: false };
+		}
+
+		const previous = session.metadata?.[US_EIN_METADATA_KEY] || null;
+		if (previous !== ein) {
+			await checkoutStripe().checkout.sessions.update(sessionId, {
+				metadata: { [US_EIN_METADATA_KEY]: ein ?? "" },
+			});
+		}
+		const customerId =
+			typeof session.customer === "string"
+				? session.customer
+				: session.customer?.id;
+		if (customerId) await syncCustomerUsEin(customerId, ein, previous);
+
+		return { ok: true };
+	} catch (error) {
+		console.error("Failed to set Cap Pro checkout EIN:", error);
 		return { ok: false };
 	}
 }

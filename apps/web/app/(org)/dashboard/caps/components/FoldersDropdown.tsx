@@ -4,16 +4,14 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
-import {
-	faCopy,
-	faEllipsis,
-	faFolderTree,
-	faGlobe,
-	faPencil,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faFolderTree } from "@fortawesome/free-solid-svg-icons/faFolderTree";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faPencil } from "@fortawesome/free-solid-svg-icons/faPencil";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { type RefObject, useRef } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface FoldersDropdownProps {
 	id: string;
@@ -24,6 +22,7 @@ interface FoldersDropdownProps {
 	public: boolean;
 	onPublicToggle: () => void;
 	onCopyPublicLink: () => void;
+	canEdit: boolean;
 	canMove: boolean;
 	onMove: () => void;
 }
@@ -35,10 +34,13 @@ export const FoldersDropdown = ({
 	public: isPublic,
 	onPublicToggle,
 	onCopyPublicLink,
+	canEdit,
 	canMove,
 	onMove,
 }: FoldersDropdownProps) => {
 	const renameRequestedRef = useRef(false);
+
+	if (!canEdit && !isPublic) return null;
 
 	return (
 		<DropdownMenu>
@@ -51,10 +53,9 @@ export const FoldersDropdown = ({
 					}}
 					onMouseEnter={(e) => e.stopPropagation()}
 					onMouseLeave={(e) => e.stopPropagation()}
-					className="flex justify-center items-center rounded-full border transition-colors duration-200
-            size-8 bg-gray-5 border-gray-7 hover:bg-gray-7 hover:border-gray-9 data-[state=open]:bg-gray-7 data-[state=open]:border-gray-9"
+					className="flex justify-center items-center rounded-lg transition-colors duration-200 size-8 text-gray-10 hover:bg-gray-3 hover:text-gray-12 data-[state=open]:bg-gray-3 data-[state=open]:text-gray-12"
 				>
-					<FontAwesomeIcon className="text-gray-12 size-4" icon={faEllipsis} />
+					<FontAwesomeIcon className="size-3.5" icon={faEllipsis} />
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent
@@ -82,48 +83,51 @@ export const FoldersDropdown = ({
 						icon: typeof faPencil;
 						onClick: () => void | Promise<void>;
 					};
-					const items: FolderDropdownItem[] = [
-						{
-							label: "Rename",
-							icon: faPencil,
-							onClick: () => {
-								renameRequestedRef.current = true;
-								setIsRenaming(true);
-								setTimeout(() => {
-									nameRef.current?.focus();
-									nameRef.current?.select();
-								}, 0);
-							},
-						},
-						{
-							label: isPublic ? "Make private" : "Make public",
-							icon: faGlobe,
-							onClick: onPublicToggle,
-						},
-						...(isPublic
-							? [
-									{
-										label: "Copy public link",
-										icon: faCopy,
-										onClick: onCopyPublicLink,
+					const copyLink: FolderDropdownItem[] = isPublic
+						? [
+								{
+									label: "Copy public link",
+									icon: faCopy,
+									onClick: onCopyPublicLink,
+								},
+							]
+						: [];
+					const items: FolderDropdownItem[] = canEdit
+						? [
+								{
+									label: "Rename",
+									icon: faPencil,
+									onClick: () => {
+										renameRequestedRef.current = true;
+										setIsRenaming(true);
+										setTimeout(() => {
+											nameRef.current?.focus();
+											nameRef.current?.select();
+										}, 0);
 									},
-								]
-							: []),
-						...(canMove
-							? [
-									{
-										label: "Move",
-										icon: faFolderTree,
-										onClick: onMove,
-									},
-								]
-							: []),
-						{
-							label: "Delete",
-							icon: faTrash,
-							onClick: () => setConfirmDeleteFolderOpen(true),
-						},
-					];
+								},
+								{
+									label: isPublic ? "Make private" : "Make public",
+									icon: faGlobe,
+									onClick: onPublicToggle,
+								},
+								...copyLink,
+								...(canMove
+									? [
+											{
+												label: "Move",
+												icon: faFolderTree,
+												onClick: onMove,
+											},
+										]
+									: []),
+								{
+									label: "Delete",
+									icon: faTrash,
+									onClick: () => setConfirmDeleteFolderOpen(true),
+								},
+							]
+						: copyLink;
 					return items.map((item) => (
 						<DropdownMenuItem
 							key={item.label}

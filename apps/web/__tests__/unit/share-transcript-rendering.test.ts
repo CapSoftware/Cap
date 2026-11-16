@@ -221,6 +221,38 @@ describe("share transcript rendering", () => {
 		},
 	);
 
+	it("cancels the download confirmation timer when the transcript closes", async () => {
+		vi.stubGlobal("Blob", Blob);
+		vi.stubGlobal("URL", {
+			createObjectURL: vi.fn().mockReturnValue("blob:transcript"),
+			revokeObjectURL: vi.fn(),
+		});
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+		const scheduled = vi.spyOn(globalThis, "setTimeout");
+		const cleared = vi.spyOn(globalThis, "clearTimeout");
+		await render();
+		const menu = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Download transcript"]',
+		);
+		if (!menu) throw new Error("Missing download button");
+		await click(menu);
+		const captions = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.includes("Captions file"),
+		);
+		if (!captions) throw new Error("Missing captions file action");
+		await click(captions);
+		const index = scheduled.mock.calls.findIndex(([, delay]) => delay === 2000);
+		expect(index).toBeGreaterThanOrEqual(0);
+		const confirmation = scheduled.mock.results[index]?.value;
+
+		await act(async () => root.unmount());
+		root = createRoot(container);
+
+		expect(cleared).toHaveBeenCalledWith(confirmation);
+		scheduled.mockRestore();
+		cleared.mockRestore();
+	});
+
 	it("only renders the changed rows when selecting a cue in a one-hour transcript", async () => {
 		await render();
 		expect(mocks.rowRenders).toBe(1200);

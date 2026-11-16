@@ -522,7 +522,10 @@ impl InstantUpload {
         manifest: SegmentUploadManifest,
     ) -> Result<(), String> {
         let screenshot = self.screenshot_upload(project_path);
-        self.authorize_manifest(manifest)?;
+        if let Err(error) = self.authorize_manifest(manifest) {
+            self.finish_segments().await?;
+            return Err(error);
+        }
         let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
         screenshot?;
         segments
@@ -1366,9 +1369,28 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
-    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+    check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
+    let auth_state = crate::store::store_section("auth");
+    let Ok(context) = auth::UploadRequestContext::for_upload(
+        &auth::server_url(),
+        auth_state.get("user_id").and_then(Value::as_str),
+    ) else {
+        return Ok(UploadResult::NotAuthenticated);
+    };
+    let result = context
+        .run(upload_exported_video_inner(
+            project_path.clone(),
+            organization_id,
+            progress,
+            cancel,
+            false,
+        ))
         .await
-        .map(|(result, _)| result)
+        .map(|(result, _)| result);
+    if matches!(result, Ok(UploadResult::Success(_))) {
+        crate::automation::upload_completed(&project_path, None, None);
+    }
+    result
 }
 
 async fn upload_exported_video_inner(
@@ -2602,6 +2624,7 @@ pub async fn upload_rendered_screenshot(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<ScreenshotShareOutcome, String> {
     let auth = crate::store::auth_snapshot();
     if !auth.signed_in() {
@@ -2613,7 +2636,7 @@ pub async fn upload_rendered_screenshot(
         return Ok(ScreenshotShareOutcome::UpgradeRequired);
     }
 
-    match upload_screenshot_bytes(image_bytes, content_type, video_id).await {
+    match upload_screenshot_bytes(image_bytes, content_type, video_id, organization_id).await {
         Ok(item) => Ok(ScreenshotShareOutcome::Uploaded(item)),
         Err(AuthApiError::InvalidAuthentication) => Ok(ScreenshotShareOutcome::NotAuthenticated),
         Err(AuthApiError::UpgradeRequired) => Ok(ScreenshotShareOutcome::UpgradeRequired),
@@ -2626,8 +2649,9 @@ async fn upload_screenshot_bytes(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthApiError> {
-    let created = create_or_get_video(true, video_id, None, None, None).await?;
+    let created = create_or_get_video(true, video_id, None, None, organization_id).await?;
     let link = created.link();
     let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
@@ -2904,6 +2928,22 @@ mod tests {
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
+    }
+
+    #[tokio::test]
+    async fn lost_completion_authorization_cannot_accept_a_successful_worker() {
+        let authorization = CompletionAuthorization::new();
+        drop(authorization.required);
+        let mut upload =
+            upload_with_task(tokio::spawn(async { Ok(()) }), Some(authorization.control));
+        upload.completion_permit = Some(authorization.permit);
+
+        let error = upload
+            .finish_with_screenshot(Path::new("unused.cap"), SegmentUploadManifest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Instant completion authorization was lost");
+        upload.abort_segments().await;
     }
 
     #[tokio::test]
