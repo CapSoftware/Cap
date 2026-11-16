@@ -943,19 +943,21 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
     .await;
 }
 
-/// The recorded window goes away because the app that owns it quits. Only a
-/// focused-window capture loses its source; a screen-region capture of a
-/// window keeps recording that region of the screen.
+/// The recorded window closes. Only a focused-window capture loses its
+/// source; a screen-region capture of a window keeps recording that region of
+/// the screen. Only the test's own TextEdit document is closed, so other open
+/// documents and their unsaved edits are left alone.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
     let documents = tempfile::tempdir().unwrap();
+    let title = |mode: &str| format!("cap-capture-target-{mode}-{}", std::process::id());
     losing_the_capture_source_stops_and_saves(
         "window-closed",
         &[("windowCaptureStyle", json!("focusedWindow"))],
         |mode| {
-            let title = format!("cap-capture-target-{mode}-{}", std::process::id());
+            let title = title(mode);
             let document = documents.path().join(&title);
             std::fs::write(&document, "The window Cap records").unwrap();
             assert!(
@@ -972,10 +974,12 @@ async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
                 ("CAP_GPUI_AUTO_WINDOW".into(), title),
             ]
         },
-        |_| {
-            let _ = Command::new("osascript")
-                .args(["-e", "tell application \"TextEdit\" to quit saving no"])
-                .status();
+        |mode| {
+            let script = format!(
+                "tell application \"TextEdit\" to close (every document whose name is \"{}\") saving no",
+                title(mode)
+            );
+            let _ = Command::new("osascript").args(["-e", &script]).status();
         },
     )
     .await;
