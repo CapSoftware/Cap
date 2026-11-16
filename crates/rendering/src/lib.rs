@@ -10651,10 +10651,14 @@ mod project_uniforms_tests {
         let mut constants = cursor_test_constants().await;
         let size = XY::new(320, 180);
         constants.options.screen_size = size;
+        // The pointer rests until 3s, then resumes. A move to the exact same
+        // position is a shape change, not movement, so the resume changes the
+        // recorded position, by far less than the f32 the cursor is drawn at
+        // resolves, so every frame draws the circle in the same place.
         let events = CursorEvents {
-            moves: [0.0, 3000.0, 3050.0]
+            moves: [(0.0, 0.5), (3000.0, 0.5 + 1e-9), (3050.0, 0.5 + 2e-9)]
                 .into_iter()
-                .map(|time| cursor_move(time, 0.5, 0.5))
+                .map(|(time, x)| cursor_move(time, x, 0.5))
                 .collect(),
             clicks: Vec::new(),
         };
