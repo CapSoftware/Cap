@@ -111,6 +111,10 @@ describe("manifest schema", () => {
 			{ categories: ["games"] },
 			{ license: "GPL-9" },
 			{ name: " Padded" },
+			{ name: "Sla\u200Dck" },
+			{ name: "Slack \u202Etsil" },
+			{ description: "Adds something\u200B useful to Cap." },
+			{ author: { name: "Cap\u2066", github: "someone" } },
 		]) {
 			expect(
 				parseManifest({ ...base, ...patch }).ok,

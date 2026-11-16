@@ -9,12 +9,22 @@ import {
 	LIMITS,
 } from "./constants";
 
+// Control characters, bidi overrides and zero-width characters let a listing
+// look like something else ("Slack" with a zero-width joiner, a name that
+// renders backwards), so text shown to people may not contain them.
+const HIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}]/u;
+
 const boundedString = (min: number, max: number) =>
 	Schema.String.pipe(
 		Schema.minLength(min),
 		Schema.maxLength(max),
 		Schema.filter((value) => value.trim() === value, {
 			message: () => "must not start or end with whitespace",
+			jsonSchema: {},
+		}),
+		Schema.filter((value) => !HIDDEN_CHARACTERS.test(value), {
+			message: () =>
+				"must not contain control, zero-width or text direction characters",
 			jsonSchema: {},
 		}),
 	);
