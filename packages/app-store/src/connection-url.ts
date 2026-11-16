@@ -37,7 +37,8 @@ export function connectionUrlProblem(
 	if (url.search || url.hash || value.includes("?") || value.includes("#"))
 		return "query_or_fragment";
 	if (value.endsWith("/")) return "trailing_slash";
-	const host = url.hostname.toLowerCase();
+	// A trailing dot names the same host ("localhost." is localhost).
+	const host = url.hostname.toLowerCase().replace(/\.$/, "");
 	if (
 		IPV4.test(host) ||
 		host.startsWith("[") ||

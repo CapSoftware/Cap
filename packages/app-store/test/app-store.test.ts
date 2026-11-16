@@ -351,6 +351,11 @@ describe("connection urls", () => {
 		expect(connectionUrlProblem("https://10.0.0.1/cap")).toBe("not_public");
 		expect(connectionUrlProblem("https://[::1]/cap")).toBe("not_public");
 		expect(connectionUrlProblem("https://intranet/cap")).toBe("not_public");
+		expect(connectionUrlProblem("https://localhost./cap")).toBe("not_public");
+		expect(connectionUrlProblem("https://metadata.google.internal./cap")).toBe(
+			"not_public",
+		);
+		expect(connectionUrlProblem("https://intranet./cap")).toBe("not_public");
 	});
 });
 
