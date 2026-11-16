@@ -4014,14 +4014,19 @@ const LICENSE_RELEASE_TIMEOUT: Duration = Duration::from_secs(20);
 /// activation made after the first one finished.
 static LICENSE_RELEASE_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// [`LICENSE_API_BASE`], or `CAP_GPUI_LICENSE_API_URL` so a test build can
-/// talk to a local license server.
+/// [`LICENSE_API_BASE`]. Debug builds also accept `CAP_GPUI_LICENSE_API_URL`
+/// so they can talk to a local license server; release builds always use the
+/// real one.
 fn license_api_base() -> String {
-    std::env::var("CAP_GPUI_LICENSE_API_URL")
+    #[cfg(debug_assertions)]
+    if let Some(url) = std::env::var("CAP_GPUI_LICENSE_API_URL")
         .ok()
         .map(|url| url.trim().trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| LICENSE_API_BASE.to_string())
+    {
+        return url;
+    }
+    LICENSE_API_BASE.to_string()
 }
 
 /// Only a 200 counts: the server answers 200 whenever nothing is held for this
