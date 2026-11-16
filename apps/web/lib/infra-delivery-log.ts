@@ -89,8 +89,13 @@ export function parseDeliveryRecord(
 	// as it has read the range). Only a body shorter than expected is abandoned.
 	// sc-bytes includes the response headers, so a body short by less than the
 	// header size still reads as complete; that difference is negligible. With
-	// no known length the line stays abandoned, the conservative side.
-	const expectedBody = rangeLength ?? contentLength;
+	// no known length the line stays abandoned, the conservative side. The
+	// expected body never exceeds the content length, so a range that runs past
+	// the end of the object cannot make a complete transfer look short.
+	const expectedBody =
+		rangeLength !== null && contentLength !== null
+			? Math.min(rangeLength, contentLength)
+			: (rangeLength ?? contentLength);
 	const abandoned =
 		field(record, "x-edge-result-type") === "Error" &&
 		(expectedBody === null || bytes < expectedBody);

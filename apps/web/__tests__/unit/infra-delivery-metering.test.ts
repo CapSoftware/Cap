@@ -206,6 +206,21 @@ describe("parseDeliveryLine", () => {
 		).toMatchObject({ abandoned: false, bodyBytes: 100000 });
 	});
 
+	it("measures an edge Error transfer against the content length when the range runs past it", () => {
+		const pastTheEnd = {
+			"x-edge-result-type": "Error",
+			"sc-content-len": "1000",
+			"sc-range-start": "0",
+			"sc-range-end": "2000000",
+		};
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "1100" })),
+		).toMatchObject({ abandoned: false, bodyBytes: 1000 });
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "500" })),
+		).toMatchObject({ abandoned: true, bodyBytes: 500 });
+	});
+
 	it("keeps an edge Error transfer with no known length abandoned", () => {
 		expect(
 			parseDeliveryLine(
