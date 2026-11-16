@@ -544,6 +544,14 @@ impl RecordingSession {
             #[cfg(target_os = "linux")]
             show_controls_after_pause: false,
         });
+        cx.observe(&session, |session, cx| {
+            if session.read(cx).phase == Phase::Idle {
+                crate::network_health::recording_released();
+            } else {
+                crate::network_health::recording_admitted();
+            }
+        })
+        .detach();
         cx.set_global(SessionGlobal(session.clone()));
         session
     }
@@ -782,6 +790,7 @@ impl RecordingSession {
             self.clean_control.uncertain = false;
         }
         self.phase = Phase::Starting;
+        crate::network_health::recording_admitted();
         self.error = None;
         self.storage_warning = false;
         self.storage_notice = None;
@@ -2141,6 +2150,7 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
+        crate::network_health::recording_released();
         self.mic_muted = false;
         self.storage_warning = false;
         self.stopped_elapsed = None;

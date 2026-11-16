@@ -187,6 +187,8 @@ export const RATE_LIMIT_IDS = {
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
+	/** Desktop upload-health probes (storage write/delete guard). Suggested: 12 / 1m per user. */
+	DESKTOP_UPLOAD_HEALTH: "rl_desktop_upload_health",
 	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
