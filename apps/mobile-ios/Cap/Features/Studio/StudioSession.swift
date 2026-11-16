@@ -292,8 +292,14 @@ final class StudioSession {
     func updatePreset(_ id: String, look: StudioLook, from directory: URL) {
         var library = presetLibrary
         guard let index = library.saved.firstIndex(where: { $0.id == id }) else { return }
+        // Without its photo the preset would point at nothing, so it stays as it was.
         if case let .image(file) = look.background {
-            try? store.presets.keepImage(named: file, from: directory.appending(path: file))
+            do {
+                try store.presets.keepImage(named: file, from: directory.appending(path: file))
+            } catch {
+                session?.toasts.show(error: error)
+                return
+            }
         }
         library.saved[index].look = look
         storePresets(library)
