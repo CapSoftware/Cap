@@ -1811,9 +1811,11 @@ fn clip_rows(
                     // clips sidebar (`displayName`).
                     name: match segment.name.as_deref().map(str::trim) {
                         Some(name) if !name.is_empty() => SharedString::from(name.to_string()),
-                        _ if multiple_clips => SharedString::from(
-                            tr::editor::timeline::segment::numbered_clip(segment.recording_clip),
-                        ),
+                        _ if multiple_clips => {
+                            SharedString::from(tr::editor::timeline::segment::numbered_clip(
+                                segment.recording_clip.saturating_add(1),
+                            ))
+                        }
                         _ => SharedString::new_static(tr::editor::timeline::segment::clip()),
                     },
                     source_start: segment.start,
