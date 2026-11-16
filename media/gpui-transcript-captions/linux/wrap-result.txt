@@ -1,0 +1,4 @@
+light_window=2097158
+light_launch=ok
+word_at=1260 312
+light_word_edit=ok
