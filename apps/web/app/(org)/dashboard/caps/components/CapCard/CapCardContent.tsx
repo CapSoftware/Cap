@@ -208,7 +208,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 	return (
 		<div className="flex flex-col gap-1 min-w-0">
-			<div className="h-5">
+			<div className="min-h-5">
 				{isEditing && !sharedCapCard ? (
 					<textarea
 						rows={1}
@@ -216,11 +216,12 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onChange={(e) => setDraft(e.target.value)}
 						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
-						className="overflow-hidden p-0 m-0 w-full h-5 text-sm font-medium tracking-normal leading-5 truncate bg-transparent border-0 resize-none outline-0 text-gray-12 font-[inherit]"
+						className="overflow-hidden p-0 m-0 w-full text-sm font-medium tracking-normal leading-5 bg-transparent border-0 resize-none outline-0 text-gray-12 font-[inherit] [field-sizing:content] max-h-10"
 					/>
 				) : (
 					<p
-						className="p-0 m-0 h-5 text-sm font-medium tracking-normal leading-5 truncate text-gray-12"
+						title={title}
+						className="p-0 m-0 text-sm font-medium tracking-normal leading-5 line-clamp-2 text-gray-12 [overflow-wrap:anywhere]"
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
