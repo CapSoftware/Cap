@@ -457,7 +457,7 @@ async fn finalize_studio(
             .meta
             .camera_path()
             .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
-        let preset_applied = apply_default_preset_to_project_config(
+        let preset_applied = apply_recording_defaults_to_project_config(
             &project_path,
             &crate::presets::PresetsStore::load(),
         );
@@ -1697,6 +1697,7 @@ fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::pat
 
 pub(crate) fn preparing_presentation(
     project: &cap_project::ProjectConfiguration,
+    clicks_by_clip: Vec<Vec<cap_project::CursorClickEvent>>,
     camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<cap_project::ProjectConfiguration, String> {
     let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
@@ -1709,6 +1710,9 @@ pub(crate) fn preparing_presentation(
         &library,
         &crate::presets::PresetsStore::load(),
     )?;
+    apply_auto_zoom(&mut config, &crate::store::GeneralSettings::load(), || {
+        clicks_by_clip
+    });
     if crate::store::studio_sound_by_default() {
         config.audio.improve = true;
         config.audio.isolation = crate::store::studio_sound_isolation();
@@ -1741,11 +1745,12 @@ fn preparing_presentation_for(
 /// Style a new recording with the default preset, as the Tauri app's
 /// `project_config_from_recording` did. The file was just written by
 /// `cap-recording` with this build's types, so a typed round trip drops nothing.
-fn apply_default_preset_to_project_config(
+fn apply_recording_defaults_to_project_config(
     project_dir: &std::path::Path,
     presets: &crate::presets::PresetsStore,
 ) -> bool {
-    if presets.default.is_none() {
+    let settings = crate::store::GeneralSettings::load();
+    if presets.default.is_none() && !settings.auto_zoom_on_clicks {
         return false;
     }
     let project = match cap_project::ProjectConfiguration::load(project_dir) {
@@ -1755,14 +1760,67 @@ fn apply_default_preset_to_project_config(
             return false;
         }
     };
-    let Some(project) = presets.apply_default(&project) else {
-        return false;
-    };
-    if let Err(error) = project.write(project_dir) {
-        tracing::warn!(path = %project_dir.display(), "could not apply the default preset: {error}");
+    let preset = presets.apply_default(&project);
+    let preset_applied = preset.is_some();
+    if !preset_applied && !settings.auto_zoom_on_clicks {
         return false;
     }
-    true
+    let mut project = preset.unwrap_or(project);
+    apply_auto_zoom(&mut project, &settings, || {
+        load_recording_clicks(project_dir)
+    });
+    if let Err(error) = project.write(project_dir) {
+        tracing::warn!(path = %project_dir.display(), "could not apply recording defaults: {error}");
+        return false;
+    }
+    preset_applied
+}
+
+pub(crate) fn load_recording_clicks(
+    project_path: &std::path::Path,
+) -> Vec<Vec<cap_project::CursorClickEvent>> {
+    let Ok(meta) = cap_project::RecordingMeta::load_for_project(project_path) else {
+        return Vec::new();
+    };
+    let cap_project::RecordingMetaInner::Studio(studio) = &meta.inner else {
+        return Vec::new();
+    };
+    let load = |cursor: Option<PathBuf>| {
+        cursor
+            .and_then(|cursor| cap_project::CursorEvents::load_clicks_from_file(&cursor).ok())
+            .unwrap_or_default()
+    };
+    match &**studio {
+        cap_project::StudioRecordingMeta::SingleSegment { segment } => {
+            vec![load(
+                segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
+            )]
+        }
+        cap_project::StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
+            .collect(),
+    }
+}
+
+fn apply_auto_zoom(
+    project: &mut cap_project::ProjectConfiguration,
+    settings: &crate::store::GeneralSettings,
+    load_clicks: impl FnOnce() -> Vec<Vec<cap_project::CursorClickEvent>>,
+) {
+    if !settings.auto_zoom_on_clicks {
+        return;
+    }
+    let Some(timeline) = project.timeline.as_mut() else {
+        return;
+    };
+    if !timeline.zoom_segments.is_empty() {
+        return;
+    }
+    let amount = f64::from(settings.new_zoom_amount());
+    timeline.zoom_segments =
+        crate::editor_edits::generate_zoom_segments_for_timeline(&load_clicks(), timeline, amount);
 }
 
 /// The camera preview bubble's current blur mode.
@@ -3996,7 +4054,7 @@ mod tests {
         styled.camera.size = 45.0;
         let presets = default_preset_store(crate::presets::preset_config(&styled));
 
-        assert!(apply_default_preset_to_project_config(&dir, &presets));
+        assert!(apply_recording_defaults_to_project_config(&dir, &presets));
 
         let opened = cap_project::ProjectConfiguration::load(&dir).unwrap();
         assert_eq!(opened.background.padding, 24.0);
@@ -4020,14 +4078,151 @@ mod tests {
             .unwrap();
         let original = std::fs::read(dir.join("project-config.json")).unwrap();
         let mut presets = default_preset_store(serde_json::json!({ "background": 42 }));
-        assert!(!apply_default_preset_to_project_config(&dir, &presets));
+        assert!(!apply_recording_defaults_to_project_config(&dir, &presets));
         presets.default = None;
-        assert!(!apply_default_preset_to_project_config(&dir, &presets));
+        assert!(!apply_recording_defaults_to_project_config(&dir, &presets));
         assert_eq!(
             std::fs::read(dir.join("project-config.json")).unwrap(),
             original
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn auto_zoom_preference_reaches_new_recordings() {
+        struct StoreOverride;
+        impl Drop for StoreOverride {
+            fn drop(&mut self) {
+                crate::store::set_test_tauri_store_path(None);
+            }
+        }
+
+        let dir = temp_project("auto-zoom-preference");
+        let segments_dir = dir.join("content/segments");
+        std::fs::create_dir_all(&segments_dir).unwrap();
+        let source = cap_enc_ffmpeg::RelocatableSource::new(segments_dir.clone()).unwrap();
+        let store_path = dir.join("store");
+        crate::store::set_test_tauri_store_path(Some(store_path.clone()));
+        let _store = StoreOverride;
+        std::fs::write(
+            dir.join("recording-meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Auto zoom", "platform": "MacOS",
+                "segments": [
+                    { "display": { "path": "first.mp4", "fps": 30 } },
+                    { "display": { "path": "second.mp4", "fps": 30 }, "cursor": "content/segments/cursor.json" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            segments_dir.join("cursor.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "clicks": [{ "time_ms": 2000.0, "down": true, "cursor_num": 0, "cursor_id": "arrow", "active_modifiers": [] }],
+                "moves": []
+            })).unwrap(),
+        ).unwrap();
+        let recorded: cap_project::ProjectConfiguration =
+            serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "start": 0.0, "end": 10.0, "timescale": 1.0 },
+                        { "recordingSegment": 1, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+                    ],
+                    "zoomSegments": []
+                }
+            }))
+            .unwrap();
+        recorded.write(&dir).unwrap();
+        let recorded = cap_project::ProjectConfiguration::load(&dir).unwrap();
+        for presets in [
+            crate::presets::PresetsStore::default(),
+            default_preset_store(serde_json::json!({ "background": { "padding": 24.0 } })),
+        ] {
+            for (enabled, amount) in [
+                (false, Some(3.2_f32)),
+                (true, Some(3.2_f32)),
+                (true, None),
+                (false, None),
+            ] {
+                std::fs::write(&store_path, serde_json::to_vec(&serde_json::json!({
+                    "general_settings": { "autoZoomOnClicks": enabled, "defaultZoomAmount": amount },
+                    "audio_enhancement": { "enabledByDefault": false }
+                })).unwrap()).unwrap();
+                assert!(presets.save());
+                recorded.write(&dir).unwrap();
+                apply_recording_defaults_to_project_config(&dir, &presets);
+                let opened = cap_project::ProjectConfiguration::load(&dir).unwrap();
+                source.relocate(dir.join("segments-backup")).unwrap();
+                assert!(!segments_dir.exists());
+                let mut reader = source.reader(std::path::Path::new("cursor.json")).unwrap();
+                let cursor = cap_gpui_kernels::codec::read_cursor_events(&mut reader).unwrap();
+                let shown = preparing_presentation(
+                    &recorded,
+                    vec![Vec::new(), cursor.clicks],
+                    Some(StudioCameraSnapshot {
+                        blur: BlurMode::Off,
+                        placement: None,
+                    }),
+                )
+                .unwrap();
+                source.relocate(segments_dir.clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&shown).unwrap(),
+                    serde_json::to_value(&opened).unwrap()
+                );
+                let timeline = opened.timeline.as_ref().unwrap();
+                assert_eq!(timeline.zoom_segments.len(), usize::from(enabled));
+                if enabled {
+                    let zoom = &timeline.zoom_segments[0];
+                    assert_eq!(zoom.amount, f64::from(amount.unwrap_or(1.5)));
+                    assert!((zoom.start - 11.7).abs() < 0.0001);
+                    assert!((zoom.end - 14.5).abs() < 0.0001);
+                }
+                apply_recording_defaults_to_project_config(&dir, &presets);
+                assert_eq!(
+                    serde_json::to_value(cap_project::ProjectConfiguration::load(&dir).unwrap())
+                        .unwrap(),
+                    serde_json::to_value(&opened).unwrap(),
+                );
+                let mut expected = recorded.clone();
+                expected.timeline.as_mut().unwrap().zoom_segments = timeline.zoom_segments.clone();
+                if presets.default.is_some() {
+                    expected.background.padding = 24.0;
+                }
+                assert_eq!(
+                    serde_json::to_value(opened).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                );
+            }
+        }
+        assert!(crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            "autoZoomOnClicks",
+            serde_json::Value::Bool(true),
+        ));
+        for cursor in [None, Some(b"invalid json".as_slice())] {
+            if let Some(cursor) = cursor {
+                std::fs::write(segments_dir.join("cursor.json"), cursor).unwrap();
+            } else {
+                std::fs::remove_file(segments_dir.join("cursor.json")).unwrap();
+            }
+            recorded.write(&dir).unwrap();
+            apply_recording_defaults_to_project_config(
+                &dir,
+                &crate::presets::PresetsStore::default(),
+            );
+            assert!(
+                cap_project::ProjectConfiguration::load(&dir)
+                    .unwrap()
+                    .timeline
+                    .unwrap()
+                    .zoom_segments
+                    .is_empty()
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The bridge writes exactly `camera.backgroundBlur.mode` and nothing else
