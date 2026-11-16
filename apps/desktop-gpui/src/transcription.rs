@@ -2577,7 +2577,7 @@ pub fn write_caption_edit_to_source(
         source.end = end as f32;
     }
     source.text = track_text;
-    if !source.words.is_empty() {
+    if !is_manual_caption(source) {
         source.words = sync_caption_words_with_text(
             &source.text,
             &source.words,
@@ -3401,6 +3401,43 @@ mod tests {
         assert!(
             crate::transcript::model::flatten_words(project.captions.as_ref().unwrap()).is_empty()
         );
+    }
+
+    #[test]
+    fn retyping_a_cleared_transcribed_caption_brings_its_words_back() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption(
+                    "segment-0",
+                    1.0,
+                    3.0,
+                    &[("hello", 1.0, 2.0), ("world", 2.0, 3.0)],
+                )],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        project.timeline.as_mut().unwrap().caption_segments[0].text = String::new();
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        assert!(project.captions.as_ref().unwrap().segments[0].words.is_empty());
+
+        project.timeline.as_mut().unwrap().caption_segments[0].text = "fresh take".into();
+        write_caption_edit_to_source(&mut project, 0, &durations);
+
+        let words: Vec<String> =
+            crate::transcript::model::flatten_words(project.captions.as_ref().unwrap())
+                .into_iter()
+                .map(|word| word.text)
+                .collect();
+        assert_eq!(words, ["fresh", "take"]);
     }
 
     #[test]
