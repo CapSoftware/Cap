@@ -2835,11 +2835,10 @@ impl EditorWindow {
     fn export_tracks_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.theme.editor;
         self.export_section(tr::editor::export::section::tracks(), "icons/layers.svg")
-            .children(
-                ui.track_options.iter().map(|option| {
-                    self.export_track_row(option, ui.tracks.contains(&option.kind), cx)
-                }),
-            )
+            .children(ui.track_options.iter().map(|option| {
+                self.export_track_row(option, ui.tracks.contains(&option.kind), cx)
+                    .into_any_element()
+            }))
             .child(
                 div()
                     .text_size(px(11.))
