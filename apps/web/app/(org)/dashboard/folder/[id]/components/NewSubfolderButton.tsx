@@ -23,11 +23,14 @@ export const NewSubfolderButton = ({
 			<Button
 				onClick={() => setOpenDialog(true)}
 				size="sm"
-				variant="dark"
-				className="flex gap-2 items-center"
+				variant="secondary"
+				className="flex gap-2 items-center px-4 h-9"
 			>
-				<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-				New Subfolder
+				<FontAwesomeIcon
+					className="size-3.5 text-gray-10"
+					icon={faFolderPlus}
+				/>
+				New subfolder
 			</Button>
 			<SubfolderDialog
 				open={openDialog}

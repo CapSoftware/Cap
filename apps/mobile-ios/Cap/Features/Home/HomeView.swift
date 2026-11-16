@@ -280,6 +280,7 @@ struct FolderStrip: View {
             .padding(.vertical, 2)
         }
         .scrollIndicators(.hidden)
+        .clipsToSafeArea()
     }
 }
 
@@ -359,6 +360,7 @@ struct ScopeBar: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .clipsToSafeArea()
             // The library column is narrow: scroll only as far as the selected scope needs, so the first chip stays whole.
             .onAppear { proxy.scrollTo(session.scope, anchor: selection == nil ? .center : nil) }
             .onChange(of: session.scope) { _, scope in

@@ -1584,6 +1584,22 @@ impl EditorWindow {
                 .items_center()
                 .gap(px(2.))
                 .child(
+                    ui::EditorButton::plain(&theme, "transcript-add-caption")
+                        .left_icon("icons/plus.svg")
+                        .tooltip(&theme, tr::editor::transcript::add_caption())
+                        .disabled(!self.project_ready())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let playhead = this.playhead_time();
+                            this.add_caption_at(
+                                playhead,
+                                crate::editor_edits::NEW_CAPTION_LENGTH,
+                                false,
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
                     ui::EditorButton::plain(&theme, "transcript-download")
                         .left_icon("icons/download.svg")
                         .tooltip(&theme, tr::editor::transcript::download_captions())

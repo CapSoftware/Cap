@@ -573,6 +573,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Smallest download",
         ),
         (tr::editor::tabs::captions::model_label(), "Model"),
+        (tr::editor::tabs::captions::new_caption(), "New caption"),
         (
             tr::editor::tabs::captions::model_updated(),
             "Recommended model updated",
@@ -1069,6 +1070,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (
+            tr::editor::transcript::add_caption(),
+            "Add caption at playhead",
+        ),
         (tr::editor::transcript::captions_saved(), "Captions saved"),
         (tr::editor::transcript::cleanup(), "Clean up"),
         (
@@ -1186,6 +1191,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::no_room_for_3d_shot(),
             "No room for another 3D shot",
+        ),
+        (
+            tr::editor::window::no_room_for_caption(),
+            "No room for another caption here",
         ),
         (
             tr::editor::window::open::damaged(),

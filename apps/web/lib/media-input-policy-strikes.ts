@@ -10,6 +10,7 @@ import {
 	MEDIA_INPUT_POLICY_STRIKE_THRESHOLD,
 	readMediaInputPolicyState,
 } from "@/lib/media-processing-policy";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 
 const OPS_NOTIFICATION_EMAIL = "hello@cap.so";
 const OPS_NOTIFICATION_FROM = "Cap Support <richie@send.cap.so>";
@@ -74,7 +75,7 @@ export async function recordMediaInputPolicyStrike(input: {
 		await tx
 			.update(users)
 			.set({
-				preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.mediaInputPolicy', CAST(${JSON.stringify(outcome.state)} AS JSON))`,
+				preferences: sql`JSON_SET(${userPreferencesObject()}, '$.mediaInputPolicy', CAST(${JSON.stringify(outcome.state)} AS JSON))`,
 			})
 			.where(eq(users.id, ownerId));
 		if (outcome.state.suspendedAt) {
