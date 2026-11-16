@@ -453,10 +453,12 @@ async fn finalize_studio(
             None => RecoveryManager::remux_if_needed(&project_path),
         };
         result.map_err(anyhow::Error::from)?;
-        let placement = completed
-            .meta
-            .camera_path()
-            .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
+        let camera_recorded = completed.meta.camera_path().is_some();
+        let placement = camera_snapshot
+            .and_then(|snapshot| snapshot.placement)
+            .filter(|_| camera_recorded);
+        let shape = camera_recorded
+            .then(|| camera_snapshot.map_or_else(current_camera_shape, |snapshot| snapshot.shape));
         let preset_applied = apply_default_preset_to_project_config(
             &project_path,
             &crate::presets::PresetsStore::load(),
@@ -465,6 +467,7 @@ async fn finalize_studio(
             &project_path,
             camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
             placement,
+            shape,
         );
         if !preset_applied {
             let library = serde_json::from_value(serde_json::Value::Object(
@@ -593,6 +596,7 @@ pub(crate) type CaptureStopFuture =
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StudioCameraSnapshot {
     pub blur: crate::store::BlurMode,
+    pub shape: crate::store::CameraShape,
     pub placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
 }
 
@@ -1713,8 +1717,11 @@ pub(crate) fn preparing_presentation(
         config.audio.improve = true;
         config.audio.isolation = crate::store::studio_sound_isolation();
     }
-    if let Some(placement) = camera_snapshot.and_then(|snapshot| snapshot.placement) {
-        placement.apply(&mut config.camera);
+    if let Some(snapshot) = camera_snapshot {
+        apply_preview_shape(&mut config.camera, snapshot.shape);
+        if let Some(placement) = snapshot.placement {
+            placement.apply(&mut config.camera);
+        }
     }
     Ok(config)
 }
@@ -1777,6 +1784,42 @@ fn current_camera_blur() -> crate::store::BlurMode {
         .camera_window
         .map(|state| state.background_blur)
         .unwrap_or_default()
+}
+
+fn current_camera_shape() -> crate::store::CameraShape {
+    crate::store::load()
+        .camera_window
+        .map(|state| state.shape)
+        .unwrap_or_default()
+}
+
+/// The Tauri app's `apply_recording_camera_preview_state`: the bubble's shape
+/// becomes the recorded camera's shape, so a round preview records round.
+fn preview_shape_settings(
+    shape: crate::store::CameraShape,
+) -> (
+    cap_project::CameraShape,
+    f32,
+    Option<cap_project::CornerStyle>,
+) {
+    match shape {
+        crate::store::CameraShape::Round => (
+            cap_project::CameraShape::Square,
+            100.0,
+            Some(cap_project::CornerStyle::Rounded),
+        ),
+        crate::store::CameraShape::Square => (cap_project::CameraShape::Square, 25.0, None),
+        crate::store::CameraShape::Full => (cap_project::CameraShape::Source, 25.0, None),
+    }
+}
+
+fn apply_preview_shape(camera: &mut cap_project::Camera, shape: crate::store::CameraShape) {
+    let (shape, rounding, rounding_type) = preview_shape_settings(shape);
+    camera.shape = shape;
+    camera.rounding = rounding;
+    if let Some(rounding_type) = rounding_type {
+        camera.rounding_type = rounding_type;
+    }
 }
 
 /// `BackgroundBlurMode`'s JSON spelling
@@ -1971,13 +2014,14 @@ fn apply_camera_blur_to_project_config(
     project_dir: &std::path::Path,
     blur: crate::store::BlurMode,
 ) -> bool {
-    apply_camera_preview_to_project_config(project_dir, blur, None)
+    apply_camera_preview_to_project_config(project_dir, blur, None, None)
 }
 
 fn apply_camera_preview_to_project_config(
     project_dir: &std::path::Path,
     blur: crate::store::BlurMode,
     placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
+    shape: Option<crate::store::CameraShape>,
 ) -> bool {
     use serde_json::{Map, Value};
 
@@ -2018,6 +2062,22 @@ fn apply_camera_preview_to_project_config(
         "mode".to_string(),
         Value::String(blur_mode_json(blur).to_string()),
     );
+
+    if let Some(shape) = shape {
+        let (shape, rounding, rounding_type) = preview_shape_settings(shape);
+        let (Ok(shape), Ok(rounding), Ok(rounding_type)) = (
+            serde_json::to_value(shape),
+            serde_json::to_value(rounding),
+            rounding_type.map(serde_json::to_value).transpose(),
+        ) else {
+            return false;
+        };
+        camera.insert("shape".into(), shape);
+        camera.insert("rounding".into(), rounding);
+        if let Some(rounding_type) = rounding_type {
+            camera.insert("roundingType".into(), rounding_type);
+        }
+    }
 
     if let Some(placement) = placement {
         let mut positioned = cap_project::Camera::default();
@@ -4117,7 +4177,8 @@ mod tests {
             assert!(apply_camera_preview_to_project_config(
                 &dir,
                 blur,
-                Some(placement)
+                Some(placement),
+                None
             ));
             let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             let mut expected = original.clone();
@@ -4128,6 +4189,96 @@ mod tests {
             assert_eq!(written, expected);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bridging_preview_shape_sets_only_the_shape_keys() {
+        use crate::store::CameraShape;
+        let dir = temp_project("camera-shape");
+        let path = dir.join("project-config.json");
+        let original = serde_json::json!({
+            "camera": {
+                "size": 41.0,
+                "mirror": true,
+                "hide": false,
+                "shadow": 12.0,
+                "manualPosition": { "x": 0.1, "y": 0.9 },
+                "position": { "x": "right", "y": "bottom" },
+                "rounding": 40.0,
+                "roundingType": "squircle",
+                "shape": "square",
+                "backgroundBlur": { "mode": "off" },
+                "futureCameraSetting": "retained"
+            },
+            "futureProjectSetting": [1, 2, 3]
+        });
+        for (shape, json_shape, rounding, rounding_type) in [
+            (CameraShape::Round, "square", 100.0, "rounded"),
+            (CameraShape::Square, "square", 25.0, "squircle"),
+            (CameraShape::Full, "source", 25.0, "squircle"),
+        ] {
+            std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            assert!(apply_camera_preview_to_project_config(
+                &dir,
+                BlurMode::Off,
+                None,
+                Some(shape)
+            ));
+            let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut expected = original.clone();
+            expected["camera"]["shape"] = json_shape.into();
+            expected["camera"]["rounding"] = rounding.into();
+            expected["camera"]["roundingType"] = rounding_type.into();
+            assert_eq!(written, expected, "{shape:?}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bridged_preview_shape_matches_the_preparing_presentation() {
+        use crate::store::CameraShape;
+        let dir = temp_project("camera-shape-parity");
+        let path = dir.join("project-config.json");
+        let placement = cap_recording::camera_placement::RecordingCameraPlacement::from_bounds(
+            [860.0, 20.0, 200.0, 200.0],
+            [0.0, 0.0, 1920.0, 1080.0],
+        )
+        .unwrap();
+        let mut preset = cap_project::ProjectConfiguration::default();
+        preset.camera.rounding = 10.0;
+        preset.camera.size = 44.0;
+        preset.camera.mirror = true;
+        for shape in [CameraShape::Round, CameraShape::Square, CameraShape::Full] {
+            std::fs::write(&path, serde_json::to_vec(&preset).unwrap()).unwrap();
+            assert!(apply_camera_preview_to_project_config(
+                &dir,
+                BlurMode::Off,
+                Some(placement),
+                Some(shape)
+            ));
+            let finalized = cap_project::ProjectConfiguration::load(&dir).unwrap();
+            let mut shown = preset.clone();
+            apply_preview_shape(&mut shown.camera, shape);
+            placement.apply(&mut shown.camera);
+            assert_eq!(
+                serde_json::to_value(&finalized.camera).unwrap(),
+                serde_json::to_value(&shown.camera).unwrap(),
+                "{shape:?}"
+            );
+            assert_eq!(finalized.camera.size, 44.0);
+            assert!(finalized.camera.mirror);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_round_preview_records_a_circle_not_the_default_squircle() {
+        let mut camera = cap_project::Camera::default();
+        assert_eq!(camera.rounding_type, cap_project::CornerStyle::Squircle);
+        apply_preview_shape(&mut camera, crate::store::CameraShape::Round);
+        assert!(matches!(camera.shape, cap_project::CameraShape::Square));
+        assert_eq!(camera.rounding, 100.0);
+        assert_eq!(camera.rounding_type, cap_project::CornerStyle::Rounded);
     }
 
     #[test]
