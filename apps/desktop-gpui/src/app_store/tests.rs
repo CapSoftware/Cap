@@ -140,6 +140,36 @@ fn action_results_only_open_https() {
 }
 
 #[test]
+fn action_responses_that_are_not_json_read_as_plain_failures() {
+    use reqwest::StatusCode;
+    let gateway = b"<html><body>Bad gateway</body></html>";
+    assert_eq!(
+        read_action_response(StatusCode::BAD_GATEWAY, gateway),
+        Err("The app could not complete this action".to_string())
+    );
+    assert_eq!(
+        read_action_response(StatusCode::OK, gateway),
+        Err("The app sent a response Cap could not read".to_string())
+    );
+    assert_eq!(
+        read_action_response(
+            StatusCode::BAD_GATEWAY,
+            br#"{"error":"Discord rejected the post"}"#
+        ),
+        Err("Discord rejected the post".to_string())
+    );
+    assert_eq!(
+        read_action_response(
+            StatusCode::OK,
+            br#"{"result":{"type":"toast","message":"Posted"}}"#
+        ),
+        Ok(ActionResult::Toast {
+            message: "Posted".to_string()
+        })
+    );
+}
+
+#[test]
 fn contributions_come_only_from_installed_apps() {
     let catalog = golden();
     let mut store = AppStore {

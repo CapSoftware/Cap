@@ -858,7 +858,17 @@ pub async fn run_cap_action(action: CapAction, cap_id: String) -> Result<ActionR
     .await
     .map_err(|error| error.to_string())?;
     let status = response.status();
-    let body: Value = response.json().await.map_err(|error| error.to_string())?;
+    let body = response.bytes().await.map_err(|error| error.to_string())?;
+    read_action_response(status, &body)
+}
+
+// A proxy or gateway in front of Cap can answer with an HTML page, so a body
+// that is not JSON reads as no body instead of surfacing the decoder's error.
+pub(crate) fn read_action_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+) -> Result<ActionResult, String> {
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     if !status.is_success() {
         return Err(body
             .get("error")
