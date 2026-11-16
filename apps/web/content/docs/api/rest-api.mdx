@@ -393,13 +393,13 @@ Before it answers, Cap opens the URL and reads the first bytes, so the common mi
 | `400` | `url_not_allowed` | The URL is not public https on the default port, has a username or password, or points to a private, loopback, link-local or cloud metadata address, directly, through its DNS name or through a redirect |
 | `422` | `url_unreachable` | The URL answered with an error status, sent nothing, redirected more than 3 times or refused the connection |
 | `422` | `unsupported_format` | The URL is a web page, a playlist, an image, a document or audio, not a video file |
-| `413` | `too_large` | The file declares a size over the 1.5 GB limit for imports. Upload larger files with [Initiate Upload](/docs/api/rest-api#initiate-upload) |
+| `413` | `too_large` | The file declares a size over the 36 GB limit |
 | `422` | `timeout` | The host did not answer in time |
 | `402` | `insufficient_credits` | The balance does not cover the file at its declared size, as for an upload |
 | `429` | `too_many_imports` | The app already has 2 imports downloading. Wait for `Retry-After` seconds |
 | `429` | `import_rate_limited` | This key started 30 imports in the last hour. `Retry-After` says when the next one is allowed |
 
-The download must finish within 12 minutes and stops if the host sends nothing for 30 seconds. A file that turns out larger than the limit while it streams is stopped too. If the download fails after the request answered, the video moves to `errored`, `errorReason` starts with `Import failed:`, and `import.errorCode` gives the code. Use [Create Upload](/docs/api/rest-api#create-upload) for files on your own machine, and for files too large or too slow to fetch in that time.
+The whole file must download within 10 minutes, so the host has to keep up a steady speed: a 4.7 GB file needs about 8 MB/s from start to finish. The download also stops if the host sends nothing for 30 seconds, and a file that turns out larger than the limit while it streams is stopped too. If the download fails after the request answered, the video moves to `errored`, `errorReason` starts with `Import failed:`, and `import.errorCode` gives the code. A download that runs out of time ends with `download_timeout`. So does a download that stops without reporting back, within 35 minutes of the request. Use [Create Upload](/docs/api/rest-api#create-upload) for files on your own machine, for large files, and for hosts that can't send the file in 10 minutes.
 
 Billing is the same as for an upload: the video is admitted again on its measured length before it is encoded, and storage is billed once it is ready. A failed import costs nothing.
 
