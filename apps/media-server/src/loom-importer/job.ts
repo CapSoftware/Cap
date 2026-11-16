@@ -216,6 +216,7 @@ async function prepareSource(
 		manifestDir,
 		signal,
 		settings.allowedHosts,
+		{ allowAudioOnly: true },
 	);
 	if (!master.endsWith(".m3u8"))
 		throw new UnsupportedStreamError("This Loom DASH layout is not supported");
