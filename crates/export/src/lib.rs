@@ -839,7 +839,9 @@ mod forward_read_tests {
 /// editor fills them in from the tracks' start times (and the devices'
 /// calibration) when it first opens the project. An export of a project the
 /// editor never opened would otherwise play every audio track from its own
-/// start, late against the screen by how much earlier it started.
+/// start, late against the screen by how much earlier it started. Saved
+/// automatic offsets of a segment with late audio are recomputed the way the
+/// editor does on open.
 fn fill_clip_offsets(
     config: &mut ProjectConfiguration,
     project_path: &std::path::Path,
@@ -847,6 +849,8 @@ fn fill_clip_offsets(
 ) {
     if config.clips.is_empty() {
         config.clips = cap_editor::initial_clip_configuration(project_path, studio_meta);
+    } else {
+        cap_editor::repair_late_audio_clip_offsets(project_path, studio_meta, &mut config.clips);
     }
 }
 
@@ -923,6 +927,68 @@ mod clip_offset_tests {
         };
         fill_clip_offsets(&mut config, dir.path(), &camera_recording());
         assert_eq!(config.clips[0].offsets.mic, 0.5);
+    }
+
+    fn late_mic_recording(mic_start: f64) -> StudioRecordingMeta {
+        let mut meta = camera_recording();
+        let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+            unreachable!()
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(mic_start);
+        meta
+    }
+
+    fn auto_clip(mic: f32, system_audio: f32, auto: bool) -> ProjectConfiguration {
+        ProjectConfiguration {
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: ClipOffsets {
+                    camera: 0.0,
+                    mic,
+                    system_audio,
+                },
+                offsets_auto_calculated: auto,
+            }],
+            ..Default::default()
+        }
+    }
+
+    // Offsets saved while a late mic set the segment's start (mic 0, system
+    // audio late - 0) move to the screen's start.
+    #[test]
+    fn saved_auto_offsets_of_a_late_mic_are_recomputed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.0, 5.2026, true);
+        fill_clip_offsets(&mut config, dir.path(), &late_mic_recording(5.2026));
+        let offsets = config.clips[0].offsets;
+        assert!((offsets.mic - -5.0).abs() < 1e-4, "mic {}", offsets.mic);
+        assert!((offsets.system_audio - 0.2026).abs() < 1e-4);
+        assert_eq!(offsets.camera, 0.0);
+        assert!(config.clips[0].offsets_auto_calculated);
+    }
+
+    #[test]
+    fn user_offsets_of_a_late_mic_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.25, 5.2026, false);
+        fill_clip_offsets(&mut config, dir.path(), &late_mic_recording(5.2026));
+        assert_eq!(config.clips[0].offsets.mic, 0.25);
+        assert_eq!(config.clips[0].offsets.system_audio, 5.2026);
+    }
+
+    // Only segments with late audio are touched: saved automatic offsets of
+    // a normal recording stay bit-identical even if they differ from a fresh
+    // computation (for example a calibration made after they were saved).
+    #[test]
+    fn saved_auto_offsets_of_a_normal_recording_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.123, 0.456, true);
+        fill_clip_offsets(&mut config, dir.path(), &camera_recording());
+        assert_eq!(config.clips[0].offsets.mic.to_bits(), 0.123f32.to_bits());
+        assert_eq!(
+            config.clips[0].offsets.system_audio.to_bits(),
+            0.456f32.to_bits()
+        );
     }
 }
 

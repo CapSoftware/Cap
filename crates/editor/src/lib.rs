@@ -41,7 +41,7 @@ pub use editor::{
 pub use editor_instance::{
     AudioLoader, EditorInstance, EditorStartupInputs, EditorState, SegmentAudioTimingRepair,
     SegmentMedia, create_segments, create_segments_without_audio, initial_clip_configuration,
-    segment_audio_timing_repairs,
+    repair_late_audio_clip_offsets, segment_audio_timing_repairs,
 };
 pub use export_audio::{
     ExportAudioError, ExportAudioPreparation, ExportAudioRenderer, ExportAudioValidation,

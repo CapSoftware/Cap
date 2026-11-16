@@ -530,6 +530,13 @@ impl EditorInstance {
             if let Err(e) = project.write(&recording_meta.project_path) {
                 warn!("Failed to save auto-generated clip offsets: {}", e);
             }
+        } else if repair_late_audio_clip_offsets(
+            &recording_meta.project_path,
+            meta,
+            &mut project.clips,
+        ) && let Err(e) = project.write(&recording_meta.project_path)
+        {
+            warn!("Failed to save repaired late audio clip offsets: {}", e);
         }
 
         // Segment setup (decoder init + kicking off audio decodes) is
@@ -1982,6 +1989,50 @@ pub fn initial_clip_configuration(
             offsets_auto_calculated: false,
         }],
     }
+}
+
+/// Recomputes the automatic clip offsets of segments with a late audio track
+/// (`MultipleSegment::has_late_audio`). Projects saved before late audio
+/// stopped setting a segment's start stored offsets measured from that late
+/// start, which would now play the audio early. Offsets the user set by hand
+/// are kept. Returns whether any clip changed.
+pub fn repair_late_audio_clip_offsets(
+    project_path: &std::path::Path,
+    meta: &StudioRecordingMeta,
+    clips: &mut [cap_project::ClipConfiguration],
+) -> bool {
+    let StudioRecordingMeta::MultipleSegments { inner } = meta else {
+        return false;
+    };
+    let mut calibration_store = None;
+    let mut changed = false;
+    for (index, segment) in inner.segments.iter().enumerate() {
+        if !segment.has_late_audio() {
+            continue;
+        }
+        let Some(clip) = clips
+            .iter_mut()
+            .find(|clip| clip.index as usize == index && clip.offsets_auto_calculated)
+        else {
+            continue;
+        };
+        let store = calibration_store.get_or_insert_with(|| load_calibration_store(project_path));
+        let calibration_offset =
+            get_calibration_offset(segment.camera_device_id(), segment.mic_device_id(), store);
+        let offsets = segment.calculate_audio_offsets_with_calibration(calibration_offset);
+        let bits = |o: &cap_project::ClipOffsets| {
+            [
+                o.camera.to_bits(),
+                o.mic.to_bits(),
+                o.system_audio.to_bits(),
+            ]
+        };
+        if bits(&clip.offsets) != bits(&offsets) {
+            clip.offsets = offsets;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn load_calibration_store(project_path: &std::path::Path) -> cap_audio::CalibrationStore {
