@@ -16,6 +16,10 @@ import {
 	it,
 	vi,
 } from "vitest";
+import {
+	DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS,
+	lockDeliveryTable,
+} from "../fixtures/delivery-table-lock";
 
 const fixture = vi.hoisted(() => ({ database: undefined as unknown }));
 
@@ -73,6 +77,7 @@ describe.runIf(Boolean(databaseUrl))(
 	"the storage cron's delivery debit against a real database",
 	() => {
 		let pool: Pool;
+		let unlock: (() => Promise<void>) | undefined;
 		const fixtureApps: string[] = [];
 
 		const makeApp = async () => {
@@ -139,29 +144,34 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			}
 			process.env.CRON_SECRET = CRON_SECRET;
+			unlock = await lockDeliveryTable(databaseUrl);
 			pool = createPool({ uri: databaseUrl, connectionLimit: 8 });
 			fixture.database = drizzle(pool);
 			await pool.query(ROLLUP_TABLE);
-		});
+		}, DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS);
 
 		afterEach(() => {
 			vi.unstubAllEnvs();
 		});
 
 		afterAll(async () => {
-			if (fixtureApps.length > 0) {
-				await pool?.query(
-					"delete from developer_delivery_daily where appId in (?)",
-					[fixtureApps],
-				);
+			try {
+				if (fixtureApps.length > 0) {
+					await pool?.query(
+						"delete from developer_delivery_daily where appId in (?)",
+						[fixtureApps],
+					);
+				}
+				if (fixtureApps.length > 0) {
+					await database()
+						.update(developerApps)
+						.set({ deletedAt: new Date() })
+						.where(inArray(developerApps.id, fixtureApps));
+				}
+				await pool?.end();
+			} finally {
+				await unlock?.();
 			}
-			if (fixtureApps.length > 0) {
-				await database()
-					.update(developerApps)
-					.set({ deletedAt: new Date() })
-					.where(inArray(developerApps.id, fixtureApps));
-			}
-			await pool?.end();
 		});
 
 		it("charges nothing with the start day unset", async () => {
