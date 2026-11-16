@@ -12,12 +12,12 @@ export default async function SettingsPage() {
 	// an empty list, which would hide still-active keys the user may need to revoke.
 	const cliApiKeys = await listCliApiKeys().catch(() => null);
 	return (
-		<>
+		<div className="flex flex-col gap-10 mx-auto w-full max-w-4xl">
 			<Settings />
 			<CliApiKeys
 				initialKeys={cliApiKeys ?? []}
 				loadFailed={cliApiKeys === null}
 			/>
-		</>
+		</div>
 	);
 }

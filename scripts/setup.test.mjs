@@ -41,9 +41,9 @@ test(
 		}
 
 		const nativeName = "native-deps-x86_64-linux-gnu.tar.xz";
-		const onnxName = "onnxruntime-linux-x64-1.24.3.tgz";
+		const onnxName = "onnxruntime-linux-x64-1.30.1.tgz";
 		const nativeUrl = `/spacedriveapp/native-deps/releases/download/v0.26/${nativeName}`;
-		const onnxUrl = `/microsoft/onnxruntime/releases/download/v1.24.3/${onnxName}`;
+		const onnxUrl = `/microsoft/onnxruntime/releases/download/v1.30.1/${onnxName}`;
 		const nativeLibrary = "synthetic native library\n";
 		const onnxLibrary = "synthetic ONNX library\n";
 		const archives = new Map();

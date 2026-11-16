@@ -413,12 +413,12 @@ export const CapCard = ({
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
-					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10",
+					"flex relative overflow-hidden flex-col w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200",
 					isSelected
-						? "!border-blue-10"
+						? "!border-blue-9 ring-1 ring-blue-9"
 						: anyCapSelected
-							? "border-blue-10 hover:border-blue-10"
-							: "hover:border-blue-10",
+							? "hover:border-blue-9"
+							: "hover:border-gray-5 hover:shadow-[0_6px_20px_-8px_rgba(0,0,0,0.12)]",
 					isDragging && "opacity-50",
 					dragEnabled && "cursor-grab active:cursor-grabbing",
 				)}
@@ -440,7 +440,7 @@ export const CapCard = ({
 							: isDropdownOpen
 								? "opacity-100"
 								: "opacity-0 group-hover:opacity-100",
-						"top-2 right-2 flex-col gap-2 z-[51]",
+						"top-2.5 right-2.5 flex-row gap-1.5 z-[51]",
 					)}
 				>
 					<CapCardButton
@@ -641,7 +641,7 @@ export const CapCard = ({
 						type="button"
 						aria-label={isSelected ? "Deselect cap" : "Select cap"}
 						className={clsx(
-							"absolute top-2 left-2 z-[49] duration-200",
+							"absolute top-2.5 left-2.5 z-[49] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
 								? "opacity-100"
 								: "group-hover:opacity-100 opacity-0",
@@ -653,10 +653,10 @@ export const CapCard = ({
 					>
 						<div
 							className={clsx(
-								"flex justify-center items-center w-6 h-6 rounded-md border transition-colors cursor-pointer hover:bg-gray-3/60",
+								"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-colors cursor-pointer",
 								isSelected
-									? "bg-blue-10 border-blue-10"
-									: "border-white-95 bg-gray-1/80",
+									? "bg-blue-9 border-blue-9"
+									: "border-gray-5 bg-gray-1 hover:border-gray-7",
 							)}
 						>
 							{isSelected && (
@@ -666,7 +666,7 @@ export const CapCard = ({
 					</button>
 				)}
 
-				<div className="relative aspect-video w-full">
+				<div className="overflow-hidden relative w-full aspect-video">
 					<Link
 						className={clsx(
 							"relative block w-full h-full",
@@ -680,7 +680,7 @@ export const CapCard = ({
 					>
 						{hasVisibleUploadProgress && (
 							<>
-								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />
+								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60" />
 								<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30">
 									{uploadProgress.status === "failed" ||
 									uploadProgress.status === "error" ? (
@@ -779,12 +779,8 @@ export const CapCard = ({
 									: cap.duration
 							}
 							imageClass={clsx(
-								anyCapSelected
-									? "opacity-50"
-									: isDropdownOpen
-										? "opacity-30"
-										: "group-hover:opacity-30",
-								"transition-opacity duration-200",
+								anyCapSelected && !isSelected && "opacity-60",
+								"transition-[opacity,transform] duration-300 ease-out group-hover:scale-[1.015]",
 							)}
 							containerClass="absolute inset-0"
 							videoId={cap.id}
@@ -799,6 +795,14 @@ export const CapCard = ({
 								uploadProgress.status !== "error"
 							}
 						/>
+						<div
+							aria-hidden
+							className={clsx(
+								"absolute inset-x-0 top-0 z-[11] h-16 bg-gradient-to-b to-transparent transition-opacity duration-200 pointer-events-none from-black/30",
+								isDropdownOpen && !anyCapSelected ? "opacity-100" : "opacity-0",
+								!anyCapSelected && "group-hover:opacity-100",
+							)}
+						/>
 						{cap.isScreenshot === true && !hasVisibleUploadProgress && (
 							<span
 								title="Screenshot"
@@ -810,7 +814,7 @@ export const CapCard = ({
 						)}
 						{effectivePasswordProtected && (
 							<div
-								className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/70 text-white"
+								className="flex absolute right-2.5 bottom-2.5 z-10 justify-center items-center text-white rounded-full backdrop-blur-sm size-6 bg-black/60"
 								title={
 									cap.hasInheritedPassword
 										? "Password required by space"
@@ -824,7 +828,7 @@ export const CapCard = ({
 				</div>
 				<div
 					className={clsx(
-						"flex flex-col flex-grow gap-3 px-4 pb-4 w-full",
+						"flex flex-col flex-grow gap-3 px-3.5 pt-3 pb-3.5 w-full",
 						!sharedCapCard ? "cursor-pointer" : "cursor-default",
 					)}
 				>
