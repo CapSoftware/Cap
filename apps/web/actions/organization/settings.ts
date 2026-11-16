@@ -8,9 +8,11 @@ import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
 	isAiGenerationLanguage,
+	type Organisation,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -21,6 +23,7 @@ type OrganizationSettingsInput = {
 	disableReactions?: boolean;
 	disableTranscript?: boolean;
 	disableComments?: boolean;
+	disableDownloads?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
@@ -63,6 +66,7 @@ const preserveProSettings = (
 
 export async function updateOrganizationSettings(
 	settings: OrganizationSettingsInput,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 
@@ -81,20 +85,23 @@ export async function updateOrganizationSettings(
 		throw new Error("Unsupported AI generation language");
 	}
 
-	if (!user.activeOrganizationId) {
-		throw new Error("Organization not found");
-	}
-
 	const [organization] = await db()
 		.select()
 		.from(organizations)
-		.where(eq(organizations.id, user.activeOrganizationId));
+		.where(eq(organizations.id, organizationId));
 
 	if (!organization) {
 		throw new Error("Organization not found");
 	}
 
-	await requireOrganizationSettingsManager(user.id, user.activeOrganizationId);
+	if (
+		settings.disableDownloads !== undefined &&
+		typeof settings.disableDownloads !== "boolean"
+	) {
+		throw new Error("Invalid download setting");
+	}
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	const sanitizedSettings =
 		settings.defaultPlaybackSpeed !== undefined
@@ -112,8 +119,8 @@ export async function updateOrganizationSettings(
 
 	await db()
 		.update(organizations)
-		.set({ settings: nextSettings })
-		.where(eq(organizations.id, user.activeOrganizationId));
+		.set({ settings: organizationSettingsKeepingLinkOverride(nextSettings) })
+		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");
 	revalidatePath("/dashboard/settings/organization");

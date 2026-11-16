@@ -11,13 +11,13 @@ import {
 	Select,
 	Switch,
 } from "@cap/ui";
-import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useDashboardContext } from "../../../Contexts";
 
 interface InviteDialogProps {

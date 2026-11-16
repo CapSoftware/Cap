@@ -85,14 +85,15 @@ const SPEED_CHANGE_CATCH_UP_SECS: f64 = 0.5;
 /// device can't. Seeking would skip or repeat speech, so the stage records
 /// the difference as `pending_shift` and plays it out by rendering slightly
 /// slower or faster than the new speed for a moment. The drift check ignores
-/// the part of the error still being played out.
+/// the part of the error still being played out. A source is installed with
+/// the 1x lead, so starting at another speed is a change from 1x too.
 struct PreviewSpeedStage {
     speed: PreviewSpeedHandle,
     stretcher: Box<PreviewStretcher>,
     scratch: Box<[f32]>,
     channels: usize,
     sample_rate: f64,
-    last_speed: Option<f64>,
+    last_speed: f64,
     pending_shift: f64,
 }
 
@@ -105,18 +106,16 @@ impl PreviewSpeedStage {
             scratch: vec![0.0; STRETCH_SCRATCH_FRAMES * channels].into_boxed_slice(),
             channels,
             sample_rate: f64::from(output_info.sample_rate.max(1)),
-            last_speed: None,
+            last_speed: 1.0,
             pending_shift: 0.0,
         }
     }
 
     fn note_speed(&mut self, speed: f64, latency_secs: f64) {
-        if let Some(previous) = self.last_speed
-            && previous != speed
-        {
-            self.pending_shift += latency_secs.max(0.0) * (previous - speed);
+        if self.last_speed != speed {
+            self.pending_shift += latency_secs.max(0.0) * (self.last_speed - speed);
+            self.last_speed = speed;
         }
-        self.last_speed = Some(speed);
     }
 
     fn engaged(&self, speed: f64) -> bool {
@@ -1826,7 +1825,9 @@ mod tests {
 
     /// Plays a silent timeline through a source on a device that holds
     /// `latency` seconds of audio, with the video clock switching from one
-    /// preview speed to another, and follows what the device plays.
+    /// preview speed to another, and follows what the device plays. The
+    /// source starts one device delay ahead of the video, as `install_source`
+    /// places it on a real output.
     fn run_speed_switch(latency: f64, from: f64, to: f64) -> SpeedSwitchRun {
         ffmpeg::init().unwrap();
         const RATE: u32 = 48_000;
@@ -1842,7 +1843,7 @@ mod tests {
                 music: MusicTracks::new(),
                 project: ProjectConfiguration::default(),
                 duration_secs: 60.0,
-                start_playhead_secs: 0.0,
+                start_playhead_secs: latency,
                 playhead_rx,
                 preview_speed: speed.clone(),
             }),
@@ -1888,13 +1889,11 @@ mod tests {
             let before = render_position(&source);
             render_source_block(&mut source, &mut buffer, latency);
             let after = render_position(&source);
-            if block > 10 {
-                if after < before - 1e-6 {
-                    run.backward_seeks += 1;
-                }
-                if after - before > tick * 4.0 + 1e-6 {
-                    run.forward_skips += 1;
-                }
+            if after < before - 1e-6 {
+                run.backward_seeks += 1;
+            }
+            if after - before > tick * 4.0 + 1e-6 {
+                run.forward_skips += 1;
             }
             device.push_back(before);
             if device.len() > queued_blocks {
@@ -1942,10 +1941,10 @@ mod tests {
 
     #[test]
     fn a_steady_speed_on_a_slow_output_stays_in_sync() {
-        for speed in [1.0, 2.0] {
+        for speed in [0.5, 1.0, 2.0, 3.0] {
             let run = run_speed_switch(0.2, speed, speed);
-            assert_eq!(run.backward_seeks, 0);
-            assert_eq!(run.forward_skips, 0);
+            assert_eq!(run.backward_seeks, 0, "{speed}x repeated audio");
+            assert_eq!(run.forward_skips, 0, "{speed}x skipped audio");
             assert!(run.settled_offset.abs() < 0.02 * speed);
         }
     }

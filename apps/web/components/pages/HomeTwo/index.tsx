@@ -4,8 +4,10 @@ import { FinalCta } from "@/components/pages/HomeTwo/FinalCta";
 import { htMono, htSans, htSerif } from "@/components/pages/HomeTwo/fonts";
 import { Hero } from "@/components/pages/HomeTwo/Hero";
 import { LoomBridge } from "@/components/pages/HomeTwo/LoomBridge";
+import { MidCta } from "@/components/pages/HomeTwo/MidCta";
 import { ModeWalkthrough } from "@/components/pages/HomeTwo/ModeWalkthrough";
 import { Pricing } from "@/components/pages/HomeTwo/Pricing";
+import { SectionView } from "@/components/pages/HomeTwo/SectionView";
 import { Testimonials } from "@/components/pages/HomeTwo/Testimonials";
 import { BAND, CREAM, grainBg, SHELL } from "@/components/pages/HomeTwo/theme";
 import { HomeTwoSchema } from "./Schema";
@@ -48,16 +50,21 @@ export function HomeTwoPage() {
 						<ModeWalkthrough />
 					</div>
 					<InstantSection />
+					<SectionView section="studio" />
 					<StudioSection />
+					<MidCta />
 					<ScreenshotSection />
 					<AiSection />
 					<OwnershipSection />
+					<SectionView section="platforms" />
 					<PlatformsSection />
 					<AgentsSection />
 					<Testimonials eyebrow={false} />
+					<SectionView section="pricing" />
 					<Pricing />
 					<Faq eyebrow={false} />
 					<LoomBridge />
+					<SectionView section="final_cta" />
 					<FinalCta />
 				</div>
 			</div>

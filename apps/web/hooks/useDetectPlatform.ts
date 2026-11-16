@@ -3,6 +3,14 @@ import { useEffect, useState } from "react";
 export interface PlatformInfo {
 	platform: string | null;
 	isIntel: boolean;
+	isIOS: boolean;
+}
+
+// iPadOS Safari sends a desktop Mac user agent, so touch points are the only
+// way to tell an iPad from a Mac.
+function detectIOS(userAgent: string): boolean {
+	if (/iPhone|iPad|iPod/.test(userAgent)) return true;
+	return userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1;
 }
 
 function detectArchFromWebGL(): boolean | null {
@@ -32,6 +40,7 @@ function detectArchFromWebGL(): boolean | null {
 export const useDetectPlatform = (): PlatformInfo => {
 	const [platform, setPlatform] = useState<string | null>(null);
 	const [isIntel, setIsIntel] = useState(false);
+	const [isIOS, setIsIOS] = useState(false);
 
 	useEffect(() => {
 		let isMounted = true;
@@ -45,12 +54,24 @@ export const useDetectPlatform = (): PlatformInfo => {
 				return;
 			}
 
+			// Android user agents say "Linux" too, but a phone or tablet can't run
+			// the desktop Linux builds.
+			if (userAgent.includes("Android")) {
+				if (isMounted) setPlatform("android");
+				return;
+			}
+
 			if (userAgent.includes("Linux")) {
 				if (isMounted) setPlatform("linux");
 				return;
 			}
 
 			if (isMounted) setPlatform("macos");
+
+			if (detectIOS(userAgent)) {
+				if (isMounted) setIsIOS(true);
+				return;
+			}
 
 			if (!userAgent.includes("Mac")) {
 				return;
@@ -85,5 +106,5 @@ export const useDetectPlatform = (): PlatformInfo => {
 		};
 	}, []);
 
-	return { platform, isIntel };
+	return { platform, isIntel, isIOS };
 };

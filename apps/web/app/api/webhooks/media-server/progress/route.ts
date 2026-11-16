@@ -14,8 +14,15 @@ import {
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
+import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
+import {
+	MEDIA_INPUT_POLICY_ERROR_CODE,
+	MEDIA_INPUT_REJECTED_ERROR_PREFIX,
+} from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
@@ -45,6 +52,7 @@ interface ProgressWebhookPayload {
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: string;
 	metadata?: {
 		duration: number;
 		width: number;
@@ -59,8 +67,6 @@ interface ProgressWebhookPayload {
 	};
 	deferredSourceKey?: string;
 }
-
-const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -114,7 +120,32 @@ export async function POST(request: NextRequest) {
 			body.kind === "audio-levels"
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
+		const developerVideoPart =
+			request.nextUrl.searchParams.get("developerVideo");
+		if (developerVideoPart && body && typeof body === "object")
+			return NextResponse.json(
+				await applyDeveloperVideoProgress(
+					body,
+					developerVideoPart,
+					request.nextUrl.searchParams.get("token"),
+				),
+			);
 		const payload = body as ProgressWebhookPayload;
+		const isInputPolicyViolation =
+			payload.phase === "error" &&
+			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
+		if (isInputPolicyViolation && typeof payload.videoId === "string") {
+			try {
+				await recordMediaInputPolicyStrike({
+					videoId: payload.videoId as Video.VideoId,
+				});
+			} catch (error) {
+				console.error("[media-server-webhook] Failed to record input policy", {
+					videoId: payload.videoId,
+					error,
+				});
+			}
+		}
 		if (
 			await applyEditProgress(
 				payload,
@@ -345,9 +376,11 @@ export async function POST(request: NextRequest) {
 				}
 			}
 		} else if (dbPhase === "error") {
-			const processingError =
-				payload.error || payload.message || "Unknown error";
-			if (isRetryableWorkflowError) {
+			const detail = payload.error || payload.message || "Unknown error";
+			const processingError = isInputPolicyViolation
+				? `${MEDIA_INPUT_REJECTED_ERROR_PREFIX}: ${detail}`
+				: detail;
+			if (isRetryableWorkflowError && !isInputPolicyViolation) {
 				await db()
 					.update(videoUploads)
 					.set({

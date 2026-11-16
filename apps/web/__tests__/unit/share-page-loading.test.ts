@@ -119,7 +119,10 @@ vi.mock("@/lib/share-web-url", () => ({
 	resolveForeignShareRedirect: mocks.foreignRedirect,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
-vi.mock("@/lib/video-download-permissions", () => ({
+vi.mock("@/lib/video-download-permissions", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@/lib/video-download-permissions")
+	>()),
 	canUserDownloadVideo: async () => false,
 }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => false }));
@@ -153,7 +156,11 @@ const createVideo = () => ({
 	metadata: null,
 	videoSettings: {
 		callToAction: { label: "Book a call", url: "https://example.com/" },
+	} as {
+		callToAction: { label: string; url: string };
+		disableDownloads?: boolean;
 	},
+	orgSettings: null as { disableDownloads?: boolean } | null,
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -188,10 +195,13 @@ function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	});
 }
 
-const renderPage = () =>
+const renderPage = (
+	videoId = "video",
+	searchParams: Record<string, string> = {},
+) =>
 	ShareVideoPage({
-		params: Promise.resolve({ videoId: "video" }),
-		searchParams: Promise.resolve({}),
+		params: Promise.resolve({ videoId }),
+		searchParams: Promise.resolve(searchParams),
 	});
 
 async function renderAuthorizedContent() {
@@ -204,6 +214,7 @@ async function renderAuthorizedContent() {
 		content.props,
 	)) as ReactElement<{
 		children: ReactElement<{
+			header: ReactElement<{ canDownload: boolean; hasEdits: boolean }>;
 			initialPlaybackUrl?: Promise<string | null>;
 			serverPlaybackUrl?: string | null;
 			screenshotImageUrl?: string | null;
@@ -276,6 +287,31 @@ describe("share page loading", () => {
 		);
 		expect(mocks.select).not.toHaveBeenCalled();
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("sends the owner landing after a recording on a custom domain to the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		mocks.restrictedRedirect.mockResolvedValue(
+			`https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		await expect(
+			renderPage(videoId, { recordingStopped: "1" }),
+		).rejects.toThrow(
+			`REDIRECT https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			videoId,
+			{ recordingStopped: "1" },
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner landing after a recording on the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		await renderPage(videoId, { recordingStopped: "1" });
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+		expect(mocks.select).toHaveBeenCalled();
 	});
 
 	it("does not look up the host for authorized videos", async () => {
@@ -419,6 +455,57 @@ describe("share page loading", () => {
 			Promise,
 		);
 		expect(mocks.playbackUrl).toHaveBeenCalledOnce();
+	});
+
+	const headerProps = async () =>
+		(await renderAuthorizedContent()).props.children.props.header.props;
+
+	it("offers a download to a signed-out viewer by default", async () => {
+		expect(await headerProps()).toMatchObject({
+			canDownload: true,
+			hasEdits: false,
+		});
+	});
+
+	it.each([
+		[null, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{ disableDownloads: true }, {}, false],
+		[null, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
+	])(
+		"with organization %j and video %j, a signed-out viewer can download: %s",
+		async (orgSettings, videoSettings, canDownload) => {
+			const video = createVideo();
+			arrangeRows([
+				{
+					...video,
+					orgSettings,
+					videoSettings: { ...video.videoSettings, ...videoSettings },
+				},
+			]);
+			expect(await headerProps()).toMatchObject({
+				canDownload,
+				hasEdits: false,
+			});
+		},
+	);
+
+	it.each([
+		["the share limit hides the video", { quota: true }],
+		["the video is still uploading", { hasActiveUpload: true }],
+		["the video is a screenshot", { isScreenshot: true }],
+		[
+			"the cap is an older MediaConvert one",
+			{ source: { type: "MediaConvert" } },
+		],
+		["the cap is an older local one", { source: { type: "local" } }],
+	])("offers no viewer download when %s", async (_label, state) => {
+		if ("quota" in state) mocks.quota.mockResolvedValue(true);
+		const { quota: _quota, ...row } = { quota: false, ...state };
+		arrangeRows([{ ...createVideo(), ...row }]);
+		expect(await headerProps()).toMatchObject({ canDownload: false });
 	});
 
 	it("does not sign media hidden by the shareable link quota", async () => {

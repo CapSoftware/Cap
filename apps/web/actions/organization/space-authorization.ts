@@ -1,5 +1,3 @@
-"use server";
-
 import { db } from "@cap/database";
 import {
 	organizationMembers,

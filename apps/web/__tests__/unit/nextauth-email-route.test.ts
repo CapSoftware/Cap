@@ -89,6 +89,20 @@ describe("email sign-in requests", () => {
 		expect(second).toBe(first);
 	});
 
+	it("uses one bucket for compatibility spellings of an email", async () => {
+		await POST(
+			emailSignIn("person\uFF20example.com"),
+			context("signin", "email"),
+		);
+		await POST(emailSignIn("person@example.com"), context("signin", "email"));
+
+		const keys = mocks.isRateLimited.mock.calls.map(
+			([, opts]) => (opts as { key: string }).key,
+		);
+		expect(keys).toHaveLength(2);
+		expect(keys[1]).toBe(keys[0]);
+	});
+
 	it("returns the NextAuth email error without sending when limited", async () => {
 		mocks.isRateLimited.mockResolvedValue(true);
 
@@ -129,6 +143,54 @@ describe("email code verification", () => {
 		expect(mocks.nextAuth).toHaveBeenCalledTimes(1);
 		expect(await response.json()).toMatchObject({ handledBy: "next-auth" });
 		expect(mocks.isRateLimited.mock.calls[0]?.[0]).toBe("rl_auth_otp_verify");
+	});
+
+	it("limits compatibility spellings of an email in the same bucket", async () => {
+		await GET(
+			emailCallback({ email: "person\uFF20example.com", token: "123456" }),
+			context("callback", "email"),
+		);
+		await GET(
+			emailCallback({ email: "person@example.com", token: "123456" }),
+			context("callback", "email"),
+		);
+
+		const keys = mocks.isRateLimited.mock.calls.map(
+			([, opts]) => (opts as { key: string }).key,
+		);
+		expect(keys).toHaveLength(2);
+		expect(keys[1]).toBe(keys[0]);
+	});
+
+	it("verifies a compatibility spelling under the identifier the code was issued to", async () => {
+		await GET(
+			emailCallback({
+				email: " Person@\uFF25xample.com",
+				token: "123456",
+				callbackUrl: "/dashboard",
+			}),
+			context("callback", "email"),
+		);
+
+		const forwarded = mocks.nextAuth.mock.calls[0]?.[0];
+		expect(forwarded?.nextUrl.searchParams.get("email")).toBe(
+			"person@example.com",
+		);
+		expect(forwarded?.nextUrl.searchParams.get("token")).toBe("123456");
+		expect(forwarded?.nextUrl.searchParams.get("callbackUrl")).toBe(
+			"/dashboard",
+		);
+	});
+
+	it("forwards an already normalized verification unchanged", async () => {
+		const request = emailCallback({
+			email: "person@example.com",
+			token: "123456",
+		});
+
+		await GET(request, context("callback", "email"));
+
+		expect(mocks.nextAuth.mock.calls[0]?.[0]).toBe(request);
 	});
 
 	it("redirects to the verification error without checking the code when limited", async () => {

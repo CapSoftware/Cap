@@ -87,12 +87,12 @@ fn configure_window_capture(settings: &mut sc::StreamCfg) {
     }
 }
 
-/// What the stream reads. A display capture crops to `crop_bounds`; a window
-/// capture reads the window itself, inside its rounded corners, where
-/// `crop_bounds` is the window already trimmed by `WINDOW_CORNER_TRIM`.
+/// What the stream reads. A display capture crops to `crop_bounds` on the
+/// display; a window capture reads the same size from the window's own
+/// top-left corner, so Focus records every pixel a screen region would.
 fn source_rect(captures_window: bool, crop_bounds: super::CropBounds) -> cg::Rect {
     let (x, y) = if captures_window {
-        (super::WINDOW_CORNER_TRIM, super::WINDOW_CORNER_TRIM)
+        (0.0, 0.0)
     } else {
         (crop_bounds.position().x(), crop_bounds.position().y())
     };
@@ -772,7 +772,8 @@ impl output_pipeline::VideoSource for VideoSource {
                             }
                         };
 
-                        if is_user_stop_error(err.as_ref()) {
+                        let user_stopped = is_user_stop_error(err.as_ref());
+                        if user_stopped || is_capture_source_gone_error(err.as_ref()) {
                             if let Ok(guard) = active_capturer.lock() {
                                 match guard.as_ref() {
                                     Some(c) => c.mark_stopped(),
@@ -782,9 +783,29 @@ impl output_pipeline::VideoSource for VideoSource {
                                 original_capturer.mark_stopped();
                             }
 
-                            info!(
-                                "Screen capture stream stopped from macOS sharing controls"
-                            );
+                            if user_stopped {
+                                info!(
+                                    "Screen capture stream stopped from macOS sharing controls"
+                                );
+                            } else {
+                                // The stream is already dead, so failing here would leave Stop
+                                // and Quit waiting on a capture that can never confirm cleanup.
+                                warn!(
+                                    captures_window = rebuild_params.config.window.is_some(),
+                                    "Screen capture source disappeared (window closed or display unavailable); keeping what was recorded"
+                                );
+                                output_pipeline::emit_health(
+                                    &health_tx,
+                                    output_pipeline::PipelineHealthEvent::CaptureTargetLost {
+                                        target: if rebuild_params.config.window.is_some() {
+                                            "window"
+                                        } else {
+                                            "display"
+                                        }
+                                        .to_string(),
+                                    },
+                                );
+                            }
                             stop_signal.mark_user_stopped();
                             pipeline_cancel.cancel();
                             break Ok(());
@@ -1006,6 +1027,17 @@ fn is_system_stop_error(err: &ns::Error) -> bool {
 fn is_user_stop_error(err: &ns::Error) -> bool {
     err.code() == sc::error::code::USER_STOPPED as ns::Integer
         && err.domain().to_string() == sc::error::domain().to_string()
+}
+
+/// `SCStreamErrorNoCaptureSource`: the recorded window closed, or the display went away or
+/// slept. Nothing can be captured, but everything recorded so far is intact.
+fn is_capture_source_gone_error(err: &ns::Error) -> bool {
+    is_capture_source_gone(err.domain().to_string(), err.code())
+}
+
+fn is_capture_source_gone(domain: String, code: ns::Integer) -> bool {
+    code == sc::error::code::NO_CAPTURE_SOURCE as ns::Integer
+        && domain == sc::error::domain().to_string()
 }
 
 fn system_stop_message() -> &'static str {
@@ -1331,11 +1363,18 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                         result = error_rx.recv() => {
                             match result {
                                 Ok(err) => {
-                                    if is_user_stop_error(err.as_ref()) {
+                                    let user_stopped = is_user_stop_error(err.as_ref());
+                                    if user_stopped || is_capture_source_gone_error(err.as_ref()) {
                                         capturer_for_monitor.mark_stopped();
-                                        info!(
-                                            "Screen capture audio stream stopped from macOS sharing controls"
-                                        );
+                                        if user_stopped {
+                                            info!(
+                                                "Screen capture audio stream stopped from macOS sharing controls"
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Screen capture audio stream ended because its capture source disappeared"
+                                            );
+                                        }
                                         stop_signal.mark_user_stopped();
                                         pipeline_cancel.cancel();
                                         break;
@@ -1449,6 +1488,61 @@ mod tests {
         }
     }
 
+    fn window_crop(
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        scale: f64,
+    ) -> super::super::CropBounds {
+        super::super::even_pixel_crop(
+            LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height)),
+            scale,
+        )
+    }
+
+    fn rect(rect: cg::Rect) -> (f64, f64, f64, f64) {
+        (
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        )
+    }
+
+    #[test]
+    fn focus_reads_the_whole_window_from_its_top_left() {
+        let crop = window_crop(100., 50., 920., 436., 1.0);
+        assert_eq!(rect(source_rect(true, crop)), (0., 0., 920., 436.));
+        assert_eq!(rect(source_rect(false, crop)), (100., 50., 920., 436.));
+    }
+
+    #[test]
+    fn focus_reads_as_many_pixels_as_a_screen_region_at_every_scale() {
+        for (scale, width, height) in [
+            (1.0, 701., 461.),
+            (2.0, 845., 753.5),
+            (1.5, 1280., 800.),
+            (2.0, 1512., 949.),
+        ] {
+            let crop = window_crop(37., 25., width, height, scale);
+            let (_, _, focus_width, focus_height) = rect(source_rect(true, crop));
+            let (_, _, region_width, region_height) = rect(source_rect(false, crop));
+            assert_eq!((focus_width, focus_height), (region_width, region_height));
+            assert!(width - focus_width < 2. / scale, "{scale}x {width} pt wide");
+            assert!(
+                height - focus_height < 2. / scale,
+                "{scale}x {height} pt tall"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_reads_a_partly_offscreen_window_from_its_top_left() {
+        let crop = window_crop(-1440., -120., 1440., 900., 2.0);
+        assert_eq!(rect(source_rect(true, crop)), (0., 0., 1440., 900.));
+    }
+
     #[test]
     fn initial_capture_uses_window_filter_for_non_excluded_window() {
         let config = window_config(Some(window_id("247")));
@@ -1490,6 +1584,20 @@ mod tests {
             capturable_window(&restart_config, &restart_excluded, "restart"),
             Some(&window_id("247"))
         );
+    }
+
+    #[test]
+    fn only_no_capture_source_counts_as_the_source_disappearing() {
+        let sc_domain = || sc::error::domain().to_string();
+
+        assert!(is_capture_source_gone(sc_domain(), -3815));
+        assert!(!is_capture_source_gone(sc_domain(), -3817));
+        assert!(!is_capture_source_gone(sc_domain(), -3821));
+        assert!(!is_capture_source_gone(sc_domain(), -3811));
+        assert!(!is_capture_source_gone(
+            "NSCocoaErrorDomain".to_string(),
+            -3815
+        ));
     }
 
     #[test]

@@ -20,7 +20,6 @@ import {
 } from "react";
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
-import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
@@ -404,9 +403,7 @@ export const ShareVideo = forwardRef<
 			canFinalizeDesktopSegments &&
 			!userConfirmedStopped &&
 			segmentUploadProgress?.status === "error" &&
-			isRetryableDesktopSegmentsFinalizationError(
-				segmentUploadProgress.errorMessage,
-			);
+			segmentUploadProgress.errorKind === "retryable";
 		useEffect(() => {
 			if (
 				!shouldAutoFinalizeFailedSegments ||

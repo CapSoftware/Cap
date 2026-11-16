@@ -29,7 +29,7 @@ const schema = z.array(
 	z.object({
 		label: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 		provider: z.enum(["s3", "googleDrive"]),
-		manifest: z.record(z.unknown()),
+		manifest: z.record(z.string(), z.unknown()),
 		fragments: z.array(
 			z.object({
 				track: z.enum(["video", "audio"]),

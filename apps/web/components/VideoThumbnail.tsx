@@ -61,12 +61,12 @@ interface VideoThumbnailProps {
 	showPreview?: boolean;
 }
 
-const formatDuration = (durationSecs: number) => {
-	const duration = durationParts(durationSecs);
+export const formatDuration = (durationSecs: number) => {
+	const duration = durationParts(Math.ceil(durationSecs));
 
 	const totalHours = Math.floor(duration.asHours);
 	const totalMinutes = Math.floor(duration.asMinutes);
-	const remainingSeconds = Math.ceil(duration.asSeconds % 60); // Use ceil to avoid 0 secs
+	const remainingSeconds = duration.asSeconds % 60;
 
 	if (totalHours > 0) {
 		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
@@ -290,7 +290,7 @@ const VideoThumbnailView = memo(
 					/>
 				)}
 				{videoDuration && (
-					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
+					<p className="absolute bottom-2.5 left-2.5 z-10 px-1.5 py-[3px] text-[11px] font-medium tabular-nums leading-none text-white rounded-md backdrop-blur-sm bg-black/60">
 						{formatDuration(videoDuration)}
 					</p>
 				)}
