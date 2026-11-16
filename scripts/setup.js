@@ -153,10 +153,7 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
-			);
+			await expandArchive(ffmpegZipPath, targetDir);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
@@ -234,6 +231,8 @@ async function main() {
 			"\\",
 			"/",
 		)}"\n`;
+
+		await setupWindowsVcRuntime(vcInstallDir.trim());
 
 		const cmakePath = path.join(
 			vcInstallDir.trim(),
@@ -412,12 +411,18 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// 1.24.2 through 1.26 keep memory from every inference whose input changes: a
+// 30 minute Parakeet transcription peaked at 2.6 GB on 1.24.2 and 1.9 GB on
+// 1.30.1. Microsoft publishes no x86_64 macOS build after 1.23.2, so Intel Macs
+// stay on that release.
+const ONNX_RUNTIME_VERSION = "1.30.1";
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
 			? {
-					version: "1.24.2",
-					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+					version: ONNX_RUNTIME_VERSION,
+					name: `onnxruntime-osx-arm64-${ONNX_RUNTIME_VERSION}.tgz`,
 				}
 			: {
 					version: "1.23.2",
@@ -469,12 +474,12 @@ async function setupMacOSOnnxRuntime() {
 async function setupWindowsOnnxRuntime() {
 	const assets = {
 		x86_64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-x64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-x64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 		aarch64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-arm64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-arm64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 	};
 	const asset = assets[arch];
@@ -501,10 +506,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, targetDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -540,7 +542,7 @@ async function setupWindowsOnnxRuntime() {
 }
 
 async function setupLinuxOnnxRuntime() {
-	const version = "1.24.3";
+	const version = ONNX_RUNTIME_VERSION;
 	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
 	if (!platformArch)
 		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
@@ -581,6 +583,58 @@ async function setupLinuxOnnxRuntime() {
 	} else console.log("Using cached ONNX Runtime shared library");
 
 	return outputPath;
+}
+
+const WINDOWS_VC_RUNTIME_DLLS = [
+	"msvcp140.dll",
+	"msvcp140_1.dll",
+	"vcruntime140.dll",
+	"vcruntime140_1.dll",
+];
+
+// Cap.exe, cap-cli.exe, cap-muxer.exe, onnxruntime.dll and dxcompiler.dll all
+// import the Visual C++ runtime, which a clean Windows 11 does not have. The
+// installer ships the runtime next to them (app-local deployment) from the
+// same Visual Studio that linked them, so it is never older than the build.
+async function setupWindowsVcRuntime(vcInstallDir) {
+	const redistArch = { x86_64: "x64", aarch64: "arm64" }[arch];
+	if (!redistArch)
+		throw new Error(
+			`Unsupported Windows architecture for the VC runtime: ${arch}`,
+		);
+	const version = (
+		await fs.readFile(
+			path.join(
+				vcInstallDir,
+				"VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt",
+			),
+			"utf-8",
+		)
+	).trim();
+	const archDir = path.join(
+		vcInstallDir,
+		"VC/Redist/MSVC",
+		version,
+		redistArch,
+	);
+	const crtDir = (await fs.readdir(archDir))
+		.filter((name) => /^Microsoft\.VC\d+\.CRT$/.test(name))
+		.sort()
+		.pop();
+	if (!crtDir)
+		throw new Error(
+			`No Visual C++ runtime redistributable found in ${archDir}`,
+		);
+
+	const outputDir = path.join(targetDir, "native-deps", "vcruntime");
+	await fs.rm(outputDir, { recursive: true, force: true });
+	await fs.mkdir(outputDir, { recursive: true });
+	for (const name of WINDOWS_VC_RUNTIME_DLLS)
+		await fs.copyFile(
+			path.join(archDir, crtDir, name),
+			path.join(outputDir, name),
+		);
+	console.log(`Prepared the Visual C++ runtime ${version} for ${redistArch}`);
 }
 
 async function setupWindowsDxc() {
@@ -624,10 +678,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -700,6 +751,21 @@ async function signMacOSDylib(filePath) {
 
 	await exec(
 		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
+	);
+}
+
+async function expandArchive(archivePath, destination) {
+	// Under a pwsh parent, PSModulePath points Windows PowerShell at
+	// PowerShell 7's Archive module, which fails on .NET Framework without a
+	// non-zero exit, leaving nothing extracted.
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(
+			([key]) => key.toLowerCase() !== "psmodulepath",
+		),
+	);
+	await exec(
+		`$ErrorActionPreference = 'Stop'; Expand-Archive -Path "${archivePath}" -DestinationPath "${destination}" -Force`,
+		{ shell: "powershell.exe", env },
 	);
 }
 

@@ -177,11 +177,61 @@ describe("parseDeliveryLine", () => {
 		expect(parseDeliveryLine(line({ "cs-method": method }))).toBeNull();
 	});
 
-	it("marks an edge Error transfer as abandoned and ignores empty responses", () => {
+	it("marks an edge Error transfer cut short as abandoned and ignores empty responses", () => {
 		expect(
-			parseDeliveryLine(line({ "x-edge-result-type": "Error" })),
-		).toMatchObject({ abandoned: true, bytes: 100400 });
+			parseDeliveryLine(
+				line({ "x-edge-result-type": "Error", "sc-bytes": "600" }),
+			),
+		).toMatchObject({ abandoned: true, bytes: 600 });
 		expect(parseDeliveryLine(line({ "sc-bytes": "0" }))).toBeNull();
+	});
+
+	it("counts an edge Error transfer whose whole range was sent as delivered", () => {
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"x-edge-detailed-result-type": "ClientCommError",
+				}),
+			),
+		).toMatchObject({ abandoned: false, bytes: 100400, bodyBytes: 100000 });
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"sc-range-start": "-",
+					"sc-range-end": "-",
+				}),
+			),
+		).toMatchObject({ abandoned: false, bodyBytes: 100000 });
+	});
+
+	it("measures an edge Error transfer against the content length when the range runs past it", () => {
+		const pastTheEnd = {
+			"x-edge-result-type": "Error",
+			"sc-content-len": "1000",
+			"sc-range-start": "0",
+			"sc-range-end": "2000000",
+		};
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "1100" })),
+		).toMatchObject({ abandoned: false, bodyBytes: 1000 });
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "500" })),
+		).toMatchObject({ abandoned: true, bodyBytes: 500 });
+	});
+
+	it("keeps an edge Error transfer with no known length abandoned", () => {
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"sc-content-len": "-",
+					"sc-range-start": "-",
+					"sc-range-end": "-",
+				}),
+			),
+		).toMatchObject({ abandoned: true, bytes: 100400 });
 	});
 
 	it("caps body bytes at what left the edge, the content length and the range", () => {
@@ -253,6 +303,128 @@ describe("HLS segment seconds", () => {
 			seconds,
 			9,
 		);
+	});
+});
+
+// A ladder joined from slices: each slice's media file follows its own init
+// section, and a range with no offset continues within its own file.
+const JOINED_PLAYLIST = [
+	"#EXTM3U",
+	"#EXT-X-VERSION:7",
+	"#EXT-X-TARGETDURATION:4",
+	"#EXT-X-PLAYLIST-TYPE:EVENT",
+	'#EXT-X-MAP:URI="720p-0-tokA.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:1000@800",
+	"720p-0-tokA.m4s",
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:1000",
+	"720p-0-tokA.m4s",
+	'#EXT-X-MAP:URI="720p-1-tokB.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:3000@800",
+	"720p-1-tokB.m4s",
+	"#EXTINF:2.000000,",
+	"#EXT-X-BYTERANGE:1500",
+	"720p-1-tokB.m4s",
+	"#EXT-X-ENDLIST",
+].join("\n");
+
+const SLICE_PLAYLIST = [
+	"#EXTM3U",
+	'#EXT-X-MAP:URI="720p.m4s",BYTERANGE="800@0"',
+	"#EXTINF:4.000000,",
+	"#EXT-X-BYTERANGE:3000@800",
+	"720p.m4s",
+	"#EXTINF:2.000000,",
+	"#EXT-X-BYTERANGE:1500@3800",
+	"720p.m4s",
+].join("\n");
+
+describe("a ladder encoded in slices", () => {
+	const sliceKey = `${base}/hls/720p-1-tokB.m4s`;
+	const request = (range: [number, number]) => {
+		const parsed = parseDeliveryLine(
+			line({
+				"cs-uri-stem": sliceKey,
+				"sc-range-start": String(range[0]),
+				"sc-range-end": String(range[1]),
+				"sc-content-len": String(range[1] - range[0] + 1),
+			}),
+		);
+		if (!parsed) throw new Error("not parsed");
+		return parsed;
+	};
+	const resolver = (stored: Record<string, string>): DeliveryResolver => ({
+		async hls(key, mediaName) {
+			const text = stored[key];
+			const name = key.slice(key.lastIndexOf("/") + 1);
+			return text
+				? parseHlsByteRanges(text, mediaName ?? name.replace(/\.m3u8$/, ".m4s"))
+				: null;
+		},
+		async video() {
+			return VIDEO_ROW;
+		},
+	});
+
+	it("counts a slice's media file under its rendition", () => {
+		expect(request([800, 3799])).toMatchObject({
+			appId: APP,
+			videoId: VIDEO,
+			kind: "720p",
+			key: sliceKey.slice(1),
+		});
+		expect(
+			parseDeliveryLine(line({ "cs-uri-stem": `${base}/hls/audio-0-tokA.m4s` }))
+				?.kind,
+		).toBe("audio");
+	});
+
+	it("reads only the requested slice's segments from the joined playlist", () => {
+		expect(parseHlsByteRanges(JOINED_PLAYLIST, "720p-1-tokB.m4s")).toEqual([
+			{ start: 800, end: 3800, duration: 4 },
+			{ start: 3800, end: 5300, duration: 2 },
+		]);
+		expect(parseHlsByteRanges(JOINED_PLAYLIST, "720p-0-tokA.m4s")).toEqual([
+			{ start: 800, end: 1800, duration: 4 },
+			{ start: 1800, end: 2800, duration: 4 },
+		]);
+		expect(
+			parseHlsByteRanges(
+				JOINED_PLAYLIST.replace(
+					"720p-0-tokA.m4s\n#EXTINF:4",
+					"other.m4s\n#EXTINF:4",
+				),
+				"720p-1-tokB.m4s",
+			),
+		).toBeNull();
+	});
+
+	it("maps a slice's segment to exact seconds once the ladder is whole", async () => {
+		const stored = {
+			[`${base.slice(1)}/hls/720p.m3u8`]: JOINED_PLAYLIST,
+		};
+		expect(
+			await deliveredSeconds(request([800, 3799]), resolver(stored)),
+		).toEqual({ tier: "720p", seconds: 4, method: "playlist" });
+	});
+
+	it("maps it from the slice's own playlist while the ladder is still growing", async () => {
+		const stored = {
+			[`${base.slice(1)}/slices/720p-1-tokB.m3u8`]: SLICE_PLAYLIST,
+		};
+		expect(
+			await deliveredSeconds(request([3800, 5299]), resolver(stored)),
+		).toEqual({ tier: "720p", seconds: 2, method: "playlist" });
+	});
+
+	it("counts each slice's bytes once, never against a neighbour", async () => {
+		const stored = {
+			[`${base.slice(1)}/hls/720p.m3u8`]: JOINED_PLAYLIST,
+		};
+		const whole = await deliveredSeconds(request([0, 5299]), resolver(stored));
+		expect(whole?.seconds).toBeCloseTo(6, 9);
 	});
 });
 
@@ -589,6 +761,22 @@ describe("meterDeliveryLog", () => {
 			["2026-11-12", APP, VIDEO, "audio", 1, 50, 0, 0],
 			["2026-11-13", APP, VIDEO, "720p", 1, 100400, 4000, 0],
 			["2026-11-12", APP, VIDEO, "1080p", 0, 0, 0, 9000],
+		]);
+	});
+
+	it("meters an edge Error transfer that sent its whole range as delivered seconds", async () => {
+		const result = await meterDeliveryLog(
+			gz([
+				line({
+					"x-edge-result-type": "Error",
+					"x-edge-detailed-result-type": "ClientCommError",
+				}),
+				line({ "x-edge-result-type": "Error", "sc-bytes": "600" }),
+			]),
+			new FakeResolver(),
+		);
+		expect(result.parts).toEqual([
+			["2026-11-12", APP, VIDEO, "720p", 1, 100400, 4000, 600],
 		]);
 	});
 

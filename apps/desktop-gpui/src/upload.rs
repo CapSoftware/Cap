@@ -1377,16 +1377,20 @@ pub async fn upload_exported_video(
     ) else {
         return Ok(UploadResult::NotAuthenticated);
     };
-    context
+    let result = context
         .run(upload_exported_video_inner(
-            project_path,
+            project_path.clone(),
             organization_id,
             progress,
             cancel,
             false,
         ))
         .await
-        .map(|(result, _)| result)
+        .map(|(result, _)| result);
+    if matches!(result, Ok(UploadResult::Success(_))) {
+        crate::automation::upload_completed(&project_path, None, None);
+    }
+    result
 }
 
 async fn upload_exported_video_inner(
@@ -2504,22 +2508,26 @@ async fn presign_put_target(
         .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))
 }
 
-async fn upload_signed_bytes_inner(
+fn signed_upload_request(
+    client: &reqwest::Client,
     target: SignedUploadTarget,
     subpath: &str,
     bytes: Vec<u8>,
-    cancel: Option<&AtomicBool>,
-) -> Result<(), AuthApiError> {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
+) -> reqwest::RequestBuilder {
     let length = bytes.len() as u64;
-    let mut request = CLIENT
-        .get_or_init(upload_client)
+    let mut request = client
         .put(&target.url)
         .header("Content-Length", length)
-        .header("Content-Type", upload_content_type(subpath))
         .timeout(Duration::from_secs(5 * 60))
         .body(bytes);
+    // reqwest appends headers; duplicating the signed Content-Type makes RustFS reject the PUT.
+    if !target
+        .headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        request = request.header("Content-Type", upload_content_type(subpath));
+    }
     if is_google_drive_resumable_url(&target.url) && length > 0 {
         request = request.header(
             "Content-Range",
@@ -2529,6 +2537,18 @@ async fn upload_signed_bytes_inner(
     for (name, value) in target.headers {
         request = request.header(name, value);
     }
+    request
+}
+
+async fn upload_signed_bytes_inner(
+    target: SignedUploadTarget,
+    subpath: &str,
+    bytes: Vec<u8>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), AuthApiError> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    let request = signed_upload_request(CLIENT.get_or_init(upload_client), target, subpath, bytes);
     let response = optional_upload_step(cancel, || async {
         send_upload_request(request).await.map_err(|error| {
             if error.is_timeout() {
@@ -2620,6 +2640,7 @@ pub async fn upload_rendered_screenshot(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<ScreenshotShareOutcome, String> {
     let auth = crate::store::auth_snapshot();
     if !auth.signed_in() {
@@ -2631,7 +2652,7 @@ pub async fn upload_rendered_screenshot(
         return Ok(ScreenshotShareOutcome::UpgradeRequired);
     }
 
-    match upload_screenshot_bytes(image_bytes, content_type, video_id).await {
+    match upload_screenshot_bytes(image_bytes, content_type, video_id, organization_id).await {
         Ok(item) => Ok(ScreenshotShareOutcome::Uploaded(item)),
         Err(AuthApiError::InvalidAuthentication) => Ok(ScreenshotShareOutcome::NotAuthenticated),
         Err(AuthApiError::UpgradeRequired) => Ok(ScreenshotShareOutcome::UpgradeRequired),
@@ -2644,8 +2665,9 @@ async fn upload_screenshot_bytes(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthApiError> {
-    let created = create_or_get_video(true, video_id, None, None, None).await?;
+    let created = create_or_get_video(true, video_id, None, None, organization_id).await?;
     let link = created.link();
     let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
@@ -2795,6 +2817,185 @@ mod tests {
             let created = parse_created_video(&body).unwrap();
             assert_eq!(created.share_url, None, "{share_url}");
         }
+    }
+
+    async fn strict_put_server() -> (String, Arc<Mutex<Vec<Vec<String>>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/bucket/object", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                let header_end = loop {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break None;
+                    }
+                    raw.extend_from_slice(&buf[..read]);
+                    if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(end);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let lines: Vec<String> = String::from_utf8_lossy(&raw[..header_end])
+                    .lines()
+                    .skip(1)
+                    .map(str::to_owned)
+                    .collect();
+                let header = |name: &str| {
+                    lines
+                        .iter()
+                        .filter(|line| {
+                            line.split_once(':')
+                                .is_some_and(|(key, _)| key.eq_ignore_ascii_case(name))
+                        })
+                        .count()
+                };
+                let length: usize = lines
+                    .iter()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        if key.eq_ignore_ascii_case("content-length") {
+                            value.trim().parse().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let mut body = raw.len() - header_end - 4;
+                while body < length {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    body += read;
+                }
+                let response: &[u8] = if header("content-type") > 1 {
+                    b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                } else {
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                };
+                seen.lock().unwrap().push(lines);
+                socket.write_all(response).await.ok();
+            }
+        });
+        (url, requests)
+    }
+
+    #[tokio::test]
+    async fn signed_uploads_send_one_content_type_on_the_wire() {
+        let (url, requests) = strict_put_server().await;
+        for (subpath, signed_type, sent_type) in [
+            ("segments/manifest.json", Some("application/json"), "application/json"),
+            ("segments/recording.json", Some("application/json"), "application/json"),
+            ("screenshot/screen-capture.jpg", Some("image/jpeg"), "image/jpeg"),
+            ("screenshot/screen-capture.png", Some("image/png"), "image/png"),
+            ("segments/video/segment_001.m4s", Some("video/mp4"), "video/mp4"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            ("segments/manifest.json", None, "application/json"),
+        ] {
+            let headers = signed_type
+                .map(|value| HashMap::from([("Content-Type".to_string(), value.to_string())]))
+                .unwrap_or_default();
+            upload_signed_bytes_inner(
+                SignedUploadTarget {
+                    url: url.clone(),
+                    headers,
+                },
+                subpath,
+                vec![7; 32],
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{subpath} with {signed_type:?}: {error}"));
+            let lines = requests.lock().unwrap().pop().unwrap();
+            let content_types: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    if key.eq_ignore_ascii_case("content-type") {
+                        Some(value.trim())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(content_types, [sent_type], "{subpath}");
+        }
+    }
+
+    #[test]
+    fn signed_upload_request_sends_one_content_type() {
+        let client = reqwest::Client::new();
+        for (subpath, supplied_name, expected) in [
+            ("segments/manifest.json", None, "application/json"),
+            ("screenshot/screen-capture.jpg", None, "image/jpeg"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            (
+                "segments/manifest.json",
+                Some("Content-Type"),
+                "application/json",
+            ),
+            (
+                "screenshot/screen-capture.jpg",
+                Some("content-type"),
+                "image/jpeg",
+            ),
+            (
+                "segments/manifest.json",
+                Some("cOnTeNt-TyPe"),
+                "application/custom+json",
+            ),
+        ] {
+            let mut headers = HashMap::from([("x-amz-meta-test".into(), "preserved".into())]);
+            if let Some(name) = supplied_name {
+                headers.insert(name.into(), expected.into());
+            }
+            let request = signed_upload_request(
+                &client,
+                SignedUploadTarget {
+                    url: "http://127.0.0.1/upload".into(),
+                    headers,
+                },
+                subpath,
+                vec![1, 2, 3],
+            )
+            .build()
+            .unwrap();
+
+            assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
+            assert_eq!(request.headers()["content-type"], expected);
+            assert_eq!(request.headers()["content-length"], "3");
+            assert_eq!(request.headers()["x-amz-meta-test"], "preserved");
+            assert_eq!(
+                request.body().unwrap().as_bytes(),
+                Some([1, 2, 3].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn signed_upload_request_preserves_drive_content_range() {
+        let request = signed_upload_request(
+            &reqwest::Client::new(),
+            SignedUploadTarget {
+                url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=test".into(),
+                headers: HashMap::from([("Content-Type".into(), "image/png".into())]),
+            },
+            "screenshot/screen-capture.png",
+            vec![1, 2, 3],
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(request.headers()["content-range"], "bytes 0-2/3");
+        assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
     }
 
     #[tokio::test]

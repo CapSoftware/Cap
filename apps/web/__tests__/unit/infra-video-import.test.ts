@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dnsState = vi.hoisted(() => ({
@@ -57,7 +59,13 @@ vi.mock("@/lib/developer-video-charge", () => ({}));
 const {
 	checkImportUrl,
 	headStop,
+	IMPORT_PREFLIGHT_TIMEOUT_MS,
+	IMPORT_REAP_AFTER_MS,
+	IMPORT_RETRY_WINDOW_MS,
+	IMPORT_STEP_MAX_DURATION_MS,
+	IMPORT_TOTAL_TIMEOUT_MS,
 	ImportStop,
+	importErrorResponse,
 	importStopFor,
 	isMissingImportTable,
 	openImportSource,
@@ -474,8 +482,158 @@ describe("timeouts", () => {
 		const stop = importStopFor(error, source.stopped());
 		source.close();
 		clearInterval(timer);
+		expect(stop.code).toBe("download_timeout");
+		expect(stop.message).toBe(
+			"The file did not finish downloading within 10 minutes. Upload it with POST /api/developer/v1/uploads, or serve it from a faster host",
+		);
+		expect(importErrorResponse(stop).status).toBe(422);
+	});
+
+	it("keeps a steady download going past the stall time when the head arrives in small pieces", async () => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		let sent = 0;
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(MP4_HEAD);
+				timer = setInterval(() => {
+					sent++;
+					if (sent > 30) {
+						clearInterval(timer);
+						controller.close();
+						return;
+					}
+					controller.enqueue(new Uint8Array(512));
+				}, 10);
+			},
+			cancel() {
+				clearInterval(timer);
+			},
+		});
+		const source = await openImportSource("https://media.example.com/a", {
+			isBlocked: publicNames,
+			request: async () => new Response(body, { status: 200 }),
+			stallTimeoutMs: 100,
+			totalTimeoutMs: 5_000,
+		});
+		let error: unknown;
+		let read = 0;
+		try {
+			for (;;) {
+				const next = await source.read();
+				if (next.done) break;
+				read += next.value.length;
+			}
+		} catch (caught) {
+			error = caught;
+		}
+		const stopped = source.stopped();
+		source.close();
+		clearInterval(timer);
+		expect(error).toBeUndefined();
+		expect(stopped).toBeNull();
+		expect(read).toBe(MP4_HEAD.length + 30 * 512);
+	});
+
+	it("says a preflight that runs out of time is the host, not the download budget", async () => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		const stop = await preflightImport("https://media.example.com/a", {
+			isBlocked: publicNames,
+			request: async () =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							timer = setInterval(
+								() => controller.enqueue(new Uint8Array([0])),
+								10,
+							);
+						},
+						cancel() {
+							clearInterval(timer);
+						},
+					}),
+					{ status: 200 },
+				),
+			stallTimeoutMs: 1_000,
+			totalTimeoutMs: 100,
+		}).catch((error) => error);
+		clearInterval(timer);
+		expect(stop).toBeInstanceOf(ImportStop);
 		expect(stop.code).toBe("timeout");
-		expect(stop.message).toMatch(/did not finish downloading/);
+		expect(stop.message).toBe(
+			`The URL did not start sending the file within ${IMPORT_PREFLIGHT_TIMEOUT_MS / 1000} seconds`,
+		);
+	});
+});
+
+describe("time budget", () => {
+	// Measured on production: the step's code starts within a second of its
+	// invocation. After the deadline the step still aborts the multipart
+	// upload and records the failure, or completes a multipart upload of up
+	// to 5 GB, and both must land before Vercel stops the function.
+	const AFTER_DEADLINE_MS = 3 * 60 * 1000;
+
+	it("ends the download early enough to record the outcome before the function is stopped", () => {
+		expect(IMPORT_STEP_MAX_DURATION_MS).toBe(800_000);
+		expect(IMPORT_TOTAL_TIMEOUT_MS + AFTER_DEADLINE_MS).toBeLessThanOrEqual(
+			IMPORT_STEP_MAX_DURATION_MS,
+		);
+	});
+
+	it("only ends an import from the cron once a re-run would also be over", () => {
+		expect(IMPORT_REAP_AFTER_MS).toBeGreaterThanOrEqual(
+			IMPORT_RETRY_WINDOW_MS + IMPORT_TOTAL_TIMEOUT_MS + AFTER_DEADLINE_MS,
+		);
+	});
+});
+
+describe("memory", () => {
+	setFlagsFromString("--expose-gc");
+	const collect = runInNewContext("gc") as () => void;
+
+	// Counts the chunks that stay reachable while the download is still open,
+	// rather than reading memoryUsage(), whose array buffer total drops only
+	// once V8's background sweeper has freed them.
+	it("keeps no chunk it has already handed on, so a large file is not held in memory", async () => {
+		const CHUNK = 256 * 1024;
+		const TOTAL_CHUNKS = 384;
+		let sent = 0;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (sent === TOTAL_CHUNKS) {
+					controller.close();
+					return;
+				}
+				const chunk = new Uint8Array(CHUNK);
+				if (sent === 0) chunk.set(MP4_HEAD);
+				sent++;
+				controller.enqueue(chunk);
+			},
+		});
+		const source = await openImportSource("https://media.example.com/a", {
+			isBlocked: publicNames,
+			request: async () =>
+				new Response(body, {
+					status: 200,
+					headers: {
+						"content-type": "video/mp4",
+						"content-length": String(CHUNK * TOTAL_CHUNKS),
+					},
+				}),
+		});
+		const handedOn: WeakRef<Uint8Array>[] = [];
+		let read = 0;
+		for (;;) {
+			const next = await source.read();
+			if (next.done) break;
+			read += next.value.length;
+			handedOn.push(new WeakRef(next.value));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		collect();
+		const stillHeld = handedOn.filter((chunk) => chunk.deref()).length;
+		source.close();
+		expect(read).toBe(CHUNK * TOTAL_CHUNKS);
+		expect(stillHeld).toBeLessThanOrEqual(2);
 	});
 });
 

@@ -4,7 +4,7 @@ import {
 	developerVideoImports,
 	developerVideos,
 } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
 import {
@@ -80,9 +80,13 @@ vi.mock("@/lib/infra-video-upload", () => ({
 const {
 	createInfraVideoImport,
 	IMPORT_MAX_PER_KEY_PER_HOUR,
+	IMPORT_REAP_AFTER_MS,
 	IMPORT_STALE_SLOT_MS,
+	reapStalledImports,
 	runInfraVideoImport,
 } = await import("@/lib/infra-video-import");
+const { storedVideoGroupsQuery } = await import("@/lib/infra-storage");
+const { MEDIA_CONTAINER_SNIFF_BYTES } = await import("@/lib/media-container");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 const missingTableUrl = process.env.CAP_INFRA_IMPORT_MISSING_TABLE_DATABASE_URL;
@@ -714,6 +718,34 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
+			it("still reports an unexpected download failure as an error", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: serving(mp4Bytes(40)),
+					writer: () => ({
+						put: async () => {
+							throw new Error("socket hang up");
+						},
+					}),
+					partBytes: 16,
+				});
+				expect(outcome).toBe("failed");
+				expect(error).toHaveBeenCalledWith(
+					"[developer-import] Download failed",
+					{
+						videoId,
+						code: "url_unreachable",
+						message: "socket hang up",
+					},
+				);
+				expect(warn).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
+			});
+
 			it("aborts the stored parts when completion fails for storage", async () => {
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
@@ -792,8 +824,264 @@ describe.runIf(Boolean(databaseUrl))(
 				const outcome = await runInfraVideoImport(videoId, { guards });
 				expect(outcome).toBe("failed");
 				expect(guards.request).not.toHaveBeenCalled();
-				expect((await importRow(videoId))?.errorCode).toBe("timeout");
+				expect((await importRow(videoId))?.errorCode).toBe("download_timeout");
 				expect((await videoRow(videoId))?.status).toBe("errored");
+			});
+
+			const TIMED_OUT_REASON =
+				"Import failed: The file did not finish downloading within 10 minutes. Upload it with POST /api/developer/v1/uploads, or serve it from a faster host";
+
+			const trickling = () => {
+				let timer: ReturnType<typeof setInterval> | undefined;
+				return {
+					stop: () => clearInterval(timer),
+					guards: {
+						isBlocked: async () => false,
+						request: vi.fn(
+							async () =>
+								new Response(
+									new ReadableStream<Uint8Array>({
+										start(controller) {
+											controller.enqueue(mp4Bytes(MEDIA_CONTAINER_SNIFF_BYTES));
+											timer = setInterval(
+												() => controller.enqueue(new Uint8Array(1024)),
+												10,
+											);
+										},
+										cancel() {
+											clearInterval(timer);
+										},
+									}),
+									{ status: 200, headers: { "content-type": "video/mp4" } },
+								),
+						),
+					},
+				};
+			};
+
+			const storedFor = async (appId: string) => {
+				const groups = await storedVideoGroupsQuery(
+					[appId],
+					database() as never,
+					undefined,
+					new Date(),
+					undefined,
+					new Date(0),
+				);
+				return groups.reduce(
+					(total, group) => ({
+						seconds: total.seconds + Number(group.seconds),
+						owed:
+							total.owed +
+							Number(group.owedFirstMonth1080p) +
+							Number(group.owedFirstMonth1440p) +
+							Number(group.owedFirstMonth2160p),
+					}),
+					{ seconds: 0, owed: 0 },
+				);
+			};
+
+			it("records a timed out download as errored inside its budget, with a part upload still in flight, and charges nothing", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				const source = trickling();
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
+				const budgetMs = 300;
+				const started = Date.now();
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: { ...source.guards, totalTimeoutMs: budgetMs },
+					writer: ({ signal }) => ({
+						put: () =>
+							new Promise<string>((_, reject) => {
+								signal.addEventListener(
+									"abort",
+									() => reject(new Error("The part upload was stopped")),
+									{ once: true },
+								);
+							}),
+					}),
+					partBytes: 1024,
+				});
+				const elapsed = Date.now() - started;
+				source.stop();
+				expect(warn).toHaveBeenCalledWith(
+					"[developer-import] Download ran out of time",
+					{ videoId, code: "download_timeout" },
+				);
+				expect(error).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
+				expect(outcome).toBe("failed");
+				expect(elapsed).toBeGreaterThanOrEqual(budgetMs);
+				expect(elapsed).toBeLessThan(budgetMs + 2_000);
+				expect(await importRow(videoId)).toMatchObject({
+					state: "failed",
+					errorCode: "download_timeout",
+				});
+				const video = await videoRow(videoId);
+				expect(video?.status).toBe("errored");
+				expect(video?.errorReason).toBe(TIMED_OUT_REASON);
+				expect(video?.duration).toBeNull();
+				expect(mocks.announce).toHaveBeenCalledWith(
+					{ id: videoId, appId },
+					{ type: "video.errored" },
+				);
+				expect(mocks.abort).toHaveBeenCalledWith({
+					appId,
+					videoId,
+					uploadId: "upload-1",
+				});
+				expect(mocks.complete).not.toHaveBeenCalled();
+				expect(await storedFor(appId)).toEqual({ seconds: 0, owed: 0 });
+			});
+
+			describe("an import whose function was stopped", () => {
+				const stalledAt = () =>
+					new Date(Date.now() - IMPORT_REAP_AFTER_MS - 60_000);
+
+				it("is ended as errored by the cron, once, and charges nothing", async () => {
+					const appId = await seedApp();
+					const videoId = await seedImport(appId, stalledAt());
+					const first = await reapStalledImports();
+					expect(first.failed).toBe(0);
+					expect(first.reaped).toBeGreaterThanOrEqual(1);
+					expect(await importRow(videoId)).toMatchObject({
+						state: "failed",
+						errorCode: "download_timeout",
+					});
+					const video = await videoRow(videoId);
+					expect(video?.status).toBe("errored");
+					expect(video?.errorReason).toBe(TIMED_OUT_REASON);
+					expect(video?.duration).toBeNull();
+					expect(mocks.announce).toHaveBeenCalledWith(
+						{ id: videoId, appId },
+						{ type: "video.errored" },
+					);
+
+					await reapStalledImports();
+					expect(
+						mocks.announce.mock.calls.filter(([video]) => video.id === videoId),
+					).toHaveLength(1);
+					expect(mocks.admit).not.toHaveBeenCalled();
+					expect(await storedFor(appId)).toEqual({ seconds: 0, owed: 0 });
+				});
+
+				it("is ended once when two cron runs overlap", async () => {
+					const appId = await seedApp();
+					const videoId = await seedImport(appId, stalledAt());
+					const runs = await Promise.all([
+						reapStalledImports(),
+						reapStalledImports(),
+					]);
+					expect(runs.map((run) => run.failed)).toEqual([0, 0]);
+					expect((await videoRow(videoId))?.status).toBe("errored");
+					expect(
+						mocks.announce.mock.calls.filter(([video]) => video.id === videoId),
+					).toHaveLength(1);
+				});
+
+				it("leaves an import alone while it is still inside its time", async () => {
+					const appId = await seedApp();
+					const videoId = await seedImport(
+						appId,
+						new Date(Date.now() - IMPORT_REAP_AFTER_MS + 60_000),
+					);
+					await reapStalledImports();
+					expect((await importRow(videoId))?.state).toBe("downloading");
+					expect((await videoRow(videoId))?.status).toBe("uploading");
+				});
+
+				it("does not touch an import whose completion already moved the video on", async () => {
+					const appId = await seedApp();
+					const completing = await seedImport(appId, stalledAt());
+					await database()
+						.update(developerVideos)
+						.set({ status: "processing" })
+						.where(eq(developerVideos.id, completing));
+					const recorded = await seedImport(appId, stalledAt());
+					await database()
+						.update(developerVideos)
+						.set({ duration: 42 })
+						.where(eq(developerVideos.id, recorded));
+
+					await reapStalledImports();
+
+					for (const videoId of [completing, recorded]) {
+						expect((await importRow(videoId))?.state).toBe("downloading");
+					}
+					expect((await videoRow(completing))?.status).toBe("processing");
+					expect((await videoRow(recorded))?.status).toBe("uploading");
+					expect((await videoRow(recorded))?.duration).toBe(42);
+					expect(mocks.announce).not.toHaveBeenCalled();
+				});
+
+				it("closes the import of a video deleted while it downloaded, without touching the video or sending an event", async () => {
+					const appId = await seedApp();
+					const deleted = await seedImport(appId, stalledAt());
+					const deletedAt = new Date(Date.now() - IMPORT_REAP_AFTER_MS);
+					deletedAt.setMilliseconds(0);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt })
+						.where(eq(developerVideos.id, deleted));
+					const before = await videoRow(deleted);
+					const recent = await seedImport(
+						appId,
+						new Date(Date.now() - IMPORT_REAP_AFTER_MS + 60_000),
+					);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt: new Date() })
+						.where(eq(developerVideos.id, recent));
+
+					const first = await reapStalledImports();
+					expect(first.failed).toBe(0);
+
+					const row = await importRow(deleted);
+					expect(row).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+					});
+					expect(row?.finishedAt).not.toBeNull();
+					expect(await videoRow(deleted)).toEqual(before);
+					expect((await importRow(recent))?.state).toBe("downloading");
+					expect(mocks.announce).not.toHaveBeenCalled();
+
+					await reapStalledImports();
+					expect(await importRow(deleted)).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+						finishedAt: row?.finishedAt,
+					});
+				});
+
+				it("lets a completion that wins the race keep its result", async () => {
+					const appId = await seedApp();
+					const videoId = await seedImport(appId, stalledAt());
+					const [reaped] = await Promise.all([
+						reapStalledImports(),
+						database()
+							.update(developerVideos)
+							.set({ status: "processing" })
+							.where(
+								and(
+									eq(developerVideos.id, videoId),
+									eq(developerVideos.status, "uploading"),
+								),
+							),
+					]);
+					expect(reaped.failed).toBe(0);
+					const video = await videoRow(videoId);
+					const row = await importRow(videoId);
+					if (video?.status === "processing") {
+						expect(row?.state).toBe("downloading");
+						expect(video.errorReason).toBeNull();
+					} else {
+						expect(video?.status).toBe("errored");
+						expect(row?.errorCode).toBe("download_timeout");
+					}
+				});
 			});
 
 			it("does nothing for an import that already finished", async () => {
