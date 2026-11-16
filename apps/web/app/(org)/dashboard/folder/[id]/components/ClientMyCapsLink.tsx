@@ -1,7 +1,7 @@
 "use client";
 
+import { classNames } from "@cap/utils";
 import type { Space } from "@cap/web-domain";
-import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,8 +25,12 @@ import { registerDropTarget } from "./ClientCapCard";
 
 export function ClientMyCapsLink({
 	spaceId,
+	compact = false,
+	className,
 }: {
 	spaceId?: Space.SpaceIdOrOrganisationId;
+	compact?: boolean;
+	className?: string;
 }) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
@@ -126,17 +130,20 @@ export function ClientMyCapsLink({
 		<Link
 			ref={linkRef}
 			href={spaceId ? `/dashboard/spaces/${spaceId}` : "/dashboard/caps"}
-			className={clsx(
-				"text-xl whitespace-nowrap flex items-center gap-1.5 transition-colors duration-200 hover:text-gray-12",
-				isDragOver ? "text-blue-10" : "text-gray-9",
+			className={classNames(
+				"flex shrink-0 gap-2 items-center px-1 -mx-1 tracking-tight leading-6 whitespace-nowrap rounded-md transition-colors duration-200 hover:text-gray-12",
+				compact &&
+					"gap-0 min-w-0 max-w-full leading-4 whitespace-normal shrink",
+				isDragOver ? "text-gray-12 bg-gray-4" : "text-gray-10",
 				isMovingVideo && "opacity-70",
 				"drag-target", // Add a class for styling when used as a drop target
+				className,
 			)}
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 		>
-			{activeSpace && (
+			{activeSpace && !compact && (
 				<SignedImageUrl
 					image={activeSpace.iconUrl}
 					name={activeSpace.name}
@@ -144,7 +151,13 @@ export function ClientMyCapsLink({
 					className="relative flex-shrink-0 size-5"
 				/>
 			)}
-			{activeSpace ? activeSpace.name : "My Caps"}
+			<span
+				className={
+					compact ? "min-w-0 [overflow-wrap:anywhere]" : "min-w-0 truncate"
+				}
+			>
+				{activeSpace ? activeSpace.name : "My Caps"}
+			</span>
 		</Link>
 	);
 }

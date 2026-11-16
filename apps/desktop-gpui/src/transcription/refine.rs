@@ -135,16 +135,58 @@ pub struct RefinedCaptions {
     /// Each input word's refined times, for captions edited while the
     /// refinement ran.
     retimed: HashMap<WordKey, (f32, f32)>,
+    /// Refined starts and ends keyed by the input word boundary they replace,
+    /// so a word corrected while the refinement ran, or several caption words
+    /// corrected into one, still moves when it starts and ends on input word
+    /// boundaries. A boundary two input words share is left out.
+    refined_starts: HashMap<u32, f32>,
+    refined_ends: HashMap<u32, f32>,
 }
 
 impl RefinedCaptions {
     pub fn new(input: &[CaptionSegment], segments: Vec<CaptionSegment>) -> Self {
+        let retimed = match_retimes(input, &segments);
+        let (refined_starts, refined_ends) = refined_boundaries(input, &retimed);
         Self {
             input_signature: words_signature(input),
-            retimed: match_retimes(input, &segments),
+            retimed,
+            refined_starts,
+            refined_ends,
             segments,
         }
     }
+
+    fn retime_of(&self, word: &CaptionWord) -> Option<(f32, f32)> {
+        if let Some(times) = self.retimed.get(&word_key(word)) {
+            return Some(*times);
+        }
+        let start = *self.refined_starts.get(&word.start.to_bits())?;
+        let end = *self.refined_ends.get(&word.end.to_bits())?;
+        (start <= end).then_some((start, end))
+    }
+}
+
+fn refined_boundaries(
+    input: &[CaptionSegment],
+    retimed: &HashMap<WordKey, (f32, f32)>,
+) -> (HashMap<u32, f32>, HashMap<u32, f32>) {
+    let mut starts: HashMap<u32, usize> = HashMap::new();
+    let mut ends: HashMap<u32, usize> = HashMap::new();
+    for word in input.iter().flat_map(|segment| &segment.words) {
+        *starts.entry(word.start.to_bits()).or_default() += 1;
+        *ends.entry(word.end.to_bits()).or_default() += 1;
+    }
+    let mut refined_starts = HashMap::new();
+    let mut refined_ends = HashMap::new();
+    for ((_, start, end), (refined_start, refined_end)) in retimed {
+        if starts.get(start) == Some(&1) {
+            refined_starts.insert(*start, *refined_start);
+        }
+        if ends.get(end) == Some(&1) {
+            refined_ends.insert(*end, *refined_end);
+        }
+    }
+    (refined_starts, refined_ends)
 }
 
 /// Pairs each input word with the refined word that has its text, in order.
@@ -194,7 +236,7 @@ pub fn apply_refined_captions(
         for segment in &mut captions.segments {
             let mut moved = false;
             for word in &mut segment.words {
-                if let Some(&(start, end)) = refined.retimed.get(&word_key(word))
+                if let Some((start, end)) = refined.retime_of(word)
                     && (word.start, word.end) != (start, end)
                 {
                     (word.start, word.end) = (start, end);

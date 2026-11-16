@@ -53,10 +53,9 @@ export const FoldersDropdown = ({
 					}}
 					onMouseEnter={(e) => e.stopPropagation()}
 					onMouseLeave={(e) => e.stopPropagation()}
-					className="flex justify-center items-center rounded-full border transition-colors duration-200
-            size-8 bg-gray-5 border-gray-7 hover:bg-gray-7 hover:border-gray-9 data-[state=open]:bg-gray-7 data-[state=open]:border-gray-9"
+					className="flex justify-center items-center rounded-lg transition-colors duration-200 size-8 text-gray-10 hover:bg-gray-3 hover:text-gray-12 data-[state=open]:bg-gray-3 data-[state=open]:text-gray-12"
 				>
-					<FontAwesomeIcon className="text-gray-12 size-4" icon={faEllipsis} />
+					<FontAwesomeIcon className="size-3.5" icon={faEllipsis} />
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent
