@@ -590,8 +590,11 @@ describe("memory", () => {
 	setFlagsFromString("--expose-gc");
 	const collect = runInNewContext("gc") as () => void;
 
+	// Counts the chunks that stay reachable while the download is still open,
+	// rather than reading memoryUsage(), whose array buffer total drops only
+	// once V8's background sweeper has freed them.
 	it("keeps no chunk it has already handed on, so a large file is not held in memory", async () => {
-		const CHUNK = 1024 * 1024;
+		const CHUNK = 256 * 1024;
 		const TOTAL_CHUNKS = 384;
 		let sent = 0;
 		const body = new ReadableStream<Uint8Array>({
@@ -606,8 +609,6 @@ describe("memory", () => {
 				controller.enqueue(chunk);
 			},
 		});
-		collect();
-		const before = process.memoryUsage().arrayBuffers;
 		const source = await openImportSource("https://media.example.com/a", {
 			isBlocked: publicNames,
 			request: async () =>
@@ -619,17 +620,20 @@ describe("memory", () => {
 					},
 				}),
 		});
+		const handedOn: WeakRef<Uint8Array>[] = [];
 		let read = 0;
 		for (;;) {
 			const next = await source.read();
 			if (next.done) break;
 			read += next.value.length;
+			handedOn.push(new WeakRef(next.value));
 		}
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		collect();
-		const held = process.memoryUsage().arrayBuffers - before;
+		const stillHeld = handedOn.filter((chunk) => chunk.deref()).length;
 		source.close();
 		expect(read).toBe(CHUNK * TOTAL_CHUNKS);
-		expect(held).toBeLessThan(32 * CHUNK);
+		expect(stillHeld).toBeLessThanOrEqual(2);
 	});
 });
 
