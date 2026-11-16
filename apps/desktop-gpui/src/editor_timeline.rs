@@ -1254,6 +1254,7 @@ pub enum SegmentDetail {
         muted: bool,
         /// `hideCursor`: the cursor (and its ripples) fade out for this clip.
         cursor_hidden: bool,
+        voice_eq: bool,
         volume: f64,
         recording_clip: u32,
         /// Held (paused) windows inside this clip's on-screen box, in output
@@ -1822,6 +1823,7 @@ fn clip_rows(
                     timescale: segment.timescale,
                     muted: clip_is_muted(segment) || segment.volume() == 0.0,
                     cursor_hidden: segment.hides_cursor(),
+                    voice_eq: segment.active_voice_eq().is_some(),
                     volume: segment.volume(),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
@@ -3728,6 +3730,7 @@ fn label_body(
                 source_duration,
                 muted,
                 cursor_hidden,
+                voice_eq,
                 ..
             },
             LabelTier::Full,
@@ -3749,6 +3752,14 @@ fn label_body(
                     tr::editor::timeline::segment::cursor_hidden(),
                 ))
             })
+            .when(*voice_eq, |this| {
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/sliders-horizontal.svg",
+                    tr::editor::timeline::segment::voice_eq(),
+                ))
+            })
             .child(label_secondary(theme, color).child(format_clip_time(*source_duration)))
             .into_any_element(),
         (
@@ -3756,6 +3767,7 @@ fn label_body(
                 source_duration,
                 muted,
                 cursor_hidden,
+                voice_eq,
                 ..
             },
             LabelTier::Compact,
@@ -3774,6 +3786,15 @@ fn label_body(
                 this.child(
                     svg()
                         .path("icons/mouse-pointer-ban.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
+            })
+            .when(*voice_eq, |this| {
+                this.child(
+                    svg()
+                        .path("icons/sliders-horizontal.svg")
                         .size(px(12.))
                         .flex_none()
                         .text_color(seg_label(theme, color)),

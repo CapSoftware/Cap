@@ -290,6 +290,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "For screenshots and recordings started from a shortcut or the tray.",
         ),
         (
+            tr::settings::shortcuts::closing_editor_title(),
+            "Closing the editor",
+        ),
+        (
+            tr::settings::shortcuts::closing_editor_description(),
+            "For the screenshot editor and the video editor.",
+        ),
+        (
             tr::settings::shortcuts::while_recording_title(),
             "While recording",
         ),
@@ -413,6 +421,30 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::outcome::cancel_stay_hidden_hint(),
             "Unless Cap was open",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::title(),
+            "When you close the editor",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::hint(),
+            "After the last one closes",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden_hint(),
+            "Until you open Cap",
         ),
         (
             tr::settings::shortcuts::label::screenshot_area(),
@@ -902,7 +934,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::title(), "Automations"),
         (
             tr::settings::automations::description(),
-            "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet.",
+            "Rules are shared with the Cap CLI. Cap runs enabled rules automatically.",
         ),
         (tr::settings::automations::templates_title(), "Templates"),
         (
@@ -956,11 +988,31 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::delete(), "Delete"),
         (
             tr::settings::automations::dangerous(),
-            "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust.",
+            "This automation runs commands or sends network requests with your permissions. Only use values you trust.",
         ),
         (
             tr::settings::automations::compatibility_checked(),
-            "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run.",
+            "Compatibility checked: every action in this automation runs in Cap. No actions were run.",
+        ),
+        (
+            tr::settings::automations::action_unsupported(),
+            "Cap doesn't run this action yet, so it is skipped.",
+        ),
+        (
+            tr::settings::automations::delete_guarded(),
+            "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept.",
+        ),
+        (
+            tr::settings::automations::delete_needs_copy(),
+            "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step.",
+        ),
+        (
+            tr::settings::automations::notify_needs_setting(),
+            "Shows only while System notifications is on in General settings.",
+        ),
+        (
+            tr::settings::automations::compatibility_unsupported(),
+            "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
         (
             tr::settings::automations::condition_never_matches(),

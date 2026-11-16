@@ -393,12 +393,7 @@ impl TranscriptEdl {
         recording_durations: &[f64],
     ) -> Self {
         let mappings = build_mappings(timeline, recording_durations);
-        let kept_ranges = merge_ranges(
-            mappings
-                .iter()
-                .map(|mapping| mapping.source_start..mapping.source_end)
-                .collect(),
-        );
+        let kept_ranges = kept_ranges(&mappings);
         let mut kept = Vec::with_capacity(doc.voiced.len());
         let mut cursor = 0;
         for word in &doc.voiced {
@@ -572,19 +567,29 @@ impl TranscriptEdl {
     }
 
     pub fn hole_around(&self, source: f64) -> Option<Range<f64>> {
-        let after = self
-            .kept_ranges
-            .partition_point(|range| range.start <= source);
-        if after > 0 && self.kept_ranges[after - 1].end > source {
-            return None;
-        }
-        let start = after
-            .checked_sub(1)
-            .map_or(f64::NEG_INFINITY, |before| self.kept_ranges[before].end);
-        let end = self
-            .kept_ranges
-            .get(after)
-            .map_or(f64::INFINITY, |range| range.start);
-        Some(start..end)
+        hole_around(&self.kept_ranges, source)
     }
+}
+
+pub fn kept_ranges(mappings: &[Mapping]) -> Vec<Range<f64>> {
+    merge_ranges(
+        mappings
+            .iter()
+            .map(|mapping| mapping.source_start..mapping.source_end)
+            .collect(),
+    )
+}
+
+pub fn hole_around(kept_ranges: &[Range<f64>], source: f64) -> Option<Range<f64>> {
+    let after = kept_ranges.partition_point(|range| range.start <= source);
+    if after > 0 && kept_ranges[after - 1].end > source {
+        return None;
+    }
+    let start = after
+        .checked_sub(1)
+        .map_or(f64::NEG_INFINITY, |before| kept_ranges[before].end);
+    let end = kept_ranges
+        .get(after)
+        .map_or(f64::INFINITY, |range| range.start);
+    Some(start..end)
 }

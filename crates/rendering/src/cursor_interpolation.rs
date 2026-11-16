@@ -12,10 +12,12 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
-/// Click anticipation windows: the spring target snaps to the click position
-/// once the next click is <=500ms away, and the spring
-/// profile stiffens 175ms before the click. The early snap relies on the
-/// spring gliding there; no extra heuristics.
+/// Click anticipation windows: the spring target snaps to the press position
+/// once the next button press is <=500ms away, and the spring profile
+/// stiffens 175ms before the press. The early snap relies on the spring
+/// gliding there; no extra heuristics. Only presses are anticipated: a
+/// release ends a drag, and aiming at it would pull the cursor to the drag's
+/// end while the pointer is still travelling there.
 const CLICK_LOOKAHEAD_TARGET_MS: f64 = 500.0;
 const CLICK_SPRING_WINDOW_MS: f64 = 175.0;
 const SHAKE_THRESHOLD_UV: f64 = 0.015;
@@ -46,23 +48,15 @@ const DEFAULT_CLICK_SPRING: SpringMassDamperSimulationConfig = SpringMassDamperS
     friction: 40.0,
 };
 
-const DRAG_SPRING: SpringMassDamperSimulationConfig = SpringMassDamperSimulationConfig {
-    tension: 1000.0,
-    mass: 1.0,
-    friction: 40.0,
-};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SpringProfile {
     Default,
     Snappy,
-    Drag,
 }
 
 struct CursorSpringPresets {
     default: SpringMassDamperSimulationConfig,
     snappy: SpringMassDamperSimulationConfig,
-    drag: SpringMassDamperSimulationConfig,
 }
 
 impl CursorSpringPresets {
@@ -81,7 +75,6 @@ impl CursorSpringPresets {
         Self {
             default: base,
             snappy,
-            drag: DRAG_SPRING,
         }
     }
 
@@ -89,9 +82,15 @@ impl CursorSpringPresets {
         match profile {
             SpringProfile::Default => self.default,
             SpringProfile::Snappy => self.snappy,
-            SpringProfile::Drag => self.drag,
         }
     }
+}
+
+/// The recorder stores device_query's 1-based button numbers, so the primary
+/// (left) button is 1. Slot 0 is never pressed there; it is accepted as
+/// primary too so hand-written event files that count from 0 keep working.
+fn is_primary_button(cursor_num: u8) -> bool {
+    cursor_num <= 1
 }
 
 struct CursorSpringContext<'a> {
@@ -113,38 +112,55 @@ impl<'a> CursorSpringContext<'a> {
         while let Some(click) = self.clicks.get(self.next_click_index)
             && click.time_ms <= time_ms
         {
-            if click.cursor_num == 0 {
+            if is_primary_button(click.cursor_num) {
                 self.primary_button_down = click.down;
             }
             self.next_click_index += 1;
         }
     }
 
+    /// The click spring stiffens toward an upcoming press. While the primary
+    /// button is held the pointer is dragging, so the cursor keeps the default
+    /// spring and follows it instead.
     fn profile(&self, time_ms: f64) -> SpringProfile {
-        if self.has_imminent_click(time_ms) {
+        if !self.primary_button_down && self.has_imminent_press(time_ms) {
             SpringProfile::Snappy
-        } else if self.primary_button_down {
-            SpringProfile::Drag
         } else {
             SpringProfile::Default
         }
     }
 
-    fn has_imminent_click(&self, time_ms: f64) -> bool {
-        let idx = self.clicks[self.next_click_index..].partition_point(|c| c.time_ms <= time_ms);
-        self.clicks
-            .get(self.next_click_index + idx)
-            .is_some_and(|c| c.time_ms - time_ms <= CLICK_SPRING_WINDOW_MS)
+    fn has_imminent_press(&self, time_ms: f64) -> bool {
+        next_press_within(
+            &self.clicks[self.next_click_index..],
+            time_ms,
+            CLICK_SPRING_WINDOW_MS,
+        )
+        .is_some()
+    }
+
+    /// The press the spring target aims at: none while the primary button is
+    /// held, since the pointer is dragging and must follow its recorded path.
+    fn anticipated_press(&self, time_ms: f64) -> Option<&'a CursorClickEvent> {
+        if self.primary_button_down {
+            return None;
+        }
+        next_press_within(self.clicks, time_ms, CLICK_LOOKAHEAD_TARGET_MS)
     }
 }
 
-fn next_click_within(
+/// The first button press after `time_ms` and at most `window_ms` ahead.
+/// Releases inside the window are skipped, not treated as targets.
+fn next_press_within(
     clicks: &[CursorClickEvent],
     time_ms: f64,
     window_ms: f64,
 ) -> Option<&CursorClickEvent> {
     let idx = clicks.partition_point(|c| c.time_ms <= time_ms);
-    clicks.get(idx).filter(|c| c.time_ms - time_ms <= window_ms)
+    clicks[idx..]
+        .iter()
+        .take_while(|c| c.time_ms - time_ms <= window_ms)
+        .find(|c| c.down)
 }
 
 fn position_at_time(
@@ -590,9 +606,7 @@ fn build_smoothed_timeline(
         let _ = position_at_time_hinted(moves, clamped_t, &mut cid_hint);
         let cursor_id = cursor_ids.intern(cursor_id_at_time(moves, clamped_t, cid_hint));
 
-        let target = if let Some(click) =
-            next_click_within(&cursor.clicks, t_ms, CLICK_LOOKAHEAD_TARGET_MS)
-        {
+        let target = if let Some(click) = context.anticipated_press(t_ms) {
             let (tx, ty) =
                 position_at_time(moves, click.time_ms.min(end_time_ms), moves_are_ordered);
             XY::new(tx as f32, ty as f32)
@@ -829,7 +843,7 @@ mod tests {
         CursorClickEvent {
             active_modifiers: vec![],
             cursor_id: "primary".into(),
-            cursor_num: 0,
+            cursor_num: 1,
             time_ms,
             down,
         }
@@ -852,13 +866,216 @@ mod tests {
         let mut context = CursorSpringContext::new(&clicks);
 
         context.advance_to(280.0);
-        assert_eq!(context.profile(280.0), SpringProfile::Drag);
+        assert!(context.primary_button_down);
+        assert_eq!(context.profile(280.0), SpringProfile::Default);
 
+        // The release 50ms ahead ends the drag; it is not a click to stiffen for.
         context.advance_to(450.0);
-        assert_eq!(context.profile(450.0), SpringProfile::Snappy);
+        assert_eq!(context.profile(450.0), SpringProfile::Default);
+        assert!(context.anticipated_press(450.0).is_none());
 
         context.advance_to(620.0);
+        assert!(!context.primary_button_down);
         assert_eq!(context.profile(620.0), SpringProfile::Default);
+    }
+
+    fn secondary_click_event(time_ms: f64, down: bool) -> CursorClickEvent {
+        CursorClickEvent {
+            cursor_num: 2,
+            ..click_event(time_ms, down)
+        }
+    }
+
+    #[test]
+    fn recorded_and_zero_based_primary_buttons_both_start_a_drag() {
+        for cursor_num in [0, 1] {
+            let clicks = vec![
+                CursorClickEvent {
+                    cursor_num,
+                    ..click_event(100.0, true)
+                },
+                CursorClickEvent {
+                    cursor_num,
+                    ..click_event(900.0, false)
+                },
+            ];
+            let mut context = CursorSpringContext::new(&clicks);
+            context.advance_to(300.0);
+            assert!(context.primary_button_down, "{cursor_num}");
+        }
+
+        let clicks = vec![secondary_click_event(100.0, true)];
+        let mut context = CursorSpringContext::new(&clicks);
+        context.advance_to(300.0);
+        assert!(!context.primary_button_down);
+    }
+
+    #[test]
+    fn a_drag_does_not_aim_at_a_press_after_its_release() {
+        // Pressed at 300ms, released at 1200ms, then a click elsewhere at
+        // 1400ms: mid-drag the target stays on the pointer.
+        let clicks = vec![
+            click_event(300.0, true),
+            click_event(1200.0, false),
+            click_event(1400.0, true),
+        ];
+        let mut context = CursorSpringContext::new(&clicks);
+        context.advance_to(1000.0);
+        assert!(context.anticipated_press(1000.0).is_none());
+        assert_eq!(context.profile(1000.0), SpringProfile::Default);
+
+        context.advance_to(1250.0);
+        assert_eq!(
+            context.anticipated_press(1250.0).map(|click| click.time_ms),
+            Some(1400.0)
+        );
+    }
+
+    #[test]
+    fn a_press_of_another_button_mid_drag_is_not_anticipated() {
+        let clicks = vec![
+            click_event(100.0, true),
+            secondary_click_event(400.0, true),
+            secondary_click_event(450.0, false),
+            click_event(900.0, false),
+        ];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        context.advance_to(300.0);
+        assert_eq!(context.profile(300.0), SpringProfile::Default);
+        assert!(context.anticipated_press(300.0).is_none());
+    }
+
+    #[test]
+    fn spring_context_anticipates_presses_but_not_releases() {
+        let clicks = vec![
+            secondary_click_event(100.0, true),
+            secondary_click_event(300.0, false),
+            click_event(700.0, true),
+        ];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        context.advance_to(200.0);
+        assert_eq!(context.profile(200.0), SpringProfile::Default);
+        assert_eq!(
+            context.anticipated_press(200.0).map(|click| click.time_ms),
+            Some(700.0)
+        );
+
+        context.advance_to(250.0);
+        assert_eq!(
+            context.anticipated_press(250.0).map(|click| click.time_ms),
+            Some(700.0)
+        );
+
+        context.advance_to(600.0);
+        assert_eq!(context.profile(600.0), SpringProfile::Snappy);
+    }
+
+    fn horizontal_drag(release_ms: Option<f64>) -> CursorEvents {
+        // The pointer rests at x=0.15 until 400ms, travels to x=0.75 by
+        // 1200ms with the primary button held from 300ms, then rests.
+        let moves = (0..=150)
+            .map(|i| {
+                let t = f64::from(i) * 10.0;
+                let u = ((t - 400.0) / 800.0).clamp(0.0, 1.0);
+                cursor_move(t, 0.15 + 0.6 * u, 0.5)
+            })
+            .collect();
+        let mut clicks = vec![click_event(300.0, true)];
+        if let Some(release_ms) = release_ms {
+            clicks.push(click_event(release_ms, false));
+        }
+        CursorEvents { moves, clicks }
+    }
+
+    fn smoothed_x(cursor: &CursorEvents, t_ms: f64) -> f64 {
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+        interpolate_cursor_with_click_spring(cursor, (t_ms / 1000.0) as f32, Some(smoothing), None)
+            .unwrap()
+            .position
+            .coord
+            .x
+    }
+
+    #[test]
+    fn dragging_cursor_follows_the_pointer_instead_of_the_release_point() {
+        let released = horizontal_drag(Some(1200.0));
+        let release_far_ahead = horizontal_drag(Some(2200.0));
+        let never_released = horizontal_drag(None);
+
+        // Until the button comes up the upcoming release must not change the
+        // path at all, wherever and whether it happens. The last simulation
+        // step before the release may land a hair past 1200ms, so stop at the
+        // step before it.
+        for t in (0..1180).step_by(10) {
+            let t = f64::from(t);
+            let x = smoothed_x(&released, t);
+            assert_eq!(x.to_bits(), smoothed_x(&release_far_ahead, t).to_bits());
+            assert_eq!(x.to_bits(), smoothed_x(&never_released, t).to_bits());
+        }
+
+        // Mid-drag the cursor sits on the pointer (x=0.525 at 900ms), not on
+        // the release point at x=0.75.
+        let mid_drag = smoothed_x(&released, 900.0);
+        assert!(
+            (mid_drag - 0.525).abs() < 0.01,
+            "dragging cursor at x={mid_drag:.4}, pointer at 0.525"
+        );
+    }
+
+    #[test]
+    fn dragging_cursor_lands_on_the_release_point_without_overshoot() {
+        // A hand slows down before letting go: ease in and out from x=0.15 at
+        // 400ms to x=0.75 at 1200ms, released on arrival.
+        let pointer = |t: f64| {
+            let u = ((t - 400.0) / 800.0).clamp(0.0, 1.0);
+            0.15 + 0.6 * u * u * (3.0 - 2.0 * u)
+        };
+        let moves = (0..=300)
+            .map(|i| {
+                let t = f64::from(i) * 10.0;
+                cursor_move(t, pointer(t), 0.5)
+            })
+            .collect();
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![click_event(300.0, true), click_event(1200.0, false)],
+        };
+
+        // It never overshoots the release point and settles on it shortly
+        // after.
+        for t in (400..3000).step_by(5) {
+            let x = smoothed_x(&cursor, f64::from(t));
+            assert!(x < 0.7505, "overshoot to x={x:.4} at {t}ms");
+        }
+        let settled = smoothed_x(&cursor, 1500.0);
+        assert!(
+            (settled - 0.75).abs() < 0.003,
+            "cursor at x={settled:.4} 300ms after the drag ends at 0.75"
+        );
+    }
+
+    #[test]
+    fn click_after_a_drag_is_still_anticipated() {
+        let mut cursor = horizontal_drag(Some(1200.0));
+        cursor.moves.extend((151..=250).map(|i| {
+            let t = f64::from(i) * 10.0;
+            let u = ((t - 1600.0) / 400.0).clamp(0.0, 1.0);
+            cursor_move(t, 0.75 - 0.5 * u, 0.5)
+        }));
+        cursor.clicks.push(click_event(2000.0, true));
+        cursor.clicks.push(click_event(2080.0, false));
+
+        let at_press = smoothed_x(&cursor, 2000.0);
+        assert!(
+            (at_press - 0.25).abs() < 0.01,
+            "cursor at x={at_press:.4} when the click lands at 0.25"
+        );
     }
 
     #[test]
@@ -1134,9 +1351,7 @@ mod tests {
             let _ = position_at_time_hinted(moves, clamped_t, &mut cid_hint);
             let cursor_id = cursor_id_at_time(moves, clamped_t, cid_hint).to_string();
 
-            let target = if let Some(click) =
-                next_click_within(&cursor.clicks, t_ms, CLICK_LOOKAHEAD_TARGET_MS)
-            {
+            let target = if let Some(click) = context.anticipated_press(t_ms) {
                 let (tx, ty) = linear_position_at_time(moves, click.time_ms.min(end_time_ms));
                 XY::new(tx as f32, ty as f32)
             } else {
@@ -1825,7 +2040,11 @@ mod tests {
             let moves = decimate_cursor_moves(filtered.as_ref());
             for config in [
                 DEFAULT_CLICK_SPRING,
-                DRAG_SPRING,
+                SpringMassDamperSimulationConfig {
+                    tension: 1000.0,
+                    mass: 1.0,
+                    friction: 40.0,
+                },
                 SpringMassDamperSimulationConfig {
                     tension: 470.0,
                     mass: 3.0,

@@ -45,6 +45,12 @@ vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: vi.fn(),
 }));
 
+vi.mock("@/lib/checkout/stripe", () => ({
+	checkoutStripe: () => ({
+		subscriptions: { list: vi.fn(async () => ({ data: [] })) },
+	}),
+}));
+
 const fetchMock = vi.fn<typeof fetch>();
 
 const json = (body: unknown, status = 200) =>

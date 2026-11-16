@@ -10,7 +10,6 @@ import {
 	VideosPolicy,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
@@ -26,6 +25,7 @@ import {
 	createDesktopReuploadToken,
 	decodeDesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
+import { startFaststartRemux } from "@/lib/faststart-remux";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	getMediaProcessingRejection,
@@ -43,6 +43,7 @@ import {
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import {
 	getMultipartFileKey,
 	getSubpath,
@@ -988,35 +989,30 @@ app.post(
 
 						mediaProcessingPending = yield* Effect.tryPromise({
 							try: async () => {
-								const response = await fetch(
-									`${mediaServerUrl}/video/process`,
-									{
-										method: "POST",
-										headers: {
-											"Content-Type": "application/json",
-											...(webhookSecret
-												? { "x-media-server-secret": webhookSecret }
-												: {}),
-										},
-										body: JSON.stringify({
-											videoId,
-											userId: user.id,
-											videoUrl: inputUrl,
-											outputPresignedUrl,
-											previewGifPresignedUrl,
-											remuxOnly: true,
-										}),
+								const remux = await startFaststartRemux({
+									mediaServerUrl,
+									webhookSecret,
+									request: {
+										videoId,
+										userId: user.id,
+										videoUrl: inputUrl,
+										outputPresignedUrl,
+										previewGifPresignedUrl,
 									},
-								);
-
-								if (!response.ok) {
-									const errorText = await response.text().catch(() => "");
-									throw new Error(
-										`Media server remux failed: ${response.status} ${errorText}`,
-									);
-								}
-
-								return true;
+									onRetriesSettled: async (queued) => {
+										if (queued) return;
+										const result = await queueVideoTranscription(
+											Video.VideoId.make(videoId),
+										);
+										if (!result.success) {
+											console.warn(
+												"Failed to queue transcription after multipart upload",
+												{ videoId, message: result.message },
+											);
+										}
+									},
+								});
+								return remux !== "failed";
 							},
 							catch: (cause) =>
 								cause instanceof Error ? cause : new Error(String(cause)),

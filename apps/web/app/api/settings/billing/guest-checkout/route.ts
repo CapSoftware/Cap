@@ -7,6 +7,7 @@ import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
 import { guestReferralParams } from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
@@ -44,6 +45,17 @@ export async function POST(request: NextRequest) {
 		return Response.json(
 			{ url: checkoutPath({ plan, seats: safeQuantity }) },
 			{ status: 200 },
+		);
+	}
+
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT, {
+			headers: request.headers,
+		})
+	) {
+		return Response.json(
+			{ error: "Too many checkout attempts" },
+			{ status: 429 },
 		);
 	}
 

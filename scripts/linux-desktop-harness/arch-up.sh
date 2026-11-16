@@ -23,10 +23,20 @@ common=(LIBSEAT_BACKEND=seatd XDG_SESSION_TYPE=wayland)
 
 case "$desktop" in
   hyprland)
+    # WINDOW_DECORATIONS=off: no border or shadow. Hyprland draws both around
+    # a window while it animates the window away, whatever the window shows,
+    # so a check for what an app left on screen needs them gone.
+    plain_conf="" plain_lua=""
+    if [[ ${WINDOW_DECORATIONS:-} == off ]]; then
+      plain_conf=$'general { border_size = 0 }\ndecoration { shadow { enabled = false } }'
+      plain_lua="  general = { border_size = 0 },
+  decoration = { shadow = { enabled = false } },"
+    fi
     cat >"$HOME/.config/hypr/hyprland.conf" <<CONF
 monitor = , 1920x1080, 0x0, 1
 misc { disable_hyprland_logo = true }
 debug { disable_logs = false }
+$plain_conf
 exec-once = sh -c '$export_session'
 exec-once = waybar
 CONF
@@ -35,6 +45,7 @@ hl.monitor({ output = "", mode = "1920x1080", position = "0x0", scale = 1 })
 hl.config({
   misc = { disable_hyprland_logo = true },
   debug = { disable_logs = false, enable_stdout_logs = true },
+$plain_lua
 })
 hl.on("hyprland.start", function()
   hl.exec_cmd("sh -c '$export_session'")

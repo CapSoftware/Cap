@@ -1,9 +1,9 @@
 "use client";
 
 import { classNames } from "@cap/utils";
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import type { ReactNode } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface PlanFeatureProps {
 	children: ReactNode;
