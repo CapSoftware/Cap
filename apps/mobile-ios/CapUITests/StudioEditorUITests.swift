@@ -44,8 +44,15 @@ final class StudioEditorUITests: XCTestCase {
         app.buttons["editor-tool-presets"].tap()
         let ocean = app.buttons["Ocean"]
         XCTAssertTrue(ocean.waitForExistence(timeout: 5))
+        // Saved presets outlive the app, so one left by an earlier run that stopped part way is cleared first.
+        for _ in 0..<3 where app.buttons["Launch"].exists {
+            app.buttons["Launch"].press(forDuration: 1)
+            if app.buttons["Delete"].waitForExistence(timeout: 3) { app.buttons["Delete"].tap() }
+            sleep(1)
+        }
         sleep(2)
         save("s00b-presets")
+        reveal(ocean, in: app)
         ocean.tap()
         sleep(2)
         XCTAssertTrue(ocean.isSelected)
@@ -80,6 +87,14 @@ final class StudioEditorUITests: XCTestCase {
         sleep(1)
         XCTAssertEqual(app.buttons["Launch"].value as? String, "Used for new recordings")
         save("s00d-preset-saved")
+        // Deleted again, which also hands new recordings back to Cap's Studio look.
+        mine.press(forDuration: 1)
+        let delete = app.buttons["Delete"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        XCTAssertTrue(app.buttons["Launch"].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["Studio"].value as? String, "Used for new recordings")
+        reveal(app.buttons["Studio"], in: app)
         app.buttons["Studio"].tap()
         sleep(1)
 
@@ -142,6 +157,19 @@ final class StudioEditorUITests: XCTestCase {
         app.buttons["Undo"].tap()
         sleep(1)
         XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Clip 2'")).firstMatch.exists)
+    }
+
+    /// Preset cards sit in a lazy horizontal strip; one further along is scrolled into view first.
+    private func reveal(_ card: XCUIElement, in app: XCUIApplication) {
+        let width = app.windows.firstMatch.frame.width
+        for _ in 0..<6 where !(card.exists && card.frame.minX >= 0 && card.frame.maxX <= width) {
+            let strip = app.buttons["Save as Preset"].firstMatch.exists ? app.buttons["Save as Preset"].firstMatch.frame.midY : card.frame.midY
+            let y = strip / app.windows.firstMatch.frame.height
+            let window = app.windows.firstMatch
+            let toLeft = !card.exists || card.frame.minX > width / 2
+            window.coordinate(withNormalizedOffset: CGVector(dx: toLeft ? 0.8 : 0.2, dy: y))
+                .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: toLeft ? 0.3 : 0.7, dy: y)), withVelocity: 600, thenHoldForDuration: 0.1)
+        }
     }
 
     private func timelineTap(_ app: XCUIApplication, _ fraction: CGFloat) {
