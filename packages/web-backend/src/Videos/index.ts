@@ -16,8 +16,8 @@ import { Array as Arr, Cause, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
-import { Storage as StorageService } from "../Storage/index.ts";
 import { getCustomThumbnailKey } from "../Storage/custom-thumbnail.ts";
+import { Storage as StorageService } from "../Storage/index.ts";
 import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
 import { getDuplicateVideoMetadata, planVideoDuplicate } from "./duplicate.ts";

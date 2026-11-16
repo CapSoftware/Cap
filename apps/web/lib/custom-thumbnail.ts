@@ -65,7 +65,11 @@ export function clampThumbnailFrameTime(
 		return null;
 	}
 	const rounded = Math.round(time * 1000) / 1000;
-	if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+	if (
+		typeof duration === "number" &&
+		Number.isFinite(duration) &&
+		duration > 0
+	) {
 		return Math.min(rounded, Math.max(duration - 0.05, 0));
 	}
 	return rounded;

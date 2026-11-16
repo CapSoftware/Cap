@@ -6,16 +6,16 @@ import { Check, CodeXml, Link2, Lock, Megaphone, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+	DEFAULT_EMBED_TOGGLES,
+	EmbedOptionsFields,
+	embedTogglesToOptions,
+} from "@/components/embed/EmbedOptionsFields";
+import {
 	FacebookIcon,
 	GoogleIcon,
 	LinkedInIcon,
 	XIcon,
 } from "@/components/icons/Social";
-import {
-	DEFAULT_EMBED_TOGGLES,
-	EmbedOptionsFields,
-	embedTogglesToOptions,
-} from "@/components/embed/EmbedOptionsFields";
 import { buildEmbedCode } from "@/lib/embed-code";
 import {
 	type ShareTargetId,

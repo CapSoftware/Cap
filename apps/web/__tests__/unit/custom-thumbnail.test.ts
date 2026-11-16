@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
-	customThumbnailKey,
-	getCustomThumbnailKey,
-	getCustomThumbnailMetadata,
-	getCustomThumbnailVersion,
-	isCustomThumbnailFileName,
-} from "../../../../packages/web-backend/src/Storage/custom-thumbnail";
-import {
 	CUSTOM_THUMBNAIL_MAX_DIMENSION,
 	clampThumbnailFrameTime,
 	fitThumbnailSize,
 	isJpegData,
 	validateThumbnailSourceFile,
 } from "@/lib/custom-thumbnail";
-import { getShareVideoUrls } from "@/lib/share-video-metadata";
-import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import {
+	buildShareVideoMetadata,
+	getShareVideoUrls,
+} from "@/lib/share-video-metadata";
+import {
+	customThumbnailKey,
+	getCustomThumbnailKey,
+	getCustomThumbnailMetadata,
+	getCustomThumbnailVersion,
+	isCustomThumbnailFileName,
+} from "../../../../packages/web-backend/src/Storage/custom-thumbnail";
 
 const video = { id: "vid123", ownerId: "owner456" };
 
@@ -67,7 +69,13 @@ describe("custom thumbnail metadata", () => {
 		const metadata = { customThumbnail: { file: "custom-a1.jpg" } };
 		expect(
 			getCustomThumbnailKey({ id: "copy789", ownerId: "owner456", metadata }),
-		).toBe(customThumbnailKey({ id: "copy789", ownerId: "owner456", file: "custom-a1.jpg" }));
+		).toBe(
+			customThumbnailKey({
+				id: "copy789",
+				ownerId: "owner456",
+				file: "custom-a1.jpg",
+			}),
+		);
 	});
 
 	it("validates file names", () => {
@@ -107,15 +115,15 @@ describe("thumbnail input checks", () => {
 	});
 
 	it("recognises complete JPEG data only", () => {
-		expect(isJpegData(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9]))).toBe(
-			true,
-		);
-		expect(isJpegData(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]))).toBe(
-			false,
-		);
-		expect(isJpegData(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00]))).toBe(
-			false,
-		);
+		expect(
+			isJpegData(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9])),
+		).toBe(true);
+		expect(
+			isJpegData(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])),
+		).toBe(false);
+		expect(
+			isJpegData(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00])),
+		).toBe(false);
 		expect(isJpegData(new Uint8Array([0xff, 0xd8]))).toBe(false);
 	});
 

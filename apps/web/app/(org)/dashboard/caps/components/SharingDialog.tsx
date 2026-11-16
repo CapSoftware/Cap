@@ -35,13 +35,13 @@ import {
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
-import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
-import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
 	DEFAULT_EMBED_TOGGLES,
 	EmbedOptionsFields,
 	embedTogglesToOptions,
 } from "@/components/embed/EmbedOptionsFields";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { buildEmbedCode } from "@/lib/embed-code";
 import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
@@ -856,6 +856,14 @@ function useEmbedCode(
 				videoId: capId,
 				options: { showTitle, showOwner, showBranding, autoplay, muted },
 			}),
-		[publicEnv.webUrl, capId, showTitle, showOwner, showBranding, autoplay, muted],
+		[
+			publicEnv.webUrl,
+			capId,
+			showTitle,
+			showOwner,
+			showBranding,
+			autoplay,
+			muted,
+		],
 	);
 }

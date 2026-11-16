@@ -31,8 +31,7 @@ const readParam = (params: SearchParamsInput, key: string) => {
 	return Array.isArray(value) ? value[0] : value;
 };
 
-const isOff = (value: string | undefined) =>
-	value === "false" || value === "0";
+const isOff = (value: string | undefined) => value === "false" || value === "0";
 const isOn = (value: string | undefined) => value === "true" || value === "1";
 
 const parseStartTime = (value: string | undefined) => {

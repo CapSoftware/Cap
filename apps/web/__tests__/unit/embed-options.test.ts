@@ -50,7 +50,11 @@ describe("parseEmbedOptions", () => {
 	it("only hides things on an explicit false", () => {
 		expect(
 			parseEmbedOptions({ title: "false", owner: "0", branding: "false" }),
-		).toMatchObject({ showTitle: false, showOwner: false, showBranding: false });
+		).toMatchObject({
+			showTitle: false,
+			showOwner: false,
+			showBranding: false,
+		});
 		expect(
 			parseEmbedOptions({ title: "no", owner: "", branding: "true" }),
 		).toMatchObject({ showTitle: true, showOwner: true, showBranding: true });
@@ -61,9 +65,9 @@ describe("parseEmbedOptions", () => {
 			autoplay: true,
 			muted: true,
 		});
-		expect(parseEmbedOptions({ autoplay: "yes", muted: "false" })).toMatchObject(
-			{ autoplay: false, muted: false },
-		);
+		expect(
+			parseEmbedOptions({ autoplay: "yes", muted: "false" }),
+		).toMatchObject({ autoplay: false, muted: false });
 	});
 
 	it("keeps the existing start time rules", () => {
@@ -75,9 +79,9 @@ describe("parseEmbedOptions", () => {
 	});
 
 	it("takes the first of repeated params", () => {
-		expect(
-			parseEmbedOptions({ title: ["false", "true"] }).showTitle,
-		).toBe(false);
+		expect(parseEmbedOptions({ title: ["false", "true"] }).showTitle).toBe(
+			false,
+		);
 		expect(
 			parseEmbedOptions(new URLSearchParams("title=true&title=false"))
 				.showTitle,
@@ -135,7 +139,9 @@ describe("buildEmbedCode", () => {
 				legacyBuildEmbedCode(input),
 			);
 		}
-		expect(buildEmbedCode({ webUrl: "https://cap.so", videoId: "abc123" })).toBe(
+		expect(
+			buildEmbedCode({ webUrl: "https://cap.so", videoId: "abc123" }),
+		).toBe(
 			'<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="https://cap.so/embed/abc123" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>',
 		);
 	});

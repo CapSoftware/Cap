@@ -32,11 +32,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
+import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
 } from "@/lib/loom-deferred-processing";
-import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import { getPlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
 import * as EffectRuntime from "@/lib/server";
@@ -222,7 +222,9 @@ async function EmbedContent({
 		organizationName: (typeof organizations.$inferSelect)["name"] | null;
 		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
 		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
-		organizationMetadata: (typeof organizations.$inferSelect)["metadata"] | null;
+		organizationMetadata:
+			| (typeof organizations.$inferSelect)["metadata"]
+			| null;
 	};
 	options: EmbedOptions;
 	minimal: boolean;
@@ -360,64 +362,66 @@ async function EmbedContent({
 	}
 
 	const customThumbnailKey = getCustomThumbnailKey(video);
-	const [commentsQuery, ownerImageUrl, branding, posterUrl] = await Promise.all([
-		db()
-			.select({
-				id: comments.id,
-				content: comments.content,
-				timestamp: comments.timestamp,
-				type: comments.type,
-				authorId: comments.authorId,
-				videoId: comments.videoId,
-				createdAt: comments.createdAt,
-				updatedAt: comments.updatedAt,
-				parentCommentId: comments.parentCommentId,
-				mediaKey: comments.mediaKey,
-				mediaDuration: comments.mediaDuration,
-				mediaMeta: comments.mediaMeta,
-				authorName: users.name,
-			})
-			.from(comments)
-			.leftJoin(users, eq(comments.authorId, users.id))
-			.where(eq(comments.videoId, video.id)),
-		Effect.gen(function* () {
-			const imageUploads = yield* ImageUploads;
-			return yield* Option.fromNullable(videoOwner?.image).pipe(
-				Option.map(imageUploads.resolveImageUrl),
-				Effect.transposeOption,
-				Effect.map(Option.getOrNull),
-			);
-		}).pipe(EffectRuntime.runPromise),
-		Effect.gen(function* () {
-			const brandingInput = {
-				owner: { isPro: ownerIsProUser },
-				orgSettings: video.orgSettings,
-				organizationName: video.organizationName,
-			};
-			const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
-				? video.organizationIconUrl
-				: video.shareableLinkIconUrl;
+	const [commentsQuery, ownerImageUrl, branding, posterUrl] = await Promise.all(
+		[
+			db()
+				.select({
+					id: comments.id,
+					content: comments.content,
+					timestamp: comments.timestamp,
+					type: comments.type,
+					authorId: comments.authorId,
+					videoId: comments.videoId,
+					createdAt: comments.createdAt,
+					updatedAt: comments.updatedAt,
+					parentCommentId: comments.parentCommentId,
+					mediaKey: comments.mediaKey,
+					mediaDuration: comments.mediaDuration,
+					mediaMeta: comments.mediaMeta,
+					authorName: users.name,
+				})
+				.from(comments)
+				.leftJoin(users, eq(comments.authorId, users.id))
+				.where(eq(comments.videoId, video.id)),
+			Effect.gen(function* () {
+				const imageUploads = yield* ImageUploads;
+				return yield* Option.fromNullable(videoOwner?.image).pipe(
+					Option.map(imageUploads.resolveImageUrl),
+					Effect.transposeOption,
+					Effect.map(Option.getOrNull),
+				);
+			}).pipe(EffectRuntime.runPromise),
+			Effect.gen(function* () {
+				const brandingInput = {
+					owner: { isPro: ownerIsProUser },
+					orgSettings: video.orgSettings,
+					organizationName: video.organizationName,
+				};
+				const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+					? video.organizationIconUrl
+					: video.shareableLinkIconUrl;
 
-			if (!ownerIsProUser || !icon || minimal || !options.showBranding) {
-				return getSharePageBranding(brandingInput);
-			}
+				if (!ownerIsProUser || !icon || minimal || !options.showBranding) {
+					return getSharePageBranding(brandingInput);
+				}
 
-			const imageUploads = yield* ImageUploads;
-			const imageUrl = yield* imageUploads.resolveImageUrl(icon);
+				const imageUploads = yield* ImageUploads;
+				const imageUrl = yield* imageUploads.resolveImageUrl(icon);
 
-			return getSharePageBranding({
-				...brandingInput,
-				organizationIconUrl: imageUrl,
-				shareableLinkIconUrl: imageUrl,
-			});
-		}).pipe(EffectRuntime.runPromise),
-		customThumbnailKey
-			? getCustomThumbnailUrl(
-					{ ...video, owner: { id: video.ownerId } },
-					customThumbnailKey,
-				)
-			: Promise.resolve(null),
-	]);
+				return getSharePageBranding({
+					...brandingInput,
+					organizationIconUrl: imageUrl,
+					shareableLinkIconUrl: imageUrl,
+				});
+			}).pipe(EffectRuntime.runPromise),
+			customThumbnailKey
+				? getCustomThumbnailUrl(
+						{ ...video, owner: { id: video.ownerId } },
+						customThumbnailKey,
+					)
+				: Promise.resolve(null),
+		],
+	);
 
 	const brandAttributes = playerBrandAttributes(
 		getPlayerBrand({
@@ -428,37 +432,35 @@ async function EmbedContent({
 
 	return (
 		<div className="contents" {...brandAttributes}>
-		<EmbedVideo
-			data={video}
-			branding={
-				ownerIsProUser && !options.showBranding ? null : branding
-			}
-			posterUrl={posterUrl}
-			user={user}
-			comments={commentsQuery}
-			chapters={
-				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
-			}
-			ownerName={videoOwner?.name || null}
-			ownerImageUrl={ownerImageUrl}
-			autoplay={options.autoplay}
-			muted={options.muted}
-			startTime={options.startTime}
-			minimal={minimal}
-			showTitle={options.showTitle}
-			showOwner={options.showOwner}
-			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
-				video.settings?.defaultPlaybackSpeed,
-				video.orgSettings?.defaultPlaybackSpeed,
-			)}
-			viewerSettings={rules.settings}
-			showPlaybackStatusBadge={user?.id === video.ownerId}
-			callToAction={
-				ownerIsProUser && !minimal
-					? parseShareCallToAction(video.settings)
-					: null
-			}
-		/>
+			<EmbedVideo
+				data={video}
+				branding={ownerIsProUser && !options.showBranding ? null : branding}
+				posterUrl={posterUrl}
+				user={user}
+				comments={commentsQuery}
+				chapters={
+					rules.settings.disableChapters ? [] : initialAiData?.chapters || []
+				}
+				ownerName={videoOwner?.name || null}
+				ownerImageUrl={ownerImageUrl}
+				autoplay={options.autoplay}
+				muted={options.muted}
+				startTime={options.startTime}
+				minimal={minimal}
+				showTitle={options.showTitle}
+				showOwner={options.showOwner}
+				defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+					video.settings?.defaultPlaybackSpeed,
+					video.orgSettings?.defaultPlaybackSpeed,
+				)}
+				viewerSettings={rules.settings}
+				showPlaybackStatusBadge={user?.id === video.ownerId}
+				callToAction={
+					ownerIsProUser && !minimal
+						? parseShareCallToAction(video.settings)
+						: null
+				}
+			/>
 		</div>
 	);
 }

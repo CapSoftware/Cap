@@ -56,7 +56,8 @@ function formFromCallToAction(
 	cta: ShareCallToAction | null,
 	brandColor: string | null,
 ): FormState {
-	if (!cta) return brandColor ? { ...EMPTY_FORM, color: brandColor } : EMPTY_FORM;
+	if (!cta)
+		return brandColor ? { ...EMPTY_FORM, color: brandColor } : EMPTY_FORM;
 	return {
 		label: cta.label,
 		url: cta.url,
@@ -711,7 +712,8 @@ function ColorPicker({
 }) {
 	const normalized = normalizeHexColor(value) ?? DEFAULT_CTA_COLOR;
 	const presets =
-		brandColor && !CTA_COLOR_PRESETS.some((preset) => preset.value === brandColor)
+		brandColor &&
+		!CTA_COLOR_PRESETS.some((preset) => preset.value === brandColor)
 			? [{ name: "Brand", value: brandColor }, ...CTA_COLOR_PRESETS]
 			: CTA_COLOR_PRESETS;
 	const isCustom = !presets.some((preset) => preset.value === normalized);

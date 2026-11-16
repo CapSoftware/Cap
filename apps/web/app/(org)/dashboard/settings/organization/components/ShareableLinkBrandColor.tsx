@@ -99,11 +99,8 @@ export const ShareableLinkBrandColor = () => {
 			>
 				<div className="flex flex-col gap-5 mt-4 md:flex-row md:items-start">
 					<div className="flex flex-col flex-1 gap-4 min-w-0">
-						<div
-							role="radiogroup"
-							aria-label="Brand colour"
-							className="flex flex-wrap gap-2 items-center"
-						>
+						<fieldset className="flex flex-wrap gap-2 items-center">
+							<legend className="sr-only">Brand colour</legend>
 							<Swatch
 								label="Cap blue"
 								color={CAP_PLAY_BLUE}
@@ -156,7 +153,7 @@ export const ShareableLinkBrandColor = () => {
 									<Pipette className="size-3.5 text-gray-10" />
 								)}
 							</label>
-						</div>
+						</fieldset>
 
 						<div className="flex gap-2 items-center">
 							<label
@@ -261,28 +258,32 @@ function Swatch({
 }) {
 	const foreground = resolvePlayerBrand(color)?.foreground;
 	return (
-		<button
-			type="button"
-			role="radio"
-			aria-checked={selected}
-			aria-label={label}
+		<label
 			title={label}
-			disabled={disabled}
-			onClick={onSelect}
 			className={clsx(
-				"flex justify-center items-center rounded-full transition-transform size-8 hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 disabled:opacity-60",
+				"flex justify-center items-center rounded-full transition-transform cursor-pointer size-8 hover:scale-105 focus-within:ring-2 focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1 has-[:disabled]:opacity-60",
 				selected && "ring-2 ring-gray-12 ring-offset-2 ring-offset-gray-1",
 			)}
 			style={{ background: color }}
 		>
+			<input
+				type="radio"
+				name="brand-colour"
+				aria-label={label}
+				checked={selected}
+				disabled={disabled}
+				onChange={onSelect}
+				className="sr-only"
+			/>
 			{selected && (
 				<Check
 					className="size-4"
 					strokeWidth={3}
 					style={{ color: foreground }}
+					aria-hidden
 				/>
 			)}
-		</button>
+		</label>
 	);
 }
 

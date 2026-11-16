@@ -1,11 +1,11 @@
 import { Video } from "@cap/web-domain";
 import { parseCapShareUrl } from "@/lib/oembed";
 import { formatClock } from "@/lib/player-time";
-import { buildVideoOgImageUrl } from "@/lib/share-video-metadata";
 import {
 	getPublicShareVideo,
 	type PublicShareVideo,
 } from "@/lib/public-share-video";
+import { buildVideoOgImageUrl } from "@/lib/share-video-metadata";
 import { sendSlackUnfurl } from "./client";
 import {
 	deleteSlackInstallationByTeamId,
