@@ -4443,7 +4443,6 @@ mod tests {
         }
     }
 
-    /// One frame is still a playable segment.
     #[test]
     fn finish_after_a_single_frame_writes_a_playable_file() {
         let output = test_output_path("finish_after_a_single_frame");
