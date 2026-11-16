@@ -188,7 +188,7 @@ fn track_icon(kind: TrackKind) -> &'static str {
         TrackKind::Screen => "icons/monitor.svg",
         TrackKind::Camera => "icons/camera.svg",
         TrackKind::Microphone => "icons/microphone.svg",
-        TrackKind::SystemAudio => "icons/volume-2.svg",
+        TrackKind::SystemAudio => "icons/audio-on.svg",
     }
 }
 
