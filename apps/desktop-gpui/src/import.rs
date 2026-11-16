@@ -2560,6 +2560,50 @@ mod tests {
     }
 
     #[test]
+    fn unique_project_path_cuts_long_names_on_a_character_boundary() {
+        let dir = temp_dir("long-unicode");
+        for stem in [
+            "日本語".repeat(28),
+            "🎬".repeat(63),
+            "é".repeat(125),
+            format!("{}.final.cut", "a".repeat(240)),
+        ] {
+            let name = sanitize_filename(&format!("{stem} 2026-01-01 at 10.00.00"));
+            let first = unique_project_path(&dir, &name).unwrap();
+            std::fs::create_dir_all(&first).unwrap();
+            let second = unique_project_path(&dir, &name).unwrap();
+            std::fs::create_dir_all(&second).unwrap();
+
+            for path in [&first, &second] {
+                let folder = path.file_name().unwrap().to_str().unwrap();
+                assert!(folder.len() <= 255, "{} bytes", folder.len());
+                assert!(folder.starts_with(&stem.chars().take(3).collect::<String>()));
+                assert!(folder.ends_with(".cap"), "{folder}");
+            }
+            assert!(second.to_str().unwrap().ends_with(" (1).cap"));
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unique_project_path_keeps_short_names_as_they_were() {
+        let dir = temp_dir("short");
+        for name in [
+            "Video 2026-01-01 at 10.00.00",
+            "clip.v2 2026-01-01 at 10.00.00",
+            ".hidden 2026-01-01 at 10.00.00",
+            "会议记录 2026-01-01 at 10.00.00",
+        ] {
+            assert_eq!(
+                unique_project_path(&dir, name).unwrap(),
+                dir.join(format!("{name}.cap"))
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn opus_output_rate_selection_matches_the_tauri_encoder() {
         let supported = [8_000, 12_000, 16_000, 24_000, 48_000];
         assert_eq!(select_output_rate(16_000, &supported), Some(16_000));
