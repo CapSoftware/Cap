@@ -23,9 +23,10 @@ describe("capActionLabel", () => {
 	it("names the install when the same action appears for you and your organization", () => {
 		const mine = action("ins_1", "user");
 		const team = action("ins_2", "organization");
-		const all = [mine, team, action("ins_3", "user", "Send to Notes")];
+		const notes = action("ins_3", "user", "Send to Notes");
+		const all = [mine, team, notes];
 		expect(capActionLabel(mine, all)).toBe("Post to Discord · Just me");
 		expect(capActionLabel(team, all)).toBe("Post to Discord · Organization");
-		expect(capActionLabel(all[2], all)).toBe("Send to Notes");
+		expect(capActionLabel(notes, all)).toBe("Send to Notes");
 	});
 });
