@@ -42,6 +42,7 @@ import {
 	DEVELOPER_VIDEO_STATUSES,
 	type DeveloperVideoProcessingState,
 	type DeveloperVideoRendition,
+	type OrganizationDefaultCallToAction,
 	type VideoCallToAction,
 	type VideoEditSpec,
 	type VideoMetadata,
@@ -249,6 +250,7 @@ export const organizations = mysqlTable(
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
 			allowPublicLinkOverride?: boolean;
+			defaultCallToAction?: OrganizationDefaultCallToAction;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -498,7 +500,7 @@ export const videos = mysqlTable(
 			disableComments?: boolean;
 			disableDownloads?: boolean;
 			defaultPlaybackSpeed?: number;
-			callToAction?: VideoCallToAction;
+			callToAction?: VideoCallToAction | false;
 			linkAccess?: "anyone";
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<

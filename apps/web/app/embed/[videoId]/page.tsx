@@ -35,7 +35,10 @@ import {
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import {
+	resolveShareCallToAction,
+	withoutWorkspaceCallToAction,
+} from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -413,7 +416,10 @@ async function EmbedContent({
 
 	return (
 		<EmbedVideo
-			data={video}
+			data={{
+				...video,
+				orgSettings: withoutWorkspaceCallToAction(video.orgSettings),
+			}}
 			branding={branding}
 			user={user}
 			comments={commentsQuery}
@@ -433,7 +439,11 @@ async function EmbedContent({
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 			callToAction={
 				ownerIsProUser && !minimal
-					? parseShareCallToAction(video.settings)
+					? resolveShareCallToAction({
+							videoSettings: video.settings,
+							organizationSettings: video.orgSettings,
+							videoCreatedAt: video.createdAt,
+						}).callToAction
 					: null
 			}
 		/>
