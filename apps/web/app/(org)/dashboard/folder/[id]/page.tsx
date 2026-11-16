@@ -18,11 +18,8 @@ import { CollectionShareControl } from "../../_components/CollectionShareControl
 import { UploadCapButton } from "../../caps/components";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { WebRecorderDialog } from "../../caps/components/web-recorder-dialog/web-recorder-dialog";
-import {
-	BreadcrumbItem,
-	ClientMyCapsLink,
-	NewSubfolderButton,
-} from "./components";
+import { NewSubfolderButton } from "./components";
+import { FolderTopBarPath } from "./components/FolderTopBarPath";
 import FolderVideosSection from "./components/FolderVideosSection";
 
 const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
@@ -67,31 +64,8 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 
 		return (
 			<div>
-				<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-10 w-full">
-					<div className="flex-1 min-w-[min(100%,280px)]">
-						<div className="flex overflow-x-auto items-center min-w-0 font-medium [scrollbar-width:none]">
-							<ClientMyCapsLink />
-
-							{breadcrumb.map((folder, index) => (
-								<div
-									key={folder.id}
-									className={
-										index === breadcrumb.length - 1
-											? "flex items-center min-w-[min(45%,220px)]"
-											: "flex items-center min-w-[88px] max-w-[200px]"
-									}
-								>
-									<p className="mx-2 text-gray-10">/</p>
-									<BreadcrumbItem
-										id={folder.id}
-										name={folder.name}
-										color={folder.color}
-										isLast={index === breadcrumb.length - 1}
-									/>
-								</div>
-							))}
-						</div>
-					</div>
+				<FolderTopBarPath breadcrumb={breadcrumb} />
+				<div className="mb-10 w-full">
 					<div className="flex flex-wrap gap-2 items-center">
 						<NewSubfolderButton parentFolderId={folderId} />
 						<UploadCapButton size="sm" />

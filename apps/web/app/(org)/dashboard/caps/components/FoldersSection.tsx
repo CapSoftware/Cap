@@ -146,14 +146,14 @@ export const FoldersSection = ({
 					aria-expanded={!collapsed}
 					className="flex gap-2 items-center py-0.5 pr-2 pl-1.5 -ml-1.5 min-w-0 text-left rounded-lg transition-colors group hover:bg-gray-3"
 				>
-					<h1
+					<h2
 						className={clsx(
 							"font-semibold tracking-tight truncate text-gray-12",
 							headingSize === "lg" ? "text-lg" : "text-base",
 						)}
 					>
 						{title}
-					</h1>
+					</h2>
 					<span className="text-sm tabular-nums text-gray-10">
 						{folders.length}
 					</span>

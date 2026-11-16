@@ -30,7 +30,7 @@ export const NewSubfolderButton = ({
 					className="size-3.5 text-gray-10"
 					icon={faFolderPlus}
 				/>
-				New Subfolder
+				New subfolder
 			</Button>
 			<SubfolderDialog
 				open={openDialog}

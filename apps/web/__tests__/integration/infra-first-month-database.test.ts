@@ -2362,9 +2362,11 @@ describe.runIf(Boolean(databaseUrl))(
 				tier: "2160p" as const,
 			};
 			let sentinel: string;
+			let sentinelAccountId: string;
 
 			beforeAll(async () => {
 				const { appId, accountId } = await makeApp(0);
+				sentinelAccountId = accountId;
 				sentinel = await makeVideo(appId, {
 					storagePaidUntil: new Date("2026-10-31T00:00:00Z"),
 				});
@@ -2386,7 +2388,12 @@ describe.runIf(Boolean(databaseUrl))(
 			afterAll(async () => {
 				await database()
 					.delete(developerCreditTransactions)
-					.where(eq(developerCreditTransactions.referenceId, sentinel));
+					.where(
+						and(
+							eq(developerCreditTransactions.accountId, sentinelAccountId),
+							eq(developerCreditTransactions.referenceId, sentinel),
+						),
+					);
 				await database()
 					.delete(developerVideos)
 					.where(eq(developerVideos.id, sentinel));
@@ -2673,9 +2680,27 @@ describe.runIf(Boolean(databaseUrl))(
 
 			afterEach(async () => {
 				if (created.length === 0) return;
-				await database()
-					.delete(developerCreditTransactions)
-					.where(inArray(developerCreditTransactions.referenceId, created));
+				const accounts = await database()
+					.select({ id: developerCreditAccounts.id })
+					.from(developerCreditAccounts)
+					.innerJoin(
+						developerVideos,
+						eq(developerVideos.appId, developerCreditAccounts.appId),
+					)
+					.where(inArray(developerVideos.id, created));
+				if (accounts.length > 0) {
+					await database()
+						.delete(developerCreditTransactions)
+						.where(
+							and(
+								inArray(
+									developerCreditTransactions.accountId,
+									accounts.map((account) => account.id),
+								),
+								inArray(developerCreditTransactions.referenceId, created),
+							),
+						);
+				}
 				await database()
 					.delete(developerVideos)
 					.where(inArray(developerVideos.id, created));
