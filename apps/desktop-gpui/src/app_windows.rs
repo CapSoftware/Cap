@@ -150,7 +150,10 @@ fn platform_display_for_capture(
     found
 }
 
-fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
+pub(crate) fn gpui_display_id(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<gpui::DisplayId> {
     #[cfg(target_os = "windows")]
     {
         target
@@ -498,7 +501,7 @@ impl CameraPark {
 
 impl Global for AppWindows {}
 
-fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
+pub(crate) fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
     let Some(native) = native else {
         return;
     };
@@ -602,6 +605,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
                 crate::tray::refresh_previous(cx);
+                crate::recordings_overlay::thumbnails_written(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -623,6 +627,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }
+        if phase != Phase::Idle && last_phase == Phase::Idle {
+            crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Recording, cx);
+        }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             #[cfg(target_os = "linux")]
             if !session.read(cx).instant_cleanup_safe() {
@@ -634,10 +641,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor, finished_instant, deleted) =
+            let (finished_studio, studio_behaviour, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
                     (
                         session.finished_studio.take(),
+                        session.studio_behaviour.take(),
                         session.take_preparing_studio_editor(),
                         std::mem::take(&mut session.finished_instant),
                         std::mem::take(&mut session.deleted_recording),
@@ -679,15 +687,18 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // to the editor, main window staying hidden --
                 // `editor_closed` brings it back once the last editor goes
                 // away. `doNothing` leaves it in the library with Cap out of
-                // the way. Every other path (instant, failures, `showOverlay`
-                // until an overlay exists) reshows the main window as before.
+                // the way, and `showOverlay` puts the recording in the
+                // floating overlay with Cap kept out of the way the same.
+                // Every other path (instant, failures) reshows the main window
+                // as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
                 // the completion and Cap stays out of the way. A recording
                 // deleted from the bar reshows it only for "Reopen recording
                 // window", as the Tauri `delete_recording` did.
                 let settings = crate::store::GeneralSettings::load();
-                let behaviour = settings.post_studio_recording_behaviour;
+                let behaviour =
+                    studio_behaviour.unwrap_or(settings.post_studio_recording_behaviour);
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
                 // main window reopened mid-recording (even if minimized since)
@@ -716,6 +727,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         open_editor(project_dir, cx)
                     }
                     (Some(_), crate::store::PostStudioBehaviour::DoNothing) => {
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (Some(project_dir), crate::store::PostStudioBehaviour::ShowOverlay) => {
+                        crate::recordings_overlay::show_studio_recording(project_dir, cx);
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
@@ -748,6 +764,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // net effect too, where `restart_recording` clears it and the
             // immediately-following `start_recording` puts it straight back.)
             restore_content_protection(cx);
+            crate::recordings_overlay::show_after(
+                crate::recordings_overlay::Capture::Recording,
+                cx,
+            );
         }
         last_phase = phase;
     })
@@ -767,8 +787,7 @@ fn open_preparing_studio_editor(session: &Entity<RecordingSession>, cx: &mut App
     if !pending.capture_stopped
         || pending.presentation != StudioEditorPresentation::Pending
         || !pending.finalization.is_finalizing()
-        || crate::store::GeneralSettings::load().post_studio_recording_behaviour
-            != crate::store::PostStudioBehaviour::OpenEditor
+        || session.read(cx).studio_behaviour != Some(crate::store::PostStudioBehaviour::OpenEditor)
     {
         return;
     }
@@ -5771,6 +5790,7 @@ fn load_editor_project_candidate(
                     crate::library::recover_interrupted_for_editing(
                         &recover_path,
                         active.as_deref(),
+                        |path| editor_window::preflight(path).is_ok(),
                     )
                 })
                 .await;
@@ -7418,8 +7438,10 @@ fn open_controls(
 /// an overlay still on screen would be in the shot. Returns whether anything
 /// was up -- the caller's cue to wait the same 150ms the Tauri command waits.
 pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
+    let overlay_was_visible =
+        crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Screenshot, cx);
     if cx.global::<AppWindows>().overlays.is_empty() {
-        return false;
+        return overlay_was_visible;
     }
     // The screenshot branch of `onRecordingStart` nulls the saved camera bounds
     // just like the recording branch does, so a parked bubble stays parked.
@@ -7446,10 +7468,11 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
         .iter()
         .map(|(_, handle)| *handle)
         .collect();
-    if overlays.is_empty() {
+    let recordings = crate::recordings_overlay::empty_for_screenshot(cx);
+    if overlays.is_empty() && recordings.is_none() {
         return None;
     }
-    let mut shown = Vec::new();
+    let mut shown: Vec<_> = recordings.into_iter().collect();
     for handle in overlays {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let scheduled = handle.update(cx, |view, window, cx| {
@@ -7495,9 +7518,16 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
-/// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
+/// window if the picker had hidden it, since nothing else will. A capture an
+/// automation rule can delete gets no recordings overlay card.
+pub fn screenshot_finished(
+    captured: Option<PathBuf>,
+    editor_choice: Option<bool>,
+    rule_deletes: bool,
+    cx: &mut App,
+) {
     let Some(png) = captured else {
+        crate::recordings_overlay::screenshot_captured(None, cx);
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
             show_main_window(cx);
@@ -7505,6 +7535,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         return;
     };
 
+    crate::recordings_overlay::screenshot_captured((!rule_deletes).then_some(png.as_path()), cx);
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
         settings
@@ -7526,7 +7557,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         .detach();
     }
 
-    if behaviour.opens_editor() {
+    if editor_choice.unwrap_or_else(|| behaviour.opens_editor()) {
         // The editor owns the foreground now, the way a stopped studio
         // recording hands off to the video editor; `screenshot_editor_closed`
         // brings the main window back.
@@ -7544,6 +7575,51 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     if hidden && was_visible && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
     }
+}
+
+/// An automation's Delete local files on a screenshot: refused while a
+/// screenshot editor has the bundle open, and run here on the main thread so
+/// no editor can open it between that check and the delete.
+pub fn delete_screenshot_for_automation(bundle: &Path, cx: &mut App) -> Result<(), String> {
+    let key = editor_key(bundle);
+    if cx
+        .global::<AppWindows>()
+        .screenshot_editors
+        .iter()
+        .any(|(path, _)| editor_key(path) == key)
+    {
+        return Err(tr::dialog::delete_recording::open_in_editor().to_string());
+    }
+    crate::library::delete_screenshot(bundle)?;
+    if let Some(settings) = cx.global::<AppWindows>().settings {
+        settings
+            .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
+            .ok();
+    }
+    refresh_library_after_delete(cx);
+    Ok(())
+}
+
+/// An automation's Apply preset: through the editor's own preset path when an
+/// editor has the project open, since it would otherwise save its loaded
+/// settings back over the file. An editor still loading the project answers
+/// [`crate::automation::EDITOR_LOADING`] so the caller can wait for it.
+pub fn apply_preset_for_automation(
+    project: &Path,
+    config: &serde_json::Value,
+    cx: &mut App,
+) -> Result<(), String> {
+    let Some(handle) = editor_window_handle(project, cx) else {
+        return crate::automation::write_preset(project, config);
+    };
+    handle
+        .update(cx, |editor, window, cx| {
+            if editor.instance.is_none() {
+                return Err(crate::automation::EDITOR_LOADING.to_string());
+            }
+            editor.apply_preset_config(config, window, cx)
+        })
+        .map_err(|_| "The editor window closed before the preset was applied".to_string())?
 }
 
 /// Open (or focus) the screenshot editor for a bundle -- the

@@ -19,6 +19,7 @@ import {
 	hdrTransferFrom,
 	SDR_COLOR_ARGS,
 } from "./hdr";
+import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import type { VideoMetadata } from "./job-manager";
 import {
 	createGuardedMediaFetch,
@@ -785,10 +786,15 @@ function shouldFallbackToGenericMpd(error: unknown): boolean {
 	return error instanceof Error && error.message.startsWith("DASH ");
 }
 
+export interface StreamingInputOptions {
+	allowAudioOnly?: boolean;
+}
+
 export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	options: StreamingInputOptions = {},
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
 		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
@@ -817,6 +823,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
 	let segmentTotal = 0;
+	let declaresNonAudio = false;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -838,6 +845,7 @@ export async function materializeMpdAsHlsPlaylist(
 				representation.attributes,
 				adaptation.attributes,
 			);
+			if (type !== "audio") declaresNonAudio = true;
 			if (!type) continue;
 
 			const representationTemplate = getFirstXmlElementBlock(
@@ -917,12 +925,18 @@ export async function materializeMpdAsHlsPlaylist(
 		(playlist) => playlist.type === "audio",
 	);
 
-	if (videoPlaylists.length === 0) {
+	const audioOnly =
+		videoPlaylists.length === 0 &&
+		!declaresNonAudio &&
+		options.allowAudioOnly === true;
+	const variants = audioOnly ? audioPlaylists.slice(0, 1) : videoPlaylists;
+
+	if (variants.length === 0) {
 		throw new Error("DASH manifest did not contain a supported video track");
 	}
 
 	const masterPath = join(dirPath, `${randomUUID()}.m3u8`);
-	const defaultAudio = audioPlaylists[0] ?? null;
+	const defaultAudio = audioOnly ? null : (audioPlaylists[0] ?? null);
 	const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
 
 	if (defaultAudio) {
@@ -931,7 +945,7 @@ export async function materializeMpdAsHlsPlaylist(
 		);
 	}
 
-	for (const video of videoPlaylists) {
+	for (const video of variants) {
 		const attributes = [
 			`BANDWIDTH=${Math.round(video.bandwidth + (defaultAudio?.bandwidth ?? 0))}`,
 		];
@@ -959,6 +973,7 @@ export async function materializeStreamingInput(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 	trustedHosts?: readonly string[],
+	options: StreamingInputOptions = {},
 ): Promise<string> {
 	let inputPath: string;
 
@@ -978,6 +993,7 @@ export async function materializeStreamingInput(
 				videoUrl,
 				dirPath,
 				abortSignal,
+				options,
 			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
@@ -1594,6 +1610,7 @@ async function probeVideoStreamEntries(
 	showEntries: string,
 	abortSignal?: AbortSignal,
 	keyed = false,
+	stream = "v:0",
 ): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
@@ -1602,7 +1619,7 @@ async function probeVideoStreamEntries(
 				"-v",
 				"error",
 				"-select_streams",
-				"v:0",
+				stream,
 				"-show_entries",
 				showEntries,
 				"-of",
@@ -1737,6 +1754,39 @@ async function readVideoSourceTraits(
 		// stream's colour tags say.
 		unconvertibleDolbyVision: value("dv_profile") === "5",
 	};
+}
+
+const HLS_COPY_AUDIO_SAMPLE_RATES = new Set(["44100", "48000"]);
+const HLS_COPY_AUDIO_MAX_BITRATE = HLS_LADDER_COPIED_AUDIO_MAX_KBPS * 1000;
+
+// Whether the source's first audio track can go into an HLS audio rendition as
+// it is. The playlists name that rendition AAC-LC with two channels, so only
+// stereo AAC-LC qualifies, at a common rate and no more than the bitrate the
+// playlists allow for. Anything else, or a probe that fails, is encoded.
+export async function sourceAudioCopiesToHls(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<boolean> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=codec_name,profile,channels,sample_rate,bit_rate",
+		abortSignal,
+		true,
+		"a:0",
+	);
+	if (stdout === null) return false;
+	const value = (key: string) =>
+		stdout.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? null;
+	const bitrate = Number(value("bit_rate"));
+	return (
+		value("codec_name") === "aac" &&
+		value("profile") === "LC" &&
+		value("channels") === "2" &&
+		HLS_COPY_AUDIO_SAMPLE_RATES.has(value("sample_rate") ?? "") &&
+		Number.isFinite(bitrate) &&
+		bitrate > 0 &&
+		bitrate <= HLS_COPY_AUDIO_MAX_BITRATE
+	);
 }
 
 // One ffprobe for the two things that decide how a source is decoded: a

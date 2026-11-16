@@ -2006,6 +2006,7 @@ fn clip_menu_row(
 enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
+    CaptionDownload,
 }
 
 struct OpenToolbarMenu {
@@ -4984,6 +4985,13 @@ impl EditorWindow {
                 } else if kind == TrackKind::Audio {
                     cx.stop_propagation();
                     self.open_audio_picker(lane, cx);
+                } else if kind == TrackKind::Caption {
+                    cx.stop_propagation();
+                    let length = (1.0_f64).max(secs_per_pixel * 80.);
+                    if self.add_caption_at(press_time, length, true, window, cx) {
+                        self.seek_to_time(press_time, cx);
+                        self.view.preview_time = None;
+                    }
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -6032,7 +6040,7 @@ pub(crate) struct EditorNotice {
 /// How long a notice stays up.
 const EDITOR_NOTICE_DURATION: Duration = Duration::from_millis(2500);
 
-fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
+fn fresh_caption_source_id(project: &ProjectConfiguration, prefix: &str) -> String {
     use std::hash::{BuildHasher, Hasher};
 
     loop {
@@ -6043,7 +6051,7 @@ fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
         let random = std::collections::hash_map::RandomState::new()
             .build_hasher()
             .finish();
-        let id = format!("cap-split-{millis}-{random:x}");
+        let id = format!("{prefix}-{millis}-{random:x}");
         if project
             .captions
             .as_ref()
@@ -6094,7 +6102,12 @@ fn split_caption_segment(
     if split_source <= f64::from(source.start) || split_source >= f64::from(source.end) {
         return false;
     }
-    let tail_id = fresh_caption_source_id(project);
+    let tail_prefix = if crate::transcription::is_manual_caption(&source) {
+        crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-')
+    } else {
+        "cap-split"
+    };
+    let tail_id = fresh_caption_source_id(project, tail_prefix);
     let Some(timeline) = project.timeline.as_mut() else {
         return false;
     };
@@ -6612,6 +6625,66 @@ impl EditorWindow {
         self.view.preview_time = None;
         self.audio_picker = None;
         self.note_edit("add-track", Some(kind));
+    }
+
+    pub(crate) fn add_caption_at(
+        &mut self,
+        time: f64,
+        length: f64,
+        centered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let durations = self.clip_display_durations.clone();
+        if !edits::ensure_timeline(&mut self.project, &durations) {
+            return false;
+        }
+        let total = self.total_duration();
+        let length = length.min(total);
+        let desired = if centered { time } else { time + length / 2.0 };
+        let placement = self.project.timeline.as_ref().and_then(|timeline| {
+            edits::find_placement(&timeline.caption_segments, desired, length, total)
+        });
+        let id = fresh_caption_source_id(
+            &self.project,
+            crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-'),
+        );
+        let showed_track = self.tracks.caption;
+        self.tracks.caption = true;
+        let mut added = false;
+        if let Some((start, end)) = placement {
+            self.edit_timeline_project(
+                |project| {
+                    added = edits::add_caption_segment(
+                        project,
+                        start..end,
+                        id.clone(),
+                        tr::editor::tabs::captions::new_caption(),
+                        &durations,
+                    )
+                    .is_some();
+                    added
+                },
+                window,
+                cx,
+            );
+        }
+        if !added {
+            self.tracks.caption = showed_track;
+            self.show_notice(tr::editor::window::no_room_for_caption(), window, cx);
+            return false;
+        }
+        let index = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline
+                .caption_segments
+                .iter()
+                .position(|segment| cap_project::source_caption_id(&segment.id) == id)
+        });
+        if let Some(index) = index {
+            self.set_selection(Some(Selection::single(TrackKind::Caption, index)), cx);
+        }
+        self.note_edit("add-caption", Some(TrackKind::Caption));
+        true
     }
 
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
@@ -7729,7 +7802,76 @@ impl EditorWindow {
                 .iter()
                 .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
                 .collect(),
+            ToolbarMenu::CaptionDownload => crate::caption_export::CaptionFormat::ALL
+                .iter()
+                .map(|format| ui::MenuItem::new(format.label(), false))
+                .collect(),
         }
+    }
+
+    pub(crate) fn caption_download_menu_open(&self) -> bool {
+        self.toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::CaptionDownload)
+    }
+
+    pub(crate) fn open_caption_download_menu(
+        &mut self,
+        trigger_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_toolbar_menu(ToolbarMenu::CaptionDownload, trigger_bounds, window, cx);
+    }
+
+    pub(crate) fn download_captions(
+        &mut self,
+        format: crate::caption_export::CaptionFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cues = crate::caption_export::cues(&self.project);
+        if cues.is_empty() {
+            return;
+        }
+        let contents = crate::caption_export::format(&cues, format);
+        let extension = format.extension();
+        let pretty_name = self
+            .summary()
+            .map(|summary| summary.pretty_name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Cap Recording".into());
+        let name = crate::editor_export::export_file_name(&pretty_name, extension);
+        tracing::info!(format = extension, cues = cues.len(), "caption download");
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = crate::platform::save_file_panel_async(&name, &[extension], cx).await
+            else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { std::fs::write(&path, contents) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match written {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "captions saved");
+                    this.show_notice(tr::editor::transcript::captions_saved(), window, cx);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "saving captions failed");
+                    this.show_notice(
+                        tr::editor::transcript::captions_save_failed(error.to_string()),
+                        window,
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_toolbar_menu(
@@ -7807,6 +7949,11 @@ impl EditorWindow {
                     self.set_preview_speed(*speed, window, cx);
                 }
             }
+            ToolbarMenu::CaptionDownload => {
+                if let Some(format) = crate::caption_export::CaptionFormat::ALL.get(index) {
+                    self.download_captions(*format, window, cx);
+                }
+            }
         }
         cx.notify();
         window.refresh();
@@ -7821,6 +7968,7 @@ impl EditorWindow {
                 .min_width(match kind {
                     ToolbarMenu::AspectRatio => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
+                    ToolbarMenu::CaptionDownload => px(160.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
@@ -8048,6 +8196,27 @@ impl EditorWindow {
             return;
         };
         self.apply_project_preset(next, window, cx);
+    }
+
+    /// An automation's Apply preset. The preset is on disk when this returns,
+    /// not 250 ms later, because the rule's next action (an Export, say)
+    /// reads the project from disk straight away.
+    pub(crate) fn apply_preset_config(
+        &mut self,
+        config: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.project_ready() {
+            return Err(crate::automation::EDITOR_LOADING.to_string());
+        }
+        let next = crate::presets::apply_preset(config, &self.project)
+            .ok_or_else(|| "The preset could not be read".to_string())?;
+        self.apply_project_preset(next, window, cx);
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| tr::editor::window::save_failed(self.project_path.display(), error))
     }
 
     /// The built-in Default row: Cap's own look, with this project's timeline
@@ -14222,6 +14391,23 @@ mod tests {
         assert!(!project_path.exists());
     }
 
+    /// An automation's Apply preset waits for an editor still loading its
+    /// project instead of reporting success for a preset it never applied.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_automation_preset_waits_for_the_editor_to_load(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let config = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let result = editor.update_in(cx, |editor, window, cx| {
+            editor.apply_preset_config(&config, window, cx)
+        });
+        assert_eq!(result, Err(crate::automation::EDITOR_LOADING.to_string()));
+        assert!(!project.path().join("project-config.json").exists());
+    }
+
     /// An arrow held in the crop dialog keeps nudging every frame until its
     /// key-up. A window that loses focus mid-hold (Cmd-Tab) never gets that
     /// key-up, so deactivation has to release the keys itself.
@@ -15013,6 +15199,38 @@ mod tests {
         cap_project::synchronize_captions(&mut project, &[10.0]);
         assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
+    }
+
+    #[test]
+    fn both_halves_of_a_split_hand_added_caption_survive_a_new_transcript() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{ "id": "caption-1-a", "start": 4.0, "end": 6.0, "text": "Chapter two" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+
+        assert!(split_caption_segment(&mut project, 0, 1.0, &[10.0]));
+        let ids: Vec<String> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|id| id.starts_with("caption-")), "{ids:?}");
+
+        crate::transcription::apply_caption_result(&mut project, Vec::new(), "en", &[10.0], 10.0);
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 2);
     }
 
     #[test]
@@ -16806,5 +17024,119 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod add_caption_ui_tests {
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
+
+    use crate::editor_window::EditorWindow;
+
+    struct View {
+        editor: Entity<EditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+        captions: serde_json::Value,
+    ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor = cx.new(|cx| EditorWindow::new(path, window, cx));
+            editor.update(cx, |editor, _| {
+                editor.project = serde_json::from_value(serde_json::json!({
+                    "timeline": {
+                        "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                        "zoomSegments": []
+                    },
+                    "captions": captions
+                }))
+                .unwrap();
+                editor.clip_display_durations = vec![10.0];
+                editor.total = 10.0;
+                cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+            });
+            View {
+                editor,
+                _project: directory,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn texts(editor: &mut EditorWindow) -> Vec<(String, f64, f64)> {
+        cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+        editor
+            .project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), segment.start, segment.end))
+            .collect()
+    }
+
+    #[gpui::test]
+    fn the_playhead_caption_takes_the_next_free_gap(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "segment-0", "start": 2.0, "end": 4.0, "text": "spoken",
+                    "words": [{ "text": "spoken", "start": 2.0, "end": 4.0 }] }],
+                "settings": { "enabled": false },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            assert!(editor.add_caption_at(
+                2.5,
+                crate::editor_edits::NEW_CAPTION_LENGTH,
+                false,
+                window,
+                cx
+            ));
+            assert!(editor.tracks.caption);
+            assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+            assert_eq!(
+                texts(editor),
+                [
+                    ("spoken".to_string(), 2.0, 4.0),
+                    ("New caption".to_string(), 4.0, 6.0)
+                ]
+            );
+            assert!(editor.add_caption_at(9.5, 1.0, true, window, cx));
+            assert_eq!(texts(editor)[2], ("New caption".to_string(), 9.0, 10.0));
+            let doc =
+                crate::transcript::model::flatten_words(editor.project.captions.as_ref().unwrap());
+            assert_eq!(doc.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn a_full_caption_track_refuses_with_a_notice(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "caption-full", "start": 0.0, "end": 10.0, "text": "all" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            let before = serde_json::to_value(&editor.project).unwrap();
+            assert!(!editor.add_caption_at(5.0, 2.0, false, window, cx));
+            assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
+            assert!(editor.notice.is_some());
+        });
     }
 }

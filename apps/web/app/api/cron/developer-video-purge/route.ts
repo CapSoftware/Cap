@@ -9,6 +9,7 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { purgeDeletedDeveloperVideos } from "@/lib/developer-video-purge";
+import { reapStalledImports } from "@/lib/infra-video-import";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("DeveloperVideoPurgeApi").add(
@@ -18,6 +19,7 @@ class Api extends HttpApi.make("DeveloperVideoPurgeApi").add(
 				Schema.Struct({
 					purged: Schema.Number,
 					failed: Schema.Number,
+					reapedImports: Schema.Number,
 				}),
 			)
 			.addError(HttpApiError.Unauthorized)
@@ -41,6 +43,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					)
 						return yield* new HttpApiError.Unauthorized();
 
+					const reap = yield* Effect.either(
+						Effect.tryPromise(() => reapStalledImports()).pipe(
+							Effect.tapError((error) =>
+								Effect.sync(() =>
+									console.error(
+										"[developer-video-purge] Failed to end stalled imports",
+										error,
+									),
+								),
+							),
+						),
+					);
 					const result = yield* Effect.tryPromise(() =>
 						purgeDeletedDeveloperVideos(),
 					).pipe(
@@ -54,9 +68,13 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						),
 						Effect.mapError(() => new HttpApiError.InternalServerError()),
 					);
-					if (result.failed > 0)
+					if (
+						result.failed > 0 ||
+						reap._tag === "Left" ||
+						reap.right.failed > 0
+					)
 						return yield* new HttpApiError.InternalServerError();
-					return result;
+					return { ...result, reapedImports: reap.right.reaped };
 				}),
 			),
 		),
