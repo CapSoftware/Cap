@@ -1471,6 +1471,9 @@ async fn reserve_unused_path(wanted: &Path) -> Result<PathBuf, String> {
         {
             Ok(_) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Windows answers "access denied", not "already exists", for a
+            // folder with the name; anything already there is skipped.
+            Err(_) if tokio::fs::symlink_metadata(&candidate).await.is_ok() => continue,
             Err(error) => {
                 return Err(format!("Failed to create {}: {error}", candidate.display()));
             }
