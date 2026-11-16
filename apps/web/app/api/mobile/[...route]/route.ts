@@ -3327,7 +3327,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 
 	const database = yield* Database;
 
-	if (!screenshotExtension && input.durationSeconds !== undefined) {
+	if (!screenshotExtension) {
 		const [userRow] = yield* database.use((db) =>
 			db
 				.select({

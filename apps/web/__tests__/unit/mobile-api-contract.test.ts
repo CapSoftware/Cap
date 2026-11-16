@@ -31,7 +31,7 @@ describe("mobile API contract schemas", () => {
 		).toBe(true);
 	});
 
-	it("holds a whole uploaded file to the free limit only when it says how long it is", () => {
+	it("holds a whole uploaded video to the free limit and needs its length to", () => {
 		expect(
 			Mobile.isMobileUploadDurationAllowed({
 				durationSeconds: 305,
@@ -50,10 +50,23 @@ describe("mobile API contract schemas", () => {
 				isPro: true,
 			}),
 		).toBe(true);
+		// Leaving the length out would skip the limit, so the free plan needs it.
 		expect(
 			Mobile.isMobileUploadDurationAllowed({
 				durationSeconds: undefined,
 				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: -1,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: undefined,
+				isPro: true,
 			}),
 		).toBe(true);
 	});
