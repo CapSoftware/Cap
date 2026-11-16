@@ -8,6 +8,7 @@ import {
 import {
 	EVENT_REQUIRED_PERMISSION,
 	FIRST_PARTY_GITHUB_OWNER,
+	isFirstPartyApp,
 	LIMITS,
 	RESERVED_ID_WORDS,
 } from "./constants";
@@ -38,9 +39,6 @@ export type LoadedApp = {
 
 export const REQUIRED_FILES = ["manifest.json", "icon.png", "README.md"];
 export const OPTIONAL_FILES = ["CHANGELOG.md"];
-
-const isFirstParty = (manifest: Manifest) =>
-	manifest.author.github === FIRST_PARTY_GITHUB_OWNER;
 
 async function walk(
 	root: string,
@@ -117,7 +115,13 @@ function checkManifestRules(
 	folderName: string,
 	report: (file: string, message: string) => void,
 ) {
-	const firstParty = isFirstParty(manifest);
+	const firstParty = isFirstPartyApp(manifest);
+	if (manifest.author.github === FIRST_PARTY_GITHUB_OWNER && !firstParty) {
+		report(
+			"manifest.json",
+			`author.github "${FIRST_PARTY_GITHUB_OWNER}" is only for apps published by Cap`,
+		);
+	}
 	if (manifest.id !== folderName) {
 		report(
 			"manifest.json",

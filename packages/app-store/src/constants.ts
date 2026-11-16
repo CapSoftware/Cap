@@ -92,6 +92,27 @@ export type BuiltinApp = (typeof BUILTIN_APPS)[number];
 
 export const FIRST_PARTY_GITHUB_OWNER = "CapSoftware";
 
+// Apps published by Cap. The author field in a manifest is self-declared, so
+// only the apps listed here are shown as made by Cap, may use reserved words
+// in their id, may be built-in, or may use a first-party connection URL.
+// Adding an id here is a code change, reviewed separately from app folders.
+export const FIRST_PARTY_APPS = [
+	"amazon-s3",
+	"aurora-backgrounds",
+	"discord",
+	"film-looks",
+	"google-drive",
+	"slack",
+	"studio-captions",
+] as const;
+
+export const isFirstPartyApp = (manifest: {
+	id: string;
+	author: { github: string };
+}) =>
+	manifest.author.github === FIRST_PARTY_GITHUB_OWNER &&
+	(FIRST_PARTY_APPS as readonly string[]).includes(manifest.id);
+
 export const RESERVED_ID_WORDS = ["cap", "official"] as const;
 
 export const LIMITS = {

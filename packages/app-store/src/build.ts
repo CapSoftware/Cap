@@ -7,6 +7,7 @@ import {
 	type CatalogBackground,
 	platformsFor,
 } from "./catalog";
+import { isFirstPartyApp } from "./constants";
 import { hashBytes, type LoadedApp } from "./validate";
 
 const EXTENSIONS: Record<string, string> = {
@@ -64,7 +65,7 @@ export function buildCatalog(
 				version: manifest.version,
 				description: manifest.description,
 				author: manifest.author,
-				firstParty: manifest.author.github === "CapSoftware",
+				firstParty: isFirstPartyApp(manifest),
 				license: manifest.license,
 				categories: [...manifest.categories],
 				keywords: [...(manifest.keywords ?? [])],

@@ -238,6 +238,26 @@ describe("validator guards", () => {
 		);
 	});
 
+	it("does not trust a self-declared Cap author", async () => {
+		const { root } = await appFromTemplate(
+			"content",
+			"cap-official-slack",
+			(manifest) => {
+				manifest.author = { name: "Cap", github: "CapSoftware" };
+				manifest.builtin = "slack";
+			},
+		);
+		const { apps, issues } = await validateAppStore(root);
+		const messages = issues.map((issue) => issue.message).join("\n");
+		expect(messages).toContain(
+			'author.github "CapSoftware" is only for apps published by Cap',
+		);
+		expect(messages).toContain('must not contain the word "cap"');
+		expect(messages).toContain("only apps published by Cap can be built-in");
+		const { catalog } = buildCatalog(apps, { assetBaseUrl: "/app-store" });
+		expect(catalog.apps[0]?.firstParty).toBe(false);
+	});
+
 	it("rejects duplicate setting keys and a select default outside its options", async () => {
 		const { dir } = await appFromTemplate(
 			"connection",
