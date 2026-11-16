@@ -57,6 +57,12 @@ fn capturable_window<'a>(
     Some(window_id)
 }
 
+/// Only a stream with a window filter loses its source when the window closes.
+/// An excluded window is recorded as a display crop, which keeps capturing.
+fn window_to_watch(config: &Config, excluded_windows: &[WindowId]) -> Option<WindowId> {
+    capturable_window(config, excluded_windows, "watch").cloned()
+}
+
 fn window_content_filter(
     window_id: &WindowId,
     content: &sc::ShareableContent,
@@ -766,11 +772,9 @@ impl output_pipeline::VideoSource for VideoSource {
         let original_capturer = capturer.clone();
         ctx.tasks().spawn("screen-capture-monitor", async move {
             let mut restart_count = 0u32;
-            let mut window_watch = rebuild_params
-                .config
-                .window
-                .clone()
-                .map(|window| (window, tokio::time::interval(WINDOW_WATCH_INTERVAL), 0u32));
+            let mut window_watch =
+                window_to_watch(&rebuild_params.config, &rebuild_params.excluded_windows)
+                    .map(|window| (window, tokio::time::interval(WINDOW_WATCH_INTERVAL), 0u32));
 
             loop {
                 select! {
@@ -1644,6 +1648,18 @@ mod tests {
             capturable_window(&restart_config, &restart_excluded, "restart"),
             Some(&window_id("247"))
         );
+    }
+
+    #[test]
+    fn only_a_window_filter_is_watched_for_its_window_closing() {
+        let config = window_config(Some(window_id("247")));
+
+        assert_eq!(
+            window_to_watch(&config, &[window_id("12")]),
+            Some(window_id("247"))
+        );
+        assert_eq!(window_to_watch(&config, &[window_id("247")]), None);
+        assert_eq!(window_to_watch(&window_config(None), &[]), None);
     }
 
     /// A window filter never reports that its window closed, so the monitor
