@@ -231,6 +231,7 @@ describe.runIf(Boolean(databaseUrl))(
 		const appId = `rt${id()}`;
 		const ownerId = `rt${id()}` as User.UserId;
 		const videoIds: string[] = [];
+		const accountId = `rt${id()}`;
 
 		beforeAll(async () => {
 			pool = createPool({ uri: databaseUrl, connectionLimit: 4 });
@@ -247,14 +248,12 @@ describe.runIf(Boolean(databaseUrl))(
 				name: "round trips",
 				environment: "development",
 			});
-			await database()
-				.insert(developerCreditAccounts)
-				.values({
-					id: `rt${id()}`,
-					appId,
-					ownerId,
-					balanceMicroCredits: 1_000_000_000,
-				});
+			await database().insert(developerCreditAccounts).values({
+				id: accountId,
+				appId,
+				ownerId,
+				balanceMicroCredits: 1_000_000_000,
+			});
 		});
 
 		afterEach(async () => {
@@ -274,11 +273,9 @@ describe.runIf(Boolean(databaseUrl))(
 			await database()
 				.delete(developerApiKeys)
 				.where(eq(developerApiKeys.appId, appId));
-			for (const videoId of videoIds) {
-				await database()
-					.delete(developerCreditTransactions)
-					.where(eq(developerCreditTransactions.referenceId, videoId));
-			}
+			await database()
+				.delete(developerCreditTransactions)
+				.where(eq(developerCreditTransactions.accountId, accountId));
 			await database()
 				.delete(developerVideos)
 				.where(eq(developerVideos.appId, appId));

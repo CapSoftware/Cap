@@ -15,6 +15,9 @@ on:
     paths:
       - "apps/desktop-gpui/src/upload.rs"
       - "apps/desktop-gpui/src/upload/**"
+      - "apps/desktop-gpui/src/automation.rs"
+      - "apps/desktop-gpui/src/automation/**"
+      - "crates/automation/**"
       - "apps/desktop-gpui/src/recording.rs"
       - "apps/desktop-gpui/src/session.rs"
       - "apps/desktop-gpui/src/library.rs"
