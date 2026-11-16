@@ -31,6 +31,33 @@ describe("mobile API contract schemas", () => {
 		).toBe(true);
 	});
 
+	it("holds a whole uploaded file to the free limit only when it says how long it is", () => {
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 305,
+				isPro: false,
+			}),
+		).toBe(true);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 900,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 900,
+				isPro: true,
+			}),
+		).toBe(true);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: undefined,
+				isPro: false,
+			}),
+		).toBe(true);
+	});
+
 	it("gates free recordings on the segments when the reported total is lower", () => {
 		const segments = Array.from({ length: 300 }, () => ({ duration: 2 }));
 		const gated = Mobile.mobileRecordingGateDurationSeconds({

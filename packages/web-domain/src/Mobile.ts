@@ -32,6 +32,19 @@ export const isMobileRecordingDurationAllowed = ({
 		mobileFreeRecordingDurationSeconds +
 			mobileRecordingDurationToleranceSeconds;
 
+// A whole file uploaded at once (an edit rendered on the phone, a video from Photos) is held to the same limit as a
+// recording. Its length is client-reported, as on the other upload routes; a file that doesn't say is let through
+// as they do.
+export const isMobileUploadDurationAllowed = ({
+	durationSeconds,
+	isPro,
+}: {
+	durationSeconds: number | undefined;
+	isPro: boolean;
+}) =>
+	durationSeconds === undefined ||
+	isMobileRecordingDurationAllowed({ durationSeconds, isPro });
+
 // The total and the segment durations are both client-reported; gating on the larger stops a client that
 // only understates the total. Authoritative enforcement needs the length measured after processing.
 export const mobileRecordingGateDurationSeconds = ({

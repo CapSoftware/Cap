@@ -994,6 +994,12 @@ final class EditorExport {
 
     /// Uploads the rendered video as a new Cap through the usual background upload.
     func share(_ model: EditorModel, session: SessionModel) async -> Bool {
+        // Cap holds free Caps to five minutes however they arrive. Said before rendering rather than after it.
+        if !session.isPro, model.timeline.outputDuration > RecordingLimits.freeDuration + RecordingLimits.freeTolerance {
+            errorMessage = "Caps on the free plan can be up to 5 minutes. Trim this one to 5 minutes, save it to Photos, or upgrade to Pro."
+            Usage.track("editor_share_over_free_limit", ["studio": .bool(model.isStudio), "seconds": .int(Int(model.timeline.outputDuration.rounded()))])
+            return false
+        }
         guard let result = await render(model, title: "Rendering") else { return false }
         let name = model.title
         let url = result.url
