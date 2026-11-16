@@ -718,6 +718,34 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
+			it("still reports an unexpected download failure as an error", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: serving(mp4Bytes(40)),
+					writer: () => ({
+						put: async () => {
+							throw new Error("socket hang up");
+						},
+					}),
+					partBytes: 16,
+				});
+				expect(outcome).toBe("failed");
+				expect(error).toHaveBeenCalledWith(
+					"[developer-import] Download failed",
+					{
+						videoId,
+						code: "url_unreachable",
+						message: "socket hang up",
+					},
+				);
+				expect(warn).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
+			});
+
 			it("aborts the stored parts when completion fails for storage", async () => {
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
@@ -857,6 +885,8 @@ describe.runIf(Boolean(databaseUrl))(
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
 				const source = trickling();
+				const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+				const error = vi.spyOn(console, "error").mockImplementation(() => {});
 				const budgetMs = 300;
 				const started = Date.now();
 				const outcome = await runInfraVideoImport(videoId, {
@@ -875,6 +905,13 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 				const elapsed = Date.now() - started;
 				source.stop();
+				expect(warn).toHaveBeenCalledWith(
+					"[developer-import] Download ran out of time",
+					{ videoId, code: "download_timeout" },
+				);
+				expect(error).not.toHaveBeenCalled();
+				warn.mockRestore();
+				error.mockRestore();
 				expect(outcome).toBe("failed");
 				expect(elapsed).toBeGreaterThanOrEqual(budgetMs);
 				expect(elapsed).toBeLessThan(budgetMs + 2_000);
@@ -967,21 +1004,56 @@ describe.runIf(Boolean(databaseUrl))(
 						.update(developerVideos)
 						.set({ duration: 42 })
 						.where(eq(developerVideos.id, recorded));
-					const deleted = await seedImport(appId, stalledAt());
-					await database()
-						.update(developerVideos)
-						.set({ deletedAt: new Date() })
-						.where(eq(developerVideos.id, deleted));
 
 					await reapStalledImports();
 
-					for (const videoId of [completing, recorded, deleted]) {
+					for (const videoId of [completing, recorded]) {
 						expect((await importRow(videoId))?.state).toBe("downloading");
 					}
 					expect((await videoRow(completing))?.status).toBe("processing");
 					expect((await videoRow(recorded))?.status).toBe("uploading");
 					expect((await videoRow(recorded))?.duration).toBe(42);
 					expect(mocks.announce).not.toHaveBeenCalled();
+				});
+
+				it("closes the import of a video deleted while it downloaded, without touching the video or sending an event", async () => {
+					const appId = await seedApp();
+					const deleted = await seedImport(appId, stalledAt());
+					const deletedAt = new Date(Date.now() - IMPORT_REAP_AFTER_MS);
+					deletedAt.setMilliseconds(0);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt })
+						.where(eq(developerVideos.id, deleted));
+					const before = await videoRow(deleted);
+					const recent = await seedImport(
+						appId,
+						new Date(Date.now() - IMPORT_REAP_AFTER_MS + 60_000),
+					);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt: new Date() })
+						.where(eq(developerVideos.id, recent));
+
+					const first = await reapStalledImports();
+					expect(first.failed).toBe(0);
+
+					const row = await importRow(deleted);
+					expect(row).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+					});
+					expect(row?.finishedAt).not.toBeNull();
+					expect(await videoRow(deleted)).toEqual(before);
+					expect((await importRow(recent))?.state).toBe("downloading");
+					expect(mocks.announce).not.toHaveBeenCalled();
+
+					await reapStalledImports();
+					expect(await importRow(deleted)).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+						finishedAt: row?.finishedAt,
+					});
 				});
 
 				it("lets a completion that wins the race keep its result", async () => {
