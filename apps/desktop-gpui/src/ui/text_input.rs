@@ -662,6 +662,12 @@ impl TextInputState {
         cx.notify();
     }
 
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_group = None;
+    }
+
     pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;

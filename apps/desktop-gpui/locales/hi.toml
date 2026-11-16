@@ -367,7 +367,7 @@ screen_region = "स्क्रीन क्षेत्र"
 [settings.options.post_studio]
 do_nothing = "कुछ न करें"
 open_editor = "एडिटर खोलें"
-show_cap = "Cap दिखाएँ"
+show_overlay = "ओवरले में दिखाएँ"
 
 [settings.options.post_screenshot]
 copy = "क्लिपबोर्ड पर कॉपी करें"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "पहले एनोटेट करें"
 studio_do_nothing = "कुछ न करें"
 studio_open_editor = "एडिटर खोलें"
 studio_open_editor_hint = "तुरंत एडिट करें"
-studio_show_cap = "Cap दिखाएँ"
-studio_show_cap_hint = "रिकॉर्डर पर वापस"
+studio_show_overlay = "ओवरले दिखाएँ"
+studio_show_overlay_hint = "कॉपी, शेयर या एक्सपोर्ट"
 
 [settings.shortcuts.label]
 add_marker = "मार्कर जोड़ें"
@@ -1152,6 +1152,35 @@ no_matching_windows = "कोई मिलती-जुलती विंडो
 no_windows = "कोई विंडो नहीं मिली"
 window = "विंडो"
 
+[recordings_overlay]
+close = "बंद करें"
+copy = "क्लिपबोर्ड पर कॉपी करें"
+copy_link = "शेयर करने लायक लिंक कॉपी करें"
+create_link = "शेयर करने लायक लिंक बनाएँ"
+edit = "एडिट करें"
+export = "एक्सपोर्ट करें"
+open = "खोलें"
+retry = "फिर से कोशिश करें"
+
+[recordings_overlay.progress]
+choose_image = "चुनें कि इमेज कहाँ सेव करनी है"
+choose_video = "चुनें कि वीडियो कहाँ एक्सपोर्ट करना है"
+copied = "क्लिपबोर्ड पर कॉपी हो गया"
+copy_failed = "कॉपी नहीं हो सका"
+copying = "क्लिपबोर्ड पर कॉपी हो रहा है"
+creating_link = "शेयर करने लायक लिंक बन रहा है"
+failed_hint = "कुछ गलत हो गया। फिर से कोशिश करें।"
+link_copied = "शेयर करने लायक लिंक कॉपी हो गया"
+preparing = "तैयारी हो रही है"
+rendering_video = "वीडियो रेंडर हो रहा है"
+save_failed = "सेव नहीं हो सका"
+saved_image = "इमेज सेव हो गई"
+saved_video = "वीडियो सेव हो गया"
+saving_image = "इमेज सेव हो रही है"
+saving_video = "वीडियो सेव हो रहा है"
+share_failed = "लिंक नहीं बन सका"
+share_failed_hint = "अपना कनेक्शन जाँचें और फिर से कोशिश करें।"
+
 [controls]
 disk_full_resume = "फिर से शुरू करने के लिए डिस्क में जगह कम है। जगह खाली करके फिर कोशिश करें, या सहेजने के लिए रोकें दबाएँ।"
 low_storage = "स्टोरेज कम है। आपकी रिकॉर्डिंग सहेजने के लिए Cap जल्द ही रुक जाएगा।"
@@ -1410,6 +1439,8 @@ devices_changed_before_start = "रिकॉर्डिंग शुरू ह�
 shortcut_conflict = "Ctrl+Shift+F9 किसी दूसरे Cap एक्शन को दिया गया है। रिकॉर्ड करने से पहले वह शॉर्टकट बदलें।"
 shortcut_description = "यह Cap रिकॉर्डिंग शुरू करें या रोकें"
 shortcut_hint = "शुरू करने के लिए {shortcut} दबाकर छोड़ें। रोकने के लिए वही शॉर्टकट इस्तेमाल करें। यह अस्थायी शॉर्टकट आपकी सेटिंग्स नहीं बदलता।"
+source_lost = "Cap ने रिकॉर्डिंग रोक दी, क्योंकि जो कैप्चर हो रहा था वह अब उपलब्ध नहीं है, जैसे डिस्प्ले स्लीप में चला गया या विंडो बंद हो गई। तब तक की पूरी रिकॉर्डिंग सेव कर ली गई है।"
+source_lost_title = "रिकॉर्डिंग रुक गई"
 tray_stop_hint = "शुरू करने के लिए Cap Stop ट्रे आइकन सक्रिय करें। रोकने के लिए वही आइकन फिर से सक्रिय करें। जब तक आप उस कंट्रोल का इस्तेमाल नहीं करते, रिकॉर्डिंग शुरू नहीं होगी।"
 window_unavailable = "चुनी गई विंडो अब उपलब्ध नहीं है। इसे फिर से चुनें।"
 
@@ -2924,9 +2955,10 @@ delete_matches_tooltip = "हर मिलान को वीडियो स�
 download_captions = "कैप्शन डाउनलोड करें"
 download_srt = "SubRip (.srt)"
 download_vtt = "WebVTT (.vtt)"
+edit_hint = "सेव करने के लिए Enter, रद्द करने के लिए Esc, अगले शब्द के लिए Tab"
 empty_description = "इस कंप्यूटर पर इस रिकॉर्डिंग को ट्रांसक्राइब करें, फिर उसका टेक्स्ट बदलकर वीडियो एडिट करें।"
 empty_title = "अभी कोई ट्रांसक्रिप्ट नहीं"
-hint = "किसी शब्द पर जाने के लिए उस पर क्लिक करें। शब्द चुनें और डिलीट कुंजी दबाएँ, वे वीडियो से कट जाएँगे।"
+hint = "किसी शब्द पर जाने के लिए उस पर क्लिक करें, उसे ठीक करने के लिए डबल-क्लिक करें। शब्द चुनें और डिलीट कुंजी दबाएँ, वे वीडियो से कट जाएँगे।"
 next_match = "अगला मिलान"
 no_audio = "इस रिकॉर्डिंग में ट्रांसक्राइब करने के लिए कोई ऑडियो नहीं है।"
 no_speech = "इस रिकॉर्डिंग में कोई बोली नहीं मिली"
@@ -3216,6 +3248,13 @@ pending = "रिकॉर्डिंग अभी बंद हो रही �
 quit_anyway = "फिर भी बंद करें"
 still_open = "Cap अभी भी खुला है"
 unconfirmed = "रिकॉर्डिंग बंद होने की पुष्टि नहीं हो सकी, इसलिए बाहर निकलना रद्द किया गया। Cap खुला रहेगा। रोकें का इस्तेमाल करें, फिर दोबारा बाहर निकलने की कोशिश करें।"
+
+[dialog.startup]
+failed = "{error}\n\nविवरण {folder} में सहेजे गए हैं।"
+failed_title = "Cap शुरू नहीं हो सका"
+quit_and_reopen = "बंद करें और फिर से खोलें"
+unresponsive = "Cap पहले से चल रहा है लेकिन जवाब नहीं दे रहा है। उसे बंद करके Cap फिर से खोलें?"
+unresponsive_title = "Cap जवाब नहीं दे रहा है"
 
 [dialog.update]
 already_getting = "Cap पहले से ही वर्ज़न {version} तैयार कर रहा है।"

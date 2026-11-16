@@ -3223,7 +3223,7 @@ fn matches_compression(current: ExportCompression, expected: ExportCompression) 
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_export(
+pub(crate) async fn run_export(
     project_path: PathBuf,
     project: cap_project::ProjectConfiguration,
     format: ExportFormatKind,

@@ -15,6 +15,7 @@ use crate::base::{EncoderBase, PacketSink};
 use crate::video::HwUpload;
 use crate::video::h264_packet::H264PacketEncoder;
 use crate::video::hardware_crash::{self, HardwareEncoderSession};
+use crate::video::isolated_self_test;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
 use std::sync::Arc;
@@ -215,6 +216,16 @@ impl H264EncoderBuilder {
                         self.bpp,
                     ),
                 );
+            }
+
+            if let Some(reason) = unsupported_frame_size(&codec_name, output_width, output_height) {
+                info!(
+                    encoder = %codec_name,
+                    %reason,
+                    "Skipping hardware H264 encoder that cannot take this frame size"
+                );
+                last_error = Some(H264EncoderError::SelfTest(reason));
+                continue;
             }
 
             let hardware_session =
@@ -612,6 +623,16 @@ impl H264EncoderBuilder {
 
         for (codec, encoder_options) in candidates {
             let codec_name = codec.name().to_string();
+
+            if let Some(reason) = unsupported_frame_size(&codec_name, output_width, output_height) {
+                info!(
+                    encoder = %codec_name,
+                    %reason,
+                    "Skipping hardware H264 encoder that cannot take this frame size"
+                );
+                last_error = Some(H264EncoderError::SelfTest(reason));
+                continue;
+            }
 
             let hardware_session =
                 is_hardware_h264(&codec_name).then(|| HardwareEncoderSession::begin(&codec_name));
@@ -1540,7 +1561,33 @@ fn get_encoder_priority_with_override(
         return &["libx264"];
     }
 
+    #[cfg(debug_assertions)]
+    if let Some(order) = debug_encoder_order() {
+        return order;
+    }
+
     override_priority.unwrap_or_else(|| get_default_encoder_priority(config))
+}
+
+/// Debug builds only: `CAP_DEBUG_H264_ENCODER_ORDER=h264_mf,libx264` puts an
+/// encoder first on a machine that would not pick it, so tests can drive the
+/// Windows fallback paths on runners without a GPU.
+#[cfg(debug_assertions)]
+fn debug_encoder_order() -> Option<&'static [&'static str]> {
+    use std::sync::OnceLock;
+    static ORDER: OnceLock<Option<Vec<&'static str>>> = OnceLock::new();
+    ORDER
+        .get_or_init(|| {
+            let raw = std::env::var("CAP_DEBUG_H264_ENCODER_ORDER").ok()?;
+            let order: Vec<&'static str> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| &*Box::leak(name.to_owned().into_boxed_str()))
+                .collect();
+            (!order.is_empty()).then_some(order)
+        })
+        .as_deref()
 }
 
 fn force_software_encoder() -> bool {
@@ -1817,21 +1864,38 @@ fn cached_hardware_self_test(
     }
 
     let started = std::time::Instant::now();
-    let result = hardware_encoder_self_test(
-        codec,
-        clone_options(encoder_options),
-        input_config,
-        output_width,
-        output_height,
-        bpp,
-        crf,
-    );
+    let isolated = self_test_runs_isolated(codec.name())
+        .then(|| {
+            isolated_self_test::run(&isolated_self_test::Request::new(
+                codec.name(),
+                encoder_options,
+                input_config,
+                output_width,
+                output_height,
+                bpp,
+                crf,
+            ))
+        })
+        .flatten();
+    let is_isolated = isolated.is_some();
+    let result = isolated.unwrap_or_else(|| {
+        hardware_encoder_self_test(
+            codec,
+            clone_options(encoder_options),
+            input_config,
+            output_width,
+            output_height,
+            bpp,
+            crf,
+        )
+    });
     debug!(
         encoder = %codec.name(),
         width = output_width,
         height = output_height,
         elapsed_ms = started.elapsed().as_millis(),
         ok = result.is_ok(),
+        isolated = is_isolated,
         "Hardware H264 encoder self-test finished"
     );
     cache
@@ -1839,6 +1903,40 @@ fn cached_hardware_self_test(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(key, result.clone());
     result
+}
+
+/// FFmpeg's `h264_mf` loads whichever vendor's Media Foundation transform is
+/// installed into this process, and Intel's faults instead of failing on
+/// frame sizes it does not support (#4016, #3928), so its self-test runs in a
+/// child process where a fault only fails the test. The other Windows
+/// encoders keep testing in process: no report implicates them, and a child
+/// process would add its start-up time to every recording start on their GPUs.
+fn self_test_runs_isolated(codec_name: &str) -> bool {
+    cfg!(target_os = "windows") && codec_name == "h264_mf"
+}
+
+/// FFmpeg's `h264_mf` hands the transform a tightly packed system memory
+/// frame at the exact output size, which Intel's transform reads past at
+/// widths it does not support. FFmpeg's `h264_qsv` pads its surfaces itself.
+fn unsupported_frame_size(codec_name: &str, width: u32, height: u32) -> Option<String> {
+    if codec_name != "h264_mf" {
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::OnceLock;
+        static FIRST_TRANSFORM: OnceLock<Option<String>> = OnceLock::new();
+        let name = FIRST_TRANSFORM
+            .get_or_init(cap_enc_mediafoundation::mft::first_hardware_h264_encoder_name)
+            .as_deref()?;
+        if cap_media_info::is_intel_h264_mft(name)
+            && !cap_media_info::intel_h264_mft_accepts_frame_size(width, height)
+        {
+            return Some(format!("{name} does not take {width}x{height} frames"));
+        }
+    }
+    let _ = (width, height);
+    None
 }
 
 fn clone_options(options: &Dictionary<'static>) -> Dictionary<'static> {
@@ -1849,7 +1947,7 @@ fn clone_options(options: &Dictionary<'static>) -> Dictionary<'static> {
     copy
 }
 
-fn hardware_encoder_self_test(
+pub(crate) fn hardware_encoder_self_test(
     codec: Codec,
     encoder_options: Dictionary<'static>,
     input_config: &VideoInfo,
@@ -1858,6 +1956,9 @@ fn hardware_encoder_self_test(
     bpp: f32,
     crf: Option<u8>,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    isolated_self_test::inject_fault(codec.name())?;
+
     // A throwaway encoder with production settings; frames are built directly
     // in the negotiated output format, so no converter is needed.
     let opened = open_video_encoder_inner(
@@ -2112,6 +2213,104 @@ mod self_test_tests {
 
     /// The order a Windows machine with an NVIDIA primary GPU uses, after
     /// Intel's Media Foundation encoder crashed the app.
+    #[test]
+    fn only_media_foundation_self_tests_in_a_child_process() {
+        assert_eq!(
+            self_test_runs_isolated("h264_mf"),
+            cfg!(target_os = "windows")
+        );
+        for name in [
+            "h264_nvenc",
+            "h264_amf",
+            "h264_qsv",
+            "h264_videotoolbox",
+            "h264_vaapi",
+            "libx264",
+        ] {
+            assert!(!self_test_runs_isolated(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_media_foundation_is_skipped_for_its_frame_size() {
+        for name in ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"] {
+            assert_eq!(unsupported_frame_size(name, 1438, 812), None, "{name}");
+        }
+        if !cfg!(target_os = "windows") {
+            assert_eq!(unsupported_frame_size("h264_mf", 1438, 812), None);
+        }
+    }
+
+    /// Media Foundation's self-test faulting (set `CAP_H264_SELF_TEST_FAULT`
+    /// to `access_violation` or `abort`) must leave this process running and
+    /// the encoder order moving on to libx264, at the odd sizes that reach
+    /// Intel's transform. Without the fault variable the runner's missing
+    /// hardware transform fails the self-test instead.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes() {
+        crate::video::isolated_self_test::tests::register_test_host();
+        for (width, height) in [(1438, 812), (1366, 768), (1448, 814)] {
+            let config = VideoInfo {
+                pixel_format: format::Pixel::NV12,
+                width,
+                height,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            };
+            let mut encoder = H264EncoderBuilder::new(config)
+                .with_encoder_priority_override(&["h264_mf", "libx264"])
+                .build_standalone()
+                .unwrap_or_else(|e| panic!("{width}x{height}: {e}"));
+            assert_eq!(encoder.codec_name(), "libx264", "{width}x{height}");
+            assert_eq!(
+                (encoder.output_width(), encoder.output_height()),
+                (width, height)
+            );
+
+            let mut packets = 0usize;
+            for index in 0..10u64 {
+                let mut frame = frame::Video::new(format::Pixel::NV12, width, height);
+                for plane in 0..frame.planes() {
+                    frame.data_mut(plane).fill(128);
+                }
+                encoder
+                    .encode_frame(frame, Duration::from_millis(index * 33), |_| {
+                        packets += 1;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            encoder
+                .flush(|_| {
+                    packets += 1;
+                    Ok(())
+                })
+                .unwrap();
+            assert!(packets >= 10, "{width}x{height}: {packets} packets");
+
+            if std::env::var_os("CAP_H264_SELF_TEST_FAULT").is_some() {
+                let (codec, options) = get_codec_and_options(
+                    &config,
+                    H264Preset::Ultrafast,
+                    Some(&["h264_mf"]),
+                    false,
+                    None,
+                )
+                .into_iter()
+                .next()
+                .expect("FFmpeg build has h264_mf");
+                let reason =
+                    cached_hardware_self_test(codec, &options, &config, width, height, 0.3, None)
+                        .unwrap_err();
+                assert!(
+                    reason.starts_with("encoder crashed its isolated self-test process"),
+                    "{width}x{height}: {reason}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_crashed_hardware_encoder_falls_through_to_the_next_candidate() {
         let nvidia = ["h264_nvenc", "h264_mf", "h264_qsv", "h264_amf", "libx264"];

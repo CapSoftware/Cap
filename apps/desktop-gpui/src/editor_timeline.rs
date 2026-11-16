@@ -1811,9 +1811,11 @@ fn clip_rows(
                     // clips sidebar (`displayName`).
                     name: match segment.name.as_deref().map(str::trim) {
                         Some(name) if !name.is_empty() => SharedString::from(name.to_string()),
-                        _ if multiple_clips => SharedString::from(
-                            tr::editor::timeline::segment::numbered_clip(segment.recording_clip),
-                        ),
+                        _ if multiple_clips => {
+                            SharedString::from(tr::editor::timeline::segment::numbered_clip(
+                                segment.recording_clip.saturating_add(1),
+                            ))
+                        }
                         _ => SharedString::new_static(tr::editor::timeline::segment::clip()),
                     },
                     source_start: segment.start,
@@ -4703,7 +4705,40 @@ mod tests {
         let SegmentDetail::Clip { name, .. } = &model.clips[1].detail else {
             panic!("not a clip")
         };
-        assert_eq!(name.as_ref(), "Clip 1");
+        assert_eq!(name.as_ref(), "Clip 2");
+    }
+
+    #[test]
+    fn numbered_clip_labels_match_the_clips_panel() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 4.0, "end": 6.0, "name": "Intro" }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        let model = TimelineModel::build(&config, false, true);
+        let names: Vec<String> = model
+            .clips
+            .iter()
+            .map(|clip| {
+                let SegmentDetail::Clip { name, .. } = &clip.detail else {
+                    panic!("not a clip")
+                };
+                name.to_string()
+            })
+            .collect();
+        assert_eq!(names, ["Clip 1", "Clip 3", "Clip 2", "Intro"]);
+        let segments = &config.timeline.as_ref().unwrap().segments;
+        for (index, name) in names.iter().enumerate().take(3) {
+            assert_eq!(*name, crate::editor_clips::segment_label(segments, index));
+        }
     }
 
     #[test]
