@@ -88,6 +88,7 @@ mod presets;
 mod style_presets;
 mod project_save;
 mod recording;
+mod recordings_overlay;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -101,6 +102,7 @@ mod sign_in;
 mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
+mod startup;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -295,6 +297,10 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    // A copy of Cap started to self-test a hardware H264 encoder runs only
+    // that test and exits, before logging, crash capture or single-instance.
+    cap_enc_ffmpeg::isolated_self_test::run_child_or_register_host();
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.
@@ -338,7 +344,7 @@ fn main() {
         std::process::exit(status);
     }
 
-    let _log_guard = init_logging();
+    startup::begin(init_logging());
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
@@ -479,11 +485,10 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
-        let Ok(window_handle) = window_handle else {
-            cx.quit();
-            return;
-        };
+            .unwrap_or_else(|error| {
+                startup::fail(format!("The main window could not be opened: {error:#}"))
+            });
+        startup::finished();
 
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();
@@ -846,6 +851,7 @@ fn main() {
         }
     });
     runtime.shutdown_background();
+    startup::flush_log();
 }
 
 #[cfg(all(

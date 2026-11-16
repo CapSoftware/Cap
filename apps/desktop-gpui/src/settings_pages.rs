@@ -1004,9 +1004,9 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     (
         store::PostStudioBehaviour::ShowOverlay,
         OutcomeOption {
-            icon: "icons/app-window.svg",
-            label: tr::settings::shortcuts::outcome::studio_show_cap,
-            hint: tr::settings::shortcuts::outcome::studio_show_cap_hint,
+            icon: "icons/layers.svg",
+            label: tr::settings::shortcuts::outcome::studio_show_overlay,
+            hint: tr::settings::shortcuts::outcome::studio_show_overlay_hint,
         },
     ),
     (
