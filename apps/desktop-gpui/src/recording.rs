@@ -2856,6 +2856,23 @@ pub fn recordings_dir() -> PathBuf {
     crate::store::app_data_dir().join("recordings")
 }
 
+/// Removes the second copy of a Studio recording that a quit, crash, or kill
+/// right after the stop left behind. Its own thread, because each removal
+/// syncs the project to disk first.
+pub fn retire_leftover_recording_backups() {
+    let spawned = std::thread::Builder::new()
+        .name("leftover-recording-backups".into())
+        .spawn(|| {
+            let retired = RecoveryManager::retire_leftover_originals(&recordings_dir());
+            if retired > 0 {
+                tracing::info!(retired, "removed leftover recording backups");
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not start the leftover recording backup sweep");
+    }
+}
+
 /// Deletes the clip the editor-append flow just copied from, using the same
 /// guarded recursive delete as the library with the active recordings folder
 /// as its only allowed root.
