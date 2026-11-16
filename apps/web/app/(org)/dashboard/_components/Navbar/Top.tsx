@@ -16,7 +16,7 @@ import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { Moon, MoreVertical, Sun } from "lucide-react";
 import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
 	cloneElement,
@@ -24,7 +24,10 @@ import {
 	type MutableRefObject,
 	memo,
 	type RefObject,
+	useCallback,
+	useEffect,
 	useImperativeHandle,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -47,6 +50,13 @@ import {
 } from "../AnimatedIcons";
 import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
+import { dashboardTitle } from "../dashboard-titles";
+import {
+	TOP_BAR_TITLE_SLOT_ID,
+	TopBarCrumbSeparator,
+	useTopBarTitleWidth,
+} from "../TopBarTitle";
+import { nextCompactSearch } from "../top-bar-search-fit";
 import { DashboardSearch } from "./DashboardSearch";
 
 const Top = () => {
@@ -56,30 +66,48 @@ const Top = () => {
 	const queryClient = useQueryClient();
 
 	const pathname = usePathname();
-	const params = useParams();
 
-	const titles: Record<string, string> = {
-		"/dashboard/caps": "Caps",
-		"/dashboard/folder": "Caps",
-		"/dashboard/shared-caps": "Shared Caps",
-		"/dashboard/caps/record": "Record a Cap",
-		"/dashboard/settings/organization": "Organization Settings",
-		"/dashboard/settings/organization/preferences": "Organization Settings",
-		"/dashboard/settings/organization/content": "Organization Settings",
-		"/dashboard/settings/organization/billing": "Organization Settings",
-		"/dashboard/settings/organization/members": "Organization Settings",
-		"/dashboard/settings/organization/integrations": "Organization Settings",
-		"/dashboard/settings/organization/security": "Organization Settings",
-		"/dashboard/settings/account": "Account Settings",
-		"/dashboard/settings/notifications": "Notification Settings",
-		"/dashboard/spaces": "Spaces",
-		"/dashboard/spaces/browse": "Browse Spaces",
-		"/dashboard/analytics": "Analytics",
-		[`/dashboard/folder/${params.id}`]: "Caps",
-		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
-	};
+	const crumbs = dashboardTitle(pathname);
+	const { width: slotTitleWidth } = useTopBarTitleWidth();
+	const rowRef = useRef<HTMLDivElement>(null);
+	const titleBoxRef = useRef<HTMLDivElement>(null);
+	const titleMeasureRef = useRef<HTMLSpanElement>(null);
+	const searchRef = useRef<HTMLDivElement>(null);
+	const [compactSearch, setCompactSearch] = useState(false);
+	const measuredTitle = activeSpace
+		? `Spaces / ${activeSpace.name}`
+		: crumbs.map((crumb) => crumb.label).join(" / ");
 
-	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
+	const fitSearch = useCallback(() => {
+		const box = titleBoxRef.current;
+		const search = searchRef.current;
+		if (!box || !search || search.offsetWidth === 0) return;
+		const slot = document.getElementById(TOP_BAR_TITLE_SLOT_ID);
+		const titleWidth = slot?.childElementCount
+			? slotTitleWidth
+			: (titleMeasureRef.current?.offsetWidth ?? 0) + (activeSpace ? 28 : 0);
+		const fullSearchWidth = Math.min(
+			420,
+			Math.max(240, window.innerWidth * 0.28),
+		);
+		const roomWithFullSearch =
+			box.clientWidth + search.offsetWidth - fullSearchWidth;
+		setCompactSearch((compact) =>
+			nextCompactSearch(compact, titleWidth, roomWithFullSearch),
+		);
+	}, [slotTitleWidth, activeSpace]);
+
+	useLayoutEffect(() => {
+		fitSearch();
+	});
+
+	useEffect(() => {
+		const row = rowRef.current;
+		if (!row) return;
+		const observer = new ResizeObserver(() => fitSearch());
+		observer.observe(row);
+		return () => observer.disconnect();
+	}, [fitSearch]);
 
 	const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
 		(e) => {
@@ -103,32 +131,97 @@ const Top = () => {
 
 	return (
 		<div
+			ref={rowRef}
 			className={clsx(
-				"flex fixed z-40 justify-between items-center py-3 pr-2 pl-5 w-full md:relative mt-[60px] lg:mt-0 lg:py-[19px] lg:pl-0 lg:pr-5",
-				"top-0 bg-gray-1",
+				"flex relative z-40 gap-3 justify-between items-center py-3 pr-2 pl-5 w-full border-b border-gray-3 shrink-0 lg:h-14 lg:py-0 lg:pl-8 lg:pr-3",
+				"bg-gray-1 lg:bg-transparent",
 				toggleNotifications && "lg:z-[60]",
 			)}
 		>
-			<div className="flex flex-col gap-0.5 min-w-0 shrink">
-				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
-				<div className="flex gap-1.5 items-center">
-					{activeSpace && (
-						<SignedImageUrl
-							image={activeSpace.iconUrl}
-							name={activeSpace?.name}
-							letterClass="text-xs"
-							className="relative flex-shrink-0 size-5"
-						/>
-					)}
-					<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
-						{title}
-					</p>
+			<div ref={titleBoxRef} className="flex flex-col flex-1 gap-0.5 min-w-0">
+				<span
+					ref={titleMeasureRef}
+					aria-hidden
+					className="absolute invisible whitespace-nowrap pointer-events-none text-[15px] font-medium tracking-tight"
+				>
+					{measuredTitle}
+				</span>
+				{activeSpace && (
+					<span className="text-xs text-gray-11 lg:hidden">Space</span>
+				)}
+				<div className="flex items-center w-full min-w-0 text-lg font-medium tracking-tight leading-6 lg:text-[15px]">
+					<div
+						id={TOP_BAR_TITLE_SLOT_ID}
+						className="flex flex-1 items-center min-w-0 peer empty:hidden"
+					/>
+					<h1 className="flex items-center min-w-0 text-lg font-medium tracking-tight leading-6 lg:text-[15px] peer-[:not(:empty)]:hidden">
+						{activeSpace ? (
+							<>
+								<Link
+									href="/dashboard/spaces/browse"
+									className="hidden transition-colors text-gray-10 shrink-0 hover:text-gray-12 lg:inline"
+								>
+									Spaces
+								</Link>
+								<span className="hidden lg:contents">
+									<TopBarCrumbSeparator />
+								</span>
+								<SignedImageUrl
+									image={activeSpace.iconUrl}
+									name={activeSpace.name}
+									letterClass="text-xs"
+									className="relative flex-shrink-0 self-start mt-0.5 mr-2 size-5 lg:self-auto lg:mt-0"
+								/>
+								<span className="min-w-0 text-gray-12 [overflow-wrap:anywhere] lg:truncate">
+									{activeSpace.name}
+								</span>
+							</>
+						) : (
+							crumbs.map((crumb, index) => {
+								const isLast = index === crumbs.length - 1;
+								return (
+									<span
+										key={crumb.label}
+										className={clsx(
+											"flex items-center",
+											isLast ? "min-w-0" : "shrink-0",
+										)}
+									>
+										{index > 0 && <TopBarCrumbSeparator />}
+										{isLast || !crumb.href ? (
+											<span
+												className={clsx(
+													"[overflow-wrap:anywhere] lg:truncate",
+													isLast ? "text-gray-12" : "text-gray-10",
+												)}
+											>
+												{crumb.label}
+											</span>
+										) : (
+											<Link
+												href={crumb.href}
+												className="transition-colors text-gray-10 hover:text-gray-12"
+											>
+												{crumb.label}
+											</Link>
+										)}
+									</span>
+								);
+							})
+						)}
+					</h1>
 				</div>
 			</div>
-			<div className="hidden flex-1 justify-start px-6 min-w-0 lg:flex">
-				<DashboardSearch />
+			<div
+				ref={searchRef}
+				className={clsx(
+					"hidden justify-end shrink-0 lg:flex",
+					!compactSearch && "lg:w-[clamp(240px,28vw,420px)]",
+				)}
+			>
+				<DashboardSearch compact={compactSearch} />
 			</div>
-			<div className="flex gap-4 justify-end items-center shrink-0">
+			<div className="flex gap-1.5 justify-end items-center shrink-0">
 				{buildEnv.NEXT_PUBLIC_IS_CAP && <ReferButton />}
 				<div className="hidden relative lg:flex">
 					<button
@@ -145,21 +238,17 @@ const Top = () => {
 							anyNewNotifications ? " (new notifications available)" : ""
 						}`}
 						aria-expanded={toggleNotifications}
-						className="relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
-                rounded-full transition-colors cursor-pointer lg:flex
-                hover:bg-gray-5 data-[state=open]:bg-gray-5
-                focus:outline-none
-                size-9"
+						className="relative justify-center items-center rounded-full transition-colors cursor-pointer lg:flex hover:bg-gray-3 data-[state=open]:bg-gray-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-6 size-8"
 					>
 						{anyNewNotifications && (
-							<div className="absolute right-0 top-1 z-10">
+							<div className="absolute right-1 top-1 z-10">
 								<div className="relative">
 									<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
-									<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+									<div className="relative w-2 h-2 bg-red-400 rounded-full ring-2 ring-gray-1" />
 								</div>
 							</div>
 						)}
-						<FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+						<FontAwesomeIcon className="text-gray-11 size-3.5" icon={faBell} />
 					</button>
 					<AnimatePresence>
 						{toggleNotifications && (
@@ -276,26 +365,26 @@ const User = () => {
 				<PopoverTrigger asChild>
 					<div
 						data-state={menuOpen ? "open" : "closed"}
-						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
+						className="flex gap-2 justify-between items-center py-1 pr-1.5 pl-1 ml-1 rounded-full transition-colors cursor-pointer data-[state=open]:bg-gray-3 group lg:gap-1.5 hover:bg-gray-3"
 					>
 						<div className="flex items-center">
 							<SignedImageUrl
 								image={user.imageUrl}
 								name={user.name ?? "User"}
 								letterClass="text-xs lg:text-md"
-								className="flex-shrink-0 size-[24px] text-gray-12"
+								className="flex-shrink-0 size-6 text-gray-12"
 							/>
-							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">
+							<span className="ml-2 text-sm font-medium truncate text-gray-12 max-w-[96px] sm:max-w-[160px]">
 								{user.name ?? "User"}
 							</span>
 						</div>
 						<MoreVertical
 							data-state={menuOpen ? "open" : "closed"}
-							className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12"
+							className="size-4 data-[state=open]:text-gray-12 transition-colors text-gray-9 group-hover:text-gray-12"
 						/>
 					</div>
 				</PopoverTrigger>
-				<PopoverContent className="p-1 w-48">
+				<PopoverContent align="end" className="p-1 w-52">
 					<Command>
 						<CommandGroup>
 							{menuItems
@@ -348,7 +437,7 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 	return (
 		<CommandItem
 			key={name}
-			className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
+			className="px-2 py-1.5 rounded-lg transition-colors duration-150 cursor-pointer hover:bg-gray-3 aria-selected:bg-gray-3 group"
 			onSelect={onClick}
 			onMouseEnter={() => {
 				iconRef.current?.startAnimation();
@@ -410,18 +499,18 @@ const ReferButton = () => {
 			}}
 		>
 			{!referClickedState && (
-				<div className="absolute right-0 top-1 z-10">
+				<div className="absolute right-1 top-1 z-10">
 					<div className="relative">
 						<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
-						<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+						<div className="relative w-2 h-2 bg-red-400 rounded-full ring-2 ring-gray-1" />
 					</div>
 				</div>
 			)}
 
-			<div className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9">
+			<div className="flex justify-center items-center rounded-full transition-colors cursor-pointer hover:bg-gray-3 size-8">
 				{cloneElement(<ReferIcon />, {
 					ref: iconRef,
-					className: "text-gray-12 size-3.5",
+					className: "text-gray-11 size-3.5",
 				})}
 			</div>
 		</Link>

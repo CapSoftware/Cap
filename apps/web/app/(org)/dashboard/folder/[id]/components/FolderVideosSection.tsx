@@ -147,12 +147,12 @@ export default function FolderVideosSection({
 
 	return (
 		<>
-			<div className="flex justify-between items-center mb-6 w-full">
-				<h1 className="text-2xl font-medium text-gray-12">
+			<div className="flex justify-between items-center mb-5 w-full">
+				<h2 className="text-lg font-semibold tracking-tight text-gray-12">
 					Videos and screenshots
-				</h1>
+				</h2>
 			</div>
-			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+			<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{visibleVideos.length === 0 && !isUploading ? (
 					<div
 						className={clsx(
