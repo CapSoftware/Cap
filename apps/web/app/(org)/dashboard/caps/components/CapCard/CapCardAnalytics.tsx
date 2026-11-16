@@ -111,7 +111,7 @@ export const CapCardAnalytics = Object.assign(
 );
 
 const Shell = (props: PropsWithChildren) => (
-	<div className="flex flex-wrap gap-4 justify-between items-center pt-3 text-sm border-t border-gray-3">
+	<div className="flex flex-wrap gap-4 justify-between items-center pt-3 mt-auto text-sm border-t border-gray-3">
 		{props.children}
 	</div>
 );

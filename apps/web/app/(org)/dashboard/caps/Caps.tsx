@@ -2,21 +2,16 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
-import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
-import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
-import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { parsePageParam } from "@/lib/page-param";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
@@ -24,9 +19,7 @@ import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
 	SelectedCapsBar,
-	UploadCapButton,
 	UploadPlaceholderCard,
-	WebRecorderDialog,
 } from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
@@ -34,6 +27,7 @@ import { DragHint } from "./components/DragHint";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
+import { QuickActions } from "./components/QuickActions";
 import { useCapsMoved } from "./components/useCapsMoved";
 import { useUploadingStatus } from "./UploadingContext";
 
@@ -269,30 +263,7 @@ export const Caps = ({
 				open={openNewFolderDialog}
 				onOpenChange={setOpenNewFolderDialog}
 			/>
-			<div className="flex flex-wrap gap-x-6 gap-y-4 justify-between items-center mb-10 w-full">
-				<h1 className="text-2xl font-semibold tracking-tight text-gray-12">
-					My Caps
-				</h1>
-				<div className="flex flex-wrap gap-2 items-center">
-					<Button
-						onClick={() => setOpenNewFolderDialog(true)}
-						size="sm"
-						variant="secondary"
-						className="flex gap-2 items-center px-4 h-9 w-fit"
-					>
-						<FontAwesomeIcon
-							className="size-3.5 text-gray-10"
-							icon={faFolderPlus}
-						/>
-						New folder
-					</Button>
-					<UploadCapButton size="sm" />
-					<ChromeRecorderButton
-						className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium h-9 px-4`}
-					/>
-					<WebRecorderDialog />
-				</div>
-			</div>
+			<QuickActions onNewFolder={() => setOpenNewFolderDialog(true)} />
 			<FoldersSection
 				title="Folders"
 				scope="personal"
