@@ -244,16 +244,20 @@ export const SharedCaps = ({
 						onOpenChange={setOpenNewFolderDialog}
 					/>
 				)}
-				<div className="flex flex-wrap gap-3">
+				<div className="flex flex-wrap gap-2 items-center">
 					{spaceData && spaceMembers && (
 						<>
 							{canManageCurrentSpace && (
 								<Button
-									variant="gray"
+									variant="secondary"
 									size="sm"
+									className="gap-2 px-4 h-9"
 									onClick={() => setIsSpaceSettingsOpen(true)}
 								>
-									<FontAwesomeIcon className="size-3" icon={faGear} />
+									<FontAwesomeIcon
+										className="size-3 text-gray-10"
+										icon={faGear}
+									/>
 									Space settings
 								</Button>
 							)}
@@ -289,10 +293,13 @@ export const SharedCaps = ({
 						<Button
 							onClick={() => setOpenNewFolderDialog(true)}
 							size="sm"
-							variant="dark"
-							className="flex gap-2 items-center w-fit"
+							variant="secondary"
+							className="flex gap-2 items-center px-4 h-9 w-fit"
 						>
-							<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+							<FontAwesomeIcon
+								className="size-3.5 text-gray-10"
+								icon={faFolderPlus}
+							/>
 							New folder
 						</Button>
 					)}
