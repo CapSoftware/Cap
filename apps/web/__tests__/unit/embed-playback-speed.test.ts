@@ -93,7 +93,7 @@ async function renderEmbed(
 		defaultPlaybackSpeed?: number;
 		minimal: boolean;
 		callToAction: { label: string; url: string } | null;
-		data: { orgSettings: Record<string, unknown> | null };
+		data: Record<string, unknown>;
 	}>;
 }
 
@@ -133,7 +133,7 @@ describe("embed default playback speed", () => {
 			},
 		});
 		expect(embed.props.callToAction).toMatchObject({ label: "Talk to sales" });
-		expect(embed.props.data.orgSettings).toEqual({ disableComments: true });
+		expect(embed.props.data).not.toHaveProperty("orgSettings");
 	});
 
 	it("keeps the workspace default off older videos", async () => {

@@ -411,7 +411,9 @@ export function CallToActionDialog({
 									disabled={busy}
 									className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-blue-11 transition-colors hover:bg-blue-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-50"
 								>
-									{pending === "inherit" ? "Switching…" : workspaceNotice.action}
+									{pending === "inherit"
+										? "Switching…"
+										: workspaceNotice.action}
 								</button>
 							)}
 						</div>

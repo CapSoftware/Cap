@@ -30,8 +30,12 @@ const pillButtonClass =
 
 export function DefaultCallToAction() {
 	const router = useRouter();
-	const { activeOrganization, organizationSettings, user, setUpgradeModalOpen } =
-		useDashboardContext();
+	const {
+		activeOrganization,
+		organizationSettings,
+		user,
+		setUpgradeModalOpen,
+	} = useDashboardContext();
 	const [dialogMounted, setDialogMounted] = useState(false);
 	const [dialogOpen, setDialogOpen] = useState(false);
 

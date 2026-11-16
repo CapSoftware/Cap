@@ -48,8 +48,8 @@ vi.mock("@cap/database", () => ({
 }));
 
 import type { Organisation } from "@cap/web-domain";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { updateOrganizationCallToAction } from "@/actions/organization/default-call-to-action";
 
 const organizationId = "org123" as Organisation.OrganisationId;

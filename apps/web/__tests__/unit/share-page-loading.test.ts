@@ -424,7 +424,10 @@ describe("share page loading", () => {
 				id: "owner",
 				activeOrganizationId: "organization",
 			});
-			arrangeWorkspaceVideo({ callToAction: false }, "2026-10-02T00:00:00.000Z");
+			arrangeWorkspaceVideo(
+				{ callToAction: false },
+				"2026-10-02T00:00:00.000Z",
+			);
 			const content = await renderAuthorizedContent();
 			const data = content.props.children.props.data;
 			expect(data.callToAction).toBeNull();

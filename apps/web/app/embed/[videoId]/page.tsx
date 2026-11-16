@@ -35,10 +35,7 @@ import {
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import {
-	resolveShareCallToAction,
-	withoutWorkspaceCallToAction,
-} from "@/lib/share-call-to-action";
+import { resolveShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -414,12 +411,11 @@ async function EmbedContent({
 		}).pipe(EffectRuntime.runPromise),
 	]);
 
+	const { orgSettings: _orgSettings, ...embedData } = video;
+
 	return (
 		<EmbedVideo
-			data={{
-				...video,
-				orgSettings: withoutWorkspaceCallToAction(video.orgSettings),
-			}}
+			data={embedData}
 			branding={branding}
 			user={user}
 			comments={commentsQuery}
