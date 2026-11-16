@@ -4995,6 +4995,10 @@ impl MainWindow {
         if let Some((notice_path, message)) = &self.app_action_notice
             && notice_path == &path
         {
+            // An app's error can be longer than the card is wide: show its
+            // start with an ellipsis and the whole message on hover.
+            let theme = self.theme;
+            let full = message.clone();
             return div()
                 .h(px(26.))
                 .flex()
@@ -5004,7 +5008,18 @@ impl MainWindow {
                 .text_size(px(11.))
                 .text_color(self.theme.gray_11)
                 .overflow_hidden()
-                .child(message.clone());
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "lib-rec-app-notice-{}",
+                            path.display()
+                        )))
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(move |_, cx| ui::Tooltip::new(&theme, full.clone()).view(cx))
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                        .child(message.clone()),
+                );
         }
         let app_actions = sharing
             .as_deref()
