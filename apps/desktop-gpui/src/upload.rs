@@ -1388,7 +1388,7 @@ pub async fn upload_exported_video(
         .await
         .map(|(result, _)| result);
     if matches!(result, Ok(UploadResult::Success(_))) {
-        crate::automation::upload_completed(&project_path, None);
+        crate::automation::upload_completed(&project_path, None, None);
     }
     result
 }

@@ -423,32 +423,39 @@ fn delete_is_refused_without_a_successful_verified_action_before_it() {
     std::fs::write(&outside, PLAYABLE_MP4).unwrap();
     let export = export_action();
 
-    assert!(verify_before_delete(&project, None, Some(&outside), None).is_err());
+    assert!(verify_before_delete(&project, None, Some(&outside), None, None).is_err());
 
     let notify = Action::Notify {
         title_template: "t".into(),
         body_template: "b".into(),
     };
     let error =
-        verify_before_delete(&project, succeeded(&notify), Some(&outside), None).unwrap_err();
+        verify_before_delete(&project, succeeded(&notify), Some(&outside), None, None).unwrap_err();
     assert!(error.contains("notify"), "{error}");
 
     let failed = Some(PrecedingAction {
         action: &export,
         succeeded: false,
     });
-    let error = verify_before_delete(&project, failed, Some(&outside), None).unwrap_err();
+    let error = verify_before_delete(&project, failed, Some(&outside), None, None).unwrap_err();
     assert!(error.contains("did not succeed"), "{error}");
 
-    assert!(verify_before_delete(&project, succeeded(&export), None, None).is_err());
+    assert!(verify_before_delete(&project, succeeded(&export), None, None, None).is_err());
 
     assert_eq!(
-        verify_before_delete(&project, succeeded(&export), Some(&outside), None),
+        verify_before_delete(&project, succeeded(&export), Some(&outside), None, None),
         Ok(())
     );
     let save = save_action(root.path());
+    let written = file_fingerprint(&outside).unwrap();
     assert_eq!(
-        verify_before_delete(&project, succeeded(&save), Some(&outside), Some(&outside)),
+        verify_before_delete(
+            &project,
+            succeeded(&save),
+            Some(&outside),
+            Some(&outside),
+            Some(&written)
+        ),
         Ok(())
     );
 }
@@ -462,13 +469,14 @@ fn delete_is_refused_when_the_export_is_not_playable_or_the_copy_is_short() {
 
     let truncated = root.path().join("truncated.mp4");
     std::fs::write(&truncated, &PLAYABLE_MP4[..PLAYABLE_MP4.len() / 3]).unwrap();
-    let error =
-        verify_before_delete(&project, succeeded(&export), Some(&truncated), None).unwrap_err();
+    let error = verify_before_delete(&project, succeeded(&export), Some(&truncated), None, None)
+        .unwrap_err();
     assert!(error.contains("not a playable video"), "{error}");
 
     let text = root.path().join("notes.mp4");
     std::fs::write(&text, b"not a video at all").unwrap();
-    let error = verify_before_delete(&project, succeeded(&export), Some(&text), None).unwrap_err();
+    let error =
+        verify_before_delete(&project, succeeded(&export), Some(&text), None, None).unwrap_err();
     assert!(error.contains("not a playable video"), "{error}");
 
     let source = root.path().join("original.png");
@@ -476,10 +484,26 @@ fn delete_is_refused_when_the_export_is_not_playable_or_the_copy_is_short() {
     let short = root.path().join("copy.png");
     std::fs::write(&short, b"01234").unwrap();
     let save = save_action(root.path());
-    let error =
-        verify_before_delete(&project, succeeded(&save), Some(&short), Some(&source)).unwrap_err();
+    let written = file_fingerprint(&short).unwrap();
+    let error = verify_before_delete(
+        &project,
+        succeeded(&save),
+        Some(&short),
+        Some(&source),
+        Some(&written),
+    )
+    .unwrap_err();
     assert!(error.contains("5 bytes but the original is 10"), "{error}");
-    assert!(verify_before_delete(&project, succeeded(&save), Some(&short), None).is_err());
+    assert!(
+        verify_before_delete(
+            &project,
+            succeeded(&save),
+            Some(&short),
+            None,
+            Some(&written)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -491,22 +515,25 @@ fn delete_is_refused_when_the_output_is_missing_empty_or_inside_the_recording() 
 
     let missing = root.path().join("missing.mp4");
     let error =
-        verify_before_delete(&project, succeeded(&export), Some(&missing), None).unwrap_err();
+        verify_before_delete(&project, succeeded(&export), Some(&missing), None, None).unwrap_err();
     assert!(error.contains("could not be checked"), "{error}");
 
     let empty = root.path().join("empty.mp4");
     std::fs::write(&empty, b"").unwrap();
-    let error = verify_before_delete(&project, succeeded(&export), Some(&empty), None).unwrap_err();
+    let error =
+        verify_before_delete(&project, succeeded(&export), Some(&empty), None, None).unwrap_err();
     assert!(error.contains("missing or empty"), "{error}");
 
     let a_directory = root.path().join("folder.mp4");
     std::fs::create_dir(&a_directory).unwrap();
-    assert!(verify_before_delete(&project, succeeded(&export), Some(&a_directory), None).is_err());
+    assert!(
+        verify_before_delete(&project, succeeded(&export), Some(&a_directory), None, None).is_err()
+    );
 
     let inside = project.join("output").join("result.mp4");
     std::fs::write(&inside, PLAYABLE_MP4).unwrap();
     let error =
-        verify_before_delete(&project, succeeded(&export), Some(&inside), None).unwrap_err();
+        verify_before_delete(&project, succeeded(&export), Some(&inside), None, None).unwrap_err();
     assert!(error.contains("inside the folder"), "{error}");
 }
 
@@ -636,7 +663,8 @@ async fn save_to_location_copies_the_capture_and_is_what_delete_checks() {
             &bundle,
             succeeded(&save),
             host.last_output().as_deref(),
-            Some(&image)
+            Some(&image),
+            host.output().and_then(|output| output.written).as_ref(),
         ),
         Ok(())
     );
@@ -651,7 +679,11 @@ async fn save_to_location_copies_the_capture_and_is_what_delete_checks() {
             &bundle,
             succeeded(&save),
             into_bundle.last_output().as_deref(),
-            Some(&image)
+            Some(&image),
+            into_bundle
+                .output()
+                .and_then(|output| output.written)
+                .as_ref(),
         )
         .is_err()
     );
@@ -710,12 +742,194 @@ async fn saving_onto_the_capture_itself_never_truncates_it() {
                 &bundle,
                 succeeded(&save),
                 host.last_output().as_deref(),
-                Some(&image)
+                Some(&image),
+                host.output().and_then(|output| output.written).as_ref(),
             )
             .is_err(),
             "a link back into the capture is not a copy"
         );
     }
+}
+
+/// Saving with no filename template keeps the capture's own name, and every
+/// capture is called `original.png`, so a second save beside the first must
+/// take a new name instead of replacing it.
+#[tokio::test]
+async fn a_second_save_never_overwrites_the_first() {
+    let root = tempfile::tempdir().unwrap();
+    let saved = root.path().join("saved");
+    let mut copies = Vec::new();
+    for (index, bytes) in [b"first capture".as_slice(), b"second"]
+        .into_iter()
+        .enumerate()
+    {
+        let bundle = root.path().join(format!("shot-{index}.cap"));
+        std::fs::create_dir(&bundle).unwrap();
+        let image = bundle.join("original.png");
+        std::fs::write(&image, bytes).unwrap();
+        let ctx = TriggerContext::new()
+            .with_project_path(bundle.clone())
+            .with_image_path(image.clone());
+        let host = GpuiAutomationHost::default();
+        host.save_to_location(&ctx, &saved.to_string_lossy(), None)
+            .await
+            .unwrap();
+        let save = save_action(&saved);
+        assert_eq!(
+            verify_before_delete(
+                &bundle,
+                succeeded(&save),
+                host.last_output().as_deref(),
+                Some(&image),
+                host.output().and_then(|output| output.written).as_ref(),
+            ),
+            Ok(())
+        );
+        copies.push(host.last_output().unwrap());
+    }
+    assert_eq!(
+        copies,
+        vec![saved.join("original.png"), saved.join("original (1).png")]
+    );
+    assert_eq!(std::fs::read(&copies[0]).unwrap(), b"first capture");
+    assert_eq!(std::fs::read(&copies[1]).unwrap(), b"second");
+}
+
+/// The delete checks the file this run wrote, so a copy replaced or edited
+/// after the save, or one that was already there, never lets the capture go.
+#[tokio::test]
+async fn delete_is_refused_when_the_saved_copy_is_not_the_one_this_run_wrote() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("shot.cap");
+    std::fs::create_dir(&bundle).unwrap();
+    let image = bundle.join("original.png");
+    std::fs::write(&image, b"png bytes").unwrap();
+    let saved = root.path().join("saved");
+    let ctx = TriggerContext::new()
+        .with_project_path(bundle.clone())
+        .with_image_path(image.clone());
+    let save = save_action(&saved);
+    let check = |host: &GpuiAutomationHost| {
+        verify_before_delete(
+            &bundle,
+            succeeded(&save),
+            host.last_output().as_deref(),
+            Some(&image),
+            host.output().and_then(|output| output.written).as_ref(),
+        )
+    };
+
+    let replaced = GpuiAutomationHost::default();
+    replaced
+        .save_to_location(&ctx, &saved.to_string_lossy(), None)
+        .await
+        .unwrap();
+    let copy = replaced.last_output().unwrap();
+    let other = root.path().join("other.png");
+    std::fs::write(&other, b"png bytes").unwrap();
+    std::fs::rename(&other, &copy).unwrap();
+    let error = check(&replaced).unwrap_err();
+    assert!(
+        error.contains("changed after this rule saved it"),
+        "{error}"
+    );
+
+    let edited = GpuiAutomationHost::default();
+    edited
+        .save_to_location(&ctx, &saved.to_string_lossy(), None)
+        .await
+        .unwrap();
+    std::fs::write(edited.last_output().unwrap(), b"png bytes and more").unwrap();
+    assert!(check(&edited).is_err());
+
+    let unwritten = GpuiAutomationHost::default();
+    unwritten.remember_output(copy);
+    let error = check(&unwritten).unwrap_err();
+    assert!(error.contains("not written by this rule"), "{error}");
+}
+
+#[tokio::test]
+async fn unused_names_count_up_past_files_folders_and_links() {
+    let root = tempfile::tempdir().unwrap();
+    let wanted = root.path().join("clip.mp4");
+    std::fs::write(&wanted, b"earlier export").unwrap();
+    std::fs::create_dir(root.path().join("clip (1).mp4")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        root.path().join("nowhere"),
+        root.path().join("clip (2).mp4"),
+    )
+    .unwrap();
+    let reserved = reserve_unused_path(&wanted).await.unwrap();
+    #[cfg(unix)]
+    assert_eq!(reserved, root.path().join("clip (3).mp4"));
+    #[cfg(not(unix))]
+    assert_eq!(reserved, root.path().join("clip (2).mp4"));
+    assert_eq!(std::fs::read(&wanted).unwrap(), b"earlier export");
+    assert_eq!(std::fs::metadata(&reserved).unwrap().len(), 0);
+    assert_eq!(
+        numbered_path(Path::new("/saved/README"), 2),
+        PathBuf::from("/saved/README (2)")
+    );
+}
+
+/// A screenshot's upload-completed rules see the screenshot: Open editor
+/// opens the screenshot editor, and Upload reuses the link it just got.
+#[tokio::test]
+async fn upload_completed_for_a_screenshot_keeps_its_image() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("shot.cap");
+    std::fs::create_dir(&bundle).unwrap();
+    let image = bundle.join("original.png");
+    std::fs::write(&image, b"png bytes").unwrap();
+    let ctx = upload_context(
+        bundle.clone(),
+        Some(image.clone()),
+        Some("https://cap.invalid/s/shot".into()),
+        Some("shot".into()),
+    );
+    assert_eq!(ctx.image_path.as_deref(), Some(image.as_path()));
+    assert!(matches!(
+        editor_request(&ctx),
+        Ok(UiRequest::OpenScreenshotEditor(path)) if path == image
+    ));
+    let host = GpuiAutomationHost::for_trigger(Trigger::UploadCompleted);
+    assert_eq!(host.upload(&ctx, None, false, false).await, Ok(()));
+
+    let recording = recording_project(root.path());
+    let ctx = upload_context(recording.clone(), None, None, None);
+    assert!(matches!(
+        editor_request(&ctx),
+        Ok(UiRequest::OpenEditor(path)) if path == recording
+    ));
+}
+
+/// Delete-after-upload waits on this: a hold taken at Stop stays until the
+/// last one is dropped, and a waiter wakes only then.
+#[tokio::test]
+async fn instant_rules_hold_the_folder_until_every_hold_is_released() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("instant.cap");
+    assert!(!instant_rules_running(&project));
+    instant_rules_finished(&project).await;
+
+    let first = InstantRulesHold::take(&project);
+    let second = InstantRulesHold::take(&project);
+    assert!(instant_rules_running(&project));
+    let waiter = tokio::spawn({
+        let project = project.clone();
+        async move { instant_rules_finished(&project).await }
+    });
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished());
+    assert!(instant_rules_running(&project));
+    drop(second);
+    tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!instant_rules_running(&project));
 }
 
 #[tokio::test]

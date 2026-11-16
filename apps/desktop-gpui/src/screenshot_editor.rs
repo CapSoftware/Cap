@@ -2392,7 +2392,8 @@ impl ScreenshotEditorWindow {
 
             if saved.is_ok() {
                 let (project, share) = completed;
-                crate::automation::upload_completed(&project, Some(share));
+                let image = bundle_image_path(&project);
+                crate::automation::upload_completed(&project, image, Some(share));
             }
             this.update_in(cx, |this, window, cx| match saved {
                 Ok(()) => this.finish_share_success(toast, link, window, cx),

@@ -1248,6 +1248,9 @@ impl RecordingSession {
         };
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
+        let instant_rules_hold = instant_share_url
+            .as_ref()
+            .and_then(|_| crate::automation::hold_instant_rules(&active.project_dir));
         let studio_behaviour = (self.mode() == Some(recording::RecordingMode::Studio)).then(|| {
             crate::automation::studio_editor_behaviour(
                 &active.project_dir,
@@ -1478,6 +1481,7 @@ impl RecordingSession {
                                     project_dir,
                                     Some(link.clone()),
                                     instant_video_id,
+                                    instant_rules_hold,
                                 );
                             }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));

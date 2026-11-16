@@ -332,12 +332,15 @@ fn studio_duration_secs(project_dir: &Path) -> Option<f64> {
     .flatten()
 }
 
+/// `hold` comes from [`hold_instant_rules`] at Stop and lives as long as the
+/// run, so delete-after-upload keeps the folder until these rules finish.
 pub fn instant_recording_finished(
     project_dir: PathBuf,
     share_link: Option<String>,
     share_id: Option<String>,
+    hold: Option<InstantRulesHold>,
 ) {
-    spawn_run(
+    let run = spawn_run(
         Trigger::InstantRecordingFinished,
         event_key(&project_dir),
         move |_| {
@@ -350,12 +353,101 @@ pub fn instant_recording_finished(
             )
         },
     );
+    if let (Some(run), Some(runtime)) = (run, RUNTIME.get()) {
+        runtime.handle.spawn(async move {
+            let _hold = hold;
+            let _ = run.await;
+        });
+    }
+}
+
+/// Instant recordings whose finished rules may still read the folder. The
+/// upload can only be verified after Stop, so a hold taken when Stop begins
+/// is in place before delete-after-upload could remove the folder, and it is
+/// released when the rules finish or the recording never reports finishing.
+struct InstantRuleHolds {
+    held: Mutex<HashMap<String, usize>>,
+    released: tokio::sync::Notify,
+}
+
+impl InstantRuleHolds {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, usize>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn is_held(&self, key: &str) -> bool {
+        self.lock().contains_key(key)
+    }
+}
+
+fn instant_rule_holds() -> &'static InstantRuleHolds {
+    static HOLDS: OnceLock<InstantRuleHolds> = OnceLock::new();
+    HOLDS.get_or_init(|| InstantRuleHolds {
+        held: Mutex::new(HashMap::new()),
+        released: tokio::sync::Notify::new(),
+    })
+}
+
+pub struct InstantRulesHold {
+    key: String,
+}
+
+impl InstantRulesHold {
+    pub(crate) fn take(project_dir: &Path) -> Self {
+        let key = event_key(project_dir);
+        *instant_rule_holds().lock().entry(key.clone()).or_default() += 1;
+        Self { key }
+    }
+}
+
+impl Drop for InstantRulesHold {
+    fn drop(&mut self) {
+        let holds = instant_rule_holds();
+        {
+            let mut held = holds.lock();
+            if let Some(count) = held.get_mut(&self.key) {
+                *count -= 1;
+                if *count == 0 {
+                    held.remove(&self.key);
+                }
+            }
+        }
+        holds.released.notify_waiters();
+    }
+}
+
+/// `None` when no enabled rule listens for finished Instant recordings.
+pub fn hold_instant_rules(project_dir: &Path) -> Option<InstantRulesHold> {
+    store_for(Trigger::InstantRecordingFinished)?;
+    Some(InstantRulesHold::take(project_dir))
+}
+
+pub fn instant_rules_running(project_dir: &Path) -> bool {
+    instant_rule_holds().is_held(&event_key(project_dir))
+}
+
+pub async fn instant_rules_finished(project_dir: &Path) {
+    let key = event_key(project_dir);
+    let holds = instant_rule_holds();
+    loop {
+        let mut released = std::pin::pin!(holds.released.notified());
+        released.as_mut().enable();
+        if !holds.is_held(&key) {
+            return;
+        }
+        released.await;
+    }
 }
 
 /// The Instant queue keeps the folder until the returned run finishes, since
 /// the rules may read it after the upload's optional cleanup would remove it.
+/// `image_path` is the screenshot's PNG when the upload was a screenshot, so
+/// its rules see a screenshot (Open editor opens the screenshot editor).
 pub fn upload_completed(
     project_dir: &Path,
+    image_path: Option<PathBuf>,
     share: Option<(String, String)>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     store_for(Trigger::UploadCompleted)?;
@@ -372,14 +464,21 @@ pub fn upload_completed(
     spawn_run(
         Trigger::UploadCompleted,
         event_key(&project_dir),
-        move |_| {
-            with_share(
-                TriggerContext::new().with_project_path(project_dir),
-                share_link,
-                share_id,
-            )
-        },
+        move |_| upload_context(project_dir, image_path, share_link, share_id),
     )
+}
+
+fn upload_context(
+    project_dir: PathBuf,
+    image_path: Option<PathBuf>,
+    share_link: Option<String>,
+    share_id: Option<String>,
+) -> TriggerContext {
+    let mut ctx = TriggerContext::new().with_project_path(project_dir);
+    if let Some(image_path) = image_path {
+        ctx = ctx.with_image_path(image_path);
+    }
+    with_share(ctx, share_link, share_id)
 }
 
 pub fn instant_share(project_dir: &Path, video_id: &str) -> Option<(String, String)> {
@@ -554,7 +653,37 @@ fn studio_editor_behaviour_for(
 #[derive(Default)]
 struct GpuiAutomationHost {
     trigger: Option<Trigger>,
-    last_output: Mutex<Option<PathBuf>>,
+    last_output: Mutex<Option<Output>>,
+}
+
+/// The file the last Export or Save to location left. `written` is set only
+/// for a copy this run wrote itself, as it was right after the write.
+#[derive(Debug, Clone, PartialEq)]
+struct Output {
+    path: PathBuf,
+    written: Option<FileFingerprint>,
+}
+
+/// Enough of a file's identity to tell that it is still the one written: a
+/// different file put in its place, or a change to it, moves one of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileFingerprint {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    inode: (u64, u64),
+}
+
+fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Ok(FileFingerprint {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        inode: (metadata.dev(), metadata.ino()),
+    })
 }
 
 impl GpuiAutomationHost {
@@ -565,15 +694,18 @@ impl GpuiAutomationHost {
         }
     }
 
-    fn set_last_output(&self, path: Option<PathBuf>) {
+    fn set_last_output(&self, output: Option<Output>) {
         *self
             .last_output
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = output;
     }
 
     fn remember_output(&self, path: PathBuf) {
-        self.set_last_output(Some(path));
+        self.set_last_output(Some(Output {
+            path,
+            written: None,
+        }));
     }
 
     /// Whether the editor for this event was already chosen when the capture
@@ -586,11 +718,16 @@ impl GpuiAutomationHost {
         )
     }
 
-    fn last_output(&self) -> Option<PathBuf> {
+    fn output(&self) -> Option<Output> {
         self.last_output
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    #[cfg(test)]
+    fn last_output(&self) -> Option<PathBuf> {
+        self.output().map(|output| output.path)
     }
 }
 
@@ -627,8 +764,8 @@ impl AutomationHost for GpuiAutomationHost {
         filename_template: Option<&str>,
     ) -> Result<(), String> {
         self.set_last_output(None);
-        let destination = save_to_location(ctx, dir, filename_template).await?;
-        self.remember_output(destination);
+        let saved = save_to_location(ctx, dir, filename_template).await?;
+        self.set_last_output(Some(saved));
         Ok(())
     }
 
@@ -652,13 +789,17 @@ impl AutomationHost for GpuiAutomationHost {
         copy_link: bool,
         open_in_browser: bool,
     ) -> Result<(), String> {
-        let link = if let Some(image_path) = ctx.image_path.as_ref() {
-            let (project, uploaded) = upload_screenshot(ctx, image_path, organization_id).await?;
-            upload_completed(&project, Some((uploaded.link.clone(), uploaded.id)));
-            uploaded.link
-        } else if let Some(existing) = ctx.share_link.as_ref() {
-            tracing::info!(link = %existing, "automation: recording already uploaded, reusing its link");
+        let link = if let Some(existing) = ctx.share_link.as_ref() {
+            tracing::info!(link = %existing, "automation: already uploaded, reusing its link");
             existing.clone()
+        } else if let Some(image_path) = ctx.image_path.as_ref() {
+            let (project, uploaded) = upload_screenshot(ctx, image_path, organization_id).await?;
+            upload_completed(
+                &project,
+                Some(image_path.clone()),
+                Some((uploaded.link.clone(), uploaded.id)),
+            );
+            uploaded.link
         } else if let Some(project_path) = ctx.project_path.as_ref() {
             if !project_path.is_dir() {
                 return Err("The recording no longer exists".to_string());
@@ -834,11 +975,7 @@ impl AutomationHost for GpuiAutomationHost {
         if self.editor_already_decided() {
             return Ok(());
         }
-        if let Some(image_path) = ctx.image_path.as_ref() {
-            return ui(UiRequest::OpenScreenshotEditor(image_path.clone())).await;
-        }
-        let path = existing_project(ctx, "No project path for editor")?;
-        ui(UiRequest::OpenEditor(path.clone())).await
+        ui(editor_request(ctx)?).await
     }
 
     async fn apply_preset(&self, ctx: &TriggerContext, name: &str) -> Result<(), String> {
@@ -887,13 +1024,25 @@ impl AutomationHost for GpuiAutomationHost {
             .as_ref()
             .ok_or("No project path for deletion")?;
         let source = ctx.image_path.as_ref().or(ctx.output_path.as_ref());
+        let output = self.output();
         verify_before_delete(
             project,
             preceding,
-            self.last_output().as_deref(),
+            output.as_ref().map(|output| output.path.as_path()),
             source.map(PathBuf::as_path),
+            output.as_ref().and_then(|output| output.written.as_ref()),
         )
     }
+}
+
+/// A screenshot (any event that carries its PNG) opens the screenshot
+/// editor; everything else opens the recording in the video editor.
+fn editor_request(ctx: &TriggerContext) -> Result<UiRequest, String> {
+    if let Some(image_path) = ctx.image_path.as_ref() {
+        return Ok(UiRequest::OpenScreenshotEditor(image_path.clone()));
+    }
+    let path = existing_project(ctx, "No project path for editor")?;
+    Ok(UiRequest::OpenEditor(path.clone()))
 }
 
 fn existing_project<'a>(ctx: &'a TriggerContext, missing: &str) -> Result<&'a PathBuf, String> {
@@ -944,9 +1093,14 @@ async fn render(
             .await
             .map_err(|error| format!("Failed to create directory: {error}"))?;
     }
-    if let Some(output) = export_output_path(project_path, profile.format, destination) {
+    let reserved = match export_output_path(project_path, profile.format, destination) {
+        Some(wanted) => Some(reserve_unused_path(&wanted).await?),
+        None => None,
+    };
+    if let Some(output) = reserved.clone() {
         builder = builder.with_output_path(output);
     }
+    let reservation = ReservedOutput(reserved);
     let base = builder.build().await.map_err(|error| format!("{error}"))?;
     let output = match profile.format {
         ExportFormat::Mp4 => {
@@ -981,8 +1135,27 @@ async fn render(
         }
     }
     .map_err(|error| format!("Export failed: {error}"))?;
+    reservation.keep();
     tracing::info!(output = %output.display(), "automation: export complete");
     Ok(output)
+}
+
+/// The name an export reserved, removed again unless the export finishes, so
+/// a failed or abandoned export leaves no empty or partial file behind.
+struct ReservedOutput(Option<PathBuf>);
+
+impl ReservedOutput {
+    fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ReservedOutput {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// 0.6.0 failed an Upload of a Studio recording nobody had exported yet with
@@ -1010,6 +1183,7 @@ fn verify_before_delete(
     preceding: Option<PrecedingAction<'_>>,
     last_output: Option<&Path>,
     source: Option<&Path>,
+    written: Option<&FileFingerprint>,
 ) -> Result<(), String> {
     let preceding = preceding.ok_or(
         "Delete local files needs an Export or Save to location before it; local files kept",
@@ -1033,13 +1207,38 @@ fn verify_before_delete(
         last_output.ok_or("The previous action left no file to check; local files kept")?;
     verify_output(output, project)?;
     match preceding.action {
-        Action::SaveToLocation { .. } => verify_copy(output, source),
+        Action::SaveToLocation { .. } => verify_copy(output, source, written),
         _ => verify_playable(output),
     }
 }
 
-fn verify_copy(output: &Path, source: Option<&Path>) -> Result<(), String> {
+/// The saved copy must be the file this run wrote, unchanged since, and as
+/// long as the original: a file that was already in the folder, or one put
+/// in its place afterwards, is not a copy of this capture.
+fn verify_copy(
+    output: &Path,
+    source: Option<&Path>,
+    written: Option<&FileFingerprint>,
+) -> Result<(), String> {
     let source = source.ok_or("The saved file has no source to compare; local files kept")?;
+    let written = written.ok_or_else(|| {
+        format!(
+            "{} was not written by this rule; local files kept",
+            output.display()
+        )
+    })?;
+    let current = file_fingerprint(output).map_err(|error| {
+        format!(
+            "{} could not be checked ({error}); local files kept",
+            output.display()
+        )
+    })?;
+    if &current != written {
+        return Err(format!(
+            "{} changed after this rule saved it; local files kept",
+            output.display()
+        ));
+    }
     let expected = std::fs::metadata(source)
         .map_err(|error| {
             format!(
@@ -1206,7 +1405,7 @@ async fn save_to_location(
     ctx: &TriggerContext,
     dir: &str,
     filename_template: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<Output, String> {
     let source = ctx
         .image_path
         .as_ref()
@@ -1219,24 +1418,83 @@ async fn save_to_location(
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "capture.png".to_string()),
     };
-    let destination = chosen_folder(dir)?.join(&filename);
-    tracing::info!(src = %source.display(), dst = %destination.display(), "automation: saving to location");
-    if let Some(parent) = destination.parent() {
+    let wanted = chosen_folder(dir)?.join(&filename);
+    if let Some(parent) = wanted.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| format!("Failed to create directory: {error}"))?;
     }
-    if destination.exists()
-        && is_same_file(source, &destination)
+    if wanted.exists()
+        && is_same_file(source, &wanted)
             .map_err(|error| format!("Failed to compare source and destination: {error}"))?
     {
-        tracing::info!(dst = %destination.display(), "automation: the file is already there");
-        return Ok(destination);
+        tracing::info!(dst = %wanted.display(), "automation: the file is already there");
+        return Ok(Output {
+            path: wanted,
+            written: None,
+        });
     }
-    tokio::fs::copy(source, &destination)
+    let destination = reserve_unused_path(&wanted).await?;
+    tracing::info!(src = %source.display(), dst = %destination.display(), "automation: saving to location");
+    let copied = tokio::fs::copy(source, &destination)
         .await
-        .map_err(|error| format!("Failed to copy file: {error}"))?;
-    Ok(destination)
+        .map_err(|error| format!("Failed to copy file: {error}"))
+        .and_then(|_| {
+            file_fingerprint(&destination)
+                .map_err(|error| format!("Failed to check the saved file: {error}"))
+        });
+    match copied {
+        Ok(written) => Ok(Output {
+            path: destination,
+            written: Some(written),
+        }),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&destination).await;
+            Err(error)
+        }
+    }
+}
+
+const MAX_NAME_ATTEMPTS: u32 = 10_000;
+
+/// Creates `wanted`, or the first free `name (n).ext` beside it, empty and
+/// exclusively, so an earlier save or export there is never overwritten and
+/// two runs never pick the same name.
+async fn reserve_unused_path(wanted: &Path) -> Result<PathBuf, String> {
+    for attempt in 0..MAX_NAME_ATTEMPTS {
+        let candidate = numbered_path(wanted, attempt);
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+            .await
+        {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!("Failed to create {}: {error}", candidate.display()));
+            }
+        }
+    }
+    Err(format!(
+        "No free file name left next to {}",
+        wanted.display()
+    ))
+}
+
+fn numbered_path(wanted: &Path, attempt: u32) -> PathBuf {
+    if attempt == 0 {
+        return wanted.to_path_buf();
+    }
+    let stem = wanted
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = match wanted.extension() {
+        Some(extension) => format!("{stem} ({attempt}).{}", extension.to_string_lossy()),
+        None => format!("{stem} ({attempt})"),
+    };
+    wanted.with_file_name(name)
 }
 
 /// A folder a rule names must be absolute: an empty or relative one would
