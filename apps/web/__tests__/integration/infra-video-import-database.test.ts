@@ -967,21 +967,56 @@ describe.runIf(Boolean(databaseUrl))(
 						.update(developerVideos)
 						.set({ duration: 42 })
 						.where(eq(developerVideos.id, recorded));
-					const deleted = await seedImport(appId, stalledAt());
-					await database()
-						.update(developerVideos)
-						.set({ deletedAt: new Date() })
-						.where(eq(developerVideos.id, deleted));
 
 					await reapStalledImports();
 
-					for (const videoId of [completing, recorded, deleted]) {
+					for (const videoId of [completing, recorded]) {
 						expect((await importRow(videoId))?.state).toBe("downloading");
 					}
 					expect((await videoRow(completing))?.status).toBe("processing");
 					expect((await videoRow(recorded))?.status).toBe("uploading");
 					expect((await videoRow(recorded))?.duration).toBe(42);
 					expect(mocks.announce).not.toHaveBeenCalled();
+				});
+
+				it("closes the import of a video deleted while it downloaded, without touching the video or sending an event", async () => {
+					const appId = await seedApp();
+					const deleted = await seedImport(appId, stalledAt());
+					const deletedAt = new Date(Date.now() - IMPORT_REAP_AFTER_MS);
+					deletedAt.setMilliseconds(0);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt })
+						.where(eq(developerVideos.id, deleted));
+					const before = await videoRow(deleted);
+					const recent = await seedImport(
+						appId,
+						new Date(Date.now() - IMPORT_REAP_AFTER_MS + 60_000),
+					);
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt: new Date() })
+						.where(eq(developerVideos.id, recent));
+
+					const first = await reapStalledImports();
+					expect(first.failed).toBe(0);
+
+					const row = await importRow(deleted);
+					expect(row).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+					});
+					expect(row?.finishedAt).not.toBeNull();
+					expect(await videoRow(deleted)).toEqual(before);
+					expect((await importRow(recent))?.state).toBe("downloading");
+					expect(mocks.announce).not.toHaveBeenCalled();
+
+					await reapStalledImports();
+					expect(await importRow(deleted)).toMatchObject({
+						state: "failed",
+						errorCode: "cancelled",
+						finishedAt: row?.finishedAt,
+					});
 				});
 
 				it("lets a completion that wins the race keep its result", async () => {
