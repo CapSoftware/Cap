@@ -1169,7 +1169,8 @@ async fn real_app_automation_quit_mid_rule_keeps_the_recording() {
 }
 
 /// Instant rules get the share link, and with "delete after upload" on the
-/// folder stays until the upload-completed rules that read it are done.
+/// folder stays until the rules that read it are done: the upload-completed
+/// ones and the Instant recording's own, which run on their own.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_automation_upload_rules_finish_before_cleanup() {
@@ -1178,11 +1179,18 @@ async fn real_app_automation_upload_rules_finish_before_cleanup() {
     sandbox.set_general("deleteInstantRecordingsAfterUpload", json!(true));
     let link = sandbox.path("instant-link");
     let copied = sandbox.path("copied");
+    let copied_by_instant = sandbox.path("copied-by-instant");
     sandbox.set_store(
         "automations",
         json!({ "version": 1, "rules": [
             automation_rule("link", "instantRecordingFinished", json!([
                 shell(format!("printf %s \"$CAP_SHARE_LINK\" > '{}'", link.display()))
+            ])),
+            automation_rule("instant-copy", "instantRecordingFinished", json!([
+                shell(format!(
+                    "sleep 8; cp -R \"$CAP_PROJECT_PATH\" '{}'",
+                    copied_by_instant.display()
+                ))
             ])),
             automation_rule("copy", "uploadCompleted", json!([
                 shell(format!("sleep 3; cp -R \"$CAP_PROJECT_PATH\" '{}'", copied.display()))
@@ -1195,7 +1203,11 @@ async fn real_app_automation_upload_rules_finish_before_cleanup() {
         &app,
         "the copy rule and the cleanup",
         Duration::from_secs(240),
-        || copied.join("recording-meta.json").exists() && sandbox.projects().is_empty(),
+        || {
+            copied.join("recording-meta.json").exists()
+                && copied_by_instant.join("recording-meta.json").exists()
+                && sandbox.projects().is_empty()
+        },
     )
     .await;
     kill(app);
@@ -1207,11 +1219,16 @@ async fn real_app_automation_upload_rules_finish_before_cleanup() {
         media_files(&copied) > 0,
         "the folder was removed under the rule"
     );
+    assert!(
+        media_files(&copied_by_instant) > 0,
+        "the folder was removed under the Instant recording's rule"
+    );
 }
 
 /// Screenshot rules run for every capture, including one that reuses the
 /// path of a capture a rule already deleted, and a copy saved elsewhere is
-/// what lets the capture go.
+/// what lets the capture go. With no filename template every capture is
+/// `original.png`, and each save still keeps its own file.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_automation_runs_for_every_screenshot() {
@@ -1224,7 +1241,7 @@ async fn real_app_automation_runs_for_every_screenshot() {
         json!({ "version": 1, "rules": [
             automation_rule("save", "screenshotTaken", json!([
                 { "type": "skipEditor" },
-                { "type": "saveToLocation", "dir": saved, "filenameTemplate": "{datetime}.png" },
+                { "type": "saveToLocation", "dir": saved },
                 { "type": "deleteLocalFiles" }
             ])),
             automation_rule("count", "screenshotTaken", json!([
@@ -1255,6 +1272,62 @@ async fn real_app_automation_runs_for_every_screenshot() {
     for image in lines() {
         assert!(!image.exists(), "{} was kept", image.display());
     }
-    let copies = std::fs::read_dir(&saved).unwrap().count();
-    assert!(copies >= 1, "no saved copies");
+    let mut copies = std::fs::read_dir(&saved)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    copies.sort();
+    assert_eq!(copies, ["original (1).png", "original.png"]);
+}
+
+/// Apply preset through the open editor is on disk before the rule's next
+/// action runs, so an Export (here a copy of the project config) right after
+/// it sees the preset, not the look from before it.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_automation_preset_is_saved_before_the_next_action() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let copied = sandbox.path("config-after-preset.json");
+    let mut preset = serde_json::to_value(cap_project::ProjectConfiguration::default()).unwrap();
+    preset["background"]["padding"] = json!(37.0);
+    sandbox.set_store(
+        "presets",
+        json!({ "default": null, "presets": [{ "name": "Padded", "config": preset }] }),
+    );
+    sandbox.set_store(
+        "automations",
+        json!({ "version": 1, "rules": [
+            automation_rule("preset", "studioRecordingFinished", json!([
+                { "type": "openEditor" },
+                { "type": "applyPreset", "name": "Padded" },
+                shell(format!(
+                    "cp \"$CAP_PROJECT_PATH/project-config.json\" '{}'",
+                    copied.display()
+                ))
+            ])),
+        ]}),
+    );
+    let app = sandbox.launch("preset", &[("CAP_GPUI_AUTO_RECORD", "studio:5")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the config copied after the preset",
+        Duration::from_secs(240),
+        || copied.exists(),
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("preset"));
+    let config: Value = serde_json::from_slice(&std::fs::read(&copied).unwrap()).unwrap();
+    assert_eq!(
+        config["background"]["padding"].as_f64(),
+        Some(37.0),
+        "the next action saw the config from before the preset:\n{log}"
+    );
+    assert!(
+        log.contains("automation: applying preset"),
+        "the preset never ran:\n{log}"
+    );
 }
