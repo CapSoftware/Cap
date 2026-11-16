@@ -352,7 +352,6 @@ pub(crate) struct PagesState {
     license_input: Entity<ui::TextInputState>,
     license_draft: String,
     license_activating: bool,
-    license_deactivating: bool,
     license_error: Option<String>,
 
     // Integrations
@@ -444,7 +443,6 @@ impl PagesState {
             license_input,
             license_draft: String::new(),
             license_activating: false,
-            license_deactivating: false,
             license_error: None,
             integrations_view: IntegrationsView::Index,
             storage: None,
@@ -517,7 +515,6 @@ impl SettingsWindow {
             Page::License => {
                 self.pages.license_draft.clear();
                 self.pages.license_activating = false;
-                self.pages.license_deactivating = false;
                 self.pages.license_error = None;
                 let input = self.pages.license_input.clone();
                 input.update(cx, |input, cx| input.set_text("", cx));
@@ -4010,9 +4007,12 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
 /// `licenseApiClient`'s fixed base (`utils/web-api.ts:54-57`).
 const LICENSE_API_BASE: &str = "https://l.cap.so/api";
 
-/// How long Deactivate waits on the license server before it gives up and
-/// keeps the license.
 const LICENSE_RELEASE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// App-wide rather than per page: the release outlives the Settings window and
+/// page switches, and a second release started meanwhile could free an
+/// activation made after the first one finished.
+static LICENSE_RELEASE_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// [`LICENSE_API_BASE`], or `CAP_GPUI_LICENSE_API_URL` so a test build can
 /// talk to a local license server.
@@ -4024,11 +4024,9 @@ fn license_api_base() -> String {
         .unwrap_or_else(|| LICENSE_API_BASE.to_string())
 }
 
-/// Frees this installation's activation on the license server, with the same
-/// key and instance id headers activation sent. Only a 200 counts: the server
-/// answers 200 whenever nothing is held for this installation any more, and
-/// anything else (offline, a timeout, a server error, a server without the
-/// route) leaves the activation where it was.
+/// Only a 200 counts: the server answers 200 whenever nothing is held for this
+/// installation any more, while a license server deployed before the route
+/// existed answers 404 and still holds the activation.
 async fn release_commercial_license(
     base: String,
     license_key: String,
@@ -4052,9 +4050,6 @@ async fn release_commercial_license(
     }
 }
 
-/// Applies a finished release to the store: a release clears the local copy
-/// (unless another key was stored meanwhile), a failure keeps it. The error is
-/// the line Deactivate shows.
 fn finish_license_release(
     released_key: &str,
     result: Result<(), String>,
@@ -4140,11 +4135,10 @@ impl SettingsWindow {
         );
     }
 
-    /// Releases the activation on the license server first and only then
-    /// clears the local copy, so the key can be activated on another
-    /// installation. A failed request keeps the license and says so.
-    fn license_deactivate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pages.license_deactivating {
+    /// Clearing only the local copy left the server bound to this
+    /// installation, so activating the key anywhere else was refused.
+    fn license_deactivate(&mut self, cx: &mut Context<Self>) {
+        if LICENSE_RELEASE_PENDING.load(Ordering::Acquire) {
             return;
         }
         let Some(license) = store::commercial_license() else {
@@ -4155,13 +4149,12 @@ impl SettingsWindow {
             cx.notify();
             return;
         };
-        self.pages.license_deactivating = true;
+        LICENSE_RELEASE_PENDING.store(true, Ordering::Release);
         self.pages.license_error = None;
         cx.notify();
 
         let key = license.license_key;
-        self.spawn_tokio(
-            window,
+        let release = gpui_tokio::Tokio::spawn(
             cx,
             release_commercial_license(
                 license_api_base(),
@@ -4169,14 +4162,21 @@ impl SettingsWindow {
                 instance_id,
                 LICENSE_RELEASE_TIMEOUT,
             ),
-            move |this, result, _window, cx| {
-                this.pages.license_deactivating = false;
-                this.pages.license_error = finish_license_release(&key, result)
-                    .err()
-                    .map(str::to_string);
-                cx.notify();
-            },
         );
+        // Not tied to the window: a release the server accepted must still
+        // clear the stored license when Settings was closed meanwhile.
+        cx.spawn(async move |this, cx| {
+            let result = release.await.unwrap_or_else(|error| Err(error.to_string()));
+            let outcome = finish_license_release(&key, result);
+            LICENSE_RELEASE_PENDING.store(false, Ordering::Release);
+            this.update(cx, |this, cx| {
+                this.pages.license_error = outcome.err().map(str::to_string);
+                cx.notify();
+            })
+            .ok();
+            cx.update(|cx| cx.refresh_windows());
+        })
+        .detach();
     }
 
     pub(crate) fn render_license(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -4334,7 +4334,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let deactivating = self.pages.license_deactivating;
+        let deactivating = LICENSE_RELEASE_PENDING.load(Ordering::Acquire);
         let expiry = license.expiry_date.map(|ms| {
             chrono::DateTime::from_timestamp_millis(ms as i64)
                 .map(|date| date.format("%-m/%-d/%Y").to_string())
@@ -4421,7 +4421,7 @@ impl SettingsWindow {
                                 },
                                 deactivating,
                                 cx,
-                                |this, window, cx| this.license_deactivate(window, cx),
+                                |this, _window, cx| this.license_deactivate(cx),
                             ))
                             .when_some(self.pages.license_error.clone(), |this, error| {
                                 this.child(
