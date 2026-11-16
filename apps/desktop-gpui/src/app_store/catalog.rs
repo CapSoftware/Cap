@@ -181,12 +181,14 @@ pub struct CatalogApp {
 }
 
 impl CatalogApp {
+    #[cfg(test)]
     pub fn has_content(&self) -> bool {
         !self.backgrounds.is_empty()
             || !self.caption_styles.is_empty()
             || !self.color_looks.is_empty()
     }
 
+    #[cfg(test)]
     pub fn runs_on_desktop(&self) -> bool {
         self.platforms.iter().any(|platform| platform == "desktop")
     }
