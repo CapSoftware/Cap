@@ -6,11 +6,15 @@ import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import type { User } from "@cap/web-domain";
 import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
+import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
+import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
 } from "@/lib/developer-video-charge";
+import { keyedDeveloperVideoId } from "@/lib/developer-video-ids";
 import {
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_DEFAULT_TIER,
@@ -21,28 +25,39 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
+import {
+	developerVideoPublicMetadata,
+	withoutReservedMetadata,
+} from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
 	getInfraUploadAdmission,
 	uploadAdmissionError,
 } from "@/lib/infra-standing";
-import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
+import {
+	COMPLETION_IN_PROGRESS,
+	fileTooLargeMessage,
+	MAX_UPLOAD_BYTES,
+	MAX_UPLOAD_DURATION_SECS,
+	STALE_UPLOAD_CLAIM_MS,
+	STORED_BYTES_PER_SECOND,
+} from "@/lib/infra-upload";
+import {
+	INFRA_UPLOAD_CONTENT_TYPES,
+	isNonVideoUploadContentType,
+	isRefusedUploadContentType,
+	UNREADABLE_VIDEO_REASON,
+	UNSUPPORTED_CONTENT_TYPE_HINT,
+} from "@/lib/infra-video-formats";
 import { runPromise } from "@/lib/server";
 
-export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
+export { MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_SECS };
 export const MAX_PRESIGN_BATCH = 50;
-const STORED_BYTES_PER_SECOND = 2_500_000;
 const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
-const ALLOWED_CONTENT_TYPES = [
-	"video/mp4",
-	"video/webm",
-	"video/quicktime",
-	"video/x-matroska",
-	"video/avi",
-	"application/octet-stream",
-];
+const ALLOWED_CONTENT_TYPES: readonly string[] = INFRA_UPLOAD_CONTENT_TYPES;
 
 export type UploadStatus = 200 | 400 | 402 | 404 | 409 | 500;
 
@@ -50,7 +65,11 @@ export type UploadResult<T> =
 	| { status: 200; body: T }
 	| {
 			status: Exclude<UploadStatus, 200>;
-			body: { error: string } & Record<string, unknown>;
+			body: { error: string; code: string; hint?: string } & Record<
+				string,
+				unknown
+			>;
+			headers?: Record<string, string>;
 	  };
 
 export type UploadPart = { partNumber: number; etag: string; size: number };
@@ -61,9 +80,174 @@ const ok = <T>(body: T): UploadResult<T> => ({ status: 200, body });
 
 const fail = (
 	status: Exclude<UploadStatus, 200>,
+	code: string,
 	error: string,
-	extra: Record<string, unknown> = {},
-) => ({ status, body: { error, ...extra } });
+	hint: string,
+) => ({ status, body: apiErrorBody(code, error, hint) });
+
+const videoNotFound = () =>
+	fail(
+		404,
+		"video_not_found",
+		"Video not found",
+		"Check the video ID and that it belongs to this app. Deleted videos are not returned.",
+	);
+
+const videoNotUploadable = () =>
+	fail(
+		400,
+		"video_not_uploadable",
+		"Video cannot accept an upload",
+		"Create a new video and upload the file to that one.",
+	);
+
+const storageFailure = (error: string) =>
+	fail(500, "internal_error", error, API_RETRY_HINT);
+
+const completionInProgress = (error: string, hint: string) =>
+	fail(409, COMPLETION_IN_PROGRESS, error, hint);
+
+const uploadNotFound = (hint: string) =>
+	fail(404, "upload_not_found", "No open upload matches this uploadId", hint);
+
+const partsMismatch = () =>
+	fail(
+		400,
+		"parts_mismatch",
+		"Uploaded parts do not match the request",
+		"Send each uploaded part once, with its partNumber and the ETag header its PUT returned. Upload any missing part again first.",
+	);
+
+const uploadByteLimit = (maxBytes: number | null | undefined) =>
+	Math.min(maxBytes ?? MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES);
+
+const fileTooLarge = (limit: number = MAX_UPLOAD_BYTES, discarded = true) =>
+	fail(
+		400,
+		"file_too_large",
+		fileTooLargeMessage(limit),
+		[
+			discarded
+				? "The upload was discarded and the video can take a new one."
+				: "No upload was opened.",
+			limit < MAX_UPLOAD_BYTES
+				? "Upload a smaller file, or get a token with a larger maxBytes from your server, then call initiate again."
+				: "Export the video at a lower bitrate or split it, then call initiate again and upload the smaller file.",
+		].join(" "),
+	);
+
+const MIN_PART_BYTES = 5 * 1024 * 1024;
+// The cleanup aborts an upload a day after it was opened, so only a recent one
+// is handed back. An older one is left for the cleanup and a new one is opened.
+const OPEN_UPLOAD_REUSE_MS = 6 * 60 * 60 * 1000;
+const OPEN_UPLOAD_LIST_PAGES = 10;
+
+type UploadListing = {
+	Uploads?: { Key?: string; UploadId?: string; Initiated?: Date }[];
+	IsTruncated?: boolean;
+	NextKeyMarker?: string;
+	NextUploadIdMarker?: string;
+};
+
+// A video keeps one open upload: asking again returns the newest recent one,
+// so repeated calls cannot pile up uploads whose parts sit in storage unpaid
+// until the cleanup removes them. Nothing is aborted here, because another
+// client may still be sending parts to an upload or completing it. If the
+// listing fails, the caller opens an upload as before.
+function newestOpenUpload<E, R>(
+	bucket: {
+		multipart: {
+			listUploads: (config: {
+				prefix: string;
+				keyMarker?: string;
+				uploadIdMarker?: string;
+			}) => Effect.Effect<UploadListing, E, R>;
+		};
+	},
+	s3Key: string,
+) {
+	return Effect.gen(function* () {
+		const reusableSince = Date.now() - OPEN_UPLOAD_REUSE_MS;
+		let newest: { uploadId: string; initiatedAt: number } | null = null;
+		let keyMarker: string | undefined;
+		let uploadIdMarker: string | undefined;
+
+		for (let page = 0; page < OPEN_UPLOAD_LIST_PAGES; page++) {
+			const listed = yield* Effect.either(
+				bucket.multipart.listUploads({
+					prefix: s3Key,
+					keyMarker,
+					uploadIdMarker,
+				}),
+			);
+			if (listed._tag === "Left") break;
+
+			for (const upload of listed.right.Uploads ?? []) {
+				if (upload.Key !== s3Key || !upload.UploadId || !upload.Initiated) {
+					continue;
+				}
+				const initiatedAt = upload.Initiated.getTime();
+				if (
+					initiatedAt > reusableSince &&
+					initiatedAt > (newest?.initiatedAt ?? 0)
+				) {
+					newest = { uploadId: upload.UploadId, initiatedAt };
+				}
+			}
+
+			const next = listed.right.NextKeyMarker;
+			if (!listed.right.IsTruncated || !next || next !== s3Key) break;
+			keyMarker = next;
+			uploadIdMarker = listed.right.NextUploadIdMarker;
+		}
+
+		return newest?.uploadId ?? null;
+	});
+}
+
+// runPromise rejects with the failed Exit, and the storage service keeps the
+// S3 error under S3Error.cause. Its name is the S3 error code.
+function storageErrorCode(error: unknown): string | null {
+	const failure =
+		Exit.isExit(error) && Exit.isFailure(error)
+			? Option.getOrNull(Cause.failureOption(error.cause))
+			: error;
+	if (typeof failure !== "object" || failure === null) return null;
+	const cause =
+		"_tag" in failure && failure._tag === "S3Error" && "cause" in failure
+			? failure.cause
+			: failure;
+	if (typeof cause !== "object" || cause === null) return null;
+	const { Code, name } = cause as { Code?: unknown; name?: unknown };
+	if (typeof Code === "string") return Code;
+	return typeof name === "string" ? name : null;
+}
+
+function storedObjectIsMissing(error: unknown) {
+	const code = storageErrorCode(error);
+	return code === "NotFound" || code === "NoSuchKey";
+}
+
+function completeRefusal(error: unknown) {
+	switch (storageErrorCode(error)) {
+		case "NoSuchUpload":
+			return uploadNotFound(
+				"The upload was aborted or the uploadId is wrong. Call initiate for a new uploadId and upload the parts again.",
+			);
+		case "EntityTooSmall":
+			return fail(
+				400,
+				"part_too_small",
+				"A part other than the last is under the minimum part size",
+				`Every part except the last must be at least ${MIN_PART_BYTES} bytes (5 MB). Call initiate again and upload the file in larger parts.`,
+			);
+		case "InvalidPart":
+		case "InvalidPartOrder":
+			return partsMismatch();
+		default:
+			return null;
+	}
+}
 
 const withoutQuotes = (etag: string | undefined) => etag?.replaceAll('"', "");
 
@@ -108,11 +292,18 @@ async function findAppVideo(appId: string, videoId: string) {
 	return video && video.appId === appId ? video : null;
 }
 
-async function openUpload(appId: string, videoId: string) {
+export async function openUpload(appId: string, videoId: string) {
 	const video = await findAppVideo(appId, videoId);
-	if (!video || video.deletedAt) return fail(404, "Video not found");
-	if (video.duration !== null) return fail(409, "Upload already completed");
-	if (!video.s3Key) return fail(400, "Video has no S3 key");
+	if (!video || video.deletedAt) return videoNotFound();
+	if (video.duration !== null) {
+		return fail(
+			409,
+			"upload_already_completed",
+			"Upload already completed",
+			"This video already has its file. Create a new video to upload another one.",
+		);
+	}
+	if (!video.s3Key) return videoNotUploadable();
 	return { status: 200 as const, s3Key: video.s3Key };
 }
 
@@ -135,57 +326,194 @@ export async function ownsInfraApp(
 	return !!app;
 }
 
+const canonicalJson = (value: unknown): string => {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value && typeof value === "object") {
+		return `{${Object.keys(value)
+			.sort()
+			.map(
+				(key) =>
+					`${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+			)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value ?? null);
+};
+
+const storedJson = (value: unknown) => {
+	if (typeof value !== "string") return value ?? null;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return value;
+	}
+};
+
+const idempotencyConflict = (message: string) =>
+	fail(
+		409,
+		"idempotency_conflict",
+		message,
+		"Send the same request to repeat it, or use a new Idempotency-Key for a new video.",
+	);
+
+type VideoRequest = {
+	name: string;
+	externalUserId: string | null;
+	metadata: Record<string, unknown> | null;
+	maxResolutionTier: DeveloperVideoResolutionTier;
+};
+
+async function replayKeyedVideo(
+	appId: string,
+	videoId: string,
+	request: VideoRequest,
+) {
+	const [video] = await db()
+		.select({
+			appId: developerVideos.appId,
+			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
+			metadata: developerVideos.metadata,
+			maxResolutionTier: developerVideos.maxResolutionTier,
+			playbackId: developerVideos.playbackId,
+			deletedAt: developerVideos.deletedAt,
+		})
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId))
+		.limit(1);
+	if (!video) return null;
+	if (video.appId !== appId) {
+		return idempotencyConflict(
+			"Idempotency key was already used for a different request",
+		);
+	}
+	const differs =
+		video.name !== request.name
+			? "name"
+			: (video.externalUserId ?? null) !== request.externalUserId
+				? "userId"
+				: video.maxResolutionTier !== request.maxResolutionTier
+					? "maxResolutionTier"
+					: canonicalJson(
+								developerVideoPublicMetadata(storedJson(video.metadata)),
+							) !== canonicalJson(request.metadata)
+						? "metadata"
+						: null;
+	if (differs) {
+		return idempotencyConflict(
+			`Idempotency key was already used with a different ${differs}`,
+		);
+	}
+	if (video.deletedAt) {
+		return idempotencyConflict(
+			"Idempotency key belongs to a video that was deleted",
+		);
+	}
+	const upload = await openUpload(appId, videoId);
+	if (upload.status !== 200) return upload;
+	if (!video.playbackId) return videoNotUploadable();
+	return ok({
+		videoId,
+		playbackId: video.playbackId,
+		...developerVideoPageUrls(video.playbackId, buildEnv.NEXT_PUBLIC_WEB_URL),
+	});
+}
+
+const videoRequest = (input: {
+	name?: string;
+	userId?: string;
+	metadata?: Record<string, unknown>;
+	maxResolutionTier?: DeveloperVideoResolutionTier;
+}): VideoRequest => ({
+	name: input.name ?? "Untitled",
+	externalUserId: input.userId?.trim() || null,
+	// The takedown marker key is Cap's own, so a client cannot set it.
+	metadata: withoutReservedMetadata(input.metadata) ?? null,
+	maxResolutionTier: input.maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
+});
+
+// The repeat of a keyed request whose video already exists. Nothing new is
+// stored, so no credit is asked for.
+export async function replayKeyedInfraVideo(input: {
+	appId: string;
+	idempotencyKey: string;
+	name?: string;
+	userId?: string;
+	metadata?: Record<string, unknown>;
+	maxResolutionTier?: DeveloperVideoResolutionTier;
+}) {
+	return replayKeyedVideo(
+		input.appId,
+		await keyedDeveloperVideoId(input.appId, input.idempotencyKey),
+		videoRequest(input),
+	);
+}
+
 export async function createInfraVideo({
 	appId,
 	name,
 	userId,
 	metadata,
 	maxResolutionTier,
+	idempotencyKey,
+	videoId: reservedVideoId,
 }: {
 	appId: string;
 	name?: string;
 	userId?: string;
 	metadata?: Record<string, unknown>;
 	maxResolutionTier?: DeveloperVideoResolutionTier;
+	idempotencyKey?: string;
+	videoId?: string;
 }): Promise<
 	UploadResult<{
 		videoId: string;
 		playbackId: string;
-		s3Key: string;
 		shareUrl: string;
 		embedUrl: string;
 	}>
 > {
 	const admission = await getInfraUploadAdmission(appId);
 	if (!admission.allowed) {
-		return { status: 402, body: uploadAdmissionError(admission) };
+		await scheduleAutoTopUp({ appId });
+		return { status: 402, body: uploadAdmissionError(admission, appId) };
 	}
 
-	const videoId = nanoId();
-	const playbackId = createDeveloperPlaybackId();
-	const s3Key = `developer/${appId}/${videoId}/video`;
+	const request = videoRequest({ name, userId, metadata, maxResolutionTier });
+	const videoId = idempotencyKey
+		? await keyedDeveloperVideoId(appId, idempotencyKey)
+		: (reservedVideoId ?? nanoId());
 
-	await db()
+	if (idempotencyKey) {
+		const replayed = await replayKeyedVideo(appId, videoId, request);
+		if (replayed) return replayed;
+	}
+
+	const playbackId = createDeveloperPlaybackId();
+	const insert = db()
 		.insert(developerVideos)
 		.values({
 			id: videoId,
 			appId,
-			externalUserId: userId,
-			name: name ?? "Untitled",
-			s3Key,
-			metadata,
+			externalUserId: request.externalUserId,
+			name: request.name,
+			s3Key: `developer/${appId}/${videoId}/video`,
+			metadata: request.metadata,
 			playbackId,
-			maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
+			maxResolutionTier: request.maxResolutionTier,
 		});
 
-	const webUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
+	if (idempotencyKey) {
+		await insert.onDuplicateKeyUpdate({ set: { id: videoId } });
+		return (await replayKeyedVideo(appId, videoId, request)) ?? videoNotFound();
+	}
 
+	await insert;
 	return ok({
 		videoId,
 		playbackId,
-		s3Key,
-		shareUrl: `${webUrl}/dev/${videoId}`,
-		embedUrl: `${webUrl}/embed/${videoId}?sdk=1`,
+		...developerVideoPageUrls(playbackId, buildEnv.NEXT_PUBLIC_WEB_URL),
 	});
 }
 
@@ -193,14 +521,38 @@ export async function initiateInfraUpload({
 	appId,
 	videoId,
 	contentType,
+	contentLength,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
 	contentType?: string;
+	contentLength?: number;
+	maxBytes?: number | null;
 }): Promise<UploadResult<{ uploadId: string }>> {
+	if (isRefusedUploadContentType(contentType)) {
+		return fail(
+			400,
+			"unsupported_content_type",
+			`${contentType} files are not supported`,
+			UNSUPPORTED_CONTENT_TYPE_HINT,
+		);
+	}
+	if (isNonVideoUploadContentType(contentType)) {
+		return fail(
+			400,
+			"unsupported_content_type",
+			UNREADABLE_VIDEO_REASON,
+			UNSUPPORTED_CONTENT_TYPE_HINT,
+		);
+	}
 	const upload = await openUpload(appId, videoId);
 	if (upload.status !== 200) return upload;
 	const { s3Key } = upload;
+	const byteLimit = uploadByteLimit(maxBytes);
+	if (contentLength !== undefined && contentLength > byteLimit) {
+		return fileTooLarge(byteLimit, false);
+	}
 
 	const resolvedContentType =
 		contentType && ALLOWED_CONTENT_TYPES.includes(contentType)
@@ -208,20 +560,43 @@ export async function initiateInfraUpload({
 			: "video/mp4";
 
 	try {
-		const uploadId = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-			const { UploadId } = yield* bucket.multipart.create(s3Key, {
-				ContentType: resolvedContentType,
-				CacheControl: "max-age=31536000",
-			});
-			if (!UploadId) throw new Error("No UploadId returned");
-			return UploadId;
-		}).pipe(provideOptionalAuth, runPromise);
+		// One request at a time per video: the row lock makes a second caller wait
+		// and then find the upload the first one opened.
+		const uploadId = await db().transaction(async (tx) => {
+			const [current] = await tx
+				.select({
+					duration: developerVideos.duration,
+					deletedAt: developerVideos.deletedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.for("update");
+			if (!current || current.deletedAt || current.duration !== null) {
+				return null;
+			}
 
+			return Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				const open = yield* newestOpenUpload(bucket, s3Key);
+				if (open) return open;
+
+				const { UploadId } = yield* bucket.multipart.create(s3Key, {
+					ContentType: resolvedContentType,
+					CacheControl: "max-age=31536000",
+				});
+				if (!UploadId) throw new Error("No UploadId returned");
+				return UploadId;
+			}).pipe(provideOptionalAuth, runPromise);
+		});
+
+		if (uploadId === null) {
+			const changed = await openUpload(appId, videoId);
+			return changed.status === 200 ? videoNotUploadable() : changed;
+		}
 		return ok({ uploadId });
 	} catch (error) {
 		console.error("Error initiating multipart upload:", error);
-		return fail(500, "Failed to initiate upload");
+		return storageFailure("Failed to initiate upload");
 	}
 }
 
@@ -230,16 +605,42 @@ export async function presignInfraUploadParts({
 	videoId,
 	uploadId,
 	partNumbers,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
 	uploadId: string;
 	partNumbers: readonly number[];
+	maxBytes?: number | null;
 }): Promise<
 	UploadResult<{ parts: { partNumber: number; presignedUrl: string }[] }>
 > {
 	if (partNumbers.length === 0 || partNumbers.length > MAX_PRESIGN_BATCH) {
-		return fail(400, `Ask for 1 to ${MAX_PRESIGN_BATCH} parts at a time`);
+		return fail(
+			400,
+			"invalid_part_count",
+			`Ask for 1 to ${MAX_PRESIGN_BATCH} parts at a time`,
+			"Split the part numbers across several presign requests.",
+		);
+	}
+	const byteLimit = uploadByteLimit(maxBytes);
+	const highestPart = Math.max(1, Math.ceil(byteLimit / MIN_PART_BYTES));
+	const overPart = partNumbers.find((partNumber) => partNumber > highestPart);
+	if (overPart !== undefined) {
+		return fail(
+			400,
+			"part_number_too_large",
+			`Part number ${overPart} is over ${highestPart}, the highest part number this upload can use`,
+			[
+				byteLimit < MAX_UPLOAD_BYTES
+					? `Every part except the last is at least 5 MB, so a file within the ${byteLimit} byte limit set for this upload never needs a part number above ${highestPart}.`
+					: `Every part except the last is at least 5 MB, so a file within the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit never needs a part number above ${highestPart}.`,
+				"No part in this request was signed. Number the parts from 1 with no gaps",
+				byteLimit < MAX_UPLOAD_BYTES
+					? "and ask again, or get a token with a larger maxBytes from your server."
+					: "and ask again.",
+			].join(" "),
+		);
 	}
 	const upload = await openUpload(appId, videoId);
 	if (upload.status !== 200) return upload;
@@ -261,7 +662,7 @@ export async function presignInfraUploadParts({
 		return ok({ parts });
 	} catch (error) {
 		console.error("Error creating presigned URL:", error);
-		return fail(500, "Failed to create presigned URL");
+		return storageFailure("Failed to create presigned URL");
 	}
 }
 
@@ -334,6 +735,7 @@ export async function completeInfraUpload({
 	width,
 	height,
 	fps,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
@@ -343,11 +745,20 @@ export async function completeInfraUpload({
 	width?: number;
 	height?: number;
 	fps?: number;
+	maxBytes?: number | null;
 }): Promise<UploadResult<{ success: true }>> {
 	const video = await findAppVideo(appId, videoId);
-	if (!video || video.deletedAt) return fail(404, "Video not found");
+	if (!video || video.deletedAt) return videoNotFound();
 	if (video.duration !== null) return ok({ success: true });
-	if (!video.s3Key) return fail(400, "Video has no S3 key");
+	if (!video.s3Key) return videoNotUploadable();
+	if (parts.length === 0) {
+		return fail(
+			400,
+			"parts_required",
+			"parts must list at least one uploaded part",
+			"Send the partNumber and ETag of every part you uploaded.",
+		);
+	}
 	const s3Key = video.s3Key;
 
 	let claim: DeveloperVideoClaim | null = null;
@@ -366,15 +777,23 @@ export async function completeInfraUpload({
 							assembled: true as const,
 							totalBytes: object.ContentLength ?? null,
 						})),
-						Effect.catchAll(() => Effect.fail(listError)),
+						Effect.catchAll((headError) =>
+							Effect.fail(
+								storedObjectIsMissing(headError) ? listError : headError,
+							),
+						),
 					),
 				),
 			);
 		}).pipe(provideOptionalAuth, runPromise);
 
 		const { totalBytes } = measured;
-		if (totalBytes === null) {
-			return fail(400, "Uploaded parts do not match the request");
+		if (totalBytes === null) return partsMismatch();
+		const byteLimit = uploadByteLimit(maxBytes);
+		const tooLarge = totalBytes > byteLimit;
+		if (tooLarge && !measured.assembled) {
+			await discardOpenUpload(s3Key, uploadId);
+			return fileTooLarge(byteLimit);
 		}
 		const storedDuration = recordedUploadDuration(durationInSecs, totalBytes);
 		const upload = {
@@ -387,21 +806,34 @@ export async function completeInfraUpload({
 		};
 
 		if (!measured.assembled) {
-			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			const admission = await admitDeveloperVideoUpload(upload);
+			const [recorded, admission] = await Promise.all([
+				videoIsRecorded(db(), videoId),
+				admitDeveloperVideoUpload(upload),
+			]);
+			if (recorded) return ok({ success: true });
 			if (!admission.allowed) {
-				return { status: 402, body: uploadAdmissionError(admission) };
+				await scheduleAutoTopUp({ appId });
+				return { status: 402, body: uploadAdmissionError(admission, appId) };
 			}
 		}
 
 		claim = await claimInfraUploadCompletion(videoId);
 		if (!claim) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			return fail(
-				409,
-				"Another request is completing this upload. Try again shortly.",
-				{ code: COMPLETION_IN_PROGRESS },
-			);
+			return {
+				...completionInProgress(
+					"Another request is completing this upload. Try again shortly.",
+					`Wait for the Retry-After seconds, then send the same request again. If an earlier request was cut off, this can last up to ${STALE_UPLOAD_CLAIM_MS / 60_000} minutes. Do not abort or delete.`,
+				),
+				headers: { "Retry-After": String(COMPLETION_RETRY_AFTER_SECONDS) },
+			};
+		}
+
+		if (tooLarge) {
+			await removeStoredFile(s3Key);
+			await releaseDeveloperVideoUpload(videoId, claim);
+			claim = null;
+			return fileTooLarge(byteLimit);
 		}
 
 		if (!measured.assembled) {
@@ -436,8 +868,9 @@ export async function completeInfraUpload({
 			claim = null;
 			return fail(
 				409,
+				"upload_removed",
 				"This upload was removed before it was recorded. Create a new video and upload the file again.",
-				{ code: "upload_removed" },
+				"Call create for a new video, then upload the file to it.",
 			);
 		}
 
@@ -445,7 +878,8 @@ export async function completeInfraUpload({
 			await removeStoredFile(s3Key);
 			await releaseDeveloperVideoUpload(videoId, claim);
 			claim = null;
-			const refusal = uploadAdmissionError(admission);
+			await scheduleAutoTopUp({ appId });
+			const refusal = uploadAdmissionError(admission, appId);
 			return {
 				status: 402,
 				body: {
@@ -460,11 +894,29 @@ export async function completeInfraUpload({
 
 		return ok({ success: true });
 	} catch (error) {
-		console.error("Error completing multipart upload:", error);
 		if (claim) {
 			await releaseDeveloperVideoUpload(videoId, claim).catch(() => {});
 		}
-		return fail(500, "Failed to complete upload");
+		const refusal = completeRefusal(error);
+		if (refusal) {
+			const recorded = await videoIsRecorded(db(), videoId).catch(() => false);
+			return recorded ? ok({ success: true }) : refusal;
+		}
+		console.error("Error completing multipart upload:", error);
+		return storageFailure("Failed to complete upload");
+	}
+}
+
+// A failed abort leaves the parts for the upload cleanup, which aborts any
+// upload still open a day after it was opened.
+async function discardOpenUpload(s3Key: string, uploadId: string) {
+	try {
+		await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+			yield* bucket.multipart.abort(s3Key, uploadId);
+		}).pipe(provideOptionalAuth, runPromise);
+	} catch (error) {
+		console.error("Error aborting an oversized upload:", s3Key, error);
 	}
 }
 
@@ -485,15 +937,54 @@ const UNRECORDED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const UNRECORDED_PAGE = 200;
 const UNRECORDED_ROWS_PER_RUN = 1_000;
 
+type StoredUpload = "stale" | "fresh" | "uploading" | "missing" | "unknown";
+
+function storedUpload(s3Key: string, now: Date): Promise<StoredUpload> {
+	return Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const head = yield* Effect.either(bucket.headObject(s3Key));
+		if (head._tag === "Right") {
+			const modified = head.right.LastModified?.getTime() ?? 0;
+			return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS
+				? ("stale" as const)
+				: ("fresh" as const);
+		}
+		if (!storedObjectIsMissing(head.left)) return "unknown" as const;
+		const open = yield* bucket.multipart.listUploads({ prefix: s3Key });
+		if (
+			open.IsTruncated ||
+			(open.Uploads ?? []).some((upload) => upload.Key === s3Key)
+		) {
+			return "uploading" as const;
+		}
+		// An upload assembled between the two reads above shows in neither, so
+		// the file is looked for once more now that no upload is open.
+		const again = yield* Effect.either(bucket.headObject(s3Key));
+		if (again._tag === "Right") return "fresh" as const;
+		return storedObjectIsMissing(again.left)
+			? ("missing" as const)
+			: ("unknown" as const);
+	})
+		.pipe(provideOptionalAuth, runPromise)
+		.catch(() => "unknown" as const);
+}
+
+// A video with no file is retired only after storage is asked again under its
+// row lock, and never while a completion's claim is recent. Initiate opens an
+// upload under the same lock, and completion can assemble a file only from an
+// upload that is still open. A claim left by a completion that died before
+// assembling keeps the video only until that claim would be released anyway.
 async function retireUnrecordedVideo(
 	appId: string,
 	videoId: string,
 	now: Date,
+	missingKey?: string,
 ) {
-	return db().transaction(async (tx) => {
+	let deleted = false;
+	const retired = await db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
 
-		const [current] = await tx
+		const read = tx
 			.select({
 				duration: developerVideos.duration,
 				deletedAt: developerVideos.deletedAt,
@@ -501,8 +992,28 @@ async function retireUnrecordedVideo(
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
+		const [current] = await (missingKey === undefined
+			? read
+			: read.for("update"));
 		if (!current || current.duration !== null) return false;
 		if (current.deletedAt) return true;
+		if (missingKey !== undefined) {
+			const [claim] = await tx
+				.select({
+					status: developerVideos.status,
+					updatedAt: developerVideos.updatedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.limit(1);
+			if (
+				claim?.status === "processing" &&
+				now.getTime() - claim.updatedAt.getTime() < STALE_UPLOAD_CLAIM_MS
+			) {
+				return false;
+			}
+			if ((await storedUpload(missingKey, now)) !== "missing") return false;
+		}
 
 		await tx
 			.update(developerVideos)
@@ -510,8 +1021,11 @@ async function retireUnrecordedVideo(
 			.where(
 				and(eq(developerVideos.id, videoId), isNull(developerVideos.duration)),
 			);
+		deleted = true;
 		return true;
 	});
+	if (deleted) await cancelDeveloperVideoEncodes({ appId, videoId });
+	return retired;
 }
 
 async function unrecordedVideosPage(
@@ -543,27 +1057,27 @@ async function unrecordedVideosPage(
 		.limit(UNRECORDED_PAGE);
 }
 
+// A video that never received a file is retired too, or abandoned uploads
+// would stay listed for good. It is left alone while an upload for it is
+// still open, and whenever storage cannot say for certain what is there.
 async function removeUnrecordedFile(
 	row: { id: string; appId: string; s3Key: string | null },
 	now: Date,
 ) {
 	const s3Key = row.s3Key;
 	if (!s3Key) return false;
-	const stale = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-		const object = yield* bucket.headObject(s3Key);
-		const modified = object.LastModified?.getTime() ?? 0;
-		return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
-	})
-		.pipe(provideOptionalAuth, runPromise)
-		.catch(() => false);
-	if (!stale) return false;
-	const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
-		(error) => {
-			console.error("Error retiring an unrecorded upload:", row.id, error);
-			return false;
-		},
-	);
+	const file = await storedUpload(s3Key, now);
+	if (file !== "stale" && file !== "missing") return false;
+	const retired = await retireUnrecordedVideo(
+		row.appId,
+		row.id,
+		now,
+		file === "missing" ? s3Key : undefined,
+	).catch((error) => {
+		console.error("Error retiring an unrecorded upload:", row.id, error);
+		return false;
+	});
+	if (file === "missing") return retired;
 	return retired && (await removeStoredFile(s3Key));
 }
 
@@ -594,7 +1108,7 @@ export async function removeUnrecordedInfraFiles(
 	return removed;
 }
 
-const STALE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
+export const COMPLETION_RETRY_AFTER_SECONDS = 5;
 
 async function releaseStaleUploadClaim(videoId: string, now: number) {
 	return db().transaction(async (tx) => {
@@ -650,13 +1164,12 @@ export async function abortInfraUpload({
 	uploadId: string;
 }): Promise<UploadResult<{ success: true }>> {
 	const video = await findAppVideo(appId, videoId);
-	if (!video) return fail(404, "Video not found");
-	if (!video.s3Key) return fail(400, "Video has no S3 key");
+	if (!video) return videoNotFound();
+	if (!video.s3Key) return videoNotUploadable();
 	if (video.status === "processing" && video.duration === null) {
-		return fail(
-			409,
+		return completionInProgress(
 			"Another request is completing this upload, so it cannot be aborted.",
-			{ code: COMPLETION_IN_PROGRESS },
+			"Do not repeat the abort. Wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 		);
 	}
 	const s3Key = video.s3Key;
@@ -669,7 +1182,9 @@ export async function abortInfraUpload({
 
 		return ok({ success: true });
 	} catch (error) {
+		if (storageErrorCode(error) === "NoSuchUpload")
+			return ok({ success: true });
 		console.error("Error aborting multipart upload:", error);
-		return fail(500, "Failed to abort upload");
+		return storageFailure("Failed to abort upload");
 	}
 }

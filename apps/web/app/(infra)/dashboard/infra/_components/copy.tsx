@@ -37,6 +37,10 @@ const ICON_BUTTON = clsx(
 	FOCUS,
 );
 
+function Announce({ copied }: { copied: boolean }) {
+	return <output className="sr-only">{copied ? "Copied" : ""}</output>;
+}
+
 export function CopyButton({
 	value,
 	label = "Copy",
@@ -48,15 +52,26 @@ export function CopyButton({
 }) {
 	const { copied, copy } = useCopy(value);
 	return (
-		<button
-			type="button"
-			onClick={copy}
-			aria-label={copied ? "Copied" : label}
-			title={label}
-			className={clsx(ICON_BUTTON, className)}
-		>
-			{copied ? <Check size={14} /> : <Copy size={14} />}
-		</button>
+		<span className="relative inline-flex shrink-0">
+			<button
+				type="button"
+				onClick={copy}
+				aria-label={label}
+				title={copied ? undefined : label}
+				className={clsx(ICON_BUTTON, copied && "text-white", className)}
+			>
+				{copied ? <Check size={14} /> : <Copy size={14} />}
+			</button>
+			{copied && (
+				<span
+					aria-hidden="true"
+					className="pointer-events-none absolute bottom-full right-0 z-10 mb-1 whitespace-nowrap rounded-[6px] bg-[#191B1F] px-2 py-1 text-[12px] leading-none text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.14)] [font-family:var(--font-infra-sans),system-ui,sans-serif]"
+				>
+					Copied
+				</span>
+			)}
+			<Announce copied={copied} />
+		</span>
 	);
 }
 
@@ -71,9 +86,13 @@ export function CopyTextButton({
 }) {
 	const { copied, copy } = useCopy(value);
 	return (
-		<Button variant={variant} size="sm" onClick={copy}>
-			{copied ? "Copied" : label}
-		</Button>
+		<>
+			<Button variant={variant} size="sm" onClick={copy}>
+				{copied && <Check size={14} aria-hidden="true" />}
+				{copied ? "Copied" : label}
+			</Button>
+			<Announce copied={copied} />
+		</>
 	);
 }
 
@@ -154,11 +173,13 @@ export function CodeBlock({
 			>
 				{code}
 			</pre>
-			<CopyButton
-				value={code}
-				label={`Copy ${label}`}
-				className="absolute right-2 top-2 bg-[#0C0D0F] shadow-[0_0_0_4px_#0C0D0F] hover:bg-[#191B1F]"
-			/>
+			<span className="absolute right-2 top-2">
+				<CopyButton
+					value={code}
+					label={`Copy ${label}`}
+					className="bg-[#0C0D0F] shadow-[0_0_0_4px_#0C0D0F] hover:bg-[#191B1F]"
+				/>
+			</span>
 		</div>
 	);
 }

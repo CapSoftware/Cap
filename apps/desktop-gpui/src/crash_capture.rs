@@ -298,6 +298,12 @@ fn record(text: &str) {
     }
 }
 
+/// Written straight to the crash record: a failed launch exits before the
+/// tracing queue drains.
+pub fn record_startup_failure(error: &str) {
+    record(&format!("{} startup failed: {error}\n", now()));
+}
+
 const PREVIOUS_SESSION_ENDED: &str = "previous session ended without a clean quit";
 
 /// The previous session's marker and, when there is one, the crash record
@@ -358,6 +364,7 @@ fn install_panic_hook() {
             now()
         ));
         tracing::error!(%thread, %location, %message, "panic");
+        crate::startup::report_panic(&message, &location);
         previous(info);
     }));
 }

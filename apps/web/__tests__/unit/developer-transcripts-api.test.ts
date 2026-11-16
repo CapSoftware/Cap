@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
 	keyRows: [] as { appId: string }[],
 	store: {
 		createTranscriptFromUrl: vi.fn(),
+		createTranscriptFromVideo: vi.fn(),
 		createTranscriptUpload: vi.fn(),
 		startTranscriptUpload: vi.fn(),
 		getTranscript: vi.fn(),
@@ -62,6 +63,7 @@ const transcript = (overrides: Record<string, unknown> = {}) => ({
 	status: "queued",
 	sourceType: "url",
 	sourceUrl: "https://media.example.com/a.mp3",
+	videoId: null,
 	s3Key: "developer/app-1/transcripts/tr-1/source",
 	resultKey: null,
 	sourceBytes: null,
@@ -99,29 +101,49 @@ describe("developer transcripts API", () => {
 
 	describe("authentication", () => {
 		it.each([
-			["no key", {}],
-			["a public key", { Authorization: "Bearer cpk_public_key" }],
-			["an agent token", { Authorization: "Bearer cap_cli_token" }],
-			["a malformed header", { Authorization: "csk_valid_key" }],
-		])("rejects %s before touching transcripts", async (_label, headers) => {
-			for (const [method, path] of [
-				["GET", "/"],
-				["GET", "/tr-1"],
-				["DELETE", "/tr-1"],
-				["POST", "/tr-1/start"],
-			] as const) {
-				const response = await app.request(path, { method, headers });
-				expect(response.status).toBe(401);
-				expect(await response.json()).toMatchObject({
-					code: "invalid_secret_key",
-				});
-			}
-			const created = await post("/", { url: "https://a.example/a" }, headers);
-			expect(created.status).toBe(401);
-			for (const mock of Object.values(mocks.store)) {
-				expect(mock).not.toHaveBeenCalled();
-			}
-		});
+			["no key", {}, 401, "invalid_secret_key"],
+			[
+				"a public key",
+				{ Authorization: "Bearer cpk_public_key" },
+				403,
+				"public_key_not_allowed",
+			],
+			[
+				"an agent token",
+				{ Authorization: "Bearer cap_cli_token" },
+				401,
+				"invalid_secret_key",
+			],
+			[
+				"a malformed header",
+				{ Authorization: "csk_valid_key" },
+				401,
+				"invalid_secret_key",
+			],
+		])(
+			"rejects %s before touching transcripts",
+			async (_label, headers, status, code) => {
+				for (const [method, path] of [
+					["GET", "/"],
+					["GET", "/tr-1"],
+					["DELETE", "/tr-1"],
+					["POST", "/tr-1/start"],
+				] as const) {
+					const response = await app.request(path, { method, headers });
+					expect(response.status).toBe(status);
+					expect(await response.json()).toMatchObject({ code });
+				}
+				const created = await post(
+					"/",
+					{ url: "https://a.example/a" },
+					headers,
+				);
+				expect(created.status).toBe(status);
+				for (const mock of Object.values(mocks.store)) {
+					expect(mock).not.toHaveBeenCalled();
+				}
+			},
+		);
 
 		it("rejects a revoked or unknown secret key", async () => {
 			mocks.keyRows = [];
@@ -181,8 +203,8 @@ describe("developer transcripts API", () => {
 			});
 		});
 
-		it("caps the limit and passes filters through", async () => {
-			await app.request("/?limit=500&offset=20&userId=user-9&status=complete", {
+		it("passes the page and filters through", async () => {
+			await app.request("/?limit=100&offset=20&userId=user-9&status=complete", {
 				headers: SECRET,
 			});
 			expect(mocks.store.listTranscripts).toHaveBeenCalledWith("app-1", {
@@ -193,11 +215,52 @@ describe("developer transcripts API", () => {
 			});
 		});
 
-		it("falls back to defaults for unusable numbers", async () => {
-			await app.request("/?limit=-3&offset=abc", { headers: SECRET });
+		it.each([
+			["limit=0", "invalid_limit"],
+			["limit=500", "invalid_limit"],
+			["limit=abc", "invalid_limit"],
+			["offset=-3", "invalid_offset"],
+			["offset=abc", "invalid_offset"],
+			["userid=user-9", "unknown_parameter"],
+			["externalUserId=user-9", "unknown_parameter"],
+		])("refuses ?%s instead of listing with defaults", async (query, code) => {
+			const response = await app.request(`/?${query}`, { headers: SECRET });
+			expect(response.status).toBe(400);
+			const body = await response.json();
+			expect(body).toMatchObject({ code });
+			expect(typeof body.error).toBe("string");
+			expect(typeof body.hint).toBe("string");
+			expect(mocks.store.listTranscripts).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["an empty userId", "userId="],
+			["a userId of spaces", "userId=%20%20"],
+			["an empty userId beside another filter", "status=complete&userId="],
+		])(
+			"refuses %s instead of listing every transcript",
+			async (_label, query) => {
+				const response = await app.request(`/?${query}`, { headers: SECRET });
+				expect(response.status).toBe(400);
+				expect(await response.json()).toMatchObject({
+					code: "invalid_user_id",
+					error: "userId filter is empty",
+					hint: expect.stringContaining("leave userId out"),
+					docs: "https://cap.so/docs/api/rest-api",
+				});
+				expect(mocks.store.listTranscripts).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([
+			["ALICE", "ALICE"],
+			["%C3%A0lice", "àlice"],
+			["%20alice%20", "alice"],
+		])("passes userId=%s to the store as %j", async (sent, userId) => {
+			await app.request(`/?userId=${sent}`, { headers: SECRET });
 			expect(mocks.store.listTranscripts).toHaveBeenCalledWith(
 				"app-1",
-				expect.objectContaining({ limit: 50, offset: 0 }),
+				expect.objectContaining({ userId }),
 			);
 		});
 
@@ -241,7 +304,6 @@ describe("developer transcripts API", () => {
 					url: "https://media.example.com/a.mp3",
 					language: "en",
 					userId: "user-1",
-					durationSeconds: 1,
 				},
 				{ ...SECRET, "Idempotency-Key": "retry-key-1" },
 			);
@@ -258,6 +320,192 @@ describe("developer transcripts API", () => {
 			const body = await response.json();
 			expect(body.data).toMatchObject({ id: "tr-1", status: "queued" });
 			expect(JSON.stringify(body)).not.toContain("s3Key");
+		});
+
+		it.each([
+			["user_id", { user_id: "alice" }],
+			["durationSeconds", { durationSeconds: 1 }],
+			["Url", { Url: "https://media.example.com/b.mp3" }],
+		])(
+			"refuses the unknown field %s on a URL transcript and names it",
+			async (field, extra) => {
+				const response = await post(
+					"/",
+					{ url: "https://media.example.com/a.mp3", ...extra },
+					SECRET,
+				);
+				expect(response.status).toBe(400);
+				const body = await response.json();
+				expect(body).toMatchObject({
+					code: "invalid_request",
+					error: `Invalid request: Unrecognized key: "${field}"`,
+					hint: "This request accepts url, videoId, name, language, userId, metadata. Field names are case-sensitive.",
+				});
+				expect(body.issues).toEqual([
+					expect.objectContaining({ code: "unrecognized_keys", keys: [field] }),
+				]);
+				expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([
+			["user_id", { user_id: "alice" }],
+			["filename", { filename: "standup.m4a" }],
+			["url", { url: "https://media.example.com/a.mp3" }],
+		])(
+			"refuses the unknown field %s on a file transcript and names it",
+			async (field, extra) => {
+				const response = await post(
+					"/uploads",
+					{ contentLength: 1_000, ...extra },
+					SECRET,
+				);
+				expect(response.status).toBe(400);
+				const body = await response.json();
+				expect(body).toMatchObject({
+					code: "invalid_request",
+					error: `Invalid request: Unrecognized key: "${field}"`,
+					hint: "This request accepts fileName, contentLength, name, language, userId, metadata. Field names are case-sensitive.",
+				});
+				expect(mocks.store.createTranscriptUpload).not.toHaveBeenCalled();
+			},
+		);
+
+		it("passes a video id, options and idempotency key to the store", async () => {
+			mocks.store.createTranscriptFromVideo.mockResolvedValue({
+				ok: true,
+				transcript: transcript({
+					sourceType: "video",
+					sourceUrl: null,
+					videoId: "video-1",
+					s3Key: "developer/app-1/video-1/encode-1/out-1/video.mp4",
+				}),
+			});
+			const response = await post(
+				"/",
+				{ videoId: "video-1", language: "en", metadata: { a: 1 } },
+				{ ...SECRET, "Idempotency-Key": "retry-key-1" },
+			);
+			expect(response.status).toBe(200);
+			expect(mocks.store.createTranscriptFromVideo).toHaveBeenCalledWith(
+				"app-1",
+				{
+					videoId: "video-1",
+					language: "en",
+					metadata: { a: 1 },
+					idempotencyKey: "retry-key-1",
+				},
+			);
+			expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			const body = await response.json();
+			expect(body.data).toMatchObject({
+				id: "tr-1",
+				videoId: "video-1",
+				source: { type: "video", url: null },
+			});
+			expect(JSON.stringify(body)).not.toContain("video.mp4");
+		});
+
+		it("returns a null video id for a transcript that is not from a video", async () => {
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: true,
+				transcript: transcript(),
+			});
+			const response = await post(
+				"/",
+				{ url: "https://media.example.com/a.mp3" },
+				SECRET,
+			);
+			expect((await response.json()).data).toMatchObject({
+				videoId: null,
+				source: { type: "url" },
+			});
+		});
+
+		it.each([
+			["both url and videoId", { url: "https://a.example/a", videoId: "v1" }],
+			["neither url nor videoId", { name: "Standup" }],
+			["an empty body", {}],
+		])("refuses %s", async (_label, body) => {
+			const response = await post("/", body, SECRET);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_request",
+				error: "Invalid request: Send exactly one of url or videoId",
+			});
+			expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			expect(mocks.store.createTranscriptFromVideo).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			[{ videoId: "" }],
+			[{ videoId: 42 }],
+			[{ videoId: "v".repeat(65) }],
+			[{ videoId: "video-1", video_id: "video-1" }],
+		])("rejects the invalid video body %j", async (body) => {
+			const response = await post("/", body, SECRET);
+			expect(response.status).toBe(400);
+			expect(mocks.store.createTranscriptFromVideo).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			[404, "video_not_found"],
+			[409, "video_not_ready"],
+		] as const)("answers %i %s from the store", async (status, code) => {
+			mocks.store.createTranscriptFromVideo.mockResolvedValue({
+				ok: false,
+				status,
+				code,
+				message: "Video problem",
+				hint: "Fix it",
+			});
+			const response = await post("/", { videoId: "video-1" }, SECRET);
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code });
+		});
+
+		it.each([
+			["creating from a URL", "/", { url: "https://media.example.com/a.mp3" }],
+			["starting an upload", "/tr-1/start", {}],
+		])(
+			"answers 429 with Retry-After when %s at the ceiling",
+			async (_label, path, body) => {
+				const atCeiling = {
+					ok: false,
+					status: 429,
+					code: "too_many_transcripts",
+					message: "This app already has 20 transcripts queued or processing",
+					hint: "Wait for one to finish, then send the request again.",
+				};
+				mocks.store.createTranscriptFromUrl.mockResolvedValue(atCeiling);
+				mocks.store.startTranscriptUpload.mockResolvedValue(atCeiling);
+
+				const response = await post(path, body, SECRET);
+
+				expect(response.status).toBe(429);
+				expect(response.headers.get("Retry-After")).toBe("15");
+				expect(await response.json()).toMatchObject({
+					error: "This app already has 20 transcripts queued or processing",
+					code: "too_many_transcripts",
+					hint: "Wait for one to finish, then send the request again.",
+				});
+			},
+		);
+
+		it("sets no Retry-After on other refusals", async () => {
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: false,
+				status: 402,
+				code: "insufficient_credits",
+				message: "Insufficient credits",
+				hint: "Add credits",
+			});
+			const response = await post(
+				"/",
+				{ url: "https://media.example.com/a.mp3" },
+				SECRET,
+			);
+			expect(response.headers.get("Retry-After")).toBeNull();
 		});
 
 		it("rejects a malformed idempotency key", async () => {
@@ -376,6 +624,117 @@ describe("developer transcripts API", () => {
 			).json();
 			expect(body.data.words).toHaveLength(1);
 			expect(body.data).not.toHaveProperty("segments");
+		});
+	});
+
+	describe("include", () => {
+		it.each([
+			["speakers", "speakers"],
+			["WORDS", "WORDS"],
+			["words,speakers", "speakers"],
+			["segments, confidence", "confidence"],
+		])("refuses include=%s and names the value", async (include, named) => {
+			const response = await app.request(
+				`/tr-1?include=${encodeURIComponent(include)}`,
+				{ headers: SECRET },
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_include",
+				message: `include has an unknown value: ${named}`,
+				hint: "Use words, segments or both, separated by a comma.",
+			});
+			expect(mocks.store.getTranscript).not.toHaveBeenCalled();
+			expect(mocks.store.getTranscriptResult).not.toHaveBeenCalled();
+		});
+
+		it.each(["words", "segments", "words,segments", " words , segments ", ""])(
+			"accepts include=%s",
+			async (include) => {
+				mocks.store.getTranscript.mockResolvedValue(
+					transcript({ status: "complete", text: "hello world", wordCount: 2 }),
+				);
+				mocks.store.getTranscriptResult.mockResolvedValue({
+					text: "hello world",
+					language: "en",
+					durationSeconds: 1,
+					words: [{ text: "hello", start: 0, end: 0.4 }],
+					segments: [{ text: "hello world", start: 0, end: 0.9 }],
+				});
+
+				const response = await app.request(
+					`/tr-1?include=${encodeURIComponent(include)}`,
+					{ headers: SECRET },
+				);
+
+				expect(response.status).toBe(200);
+				const { data } = (await response.json()) as {
+					data: Record<string, unknown>;
+				};
+				expect("words" in data).toBe(include.includes("words"));
+				expect("segments" in data).toBe(include.includes("segments"));
+			},
+		);
+	});
+
+	describe("what a transcript response carries", () => {
+		it("returns when the upload URL expires while the transcript waits for its file", async () => {
+			mocks.store.getTranscript.mockResolvedValue(
+				transcript({
+					status: "uploading",
+					sourceType: "upload",
+					sourceUrl: null,
+					updatedAt: new Date("2026-11-12T14:28:41.000Z"),
+				}),
+			);
+
+			const response = await app.request("/tr-1", { headers: SECRET });
+
+			expect((await response.json()).data).toMatchObject({
+				status: "uploading",
+				upload: { expiresAt: "2026-11-12T15:28:41.000Z" },
+			});
+		});
+
+		it.each(["queued", "processing", "complete", "error"])(
+			"has no upload expiry once the transcript is %s",
+			async (status) => {
+				mocks.store.getTranscript.mockResolvedValue(transcript({ status }));
+
+				const response = await app.request("/tr-1", { headers: SECRET });
+
+				expect("upload" in (await response.json()).data).toBe(false);
+			},
+		);
+
+		it("never returns the query string of the source URL, from get, list or create", async () => {
+			const signed = transcript({
+				sourceUrl: "https://files.example.com/call.mp3?sig=abc123&expires=9",
+			});
+			mocks.store.getTranscript.mockResolvedValue(signed);
+			mocks.store.listTranscripts.mockResolvedValue({
+				transcripts: [signed],
+				hasMore: false,
+			});
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: true,
+				transcript: signed,
+			});
+
+			const text = async (response: Response | Promise<Response>) =>
+				(await response).text();
+			const bodies = await Promise.all([
+				text(app.request("/tr-1", { headers: SECRET })),
+				text(app.request("/", { headers: SECRET })),
+				text(post("/", { url: signed.sourceUrl }, SECRET)),
+			]);
+
+			for (const body of bodies) {
+				expect(body).toContain("https://files.example.com/call.mp3");
+				expect(body).not.toContain("abc123");
+				expect(body).not.toContain("expires=9");
+			}
 		});
 	});
 });

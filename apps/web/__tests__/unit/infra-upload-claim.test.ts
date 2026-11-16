@@ -171,6 +171,7 @@ describe("completing an upload through the processing claim", () => {
 
 		expect(result.status).toBe(409);
 		expect(result.body).toMatchObject({ code: "completion_in_progress" });
+		expect(result).toMatchObject({ headers: { "Retry-After": "5" } });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
 		expect(mocks.updates).toEqual([]);
@@ -215,6 +216,23 @@ describe("completing an upload through the processing claim", () => {
 		for (const call of mocks.admission.mock.calls) {
 			expect(call[1]).toMatchObject({ tier: "1080p" });
 		}
+	});
+
+	it("still refuses a claim held for 14 minutes and says the wait can reach 15", async () => {
+		const recently = Date.now() - 14 * 60 * 1000;
+		mocks.video = uploading({
+			status: "processing",
+			processing: processingState({ startedAt: recently, probe: null }),
+			updatedAt: new Date(recently),
+		});
+
+		const result = await complete();
+
+		expect(result.status).toBe(409);
+		expect(result.body).toMatchObject({
+			hint: expect.stringContaining("up to 15 minutes"),
+		});
+		expect(mocks.updates).toEqual([]);
 	});
 
 	it("takes over a claim left by a completion that died before recording the video", async () => {

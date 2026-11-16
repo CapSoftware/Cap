@@ -17,6 +17,13 @@ const context = vi.hoisted(() => ({
 	objectSize: null as number | null,
 	deleted: [] as string[],
 	presigned: [] as { key: string; contentLength: number }[],
+	failSigning: false,
+	onDelete: null as null | (() => Promise<void>),
+	scheduleAutoTopUp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	scheduleAutoTopUp: context.scheduleAutoTopUp,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -89,6 +96,7 @@ vi.mock("@/lib/developer-transcript-speech", () => ({
 
 vi.mock("@/lib/developer-transcript-storage", () => ({
 	presignDeveloperUpload: async (key: string, contentLength: number) => {
+		if (context.failSigning) throw new Error("signing unavailable");
 		context.presigned.push({ key, contentLength });
 		return `https://storage.example/${key}?signed=${context.presigned.length}`;
 	},
@@ -96,6 +104,9 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	getDeveloperObjectText: async () => null,
 	deleteDeveloperObjects: async (keys: string[]) => {
 		context.deleted.push(...keys);
+		const hook = context.onDelete;
+		context.onDelete = null;
+		await hook?.();
 	},
 }));
 
@@ -113,11 +124,16 @@ import {
 	expireStaleTranscripts,
 	getTranscript,
 	isTranscriptIdempotencyKey,
+	listConsoleTranscripts,
 	listTranscripts,
 	startTranscriptUpload,
 	transcriptIdForIdempotencyKey,
 	validateTranscriptOptions,
 } from "@/lib/developer-transcript-store";
+import {
+	transcriptHasNoSpeech,
+	transcriptUploadExpiry,
+} from "@/lib/developer-transcripts";
 import { isBlockedS3Endpoint } from "@/lib/s3-endpoint-policy";
 
 const URL_A = "https://media.example.com/standup.mp3";
@@ -152,6 +168,7 @@ const fromUrl = (url = URL_A, idempotencyKey?: string, appId = "app-1") =>
 beforeEach(() => {
 	fake().reset();
 	context.ids = 0;
+	context.scheduleAutoTopUp.mockReset();
 	context.speechConfigured = true;
 	context.hosted = true;
 	context.start.mockReset();
@@ -159,6 +176,8 @@ beforeEach(() => {
 	context.objectSize = null;
 	context.deleted = [];
 	context.presigned = [];
+	context.failSigning = false;
+	context.onDelete = null;
 	fake().seed(developerCreditAccounts, {
 		id: "account-1",
 		appId: "app-1",
@@ -292,6 +311,19 @@ describe("creating a transcript from a URL", () => {
 		});
 		expect(transcripts()).toHaveLength(0);
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
+	});
+
+	it("links the app's own Billing page when it refuses for credit", async () => {
+		setBalance(0);
+		const result = await fromUrl();
+
+		expect(result).toMatchObject({ ok: false, status: 402 });
+		expect(result.ok === false && result.hint).toBe(
+			"Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
+		);
 	});
 
 	it("says how much to add below the minimum balance", async () => {
@@ -447,6 +479,213 @@ describe("creating a transcript from a URL", () => {
 		expect(context.start).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		["name", { name: "Renamed" }],
+		["language", { language: "de" }],
+		["userId", { userId: "user-2" }],
+		["metadata", { metadata: { episode: 8 } }],
+	])(
+		"refuses a replay with a different %s and names it",
+		async (field, change) => {
+			const original = {
+				url: URL_A,
+				name: "Standup",
+				language: "en",
+				userId: "user-1",
+				metadata: { episode: 7, show: "daily" },
+				idempotencyKey: "retry-key-0001",
+			};
+			const first = await createTranscriptFromUrl("app-1", original, guards);
+			if (!first.ok) throw new Error("create failed");
+
+			const replay = await createTranscriptFromUrl(
+				"app-1",
+				{ ...original, ...change },
+				guards,
+			);
+
+			expect(replay).toMatchObject({
+				ok: false,
+				status: 409,
+				code: "idempotency_conflict",
+				message: `Idempotency key was already used with a different ${field}`,
+			});
+			expect(transcripts()).toHaveLength(1);
+			expect(transcripts()[0]).toMatchObject({
+				name: "Standup",
+				requestedLanguage: "en",
+				externalUserId: "user-1",
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("accepts a replay that sends the same request, whatever the key order of its metadata", async () => {
+		const original = {
+			url: URL_A,
+			name: " Standup ",
+			language: "en",
+			userId: "user-1",
+			metadata: { show: "daily", nested: { b: 2, a: 1 }, episode: 7 },
+			idempotencyKey: "retry-key-0001",
+		};
+		const first = await createTranscriptFromUrl("app-1", original, guards);
+		const replay = await createTranscriptFromUrl(
+			"app-1",
+			{
+				...original,
+				name: "Standup",
+				metadata: { episode: 7, nested: { a: 1, b: 2 }, show: "daily" },
+			},
+			guards,
+		);
+
+		if (!first.ok || !replay.ok) throw new Error("replay refused");
+		expect(replay.transcript.id).toBe(first.transcript.id);
+		expect(transcripts()).toHaveLength(1);
+	});
+
+	describe("two creates with one key that both miss the first lookup", () => {
+		const original = {
+			url: URL_A,
+			name: "Standup",
+			language: "en",
+			userId: "user-1",
+			metadata: { episode: 7 },
+			idempotencyKey: "race-key-0001",
+		};
+		const racing = async (loser: Record<string, unknown>) => {
+			const winners: Awaited<ReturnType<typeof createTranscriptFromUrl>>[] = [];
+			const lost = await createTranscriptFromUrl(
+				"app-1",
+				{ ...original, ...loser },
+				{
+					isBlocked: async (url) => {
+						if (winners.length === 0) {
+							winners.push(
+								await createTranscriptFromUrl("app-1", original, guards),
+							);
+						}
+						return guards.isBlocked(url);
+					},
+				},
+			);
+			const [winner] = winners;
+			if (!winner) throw new Error("The winner never ran");
+			return { winner, lost };
+		};
+
+		it.each([
+			["name", { name: "Renamed" }],
+			["language", { language: "de" }],
+			["userId", { userId: "user-2" }],
+			["metadata", { metadata: { episode: 8 } }],
+			["url", { url: URL_B }],
+		])("refuses the loser when its %s differs", async (field, change) => {
+			const { winner, lost } = await racing(change);
+
+			expect(winner).toMatchObject({ ok: true });
+			expect(lost).toMatchObject({
+				ok: false,
+				status: 409,
+				code: "idempotency_conflict",
+				message: `Idempotency key was already used with a different ${field}`,
+			});
+			expect(transcripts()).toHaveLength(1);
+			expect(transcripts()[0]).toMatchObject({
+				name: "Standup",
+				requestedLanguage: "en",
+				externalUserId: "user-1",
+				metadata: { episode: 7 },
+				sourceUrl: URL_A,
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("returns the winner's transcript to a loser that sent the same request", async () => {
+			const { winner, lost } = await racing({});
+
+			if (!winner.ok || !lost.ok) throw new Error("refused");
+			expect(lost.transcript.id).toBe(winner.transcript.id);
+			expect(transcripts()).toHaveLength(1);
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("refuses a loser whose winner was already deleted", async () => {
+			let done = false;
+			const lost = await createTranscriptFromUrl("app-1", original, {
+				isBlocked: async (url) => {
+					if (!done) {
+						done = true;
+						const first = await createTranscriptFromUrl(
+							"app-1",
+							original,
+							guards,
+						);
+						if (!first.ok) throw new Error("create failed");
+						await deleteTranscript("app-1", first.transcript.id);
+					}
+					return guards.isBlocked(url);
+				},
+			});
+
+			expect(lost).toMatchObject({
+				ok: false,
+				status: 409,
+				message: "Idempotency key belongs to a transcript that was deleted",
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("lets exactly one of several different requests sent together through", async () => {
+			const results = await Promise.all(
+				["Alpha", "Beta", "Gamma", "Delta"].map((name) =>
+					createTranscriptFromUrl("app-1", { ...original, name }, guards),
+				),
+			);
+
+			const accepted = results.filter((result) => result.ok);
+			expect(accepted).toHaveLength(1);
+			for (const result of results) {
+				if (result.ok) continue;
+				expect(result).toMatchObject({
+					status: 409,
+					message: "Idempotency key was already used with a different name",
+				});
+			}
+			expect(transcripts()).toHaveLength(1);
+			const winner = accepted[0];
+			expect(winner?.ok && winner.transcript.name).toBe(transcripts()[0]?.name);
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("names the URL when a key is reused for a different one", async () => {
+		await fromUrl(URL_A, "retry-key-0001");
+		expect(await fromUrl(URL_B, "retry-key-0001")).toMatchObject({
+			status: 409,
+			code: "idempotency_conflict",
+			message: "Idempotency key was already used with a different url",
+		});
+	});
+
+	it("lists the supported codes when the language is not one of them", async () => {
+		const result = await createTranscriptFromUrl(
+			"app-1",
+			{ url: URL_A, language: "en-US" },
+			guards,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			status: 400,
+			code: "invalid_language",
+		});
+		if (result.ok) throw new Error("accepted");
+		expect(result.hint).toContain('"auto"');
+		expect(result.hint).toContain("en, es, fr, de");
+		expect(result.hint).toContain("he");
+	});
+
 	it("rejects an idempotency key whose transcript was deleted", async () => {
 		const created = await fromUrl(URL_A, "retry-key-0001");
 		if (!created.ok) throw new Error("create failed");
@@ -556,6 +795,102 @@ describe("creating a transcript from an upload", () => {
 		);
 	});
 
+	it.each([
+		["name", { name: "Renamed" }],
+		["name", { fileName: "other.mp3" }],
+		["language", { language: "auto" }],
+		["userId", { userId: "user-2" }],
+		["metadata", { metadata: { a: 2 } }],
+	])("refuses an upload replay with a different %s", async (field, change) => {
+		const original = {
+			fileName: "standup.mp3",
+			contentLength: 2048,
+			language: "en",
+			userId: "user-1",
+			metadata: { a: 1 },
+			idempotencyKey: "upload-key-0001",
+		};
+		const first = await createTranscriptUpload("app-1", original);
+		if (!first.ok) throw new Error("create failed");
+
+		expect(
+			await createTranscriptUpload("app-1", { ...original, ...change }),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "idempotency_conflict",
+			message: `Idempotency key was already used with a different ${field}`,
+		});
+		expect(transcripts()).toHaveLength(1);
+	});
+
+	it("moves the upload expiry forward when a replay issues a new URL", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-11-12T14:28:41.400Z"));
+			const first = await upload(1024, "upload-key-0002");
+			if (!first.ok || !first.upload) throw new Error("create failed");
+			expect(first.upload.expiresAt).toBe("2026-11-12T15:28:41.000Z");
+			expect(transcriptUploadExpiry(first.transcript).toISOString()).toBe(
+				first.upload.expiresAt,
+			);
+
+			vi.setSystemTime(new Date("2026-11-12T15:40:00.000Z"));
+			const again = await upload(1024, "upload-key-0002");
+			if (!again.ok || !again.upload) throw new Error("replay failed");
+			expect(again.upload.expiresAt).toBe("2026-11-12T16:40:00.000Z");
+			expect(again.upload.url).not.toBe(first.upload.url);
+
+			const stored = await getTranscript("app-1", first.transcript.id);
+			if (!stored) throw new Error("missing");
+			expect(transcriptUploadExpiry(stored).toISOString()).toBe(
+				"2026-11-12T16:40:00.000Z",
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves the upload expiry alone when a new URL cannot be issued", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-11-12T14:28:41.400Z"));
+			const first = await upload(1024, "upload-key-0004");
+			if (!first.ok || !first.upload) throw new Error("create failed");
+
+			vi.setSystemTime(new Date("2026-11-12T15:10:00.000Z"));
+			context.failSigning = true;
+			await expect(upload(1024, "upload-key-0004")).rejects.toThrow(
+				"signing unavailable",
+			);
+
+			const stored = await getTranscript("app-1", first.transcript.id);
+			if (!stored) throw new Error("missing");
+			expect(transcriptUploadExpiry(stored).toISOString()).toBe(
+				first.upload.expiresAt,
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("tells a caller whose upload URL expired how to get a new one", async () => {
+		const created = await upload(1024, "upload-key-0003");
+		if (!created.ok) throw new Error("create failed");
+
+		const started = await startTranscriptUpload("app-1", created.transcript.id);
+
+		expect(started).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "upload_not_found",
+		});
+		if (started.ok) throw new Error("started");
+		expect(started.hint).toContain(
+			"repeat the create request with the same Idempotency-Key",
+		);
+	});
+
 	it("rejects an idempotency key reused for a different file size", async () => {
 		await upload(1024, "upload-key-0001");
 		expect(await upload(2048, "upload-key-0001")).toMatchObject({
@@ -637,12 +972,17 @@ describe("starting an uploaded transcript", () => {
 		const id = await created();
 		context.objectSize = 1024;
 		setBalance(0);
+		context.scheduleAutoTopUp.mockReset();
 
 		expect(await startTranscriptUpload("app-1", id)).toMatchObject({
 			ok: false,
 			status: 402,
+			hint: "Add credits to this app at https://cap.so/dashboard/infra/app-1/billing, then retry.",
 		});
 		expect(context.start).not.toHaveBeenCalled();
+		expect(context.scheduleAutoTopUp).toHaveBeenCalledWith({
+			appId: "app-1",
+		});
 	});
 
 	it("can be retried after the job could not be started", async () => {
@@ -716,6 +1056,38 @@ describe("reading and listing", () => {
 		expect(page.hasMore).toBe(false);
 	});
 
+	it("does not call an older transcript silent when it has text but no word count", async () => {
+		seed("tr-old-text", { status: "complete", wordCount: 0, text: "hello" });
+		seed("tr-silent", { status: "complete", wordCount: 0, text: "" });
+		seed("tr-never-set", { status: "complete", wordCount: 0, text: null });
+
+		const { transcripts: listed } = await listTranscripts("app-1", {
+			limit: 10,
+		});
+		const silent = Object.fromEntries(
+			listed.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+		);
+
+		expect(silent).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(listed.every((row) => !("text" in row))).toBe(true);
+
+		const { transcripts: shown } = await listConsoleTranscripts("app-1", 10);
+		expect(
+			Object.fromEntries(
+				shown.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+			),
+		).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(shown.every((row) => !("text" in row))).toBe(true);
+	});
+
 	it("pages by cursor without skipping or repeating", async () => {
 		const sameInstant = new Date("2026-11-11T12:00:00.000Z");
 		for (const id of ["tr-a", "tr-b", "tr-c"]) {
@@ -754,6 +1126,22 @@ describe("reading and listing", () => {
 		});
 		expect(byStatus.transcripts.map((row) => row.id)).toEqual(["tr-2"]);
 	});
+
+	it("never treats an empty user filter as no filter", async () => {
+		seed("tr-1", { externalUserId: "user-1" });
+		seed("tr-2", { externalUserId: null });
+
+		const empty = await listTranscripts("app-1", { limit: 10, userId: "" });
+		expect(empty.transcripts).toEqual([]);
+
+		for (const userId of [null, undefined]) {
+			const all = await listTranscripts("app-1", { limit: 10, userId });
+			expect(all.transcripts.map((row) => row.id).sort()).toEqual([
+				"tr-1",
+				"tr-2",
+			]);
+		}
+	});
 });
 
 describe("deleting", () => {
@@ -775,10 +1163,49 @@ describe("deleting", () => {
 			"developer/app-1/transcripts/tr-1/result.json",
 		]);
 		expect(await getTranscript("app-1", "tr-1")).toBeNull();
-		expect(await deleteTranscript("app-1", "tr-1")).toMatchObject({
-			ok: false,
-			status: 404,
+	});
+
+	it("answers a repeat delete of a deleted transcript with success and clears its files again", async () => {
+		fake().seed(developerTranscripts, {
+			id: "tr-1",
+			appId: "app-1",
+			status: "complete",
+			sourceType: "upload",
+			text: "secret words",
 		});
+		expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
+		const deletedAt = transcripts()[0]?.deletedAt;
+		context.deleted = [];
+
+		expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
+
+		expect(transcripts()[0]?.deletedAt).toEqual(deletedAt);
+		expect(context.deleted).toEqual([
+			"developer/_uploads/app-1/t-tr-1",
+			"developer/app-1/transcripts/tr-1/audio.mp3",
+			"developer/app-1/transcripts/tr-1/result.json",
+		]);
+	});
+
+	it("still answers 404 for a transcript that never existed, or another app's deleted one", async () => {
+		fake().seed(developerTranscripts, {
+			id: "tr-2",
+			appId: "app-2",
+			status: "complete",
+			sourceType: "upload",
+			text: "other app",
+		});
+		expect(await deleteTranscript("app-2", "tr-2")).toEqual({ ok: true });
+		context.deleted = [];
+
+		for (const id of ["tr-2", "never-existed"]) {
+			expect(await deleteTranscript("app-1", id)).toMatchObject({
+				ok: false,
+				status: 404,
+				code: "transcript_not_found",
+			});
+		}
+		expect(context.deleted).toEqual([]);
 	});
 
 	it("does not delete another app's transcript", async () => {
@@ -812,6 +1239,30 @@ describe("expiring stale transcripts", () => {
 			updatedAt: at(updatedAt),
 		});
 
+	it("leaves an upload alone when its URL was renewed while cleanup ran", async () => {
+		seed("first-old-upload", "uploading", "2026-11-10T09:00:00Z");
+		seed("renewed-upload", "uploading", "2026-11-10T09:00:00Z");
+		const now = at("2026-11-11T10:00:00Z");
+		context.onDelete = async () => {
+			const renewed = transcripts().find((row) => row.id === "renewed-upload");
+			if (renewed) renewed.updatedAt = now;
+		};
+
+		const result = await expireStaleTranscripts(now);
+
+		expect(result).toEqual({ expired: 1, redispatched: 0 });
+		const byId = Object.fromEntries(
+			transcripts().map((row) => [row.id, [row.status, row.errorCode]]),
+		);
+		expect(byId).toEqual({
+			"first-old-upload": ["error", "upload_expired"],
+			"renewed-upload": ["uploading", null],
+		});
+		expect(context.deleted.some((key) => key.includes("renewed-upload"))).toBe(
+			false,
+		);
+	});
+
 	it("fails uploads never sent and jobs that never finished", async () => {
 		seed("old-upload", "uploading", "2026-11-10T09:00:00Z");
 		seed("new-upload", "uploading", "2026-11-11T09:00:00Z");
@@ -841,6 +1292,35 @@ describe("expiring stale transcripts", () => {
 	});
 });
 
+describe("a transcript that timed out", () => {
+	it("releases its hold and charges nothing", async () => {
+		setBalance(50_000);
+		const stuck = fake().seed(developerTranscripts, {
+			id: "stuck-held",
+			appId: "app-1",
+			status: "processing",
+			sourceType: "upload",
+			durationSeconds: 3_600,
+			reservedMicroCredits: 10_000,
+			queuedAt: new Date("2026-11-11T03:00:00Z"),
+			createdAt: new Date("2026-11-11T03:00:00Z"),
+			updatedAt: new Date("2026-11-11T03:00:00Z"),
+		});
+
+		await expireStaleTranscripts(new Date("2026-11-11T10:00:00Z"));
+
+		expect(stuck).toMatchObject({
+			status: "error",
+			errorCode: "timed_out",
+			reservedMicroCredits: 0,
+		});
+		expect(fake().rows(developerCreditTransactions)).toHaveLength(0);
+		expect(fake().rows(developerCreditAccounts)[0]?.balanceMicroCredits).toBe(
+			50_000,
+		);
+	});
+});
+
 describe("recovering a job that was claimed but never started", () => {
 	const minutesAgo = (minutes: number) =>
 		new Date(Date.now() - minutes * 60 * 1000);
@@ -851,6 +1331,7 @@ describe("recovering a job that was claimed but never started", () => {
 			status: "queued",
 			sourceType,
 			sourceUrl: sourceType === "url" ? URL_A : null,
+			name: sourceType === "url" ? "standup" : "Untitled",
 			runId: "run-first",
 			queuedAt: startedAt,
 			startedAt,
@@ -1039,5 +1520,34 @@ describe("input validation", () => {
 		expect(isTranscriptIdempotencyKey("has spaces in it")).toBe(false);
 		expect(isTranscriptIdempotencyKey("k".repeat(129))).toBe(false);
 		expect(isTranscriptIdempotencyKey(undefined)).toBe(false);
+	});
+});
+
+describe("deleting a transcript that is still running", () => {
+	it("leaves its files for the run to settle and clean up, and removes them otherwise", async () => {
+		for (const [status, kept] of [
+			["processing", true],
+			["queued", false],
+			["complete", false],
+			["error", false],
+		] as const) {
+			context.deleted = [];
+			const id = `tr-${status}`;
+			fake().seed(developerTranscripts, {
+				id,
+				appId: "app-1",
+				status,
+				sourceType: "upload",
+			});
+
+			expect(await deleteTranscript("app-1", id)).toEqual({ ok: true });
+
+			expect(context.deleted.length > 0).toBe(!kept);
+			expect(
+				fake()
+					.rows(developerTranscripts)
+					.find((row) => row.id === id)?.deletedAt,
+			).toBeInstanceOf(Date);
+		}
 	});
 });

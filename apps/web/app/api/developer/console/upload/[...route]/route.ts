@@ -7,6 +7,7 @@ import {
 	HttpApiSchema,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
+import { consoleErrorResponse } from "@/lib/infra-console-errors";
 import {
 	abortInfraUpload,
 	completeInfraUpload,
@@ -23,6 +24,7 @@ const errorFields = {
 	error: Schema.String,
 	message: Schema.optional(Schema.String),
 	code: Schema.optional(Schema.String),
+	hint: Schema.optional(Schema.String),
 };
 
 class UploadBadRequest extends Schema.TaggedError<UploadBadRequest>()(
@@ -153,6 +155,7 @@ function refusal(result: Exclude<UploadResult<unknown>, { status: 200 }>) {
 		error: result.body.error,
 		message: text(result.body.message),
 		code: text(result.body.code),
+		hint: text(result.body.hint),
 	};
 	switch (result.status) {
 		case 400:
@@ -216,4 +219,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
-export const POST = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
+
+export const POST = async (request: Request) =>
+	consoleErrorResponse(await handler(request));

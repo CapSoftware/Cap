@@ -47,8 +47,8 @@ export function Step({
 				className={clsx(
 					"absolute -left-9 top-[5px] size-[11px] rounded-full transition-colors duration-700",
 					state === "next"
-						? "bg-[#050506] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.22)]"
-						: "bg-white shadow-[0_0_0_3px_#050506,0_0_10px_2px_rgba(214,228,255,0.55)]",
+						? "bg-[#0A0B0D] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.22)]"
+						: "bg-white shadow-[0_0_0_3px_#0A0B0D,0_0_10px_2px_rgba(214,228,255,0.55)]",
 				)}
 			/>
 			<h3

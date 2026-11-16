@@ -73,7 +73,8 @@ video into text and `cap developers videos upload <app> <file>` uploads a video.
 `developer_transcript_get`, and `developer_video_upload`. A transcript spends the app's prepaid credits and
 an uploaded video is billed daily for storage, so name the app, the file, and the price and get confirmation
 first. An uploaded video comes back as `processing` until its playback files are ready. A `queued` or `processing` transcript is not done:
-wait for `complete`. `INSUFFICIENT_CREDITS` means the app needs a top-up through
+wait for `complete`. A `complete` transcript with empty text and a `wordCount` of 0 means the audio had no
+speech; it is still billed for its length, while a transcript that fails is not charged. `INSUFFICIENT_CREDITS` means the app needs a top-up through
 `cap developers credits purchase`.
 
 Organization invites deliver email by default. Use `cap organizations invite add ... --no-email` only when the

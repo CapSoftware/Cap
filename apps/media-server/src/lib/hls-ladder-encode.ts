@@ -9,6 +9,7 @@ import {
 	type HlsLadderRange,
 	type HlsLadderRendition,
 	type HlsLadderTierName,
+	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
 	planHlsLadder,
@@ -16,13 +17,17 @@ import {
 import type { VideoMetadata } from "./job-manager";
 import {
 	decodeThreadsFromEnv,
+	encodeLengthLimit,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
+import { ProbeBusyError, probeFastestFrameRate } from "./media-probe";
 import {
 	getProcessTimeoutMs,
-	probeVideoRotation,
+	requireVideoSourceTraits,
 	runTranscodeCommand,
+	sourceAudioCopiesToHls,
+	sourceHasAudio,
 } from "./media-video";
 import {
 	canDecodeOnGpu,
@@ -52,6 +57,9 @@ export interface HlsLadderResult {
 export interface EncodedHlsLadder {
 	files: HlsLadderFile[];
 	result: HlsLadderResult;
+	// The largest rendition and the length of video in it. A poster taken from
+	// it has the colours viewers see, where the source may still be HDR.
+	poster: { path: string; durationSeconds: number };
 	cleanup: () => Promise<void>;
 }
 
@@ -80,15 +88,46 @@ export async function encodeHlsLadder(
 	abortSignal?: AbortSignal,
 ): Promise<EncodedHlsLadder> {
 	abortSignal?.throwIfAborted();
-	const rotation = await probeVideoRotation(inputPath, abortSignal);
+	const probing = new AbortController();
+	const probeSignal = abortSignal
+		? AbortSignal.any([abortSignal, probing.signal])
+		: probing.signal;
+	const traits = requireVideoSourceTraits(inputPath, probeSignal);
+	const frameTiming = probeFastestFrameRate(inputPath, probeSignal).catch(
+		(error) => {
+			// A full probe pool fails the job, as it does for the probe before
+			// this one. Falling back would quietly encode a variable frame rate
+			// source on its opening rate whenever the server is busy.
+			if (error instanceof ProbeBusyError) throw error;
+			// A slice has to land on the frame grid its neighbours use. Guessing
+			// the rate here while another worker measured it would put the slices
+			// on different grids, so the slice fails and is sent again.
+			if (options.range) throw error;
+			if (!probeSignal.aborted) {
+				console.warn(
+					"[hls-ladder] Could not read frame timing, using the probed frame rate:",
+					error,
+				);
+			}
+			return null;
+		},
+	);
+	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
+		traits,
+		frameTiming,
+	]).catch(async (error) => {
+		probing.abort();
+		await Promise.allSettled([traits, frameTiming]);
+		throw error;
+	});
 	abortSignal?.throwIfAborted();
 	const rungs = planHlsLadder(
 		{ width: metadata.width, height: metadata.height },
 		{ maxTier: options.maxTier },
 	);
-	const sourceHasAudio = Boolean(metadata.audioCodec);
 	const range = options.range ?? null;
-	const wantsAudio = sourceHasAudio && (options.includeAudio ?? !range);
+	const wantsAudio =
+		sourceHasAudio(metadata) && (options.includeAudio ?? !range);
 	const muxAudioWithVideo = wantsAudio && !range;
 
 	await ensureTempDir();
@@ -110,25 +149,27 @@ export async function encodeHlsLadder(
 			Math.max(0, metadata.duration - range.startSeconds))
 		: metadata.duration;
 	const timeoutMs = getProcessTimeoutMs(sliceSeconds, PROCESS_TIMEOUT_MS);
+	const maxOutputSeconds = encodeLengthLimit(metadata);
 	const totalDurationUs = sliceSeconds * 1_000_000;
 	const argsInput = {
 		inputPath,
 		outputDir: dir,
 		videoCodec: metadata.videoCodec,
 		hasAudio: muxAudioWithVideo,
-		sourceFps: metadata.fps,
+		sourceFps: hlsLadderSourceFps(metadata.fps, fastestFps),
 		rungs,
 		range,
+		hdr,
+		hdrColor,
+		maxOutputSeconds,
 	};
 
 	const encodeVideo = async (): Promise<"nvenc" | "libx264"> => {
 		const nvenc = nvencOptionsFromEnv();
 		if (nvenc) {
-			const gpuDecode = canDecodeOnGpu(
-				metadata.videoCodec,
-				rotation,
-				nvenc.gpuDecodeCodecs,
-			);
+			const gpuDecode =
+				hdr === null &&
+				canDecodeOnGpu(metadata.videoCodec, rotation, nvenc.gpuDecodeCodecs);
 			try {
 				await runTranscodeCommand(
 					buildHlsLadderArgs({
@@ -180,13 +221,23 @@ export async function encodeHlsLadder(
 		const audioPlaylistName = `${HLS_LADDER_AUDIO_NAME}.m3u8`;
 		const separateAudio =
 			wantsAudio && range
-				? runTranscodeCommand(
-						buildHlsAudioArgs({ inputPath, outputDir: dir }),
-						join(dir, audioPlaylistName),
-						metadata.duration * 1_000_000,
-						getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
-						undefined,
-						signal,
+				? // The whole video's audio rides with the first slice, so encoding it
+					// would hold that slice to the speed of one AAC encode (about 90 s
+					// for an hour). Stereo AAC-LC is copied instead, in seconds.
+					sourceAudioCopiesToHls(inputPath, signal).then((copy) =>
+						runTranscodeCommand(
+							buildHlsAudioArgs({
+								inputPath,
+								outputDir: dir,
+								maxOutputSeconds,
+								copy,
+							}),
+							join(dir, audioPlaylistName),
+							metadata.duration * 1_000_000,
+							getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
+							undefined,
+							signal,
+						),
 					)
 				: Promise.resolve();
 		const video = encodeVideo();
@@ -247,7 +298,15 @@ export async function encodeHlsLadder(
 				bytes: media.bytes,
 			};
 		}
-		return { files, result: { encoder, renditions, audio }, cleanup };
+		const [top] = master.video;
+		const posterFile = files.find((file) => file.name === top?.media);
+		if (!posterFile) throw new Error("HLS ladder is missing a rendition");
+		return {
+			files,
+			result: { encoder, renditions, audio },
+			poster: { path: posterFile.path, durationSeconds: sliceSeconds },
+			cleanup,
+		};
 	} catch (error) {
 		await cleanup();
 		abortSignal?.throwIfAborted();

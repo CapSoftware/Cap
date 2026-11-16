@@ -36,6 +36,12 @@ import {
 	saveCardFromCheckout,
 	settleAutoTopUpPaymentIntent,
 } from "@/lib/infra-auto-top-up";
+import { isFreeCreditCheckout } from "@/lib/infra-credit-code";
+import {
+	awaitsCreditGrant,
+	reverseDisputedPayment,
+	reverseRefundedCharge,
+} from "@/lib/infra-credit-reversal";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	attachSsoCheckout,
@@ -53,6 +59,8 @@ const relevantEvents = new Set([
 	"invoice.payment_failed",
 	"payment_intent.succeeded",
 	"payment_intent.payment_failed",
+	"charge.refunded",
+	"charge.dispute.created",
 ]);
 
 async function grantDeveloperCredits(
@@ -61,8 +69,14 @@ async function grantDeveloperCredits(
 	const { accountId, amountCents } = session.metadata ?? {};
 	const paymentIntentId =
 		typeof session.payment_intent === "string" ? session.payment_intent : null;
+	const free = isFreeCreditCheckout(session, Number(amountCents));
+	const reference = paymentIntentId
+		? ({ id: paymentIntentId, type: "stripe_payment_intent" } as const)
+		: free
+			? ({ id: session.id, type: "stripe_checkout_session" } as const)
+			: null;
 
-	if (!accountId || !amountCents || !paymentIntentId) {
+	if (!accountId || !amountCents || !reference) {
 		console.error("Missing required metadata for developer credits:", {
 			accountId,
 			amountCents,
@@ -71,13 +85,10 @@ async function grantDeveloperCredits(
 		return new Response("Missing metadata", { status: 400 });
 	}
 
-	// Only grant credits once the payment has actually settled. Without this
-	// guard a checkout session (e.g. an unpaid/async payment) could grant
-	// credits before money is captured.
-	if (session.payment_status !== "paid") {
+	if (session.payment_status !== "paid" && !free) {
 		console.log(
 			`Developer credits checkout not paid yet (payment_status=${session.payment_status}); skipping credit grant`,
-			{ accountId, paymentIntentId },
+			{ accountId, referenceId: reference.id },
 		);
 		return NextResponse.json({ received: true });
 	}
@@ -85,7 +96,7 @@ async function grantDeveloperCredits(
 	console.log("Processing developer credits purchase:", {
 		accountId,
 		amountCents,
-		paymentIntentId,
+		referenceId: reference.id,
 	});
 
 	const [existingTxn] = await db()
@@ -94,8 +105,8 @@ async function grantDeveloperCredits(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.referenceId, paymentIntentId),
-				eq(developerCreditTransactions.referenceType, "stripe_payment_intent"),
+				eq(developerCreditTransactions.referenceId, reference.id),
+				eq(developerCreditTransactions.referenceType, reference.type),
 			),
 		)
 		.limit(1);
@@ -111,11 +122,15 @@ async function grantDeveloperCredits(
 	await addCreditsToAccount({
 		accountId,
 		amountCents: Number(amountCents),
-		referenceId: paymentIntentId,
-		referenceType: "stripe_payment_intent",
+		referenceId: reference.id,
+		referenceType: reference.type,
 		metadata: {
 			amountCents: Number(amountCents),
 			stripeSessionId: session.id,
+			...(typeof session.amount_total === "number" &&
+			session.amount_total !== Number(amountCents)
+				? { paidCents: session.amount_total }
+				: {}),
 		},
 	});
 
@@ -486,6 +501,21 @@ export const POST = async (req: Request) => {
 					event.data.object as Stripe.PaymentIntent,
 					event.type === "payment_intent.succeeded" ? "succeeded" : "failed",
 				);
+				return NextResponse.json({ received: true });
+			}
+			if (
+				event.type === "charge.refunded" ||
+				event.type === "charge.dispute.created"
+			) {
+				const reversed =
+					event.type === "charge.refunded"
+						? await reverseRefundedCharge(event.data.object as Stripe.Charge)
+						: await reverseDisputedPayment(event.data.object as Stripe.Dispute);
+				if (awaitsCreditGrant(reversed)) {
+					return new Response("Credit grant not recorded yet, retry", {
+						status: 503,
+					});
+				}
 				return NextResponse.json({ received: true });
 			}
 			if (
@@ -1025,42 +1055,36 @@ export const POST = async (req: Request) => {
 						? User.UserId.make(customer.metadata.userId)
 						: undefined;
 				}
-				if (!foundUserId) {
-					console.log("No user found in metadata, checking customer email");
-					if ("email" in customer && customer.email) {
-						const userByEmail = await db()
+
+				let [subscriptionUser] = foundUserId
+					? await db()
 							.select()
 							.from(users)
-							.where(eq(users.email, customer.email))
-							.limit(1);
+							.where(eq(users.id, foundUserId))
+							.limit(1)
+					: [];
 
-						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
-							foundUserId = userByEmail[0].id;
-							linkCustomerToUser = true;
-							console.log(`User found by email: ${foundUserId}`);
-						} else {
-							console.log("No user found by email");
-							return new Response("No user found", {
-								status: 400,
-							});
-						}
-					} else {
-						console.log("No email found for customer");
-						return new Response("No user found", {
-							status: 400,
-						});
-					}
-				}
-
-				const userResult = await db()
-					.select()
-					.from(users)
-					.where(eq(users.id, foundUserId));
-
-				const [subscriptionUser] = userResult;
+				// Older customers carry a metadata userId for an account that no
+				// longer exists. Rejecting the event left the account on past_due,
+				// which keeps Pro forever, so match on email like the other events.
 				if (!subscriptionUser) {
-					console.log("No user found in database");
-					return new Response("No user found", { status: 400 });
+					console.log("No user found from metadata, checking customer email");
+					if (!("email" in customer) || !customer.email) {
+						console.log("No email found for customer");
+						return new Response("No user found", { status: 400 });
+					}
+					[subscriptionUser] = await db()
+						.select()
+						.from(users)
+						.where(eq(users.email, customer.email))
+						.limit(1);
+					if (!subscriptionUser) {
+						console.log("No user found by email");
+						return new Response("No user found", { status: 400 });
+					}
+					foundUserId = subscriptionUser.id;
+					linkCustomerToUser = true;
+					console.log(`User found by email: ${foundUserId}`);
 				}
 
 				if (
@@ -1078,7 +1102,7 @@ export const POST = async (req: Request) => {
 
 				if (linkCustomerToUser) {
 					await stripe().customers.update(customer.id, {
-						metadata: { userId: foundUserId },
+						metadata: { userId: subscriptionUser.id },
 					});
 				}
 
@@ -1103,11 +1127,11 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set(userUpdate)
-					.where(eq(users.id, foundUserId));
-				await enqueueLoopsSync(db(), foundUserId);
+					.where(eq(users.id, subscriptionUser.id));
+				await enqueueLoopsSync(db(), subscriptionUser.id);
 
 				console.log("User updated successfully", {
-					foundUserId,
+					userId: subscriptionUser.id,
 					...userUpdate,
 				});
 			}

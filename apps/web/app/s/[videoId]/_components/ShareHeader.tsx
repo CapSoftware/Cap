@@ -61,6 +61,7 @@ import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
+import { RelativeTime } from "./RelativeTime";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -942,12 +943,33 @@ export const ShareHeader = ({
 			)}
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
 			    own padding rather than a top margin against the video. */}
-			<div className={clsx("pb-4", dashboardDestination ? "pt-2" : "pt-4")}>
-				{dashboardDestination && (
-					<DashboardBackLink
-						destination={dashboardDestination}
-						className="-ml-1.5 mb-1.5"
-					/>
+			<div
+				className={clsx(
+					"pb-4",
+					dashboardDestination || (isOwner && canMoveToFolder)
+						? "pt-2"
+						: "pt-4",
+				)}
+			>
+				{(dashboardDestination || (isOwner && canMoveToFolder)) && (
+					<div className="flex flex-wrap gap-1 items-center -ml-1.5 mb-1.5 min-w-0">
+						{dashboardDestination && (
+							<DashboardBackLink destination={dashboardDestination} />
+						)}
+						{isOwner && canMoveToFolder && (
+							<button
+								type="button"
+								onClick={() => {
+									setMoveDialogMounted(true);
+									setMoveDialogOpen(true);
+								}}
+								className="inline-flex gap-1.5 items-center px-3 h-8 text-[13px] rounded-full border transition-colors border-gray-4 bg-gray-1 text-gray-11 hover:border-gray-6 hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9"
+							>
+								<FolderInput className="size-3.5 shrink-0" aria-hidden />
+								Move to folder or space
+							</button>
+						)}
+					</div>
 				)}
 				<div className="flex flex-col gap-4">
 					<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1088,7 +1110,7 @@ export const ShareHeader = ({
 										{data.owner.name}
 									</p>
 									<p className="truncate text-xs text-gray-10">
-										{fromNow(data.createdAt)}
+										<RelativeTime date={data.createdAt} format={fromNow} />
 										{views !== undefined && (
 											<Suspense fallback={null}>
 												<ViewCount views={views} />
@@ -1229,7 +1251,7 @@ export const ShareHeader = ({
 														>
 															<FolderInput className="size-3" />
 															<p className="text-sm text-gray-12">
-																Move to folder
+																Move or add to space
 															</p>
 														</DropdownMenuItem>
 													)}

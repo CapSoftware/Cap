@@ -85,7 +85,7 @@ async function createIn(spaceId?: Space.SpaceIdOrOrganisationId) {
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 	});
 	const buttons = [...document.querySelectorAll("button")];
-	const color = buttons.find((b) => b.textContent?.trim() === "Blue");
+	const color = buttons.find((b) => b.getAttribute("aria-label") === "Blue");
 	const create = buttons.find((b) => b.textContent?.trim() === "Create");
 	if (!color || !create) throw new Error("Dialog buttons missing");
 	await act(async () => color.click());
@@ -108,5 +108,39 @@ describe("creating a subfolder inside a space folder", () => {
 		const call = await createIn();
 
 		expect(call && Option.getOrNull(call.spaceId)).toBe("listed-space");
+	});
+
+	it("creates with the default color when no color is picked, and on Enter", async () => {
+		await act(async () => {
+			root.render(
+				React.createElement(SubfolderDialog, {
+					open: true,
+					onOpenChange: () => {},
+					parentFolderId,
+				}),
+			);
+		});
+		const input = document.querySelector<HTMLInputElement>(
+			'input[placeholder="Subfolder name"]',
+		);
+		if (!input) throw new Error("Name field missing");
+		const setValue = Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setValue?.call(input, "SEO");
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await act(async () => {
+			input.dispatchEvent(
+				new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+			);
+		});
+		const call = mocks.create.mock.calls[0]?.[0] as
+			| { name: string; color: string }
+			| undefined;
+		expect(call?.name).toBe("SEO");
+		expect(call?.color).toBe("normal");
 	});
 });

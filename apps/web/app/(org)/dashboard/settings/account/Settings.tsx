@@ -2,9 +2,6 @@
 
 import {
 	Button,
-	Card,
-	CardDescription,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogFooter,
@@ -15,6 +12,7 @@ import {
 } from "@cap/ui";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
+import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -25,6 +23,12 @@ import { resetUser } from "@/app/utils/analytics";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../Contexts";
+import {
+	SettingsCard,
+	SettingsRow,
+	SettingsSection,
+	settingsFieldClass,
+} from "../organization/_components/settings-ui";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings, signOutAllDevices } from "./server";
 
@@ -182,132 +186,135 @@ export const Settings = () => {
 					updateName();
 				}}
 			>
-				<div className="grid gap-6 w-full md:grid-cols-2">
-					<Card className="space-y-4">
-						<div className="space-y-1">
-							<CardTitle>Profile image</CardTitle>
-							<CardDescription>
-								This image appears in your profile, comments, and shared caps.
-							</CardDescription>
-						</div>
-						<ProfileImage
-							initialPreviewUrl={profileImagePreviewUrl}
-							onChange={handleProfileImageChange}
-							onRemove={handleProfileImageRemove}
-							disabled={isProfileImageMutating}
-							isUploading={uploadProfileImageMutation.isPending}
-							isRemoving={removeProfileImageMutation.isPending}
-							userName={user?.name}
-						/>
-					</Card>
-					<Card className="space-y-4">
-						<div className="space-y-1">
-							<CardTitle>Your name</CardTitle>
-							<CardDescription>
-								Changing your name below will update how your name appears when
-								sharing a Cap, and in your profile.
-							</CardDescription>
-						</div>
-						<div className="flex flex-col flex-wrap gap-3 w-full">
-							<div className="flex-1">
-								<Input
-									type="text"
-									placeholder="First name"
-									onChange={(e) => setFirstName(e.target.value)}
-									defaultValue={firstName as string}
-									id={firstNameId}
-									name="firstName"
+				<SettingsSection title="Profile">
+					<SettingsCard>
+						<SettingsRow
+							title="Profile image"
+							description="This image appears in your profile, comments, and shared caps. Recommended size: 120x120."
+							control={
+								<ProfileImage
+									initialPreviewUrl={profileImagePreviewUrl}
+									onChange={handleProfileImageChange}
+									onRemove={handleProfileImageRemove}
+									disabled={isProfileImageMutating}
+									isUploading={uploadProfileImageMutation.isPending}
+									isRemoving={removeProfileImageMutation.isPending}
+									userName={user?.name}
 								/>
-							</div>
-							<div className="flex-1 space-y-2">
-								<Input
-									type="text"
-									placeholder="Last name"
-									onChange={(e) => setLastName(e.target.value)}
-									defaultValue={lastName as string}
-									id={lastNameId}
-									name="lastName"
-								/>
-							</div>
-						</div>
-					</Card>
-					<Card className="flex flex-col gap-4">
-						<div className="space-y-1">
-							<CardTitle>Contact email address</CardTitle>
-							<CardDescription>
-								This is the email address you used to sign up to Cap with.
-							</CardDescription>
-						</div>
-						<Input
-							type="email"
-							value={user?.email as string}
-							id={contactEmailId}
-							name="contactEmail"
-							disabled
+							}
 						/>
-					</Card>
-					<Card className="flex flex-col gap-4">
-						<div className="space-y-1">
-							<CardTitle>Default organization</CardTitle>
-							<CardDescription>
-								This is the default organization
-							</CardDescription>
-						</div>
-
-						<Select
-							placeholder="Default organization"
-							value={
-								defaultOrgId ??
-								user?.defaultOrgId ??
-								organizationData?.[0]?.organization.id ??
-								""
-							}
-							onValueChange={(value) =>
-								setDefaultOrgId(Organisation.OrganisationId.make(value))
-							}
-							options={(organizationData || []).map((org) => ({
-								value: org.organization.id,
-								label: org.organization.name,
-								image: (
-									<SignedImageUrl
-										className="size-5"
-										image={org.organization.iconUrl}
-										name={org.organization.name}
+						<SettingsRow
+							title={<label htmlFor={firstNameId}>Your name</label>}
+							description="Changing your name will update how it appears when sharing a Cap, and in your profile."
+							control={
+								<div className="flex gap-2 w-full sm:w-auto">
+									<Input
+										type="text"
+										placeholder="First name"
+										className={clsx(settingsFieldClass, "w-full sm:w-36")}
+										onChange={(e) => setFirstName(e.target.value)}
+										defaultValue={firstName as string}
+										id={firstNameId}
+										name="firstName"
 									/>
-								),
-							}))}
+									<Input
+										type="text"
+										placeholder="Last name"
+										aria-label="Last name"
+										className={clsx(settingsFieldClass, "w-full sm:w-36")}
+										onChange={(e) => setLastName(e.target.value)}
+										defaultValue={lastName as string}
+										id={lastNameId}
+										name="lastName"
+									/>
+								</div>
+							}
 						/>
-					</Card>
-				</div>
-				<Button
-					disabled={!firstName || updateNamePending || !hasChanges}
-					className="mt-6"
-					type="submit"
-					size="sm"
-					variant="dark"
-					spinner={updateNamePending}
-				>
-					{updateNamePending ? "Saving..." : "Save"}
-				</Button>
+						<SettingsRow
+							title={
+								<label htmlFor={contactEmailId}>Contact email address</label>
+							}
+							description="This is the email address you used to sign up to Cap with."
+							control={
+								<Input
+									type="email"
+									className={clsx(
+										settingsFieldClass,
+										"w-full sm:w-[17rem] disabled:bg-gray-2 disabled:text-gray-10",
+									)}
+									value={user?.email as string}
+									id={contactEmailId}
+									name="contactEmail"
+									disabled
+								/>
+							}
+						/>
+						<SettingsRow
+							title="Default organization"
+							description="This is your default organization."
+							control={
+								<div className="w-full sm:w-[17rem]">
+									<Select
+										placeholder="Default organization"
+										value={
+											defaultOrgId ??
+											user?.defaultOrgId ??
+											organizationData?.[0]?.organization.id ??
+											""
+										}
+										onValueChange={(value) =>
+											setDefaultOrgId(Organisation.OrganisationId.make(value))
+										}
+										options={(organizationData || []).map((org) => ({
+											value: org.organization.id,
+											label: org.organization.name,
+											image: (
+												<SignedImageUrl
+													className="size-5"
+													image={org.organization.iconUrl}
+													name={org.organization.name}
+												/>
+											),
+										}))}
+									/>
+								</div>
+							}
+						/>
+						<div className="flex justify-end px-4 py-3 rounded-b-xl sm:px-5 bg-gray-2">
+							<Button
+								disabled={!firstName || updateNamePending || !hasChanges}
+								className="px-4 h-9"
+								type="submit"
+								size="sm"
+								variant="dark"
+								spinner={updateNamePending}
+							>
+								{updateNamePending ? "Saving..." : "Save changes"}
+							</Button>
+						</div>
+					</SettingsCard>
+				</SettingsSection>
 			</form>
-			<Card className="flex flex-col gap-4 mt-6 md:flex-row md:items-center md:justify-between">
-				<div className="space-y-1">
-					<CardTitle>Sign out of all devices</CardTitle>
-					<CardDescription>
-						Invalidate every Cap web session, desktop app authentication token,
-						and CLI API key connected to your account.
-					</CardDescription>
-				</div>
-				<Button
-					type="button"
-					size="sm"
-					variant="destructive"
-					icon={<LogOut className="size-4" />}
-					onClick={() => setSignOutAllDevicesOpen(true)}
-				>
-					Sign out all devices
-				</Button>
-			</Card>
+			<SettingsSection title="Security">
+				<SettingsCard>
+					<SettingsRow
+						title="Sign out of all devices"
+						description="Invalidate every Cap web session, desktop app authentication token, and CLI API key connected to your account."
+						control={
+							<Button
+								type="button"
+								size="sm"
+								variant="destructive"
+								className="px-4 h-9"
+								icon={<LogOut className="size-3.5" />}
+								onClick={() => setSignOutAllDevicesOpen(true)}
+							>
+								Sign out all devices
+							</Button>
+						}
+					/>
+				</SettingsCard>
+			</SettingsSection>
 			<Dialog
 				open={signOutAllDevicesOpen}
 				onOpenChange={setSignOutAllDevicesOpen}

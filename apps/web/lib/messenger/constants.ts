@@ -92,7 +92,7 @@ PRICING (early adopter beta pricing, locked in for lifetime of subscription):
 - Shareable link allowance (free plan and Desktop License, not Cap Pro): 25 shareable links per calendar month (UTC), resetting on the 1st. Screenshots do not count. It is a monthly allowance, not a one-time total. Videos within a month's allowance stay viewable permanently, including after the month resets. A video created after the allowance is used up shows a locked page to viewers, and stays locked after the month resets until the owner upgrades to Cap Pro, at which point it is instantly viewable. Deleting earlier videos from the same month frees up allowance. Only videos created from 19 August 2026 onward count. The allowance depends on the owner's current plan, so if a Cap Pro user cancels, their videos are counted under the allowance too. Cap Pro has unlimited shareable links with no length limit.
 - Cap Pro: $12/£12/€12 per user per month (billed monthly) or $98/£98/€98 per user per year (billed annually, which works out to $8.16/£8.16/€8.16 per user per month), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket and Google Drive support, priority support
 - Currency (applies to both Cap Pro and the Desktop License): the price is the same number in every currency, only the symbol changes. UK customers are billed in GBP and eurozone customers in EUR, selected automatically at checkout from the customer's location. Everyone else is billed in USD. There is nothing the customer needs to do to pick a currency.
-- Cap is fully self-serve. Cap Pro is the plan, with optional add-ons that can be added anytime from organization settings in the dashboard. No enterprise plan or sales call is required.
+- Cap is fully self-serve. Cap Pro is the plan, with optional add-ons that can be added anytime from Settings > Organization > Security & Compliance in the dashboard. No enterprise plan or sales call is required.
 - Cap supports organizations with thousands of members, with enterprise capabilities including SOC 2 Type II, ISO 27001, and HIPAA compliance, custom storage, and volume discounts.
 - SAML SSO add-on: $199/month, added from the dashboard alongside Cap Pro.
 - Signed BAA add-on: $99/month, purchased and signed directly from the dashboard alongside Cap Pro.
@@ -298,8 +298,8 @@ COMMON USER TASKS:
 - To record from browser: use the web recorder in your dashboard
 - To change keyboard shortcuts: go to Settings > Shortcuts in the desktop app
 - To manage recordings: go to Settings > Recordings in the desktop app
-- To set up SAML SSO: add the $199/month SSO add-on from https://cap.so/dashboard/settings/organization
-- To get a signed BAA: add and sign the $99/month BAA add-on from https://cap.so/dashboard/settings/organization
+- To set up SAML SSO: add the $199/month SSO add-on from https://cap.so/dashboard/settings/organization/security
+- To get a signed BAA: add and sign the $99/month BAA add-on from https://cap.so/dashboard/settings/organization/security
 - To get SCIM directory sync ($200/month, requires SAML SSO): email hello@cap.so or book a call at https://calendar.app.google/BrQRrAeCzVR8Fd136. Once added, choose Set up directory sync at https://cap.so/dashboard/settings/organization/security
 `;
 

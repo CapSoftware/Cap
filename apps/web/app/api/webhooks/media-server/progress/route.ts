@@ -17,6 +17,7 @@ import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finaliz
 import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
 import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
 import {
 	MEDIA_INPUT_POLICY_ERROR_CODE,
@@ -66,8 +67,6 @@ interface ProgressWebhookPayload {
 	};
 	deferredSourceKey?: string;
 }
-
-const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;

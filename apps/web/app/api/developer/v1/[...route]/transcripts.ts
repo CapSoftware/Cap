@@ -1,9 +1,11 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
-import { parseDeveloperVideosPagination } from "@/lib/developer-pagination";
+import { invalidIdempotencyKey } from "@/lib/developer-ids";
+import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	createTranscriptFromUrl,
+	createTranscriptFromVideo,
 	createTranscriptUpload,
 	deleteTranscript,
 	getTranscript,
@@ -16,9 +18,11 @@ import {
 import {
 	isTranscriptStatus,
 	serializeTranscript,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	TRANSCRIPT_STATUSES,
+	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
-import { zValidator } from "@/utils/zod-validator";
+import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 export const app = new Hono<{
@@ -30,6 +34,13 @@ export const app = new Hono<{
 
 const failureBody = (failure: TranscriptFailure) =>
 	apiErrorBody(failure.code, failure.message, failure.hint);
+
+const refuse = (c: Context, failure: TranscriptFailure) => {
+	if (failure.status === 429) {
+		c.header("Retry-After", String(TRANSCRIPT_BUSY_RETRY_SECONDS));
+	}
+	return c.json(failureBody(failure), failure.status);
+};
 
 const optionsSchema = {
 	name: z.string().max(255).optional(),
@@ -45,33 +56,51 @@ const readIdempotencyKey = (header: string | undefined) => {
 		: { ok: false as const };
 };
 
-const invalidIdempotencyKey = apiErrorBody(
-	"invalid_idempotency_key",
-	"Idempotency-Key is not valid",
-	"Send 8 to 128 characters from letters, digits, dot, dash and underscore.",
-);
+const INCLUDE_VALUES = ["words", "segments"] as const;
 
 app.post(
 	"/",
-	zValidator("json", z.object({ url: z.string().min(1), ...optionsSchema })),
+	developerZValidator(
+		"json",
+		z
+			.strictObject({
+				url: z.string().min(1).optional(),
+				videoId: z.string().min(1).max(64).optional(),
+				...optionsSchema,
+			})
+			.refine(
+				(body) => (body.url === undefined) !== (body.videoId === undefined),
+				{ message: "Send exactly one of url or videoId" },
+			),
+	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
-		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
 
-		const result = await createTranscriptFromUrl(c.get("developerAppId"), {
-			...c.req.valid("json"),
-			idempotencyKey: idempotency.key,
-		});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		const { url, videoId, ...options } = c.req.valid("json");
+		const appId = c.get("developerAppId");
+		const result =
+			videoId !== undefined
+				? await createTranscriptFromVideo(appId, {
+						...options,
+						videoId,
+						idempotencyKey: idempotency.key,
+					})
+				: await createTranscriptFromUrl(appId, {
+						...options,
+						url: url ?? "",
+						idempotencyKey: idempotency.key,
+					});
+		if (!result.ok) return refuse(c, result);
 		return c.json({ data: serializeTranscript(result.transcript) });
 	},
 );
 
 app.post(
 	"/uploads",
-	zValidator(
+	developerZValidator(
 		"json",
-		z.object({
+		z.strictObject({
 			fileName: z.string().max(255).optional(),
 			contentLength: z.number().int().positive(),
 			...optionsSchema,
@@ -79,13 +108,13 @@ app.post(
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
-		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
 
 		const result = await createTranscriptUpload(c.get("developerAppId"), {
 			...c.req.valid("json"),
 			idempotencyKey: idempotency.key,
 		});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		if (!result.ok) return refuse(c, result);
 		return c.json(
 			{
 				data: {
@@ -103,15 +132,16 @@ app.post("/:id/start", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ data: serializeTranscript(result.transcript) });
 });
 
 app.get("/", async (c) => {
-	const { limit, offset } = parseDeveloperVideosPagination(
-		c.req.query("limit"),
-		c.req.query("offset"),
-	);
+	const parsed = parseDeveloperListQuery(c.req.query(), ["userId", "status"]);
+	if (!parsed.ok) {
+		return c.json(apiErrorBody(parsed.code, parsed.message, parsed.hint), 400);
+	}
+	const { limit, offset } = parsed;
 	const status = c.req.query("status");
 	if (status !== undefined && !isTranscriptStatus(status)) {
 		return c.json(
@@ -124,12 +154,24 @@ app.get("/", async (c) => {
 		);
 	}
 
+	const userId = c.req.query("userId")?.trim();
+	if (userId === "") {
+		return c.json(
+			apiErrorBody(
+				"invalid_user_id",
+				"userId filter is empty",
+				"Send the user ID to filter by, or leave userId out to list every transcript.",
+			),
+			400,
+		);
+	}
+
 	const { transcripts, hasMore } = await listTranscripts(
 		c.get("developerAppId"),
 		{
 			limit,
 			offset,
-			userId: c.req.query("userId")?.trim() || null,
+			userId: userId ?? null,
 			status: status ?? null,
 		},
 	);
@@ -141,6 +183,26 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
+	const include = new Set(
+		(c.req.query("include") ?? "")
+			.split(",")
+			.map((part) => part.trim())
+			.filter(Boolean),
+	);
+	const unknown = [...include].find(
+		(value) => !INCLUDE_VALUES.some((known) => known === value),
+	);
+	if (unknown !== undefined) {
+		return c.json(
+			apiErrorBody(
+				"invalid_include",
+				`include has an unknown value: ${unknown.slice(0, 64)}`,
+				`Use ${INCLUDE_VALUES.join(", ")} or both, separated by a comma.`,
+			),
+			400,
+		);
+	}
+
 	const transcript = await getTranscript(
 		c.get("developerAppId"),
 		c.req.param("id"),
@@ -156,13 +218,16 @@ app.get("/:id", async (c) => {
 		);
 	}
 
-	const include = new Set(
-		(c.req.query("include") ?? "")
-			.split(",")
-			.map((part) => part.trim())
-			.filter(Boolean),
-	);
-	const data = serializeTranscript(transcript, { includeText: true });
+	const data = {
+		...serializeTranscript(transcript, { includeText: true }),
+		...(transcript.status === "uploading"
+			? {
+					upload: {
+						expiresAt: transcriptUploadExpiry(transcript).toISOString(),
+					},
+				}
+			: {}),
+	};
 	if (!include.has("words") && !include.has("segments")) {
 		return c.json({ data });
 	}
@@ -184,6 +249,6 @@ app.delete("/:id", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ success: true });
 });

@@ -7,13 +7,10 @@ export function listVideosCurl() {
 	].join("\n");
 }
 
-const INFRA_EXAMPLE_ORIGIN = "https://app.example.com";
-
-export function createVideoCurl(publicKey: string, isProduction: boolean) {
+export function createUploadCurl() {
 	return [
-		`curl -X POST ${INFRA_API_ORIGIN}/api/developer/sdk/v1/videos/create \\`,
-		`  -H "Authorization: Bearer ${publicKey}" \\`,
-		...(isProduction ? [`  -H "Origin: ${INFRA_EXAMPLE_ORIGIN}" \\`] : []),
+		`curl -X POST ${INFRA_API_ORIGIN}/api/developer/v1/uploads \\`,
+		`  -H "Authorization: Bearer csk_..." \\`,
 		`  -H "Content-Type: application/json" \\`,
 		`  -d '{"name": "First video", "userId": "user_123"}'`,
 	].join("\n");

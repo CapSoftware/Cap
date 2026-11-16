@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { db } from "@cap/database";
 import { developerTranscripts } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { sleep } from "workflow";
 import {
 	extractTranscriptAudioBytes,
 	TRANSCRIPT_AUDIO_BITS_PER_SECOND,
@@ -14,13 +15,23 @@ import {
 	TRANSCRIPT_AUDIO_MAX_SECONDS,
 } from "@/lib/developer-transcript-audio";
 import {
+	holdTranscriptCredits,
 	INSUFFICIENT_CREDITS_MESSAGE,
 	reserveTranscriptCredits,
 	settleTranscript,
+	type TranscriptHold,
 } from "@/lib/developer-transcript-billing";
+import {
+	insufficientHoldMessage,
+	transcriptHoldCoversSeconds,
+	transcriptHoldForAudioSeconds,
+	transcriptHoldForSourceBytes,
+} from "@/lib/developer-transcript-hold";
 import {
 	claimTranscriptRun,
 	failTranscriptRun,
+	runOwnedState,
+	transcriptAwaitsSpeech,
 } from "@/lib/developer-transcript-run";
 import {
 	parseTranscriptLanguage,
@@ -41,11 +52,22 @@ import {
 	TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_BYTES,
+	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS,
 	type TranscriptErrorCode,
 	type TranscriptResultObject,
 	transcriptObjectKeys,
+	transcriptWordCount,
 } from "@/lib/developer-transcripts";
-import { urlIsSelfContainedMedia } from "@/lib/media-container";
+import {
+	findVideoForTranscript,
+	syncVideoCaptions,
+} from "@/lib/developer-video-captions";
+import {
+	looksLikeHtml,
+	MEDIA_CONTAINER_SNIFF_BYTES,
+	sniffMedia,
+	urlIsSelfContainedMedia,
+} from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
 import {
 	fetchPublicMedia,
@@ -56,9 +78,30 @@ import {
 } from "@/lib/public-media-fetch";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
 
-const URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const downloadLimit = () =>
+	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS >= 60_000
+		? `${Math.round(TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS / 60_000)} minutes`
+		: `${Math.round(TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS / 1000)} seconds`;
+
+const HOLD_WAIT_LIMIT_SECONDS = 15 * 60;
+const HOLD_RETRY_MAX_SECONDS = 10;
+const HOLD_RAISE_LIMIT = 2;
 
 type StepFailure = { ok: false; code: TranscriptErrorCode; message: string };
+
+type KnownSource = { bytes: number | null };
+
+type HoldWait = {
+	ok: false;
+	wait: true;
+	neededMicroCredits: number;
+	availableMicroCredits: number;
+	known: KnownSource | null;
+};
+
+type HoldRaise = { ok: false; raise: true; reportedSeconds: number | null };
+
+type HoldGate = { waitedSeconds: number; tries: number };
 
 const failure = (code: TranscriptErrorCode, message: string): StepFailure => ({
 	ok: false,
@@ -66,14 +109,80 @@ const failure = (code: TranscriptErrorCode, message: string): StepFailure => ({
 	message,
 });
 
+const notHeld = (
+	hold: Exclude<TranscriptHold, { state: "held" }>,
+	known: KnownSource | null,
+): StepFailure | HoldWait => {
+	if (hold.state === "skipped") {
+		return failure("source_missing", FAILURE_MESSAGES.source_missing);
+	}
+	if (hold.state === "insufficient") {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				hold.neededMicroCredits,
+				hold.availableMicroCredits,
+			),
+		);
+	}
+	return {
+		ok: false,
+		wait: true,
+		neededMicroCredits: hold.neededMicroCredits,
+		availableMicroCredits: hold.availableMicroCredits,
+		known,
+	};
+};
+
+const nextHoldWait = (
+	gate: HoldGate,
+	wait: HoldWait,
+): StepFailure | { seconds: number } => {
+	if (gate.waitedSeconds >= HOLD_WAIT_LIMIT_SECONDS) {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				wait.neededMicroCredits,
+				wait.availableMicroCredits,
+			),
+		);
+	}
+	const seconds = Math.min(HOLD_RETRY_MAX_SECONDS, 2 + gate.tries);
+	gate.tries += 1;
+	gate.waitedSeconds += seconds;
+	return { seconds };
+};
+
+const asFailure = (result: StepFailure | HoldWait | HoldRaise): StepFailure => {
+	if ("wait" in result) {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				result.neededMicroCredits,
+				result.availableMicroCredits,
+			),
+		);
+	}
+	if ("raise" in result) {
+		return failure(
+			"transcription_failed",
+			FAILURE_MESSAGES.transcription_failed,
+		);
+	}
+	return result;
+};
+
 const FAILURE_MESSAGES = {
 	source_missing: "The source file was not found",
+	video_missing: "The video was deleted before it could be transcribed",
+	deleted: "The transcript was deleted before its audio was transcribed",
 	source_too_large: "The source file is larger than the 2 GB limit",
 	source_unreachable: "The file at the URL could not be downloaded",
+	source_incomplete: "The file at the URL ended before its declared length",
 	source_blocked: "The URL does not point to a public address",
 	no_audio_track: "The file has no audio track",
 	unsupported_format: "The file is not a supported audio or video format",
-	no_speech: "No speech was found in the audio",
+	web_page: "The URL returned a web page, not a media file",
 	duration_too_long: "The audio is longer than the 4 hour limit",
 	transcription_failed: "The transcript could not be created",
 } as const;
@@ -91,29 +200,81 @@ export async function developerTranscribeWorkflow(
 	const { transcriptId, runId } = payload;
 
 	try {
-		const claimed = await claimTranscript(transcriptId, runId);
-		if (!claimed) {
+		const fast = await runTranscriptFastPath(transcriptId, runId);
+		if (fast.resume === "unclaimed") {
+			return { success: true, message: "Transcript is not waiting to run" };
+		}
+		if (fast.resume === "finalize") {
+			return finishTranscript(transcriptId, fast.settlement);
+		}
+		if (
+			fast.resume === "claim" &&
+			!(await claimTranscript(transcriptId, runId))
+		) {
 			return { success: true, message: "Transcript is not waiting to run" };
 		}
 
-		const source = await prepareTranscriptSource(transcriptId);
-		if (!source.ok) {
+		const gate: HoldGate = { waitedSeconds: 0, tries: 0 };
+		const stop = async (result: StepFailure | HoldWait | HoldRaise) => {
+			const failed = asFailure(result);
 			await failTranscriptStep(
 				transcriptId,
 				runId,
-				source.code,
-				source.message,
+				failed.code,
+				failed.message,
 			);
-			return { success: false, message: source.message };
+			return { success: false, message: failed.message };
+		};
+
+		if (fast.resume === "claim" || fast.resume === "prepare") {
+			let source =
+				fast.resume === "prepare" && fast.source
+					? fast.source
+					: await prepareTranscriptSource(transcriptId, null);
+			while (!source.ok && "wait" in source) {
+				const next = nextHoldWait(gate, source);
+				if ("code" in next) return stop(next);
+				await sleep(`${next.seconds}s`);
+				source = await prepareTranscriptSource(
+					transcriptId,
+					source.known ?? { bytes: null },
+				);
+			}
+			if (!source.ok) return stop(source);
 		}
 
-		const audio = await extractTranscriptAudio(transcriptId);
-		if (!audio.ok) {
-			await failTranscriptStep(transcriptId, runId, audio.code, audio.message);
-			return { success: false, message: audio.message };
+		if (
+			fast.resume === "claim" ||
+			fast.resume === "prepare" ||
+			fast.resume === "extract"
+		) {
+			let audio =
+				fast.resume === "extract" && fast.audio
+					? fast.audio
+					: await extractTranscriptAudio(transcriptId);
+			for (
+				let raises = 0;
+				!audio.ok && "raise" in audio && raises < HOLD_RAISE_LIMIT;
+				raises++
+			) {
+				const { reportedSeconds } = audio;
+				let raised = await raiseTranscriptHold(transcriptId, reportedSeconds);
+				while (!raised.ok && "wait" in raised) {
+					const next = nextHoldWait(gate, raised);
+					if ("code" in next) return stop(next);
+					await sleep(`${next.seconds}s`);
+					raised = await raiseTranscriptHold(transcriptId, reportedSeconds);
+				}
+				if (!raised.ok) return stop(raised);
+				audio = await extractTranscriptAudio(transcriptId);
+			}
+			if (!audio.ok) return stop(audio);
 		}
 
-		const transcription = await transcribeTranscriptAudio(transcriptId);
+		const transcription =
+			fast.resume === "settle" || fast.resume === "done"
+				? fast.transcription
+				: await transcribeTranscriptAudio(transcriptId);
 		if (!transcription.ok) {
 			await failTranscriptStep(
 				transcriptId,
@@ -124,15 +285,12 @@ export async function developerTranscribeWorkflow(
 			return { success: false, message: transcription.message };
 		}
 
-		const settlement = await settleTranscriptStep(transcriptId, transcription);
-		await cleanupTranscriptObjects(transcriptId, settlement !== "complete");
-		return {
-			success: settlement === "complete",
-			message:
-				settlement === "complete"
-					? "Transcript completed"
-					: `Transcript was not completed: ${settlement}`,
-		};
+		return finishTranscript(
+			transcriptId,
+			fast.resume === "done"
+				? fast.settlement
+				: await settleTranscriptStep(transcriptId, transcription),
+		);
 	} catch (error) {
 		await failTranscriptStep(
 			transcriptId,
@@ -144,7 +302,24 @@ export async function developerTranscribeWorkflow(
 	}
 }
 
+async function finishTranscript(transcriptId: string, settlement: Settlement) {
+	await cleanupTranscriptObjects(transcriptId, settlement !== "complete");
+	if (settlement === "complete") await writeVideoCaptions(transcriptId);
+	return {
+		success: settlement === "complete",
+		message:
+			settlement === "complete"
+				? "Transcript completed"
+				: `Transcript was not completed: ${settlement}`,
+	};
+}
+
 async function loadTranscript(transcriptId: string) {
+	const row = await loadTranscriptRow(transcriptId);
+	return row && !row.deletedAt ? row : null;
+}
+
+async function loadTranscriptRow(transcriptId: string) {
 	const [row] = await db()
 		.select({
 			id: developerTranscripts.id,
@@ -152,14 +327,139 @@ async function loadTranscript(transcriptId: string) {
 			status: developerTranscripts.status,
 			sourceType: developerTranscripts.sourceType,
 			sourceUrl: developerTranscripts.sourceUrl,
+			videoId: developerTranscripts.videoId,
+			s3Key: developerTranscripts.s3Key,
 			requestedLanguage: developerTranscripts.requestedLanguage,
 			durationSeconds: developerTranscripts.durationSeconds,
+			reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 			deletedAt: developerTranscripts.deletedAt,
 		})
 		.from(developerTranscripts)
 		.where(eq(developerTranscripts.id, transcriptId))
 		.limit(1);
-	return row && !row.deletedAt ? row : null;
+	return row ?? null;
+}
+
+export const FAST_PATH_MAX_AUDIO_SECONDS = 30 * 60;
+export const FAST_PATH_BUDGET_MS = 2 * 60 * 1000;
+
+type FastPath =
+	| { resume: "unclaimed" }
+	| { resume: "finalize"; settlement: Settlement }
+	| { resume: "claim" }
+	| { resume: "prepare"; source: StepFailure | HoldWait | null }
+	| { resume: "extract"; audio: StepFailure | HoldRaise | null }
+	| { resume: "transcribe" }
+	| { resume: "settle"; transcription: TranscriptionSummary | StepFailure }
+	| {
+			resume: "done";
+			transcription: TranscriptionSummary;
+			settlement: Settlement;
+	  };
+
+const handOff = (transcriptId: string, stage: string, error: unknown) => {
+	console.error(
+		`[developer-transcribe] ${stage} failed in the fast path for ${transcriptId}, continuing step by step`,
+		error,
+	);
+};
+
+export async function runTranscriptFastPath(
+	transcriptId: string,
+	runId: string,
+): Promise<FastPath> {
+	"use step";
+
+	const startedAt = performance.now();
+	const overBudget = () => performance.now() - startedAt > FAST_PATH_BUDGET_MS;
+	let saved: ExtractedAudio | null;
+	try {
+		if (await claimTranscriptRun(transcriptId, runId)) {
+			saved = await savedExtraction(transcriptId);
+		} else {
+			const state = await runOwnedState(transcriptId, runId);
+			if (state === "complete") {
+				return { resume: "finalize", settlement: "complete" };
+			}
+			if (state === "ended") {
+				return { resume: "finalize", settlement: "skipped" };
+			}
+			if (state !== "processing") return { resume: "unclaimed" };
+			saved = (await savedExtraction(transcriptId)) ?? {
+				ok: true,
+				audio: null,
+				durationSeconds: 0,
+			};
+		}
+	} catch (error) {
+		handOff(transcriptId, "claim", error);
+		return { resume: "claim" };
+	}
+
+	let extracted: ExtractedAudio;
+	if (saved) {
+		extracted = saved;
+	} else {
+		try {
+			const source = await prepareSource(transcriptId, null);
+			if (!source.ok) return { resume: "prepare", source };
+		} catch (error) {
+			handOff(transcriptId, "prepare", error);
+			return { resume: "prepare", source: null };
+		}
+
+		if (overBudget()) return { resume: "extract", audio: null };
+
+		try {
+			const audio = await extractAudio(transcriptId);
+			if (!audio.ok) return { resume: "extract", audio };
+			extracted = audio;
+		} catch (error) {
+			handOff(transcriptId, "extract", error);
+			return { resume: "extract", audio: null };
+		}
+	}
+
+	if (extracted.durationSeconds > FAST_PATH_MAX_AUDIO_SECONDS || overBudget()) {
+		return { resume: "transcribe" };
+	}
+
+	let transcription: TranscriptionSummary | StepFailure;
+	try {
+		transcription = await transcribeAudio(transcriptId, extracted.audio);
+	} catch (error) {
+		handOff(transcriptId, "transcribe", error);
+		return { resume: "transcribe" };
+	}
+	if (!transcription.ok) return { resume: "settle", transcription };
+
+	try {
+		return {
+			resume: "done",
+			transcription,
+			settlement: await settleSummary(transcriptId, transcription),
+		};
+	} catch (error) {
+		handOff(transcriptId, "settle", error);
+		return { resume: "settle", transcription };
+	}
+}
+
+async function savedExtraction(
+	transcriptId: string,
+): Promise<ExtractedAudio | null> {
+	const transcript = await loadTranscriptRow(transcriptId);
+	if (!transcript || transcript.durationSeconds === null) return null;
+	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
+	const audioSaved = ((await developerObjectSize(keys.audio)) ?? 0) > 0;
+	if (!audioSaved && (await getDeveloperObjectText(keys.result)) === null) {
+		return null;
+	}
+	return {
+		ok: true,
+		audio: null,
+		durationSeconds: transcript.durationSeconds,
+	};
 }
 
 async function claimTranscript(
@@ -171,39 +471,123 @@ async function claimTranscript(
 	return claimTranscriptRun(transcriptId, runId);
 }
 
-async function spoolToStorage(
-	key: string,
+async function spoolToFile(
+	path: string,
 	body: ReadableStream<Uint8Array>,
-	contentType: string,
+	maxBytes: number,
 ) {
-	const path = join(tmpdir(), `transcript-source-${randomUUID()}`);
-	try {
-		await pipeline(
-			Readable.fromWeb(
-				limitStreamBytes(
-					body,
-					TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
-				) as unknown as Parameters<typeof Readable.fromWeb>[0],
-			),
-			createWriteStream(path),
-		);
-		const { size } = await fs.stat(path);
-		if (size > 0) await putDeveloperObjectFile(key, path, size, contentType);
-		return size;
-	} finally {
-		await fs.unlink(path).catch(() => {});
+	await pipeline(
+		Readable.fromWeb(
+			limitStreamBytes(body, maxBytes) as unknown as Parameters<
+				typeof Readable.fromWeb
+			>[0],
+		),
+		createWriteStream(path),
+	);
+	const { size } = await fs.stat(path);
+	return size;
+}
+
+async function readSourceHead(body: ReadableStream<Uint8Array>) {
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	let finished = false;
+	for (; length < MEDIA_CONTAINER_SNIFF_BYTES; ) {
+		const { done, value } = await reader.read();
+		if (done) {
+			finished = true;
+			break;
+		}
+		chunks.push(value);
+		length += value.length;
 	}
+	const read = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		read.set(chunk, offset);
+		offset += chunk.length;
+	}
+	let sentHead = false;
+	return {
+		head: read.subarray(0, MEDIA_CONTAINER_SNIFF_BYTES),
+		cancel: () => reader.cancel().catch(() => {}),
+		body: new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				if (!sentHead) {
+					sentHead = true;
+					if (read.length > 0) controller.enqueue(read);
+					if (finished) controller.close();
+					return;
+				}
+				const { done, value } = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			cancel: (reason) => reader.cancel(reason),
+		}),
+	};
+}
+
+async function holdForSource(
+	transcriptId: string,
+	known: KnownSource,
+): Promise<StepFailure | HoldWait | null> {
+	const hold = await holdTranscriptCredits({
+		transcriptId,
+		microCredits: transcriptHoldForSourceBytes(known.bytes),
+	});
+	return hold.state === "held" ? null : notHeld(hold, known);
+}
+
+async function prepareVideoSource(transcript: {
+	id: string;
+	appId: string;
+	videoId: string | null;
+}): Promise<{ ok: true } | StepFailure | HoldWait> {
+	const video = transcript.videoId
+		? await findVideoForTranscript(transcript.appId, transcript.videoId)
+		: null;
+	if (video?.state !== "ok") {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const bytes = await developerObjectSize(video.sourceKey);
+	if (bytes === null || bytes === 0) {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const hold = await holdTranscriptCredits({
+		transcriptId: transcript.id,
+		microCredits:
+			video.durationSeconds === null
+				? transcriptHoldForSourceBytes(bytes)
+				: transcriptHoldForAudioSeconds(video.durationSeconds),
+	});
+	if (hold.state !== "held") return notHeld(hold, null);
+	await db()
+		.update(developerTranscripts)
+		.set({ sourceBytes: bytes, s3Key: video.sourceKey })
+		.where(eq(developerTranscripts.id, transcript.id));
+	return { ok: true };
 }
 
 async function prepareTranscriptSource(
 	transcriptId: string,
-): Promise<{ ok: true } | StepFailure> {
+	known: KnownSource | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
 	"use step";
 
+	return prepareSource(transcriptId, known);
+}
+
+async function prepareSource(
+	transcriptId: string,
+	known: KnownSource | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
 	const transcript = await loadTranscript(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
+	if (transcript.sourceType === "video") return prepareVideoSource(transcript);
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
 	const existingSize = await developerObjectSize(keys.source);
 
@@ -214,88 +598,224 @@ async function prepareTranscriptSource(
 		if (existingSize > TRANSCRIPT_MAX_UPLOAD_BYTES) {
 			return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
 		}
-		return { ok: true };
+		return (
+			(await holdForSource(transcript.id, { bytes: existingSize })) ?? {
+				ok: true,
+			}
+		);
 	}
 
-	if (existingSize !== null && existingSize > 0) return { ok: true };
+	if (existingSize !== null && existingSize > 0) {
+		return (
+			(await holdForSource(transcript.id, { bytes: existingSize })) ?? {
+				ok: true,
+			}
+		);
+	}
 	if (!transcript.sourceUrl) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
+	if (known) {
+		const refused = await holdForSource(transcript.id, known);
+		if (refused) return refused;
+	}
 
+	const download = new AbortController();
+	const timer = setTimeout(
+		() => download.abort(),
+		TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS,
+	);
+	const spoolPath = join(tmpdir(), `transcript-source-${randomUUID()}`);
+	const stop = (result: StepFailure | HoldWait) => {
+		download.abort();
+		return result;
+	};
 	try {
-		const { response, contentLength } = await fetchPublicMedia(
-			transcript.sourceUrl,
-			{
-				maxBytes: TRANSCRIPT_MAX_URL_BYTES,
-				signal: AbortSignal.timeout(URL_DOWNLOAD_TIMEOUT_MS),
-			},
-		);
-		if (!response.body) {
+		let spooled: { bytes: number; contentType: string } | null = null;
+		let sourceBytes = 0;
+		try {
+			const { response, contentLength } = await fetchPublicMedia(
+				transcript.sourceUrl,
+				{ maxBytes: TRANSCRIPT_MAX_URL_BYTES, signal: download.signal },
+			);
+			if (!response.body) {
+				return stop(
+					failure("source_unreachable", FAILURE_MESSAGES.source_unreachable),
+				);
+			}
+			const declared =
+				contentLength !== null && contentLength > 0 ? contentLength : null;
+			const refused = await holdForSource(transcript.id, { bytes: declared });
+			if (refused) {
+				await response.body.cancel().catch(() => {});
+				return stop(refused);
+			}
+			const source = await readSourceHead(response.body);
+			if (source.head.length > 0 && sniffMedia(source.head) !== "media") {
+				await source.cancel();
+				return stop(
+					failure(
+						"unsupported_format",
+						looksLikeHtml(source.head)
+							? FAILURE_MESSAGES.web_page
+							: FAILURE_MESSAGES.unsupported_format,
+					),
+				);
+			}
+			const contentType =
+				response.headers.get("content-type") ?? "application/octet-stream";
+			if (declared !== null && declared > TRANSCRIPT_MAX_SPOOLED_URL_BYTES) {
+				await putDeveloperObjectStream(
+					keys.source,
+					limitStreamBytes(source.body, declared),
+					declared,
+					contentType,
+				);
+				sourceBytes = declared;
+			} else {
+				const bytes = await spoolToFile(
+					spoolPath,
+					source.body,
+					declared ?? TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
+				);
+				if (bytes === 0 || (declared !== null && bytes < declared)) {
+					return stop(
+						failure(
+							"source_unreachable",
+							bytes === 0
+								? FAILURE_MESSAGES.source_unreachable
+								: FAILURE_MESSAGES.source_incomplete,
+						),
+					);
+				}
+				spooled = { bytes, contentType };
+				sourceBytes = bytes;
+			}
+		} catch (error) {
+			const timedOut = download.signal.aborted;
+			download.abort();
+			await deleteDeveloperObjects([keys.source]);
+			if (error instanceof PublicMediaFetchError) {
+				if (error.problem === "too_large") {
+					return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
+				}
+				if (
+					error.problem === "bad_status" ||
+					error.problem === "too_many_redirects"
+				) {
+					return failure("source_unreachable", error.message);
+				}
+				return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(
+				`[developer-transcribe] Source download failed for ${transcript.id}: ${message}`,
+			);
+			if (timedOut) {
+				return failure(
+					"source_unreachable",
+					`The file at the URL did not finish downloading within ${downloadLimit()}`,
+				);
+			}
+			if (/private address/i.test(message)) {
+				return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
+			}
 			return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
 		}
-		const contentType =
-			response.headers.get("content-type") ?? "application/octet-stream";
-		const sourceBytes =
-			contentLength !== null && contentLength > 0
-				? await putDeveloperObjectStream(
-						keys.source,
-						limitStreamBytes(response.body, contentLength),
-						contentLength,
-						contentType,
-					).then(() => contentLength)
-				: await spoolToStorage(keys.source, response.body, contentType);
 
-		if (sourceBytes === 0) {
-			return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
+		if (spooled) {
+			await putDeveloperObjectFile(
+				keys.source,
+				spoolPath,
+				spooled.bytes,
+				spooled.contentType,
+			);
 		}
-
 		await db()
 			.update(developerTranscripts)
 			.set({ sourceBytes })
 			.where(eq(developerTranscripts.id, transcript.id));
 		return { ok: true };
-	} catch (error) {
-		await deleteDeveloperObjects([keys.source]);
-		if (error instanceof PublicMediaFetchError) {
-			if (error.problem === "too_large") {
-				return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
-			}
-			if (
-				error.problem === "bad_status" ||
-				error.problem === "too_many_redirects"
-			) {
-				return failure("source_unreachable", error.message);
-			}
-			return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
-		}
-		const message = error instanceof Error ? error.message : String(error);
-		console.error(
-			`[developer-transcribe] Source download failed for ${transcript.id}: ${message}`,
-		);
-		if (/private address/i.test(message)) {
-			return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
-		}
-		return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
+	} finally {
+		clearTimeout(timer);
+		await fs.unlink(spoolPath).catch(() => {});
 	}
+}
+
+async function raiseTranscriptHold(
+	transcriptId: string,
+	reportedSeconds: number | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
+	"use step";
+
+	const hold = await holdTranscriptCredits({
+		transcriptId,
+		microCredits: transcriptHoldForAudioSeconds(reportedSeconds),
+		releaseWhileWaiting: true,
+	});
+	return hold.state === "held" ? { ok: true } : notHeld(hold, null);
 }
 
 async function extractTranscriptAudio(
 	transcriptId: string,
-): Promise<{ ok: true } | StepFailure> {
+): Promise<{ ok: true } | StepFailure | HoldRaise> {
 	"use step";
 
+	const extracted = await extractAudio(transcriptId);
+	return extracted.ok ? { ok: true } : extracted;
+}
+
+type ExtractedAudio = {
+	ok: true;
+	audio: Buffer | null;
+	durationSeconds: number;
+};
+
+async function extractAudio(
+	transcriptId: string,
+): Promise<ExtractedAudio | StepFailure | HoldRaise> {
 	const transcript = await loadTranscript(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
+	const heldSeconds = transcriptHoldCoversSeconds(
+		Number(transcript.reservedMicroCredits) || 0,
+	);
+	if (heldSeconds <= 0) {
+		return failure("insufficient_credits", INSUFFICIENT_CREDITS_MESSAGE);
+	}
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
-	const sourceUrl = await developerObjectUrl(keys.source);
+	if (
+		transcript.durationSeconds !== null &&
+		((await developerObjectSize(keys.audio)) ?? 0) > 0
+	) {
+		return {
+			ok: true,
+			audio: null,
+			durationSeconds: transcript.durationSeconds,
+		};
+	}
+	if (transcript.sourceType === "video" && !transcript.s3Key) {
+		return failure("source_missing", FAILURE_MESSAGES.video_missing);
+	}
+	const sourceUrl = await developerObjectUrl(
+		transcript.sourceType === "video" && transcript.s3Key
+			? transcript.s3Key
+			: keys.source,
+	);
 	if (!(await urlIsSelfContainedMedia(sourceUrl))) {
 		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
 	}
-	const extracted = await extractTranscriptAudioBytes(sourceUrl);
+	const extracted = await extractTranscriptAudioBytes(sourceUrl, heldSeconds);
 	if (extracted.state === "too_long") {
 		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+	}
+	if (extracted.state === "over_limit") {
+		return {
+			ok: false,
+			raise: true,
+			reportedSeconds: extracted.reportedSeconds,
+		};
 	}
 	if (extracted.state === "no_audio" || extracted.audio.length === 0) {
 		return failure("no_audio_track", FAILURE_MESSAGES.no_audio_track);
@@ -308,6 +828,9 @@ async function extractTranscriptAudio(
 
 	if (durationSeconds > TRANSCRIPT_AUDIO_MAX_SECONDS) {
 		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+	}
+	if (durationSeconds > heldSeconds) {
+		return { ok: false, raise: true, reportedSeconds: null };
 	}
 
 	await putDeveloperObject(keys.audio, audio, "audio/mpeg");
@@ -322,7 +845,7 @@ async function extractTranscriptAudio(
 	if (reservation.state === "skipped") {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
-	return { ok: true };
+	return { ok: true, audio, durationSeconds };
 }
 
 type TranscriptionSummary = {
@@ -337,7 +860,22 @@ async function transcribeTranscriptAudio(
 ): Promise<TranscriptionSummary | StepFailure> {
 	"use step";
 
-	const transcript = await loadTranscript(transcriptId);
+	return transcribeAudio(transcriptId, null);
+}
+
+async function readExtractedAudio(key: string) {
+	const audioResponse = await fetchStorageUrl(await developerObjectUrl(key));
+	if (!audioResponse.ok || !audioResponse.body) {
+		throw new Error(`Extracted audio is not readable: ${audioResponse.status}`);
+	}
+	return readStreamBounded(audioResponse.body, TRANSCRIPT_AUDIO_MAX_BYTES);
+}
+
+async function transcribeAudio(
+	transcriptId: string,
+	extracted: Buffer | null,
+): Promise<TranscriptionSummary | StepFailure> {
+	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
@@ -350,22 +888,16 @@ async function transcribeTranscriptAudio(
 			ok: true,
 			durationSeconds: stored.durationSeconds,
 			language: stored.language,
-			wordCount: stored.words.length,
+			wordCount: transcriptWordCount(stored),
 		};
 	}
-
-	const audioResponse = await fetchStorageUrl(
-		await developerObjectUrl(keys.audio),
-	);
-	if (!audioResponse.ok || !audioResponse.body) {
-		throw new Error(`Extracted audio is not readable: ${audioResponse.status}`);
+	if (transcript.deletedAt) {
+		return failure("source_missing", FAILURE_MESSAGES.deleted);
 	}
+
 	let audio: Buffer;
 	try {
-		audio = await readStreamBounded(
-			audioResponse.body,
-			TRANSCRIPT_AUDIO_MAX_BYTES,
-		);
+		audio = extracted ?? (await readExtractedAudio(keys.audio));
 	} catch (error) {
 		if (error instanceof StreamTooLargeError) {
 			return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
@@ -373,28 +905,26 @@ async function transcribeTranscriptAudio(
 		throw error;
 	}
 
+	if (!(await transcriptAwaitsSpeech(transcript.id))) {
+		return failure("source_missing", FAILURE_MESSAGES.deleted);
+	}
 	const speech = await transcribeSpeech(
 		audio,
 		parseTranscriptLanguage(transcript.requestedLanguage) ?? "auto",
 	);
-	if (speech.state === "no_speech") {
-		return failure("no_speech", FAILURE_MESSAGES.no_speech);
-	}
+	const spoken = speech.state === "ok" ? speech : null;
 
 	const durationSeconds = measuredTranscriptDuration({
 		extractedAudioSeconds: transcript.durationSeconds,
-		serviceDurationSeconds: speech.durationSeconds,
-		lastWordEndMs: speech.words.at(-1)?.end,
+		serviceDurationSeconds: spoken?.durationSeconds,
+		lastWordEndMs: spoken?.words.at(-1)?.end,
 	});
 	const result = buildTranscriptResult({
-		text: speech.text,
-		words: speech.words,
-		language: speech.language,
+		text: spoken?.text,
+		words: spoken?.words,
+		language: spoken?.language,
 		durationSeconds,
 	});
-	if (result.text.length === 0) {
-		return failure("no_speech", FAILURE_MESSAGES.no_speech);
-	}
 
 	await putDeveloperObject(
 		keys.result,
@@ -406,34 +936,75 @@ async function transcribeTranscriptAudio(
 		ok: true,
 		durationSeconds,
 		language: result.language,
-		wordCount: result.words.length,
+		wordCount: transcriptWordCount(result),
 	};
 }
 
 async function settleTranscriptStep(
 	transcriptId: string,
 	summary: TranscriptionSummary,
-): Promise<"complete" | "insufficient_credits" | "skipped"> {
+): Promise<Settlement> {
 	"use step";
 
-	const transcript = await loadTranscript(transcriptId);
+	return settleSummary(transcriptId, summary);
+}
+
+type Settlement = "complete" | "insufficient_credits" | "skipped";
+
+async function settleSummary(
+	transcriptId: string,
+	summary: TranscriptionSummary,
+): Promise<Settlement> {
+	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) return "skipped";
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
 	const stored = await getDeveloperObjectText(keys.result);
-	if (stored === null) {
-		throw new Error(`Transcript result is missing for ${transcript.id}`);
+	if (stored === null && !transcript.deletedAt) {
+		const latest = await loadTranscriptRow(transcriptId);
+		if (!latest?.deletedAt) {
+			throw new Error(`Transcript result is missing for ${transcript.id}`);
+		}
 	}
-	const result = JSON.parse(stored) as TranscriptResultObject;
+	const result =
+		stored === null ? null : (JSON.parse(stored) as TranscriptResultObject);
 
 	const settlement = await settleTranscript({
 		transcriptId: transcript.id,
 		durationSeconds: summary.durationSeconds,
 		language: summary.language,
-		text: result.text,
+		text: result?.text ?? "",
 		wordCount: summary.wordCount,
 		resultKey: keys.result,
 	});
 	return settlement.state;
+}
+
+async function writeVideoCaptions(transcriptId: string): Promise<void> {
+	"use step";
+
+	const [row] = await db()
+		.select({
+			appId: developerTranscripts.appId,
+			videoId: developerTranscripts.videoId,
+			status: developerTranscripts.status,
+			language: developerTranscripts.language,
+			wordCount: developerTranscripts.wordCount,
+		})
+		.from(developerTranscripts)
+		.where(eq(developerTranscripts.id, transcriptId))
+		.limit(1);
+	if (
+		!row?.videoId ||
+		row.status !== "complete" ||
+		(row.wordCount ?? 0) === 0
+	) {
+		return;
+	}
+	await syncVideoCaptions({
+		appId: row.appId,
+		videoId: row.videoId,
+		language: row.language,
+	});
 }
 
 async function transcriptStorage(transcriptId: string) {
@@ -441,13 +1012,14 @@ async function transcriptStorage(transcriptId: string) {
 		.select({
 			appId: developerTranscripts.appId,
 			status: developerTranscripts.status,
+			deletedAt: developerTranscripts.deletedAt,
 		})
 		.from(developerTranscripts)
 		.where(eq(developerTranscripts.id, transcriptId))
 		.limit(1);
 	if (!row) return null;
 	return {
-		status: row.status,
+		status: row.deletedAt ? "deleted" : row.status,
 		keys: transcriptObjectKeys(row.appId, transcriptId),
 	};
 }

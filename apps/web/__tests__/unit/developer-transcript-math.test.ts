@@ -12,12 +12,17 @@ import {
 	isStaleDeveloperUpload,
 	isTranscriptStatus,
 	measuredTranscriptDuration,
+	publicSourceUrl,
+	publicTranscriptWords,
 	serializeTranscript,
 	type TranscriptSummaryRow,
 	toAgentDeveloperTranscript,
+	transcriptHasNoSpeech,
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptUploadExpiry,
+	transcriptWordCount,
 } from "@/lib/developer-transcripts";
 
 const row = (
@@ -30,6 +35,8 @@ const row = (
 	status: "complete",
 	sourceType: "upload",
 	sourceUrl: null,
+	videoId: null,
+	requestedAt: null,
 	s3Key: "developer/app-1/transcripts/tr-1/source",
 	resultKey: "developer/app-1/transcripts/tr-1/result.json",
 	sourceBytes: 1_000,
@@ -153,13 +160,8 @@ describe("transcript result", () => {
 			],
 		});
 		expect(result.text).toBe("Hello there. General Kenobi");
-		expect(result.words[0]).toEqual({
-			text: "Hello",
-			start: 0,
-			end: 0.4,
-			confidence: 0.99,
-		});
-		expect(result.words[1]?.confidence).toBeNull();
+		expect(result.words[0]).toEqual({ text: "Hello", start: 0, end: 0.4 });
+		expect(JSON.stringify(result)).not.toContain("confidence");
 		expect(result.segments).toEqual([
 			{ text: "Hello there.", start: 0, end: 0.9 },
 			{ text: "General Kenobi", start: 2.6, end: 3.5 },
@@ -264,6 +266,7 @@ describe("transcript serialization", () => {
 			"text",
 			"updatedAt",
 			"userId",
+			"videoId",
 			"wordCount",
 		]);
 		expect(Object.keys(agent).sort()).toEqual([
@@ -282,6 +285,7 @@ describe("transcript serialization", () => {
 			"sourceUrl",
 			"status",
 			"updatedAt",
+			"videoId",
 			"wordCount",
 		]);
 		for (const serialized of [JSON.stringify(rest), JSON.stringify(agent)]) {
@@ -379,5 +383,196 @@ describe("transcript inputs", () => {
 		expect(
 			transcriptObjectKeys("app-2", "tr-1").source.includes("/app-1/"),
 		).toBe(false);
+	});
+});
+
+describe("audio with no speech", () => {
+	it("builds an empty result with no words or segments", () => {
+		expect(
+			buildTranscriptResult({
+				text: undefined,
+				words: undefined,
+				language: undefined,
+				durationSeconds: 42.5,
+			}),
+		).toEqual({
+			text: "",
+			language: null,
+			durationSeconds: 42.5,
+			words: [],
+			segments: [],
+		});
+	});
+
+	it("counts no words for an empty result and at least one for any text", () => {
+		expect(transcriptWordCount({ text: "", words: [] })).toBe(0);
+		expect(transcriptWordCount({ text: "   ", words: [] })).toBe(0);
+		expect(transcriptWordCount({ text: "one  two\nthree", words: [] })).toBe(3);
+		expect(
+			transcriptWordCount({
+				text: "hello world",
+				words: [
+					{ text: "hello", start: 0, end: 0.4 },
+					{ text: "world", start: 0.5, end: 0.9 },
+				],
+			}),
+		).toBe(2);
+	});
+
+	it("is a complete transcript with a word count of zero, in every response shape", () => {
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: 0 })).toBe(
+			true,
+		);
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: 5 })).toBe(
+			false,
+		);
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: null })).toBe(
+			false,
+		);
+		expect(transcriptHasNoSpeech({ status: "error", wordCount: 0 })).toBe(
+			false,
+		);
+		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 1 }),
+		).toBe(false);
+		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 0 }),
+		).toBe(true);
+		expect(
+			transcriptHasNoSpeech({ status: "processing", wordCount: null }),
+		).toBe(false);
+
+		const silent = row({
+			status: "complete",
+			text: "",
+			wordCount: 0,
+			language: null,
+			durationSeconds: 600,
+			billedMicroCredits: 1_666,
+		});
+		expect(serializeTranscript(silent, { includeText: true })).toMatchObject({
+			status: "complete",
+			text: "",
+			wordCount: 0,
+			language: null,
+			costMicroCredits: 1_666,
+			costDollars: 0.01666,
+			error: null,
+		});
+		expect(toAgentDeveloperTranscript(silent)).toMatchObject({
+			status: "complete",
+			wordCount: 0,
+			costMicroCredits: 1_666,
+			errorCode: null,
+			errorMessage: null,
+		});
+	});
+
+	it("still serializes a transcript that failed as no speech before the change", () => {
+		const old = row({
+			status: "error",
+			errorCode: "no_speech",
+			errorMessage: "No speech was found in the audio",
+			billedMicroCredits: 0,
+		});
+		expect(serializeTranscript(old)).toMatchObject({
+			status: "error",
+			costMicroCredits: 0,
+			error: { code: "no_speech", message: "No speech was found in the audio" },
+		});
+	});
+});
+
+describe("what a response never carries", () => {
+	it("returns a URL source without its query string or fragment", () => {
+		const signed = row({
+			sourceType: "url",
+			sourceUrl:
+				"https://files.example.com/private/call.mp3?sig=abc123&expires=1794500000#t=10",
+		});
+		expect(serializeTranscript(signed).source).toEqual({
+			type: "url",
+			url: "https://files.example.com/private/call.mp3",
+		});
+		expect(toAgentDeveloperTranscript(signed).sourceUrl).toBe(
+			"https://files.example.com/private/call.mp3",
+		);
+		for (const shape of [
+			serializeTranscript(signed, { includeText: true }),
+			toAgentDeveloperTranscript(signed),
+		]) {
+			const body = JSON.stringify(shape);
+			expect(body).not.toContain("abc123");
+			expect(body).not.toContain("expires=");
+			expect(body).not.toContain("#t=10");
+		}
+	});
+
+	it("leaves a URL with no query string as it is", () => {
+		expect(publicSourceUrl("https://a.example/talk.mp3")).toBe(
+			"https://a.example/talk.mp3",
+		);
+		expect(publicSourceUrl("https://a.example/t.mp3#frag")).toBe(
+			"https://a.example/t.mp3",
+		);
+		expect(publicSourceUrl("https://a.example/?only=query")).toBe(
+			"https://a.example/",
+		);
+		expect(publicSourceUrl(null)).toBeNull();
+	});
+
+	it("drops word confidence from results stored before it was removed", () => {
+		expect(
+			publicTranscriptWords([
+				{ text: "hello", start: 0, end: 0.4, confidence: null } as never,
+				{ text: "world", start: 0.5, end: 0.9, confidence: 0.9 } as never,
+			]),
+		).toEqual([
+			{ text: "hello", start: 0, end: 0.4 },
+			{ text: "world", start: 0.5, end: 0.9 },
+		]);
+	});
+});
+
+describe("transcript timestamps", () => {
+	it("never reports updatedAt earlier than completedAt", () => {
+		const settled = row({
+			status: "complete",
+			updatedAt: new Date("2026-11-12T14:00:05.000Z"),
+			completedAt: new Date("2026-11-12T14:00:06.000Z"),
+		});
+		expect(serializeTranscript(settled)).toMatchObject({
+			updatedAt: "2026-11-12T14:00:06.000Z",
+			completedAt: "2026-11-12T14:00:06.000Z",
+		});
+		expect(toAgentDeveloperTranscript(settled)).toMatchObject({
+			updatedAt: "2026-11-12T14:00:06.000Z",
+			completedAt: "2026-11-12T14:00:06.000Z",
+		});
+	});
+
+	it("keeps a later updatedAt and an unfinished transcript as they are", () => {
+		const later = row({
+			updatedAt: new Date("2026-11-12T14:00:09.000Z"),
+			completedAt: new Date("2026-11-12T14:00:06.000Z"),
+		});
+		expect(serializeTranscript(later).updatedAt).toBe(
+			"2026-11-12T14:00:09.000Z",
+		);
+		const running = row({
+			updatedAt: new Date("2026-11-12T14:00:02.000Z"),
+			completedAt: null,
+		});
+		expect(serializeTranscript(running).updatedAt).toBe(
+			"2026-11-12T14:00:02.000Z",
+		);
+	});
+
+	it("puts an upload URL's expiry one hour after it was issued", () => {
+		expect(
+			transcriptUploadExpiry({
+				updatedAt: new Date("2026-11-12T14:28:41.000Z"),
+			}).toISOString(),
+		).toBe("2026-11-12T15:28:41.000Z");
 	});
 });

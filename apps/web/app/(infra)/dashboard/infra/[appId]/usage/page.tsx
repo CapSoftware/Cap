@@ -1,16 +1,17 @@
 import clsx from "clsx";
-import type { Metadata } from "next";
 import {
 	STORAGE_BILLING_DAYS_PER_MONTH,
 	storageMicroCreditsPerMinutePerMonth,
 } from "@/lib/developer-pricing";
 import { getTranscriptionUsageSince } from "@/lib/developer-transcript-store";
+import { deliveryJson, getDeliveredUsage } from "@/lib/infra-delivery";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
+import { getAppStorage } from "@/lib/infra-storage";
 import {
+	formatAudioLength,
 	formatCharge,
 	formatMinutes,
 	INFRA_TIER_LABELS,
@@ -18,6 +19,7 @@ import {
 	utcDaysAgoKey,
 	utcMonthStart,
 } from "@/lib/infra-usage";
+import { DeliveredMinutes } from "../../_components/delivered-minutes";
 import {
 	Block,
 	Empty,
@@ -30,11 +32,14 @@ import {
 	TH,
 	TR,
 } from "../../_components/ui";
-import { getInfraStorageSnapshots, requireInfraApp } from "../../infra-data";
+import {
+	getInfraFirstMonthChargesSince,
+	getInfraStorageSnapshots,
+	infraPageMetadata,
+	requireInfraApp,
+} from "../../infra-data";
 
-export const metadata: Metadata = {
-	title: "Usage | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Usage");
 
 const HISTORY_DAYS = 60;
 
@@ -67,15 +72,29 @@ export default async function InfraUsagePage({
 	const { app } = await requireInfraApp(appId);
 	const now = new Date();
 
-	const [usage, snapshots, transcription] = await Promise.all([
-		getAppStorageUsage(app.id),
-		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
-		getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
-			console.error("[infra-usage] Transcription usage unavailable", error);
-			return null;
-		}),
-	]);
-	const audioHours = (transcription?.audioSeconds ?? 0) / 3600;
+	const [storage, snapshots, transcription, firstMonths, delivered] =
+		await Promise.all([
+			getAppStorage(app.id),
+			getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
+			getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
+				console.error("[infra-usage] Transcription usage unavailable", error);
+				return null;
+			}),
+			app.creditAccount
+				? getInfraFirstMonthChargesSince(
+						app.creditAccount.id,
+						utcMonthStart(now),
+					)
+				: Promise.resolve({ chargedMicroCredits: 0, videos: 0 }),
+			getDeliveredUsage(app.id, now).then(
+				(usage) => ({ usage, failed: false }),
+				(error) => {
+					console.error("[infra-usage] Delivery usage unavailable", error);
+					return { usage: null, failed: true };
+				},
+			),
+		]);
+	const usage = storage.stored;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
 		(tier) => usage.minutesByTier[tier] > 0,
 	);
@@ -91,7 +110,7 @@ export default async function InfraUsagePage({
 		<>
 			<PageHeader
 				title="Usage"
-				description="Storage is billed once a day, for each video at its resolution. Uploads and encoding are free."
+				description="Each video is charged one month of storage when it becomes ready, then once a day at its resolution. Uploads and encoding are free."
 			/>
 
 			<Figures>
@@ -106,18 +125,27 @@ export default async function InfraUsagePage({
 				/>
 				<Figure
 					label="Storage per day"
-					hint="at what is stored now"
-					value={formatCharge(usage.dailyMicroCredits)}
+					hint="for videos past their first month"
+					value={formatCharge(storage.dailyCharge.dailyMicroCredits)}
 				/>
 				<Figure
 					label={`Storage in ${monthName}`}
-					hint={`${month.billedDays} billed ${month.billedDays === 1 ? "day" : "days"}`}
-					value={formatCharge(month.chargedMicroCredits)}
+					hint={[
+						`${month.billedDays} billed ${month.billedDays === 1 ? "day" : "days"}`,
+						...(firstMonths.videos > 0
+							? [
+									`${firstMonths.videos} first ${firstMonths.videos === 1 ? "month" : "months"}`,
+								]
+							: []),
+					].join(", ")}
+					value={formatCharge(
+						month.chargedMicroCredits + firstMonths.chargedMicroCredits,
+					)}
 				/>
 				{transcription && (
 					<Figure
 						label={`Transcription in ${monthName}`}
-						hint={`${audioHours.toLocaleString("en-US", { maximumFractionDigits: audioHours < 10 ? 2 : 0 })} audio ${audioHours === 1 ? "hour" : "hours"}`}
+						hint={formatAudioLength(transcription.audioSeconds)}
 						value={formatCharge(transcription.chargedMicroCredits)}
 					/>
 				)}
@@ -126,11 +154,11 @@ export default async function InfraUsagePage({
 			{first && last && timeline.length > 1 && (
 				<figure className="m-0 w-fit min-w-[min(100%,220px)] max-w-full">
 					<figcaption className="text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
-						Minutes stored per day
+						Minutes billed per day
 					</figcaption>
 					<div
 						role="img"
-						aria-label={`Minutes stored each billed day, from ${formatMinutes(first.totalDurationMinutes)} on ${shortDay.format(asDate(first.snapshotDate))} to ${formatMinutes(last.totalDurationMinutes)} on ${shortDay.format(asDate(last.snapshotDate))}`}
+						aria-label={`Minutes billed each day, from ${formatMinutes(first.totalDurationMinutes)} on ${shortDay.format(asDate(first.snapshotDate))} to ${formatMinutes(last.totalDurationMinutes)} on ${shortDay.format(asDate(last.snapshotDate))}`}
 						className="mt-6 flex h-[132px] items-end gap-[5px] border-b border-[rgba(222,230,246,0.08)]"
 					>
 						{timeline.map((snapshot, index) => (
@@ -222,9 +250,15 @@ export default async function InfraUsagePage({
 				</Block>
 			)}
 
+			<DeliveredMinutes
+				delivery={deliveryJson(delivered.usage)}
+				monthName={monthName}
+				unavailable={delivered.failed}
+			/>
+
 			<Block
 				title="Daily storage"
-				description={`One row for each day this app stored video. Last ${HISTORY_DAYS} days.`}
+				description={`One row for each day billed, over the last ${HISTORY_DAYS} days. A row records what was stored when that day's charge was taken, so today's row can differ from what is stored now.`}
 			>
 				{snapshots.length === 0 ? (
 					<Empty>
@@ -237,8 +271,8 @@ export default async function InfraUsagePage({
 							<thead>
 								<tr className={TR}>
 									<th className={TH}>Day</th>
-									<th className={clsx(TH, "text-right")}>Minutes stored</th>
-									<th className={clsx(TH, "text-right")}>Videos</th>
+									<th className={clsx(TH, "text-right")}>Minutes billed</th>
+									<th className={clsx(TH, "text-right")}>Videos billed</th>
 									<th className={clsx(TH, "text-right")}>Charged</th>
 								</tr>
 							</thead>

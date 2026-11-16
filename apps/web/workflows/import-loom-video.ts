@@ -16,6 +16,7 @@ import {
 	getLoomDownloadUrl,
 	getReusableLoomDownloadUrl,
 	LoomDownloadTemporaryError,
+	LoomDownloadUnavailableError,
 } from "@/lib/loom-download-url";
 import { cleanupLoomFileSource } from "@/lib/loom-file-cleanup";
 import { getLoomImportSignalToken } from "@/lib/loom-import-signal-token";
@@ -96,6 +97,9 @@ async function fetchFreshLoomDownloadUrl(
 			throw new RetryableError(error.message, {
 				retryAfter: error.retryAfterMs,
 			});
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			throw new FatalError(error.message);
 		}
 		throw error;
 	}

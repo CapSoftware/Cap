@@ -104,7 +104,7 @@ export function isMediaServerConfigured(): boolean {
 
 export async function checkMediaServerHealth(): Promise<{
 	status: string;
-	ffmpeg: { available: boolean; version: string };
+	ffmpeg: { available: boolean; version?: string };
 }> {
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -362,9 +362,109 @@ export async function startMediaServerVideoJob(
 	return { status: "rejected", message: await readErrorMessage(response) };
 }
 
+export const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
+
+export type MediaServerJobStatus =
+	| { status: "running" }
+	| { status: "finished"; progress: Record<string, unknown> }
+	| { status: "missing" }
+	| { status: "unreachable" };
+
+const JOB_STATUS_TIMEOUT_MS = 10_000;
+const TERMINAL_JOB_PHASES = new Set(["complete", "error", "cancelled"]);
+
+// Only the media server's own "job not found" counts as missing. A proxy or
+// a host that is still starting can answer 404 too, and the job may be alive
+// behind it.
+export async function readMediaServerVideoJob(
+	jobId: string,
+	videoId: string,
+): Promise<MediaServerJobStatus> {
+	const unreachable = { status: "unreachable" } as const;
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/status`,
+			{
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_STATUS_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (!body || typeof body !== "object") return unreachable;
+		if (response.status === 404) {
+			return "code" in body && body.code === "NOT_FOUND"
+				? { status: "missing" }
+				: unreachable;
+		}
+		if (
+			!response.ok ||
+			!("jobId" in body) ||
+			body.jobId !== jobId ||
+			!("videoId" in body) ||
+			body.videoId !== videoId ||
+			!("phase" in body) ||
+			typeof body.phase !== "string"
+		) {
+			return unreachable;
+		}
+		return TERMINAL_JOB_PHASES.has(body.phase)
+			? { status: "finished", progress: { ...body } }
+			: { status: "running" };
+	} catch {
+		return unreachable;
+	}
+}
+
+export type MediaServerJobCancel =
+	| "cancelled"
+	| "finished"
+	| "missing"
+	| "failed";
+
+const JOB_CANCEL_TIMEOUT_MS = 5_000;
+
+export async function cancelMediaServerVideoJob(
+	jobId: string,
+): Promise<MediaServerJobCancel> {
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/cancel`,
+			{
+				method: "POST",
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_CANCEL_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (response.ok) return "cancelled";
+		const code =
+			body && typeof body === "object" && "code" in body
+				? body.code
+				: undefined;
+		if (response.status === 400 && code === "INVALID_STATE") {
+			return "finished";
+		}
+		if (response.status === 404 && code === "NOT_FOUND") return "missing";
+		return "failed";
+	} catch {
+		return "failed";
+	}
+}
+
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }
+	| { status: "timed_out" }
 	| { status: "rejected"; message: string; unusable: boolean };
 
 export async function tryProbeVideoViaMediaServer(
@@ -384,6 +484,18 @@ export async function tryProbeVideoViaMediaServer(
 		return { status: "unreachable" };
 	}
 
+	// The media server answers 504 with code TIMEOUT when it gave up reading
+	// this file. That says something about the file, so it is not retried as if
+	// the server were away. A 504 from anything in front of it still is.
+	if (response.status === 504) {
+		const body: unknown = await response.json().catch(() => null);
+		return body &&
+			typeof body === "object" &&
+			"code" in body &&
+			body.code === "TIMEOUT"
+			? { status: "timed_out" }
+			: { status: "unreachable" };
+	}
 	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
 		await response.body?.cancel().catch(() => {});
 		return { status: "unreachable" };

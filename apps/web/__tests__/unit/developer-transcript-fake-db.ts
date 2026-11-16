@@ -7,6 +7,17 @@ type Table = object;
 
 const dialect = new MySqlDialect();
 
+const metadataOf = (value: unknown): Row => {
+	if (typeof value === "string") {
+		try {
+			return metadataOf(JSON.parse(value));
+		} catch {
+			return {};
+		}
+	}
+	return typeof value === "object" && value !== null ? (value as Row) : {};
+};
+
 const comparable = (value: unknown) =>
 	value instanceof Date
 		? value.toISOString().slice(0, -1).replace("T", " ")
@@ -36,7 +47,7 @@ const compare = (left: unknown, operator: string, right: unknown) => {
 	}
 };
 
-function compile(condition: SQL | undefined): Predicate {
+function compile(condition: SQL | undefined, outer: Row = {}): Predicate {
 	if (!condition) return () => true;
 	const query = dialect.sqlToQuery(condition);
 	const tokens =
@@ -63,8 +74,93 @@ function compile(condition: SQL | undefined): Predicate {
 		return params.shift();
 	};
 
+	const columnName = () => take().split(".").pop()?.replaceAll("`", "") ?? "";
+
+	const binaryComparison = (): Predicate => {
+		expect("cast");
+		expect("(");
+		const column = columnName();
+		expect("as");
+		expect("binary");
+		expect(")");
+		expect("=");
+		expect("cast");
+		expect("(");
+		const value = param();
+		expect("as");
+		expect("binary");
+		expect(")");
+		return (row) => row[column] === value;
+	};
+
+	const jsonField = () => {
+		expect("json_extract");
+		expect("(");
+		const column = columnName();
+		expect(",");
+		const field = take();
+		expect(")");
+		return (row: Row) => metadataOf(row[column])[field];
+	};
+
+	const jsonComparison = (): Predicate => {
+		if (peek() === "json_unquote") {
+			take();
+			expect("(");
+			const field = jsonField();
+			expect(")");
+			expect("=");
+			const value = param();
+			return (row) => {
+				const found = field(row);
+				return found !== null && found !== undefined && String(found) === value;
+			};
+		}
+		const field = jsonField();
+		expect("is");
+		const negated = peek() === "not";
+		if (negated) take();
+		expect("null");
+		return (row) =>
+			(field(row) === null || field(row) === undefined) !== negated;
+	};
+
+	const coalescedJsonComparison = (): Predicate => {
+		expect("coalesce");
+		expect("(");
+		expect("cast");
+		expect("(");
+		expect("json_extract");
+		expect("(");
+		const column = columnName();
+		expect(",");
+		const field = String(param()).replace(/^\$\./, "");
+		expect(")");
+		expect("as");
+		expect("signed");
+		expect(")");
+		expect(",");
+		const fallback = columnName();
+		expect(")");
+		const operator = take();
+		const value = param();
+		return (row) => {
+			const found = metadataOf(row[column])[field];
+			return compare(
+				found === null || found === undefined ? row[fallback] : Number(found),
+				operator,
+				value,
+			);
+		};
+	};
+
 	const comparison = (): Predicate => {
-		const column = take().split(".").pop()?.replaceAll("`", "") ?? "";
+		if (peek() === "coalesce") return coalescedJsonComparison();
+		if (peek() === "cast") return binaryComparison();
+		if (peek() === "json_unquote" || peek() === "json_extract") {
+			return jsonComparison();
+		}
+		const column = columnName();
 		const operator = take().toLowerCase();
 		if (operator === "is") {
 			if (peek() === "not") {
@@ -84,6 +180,10 @@ function compile(condition: SQL | undefined): Predicate {
 			}
 			expect(")");
 			return (row) => values.some((value) => compare(row[column], "=", value));
+		}
+		if (peek()?.startsWith("`")) {
+			const reference = columnName();
+			return (row) => compare(row[column], operator, outer[reference]);
 		}
 		const value = param();
 		return (row) => compare(row[column], operator, value);
@@ -127,14 +227,36 @@ function compile(condition: SQL | undefined): Predicate {
 const isSql = (value: unknown): value is SQL =>
 	typeof value === "object" && value !== null && "queryChunks" in value;
 
+const isQuery = (value: unknown): value is PromiseLike<Row[]> =>
+	typeof value === "object" &&
+	value !== null &&
+	"then" in value &&
+	typeof value.then === "function";
+
 const columnName = (value: unknown) =>
 	typeof value === "object" && value !== null && "name" in value
 		? String((value as { name: unknown }).name)
 		: null;
 
+const isAggregate = (value: unknown) =>
+	isSql(value) &&
+	/SUM\(|count\(\*\)|MAX\(GREATEST\(/i.test(dialect.sqlToQuery(value).sql);
+
+function rowExpression(row: Row, field: SQL) {
+	const text = dialect.sqlToQuery(field).sql;
+	const filled = text.match(
+		/^\((?:`[^`]+`\.)?`([^`]+)` IS NOT NULL AND (?:`[^`]+`\.)?`\1` <> ''\)$/i,
+	);
+	if (!filled) throw new Error(`Unsupported expression ${text}`);
+	const value = row[filled[1] ?? ""];
+	return value !== null && value !== undefined && value !== "" ? 1 : 0;
+}
+
 function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 	if (!fields) return rows.map((row) => ({ ...row }));
-	const aggregates = Object.entries(fields).filter(([, field]) => isSql(field));
+	const aggregates = Object.entries(fields).filter(([, field]) =>
+		isAggregate(field),
+	);
 	if (aggregates.length > 0) {
 		const result: Row = {};
 		for (const [alias, field] of Object.entries(fields)) {
@@ -149,6 +271,17 @@ function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 				);
 			} else if (/count\(\*\)/i.test(text)) {
 				result[alias] = rows.length;
+			} else if (/MAX\(GREATEST\(/i.test(text)) {
+				const values = rows.map((row) => {
+					const metadata = metadataOf(row.metadata);
+					const owed = Number(metadata.owedMicroCredits) || 0;
+					const charged = Number(metadata.chargedMicroCredits) || 0;
+					return Math.max(
+						charged < owed ? owed : 0,
+						Number(metadata.outstandingMicroCredits) || 0,
+					);
+				});
+				result[alias] = values.length > 0 ? Math.max(...values) : null;
 			} else {
 				throw new Error(`Unsupported aggregate ${text}`);
 			}
@@ -159,7 +292,9 @@ function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 		Object.fromEntries(
 			Object.entries(fields).map(([alias, field]) => [
 				alias,
-				row[columnName(field) ?? alias],
+				isSql(field)
+					? rowExpression(row, field)
+					: row[columnName(field) ?? alias],
 			]),
 		),
 	);
@@ -185,52 +320,107 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		return new Date(clock);
 	};
 
-	const select = (fields?: Record<string, unknown>) => ({
+	const select = (fields?: Record<string, unknown>, distinct = false) => ({
 		from: (table: Table) => {
 			const state = {
 				condition: undefined as SQL | undefined,
 				ordered: false,
+				orderColumn: "createdAt",
+				ascending: false,
 				limit: undefined as number | undefined,
 				offset: 0,
 			};
-			const run = async () => {
-				let rows = rowsOf(table).filter(compile(state.condition));
+			const run = async (outer: Row = {}) => {
+				let rows = rowsOf(table).filter(compile(state.condition, outer));
 				if (state.ordered) {
+					const time = (row: Row) => {
+						const value = row[state.orderColumn];
+						return value instanceof Date ? value.getTime() : 0;
+					};
+					const direction = state.ascending ? -1 : 1;
 					rows = [...rows].sort((a, b) => {
-						const byDate =
-							(b.createdAt as Date).getTime() - (a.createdAt as Date).getTime();
-						return byDate !== 0
-							? byDate
-							: String(b.id).localeCompare(String(a.id));
+						const byDate = time(b) - time(a);
+						return (
+							direction *
+							(byDate !== 0 ? byDate : String(b.id).localeCompare(String(a.id)))
+						);
 					});
 				}
-				const projected = project(rows, fields);
+				const subqueries = Object.entries(fields ?? {}).flatMap(
+					([alias, field]) => {
+						const inner = isSql(field)
+							? field.queryChunks.find(isQuery)
+							: undefined;
+						return inner ? [[alias, inner] as const] : [];
+					},
+				);
+				const scalarAliases = new Set(subqueries.map(([alias]) => alias));
+				const selected = fields
+					? Object.fromEntries(
+							Object.entries(fields).filter(
+								([alias]) => !scalarAliases.has(alias),
+							),
+						)
+					: fields;
+				const all: Row[] = [];
+				const base = project(rows, selected);
+				for (const [index, row] of base.entries()) {
+					const scalars: Row = {};
+					for (const [alias, inner] of subqueries) {
+						const correlated = inner as PromiseLike<Row[]> & {
+							runFor?: (outer: Row) => Promise<Row[]>;
+						};
+						const [first] = correlated.runFor
+							? await correlated.runFor(rows[index] ?? {})
+							: await inner;
+						scalars[alias] = Object.values(first ?? {})[0] ?? null;
+					}
+					all.push({ ...row, ...scalars });
+				}
+				const seen = new Set<string>();
+				const projected = distinct
+					? all.filter((row) => {
+							const key = JSON.stringify(row);
+							if (seen.has(key)) return false;
+							seen.add(key);
+							return true;
+						})
+					: all;
 				return projected.slice(
 					state.offset,
 					state.limit === undefined ? undefined : state.offset + state.limit,
 				);
 			};
-			const chain = Object.assign(Promise.resolve().then(run), {
-				where(condition: SQL | undefined) {
-					state.condition = condition;
-					return chain;
+			const chain = Object.assign(
+				Promise.resolve().then(() => run()),
+				{
+					runFor: (outer: Row) => run(outer),
+					where(condition: SQL | undefined) {
+						state.condition = condition;
+						return chain;
+					},
+					orderBy(first?: SQL) {
+						state.ordered = true;
+						const named = first
+							? dialect.sqlToQuery(first).sql.match(/`(\w+)`(?: (desc|asc))?$/i)
+							: null;
+						state.orderColumn = named?.[1] ?? "createdAt";
+						state.ascending = named?.[2]?.toLowerCase() === "asc";
+						return chain;
+					},
+					limit(count: number) {
+						state.limit = count;
+						return chain;
+					},
+					offset(count: number) {
+						state.offset = count;
+						return chain;
+					},
+					for() {
+						return chain;
+					},
 				},
-				orderBy() {
-					state.ordered = true;
-					return chain;
-				},
-				limit(count: number) {
-					state.limit = count;
-					return chain;
-				},
-				offset(count: number) {
-					state.offset = count;
-					return chain;
-				},
-				for() {
-					return chain;
-				},
-			});
+			);
 			return chain;
 		},
 	});
@@ -281,7 +471,7 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							row[key] = value;
 						}
 					}
-					row.updatedAt = now();
+					if (!("updatedAt" in values)) row.updatedAt = now();
 				}
 				return [{ affectedRows: matches.length }];
 			},
@@ -299,7 +489,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		},
 	});
 
-	const client = { select, insert, update, delete: remove };
+	const client = {
+		select: (fields?: Record<string, unknown>) => select(fields),
+		selectDistinct: (fields: Record<string, unknown>) => select(fields, true),
+		insert,
+		update,
+		delete: remove,
+	};
 
 	const transaction = <T>(callback: (tx: typeof client) => Promise<T>) => {
 		const run = async () => {

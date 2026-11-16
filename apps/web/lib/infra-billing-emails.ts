@@ -1,7 +1,4 @@
 import { db } from "@cap/database";
-import { sendEmail } from "@cap/database/emails/config";
-import { InfraOutOfCredit } from "@cap/database/emails/infra-out-of-credit";
-import { InfraTopUpFailed } from "@cap/database/emails/infra-top-up-failed";
 import {
 	developerApps,
 	developerCreditAccounts,
@@ -58,7 +55,11 @@ export async function sendInfraOutOfCreditEmail({
 	try {
 		const recipient = await recipientFor(accountId);
 		if (!recipient) return false;
-		await sendEmail({
+		const [{ sendEmail }, { InfraOutOfCredit }] = await Promise.all([
+			import("@cap/database/emails/config"),
+			import("@cap/database/emails/infra-out-of-credit"),
+		]);
+		const result = await sendEmail({
 			email: recipient.email,
 			subject: `${recipient.appName} is out of Cap Infra credit`,
 			react: InfraOutOfCredit({
@@ -67,7 +68,7 @@ export async function sendInfraOutOfCreditEmail({
 			}),
 			idempotencyKey: `infra-out-of-credit-${accountId}-${shortSince.toISOString().slice(0, 10)}`,
 		});
-		return true;
+		return result?.error === null;
 	} catch (error) {
 		console.error("[infra-billing] Out of credit email failed", error);
 		return false;
@@ -87,6 +88,10 @@ export async function sendInfraTopUpFailedEmail({
 	try {
 		const recipient = await recipientFor(accountId);
 		if (!recipient) return false;
+		const [{ sendEmail }, { InfraTopUpFailed }] = await Promise.all([
+			import("@cap/database/emails/config"),
+			import("@cap/database/emails/infra-top-up-failed"),
+		]);
 		await sendEmail({
 			email: recipient.email,
 			subject: `The auto top-up for ${recipient.appName} was declined`,

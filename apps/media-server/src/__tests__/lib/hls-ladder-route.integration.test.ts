@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type appType from "../../app";
 import { parseHlsLadderMaster } from "../../lib/hls-ladder";
@@ -23,8 +25,10 @@ const LADDER_FILES = [
 
 let app: typeof appType;
 let getJob: typeof import("../../lib/job-manager").getJob;
+let jobManager: typeof import("../../lib/job-manager");
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl = "";
+const workDir = mkdtempSync(join(tmpdir(), "cap-ladder-route-"));
 const uploads = new Map<string, { bytes: Uint8Array; contentType: string }>();
 const webhooks: JobProgress[] = [];
 
@@ -64,8 +68,27 @@ beforeAll(async () => {
 	process.env.MEDIA_SERVER_WEBHOOK_SECRET = SECRET;
 	process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES = "4";
 	app = (await import("../../app")).default;
-	getJob = (await import("../../lib/job-manager")).getJob;
+	jobManager = await import("../../lib/job-manager");
+	getJob = jobManager.getJob;
 	const fixture = readFileSync(FIXTURE);
+	const largePath = join(workDir, "large.mp4");
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=1280x720:rate=30:duration=3",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"ultrafast",
+		"-pix_fmt",
+		"yuv420p",
+		"-y",
+		largePath,
+	]);
+	const large = readFileSync(largePath);
 	server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -82,11 +105,17 @@ beforeAll(async () => {
 				});
 				return new Response(null, { status: 200, headers: { ETag: '"x"' } });
 			}
-			if (url.pathname === "/fixture.mp4") {
-				return new Response(fixture, {
+			const source =
+				url.pathname === "/fixture.mp4"
+					? fixture
+					: url.pathname === "/large.mp4"
+						? large
+						: null;
+			if (source) {
+				return new Response(source, {
 					headers: {
 						"Content-Type": "video/mp4",
-						"Content-Length": String(fixture.byteLength),
+						"Content-Length": String(source.byteLength),
 					},
 				});
 			}
@@ -98,7 +127,26 @@ beforeAll(async () => {
 
 afterAll(() => {
 	server?.stop(true);
+	rmSync(workDir, { recursive: true, force: true });
 });
+
+function imageSize(bytes: Uint8Array): string {
+	const path = join(workDir, "poster.jpg");
+	writeFileSync(path, bytes);
+	return execFileSync(
+		"ffprobe",
+		[
+			"-v",
+			"error",
+			"-show_entries",
+			"stream=width,height",
+			"-of",
+			"csv=p=0:s=x",
+			path,
+		],
+		{ encoding: "utf8" },
+	).trim();
+}
 
 describe("POST /video/ladder", () => {
 	test("rejects a request without the shared secret", async () => {
@@ -151,6 +199,36 @@ describe("POST /video/ladder", () => {
 		expect(final?.ladder?.renditions.length).toBe(ladder?.renditions.length);
 	}, 120_000);
 
+	test("takes the poster from the largest rendition it encoded", async () => {
+		const response = await startLadder({
+			videoUrl: `${baseUrl}/large.mp4`,
+			maxTier: "360p",
+			uploads: uploadTargets("poster"),
+			thumbnailPresignedUrl: `${baseUrl}/uploads/poster/poster.jpg`,
+		});
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		expect(job.error).toBeUndefined();
+		expect(job.phase).toBe("complete");
+		expect(job.ladder?.renditions.map((rendition) => rendition.name)).toEqual([
+			"360p",
+		]);
+		const poster = uploads.get("poster/poster.jpg");
+		expect(poster?.contentType).toBe("image/jpeg");
+		expect(imageSize(poster?.bytes ?? new Uint8Array())).toBe("640x360");
+	}, 120_000);
+
+	test("fails the job when the poster cannot be uploaded", async () => {
+		const response = await startLadder({
+			uploads: uploadTargets("poster-refused"),
+			thumbnailPresignedUrl: `${baseUrl}/refused/poster.jpg`,
+		});
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		expect(job.phase).toBe("error");
+	}, 120_000);
+
 	test("encodes one slice without audio when asked", async () => {
 		const response = await startLadder({
 			uploads: uploadTargets("slice"),
@@ -165,6 +243,54 @@ describe("POST /video/ladder", () => {
 		expect(uploads.has("slice/audio.m4s")).toBe(false);
 		expect(uploads.has("slice/master.m3u8")).toBe(true);
 	}, 120_000);
+
+	// With two slots or fewer the slice reserve and the reserve for a whole
+	// Infra job are the same slot (infra-capacity.test.ts covers the rule
+	// itself), so this needs a machine with room for three jobs.
+	test("holds an Infra slice back once half the worker's slots are taken and still takes a whole Infra job", async () => {
+		const { effectiveMax } = jobManager.getSystemResources();
+		if (effectiveMax <= 2) {
+			console.warn(
+				`[test] ${effectiveMax} slots here, the slice reserve is not separate`,
+			);
+			return;
+		}
+		const held = Array.from(
+			{ length: Math.floor(effectiveMax / 2) },
+			(_, index) => `held-${index}`,
+		);
+		for (const jobId of held) jobManager.createJob(jobId, "other", "user-1");
+		try {
+			const slice = await startLadder({
+				uploads: uploadTargets("held-slice"),
+				range: { startSeconds: 0, durationSeconds: 4 },
+				infra: true,
+			});
+			expect(slice.status).toBe(503);
+			expect(slice.headers.get("retry-after")).not.toBeNull();
+			expect(uploads.has("held-slice/master.m3u8")).toBe(false);
+
+			const whole = await startLadder({
+				uploads: uploadTargets("held-whole"),
+				infra: true,
+			});
+			expect(whole.status).toBe(200);
+			const { jobId } = (await whole.json()) as { jobId: string };
+			expect((await waitForTerminalJob(jobId)).phase).toBe("complete");
+
+			jobManager.deleteJob(held[0] as string);
+			const admitted = await startLadder({
+				uploads: uploadTargets("held-slice"),
+				range: { startSeconds: 0, durationSeconds: 4 },
+				infra: true,
+			});
+			expect(admitted.status).toBe(200);
+			const sliceJob = (await admitted.json()) as { jobId: string };
+			expect((await waitForTerminalJob(sliceJob.jobId)).phase).toBe("complete");
+		} finally {
+			for (const jobId of held) jobManager.deleteJob(jobId);
+		}
+	}, 180_000);
 
 	test("fails the job when a produced file has no upload target", async () => {
 		const response = await startLadder({

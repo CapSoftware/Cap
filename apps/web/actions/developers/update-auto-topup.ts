@@ -6,6 +6,7 @@ import { developerApps, developerCreditAccounts } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { canUseInfra } from "@/lib/infra-access";
+import { actionFailure } from "@/lib/infra-action-result";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
 
 export async function updateDeveloperAutoTopUp(data: {
@@ -50,7 +51,7 @@ export async function updateDeveloperAutoTopUp(data: {
 		amountCents,
 		hasCard: !!account.stripePaymentMethodId,
 	});
-	if (invalid) throw new Error(invalid);
+	if (invalid) return actionFailure(invalid);
 
 	await db()
 		.update(developerCreditAccounts)
@@ -66,5 +67,5 @@ export async function updateDeveloperAutoTopUp(data: {
 		.where(eq(developerCreditAccounts.id, account.id));
 
 	revalidatePath("/dashboard/infra", "layout");
-	return { success: true };
+	return { success: true as const };
 }

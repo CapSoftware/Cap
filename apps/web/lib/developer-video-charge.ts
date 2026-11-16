@@ -4,6 +4,7 @@ import {
 	type InfraDbExecutor,
 	type InfraUploadAdmission,
 } from "@/lib/infra-standing";
+import { formatNeed } from "@/lib/infra-usage";
 
 export const DEVELOPER_VIDEO_MAX_DURATION_SECONDS = 4 * 60 * 60;
 
@@ -38,9 +39,6 @@ export function admitDeveloperVideoUpload(
 	});
 }
 
-const dollars = (microCredits: number) =>
-	`$${(Math.ceil(Math.max(0, microCredits) / 1000) / 100).toFixed(2)}`;
-
 export async function chargeDeveloperVideoUpload(
 	input: DeveloperVideoUpload,
 ): Promise<DeveloperVideoCharge> {
@@ -48,6 +46,6 @@ export async function chargeDeveloperVideoUpload(
 	if (admission.allowed) return "charged";
 	if (admission.reason === "no_account") return "no-account";
 	return {
-		refused: `Not enough credit to store this video at its measured length and size. Add at least ${dollars(admission.shortfallMicroCredits)} of credit and upload it again.`,
+		refused: `Not enough credit to store this video at its measured length and size. Add at least ${formatNeed(admission.shortfallMicroCredits)} of credit and upload it again.`,
 	};
 }

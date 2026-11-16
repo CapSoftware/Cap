@@ -4,14 +4,62 @@ import type {
 } from "@cap/database/schema";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 
+// Cap's own key in a transcript's metadata, set once the video captions built
+// from it are in storage. It records whether the client's metadata was null,
+// so the client reads back exactly what it sent. Never shown to or taken from
+// a client.
+export const TRANSCRIPT_CAPTIONS_WRITTEN_KEY = "__capCaptionsWritten";
+
+type CaptionsWritten = { at: string; metadataWasNull: boolean };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function transcriptCaptionsWritten(
+	metadata: unknown,
+): CaptionsWritten | null {
+	if (!isRecord(metadata)) return null;
+	const marker = metadata[TRANSCRIPT_CAPTIONS_WRITTEN_KEY];
+	return isRecord(marker) && typeof marker.at === "string"
+		? { at: marker.at, metadataWasNull: marker.metadataWasNull === true }
+		: null;
+}
+
+export function withCaptionsWritten(
+	metadata: unknown,
+	at: Date,
+): Record<string, unknown> {
+	const client = transcriptPublicMetadata(metadata);
+	return {
+		...(client ?? {}),
+		[TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: {
+			at: at.toISOString(),
+			metadataWasNull: client === null,
+		},
+	};
+}
+
+export function transcriptPublicMetadata(
+	metadata: unknown,
+): Record<string, unknown> | null {
+	if (!isRecord(metadata)) return (metadata ?? null) as never;
+	if (!(TRANSCRIPT_CAPTIONS_WRITTEN_KEY in metadata)) return metadata;
+	const { [TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: marker, ...client } = metadata;
+	return isRecord(marker) && marker.metadataWasNull === true ? null : client;
+}
+
 export const TRANSCRIPT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const TRANSCRIPT_MAX_URL_BYTES = 2 * 1024 * 1024 * 1024;
 export const TRANSCRIPT_MAX_SPOOLED_URL_BYTES = 400 * 1024 * 1024;
 export const TRANSCRIPT_MAX_DURATION_SECONDS = 4 * 60 * 60;
+export const TRANSCRIPT_DURATION_SLACK_SECONDS = 1;
 export const TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS = 1_000;
 export const TRANSCRIPT_UPLOAD_URL_TTL_SECONDS = 60 * 60;
+export const TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 export const TRANSCRIPT_MAX_URL_LENGTH = 2_048;
 export const TRANSCRIPT_MAX_METADATA_BYTES = 8_192;
+export const TRANSCRIPT_MAX_CONCURRENT = 20;
+export const TRANSCRIPT_BUSY_RETRY_SECONDS = 15;
 
 export const TRANSCRIPT_STATUSES = [
 	"uploading",
@@ -39,7 +87,6 @@ export type TranscriptWord = {
 	text: string;
 	start: number;
 	end: number;
-	confidence: number | null;
 };
 
 export type TranscriptSegment = {
@@ -58,7 +105,9 @@ export type TranscriptResultObject = {
 
 type TranscriptRow = typeof developerTranscripts.$inferSelect;
 
-export type TranscriptSummaryRow = Omit<TranscriptRow, "text">;
+export type TranscriptSummaryRow = Omit<TranscriptRow, "text"> & {
+	hasText?: boolean | number | null;
+};
 
 export function isTranscriptStatus(
 	value: string | undefined | null,
@@ -123,6 +172,33 @@ export function microCreditsToDollars(microCredits: number) {
 
 const iso = (value: Date | null) => (value ? value.toISOString() : null);
 
+export function publicSourceUrl(url: string | null) {
+	if (!url) return null;
+	const end = url.search(/[?#]/);
+	return end === -1 ? url : url.slice(0, end);
+}
+
+const lastUpdate = (row: { updatedAt: Date; completedAt: Date | null }) =>
+	row.completedAt && row.completedAt.getTime() > row.updatedAt.getTime()
+		? row.completedAt
+		: row.updatedAt;
+
+export function transcriptUploadExpiry(row: { updatedAt: Date }) {
+	return new Date(
+		row.updatedAt.getTime() + TRANSCRIPT_UPLOAD_URL_TTL_SECONDS * 1000,
+	);
+}
+
+export function publicTranscriptWords(
+	words: readonly TranscriptWord[],
+): TranscriptWord[] {
+	return words.map((word) => ({
+		text: word.text,
+		start: word.start,
+		end: word.end,
+	}));
+}
+
 export function serializeTranscript(
 	row: TranscriptSummaryRow & { text?: string | null },
 	options: { includeText?: boolean } = {},
@@ -134,8 +210,11 @@ export function serializeTranscript(
 		name: row.name,
 		source:
 			row.sourceType === "url"
-				? { type: "url" as const, url: row.sourceUrl }
-				: { type: "upload" as const, url: null },
+				? { type: "url" as const, url: publicSourceUrl(row.sourceUrl) }
+				: row.sourceType === "video"
+					? { type: "video" as const, url: null }
+					: { type: "upload" as const, url: null },
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -152,9 +231,9 @@ export function serializeTranscript(
 					}
 				: null,
 		userId: row.externalUserId,
-		metadata: row.metadata ?? null,
+		metadata: transcriptPublicMetadata(row.metadata),
 		createdAt: row.createdAt.toISOString(),
-		updatedAt: row.updatedAt.toISOString(),
+		updatedAt: lastUpdate(row).toISOString(),
 		completedAt: iso(row.completedAt),
 	};
 }
@@ -168,7 +247,8 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		status: row.status,
 		name: row.name,
 		sourceType: row.sourceType,
-		sourceUrl: row.sourceUrl,
+		sourceUrl: publicSourceUrl(row.sourceUrl),
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -177,7 +257,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		errorMessage: row.status === "error" ? row.errorMessage : null,
 		externalUserId: row.externalUserId,
 		createdAt: row.createdAt.toISOString(),
-		updatedAt: row.updatedAt.toISOString(),
+		updatedAt: lastUpdate(row).toISOString(),
 		completedAt: row.completedAt?.toISOString() ?? null,
 	};
 }
@@ -208,10 +288,6 @@ export function buildTranscriptResult(input: {
 		text: word.text,
 		start: seconds(word.start),
 		end: seconds(word.end),
-		confidence:
-			typeof word.confidence === "number" && Number.isFinite(word.confidence)
-				? word.confidence
-				: null,
 	}));
 
 	const segments: TranscriptSegment[] = [];
@@ -252,6 +328,20 @@ export function buildTranscriptResult(input: {
 		words,
 		segments,
 	};
+}
+
+export function transcriptWordCount(
+	result: Pick<TranscriptResultObject, "text" | "words">,
+) {
+	return result.words.length || result.text.split(/\s+/).filter(Boolean).length;
+}
+
+export function transcriptHasNoSpeech(row: {
+	status: string;
+	wordCount: number | null;
+	hasText?: boolean | number | null;
+}) {
+	return row.status === "complete" && row.wordCount === 0 && !row.hasText;
 }
 
 export function measuredTranscriptDuration(input: {
