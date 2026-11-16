@@ -3560,12 +3560,23 @@ mod linux_takeover_tests {
             let image = directory.join(name).join("cap-gpui");
             std::fs::create_dir_all(image.parent().unwrap()).unwrap();
             std::fs::copy("/bin/sleep", &image).unwrap();
-            let child = std::process::Command::new(&image)
-                .arg("60")
-                .spawn()
-                .unwrap();
-            let fake = Self(child);
+            // A test forking on another thread while the copy was open for
+            // writing holds that descriptor until its exec, and exec fails
+            // with ETXTBSY until then.
             let started = Instant::now();
+            let child = loop {
+                match std::process::Command::new(&image).arg("60").spawn() {
+                    Ok(child) => break child,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && started.elapsed() < Duration::from_secs(5) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("could not start the fake Cap: {error}"),
+                }
+            };
+            let fake = Self(child);
             while !is_cap_gpui(fake.pid() as i32) {
                 assert!(started.elapsed() < Duration::from_secs(5));
                 std::thread::sleep(Duration::from_millis(10));
