@@ -129,8 +129,10 @@ final class StudioSession {
                 try? cameraInfo?.save(as: "camera", in: store.directory(for: projectId))
             }
             let directory = store.directory(for: projectId)
-            // Usually there before Cap notices the stop; the extension has a few seconds to close the file.
-            for _ in 0..<100 where StudioTrackInfo.load("screen", in: directory) == nil {
+            // The extension notes the track with no length on its first frame and again with its length once the file
+            // is closed. Only the second is safe to open. An extension killed while closing never writes it, so after a
+            // while the file's own length is used instead.
+            for _ in 0..<150 where (StudioTrackInfo.load("screen", in: directory)?.duration ?? 0) <= 0 {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             await assemble(projectId: projectId, in: store, screen: StudioTrackInfo.load("screen", in: directory), camera: cameraInfo, title: Self.title(for: .now, screen: true))
@@ -235,9 +237,12 @@ final class StudioSession {
     }
 
 
-    func save(_ project: StudioProject) {
+    /// `store` is the account the project was opened in, which stays its home even if the session ends meanwhile.
+    func save(_ project: StudioProject, in store: StudioStore? = nil) {
+        let target = store ?? self.store
         do {
-            try store.save(project)
+            try target.save(project)
+            guard target.root == self.store.root else { return }
             if let index = projects.firstIndex(where: { $0.id == project.id }) { projects[index] = project } else { reload() }
         } catch {
             Self.log.error("Studio project didn't save: \(String(describing: error), privacy: .public)")
