@@ -219,7 +219,9 @@ async fn stress_test_recording(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    unsafe { std::env::set_var("RUST_LOG", "info") };
+    if std::env::var_os("RUST_LOG").is_none() {
+        unsafe { std::env::set_var("RUST_LOG", "info") };
+    }
     tracing_subscriber::fmt::init();
 
     println!("=== Cap Recording Benchmark ===\n");

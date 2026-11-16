@@ -155,8 +155,10 @@ async fn run_camera_encoding_benchmark(
         None
     };
 
+    let output_path =
+        std::env::temp_dir().join(format!("cap-camera-benchmark-{}.mp4", std::process::id()));
     let mut output =
-        ffmpeg::format::output_as("/dev/null", "mp4").expect("Failed to create dummy output");
+        ffmpeg::format::output_as(&output_path, "mp4").expect("Failed to create dummy output");
     let video_info = cap_media_info::VideoInfo {
         width,
         height,
@@ -315,6 +317,8 @@ async fn run_camera_encoding_benchmark(
     metrics.stop();
     let _ = encoder.flush(&mut output);
     let _ = output.write_trailer();
+    drop(output);
+    let _ = std::fs::remove_file(&output_path);
 
     metrics.snapshot()
 }
