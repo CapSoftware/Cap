@@ -411,12 +411,18 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// 1.24.2 through 1.26 keep memory from every inference whose input changes: a
+// 30 minute Parakeet transcription peaked at 2.6 GB on 1.24.2 and 1.9 GB on
+// 1.30.1. Microsoft publishes no x86_64 macOS build after 1.23.2, so Intel Macs
+// stay on that release.
+const ONNX_RUNTIME_VERSION = "1.30.1";
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
 			? {
-					version: "1.24.2",
-					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+					version: ONNX_RUNTIME_VERSION,
+					name: `onnxruntime-osx-arm64-${ONNX_RUNTIME_VERSION}.tgz`,
 				}
 			: {
 					version: "1.23.2",
@@ -468,12 +474,12 @@ async function setupMacOSOnnxRuntime() {
 async function setupWindowsOnnxRuntime() {
 	const assets = {
 		x86_64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-x64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-x64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 		aarch64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-arm64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-arm64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 	};
 	const asset = assets[arch];
@@ -536,7 +542,7 @@ async function setupWindowsOnnxRuntime() {
 }
 
 async function setupLinuxOnnxRuntime() {
-	const version = "1.24.3";
+	const version = ONNX_RUNTIME_VERSION;
 	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
 	if (!platformArch)
 		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
