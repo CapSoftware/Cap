@@ -1473,8 +1473,31 @@ pub fn available_recording_storage() -> std::io::Result<cap_utils::disk_space::R
 }
 
 pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> anyhow::Result<()> {
-    let storage = cap_utils::disk_space::recording_storage(project_path)
-        .context("checking storage before saving the recording")?;
+    finalization_storage_verdict(
+        project_path,
+        cap_utils::disk_space::recording_storage(project_path),
+    )
+}
+
+fn finalization_storage_verdict(
+    project_path: &std::path::Path,
+    storage: std::io::Result<cap_utils::disk_space::RecordingStorage>,
+) -> anyhow::Result<()> {
+    let storage = match storage {
+        Ok(storage) => storage,
+        // A check that could not run says nothing about the drive. Refusing
+        // here left a captured recording unsaved and blocked its recovery the
+        // same way, while the save stages its output beside the capture and
+        // reports a full drive itself, so only a measured shortage refuses.
+        Err(error) => {
+            tracing::warn!(
+                path = %project_path.display(),
+                %error,
+                "Could not check storage before saving the recording; saving without the check"
+            );
+            return Ok(());
+        }
+    };
     if !storage.can_finalize() {
         return Err(anyhow!(
             "Low storage. Your recording files are preserved at {}. Free up space, then recover the recording in Cap.",
@@ -4686,6 +4709,63 @@ mod studio_finalization_tests {
         let (_, second) = channel();
         assert!(first.same_job(&first.clone()));
         assert!(!first.same_job(&second));
+    }
+}
+
+#[cfg(test)]
+mod finalization_storage_tests {
+    use super::*;
+
+    #[test]
+    fn finalization_storage_check_that_cannot_run_does_not_block_the_save() {
+        let directory = tempfile::tempdir().unwrap();
+        ensure_finalization_storage(&directory.path().join("missing.cap")).unwrap();
+        finalization_storage_verdict(
+            directory.path(),
+            Err(std::io::Error::other(
+                "The system cannot find the path specified. (0x80070003)",
+            )),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn finalization_storage_check_still_refuses_a_measured_shortage() {
+        use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RecordingStorage};
+        let directory = tempfile::tempdir().unwrap();
+        let recording_bytes = 1024 * 1024 * 1024;
+        let needed = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
+        let error = finalization_storage_verdict(
+            directory.path(),
+            Ok(RecordingStorage {
+                available_bytes: needed,
+                recording_bytes,
+            }),
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with("Low storage."), "{error}");
+        finalization_storage_verdict(
+            directory.path(),
+            Ok(RecordingStorage {
+                available_bytes: needed + 1,
+                recording_bytes,
+            }),
+        )
+        .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finalization_storage_check_accepts_a_project_past_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut project = directory.path().to_path_buf();
+        while project.as_os_str().len() < 286 {
+            project.push("p".repeat(40));
+        }
+        project.push("content");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("segment_000.m4s"), [0; 128]).unwrap();
+        ensure_finalization_storage(project.parent().unwrap()).unwrap();
     }
 }
 

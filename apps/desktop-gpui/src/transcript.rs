@@ -275,6 +275,83 @@ impl TranscriptState {
     }
 }
 
+/// Lands one caption refinement in the project and in each undo entry: the
+/// refined word times go in, then the word cuts made before they were known
+/// move with their words.
+pub(crate) struct RefinementLanding<'a> {
+    refined: &'a crate::transcription::RefinedCaptions,
+    recording_durations: &'a [f64],
+    removed_takes: &'a [cap_project::TimelineSegment],
+    energy: Option<&'a EnergyEnvelope>,
+    docs: HashMap<u64, Rc<TranscriptDoc>>,
+}
+
+impl<'a> RefinementLanding<'a> {
+    pub fn new(
+        refined: &'a crate::transcription::RefinedCaptions,
+        recording_durations: &'a [f64],
+        removed_takes: &'a [cap_project::TimelineSegment],
+        energy: Option<&'a EnergyEnvelope>,
+    ) -> Self {
+        Self {
+            refined,
+            recording_durations,
+            removed_takes,
+            energy,
+            docs: HashMap::new(),
+        }
+    }
+
+    fn doc(&mut self, captions: &cap_project::CaptionsData) -> Rc<TranscriptDoc> {
+        let energy = self.energy;
+        self.docs
+            .entry(model::captions_signature(Some(captions)))
+            .or_insert_with(|| {
+                let mut doc = TranscriptDoc::build(captions);
+                doc.refine_voiced(energy);
+                Rc::new(doc)
+            })
+            .clone()
+    }
+
+    /// `None` when the refinement changed nothing in `project`, otherwise how
+    /// many word cuts moved.
+    pub fn land(&mut self, project: &mut cap_project::ProjectConfiguration) -> Option<usize> {
+        let before = project
+            .captions
+            .as_ref()
+            .filter(|captions| captions.source_timed)
+            .map(|captions| self.doc(captions));
+        if !crate::transcription::apply_refined_captions(
+            project,
+            self.refined,
+            self.recording_durations,
+        ) {
+            return None;
+        }
+        let after = project.captions.as_ref().map(|captions| self.doc(captions));
+        let (Some(before), Some(after), Some(timeline)) =
+            (before, after, project.timeline.as_mut())
+        else {
+            return Some(0);
+        };
+        let caption_track = std::mem::take(&mut timeline.caption_segments);
+        let moved = cuts::follow_refined_words(
+            timeline,
+            self.recording_durations,
+            self.removed_takes,
+            &before,
+            &after,
+            self.energy,
+        );
+        timeline.caption_segments = caption_track;
+        if moved > 0 {
+            cap_project::synchronize_captions(project, self.recording_durations);
+        }
+        Some(moved)
+    }
+}
+
 pub(crate) fn has_words(project: &cap_project::ProjectConfiguration) -> bool {
     project.captions.as_ref().is_some_and(|captions| {
         captions

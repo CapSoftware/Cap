@@ -478,6 +478,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 })
                 .collect(),
@@ -1408,6 +1409,9 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    /// Held from the window opening until it gives up its engine, so the
+    /// library refuses to delete the project from under an open editor.
+    open_project: Option<crate::library::ProjectOpenInEditor>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2176,6 +2180,7 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
+            open_project: None,
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2312,7 +2317,7 @@ impl EditorWindow {
             clips: crate::editor_clips::ClipsState::default(),
             transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
             transcript_view,
-            panel: crate::editor_side_panel::PanelState::load(),
+            panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
         }
     }
 
@@ -2795,16 +2800,46 @@ impl EditorWindow {
             return;
         }
         let durations = self.clip_display_durations.clone();
-        let changed =
-            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
-        self.history.amend_all(|entry| {
-            crate::transcription::apply_refined_captions(entry, refined, &durations);
-        });
-        if !changed {
-            return;
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
+        let energy = self.transcript.energy.clone();
+        let mut landing = crate::transcript::RefinementLanding::new(
+            refined,
+            &durations,
+            &removed_takes,
+            energy.as_deref(),
+        );
+        let moves_cuts = landing
+            .land(&mut self.project.clone())
+            .is_some_and(|moved| moved > 0);
+        if moves_cuts {
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.dismiss_frame_controls(cx);
+            self.canvas_mouse_up(window, cx);
+            self.end_timeline_gesture(window, cx);
         }
+        let landed = landing.land(&mut self.project);
+        self.history.amend_all(|entry| {
+            landing.land(entry);
+        });
+        let Some(moved_cuts) = landed else {
+            return;
+        };
         self.caption_sync_signature = self.caption_projection_signature();
         self.transcript.dirty = true;
+        if moved_cuts > 0 {
+            self.transcript.selection = None;
+            self.transcript.hovered_cut = None;
+            self.set_selection(None, cx);
+            self.canvas_selection = None;
+            self.rebuild_timeline();
+            self.note_edit("caption-refinement", Some(TrackKind::Clip));
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
@@ -2962,6 +2997,11 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        // History holds the project, not the row flags, and these two rows
+        // show exactly when their overlay renders.
+        let restored = TrackLanes::from_project(&self.project, self.has_camera);
+        self.tracks.caption = restored.caption;
+        self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
         self.transcript.dirty = true;
         self.transcript.selection = None;
@@ -3290,7 +3330,14 @@ impl EditorWindow {
         self.instance = Some(instance);
     }
 
+    pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
+        self.open_project = Some(project);
+    }
+
+    /// Every way an editor window goes away takes its engine first: closing,
+    /// reloading after an import, and the editor's own Delete.
     pub fn take_instance(&mut self) -> Option<Arc<EditorInstance>> {
+        self.open_project = None;
         self.instance.take()
     }
 
@@ -4659,6 +4706,7 @@ impl EditorWindow {
 
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        self.follow_selection_to_style(selection.as_ref(), cx);
         if self.selection != selection {
             self.text_menu = None;
             self.style_presets.close_menu();
@@ -4843,6 +4891,13 @@ impl EditorWindow {
                 } else if kind == TrackKind::Audio {
                     cx.stop_propagation();
                     self.open_audio_picker(lane, cx);
+                } else if kind == TrackKind::Caption {
+                    cx.stop_propagation();
+                    let length = (1.0_f64).max(secs_per_pixel * 80.);
+                    if self.add_caption_at(press_time, length, true, window, cx) {
+                        self.seek_to_time(press_time, cx);
+                        self.view.preview_time = None;
+                    }
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -5885,7 +5940,7 @@ pub(crate) struct EditorNotice {
 /// How long a notice stays up.
 const EDITOR_NOTICE_DURATION: Duration = Duration::from_millis(2500);
 
-fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
+fn fresh_caption_source_id(project: &ProjectConfiguration, prefix: &str) -> String {
     use std::hash::{BuildHasher, Hasher};
 
     loop {
@@ -5896,7 +5951,7 @@ fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
         let random = std::collections::hash_map::RandomState::new()
             .build_hasher()
             .finish();
-        let id = format!("cap-split-{millis}-{random:x}");
+        let id = format!("{prefix}-{millis}-{random:x}");
         if project
             .captions
             .as_ref()
@@ -5947,7 +6002,12 @@ fn split_caption_segment(
     if split_source <= f64::from(source.start) || split_source >= f64::from(source.end) {
         return false;
     }
-    let tail_id = fresh_caption_source_id(project);
+    let tail_prefix = if crate::transcription::is_manual_caption(&source) {
+        crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-')
+    } else {
+        "cap-split"
+    };
+    let tail_id = fresh_caption_source_id(project, tail_prefix);
     let Some(timeline) = project.timeline.as_mut() else {
         return false;
     };
@@ -6465,6 +6525,66 @@ impl EditorWindow {
         self.view.preview_time = None;
         self.audio_picker = None;
         self.note_edit("add-track", Some(kind));
+    }
+
+    pub(crate) fn add_caption_at(
+        &mut self,
+        time: f64,
+        length: f64,
+        centered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let durations = self.clip_display_durations.clone();
+        if !edits::ensure_timeline(&mut self.project, &durations) {
+            return false;
+        }
+        let total = self.total_duration();
+        let length = length.min(total);
+        let desired = if centered { time } else { time + length / 2.0 };
+        let placement = self.project.timeline.as_ref().and_then(|timeline| {
+            edits::find_placement(&timeline.caption_segments, desired, length, total)
+        });
+        let id = fresh_caption_source_id(
+            &self.project,
+            crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-'),
+        );
+        let showed_track = self.tracks.caption;
+        self.tracks.caption = true;
+        let mut added = false;
+        if let Some((start, end)) = placement {
+            self.edit_timeline_project(
+                |project| {
+                    added = edits::add_caption_segment(
+                        project,
+                        start..end,
+                        id.clone(),
+                        tr::editor::tabs::captions::new_caption(),
+                        &durations,
+                    )
+                    .is_some();
+                    added
+                },
+                window,
+                cx,
+            );
+        }
+        if !added {
+            self.tracks.caption = showed_track;
+            self.show_notice(tr::editor::window::no_room_for_caption(), window, cx);
+            return false;
+        }
+        let index = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline
+                .caption_segments
+                .iter()
+                .position(|segment| cap_project::source_caption_id(&segment.id) == id)
+        });
+        if let Some(index) = index {
+            self.set_selection(Some(Selection::single(TrackKind::Caption, index)), cx);
+        }
+        self.note_edit("add-caption", Some(TrackKind::Caption));
+        true
     }
 
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
@@ -7903,6 +8023,27 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
+    /// An automation's Apply preset. The preset is on disk when this returns,
+    /// not 250 ms later, because the rule's next action (an Export, say)
+    /// reads the project from disk straight away.
+    pub(crate) fn apply_preset_config(
+        &mut self,
+        config: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.project_ready() {
+            return Err(crate::automation::EDITOR_LOADING.to_string());
+        }
+        let next = crate::presets::apply_preset(config, &self.project)
+            .ok_or_else(|| "The preset could not be read".to_string())?;
+        self.apply_project_preset(next, window, cx);
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| tr::editor::window::save_failed(self.project_path.display(), error))
+    }
+
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -9066,6 +9207,19 @@ impl EditorWindow {
         self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
+    fn open_clip_voice_eq(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.clip_speed = None;
+        if self.sidebar.tab != crate::editor_sidebar::SidebarTab::Audio
+            && let Some(position) = crate::editor_sidebar::SidebarTab::ALL
+                .iter()
+                .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Audio)
+        {
+            self.select_sidebar_tab(position, window, cx);
+        }
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        cx.notify();
+    }
+
     fn set_clip_muted(
         &mut self,
         index: usize,
@@ -9279,6 +9433,9 @@ impl EditorWindow {
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
         let cursor_hidden = segment.hides_cursor();
+        let voice_eq_active = segment.active_voice_eq().is_some();
+        let voice_eq_summary = crate::editor_voice_eq::voice_eq_summary(segment);
+        let has_microphone = self.summary().is_some_and(|summary| summary.has_microphone);
         let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
         let title = match self.timeline.clips.get(index).map(|clip| &clip.detail) {
             Some(timeline::SegmentDetail::Clip { name, .. }) => name.clone(),
@@ -9484,6 +9641,64 @@ impl EditorWindow {
                                 ))
                             }))
                             .into_any_element()
+                    })
+                    .when(has_microphone, |section| {
+                        section.child(
+                            div()
+                                .id("clip-menu-voice-eq")
+                                .h(px(40.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .rounded(px(8.))
+                                .px(px(8.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+                                .child(
+                                    svg()
+                                        .path("icons/sliders-horizontal.svg")
+                                        .size(px(14.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(if voice_eq_active {
+                                            theme.editor.accent
+                                        } else {
+                                            theme.editor.text_2
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(Hsla::from(theme.editor.text_1))
+                                                .child(tr::editor::window::clip_menu::voice_eq()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(Hsla::from(theme.editor.text_3))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(voice_eq_summary),
+                                        ),
+                                )
+                                .child(
+                                    svg()
+                                        .path("icons/chevron-right.svg")
+                                        .size(px(12.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(theme.editor.text_3)),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_clip_voice_eq(index, window, cx);
+                                })),
+                        )
                     }),
             )
             .child(
@@ -13025,6 +13240,18 @@ impl Render for EditorWindow {
             // {mousemove, mouseup})` is exactly what the pad's own press
             // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
             // what closes the pad's undo bracket.
+            .children(self.voice_eq_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "voice-eq-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.voice_eq_mouse_move(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.voice_eq_mouse_up(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ClosedHand)
+            }))
             .children(self.pad_dragging().then(|| {
                 ui::Slider::drag_layer(
                     "sidebar-pad-drag",
@@ -13433,6 +13660,54 @@ mod tests {
             cx.simulate_keystrokes("escape");
             assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
         }
+
+        #[gpui::test]
+        fn selecting_a_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(shape.clone()), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.selection.as_ref(), Some(&shape));
+                });
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+
+        #[gpui::test]
+        fn reselecting_the_selected_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx).0, PanelTab::Transcript);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_clip_keeps_the_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(Selection::single(TrackKind::Clip, 0)), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx).0, tab);
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -13796,6 +14071,70 @@ mod tests {
             });
         }
 
+        fn shows_row(editor: &EditorWindow, kind: TrackKind) -> bool {
+            editor.timeline.rows.iter().any(|row| row.kind == kind)
+        }
+
+        #[gpui::test]
+        fn undo_and_redo_bring_caption_and_keyboard_rows_back_with_their_overlay(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                editor.project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                        "zoomSegments": [],
+                        "captionSegments": [{"id": "c", "start": 1.0, "end": 2.0, "text": "hi"}],
+                        "keyboardSegments": [{"id": "k", "start": 3.0, "end": 4.0, "displayText": "A"}]
+                    }))
+                    .unwrap(),
+                );
+                let mut captions = cap_project::CaptionsData::default();
+                captions.settings.enabled = true;
+                editor.project.captions = Some(captions);
+                let mut keyboard = cap_project::KeyboardData::default();
+                keyboard.settings.enabled = true;
+                editor.project.keyboard = Some(keyboard);
+                editor.tracks = TrackLanes::from_project(&editor.project, editor.has_camera);
+                editor.history.record(&editor.project);
+                editor.rebuild_timeline();
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            for kind in [TrackKind::Caption, TrackKind::Keyboard] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.delete_single_track(kind, window, cx);
+                    // `project_changed` records nothing until a recording loads.
+                    editor.history.record(&editor.project);
+                    editor.rebuild_timeline();
+                });
+            }
+            editor.read_with(cx, |editor, _| {
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Keyboard));
+                assert!(!shows_row(editor, TrackKind::Caption));
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+        }
+
         #[gpui::test]
         fn undo_during_a_lane_reorder_cancels_it(cx: &mut gpui::TestAppContext) {
             let (editor, cx) = fixture(cx);
@@ -13839,6 +14178,59 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    /// An editor window holds its project against deletion from the library
+    /// for as long as it has it open. Giving up the engine, which closing,
+    /// reloading and the editor's own Delete all do first, lets go.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_open_editor_holds_its_project_until_it_gives_up_its_engine(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let library = tempfile::tempdir().unwrap();
+        let dirs = [library.path().to_path_buf()];
+        let project_path = library.path().join("open.cap");
+        std::fs::create_dir(&project_path).unwrap();
+        let meta = project_path.join("recording-meta.json");
+        std::fs::write(&meta, b"{}").unwrap();
+        let opened = project_path.canonicalize().unwrap();
+        let held = crate::library::ProjectOpenInEditor::begin(&opened).unwrap();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            let mut editor = EditorWindow::new(opened.clone(), window, cx);
+            editor.hold_project(held);
+            editor
+        });
+
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        assert!(meta.is_file());
+
+        editor.update_in(cx, |editor, _, _| assert!(editor.take_instance().is_none()));
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Ok(())
+        );
+        assert!(!project_path.exists());
+    }
+
+    /// An automation's Apply preset waits for an editor still loading its
+    /// project instead of reporting success for a preset it never applied.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_automation_preset_waits_for_the_editor_to_load(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let config = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let result = editor.update_in(cx, |editor, window, cx| {
+            editor.apply_preset_config(&config, window, cx)
+        });
+        assert_eq!(result, Err(crate::automation::EDITOR_LOADING.to_string()));
+        assert!(!project.path().join("project-config.json").exists());
     }
 
     /// An arrow held in the crop dialog keeps nudging every frame until its
@@ -14590,6 +14982,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 }],
                 transitions: Vec::new(),
@@ -14634,6 +15027,38 @@ mod tests {
     }
 
     #[test]
+    fn both_halves_of_a_split_hand_added_caption_survive_a_new_transcript() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{ "id": "caption-1-a", "start": 4.0, "end": 6.0, "text": "Chapter two" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+
+        assert!(split_caption_segment(&mut project, 0, 1.0, &[10.0]));
+        let ids: Vec<String> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|id| id.starts_with("caption-")), "{ids:?}");
+
+        crate::transcription::apply_caption_result(&mut project, Vec::new(), "en", &[10.0], 10.0);
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 2);
+    }
+
+    #[test]
     fn caption_split_delete_survives_a_repeated_trimmed_edl() {
         let mut project = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
@@ -14646,6 +15071,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                     cap_project::TimelineSegment {
@@ -14656,6 +15082,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                 ],
@@ -16422,5 +16849,119 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod add_caption_ui_tests {
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
+
+    use crate::editor_window::EditorWindow;
+
+    struct View {
+        editor: Entity<EditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+        captions: serde_json::Value,
+    ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor = cx.new(|cx| EditorWindow::new(path, window, cx));
+            editor.update(cx, |editor, _| {
+                editor.project = serde_json::from_value(serde_json::json!({
+                    "timeline": {
+                        "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                        "zoomSegments": []
+                    },
+                    "captions": captions
+                }))
+                .unwrap();
+                editor.clip_display_durations = vec![10.0];
+                editor.total = 10.0;
+                cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+            });
+            View {
+                editor,
+                _project: directory,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn texts(editor: &mut EditorWindow) -> Vec<(String, f64, f64)> {
+        cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+        editor
+            .project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), segment.start, segment.end))
+            .collect()
+    }
+
+    #[gpui::test]
+    fn the_playhead_caption_takes_the_next_free_gap(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "segment-0", "start": 2.0, "end": 4.0, "text": "spoken",
+                    "words": [{ "text": "spoken", "start": 2.0, "end": 4.0 }] }],
+                "settings": { "enabled": false },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            assert!(editor.add_caption_at(
+                2.5,
+                crate::editor_edits::NEW_CAPTION_LENGTH,
+                false,
+                window,
+                cx
+            ));
+            assert!(editor.tracks.caption);
+            assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+            assert_eq!(
+                texts(editor),
+                [
+                    ("spoken".to_string(), 2.0, 4.0),
+                    ("New caption".to_string(), 4.0, 6.0)
+                ]
+            );
+            assert!(editor.add_caption_at(9.5, 1.0, true, window, cx));
+            assert_eq!(texts(editor)[2], ("New caption".to_string(), 9.0, 10.0));
+            let doc =
+                crate::transcript::model::flatten_words(editor.project.captions.as_ref().unwrap());
+            assert_eq!(doc.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn a_full_caption_track_refuses_with_a_notice(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "caption-full", "start": 0.0, "end": 10.0, "text": "all" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            let before = serde_json::to_value(&editor.project).unwrap();
+            assert!(!editor.add_caption_at(5.0, 2.0, false, window, cx));
+            assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
+            assert!(editor.notice.is_some());
+        });
     }
 }

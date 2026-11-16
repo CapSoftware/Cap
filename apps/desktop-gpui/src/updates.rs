@@ -856,7 +856,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
             Ok(Some(executable)) => restart_after_install(version, executable, cx),
             Ok(None) => {
                 tracing::info!(%version, "update installer started; quitting");
-                crate::menus::quit(cx);
+                crate::menus::quit(crate::menus::QuitSource::UpdateInstaller, cx);
             }
             Err(error) => {
                 tracing::error!(%version, "update install failed: {error}");
@@ -899,7 +899,7 @@ fn relaunch_into(version: &Version, executable: &std::path::Path, cx: &mut App) 
     tracing::info!(%version, "update installed; relaunching");
     if let Err(error) = crate::permissions::relaunch_executable(executable, cx) {
         tracing::error!(%error, "could not relaunch after updating");
-        crate::menus::quit(cx);
+        crate::menus::quit(crate::menus::QuitSource::UpdateRelaunchFailed, cx);
     }
 }
 

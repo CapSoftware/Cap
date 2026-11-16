@@ -280,9 +280,10 @@ final class CompletionLog: Sendable {
         }
         try write(RecordedSegment(track: .video, index: 0, duration: 0, bytes: 48), in: recorder, job: live.id)
 
-        await recorder.handOff(recording.id, durationSeconds: 4)
+        #expect(await recorder.handOff(recording.id, durationSeconds: 4) == .recording)
         RecordingUploads.markActive(recording.id, false)
         #expect(recorder.job(recording.id) == nil, "the recorder lets go of it")
+        #expect(await recorder.handOff(recording.id, durationSeconds: 4) == nil, "nothing is left to hand over")
         let recorderCalls = recorderTransport.requests.count
 
         await app.adopt()

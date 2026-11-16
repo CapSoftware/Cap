@@ -232,4 +232,24 @@ describe("sharing Caps to private spaces", () => {
 		});
 		expect(writes()).toEqual([]);
 	});
+
+	it("replaces the full share list by default", async () => {
+		spaceRole = "member";
+		organizationShareExists = true;
+		await expect(shareCap({ capId, spaceIds: [spaceId] })).resolves.toEqual({
+			success: true,
+		});
+		expect(organizationShareExists).toBe(false);
+	});
+
+	it("only adds the space when existing shares must be kept", async () => {
+		spaceRole = "member";
+		organizationShareExists = true;
+		await expect(
+			shareCap({ capId, spaceIds: [spaceId], keepExisting: true }),
+		).resolves.toEqual({ success: true });
+		expect(organizationShareExists).toBe(true);
+		expect(writes().map(([query]) => query.split(" ")[0])).toEqual(["insert"]);
+		expect(writes()[0]?.[0]).toMatch(/^insert into `space_videos`/);
+	});
 });

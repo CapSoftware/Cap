@@ -45,6 +45,7 @@ fn local_error(code: &str, message: impl Into<String>) -> AgentApiError {
         retryable: false,
         retry_after_ms: None,
         request_id: None,
+        ..Default::default()
     }
 }
 
@@ -108,28 +109,31 @@ pub async fn wait_operation(
                 retryable: true,
                 retry_after_ms: Some(2_000),
                 request_id,
+                ..Default::default()
             })
         })
 }
 
 impl JobsArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
-        let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
+        let client = AgentClient::from_credentials()?;
         match self.command {
             JobsCommands::Get(args) => {
-                let operation_id = opaque_id(&args.operation_id, "Operation ID")
-                    .map_err(|error| error.to_string())?;
+                let operation_id = opaque_id(&args.operation_id, "Operation ID")?;
                 let value = client
                     .get_json(&format!("/operations/{operation_id}"))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                print_value(&value, resolve_format(global_json, args.format))
+                    .await?;
+                Ok(print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
             JobsCommands::Wait(args) => {
-                let value = wait_operation(&client, &args.operation_id, args.timeout)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                print_value(&value, resolve_format(global_json, args.format))
+                let value = wait_operation(&client, &args.operation_id, args.timeout).await?;
+                Ok(print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
         }
     }

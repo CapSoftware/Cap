@@ -1579,6 +1579,22 @@ impl EditorWindow {
                 .items_center()
                 .gap(px(2.))
                 .child(
+                    ui::EditorButton::plain(&theme, "transcript-add-caption")
+                        .left_icon("icons/plus.svg")
+                        .tooltip(&theme, tr::editor::transcript::add_caption())
+                        .disabled(!self.project_ready())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let playhead = this.playhead_time();
+                            this.add_caption_at(
+                                playhead,
+                                crate::editor_edits::NEW_CAPTION_LENGTH,
+                                false,
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
                     ui::EditorButton::plain(&theme, "transcript-search")
                         .left_icon("icons/search.svg")
                         .tooltip(&theme, tr::editor::transcript::search())
@@ -2119,6 +2135,20 @@ impl EditorWindow {
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
         let generating = snapshot.generating;
+        let outdated = !downloaded && model.name == "best" && snapshot.recommended_outdated;
+        let (title, description) = if outdated {
+            (
+                tr::editor::tabs::captions::model_updated(),
+                tr::editor::tabs::captions::model_updated_description(),
+            )
+        } else if snapshot.no_speech {
+            (tr::editor::transcript::no_speech(), "")
+        } else {
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::empty_description(),
+            )
+        };
 
         let action: AnyElement = if !has_audio {
             div()
@@ -2172,8 +2202,8 @@ impl EditorWindow {
         crate::editor_side_panel::panel_empty_state(
             &theme,
             "icons/scan-text.svg",
-            tr::editor::transcript::empty_title(),
-            tr::editor::transcript::empty_description(),
+            title,
+            description,
         )
         .child(div().pt(px(6.)).child(action))
         .children(snapshot.generation_error.map(|error| {

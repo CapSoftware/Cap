@@ -39,6 +39,7 @@ export {
 	type ViewerSettings,
 } from "./Videos/EffectiveVideoRules.ts";
 export { findScreenshotObjectKey, Videos } from "./Videos/index.ts";
+export { VideoDownloadGate } from "./Videos/VideoDownloadGate.ts";
 export {
 	buildCanView,
 	buildCanViewLoaded,

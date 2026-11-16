@@ -75,7 +75,14 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import {
+	describeLinkAccessChoice,
+	isLinkRestricted,
+	linkAccessSettingsPatch,
+	resolveLinkAccessWrite,
+} from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
 	resolveMobileRequestOrigin,
@@ -83,11 +90,13 @@ import {
 } from "@/lib/mobile-request-origin";
 import { createNotification, sendFirstViewEmail } from "@/lib/Notification";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { acceptsClientEvents, sendClientEvents } from "@/lib/server-analytics";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
 	restoreVideoToOriginalAsUser,
@@ -155,6 +164,7 @@ type MobileOrganizationIconInput =
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
 type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
+type MobileEventsInput = (typeof Mobile.MobileEventsInput)["Type"];
 type MobileNotificationPreferences =
 	(typeof Mobile.MobileNotificationPreferences)["Type"];
 type MobileNotificationPreferencesInput =
@@ -786,7 +796,7 @@ const updateNotificationPreferences = Effect.fn(
 			db
 				.update(Db.users)
 				.set({
-					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+					preferences: sql`JSON_SET(${userPreferencesObject()}, '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
 				})
 				.where(eq(Db.users.id, user.id)),
 		);
@@ -910,7 +920,7 @@ const blockMobileUser = Effect.fn("Mobile.blockUser")(function* (
 				await tx
 					.update(Db.users)
 					.set({
-						preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
+						preferences: sql`JSON_SET(${userPreferencesObject()}, '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
 					})
 					.where(eq(Db.users.id, user.id));
 			}
@@ -2412,6 +2422,25 @@ const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
 	return { success: true as const };
 });
 
+const getLinkAccessState = Effect.fn("Mobile.getLinkAccessState")(function* (
+	videoId: Video.VideoId,
+) {
+	const database = yield* Database;
+	const [state] = yield* database.use((db) =>
+		db
+			.select({
+				videoSettings: Db.videos.settings,
+				organizationSettings: Db.organizations.settings,
+				allowedEmailDomain: Db.organizations.allowedEmailDomain,
+			})
+			.from(Db.videos)
+			.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	return state;
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -2489,9 +2518,24 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		Effect.catchAll(() => Effect.succeed(0)),
 	);
 
+	const linkAccessState =
+		capRow.ownerId === user.id && capRow.public
+			? yield* getLinkAccessState(capRow.id)
+			: undefined;
+	const linkAccess = linkAccessState
+		? describeLinkAccessChoice({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+	const linkRestricted = linkAccessState
+		? isLinkRestricted({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+
 	return {
 		row: capRow,
-		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+		cap: {
+			...toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+			...(linkAccess ? { linkAccess } : {}),
+			...(linkRestricted === undefined ? {} : { linkRestricted }),
+		},
 	};
 });
 
@@ -3175,6 +3219,41 @@ const toHeaders = (headers: Record<string, string>) => {
 	return result;
 };
 
+// Signed-in sessions only, and limited per user: these are forwarded with the
+// server's analytics secret, so an open endpoint would let anyone write
+// made-up events into it. The user comes from the session, never the payload.
+const trackMobileEvents = Effect.fn("Mobile.trackEvents")(function* (
+	input: MobileEventsInput,
+	request: HttpServerRequest.HttpServerRequest,
+) {
+	const user = yield* CurrentUser;
+	const headers = toHeaders(request.headers);
+	const limited = yield* Effect.promise(() =>
+		isRateLimited(RATE_LIMIT_IDS.MOBILE_EVENTS, {
+			key: `mobile-events:${user.id}`,
+			headers,
+		}),
+	);
+	if (limited) return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	if (!acceptsClientEvents()) return { success: true as const };
+
+	const events = prepareMobileEvents(input, Date.now());
+	if (events.length === 0) return { success: true as const };
+
+	const result = yield* Effect.promise(() =>
+		sendClientEvents({
+			profileId: user.id,
+			userAgent: mobileUserAgent(input.app),
+			ip: clientAddress(headers),
+			events,
+		}),
+	);
+	if (result && result.sent === 0) {
+		return yield* Effect.fail(new HttpApiError.InternalServerError());
+	}
+	return { success: true as const };
+});
+
 const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	loomUrlInput: string,
 	request: HttpServerRequest.HttpServerRequest,
@@ -3713,6 +3792,9 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("removePushToken", ({ payload }) =>
 						withMappedErrors(removePushToken(payload.token)),
 					)
+					.handle("trackEvents", ({ payload, request }) =>
+						trackMobileEvents(payload, request),
+					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>
 						withMappedErrors(
@@ -3802,18 +3884,51 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const publicOrigin = getMobilePublicOrigin(request);
 								const user = yield* CurrentUser;
 								yield* assertMobileVideoOwner(path.id);
+								if (payload.linkAccess === "anyone") {
+									const state = yield* getLinkAccessState(path.id);
+									if (
+										state?.organizationSettings?.allowPublicLinkOverride !==
+										true
+									) {
+										return yield* Effect.fail(new HttpApiError.Forbidden());
+									}
+								}
+								const nextLinkAccess = resolveLinkAccessWrite(
+									payload.public,
+									payload.linkAccess,
+								);
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ public: payload.public })
+										.set({
+											public: payload.public,
+											...(nextLinkAccess === undefined
+												? {}
+												: {
+														settings: linkAccessSettingsPatch(nextLinkAccess),
+													}),
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												// A link access choice only exists on a public link. Without this an
+												// earlier "open to anyone" request landing after "make private" would
+												// publish the Cap again. The request is refused below instead.
+												payload.linkAccess === undefined
+													? undefined
+													: eq(Db.videos.public, true),
 											),
 										),
 								);
 								const { cap } = yield* getCapById(path.id, publicOrigin);
+								if (
+									payload.linkAccess !== undefined &&
+									payload.public &&
+									!cap.public
+								) {
+									return yield* Effect.fail(new HttpApiError.Conflict());
+								}
 								return cap;
 							}),
 						),
