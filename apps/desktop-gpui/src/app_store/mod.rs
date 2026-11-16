@@ -182,6 +182,11 @@ impl AppStore {
         };
         state.index_cached_assets();
         cx.set_global(state);
+        // Icons and thumbnails already on disk show at once, without waiting
+        // for a sync that can take two connect timeouts when the server is
+        // unreachable.
+        cx.spawn(async move |cx: &mut AsyncApp| load_assets(cx, true).await)
+            .detach();
         let sign_in = crate::sign_in::SignIn::global(cx);
         cx.subscribe(&sign_in, |_, event, cx| {
             if matches!(
@@ -434,7 +439,7 @@ pub fn refresh(cx: &mut App) {
             })
         });
         if applied {
-            load_assets(cx).await;
+            load_assets(cx, false).await;
         }
     })
     .detach();
@@ -544,7 +549,7 @@ async fn adopt_local_installs(local: &BTreeSet<String>) {
     write_local_installs(&kept);
 }
 
-async fn load_assets(cx: &mut AsyncApp) {
+async fn load_assets(cx: &mut AsyncApp, cached_only: bool) {
     let Some((catalog, installed, known)) = cx.update(|cx| {
         cx.try_global::<AppStore>().and_then(|store| {
             store.catalog.clone().map(|catalog| {
@@ -584,6 +589,9 @@ async fn load_assets(cx: &mut AsyncApp) {
                     continue;
                 };
                 if !path.is_file() {
+                    if cached_only {
+                        continue;
+                    }
                     let response = auth::apply_desktop_headers(client.get(asset_url(&server, &asset)))
                         .send()
                         .await;
