@@ -207,12 +207,26 @@ export function chooseContainer(
 	return null;
 }
 
+export type AudioHandling = "copy" | "encode";
+
+const AAC_ENCODE_ARGS = ["-c:a", "aac", "-b:a", "128k"];
+
+export function isAudioCopyFailure(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		/Error parsing ADTS frame header|Error applying bitstream filters to an output packet for stream #1\b/.test(
+			error.message,
+		)
+	);
+}
+
 export function buildRemuxArgs(
 	inputArgs: string[],
 	input: string,
 	output: string,
 	container: ImportContainer,
 	hasAudio: boolean,
+	audio: AudioHandling = "copy",
 ): string[] {
 	return [
 		"ffmpeg",
@@ -228,8 +242,9 @@ export function buildRemuxArgs(
 		...(hasAudio ? ["-map", "0:a:0"] : []),
 		"-dn",
 		"-sn",
-		"-c",
-		"copy",
+		...(hasAudio && audio === "encode"
+			? ["-c:v", "copy", ...AAC_ENCODE_ARGS]
+			: ["-c", "copy"]),
 		...(container === "mp4"
 			? ["-movflags", "+faststart", "-f", "mp4"]
 			: ["-f", "webm"]),
@@ -244,6 +259,7 @@ export function buildAudioOnlyArgs(
 	output: string,
 	audioCodec: string,
 	duration: number | null,
+	audio: AudioHandling = "copy",
 ): string[] {
 	return [
 		"ffmpeg",
@@ -275,9 +291,9 @@ export function buildAudioOnlyArgs(
 		"yuv420p",
 		"-threads",
 		"2",
-		...(audioCodec === "aac"
+		...(audioCodec === "aac" && audio === "copy"
 			? ["-c:a", "copy"]
-			: ["-c:a", "aac", "-b:a", "128k"]),
+			: AAC_ENCODE_ARGS),
 		"-movflags",
 		"+faststart",
 		"-f",
