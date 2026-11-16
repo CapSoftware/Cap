@@ -307,6 +307,8 @@ final class CapUITests: XCTestCase {
 
     /// Photos runs the change block off the main thread, so a block isolated to the main actor stops the app here.
     func testSaveToPhotos() {
+        // Starts from no decision, so an earlier denial can't stop the save before it reaches Photos.
+        XCUIApplication().resetAuthorizationStatus(for: .photos)
         let app = launch(route: "cap:cap_london")
         let more = app.buttons["More"].firstMatch
         waitFor(more, 15)
