@@ -1074,6 +1074,9 @@ fn microphone_available(name: &str) -> bool {
 /// and a recording visibly in Studio mode with the pill saying Instant is the
 /// worse mismatch.
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
+    if crate::updates::dialog_open(cx) {
+        return;
+    }
     app_windows::set_recording_mode(mode, cx);
     let main = cx.global::<app_windows::AppWindows>().main;
     let armed = main.read(cx).ok().and_then(|view| view.armed_target());
@@ -1090,7 +1093,9 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             .map(|microphone| microphone.name.clone())
     });
 
+    let capture_request = app_windows::CaptureRequest::begin(cx);
     cx.spawn(async move |cx| {
+        let _capture_request = capture_request;
         // Window and display lookups enumerate the system, so they run off
         // the main thread along with the microphone probe below.
         let target = cx
