@@ -292,6 +292,9 @@ import Testing
         #expect(scene.rememberedTimes.count == StudioScene.rememberedFrames)
         #expect(scene.renderStill(near: CMTime(seconds: 11.21, preferredTimescale: 600)) != nil)
         #expect(scene.renderStill(near: CMTime(seconds: 5, preferredTimescale: 600)) == nil)
+        // The same frames serve the preset pictures, and only for the moment they show.
+        #expect(scene.sources(near: CMTime(seconds: 11.3, preferredTimescale: 600), tolerance: 0.25)?.screen != nil)
+        #expect(scene.sources(near: CMTime(seconds: 5, preferredTimescale: 600), tolerance: 0.25) == nil)
     }
 
     @Test func frameCostStaysSmall() throws {

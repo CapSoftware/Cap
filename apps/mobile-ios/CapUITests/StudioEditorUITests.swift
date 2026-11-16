@@ -50,6 +50,12 @@ final class StudioEditorUITests: XCTestCase {
         sleep(2)
         XCTAssertTrue(ocean.isSelected)
         save("s00c-preset-ocean")
+        // A paused seek redraws the pictures at the new moment.
+        timelineTap(app, 0.75)
+        sleep(2)
+        save("s00c2-preset-after-seek")
+        timelineTap(app, 0.02)
+        sleep(1)
         // Already a preset, so saving it again isn't offered until it's changed.
         XCTAssertFalse(app.buttons["Save as Preset"].firstMatch.isEnabled)
         app.buttons["editor-tool-frame"].tap()

@@ -100,11 +100,13 @@ public final class StudioScene: @unchecked Sendable {
         frames.withLock { $0.map(\.time.seconds) }
     }
 
-    /// The source frames composed most recently near `time`, for drawing the same moment in another look.
-    public func sources(near time: CMTime) -> (screen: CVPixelBuffer?, camera: CVPixelBuffer?)? {
-        frames.withLock { frames in
+    /// The source frames composed within `tolerance` of `time`, for drawing the same moment in another look.
+    public func sources(near time: CMTime, tolerance: Double) -> (screen: CVPixelBuffer?, camera: CVPixelBuffer?)? {
+        let frame = frames.withLock { frames in
             frames.min { abs(CMTimeSubtract($0.time, time).seconds) < abs(CMTimeSubtract($1.time, time).seconds) }
-        }.map { ($0.screen, $0.camera) }
+        }
+        guard let frame, abs(CMTimeSubtract(frame.time, time).seconds) <= tolerance else { return nil }
+        return (frame.screen, frame.camera)
     }
 
     /// Redraws the remembered frame closest to `time` with the current look. Nil if nothing near it was decoded.

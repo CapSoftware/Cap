@@ -307,6 +307,10 @@ struct PresetPanel: View {
     private var library: StudioPresetLibrary { studio.presetLibrary }
     private static let tile = CGSize(width: 74, height: 98)
 
+    private var pausedMoment: Double? {
+        model.isPlaying ? nil : (model.outputTime * 10).rounded() / 10
+    }
+
     var body: some View {
         let selected = library.preset(matching: model.look)
         ScrollViewReader { scroller in
@@ -326,10 +330,13 @@ struct PresetPanel: View {
             }
         }
         .sensoryFeedback(.selection, trigger: selected?.id)
-        .onAppear { model.loadPresetThumbnails(library.all) }
         .onChange(of: library) { _, library in model.loadPresetThumbnails(library.all) }
-        .onChange(of: model.isPlaying) { _, playing in
-            if !playing { model.loadPresetThumbnails(library.all) }
+        // Redrawn once a paused seek settles: a scrub changes this many times, and each change cancels the last wait.
+        .task(id: pausedMoment) {
+            guard pausedMoment != nil else { return }
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            model.loadPresetThumbnails(library.all)
         }
         .alert(naming == .new ? "Save Preset" : "Rename Preset", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("Name", text: $name)

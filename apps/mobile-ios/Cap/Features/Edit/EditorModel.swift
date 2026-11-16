@@ -760,7 +760,7 @@ final class EditorModel {
         let renderer = presetRenderer
         let backgrounds = Dictionary(looks.map { ($0, presetBackgroundURL($0.background)) }, uniquingKeysWith: { a, _ in a })
         var remembered = PresetFrames()
-        if let sources = scene.sources(near: CMTime(seconds: time, preferredTimescale: 600)) {
+        if let sources = scene.sources(near: CMTime(seconds: time, preferredTimescale: 600), tolerance: 0.25) {
             if let info = screenSource?.info, let buffer = sources.screen { remembered.screen = (info, buffer) }
             if let info = cameraSource?.info, let buffer = sources.camera { remembered.camera = (info, buffer) }
         }
@@ -808,8 +808,8 @@ final class EditorModel {
         var camera: (info: StudioSourceInfo, buffer: CVPixelBuffer)?
     }
 
-    /// The frames the preview last composed, or, before anything has been composed (an unstyled Cap plays without
-    /// the compositor), the same moment decoded once at a small size.
+    /// The frames the preview composed at this moment, or, when it hasn't composed one yet (a seek still settling,
+    /// or an unstyled Cap, which plays without the compositor), the same moment decoded once at a small size.
     nonisolated private static func presetFrames(remembered: PresetFrames, screen: StudioTrackSource?, camera: StudioTrackSource?, at time: Double) async -> PresetFrames {
         if remembered.screen != nil || remembered.camera != nil { return remembered }
         var frames = PresetFrames()
