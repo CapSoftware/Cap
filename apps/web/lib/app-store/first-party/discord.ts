@@ -53,7 +53,7 @@ export async function discordConnection(request: Request): Promise<Response> {
 			? capJson(
 					200,
 					toast(
-						"Add a Discord webhook URL in the app's settings, then try again",
+						"Use a Discord webhook URL in the app's settings, then try again",
 					),
 				)
 			: capJson(200, { ok: true, skipped: "no_webhook" });
