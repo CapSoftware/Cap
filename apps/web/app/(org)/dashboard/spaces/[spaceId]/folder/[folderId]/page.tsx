@@ -111,7 +111,7 @@ const FolderPage = async (props: {
 
 		return (
 			<div>
-				<div className="flex gap-2 items-center mb-10">
+				<div className="flex flex-wrap gap-2 items-center mb-10">
 					{canManageCollection && (
 						<NewSubfolderButton
 							parentFolderId={params.folderId}
