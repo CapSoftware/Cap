@@ -132,7 +132,8 @@ export function ClientMyCapsLink({
 			href={spaceId ? `/dashboard/spaces/${spaceId}` : "/dashboard/caps"}
 			className={classNames(
 				"flex shrink-0 gap-2 items-center px-1 -mx-1 tracking-tight leading-6 whitespace-nowrap rounded-md transition-colors duration-200 hover:text-gray-12",
-				compact && "gap-0 min-w-0 max-w-full leading-4 whitespace-normal shrink",
+				compact &&
+					"gap-0 min-w-0 max-w-full leading-4 whitespace-normal shrink",
 				isDragOver ? "text-gray-12 bg-gray-4" : "text-gray-10",
 				isMovingVideo && "opacity-70",
 				"drag-target", // Add a class for styling when used as a drop target
