@@ -776,6 +776,15 @@ impl Overlay {
         self.set_state(id, ActionState::Idle, cx);
     }
 
+    /// The export dialog failed while the card was waiting for a location.
+    fn dialog_failed(&mut self, id: u64, message: String, cx: &mut Context<Self>) {
+        if self.entry(id).is_some_and(|entry| {
+            entry.state == ActionState::Busy(ActionKind::Save, Stage::ChoosingLocation)
+        }) {
+            self.set_state(id, ActionState::Failed(ActionKind::Save, message), cx);
+        }
+    }
+
     fn copy(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(kind) = self.entry(id).map(|entry| entry.kind) else {
             return;
@@ -1398,12 +1407,13 @@ impl OverlayView {
         let model = self.model.clone();
         cx.spawn_in(window, async move |_, cx| {
             let chosen = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
-                Some(path) => Some(PathBuf::from(path)),
+                Some(path) => Ok(Some(PathBuf::from(path))),
                 None => choose_save_path(&suggested, extension, cx).await,
             };
             model.update(cx, |overlay, cx| match chosen {
-                Some(destination) => overlay.save_to(id, destination, cx),
-                None => overlay.reset(id, cx),
+                Ok(Some(destination)) => overlay.save_to(id, destination, cx),
+                Ok(None) => overlay.reset(id, cx),
+                Err(message) => overlay.dialog_failed(id, message, cx),
             });
         })
         .detach();
@@ -1744,15 +1754,15 @@ async fn choose_save_path(
     suggested: &str,
     extension: &str,
     cx: &mut gpui::AsyncWindowContext,
-) -> Option<PathBuf> {
+) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = cx;
         match platform::try_save_file_panel(suggested, &[extension]) {
-            Ok(path) => path,
+            Ok(path) => Ok(path),
             Err(error) => {
                 tracing::warn!(error, "save panel unavailable");
-                None
+                Ok(None)
             }
         }
     }
@@ -1764,7 +1774,7 @@ async fn choose_save_path(
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        platform::save_file_panel_async(suggested, &[extension], cx).await
+        Ok(platform::save_file_panel_async(suggested, &[extension], cx).await)
     }
 }
 

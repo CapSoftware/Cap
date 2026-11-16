@@ -463,3 +463,35 @@ fn a_chosen_export_path_only_starts_the_card_still_waiting_for_it(cx: &mut TestA
     overlay.update(cx, |overlay, cx| overlay.save_to(id, destination, cx));
     assert!(paths(&overlay, cx).is_empty());
 }
+
+#[gpui::test]
+fn a_failed_export_dialog_fails_only_the_card_waiting_for_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = bundle(&dir, "recording");
+    let overlay = cx.new(|_| Overlay::default());
+    let id = overlay.update(cx, |overlay, cx| {
+        overlay.add(path.clone(), MediaKind::Recording, cx);
+        overlay.entries[0].id
+    });
+    let state = |cx: &mut TestAppContext| {
+        overlay.read_with(cx, |overlay, _| overlay.entry(id).unwrap().state.clone())
+    };
+
+    overlay.update(cx, |overlay, cx| {
+        overlay.dialog_failed(id, "File dialog unavailable".into(), cx)
+    });
+    assert_eq!(state(cx), ActionState::Idle);
+
+    overlay.update(cx, |overlay, cx| {
+        assert!(overlay.begin(id, ActionKind::Save, Stage::ChoosingLocation, cx));
+        overlay.dialog_failed(id, "File dialog unavailable".into(), cx);
+    });
+    assert_eq!(
+        state(cx),
+        ActionState::Failed(ActionKind::Save, "File dialog unavailable".into())
+    );
+    assert_eq!(
+        state(cx).message(MediaKind::Recording).as_deref(),
+        Some("File dialog unavailable")
+    );
+}
