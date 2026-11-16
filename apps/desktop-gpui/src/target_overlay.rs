@@ -795,12 +795,13 @@ impl AreaScreen {
         }
     }
 
+    /// The UUID decides when both sides have one: macOS can hand a display's
+    /// old id to another display, and only the UUID follows the panel.
     fn owns(&self, locked: &LockedArea) -> bool {
-        locked.screen_id == self.id
-            || locked
-                .screen_uuid
-                .as_deref()
-                .is_some_and(|uuid| self.uuid.as_deref() == Some(uuid))
+        match (locked.screen_uuid.as_deref(), self.uuid.as_deref()) {
+            (Some(saved), Some(current)) => saved == current,
+            _ => locked.screen_id == self.id,
+        }
     }
 }
 
@@ -5935,6 +5936,11 @@ mod snap_to_ratio_tests {
         );
         assert_eq!(
             locked_area_for(&screen("46", None), display, AREA_MIN_SIZE),
+            None
+        );
+        // Another display that inherited the old id is not the locked one.
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-B")), display, AREA_MIN_SIZE),
             None
         );
         // A lock saved without a UUID (0.6.0, or a display that has none)
