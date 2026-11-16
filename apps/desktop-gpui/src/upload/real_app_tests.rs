@@ -943,43 +943,60 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
     .await;
 }
 
-/// The recorded window closes. Only a focused-window capture loses its
+/// The recorded window goes away. Only a focused-window capture loses its
 /// source; a screen-region capture of a window keeps recording that region of
-/// the screen. Only the test's own TextEdit document is closed, so other open
-/// documents and their unsaved edits are left alone.
+/// the screen. The document opens in a TextEdit instance of its own, and only
+/// that instance is ended: scripting a close would need Automation consent,
+/// which a fresh Mac asks for with a prompt nobody answers, and quitting
+/// TextEdit would close every other document too.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
+    fn text_edit_pids() -> Vec<String> {
+        let out = Command::new("pgrep")
+            .args(["-x", "TextEdit"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    }
     let documents = tempfile::tempdir().unwrap();
-    let title = |mode: &str| format!("cap-capture-target-{mode}-{}", std::process::id());
+    let opened = std::sync::Mutex::new(Vec::<String>::new());
     losing_the_capture_source_stops_and_saves(
         "window-closed",
         &[("windowCaptureStyle", json!("focusedWindow"))],
         |mode| {
-            let title = title(mode);
+            let title = format!("cap-capture-target-{mode}-{}", std::process::id());
             let document = documents.path().join(&title);
             std::fs::write(&document, "The window Cap records").unwrap();
+            let before = text_edit_pids();
             assert!(
                 Command::new("open")
-                    .args(["-a", "TextEdit"])
+                    .args(["-n", "-a", "TextEdit"])
                     .arg(&document)
                     .status()
                     .unwrap()
                     .success()
             );
             std::thread::sleep(Duration::from_secs(3));
+            let ours: Vec<String> = text_edit_pids()
+                .into_iter()
+                .filter(|pid| !before.contains(pid))
+                .collect();
+            assert_eq!(ours.len(), 1, "{mode}: no TextEdit instance of our own");
+            *opened.lock().unwrap() = ours;
             vec![
                 ("CAP_GPUI_AUTO_OVERLAY".into(), "window".into()),
                 ("CAP_GPUI_AUTO_WINDOW".into(), title),
             ]
         },
-        |mode| {
-            let script = format!(
-                "tell application \"TextEdit\" to close (every document whose name is \"{}\") saving no",
-                title(mode)
-            );
-            let _ = Command::new("osascript").args(["-e", &script]).status();
+        |_| {
+            for pid in opened.lock().unwrap().drain(..) {
+                let _ = Command::new("kill").arg(&pid).status();
+            }
         },
     )
     .await;
