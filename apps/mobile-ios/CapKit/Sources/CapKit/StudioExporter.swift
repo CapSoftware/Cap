@@ -35,6 +35,8 @@ public final class StudioExporter: @unchecked Sendable {
     /// `cancel()` comes from another thread while the export sets this, so it's only touched under the lock.
     private let lock = NSLock()
     private var pumps: Pumps?
+    /// Tests only: runs just before the file is closed, to cancel at that exact moment.
+    nonisolated(unsafe) var willFinishWriting: (@Sendable () -> Void)?
 
     public init() {}
 
@@ -202,7 +204,13 @@ public final class StudioExporter: @unchecked Sendable {
             writer.cancelWriting()
             throw reader.error ?? Failure.cantRead
         }
+        willFinishWriting?()
         await writer.finishWriting()
+        // A cancel while the file was being closed still wins: the finished file is never handed on.
+        if cancelled.isRaised {
+            try? FileManager.default.removeItem(at: url)
+            throw Failure.cancelled
+        }
         guard writer.status == .completed else { throw writer.error ?? Failure.cantWrite }
         progress?(1)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0

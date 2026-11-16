@@ -347,6 +347,23 @@ import Testing
         }
     }
 
+    /// A cancel that lands while the finished file is being closed still cancels: nothing is handed on to share.
+    @Test func cancellingWhileTheFileClosesReturnsNothing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "studio-cancel-close-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let track = Track(hostStart: 0, seconds: 2, frameInterval: 1.0 / 30, jitter: 0, dropEvery: nil, gap: nil, color: Self.screenColor, size: CGSize(width: 720, height: 1560), beeps: true)
+        _ = try await Self.record(track, flashesAt: [1], to: directory.appending(path: "screen.mp4"), kind: .screen)
+        let screen = try await StudioTrackSource.load(url: directory.appending(path: "screen.mp4"), offset: 0)
+        let scene = StudioScene(look: .studioDefault, screen: screen.info, camera: nil)
+        let built = try StudioComposition.build(clips: [EditRange(start: 0, end: 2)], screen: screen, camera: nil, music: nil, voiceVolume: 1, scene: scene, longEdge: 1280, remembersFrames: false)
+        let exporter = StudioExporter()
+        exporter.willFinishWriting = { [weak exporter] in exporter?.cancel() }
+        let url = directory.appending(path: "out.mp4")
+        await #expect(throws: StudioExporter.Failure.self) { _ = try await exporter.export(built, to: url) }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
     /// Sound that stops while the picture carries on (a muted microphone, an interruption) must never stop the picture.
     @Test func pictureCarriesOnWhenSoundStops() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "studio-nosound-\(UUID().uuidString)")
