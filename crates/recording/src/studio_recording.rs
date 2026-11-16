@@ -150,43 +150,6 @@ fn screen_captured_nothing(outcome: &OutputPipelineStopOutcome) -> bool {
     }
 }
 
-/// Markers are captured against segment indices; a segment left out for
-/// having no screen frames shifts every later segment down by one. A marker
-/// pressed inside such a segment lands at the end of the segment before it.
-fn markers_without_empty_segments(
-    markers: Vec<RecordedMarker>,
-    empty_segments: &[u32],
-) -> Vec<RecordedMarker> {
-    if empty_segments.is_empty() {
-        return markers;
-    }
-    let position = |segment: u32| {
-        segment
-            - empty_segments
-                .iter()
-                .filter(|&&empty| empty < segment)
-                .count() as u32
-    };
-    markers
-        .into_iter()
-        .filter_map(|marker| {
-            if !empty_segments.contains(&marker.segment) {
-                return Some(RecordedMarker {
-                    segment: position(marker.segment),
-                    offset: marker.offset,
-                });
-            }
-            let before = (0..marker.segment)
-                .rev()
-                .find(|segment| !empty_segments.contains(segment))?;
-            Some(RecordedMarker {
-                segment: position(before),
-                offset: None,
-            })
-        })
-        .collect()
-}
-
 fn accumulate_finalization_error(failure: &mut Option<anyhow::Error>, result: anyhow::Result<()>) {
     if let Err(error) = result {
         *failure = Some(match failure.take() {
@@ -432,8 +395,8 @@ pub struct Actor {
     #[cfg(target_os = "linux")]
     resume_cleanup_error: Option<String>,
     segments: Vec<RecordingSegment>,
-    /// Indices of segments left out because their screen got no frame.
-    empty_segments: Vec<u32>,
+    /// Segments left out because their screen got no frame.
+    empty_segments: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     // Resolved once at recording start: the display can be disconnected, or its
     // mode changed, by the time the recording stops.
@@ -480,7 +443,7 @@ impl Actor {
         pipeline: Pipeline,
         index: u32,
         segment_start_time: f64,
-    ) -> anyhow::Result<(Cursors, u32)> {
+    ) -> anyhow::Result<((Cursors, u32), SegmentKept)> {
         tracing::info!("pipeline shutting down");
 
         let stopped = pipeline.stop().await;
@@ -534,12 +497,8 @@ impl Actor {
         let mic_device_id = self.segment_factory.mic_device_id();
 
         if screen_empty && media_error.is_none() {
-            warn!(
-                segment = index,
-                "Studio segment captured no screen frames; leaving it out and keeping the rest of the recording"
-            );
-            self.empty_segments.push(index);
-            return Ok(cursors);
+            self.leave_out_empty_segment(index)?;
+            return Ok((cursors, SegmentKept::No));
         }
 
         self.segments.push(RecordingSegment {
@@ -557,7 +516,37 @@ impl Actor {
             return Err(error.context(message));
         }
 
-        Ok(cursors)
+        Ok((cursors, SegmentKept::Yes))
+    }
+
+    /// A segment whose screen captured no frame is left out of the recording
+    /// and gives its index to the next segment, so the folders under
+    /// `content/segments` stay numbered like the saved segments, which
+    /// recovery and finalization rely on. Its other files are kept under
+    /// `content/empty-segments`.
+    fn leave_out_empty_segment(&mut self, index: u32) -> anyhow::Result<()> {
+        let segments_dir = &self.segment_factory.segments_dir;
+        let source = segments_dir.join(format!("segment-{index}"));
+        if source.exists() {
+            let target_dir = segments_dir.with_file_name("empty-segments");
+            let target = target_dir.join(format!("segment-{index}-{}", self.empty_segments));
+            std::fs::create_dir_all(&target_dir)
+                .and_then(|()| std::fs::rename(&source, &target))
+                .with_context(|| {
+                    format!("Could not move aside segment {index}, which captured no screen frames")
+                })?;
+        }
+        warn!(
+            segment = index,
+            "Studio segment captured no screen frames; leaving it out and keeping the rest of the recording"
+        );
+        self.empty_segments += 1;
+        self.segment_factory.index = index;
+        if index == 0 {
+            self.segment_factory.base_inputs.start_gate = None;
+        }
+        self.markers.segment_dropped(index);
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -680,7 +669,7 @@ impl Actor {
                     .stop_pipeline(pipeline, index, segment_start_time)
                     .await
                 {
-                    Ok((cursors, _)) => cursors,
+                    Ok(((cursors, _), _)) => cursors,
                     Err(error) if studio_capture_stopped(&error) => {
                         let error = self.preserve_failure_evidence(error);
                         let error = match ctx.actor_ref().stop_gracefully().await {
@@ -728,7 +717,7 @@ impl Actor {
             })
         };
 
-        if self.segments.is_empty() && !self.empty_segments.is_empty() {
+        if self.segments.is_empty() && self.empty_segments > 0 {
             let error = anyhow!(known_failure.unwrap_or_else(|| {
                 "Screen capture delivered no frames, so nothing was recorded".to_string()
             }));
@@ -752,7 +741,7 @@ impl Actor {
                 pretty_name: self.pretty_name.as_deref(),
             },
             known_failure,
-            markers_without_empty_segments(self.markers.snapshot(), &self.empty_segments),
+            self.markers.snapshot(),
         )
         .await;
         let recording = match recording {
@@ -825,9 +814,12 @@ impl Message<Pause> for Actor {
                     .await
                     .context("stop_pipeline");
                 match stopped {
-                    Ok((cursors, next_cursor_id)) if self.all_tracks_stopped => {
+                    Ok(((cursors, next_cursor_id), kept)) if self.all_tracks_stopped => {
                         self.state = Some(ActorState::Paused {
-                            next_index: index + 1,
+                            next_index: match kept {
+                                SegmentKept::Yes => index + 1,
+                                SegmentKept::No => index,
+                            },
                             cursors,
                             next_cursor_id,
                         });
@@ -1386,7 +1378,6 @@ struct Pipeline {
     pub cursor: Option<CursorPipeline>,
     pub track_failures: SharedTrackFailures,
     pub watcher_task: Option<JoinHandle<()>>,
-    #[cfg(any(target_os = "linux", windows))]
     stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -1399,6 +1390,13 @@ struct FinishedPipeline {
     pub system_audio: Option<FinishedOutputPipeline>,
     pub cursor: Option<CursorPipeline>,
     pub track_failures: Vec<TrackFailureRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SegmentKept {
+    Yes,
+    /// Left out for having no screen frames; its index is reused.
+    No,
 }
 
 struct PipelineStopOutcome {
@@ -1713,7 +1711,6 @@ impl Pipeline {
     pub async fn stop(mut self) -> anyhow::Result<PipelineStopOutcome> {
         let stop_started = Instant::now();
         let epoch = self.epoch();
-        #[cfg(any(target_os = "linux", windows))]
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
         #[cfg(target_os = "macos")]
@@ -1945,15 +1942,17 @@ impl Pipeline {
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-        #[cfg(any(target_os = "linux", windows))]
         let stopping = self.stopping.clone();
         let track_failures = self.track_failures.clone();
         self.watcher_task = Some(tokio::spawn(async move {
             while let Some((track, required, res)) = futures.next().await {
-                // Only a finishing muxer reports this: the track ended with
-                // empty media, which Stop handles, not a failure.
+                // Empty media at Pause or Stop is left out by Stop; a track
+                // that ends on its own before Stop is still a failure.
                 let res = match res {
-                    Err(error) if error.is_caused_by::<NoVideoFramesCaptured>() => {
+                    Err(error)
+                        if error.is_caused_by::<NoVideoFramesCaptured>()
+                            && stopping.load(std::sync::atomic::Ordering::Acquire) =>
+                    {
                         warn!(?track, "Recording track captured no video frames");
                         Ok(())
                     }
@@ -2642,7 +2641,7 @@ async fn spawn_studio_recording_actor(
         }),
         all_tracks_stopped: true,
         terminal_stop_failure: None,
-        empty_segments: Vec::new(),
+        empty_segments: 0,
         segment_factory: segment_pipeline_factory,
         #[cfg(target_os = "linux")]
         resume_attempt: None,
@@ -3920,7 +3919,6 @@ async fn create_segment_pipeline(
         system_audio,
         track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         watcher_task: None,
-        #[cfg(any(target_os = "linux", windows))]
         stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
@@ -4317,7 +4315,7 @@ mod tests {
                     }),
                     all_tracks_stopped: true,
                     terminal_stop_failure: None,
-                    empty_segments: Vec::new(),
+                    empty_segments: 0,
                     #[cfg(windows)]
                     cancel_error: None,
                     segment_factory,
@@ -4428,7 +4426,7 @@ mod tests {
             }),
             all_tracks_stopped: true,
             terminal_stop_failure: None,
-            empty_segments: Vec::new(),
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4480,7 +4478,7 @@ mod tests {
             state: None,
             all_tracks_stopped: true,
             terminal_stop_failure: None,
-            empty_segments: Vec::new(),
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4674,7 +4672,6 @@ mod tests {
                     cursor: None,
                     track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                     watcher_task: None,
-                    #[cfg(windows)]
                     stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 },
                 index: 0,
@@ -4683,7 +4680,7 @@ mod tests {
             }),
             all_tracks_stopped: true,
             terminal_stop_failure: None,
-            empty_segments: Vec::new(),
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4758,7 +4755,7 @@ mod tests {
             }),
             all_tracks_stopped: false,
             terminal_stop_failure: None,
-            empty_segments: Vec::new(),
+            empty_segments: 0,
             segment_factory,
             segments: vec![RecordingSegment {
                 start: 0.0,
@@ -4931,7 +4928,7 @@ mod tests {
                 }),
                 all_tracks_stopped: true,
                 terminal_stop_failure: None,
-                empty_segments: Vec::new(),
+                empty_segments: 0,
                 #[cfg(windows)]
                 cancel_error: None,
                 segment_factory: factory,
@@ -5030,6 +5027,9 @@ mod tests {
                         let senders = prepare_senders.clone();
                         let display = display.clone();
                         async move {
+                            let segment_dir = display.parent().unwrap();
+                            std::fs::create_dir_all(segment_dir)?;
+                            std::fs::write(segment_dir.join("audio-input.ogg"), b"audio")?;
                             let (tx, rx) = flume::bounded(4);
                             senders.lock().unwrap().push(tx);
                             let timestamps = Timestamps::now();
@@ -5049,19 +5049,23 @@ mod tests {
                                 cursor: None,
                                 track_failures: Default::default(),
                                 watcher_task: None,
-                                #[cfg(windows)]
                                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                             })
                         }
                         .boxed()
                     }),
                 );
-                handle.resume().await.unwrap();
-                if !stop_while_recording {
-                    handle.pause().await.unwrap_or_else(|error| {
-                        panic!("{case}: pausing an empty segment failed the recording: {error:#}")
-                    });
-                    assert!(handle.is_paused().await.unwrap(), "{case}");
+                let empty_segments = if stop_while_recording { 1 } else { 2 };
+                for _ in 0..empty_segments {
+                    handle.resume().await.unwrap();
+                    if !stop_while_recording {
+                        handle.pause().await.unwrap_or_else(|error| {
+                            panic!(
+                                "{case}: pausing an empty segment failed the recording: {error:#}"
+                            )
+                        });
+                        assert!(handle.is_paused().await.unwrap(), "{case}");
+                    }
                 }
                 let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
                 assert!(report.accepted_intent && report.stop_acknowledged, "{case}");
@@ -5083,6 +5087,20 @@ mod tests {
                     .collect();
                 assert_eq!(kept, ["saved-0.m4s", "saved-1.m4s"], "{case}");
                 assert!(handle.done_fut().await.is_ok(), "{case}");
+                assert!(
+                    !temp.path().join("content/segments/segment-2").exists(),
+                    "{case}: the next segment can take the empty one's index"
+                );
+                for moved in 0..empty_segments {
+                    assert_eq!(
+                        std::fs::read(temp.path().join(format!(
+                            "content/empty-segments/segment-2-{moved}/audio-input.ogg"
+                        )))
+                        .unwrap(),
+                        b"audio",
+                        "{case}: the empty segment's other files are kept"
+                    );
+                }
                 drop(senders);
             }
         }
@@ -5274,7 +5292,7 @@ mod tests {
                     }),
                     all_tracks_stopped: true,
                     terminal_stop_failure: None,
-                    empty_segments: Vec::new(),
+                    empty_segments: 0,
                     segment_factory: factory,
                     resume_attempt: None,
                     resume_generation: 0,
@@ -5735,7 +5753,6 @@ mod tests {
                                 cursor: None,
                                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                                 watcher_task: None,
-                                #[cfg(target_os = "linux")]
                                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                             })
                         }
@@ -5843,7 +5860,6 @@ mod tests {
             cursor: None,
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
-            #[cfg(any(target_os = "linux", windows))]
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
@@ -5966,6 +5982,7 @@ mod tests {
                 cursor: None,
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
+                stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
 
             let stopping = tokio::spawn(pipeline.stop());
@@ -6265,7 +6282,6 @@ mod tests {
             cursor: None,
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
-            #[cfg(any(target_os = "linux", windows))]
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         pipeline.spawn_start_time_persister();
@@ -6355,7 +6371,6 @@ mod tests {
             cursor: None,
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
-            #[cfg(any(target_os = "linux", windows))]
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let pipeline = Pipeline {
@@ -6993,7 +7008,7 @@ mod tests {
                 }),
                 all_tracks_stopped: true,
                 terminal_stop_failure: None,
-                empty_segments: Vec::new(),
+                empty_segments: 0,
                 segment_factory,
                 segments: Vec::new(),
                 completion_tx,
@@ -7129,7 +7144,6 @@ mod tests {
             cursor: None,
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
-            #[cfg(any(target_os = "linux", windows))]
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         pipeline.spawn_watcher(completion_tx);
@@ -7249,7 +7263,6 @@ mod tests {
                 cursor: None,
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
-                #[cfg(any(target_os = "linux", windows))]
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
             pipeline.spawn_watcher(completion_tx);
@@ -7273,39 +7286,6 @@ mod tests {
             assert!(stopped.pipeline.track_failures.is_empty());
             assert!(completion_rx.borrow().is_none());
         }
-    }
-
-    #[test]
-    fn markers_follow_the_segments_kept_around_empty_ones() {
-        let marker = |segment, offset| RecordedMarker { segment, offset };
-        assert_eq!(
-            markers_without_empty_segments(
-                vec![
-                    marker(0, Some(1.0)),
-                    marker(1, Some(0.5)),
-                    marker(1, None),
-                    marker(2, Some(2.0)),
-                    marker(4, None),
-                ],
-                &[1, 3],
-            ),
-            vec![
-                marker(0, Some(1.0)),
-                marker(0, None),
-                marker(0, None),
-                marker(1, Some(2.0)),
-                marker(2, None),
-            ]
-        );
-        assert_eq!(
-            markers_without_empty_segments(vec![marker(0, Some(0.2)), marker(1, Some(0.3))], &[0]),
-            vec![marker(0, Some(0.3))]
-        );
-        let untouched = vec![marker(0, Some(0.2)), marker(3, None)];
-        assert_eq!(
-            markers_without_empty_segments(untouched.clone(), &[]),
-            untouched
-        );
     }
 
     #[test]
@@ -7385,7 +7365,7 @@ mod windows_cancel_tests {
             state: None,
             all_tracks_stopped: true,
             terminal_stop_failure: None,
-            empty_segments: Vec::new(),
+            empty_segments: 0,
             cancel_error: error,
             segment_factory,
             segments: Vec::new(),
