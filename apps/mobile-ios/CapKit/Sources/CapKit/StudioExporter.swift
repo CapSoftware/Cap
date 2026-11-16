@@ -32,30 +32,24 @@ public final class StudioExporter: @unchecked Sendable {
     }
 
     private let cancelled = Flag()
-    /// `cancel()` comes from another thread while the export sets these, so they're only touched under the lock.
+    /// `cancel()` comes from another thread while the export sets this, so it's only touched under the lock.
     private let lock = NSLock()
-    private var reader: AVAssetReader?
-    private var writer: AVAssetWriter?
     private var pumps: Pumps?
 
     public init() {}
 
+    /// Only asks the export to stop. The reader and writer aren't safe to use from two threads at once, so
+    /// cancelling them is left to the export, once every pump has stopped touching them.
     public func cancel() {
         _ = cancelled.raise()
         lock.lock()
-        let reader = reader
-        let writer = writer
         let pumps = pumps
         lock.unlock()
-        reader?.cancelReading()
-        writer?.cancelWriting()
         pumps?.finishAll()
     }
 
-    private func hold(reader: AVAssetReader?, writer: AVAssetWriter?, pumps: Pumps?) {
+    private func hold(_ pumps: Pumps?) {
         lock.lock()
-        self.reader = reader
-        self.writer = writer
         self.pumps = pumps
         lock.unlock()
     }
@@ -67,7 +61,6 @@ public final class StudioExporter: @unchecked Sendable {
         let reader = try AVAssetReader(asset: asset)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true
-        hold(reader: reader, writer: writer, pumps: nil)
 
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
@@ -136,17 +129,19 @@ public final class StudioExporter: @unchecked Sendable {
         // A writer that is cancelled or fails stops asking for data, so a pump waiting for room would never hear
         // again. Every pump can be ended from outside: by `cancel()`, or by the other pump failing.
         let pumps = Pumps()
-        hold(reader: reader, writer: writer, pumps: pumps)
+        hold(pumps)
         if cancelled.isRaised { pumps.finishAll() }
         @Sendable func pump(_ output: AVAssetReaderOutput, into input: AVAssetWriterInput, label: String, reportsProgress: Bool) async {
             nonisolated(unsafe) let output = output
             nonisolated(unsafe) let input = input
+            let queue = DispatchQueue(label: "so.cap.mobile.studio.export.\(label)")
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                guard let handle = pumps.add(continuation) else { return }
-                let queue = DispatchQueue(label: "so.cap.mobile.studio.export.\(label)")
+                guard let handle = pumps.add(continuation, on: queue) else { return }
                 input.requestMediaDataWhenReady(on: queue) {
+                    // A pump only ends on its own queue, between passes, so once it has ended nothing here
+                    // touches the reader or writer again.
+                    if handle.isFinished { return }
                     while input.isReadyForMoreMediaData {
-                        if handle.isFinished { return }
                         if cancelled.isRaised || pumpReader.status != .reading {
                             pumps.finishAll()
                             return
@@ -191,13 +186,14 @@ public final class StudioExporter: @unchecked Sendable {
                 group.addTask { await pump(audioFeed.0, into: audioFeed.1, label: "audio", reportsProgress: false) }
             }
         }
-        hold(reader: reader, writer: writer, pumps: nil)
+        hold(nil)
         if writer.status == .failed {
             reader.cancelReading()
             throw writer.error ?? Failure.cantWrite
         }
 
         if cancelled.isRaised {
+            reader.cancelReading()
             writer.cancelWriting()
             try? FileManager.default.removeItem(at: url)
             throw Failure.cancelled
@@ -230,15 +226,23 @@ final class Pumps: @unchecked Sendable {
     final class Handle: @unchecked Sendable {
         private let done = Flag()
         fileprivate let continuation: CheckedContinuation<Void, Never>
+        fileprivate let queue: DispatchQueue
 
-        fileprivate init(_ continuation: CheckedContinuation<Void, Never>) {
+        fileprivate init(_ continuation: CheckedContinuation<Void, Never>, queue: DispatchQueue) {
             self.continuation = continuation
+            self.queue = queue
         }
 
         var isFinished: Bool { done.isRaised }
 
+        /// From the pump's own queue.
         func finish() {
             if done.raise() { continuation.resume() }
+        }
+
+        /// From anywhere: waits for a pass the pump is in the middle of to return first.
+        fileprivate func finishOnQueue() {
+            queue.async { self.finish() }
         }
     }
 
@@ -247,8 +251,8 @@ final class Pumps: @unchecked Sendable {
     private var ended = false
 
     /// Nil, with the continuation already resumed, once everything has been ended.
-    func add(_ continuation: CheckedContinuation<Void, Never>) -> Handle? {
-        let handle = Handle(continuation)
+    func add(_ continuation: CheckedContinuation<Void, Never>, on queue: DispatchQueue) -> Handle? {
+        let handle = Handle(continuation, queue: queue)
         lock.lock()
         let isEnded = ended
         if !isEnded { handles.append(handle) }
@@ -265,6 +269,6 @@ final class Pumps: @unchecked Sendable {
         ended = true
         let all = handles
         lock.unlock()
-        for handle in all { handle.finish() }
+        for handle in all { handle.finishOnQueue() }
     }
 }
