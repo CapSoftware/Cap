@@ -777,10 +777,7 @@ final class EditorExport {
         guard let result = await render(model, title: "Saving to Photos") else { return false }
         defer { try? FileManager.default.removeItem(at: result.url) }
         do {
-            let url = result.url
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url)
-            }
+            try await PhotoLibrary.addVideo(at: result.url)
             Usage.track("editor_saved_to_photos", ["studio": .bool(model.isStudio)])
             return true
         } catch {
