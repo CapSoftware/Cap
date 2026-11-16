@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "cap"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "base64 0.22.1",
  "cap-automation",
@@ -1862,6 +1862,7 @@ dependencies = [
  "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-media-info",
  "cap-mediafoundation-utils",

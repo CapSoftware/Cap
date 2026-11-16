@@ -14,6 +14,7 @@ export * from "./Rpcs.ts";
 export { S3Buckets } from "./S3Buckets/index.ts";
 export { Spaces } from "./Spaces/index.ts";
 export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
+export { attachmentContentDisposition } from "./Storage/content-disposition.ts";
 export * from "./Storage/GoogleDrive.ts";
 export { Storage } from "./Storage/index.ts";
 export {
@@ -38,6 +39,7 @@ export {
 	type ViewerSettings,
 } from "./Videos/EffectiveVideoRules.ts";
 export { findScreenshotObjectKey, Videos } from "./Videos/index.ts";
+export { VideoDownloadGate } from "./Videos/VideoDownloadGate.ts";
 export {
 	buildCanView,
 	buildCanViewLoaded,

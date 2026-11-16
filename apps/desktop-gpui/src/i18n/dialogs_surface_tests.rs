@@ -185,6 +185,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Deletion is still finishing",
         ),
         (
+            tr::dialog::delete_recording::open_in_editor(),
+            "This recording is open in the editor. Close the editor and try again.",
+        ),
+        (
             tr::dialog::delete_recording::outside_library(),
             "This recording is outside the recordings library. Its files were not changed.",
         ),

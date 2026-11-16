@@ -199,12 +199,41 @@ pub fn x11_capture_rect(
     display_height: f64,
     crop: Option<(f64, f64, f64, f64)>,
 ) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let (x, y, width, height) =
+        x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 2)?;
+    Ok((x, y, ensure_even(width), ensure_even(height)))
+}
+
+pub fn x11_screenshot_rect(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
+    x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 1)
+}
+
+fn x11_capture_bounds(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+    minimum: i32,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
     let display_left = floor_i32(display_x, "display x")?;
     let display_top = floor_i32(display_y, "display y")?;
-    let display_right = ceil_i32(display_x + display_width.max(2.0), "display right")?;
-    let display_bottom = ceil_i32(display_y + display_height.max(2.0), "display bottom")?;
+    let display_right = ceil_i32(
+        display_x + display_width.max(f64::from(minimum)),
+        "display right",
+    )?;
+    let display_bottom = ceil_i32(
+        display_y + display_height.max(f64::from(minimum)),
+        "display bottom",
+    )?;
 
-    if display_right - display_left < 2 || display_bottom - display_top < 2 {
+    if display_right - display_left < minimum || display_bottom - display_top < minimum {
         bail!("X11 display bounds are too small for capture");
     }
 
@@ -212,23 +241,24 @@ pub fn x11_capture_rect(
         Some((x, y, width, height)) => (
             floor_i32(display_x + x, "capture x")?,
             floor_i32(display_y + y, "capture y")?,
-            ceil_i32(display_x + x + width.max(2.0), "capture right")?,
-            ceil_i32(display_y + y + height.max(2.0), "capture bottom")?,
+            ceil_i32(
+                display_x + x + width.max(f64::from(minimum)),
+                "capture right",
+            )?,
+            ceil_i32(
+                display_y + y + height.max(f64::from(minimum)),
+                "capture bottom",
+            )?,
         ),
         None => (display_left, display_top, display_right, display_bottom),
     };
 
-    let left = raw_left.clamp(display_left, display_right - 2);
-    let top = raw_top.clamp(display_top, display_bottom - 2);
-    let right = raw_right.clamp(left + 2, display_right);
-    let bottom = raw_bottom.clamp(top + 2, display_bottom);
+    let left = raw_left.clamp(display_left, display_right - minimum);
+    let top = raw_top.clamp(display_top, display_bottom - minimum);
+    let right = raw_right.clamp(left + minimum, display_right);
+    let bottom = raw_bottom.clamp(top + minimum, display_bottom);
 
-    Ok((
-        left,
-        top,
-        ensure_even((right - left) as u32),
-        ensure_even((bottom - top) as u32),
-    ))
+    Ok((left, top, (right - left) as u32, (bottom - top) as u32))
 }
 
 fn floor_i32(value: f64, label: &str) -> anyhow::Result<i32> {

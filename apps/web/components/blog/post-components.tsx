@@ -1,5 +1,12 @@
 import type { MDXComponents } from "mdx/types";
 import { CapEmbed } from "./CapEmbed";
+import { InfraCode } from "./infra/Code";
+import { InfraCta } from "./infra/Cta";
+import { InfraFilm } from "./infra/Film";
+import { InfraLadder } from "./infra/Ladder";
+import { InfraPipeline } from "./infra/Pipeline";
+import { InfraCompare, InfraPrices } from "./infra/Prices";
+import { InfraSpeed } from "./infra/Speed";
 import { BeforeAfter } from "./native/BeforeAfter";
 import { CodeCompare } from "./native/CodeCompare";
 import { ExportRace } from "./native/ExportRace";
@@ -32,6 +39,16 @@ const POST_COMPONENTS: Record<string, PostComponents> = {
 		ResourceChart,
 		Screenshot,
 		Tweet,
+	},
+	"introducing-cap-infra": {
+		InfraCode,
+		InfraCompare,
+		InfraCta,
+		InfraFilm,
+		InfraLadder,
+		InfraPipeline,
+		InfraPrices,
+		InfraSpeed,
 	},
 };
 

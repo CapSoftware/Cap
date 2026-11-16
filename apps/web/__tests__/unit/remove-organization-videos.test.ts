@@ -22,7 +22,29 @@ const colleagueVideo = Video.VideoId.make("video-colleague");
 
 let memberRole: string | null;
 let sharedRows: { videoId: Video.VideoId; ownerId: string }[];
+const folderRows = [
+	{ id: "personal-folder", organizationId, spaceId: null },
+	{ id: "org-folder", organizationId, spaceId: organizationId },
+	{ id: "space-folder", organizationId, spaceId: "space-1" },
+	{ id: "other-org-folder", organizationId: "org-2", spaceId: "org-2" },
+];
 const writes: { table: string; params: unknown[] }[] = [];
+
+// Applies a compiled `and` of `column = ?` / `column is null` comparisons on
+// `folders` to a row, so the test checks the filter the action really builds.
+function matchesFolderFilter(
+	row: Record<string, unknown>,
+	sql: string,
+	params: unknown[],
+) {
+	if (/ or |not /i.test(sql)) throw new Error(`unsupported filter: ${sql}`);
+	const comparisons = [...sql.matchAll(/`folders`\.`(\w+)` (= \?|is null)/g)];
+	if (comparisons.length === 0) throw new Error(`unsupported filter: ${sql}`);
+	let next = 0;
+	return comparisons.every(([, column = "", op]) =>
+		op === "is null" ? row[column] == null : row[column] === params[next++],
+	);
+}
 
 beforeEach(() => {
 	writes.length = 0;
@@ -35,6 +57,7 @@ beforeEach(() => {
 	mocks.select.mockImplementation(() => {
 		let table = "";
 		let params: unknown[] = [];
+		let sql = "";
 		const rows = () => {
 			if (table === "organizations")
 				return [{ id: organizationId, ownerId: "org-owner" }];
@@ -42,7 +65,10 @@ beforeEach(() => {
 				return memberRole ? [{ id: "membership", role: memberRole }] : [];
 			if (table === "shared_videos")
 				return sharedRows.filter((row) => params.includes(row.videoId));
-			if (table === "folders") return [{ id: "folder-1" }];
+			if (table === "folders")
+				return folderRows
+					.filter((row) => matchesFolderFilter(row, sql, params))
+					.map(({ id }) => ({ id }));
 			return [];
 		};
 		const query = Object.assign(
@@ -54,7 +80,9 @@ beforeEach(() => {
 				},
 				leftJoin: () => query,
 				where(filter: SQL) {
-					params = dialect.sqlToQuery(filter).params;
+					const compiled = dialect.sqlToQuery(filter);
+					params = compiled.params;
+					sql = compiled.sql;
 					return query;
 				},
 				limit: () => query,
@@ -95,6 +123,15 @@ describe("removing videos from an organization", () => {
 		expect(writes).toEqual([]);
 	});
 
+	it("only unfiles videos from the organization's folders, not personal ones", async () => {
+		await removeVideosFromOrganization(organizationId, [ownVideo]);
+
+		expect(writes).toContainEqual({
+			table: "videos",
+			params: [ownVideo, "org-folder"],
+		});
+	});
+
 	it("only removes and unfiles the member's own videos from a mixed request", async () => {
 		const result = await removeVideosFromOrganization(organizationId, [
 			ownVideo,
@@ -104,7 +141,7 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, ownVideo] },
-			{ table: "videos", params: [ownVideo, "folder-1"] },
+			{ table: "videos", params: [ownVideo, "org-folder"] },
 		]);
 	});
 
@@ -122,7 +159,7 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, colleagueVideo] },
-			{ table: "videos", params: [colleagueVideo, "folder-1"] },
+			{ table: "videos", params: [colleagueVideo, "org-folder"] },
 		]);
 	});
 

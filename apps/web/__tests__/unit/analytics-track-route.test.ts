@@ -67,6 +67,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 		repo: {
 			getById: () => Effect.succeedNone,
 			hasViewerGrant: () => Effect.succeed(false),
+			isLinkOpenToAnyone: () => Effect.succeed(false),
 		},
 		orgsRepo: {
 			membershipForVideo: () =>

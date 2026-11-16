@@ -191,10 +191,14 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					),
 				);
 
+				// A blank name would leave the folder unnamed everywhere it is
+				// listed; keep the current one.
+				const name = data.name?.trim() === "" ? undefined : data.name;
+
 				// Drizzle throws on an all-undefined .set(); a payload with only an
 				// id is a no-op, not an error.
 				if (
-					data.name === undefined &&
+					name === undefined &&
 					data.color === undefined &&
 					data.public === undefined &&
 					data.publicPage === undefined &&
@@ -255,7 +259,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					db
 						.update(Db.folders)
 						.set({
-							name: data.name,
+							name,
 							color: data.color,
 							public: data.public,
 							// Atomic merge so concurrent patches (and the logo upload
