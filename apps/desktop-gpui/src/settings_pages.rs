@@ -352,6 +352,7 @@ pub(crate) struct PagesState {
     license_input: Entity<ui::TextInputState>,
     license_draft: String,
     license_activating: bool,
+    license_deactivating: bool,
     license_error: Option<String>,
 
     // Integrations
@@ -443,6 +444,7 @@ impl PagesState {
             license_input,
             license_draft: String::new(),
             license_activating: false,
+            license_deactivating: false,
             license_error: None,
             integrations_view: IntegrationsView::Index,
             storage: None,
@@ -515,6 +517,7 @@ impl SettingsWindow {
             Page::License => {
                 self.pages.license_draft.clear();
                 self.pages.license_activating = false;
+                self.pages.license_deactivating = false;
                 self.pages.license_error = None;
                 let input = self.pages.license_input.clone();
                 input.update(cx, |input, cx| input.set_text("", cx));
@@ -4007,6 +4010,68 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
 /// `licenseApiClient`'s fixed base (`utils/web-api.ts:54-57`).
 const LICENSE_API_BASE: &str = "https://l.cap.so/api";
 
+/// How long Deactivate waits on the license server before it gives up and
+/// keeps the license.
+const LICENSE_RELEASE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// [`LICENSE_API_BASE`], or `CAP_GPUI_LICENSE_API_URL` so a test build can
+/// talk to a local license server.
+fn license_api_base() -> String {
+    std::env::var("CAP_GPUI_LICENSE_API_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| LICENSE_API_BASE.to_string())
+}
+
+/// Frees this installation's activation on the license server, with the same
+/// key and instance id headers activation sent. Only a 200 counts: the server
+/// answers 200 whenever nothing is held for this installation any more, and
+/// anything else (offline, a timeout, a server error, a server without the
+/// route) leaves the activation where it was.
+async fn release_commercial_license(
+    base: String,
+    license_key: String,
+    instance_id: String,
+    timeout: Duration,
+) -> Result<(), String> {
+    match http_json(
+        reqwest::Method::POST,
+        format!("{base}/commercial/release"),
+        Vec::new(),
+        vec![("licensekey", license_key), ("instanceid", instance_id)],
+        None,
+        HttpBody::Json(json!({})),
+        Some(timeout),
+    )
+    .await
+    {
+        Ok((200, _)) => Ok(()),
+        Ok((status, body)) => Err(format!("status {status}: {body}")),
+        Err(error) => Err(error.text()),
+    }
+}
+
+/// Applies a finished release to the store: a release clears the local copy
+/// (unless another key was stored meanwhile), a failure keeps it. The error is
+/// the line Deactivate shows.
+fn finish_license_release(
+    released_key: &str,
+    result: Result<(), String>,
+) -> Result<(), &'static str> {
+    if let Err(error) = result {
+        tracing::warn!(%error, "releasing the commercial license failed");
+        return Err(tr::settings::license::deactivate_failed());
+    }
+    let still_stored =
+        store::commercial_license().is_some_and(|stored| stored.license_key == released_key);
+    if still_stored && !store::set_commercial_license(None) {
+        tracing::warn!("clearing the commercial license failed");
+        return Err(tr::settings::license::save_failed());
+    }
+    Ok(())
+}
+
 impl SettingsWindow {
     /// `activateCommercialLicense`: key and instance id go as headers, and a
     /// 200 writes `general_settings.commercialLicense` in the exact shape
@@ -4025,7 +4090,7 @@ impl SettingsWindow {
         self.pages.license_error = None;
         cx.notify();
 
-        let url = format!("{LICENSE_API_BASE}/commercial/activate");
+        let url = format!("{}/commercial/activate", license_api_base());
         let header_key = key.clone();
         self.spawn_tokio(
             window,
@@ -4071,6 +4136,45 @@ impl SettingsWindow {
                     }
                     Err(error) => this.pages.license_error = Some(error.text()),
                 }
+            },
+        );
+    }
+
+    /// Releases the activation on the license server first and only then
+    /// clears the local copy, so the key can be activated on another
+    /// installation. A failed request keeps the license and says so.
+    fn license_deactivate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pages.license_deactivating {
+            return;
+        }
+        let Some(license) = store::commercial_license() else {
+            return;
+        };
+        let Some(instance_id) = store::instance_id_or_create() else {
+            self.pages.license_error = Some(tr::settings::license::no_instance().to_string());
+            cx.notify();
+            return;
+        };
+        self.pages.license_deactivating = true;
+        self.pages.license_error = None;
+        cx.notify();
+
+        let key = license.license_key;
+        self.spawn_tokio(
+            window,
+            cx,
+            release_commercial_license(
+                license_api_base(),
+                key.clone(),
+                instance_id,
+                LICENSE_RELEASE_TIMEOUT,
+            ),
+            move |this, result, _window, cx| {
+                this.pages.license_deactivating = false;
+                this.pages.license_error = finish_license_release(&key, result)
+                    .err()
+                    .map(str::to_string);
+                cx.notify();
             },
         );
     }
@@ -4230,6 +4334,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
+        let deactivating = self.pages.license_deactivating;
         let expiry = license.expiry_date.map(|ms| {
             chrono::DateTime::from_timestamp_millis(ms as i64)
                 .map(|date| date.format("%-m/%-d/%Y").to_string())
@@ -4301,20 +4406,34 @@ impl SettingsWindow {
                         )
                     })
                     .child(div().h(px(1.)).w_full().bg(theme.settings_border()))
-                    .child(div().flex().flex_col().items_center().child(self.button(
-                        "license-deactivate",
-                        (ui::ButtonVariant::Destructive, None),
-                        tr::settings::license::deactivate(),
-                        false,
-                        cx,
-                        |this, _window, cx| {
-                            if !store::set_commercial_license(None) {
-                                tracing::warn!("clearing the commercial license failed");
-                            }
-                            this.pages.license_error = None;
-                            cx.notify();
-                        },
-                    ))),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(self.button(
+                                "license-deactivate",
+                                (ui::ButtonVariant::Destructive, None),
+                                if deactivating {
+                                    tr::settings::license::deactivating()
+                                } else {
+                                    tr::settings::license::deactivate()
+                                },
+                                deactivating,
+                                cx,
+                                |this, window, cx| this.license_deactivate(window, cx),
+                            ))
+                            .when_some(self.pages.license_error.clone(), |this, error| {
+                                this.child(
+                                    div()
+                                        .mt(px(8.))
+                                        .text_size(px(13.))
+                                        .text_center()
+                                        .text_color(Hsla::from(theme.red_9))
+                                        .child(error),
+                                )
+                            }),
+                    ),
             )
             .into_any_element()
     }
@@ -8862,5 +8981,177 @@ mod tests {
         let b = (TEMPLATES[0].build)();
         assert_ne!(a.id, b.id);
         assert!(a.enabled && a.conditions.is_empty());
+    }
+
+    /// A one-request stand-in for the license server: answers with
+    /// `response` (or never, when it is `None`) and hands back the request it
+    /// read.
+    fn license_server(response: Option<String>) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/api", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            // The client's JSON body is `{}`, the last bytes it sends.
+            loop {
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.ends_with(b"{}") {
+                    break;
+                }
+            }
+            match response {
+                Some(response) => stream.write_all(response.as_bytes()).unwrap(),
+                // Hold the connection open past the client's timeout.
+                None => std::thread::park_timeout(Duration::from_millis(1500)),
+            }
+            String::from_utf8(request).unwrap()
+        });
+        (base, handle)
+    }
+
+    fn release(base: String, timeout: Duration) -> Result<(), String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(release_commercial_license(
+                base,
+                "KEY-123".into(),
+                "instance-abc".into(),
+                timeout,
+            ))
+    }
+
+    fn http_response(status: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Deactivate frees the activation with the same key and instance id
+    /// headers activation sent, so the server matches this installation.
+    #[test]
+    fn license_release_sends_the_activation_identity() {
+        let response = http_response("200 OK", "application/json", r#"{"released":true}"#);
+        let (base, server) = license_server(Some(response));
+        assert_eq!(release(base, Duration::from_secs(5)), Ok(()));
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(
+            request.starts_with("post /api/commercial/release "),
+            "{request}"
+        );
+        assert!(request.contains("\r\nlicensekey: key-123\r\n"), "{request}");
+        assert!(
+            request.contains("\r\ninstanceid: instance-abc\r\n"),
+            "{request}"
+        );
+    }
+
+    /// The server answers 200 whenever nothing is held here any more, which
+    /// is also how a second click or an already freed key reads.
+    #[test]
+    fn license_release_treats_nothing_held_as_released() {
+        let response = http_response("200 OK", "application/json", r#"{"released":false}"#);
+        let (base, server) = license_server(Some(response));
+        assert_eq!(release(base, Duration::from_secs(5)), Ok(()));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn license_release_fails_on_any_other_answer() {
+        for response in [
+            http_response(
+                "500 Internal Server Error",
+                "application/json",
+                r#"{"message":"boom"}"#,
+            ),
+            http_response(
+                "403 Forbidden",
+                "application/json",
+                r#"{"message":"License expired"}"#,
+            ),
+            // A license server deployed before the route existed.
+            http_response("404 Not Found", "text/plain", "404 Not Found"),
+        ] {
+            let (base, server) = license_server(Some(response));
+            assert!(release(base, Duration::from_secs(5)).is_err());
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn license_release_fails_offline_and_on_timeout() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/api", closed.local_addr().unwrap());
+        drop(closed);
+        assert!(release(base, Duration::from_secs(5)).is_err());
+
+        let (base, server) = license_server(None);
+        let started = std::time::Instant::now();
+        assert!(release(base, Duration::from_millis(300)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        server.join().unwrap();
+    }
+
+    fn with_licensed_store(test: impl FnOnce()) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("store.json");
+        std::fs::write(
+            &path,
+            r#"{ "general_settings": { "instanceId": "instance-abc", "commercialLicense": { "licenseKey": "KEY-123", "expiryDate": null, "refresh": 1.0, "activatedOn": 2.0 } } }"#,
+        )
+        .unwrap();
+        store::set_test_tauri_store_path(Some(path));
+        test();
+        store::set_test_tauri_store_path(None);
+    }
+
+    /// A failed release (offline, timeout, server error) keeps the license on
+    /// this installation, since the server still holds it.
+    #[test]
+    fn failed_license_release_keeps_the_license() {
+        with_licensed_store(|| {
+            assert_eq!(
+                finish_license_release("KEY-123", Err("offline".into())),
+                Err(tr::settings::license::deactivate_failed())
+            );
+            assert_eq!(
+                store::commercial_license().map(|license| license.license_key),
+                Some("KEY-123".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn released_license_is_cleared_locally() {
+        with_licensed_store(|| {
+            assert_eq!(finish_license_release("KEY-123", Ok(())), Ok(()));
+            assert_eq!(store::commercial_license(), None);
+            // The installation keeps its id for the next activation.
+            assert_eq!(
+                store::instance_id_or_create().as_deref(),
+                Some("instance-abc")
+            );
+        });
+    }
+
+    /// A key activated while the release was in flight is not the one that
+    /// was freed, so it stays.
+    #[test]
+    fn release_does_not_clear_a_different_key() {
+        with_licensed_store(|| {
+            assert_eq!(finish_license_release("OLD-KEY", Ok(())), Ok(()));
+            assert_eq!(
+                store::commercial_license().map(|license| license.license_key),
+                Some("KEY-123".to_string())
+            );
+        });
     }
 }
