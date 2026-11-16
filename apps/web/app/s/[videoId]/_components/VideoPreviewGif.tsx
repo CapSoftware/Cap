@@ -66,3 +66,33 @@ function PreviewGifImage({
 		/>
 	);
 }
+
+/**
+ * The owner's custom thumbnail, shown in place of the animated preview until
+ * the first play. Rendered from the server-signed URL so it is in the HTML.
+ */
+export function VideoPoster({
+	src,
+	visible,
+}: {
+	src: string;
+	visible: boolean;
+}) {
+	return (
+		<Image
+			src={src}
+			alt=""
+			aria-hidden="true"
+			unoptimized
+			fill
+			sizes="(max-width: 768px) 100vw, 75vw"
+			loading="eager"
+			fetchPriority="high"
+			draggable={false}
+			className={clsx(
+				"object-contain absolute inset-0 z-[5] w-full h-full bg-black pointer-events-none transition-opacity duration-200",
+				visible ? "opacity-100" : "opacity-0",
+			)}
+		/>
+	);
+}

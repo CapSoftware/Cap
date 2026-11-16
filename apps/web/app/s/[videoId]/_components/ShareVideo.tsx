@@ -85,6 +85,7 @@ export const ShareVideo = forwardRef<
 		};
 		initialPlaybackUrl?: Promise<string | null>;
 		serverPlaybackUrl?: string | null;
+		posterUrl?: string | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -113,6 +114,7 @@ export const ShareVideo = forwardRef<
 			data,
 			initialPlaybackUrl,
 			serverPlaybackUrl = null,
+			posterUrl = null,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -592,6 +594,7 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -629,6 +632,7 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

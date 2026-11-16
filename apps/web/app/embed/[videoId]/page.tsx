@@ -21,6 +21,10 @@ import {
 	Videos,
 	VideosPolicy,
 } from "@cap/web-backend";
+import {
+	getCustomThumbnailKey,
+	getCustomThumbnailVersion,
+} from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -32,10 +36,13 @@ import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
 } from "@/lib/loom-deferred-processing";
+import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
+import { getPlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { getCustomThumbnailUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -61,6 +68,9 @@ export async function generateMetadata(
 						width: Option.getOrNull(video.width),
 						height: Option.getOrNull(video.height),
 						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+						thumbnailVersion: getCustomThumbnailVersion(
+							Option.getOrNull(video.metadata),
+						),
 					}),
 					robots: "index, follow",
 				}),
@@ -104,18 +114,10 @@ export default async function EmbedVideoPage(
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
-	const autoplay = searchParams.autoplay === "true";
 	const minimal = searchParams.slack === "true";
 	// `?t=` mirrors the share page, so an embed snippet copied "at 1:23" opens
-	// there too. Repeated params arrive as an array; take the first.
-	const startTimeParam = Array.isArray(searchParams.t)
-		? searchParams.t[0]
-		: searchParams.t;
-	const parsedStartTime = Number.parseInt(startTimeParam ?? "", 10);
-	const startTime =
-		Number.isFinite(parsedStartTime) && parsedStartTime > 0
-			? parsedStartTime
-			: null;
+	// there too. Repeated params arrive as an array; the parser takes the first.
+	const embedOptions = parseEmbedOptions(searchParams);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -160,6 +162,7 @@ export default async function EmbedVideoPage(
 					organizationName: organizations.name,
 					organizationIconUrl: organizations.iconUrl,
 					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
+					organizationMetadata: organizations.metadata,
 					hasActiveUpload:
 						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 							Boolean,
@@ -192,8 +195,7 @@ export default async function EmbedVideoPage(
 				{!data.needsPassword && (
 					<EmbedContent
 						video={data.video}
-						autoplay={autoplay}
-						startTime={startTime}
+						options={embedOptions}
 						minimal={minimal}
 					/>
 				)}
@@ -209,9 +211,8 @@ export default async function EmbedVideoPage(
 }
 
 async function EmbedContent({
-	video,
-	autoplay,
-	startTime,
+	video: { organizationMetadata, ...video },
+	options,
 	minimal,
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
@@ -221,9 +222,9 @@ async function EmbedContent({
 		organizationName: (typeof organizations.$inferSelect)["name"] | null;
 		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
 		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
+		organizationMetadata: (typeof organizations.$inferSelect)["metadata"] | null;
 	};
-	autoplay: boolean;
-	startTime: number | null;
+	options: EmbedOptions;
 	minimal: boolean;
 }) {
 	const [user, sharedSpaces, [videoOwner]] = await Promise.all([
@@ -358,7 +359,8 @@ async function EmbedContent({
 		);
 	}
 
-	const [commentsQuery, ownerImageUrl, branding] = await Promise.all([
+	const customThumbnailKey = getCustomThumbnailKey(video);
+	const [commentsQuery, ownerImageUrl, branding, posterUrl] = await Promise.all([
 		db()
 			.select({
 				id: comments.id,
@@ -396,7 +398,7 @@ async function EmbedContent({
 				? video.organizationIconUrl
 				: video.shareableLinkIconUrl;
 
-			if (!ownerIsProUser || !icon || minimal) {
+			if (!ownerIsProUser || !icon || minimal || !options.showBranding) {
 				return getSharePageBranding(brandingInput);
 			}
 
@@ -409,12 +411,29 @@ async function EmbedContent({
 				shareableLinkIconUrl: imageUrl,
 			});
 		}).pipe(EffectRuntime.runPromise),
+		customThumbnailKey
+			? getCustomThumbnailUrl(
+					{ ...video, owner: { id: video.ownerId } },
+					customThumbnailKey,
+				)
+			: Promise.resolve(null),
 	]);
 
+	const brandAttributes = playerBrandAttributes(
+		getPlayerBrand({
+			ownerIsPro: ownerIsProUser,
+			organizationMetadata,
+		}),
+	);
+
 	return (
+		<div className="contents" {...brandAttributes}>
 		<EmbedVideo
 			data={video}
-			branding={branding}
+			branding={
+				ownerIsProUser && !options.showBranding ? null : branding
+			}
+			posterUrl={posterUrl}
 			user={user}
 			comments={commentsQuery}
 			chapters={
@@ -422,9 +441,12 @@ async function EmbedContent({
 			}
 			ownerName={videoOwner?.name || null}
 			ownerImageUrl={ownerImageUrl}
-			autoplay={autoplay}
-			startTime={startTime}
+			autoplay={options.autoplay}
+			muted={options.muted}
+			startTime={options.startTime}
 			minimal={minimal}
+			showTitle={options.showTitle}
+			showOwner={options.showOwner}
 			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
 				video.settings?.defaultPlaybackSpeed,
 				video.orgSettings?.defaultPlaybackSpeed,
@@ -437,5 +459,6 @@ async function EmbedContent({
 					: null
 			}
 		/>
+		</div>
 	);
 }
