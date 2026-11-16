@@ -1,0 +1,3 @@
+test editor_clips::probe_clip_names::probe_build_clip_names_project ... probe segment 0 None
+probe segment 1 Some("Product demo")
+probe segment 2 Some("Customer call")
