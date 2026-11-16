@@ -23,6 +23,7 @@ import {
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
 import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 import { formatChaptersAsVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { type PlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
 import { formatPlayerTime } from "@/lib/player-time";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
@@ -61,6 +62,7 @@ export const EmbedVideo = forwardRef<
 		};
 		branding: SharePageBranding | null;
 		posterUrl?: string | null;
+		playerBrand?: PlayerBrand | null;
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
@@ -84,6 +86,7 @@ export const EmbedVideo = forwardRef<
 			data,
 			branding,
 			posterUrl = null,
+			playerBrand = null,
 			user: _user,
 			comments: _comments,
 			chapters = [],
@@ -273,6 +276,7 @@ export const EmbedVideo = forwardRef<
 			<>
 				<div
 					ref={playerContainerRef}
+					{...playerBrandAttributes(playerBrand)}
 					className="relative w-screen h-screen rounded-xl"
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}

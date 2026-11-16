@@ -38,7 +38,7 @@ import {
 	startDeferredLoomProcessing,
 } from "@/lib/loom-deferred-processing";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
-import { getPlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
+import { getPlayerBrand } from "@/lib/player-brand";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
@@ -423,44 +423,41 @@ async function EmbedContent({
 		],
 	);
 
-	const brandAttributes = playerBrandAttributes(
-		getPlayerBrand({
-			ownerIsPro: ownerIsProUser,
-			organizationMetadata,
-		}),
-	);
+	const playerBrand = getPlayerBrand({
+		ownerIsPro: ownerIsProUser,
+		organizationMetadata,
+	});
 
 	return (
-		<div className="contents" {...brandAttributes}>
-			<EmbedVideo
-				data={video}
-				branding={ownerIsProUser && !options.showBranding ? null : branding}
-				posterUrl={posterUrl}
-				user={user}
-				comments={commentsQuery}
-				chapters={
-					rules.settings.disableChapters ? [] : initialAiData?.chapters || []
-				}
-				ownerName={videoOwner?.name || null}
-				ownerImageUrl={ownerImageUrl}
-				autoplay={options.autoplay}
-				muted={options.muted}
-				startTime={options.startTime}
-				minimal={minimal}
-				showTitle={options.showTitle}
-				showOwner={options.showOwner}
-				defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
-					video.settings?.defaultPlaybackSpeed,
-					video.orgSettings?.defaultPlaybackSpeed,
-				)}
-				viewerSettings={rules.settings}
-				showPlaybackStatusBadge={user?.id === video.ownerId}
-				callToAction={
-					ownerIsProUser && !minimal
-						? parseShareCallToAction(video.settings)
-						: null
-				}
-			/>
-		</div>
+		<EmbedVideo
+			data={video}
+			branding={ownerIsProUser && !options.showBranding ? null : branding}
+			posterUrl={posterUrl}
+			playerBrand={playerBrand}
+			user={user}
+			comments={commentsQuery}
+			chapters={
+				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
+			}
+			ownerName={videoOwner?.name || null}
+			ownerImageUrl={ownerImageUrl}
+			autoplay={options.autoplay}
+			muted={options.muted}
+			startTime={options.startTime}
+			minimal={minimal}
+			showTitle={options.showTitle}
+			showOwner={options.showOwner}
+			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+				video.settings?.defaultPlaybackSpeed,
+				video.orgSettings?.defaultPlaybackSpeed,
+			)}
+			viewerSettings={rules.settings}
+			showPlaybackStatusBadge={user?.id === video.ownerId}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
+		/>
 	);
 }
