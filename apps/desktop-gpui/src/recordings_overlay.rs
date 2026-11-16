@@ -820,7 +820,9 @@ impl Overlay {
     }
 
     fn save_to(&mut self, id: u64, destination: PathBuf, cx: &mut Context<Self>) {
-        let Some(entry) = self.entry(id) else {
+        let Some(entry) = self.entry(id).filter(|entry| {
+            entry.state == ActionState::Busy(ActionKind::Save, Stage::ChoosingLocation)
+        }) else {
             return;
         };
         let kind = entry.kind;
@@ -1580,7 +1582,12 @@ impl OverlayView {
         let (fill, hover, active, icon_color): (gpui::Hsla, gpui::Hsla, gpui::Hsla, gpui::Hsla) =
             if theme.is_dark() {
                 let fill = gpui::Hsla::from(theme.gray_12);
-                (fill, fill.opacity(0.9), fill.opacity(0.8), theme.gray_2.into())
+                (
+                    fill,
+                    fill.opacity(0.9),
+                    fill.opacity(0.8),
+                    theme.gray_2.into(),
+                )
             } else {
                 (
                     theme.gray_1.into(),
@@ -1749,7 +1756,13 @@ async fn choose_save_path(
             }
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    // A screenshot closes the overlay window while this dialog is open, so the
+    // Linux dialog must not be owned by it; `save_to` checks the card instead.
+    #[cfg(target_os = "linux")]
+    {
+        platform::save_file_panel_async_unowned(suggested, &[extension], cx).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         platform::save_file_panel_async(suggested, &[extension], cx).await
     }

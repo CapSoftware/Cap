@@ -451,6 +451,23 @@ pub(crate) async fn open_file_panel_from_app_async(
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
+/// `save_file_panel_async` parented to the calling window but not owned by
+/// it: the chosen path survives that window closing, so the caller must check
+/// its own state before using it.
+#[cfg(target_os = "linux")]
+pub(crate) async fn save_file_panel_async_unowned(
+    suggested: &str,
+    extensions: &[&str],
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    let parent = cx
+        .update(|window, _| LinuxFileDialogParent::from_window(window))
+        .ok()
+        .flatten();
+    let result = linux_save_file_panel(suggested, extensions, None, parent, cx).await;
+    finish_linux_file_dialog(result, None, cx).await
+}
+
 pub(crate) async fn save_file_panel_async(
     suggested: &str,
     extensions: &[&str],

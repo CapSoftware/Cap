@@ -431,3 +431,35 @@ fn a_screenshot_during_a_recording_keeps_the_stack_hidden(cx: &mut TestAppContex
     });
     assert!(overlay.read_with(cx, |overlay, _| !overlay.hidden()));
 }
+
+#[gpui::test]
+fn a_chosen_export_path_only_starts_the_card_still_waiting_for_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = bundle(&dir, "screenshot");
+    let overlay = cx.new(|_| Overlay::default());
+    let id = overlay.update(cx, |overlay, cx| {
+        overlay.add(path.clone(), MediaKind::Screenshot, cx);
+        overlay.entries[0].id
+    });
+    let state = |cx: &mut TestAppContext| {
+        overlay.read_with(cx, |overlay, _| overlay.entry(id).unwrap().state.clone())
+    };
+    let destination = dir.path().join("out.png");
+
+    overlay.update(cx, |overlay, cx| {
+        overlay.save_to(id, destination.clone(), cx)
+    });
+    assert_eq!(state(cx), ActionState::Idle);
+
+    overlay.update(cx, |overlay, cx| {
+        assert!(overlay.begin(id, ActionKind::Save, Stage::ChoosingLocation, cx));
+        overlay.save_to(id, destination.clone(), cx);
+    });
+    assert!(
+        matches!(state(cx), ActionState::Busy(ActionKind::Save, stage) if stage != Stage::ChoosingLocation)
+    );
+
+    overlay.update(cx, |overlay, cx| overlay.remove(id, cx));
+    overlay.update(cx, |overlay, cx| overlay.save_to(id, destination, cx));
+    assert!(paths(&overlay, cx).is_empty());
+}
