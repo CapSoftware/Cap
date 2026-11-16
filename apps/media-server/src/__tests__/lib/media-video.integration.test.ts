@@ -1987,6 +1987,22 @@ describe("DASH segment expansion", () => {
 				);
 			});
 		});
+
+		test("are not inferred when the video uses an unsupported segment layout", async () => {
+			const unsupportedVideo = audioOnly.replace(
+				"</Period>",
+				'<AdaptationSet id="1" contentType="video"><Representation id="1" bandwidth="1500000" codecs="vp9" mimeType="video/webm" width="1280" height="720"><SegmentList><Initialization sourceURL="v-init.webm"/><SegmentURL media="v-0.webm"/></SegmentList></Representation></AdaptationSet></Period>',
+			);
+			await withManifest(unsupportedVideo, async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(url, dir, undefined, {
+						allowAudioOnly: true,
+					}),
+				).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+			});
+		});
 	});
 
 	test.each([

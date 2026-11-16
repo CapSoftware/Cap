@@ -823,6 +823,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
 	let segmentTotal = 0;
+	let declaresNonAudio = false;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -844,6 +845,7 @@ export async function materializeMpdAsHlsPlaylist(
 				representation.attributes,
 				adaptation.attributes,
 			);
+			if (type !== "audio") declaresNonAudio = true;
 			if (!type) continue;
 
 			const representationTemplate = getFirstXmlElementBlock(
@@ -924,7 +926,9 @@ export async function materializeMpdAsHlsPlaylist(
 	);
 
 	const audioOnly =
-		videoPlaylists.length === 0 && options.allowAudioOnly === true;
+		videoPlaylists.length === 0 &&
+		!declaresNonAudio &&
+		options.allowAudioOnly === true;
 	const variants = audioOnly ? audioPlaylists.slice(0, 1) : videoPlaylists;
 
 	if (variants.length === 0) {
