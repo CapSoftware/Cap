@@ -451,6 +451,41 @@ pub(crate) async fn open_file_panel_from_app_async(
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
+/// `save_file_panel_async` parented to the calling window but not owned by
+/// it: the chosen path survives that window closing, so the caller must check
+/// its own state before using it. With no owner to show an alert in, a failed
+/// dialog comes back as a short message for the caller to show; raw portal
+/// errors are logged instead.
+#[cfg(target_os = "linux")]
+pub(crate) async fn save_file_panel_async_unowned(
+    suggested: &str,
+    extensions: &[&str],
+    cx: &mut gpui::AsyncWindowContext,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let parent = cx
+        .update(|window, _| LinuxFileDialogParent::from_window(window))
+        .ok()
+        .flatten();
+    linux_save_file_panel(suggested, extensions, None, parent, cx)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "native file dialog failed");
+            unowned_dialog_message(&error)
+        })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unowned_dialog_message(error: &LinuxFileDialogError) -> String {
+    match error {
+        LinuxFileDialogError::BeforeDispatch(_) | LinuxFileDialogError::NativeResponse(_) => {
+            crate::i18n::tr::dialog::file::unavailable_title().into()
+        }
+        LinuxFileDialogError::Busy
+        | LinuxFileDialogError::Indeterminate(_)
+        | LinuxFileDialogError::RestartRequired => error.message(),
+    }
+}
+
 pub(crate) async fn save_file_panel_async(
     suggested: &str,
     extensions: &[&str],
@@ -3759,6 +3794,27 @@ mod file_dialog_tests {
         sync::atomic::AtomicU8,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn unowned_dialog_failures_read_without_raw_portal_errors() {
+        let raw = "org.freedesktop.portal.Error.Failed: zbus";
+        for error in [
+            LinuxFileDialogError::BeforeDispatch(raw.into()),
+            LinuxFileDialogError::NativeResponse(raw.into()),
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, "File dialog unavailable");
+        }
+        for error in [
+            LinuxFileDialogError::Busy,
+            LinuxFileDialogError::Indeterminate(raw.into()),
+            LinuxFileDialogError::RestartRequired,
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, error.message());
+            assert!(!message.contains(raw));
+        }
+    }
 
     #[test]
     fn active_native_dialog_rejects_repeated_requests() {

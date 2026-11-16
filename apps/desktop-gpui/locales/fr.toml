@@ -367,7 +367,7 @@ screen_region = "Zone de l'écran"
 [settings.options.post_studio]
 do_nothing = "Ne rien faire"
 open_editor = "Ouvrir l'éditeur"
-show_cap = "Afficher Cap"
+show_overlay = "Afficher en superposition"
 
 [settings.options.post_screenshot]
 copy = "Copier dans le presse-papiers"
@@ -451,8 +451,8 @@ screenshot_open_editor_hint = "Annoter d'abord"
 studio_do_nothing = "Ne rien faire"
 studio_open_editor = "Ouvrir l'éditeur"
 studio_open_editor_hint = "Modifier tout de suite"
-studio_show_cap = "Afficher Cap"
-studio_show_cap_hint = "Retour à l'enregistreur"
+studio_show_overlay = "Superposition"
+studio_show_overlay_hint = "Copier, partager, exporter"
 
 [settings.shortcuts.label]
 add_marker = "Ajouter un repère"
@@ -1152,6 +1152,35 @@ no_matching_windows = "Aucune fenêtre correspondante"
 no_windows = "Aucune fenêtre trouvée"
 window = "Fenêtre"
 
+[recordings_overlay]
+close = "Fermer"
+copy = "Copier dans le presse-papiers"
+copy_link = "Copier le lien de partage"
+create_link = "Créer un lien de partage"
+edit = "Modifier"
+export = "Exporter"
+open = "Ouvrir"
+retry = "Réessayer"
+
+[recordings_overlay.progress]
+choose_image = "Choisissez où enregistrer l'image"
+choose_video = "Choisissez où exporter la vidéo"
+copied = "Copié dans le presse-papiers"
+copy_failed = "Copie impossible"
+copying = "Copie dans le presse-papiers"
+creating_link = "Création du lien de partage"
+failed_hint = "Un problème est survenu. Réessayez."
+link_copied = "Lien de partage copié"
+preparing = "Préparation"
+rendering_video = "Rendu de la vidéo"
+save_failed = "Enregistrement impossible"
+saved_image = "Image enregistrée"
+saved_video = "Vidéo enregistrée"
+saving_image = "Enregistrement de l'image"
+saving_video = "Enregistrement de la vidéo"
+share_failed = "Impossible de créer le lien"
+share_failed_hint = "Vérifiez votre connexion et réessayez."
+
 [controls]
 disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."
 low_storage = "Espace de stockage faible. Cap va bientôt s'arrêter pour préserver votre enregistrement."
@@ -1410,6 +1439,8 @@ devices_changed_before_start = "Les appareils sélectionnés ont changé avant l
 shortcut_conflict = "Ctrl+Shift+F9 est attribué à une autre action de Cap. Modifiez ce raccourci avant d'enregistrer."
 shortcut_description = "Lancer ou arrêter cet enregistrement Cap"
 shortcut_hint = "Appuyez sur {shortcut} puis relâchez pour démarrer. Utilisez le même raccourci pour arrêter. Ce raccourci temporaire ne modifie pas vos réglages."
+source_lost = "Cap a arrêté l'enregistrement, car ce qu'il capturait n'est plus disponible, par exemple l'écran s'est mis en veille ou la fenêtre a été fermée. Tout ce qui a été enregistré jusque-là a été sauvegardé."
+source_lost_title = "Enregistrement arrêté"
 tray_stop_hint = "Activez l'icône d'arrêt de Cap dans la zone de notification pour démarrer. Activez-la à nouveau pour arrêter. L'enregistrement ne commencera pas tant que vous n'aurez pas utilisé cette commande."
 window_unavailable = "La fenêtre sélectionnée n'est plus disponible. Sélectionnez-la à nouveau."
 
@@ -2919,9 +2950,10 @@ cleanup = "Nettoyer"
 cleanup_tooltip = "Supprimer les mots de remplissage et raccourcir les pauses"
 delete_matches = "Tout supprimer"
 delete_matches_tooltip = "Couper chaque résultat de la vidéo"
+edit_hint = "Entrée pour enregistrer, Échap pour annuler, Tab pour le mot suivant"
 empty_description = "Transcrivez cet enregistrement sur cet ordinateur, puis modifiez la vidéo en modifiant son texte."
 empty_title = "Pas encore de transcription"
-hint = "Cliquez sur un mot pour y aller. Sélectionnez des mots et appuyez sur la touche Supprimer pour les couper de la vidéo."
+hint = "Cliquez sur un mot pour y aller, double-cliquez pour le corriger. Sélectionnez des mots et appuyez sur la touche Supprimer pour les couper de la vidéo."
 next_match = "Résultat suivant"
 no_audio = "Cet enregistrement n'a pas d'audio à transcrire."
 no_speech = "Aucune parole trouvée dans cet enregistrement"
@@ -3211,6 +3243,13 @@ pending = "Fermeture annulée, car l'arrêt de l'enregistrement est toujours en 
 quit_anyway = "Quitter quand même"
 still_open = "Cap est toujours ouvert"
 unconfirmed = "Fermeture annulée, car l'arrêt de l'enregistrement n'a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
+
+[dialog.startup]
+failed = "{error}\n\nLes détails ont été enregistrés dans {folder}."
+failed_title = "Cap n'a pas pu démarrer"
+quit_and_reopen = "Quitter et rouvrir"
+unresponsive = "Cap est déjà ouvert mais ne répond pas. Quitter cette instance et rouvrir Cap ?"
+unresponsive_title = "Cap ne répond pas"
 
 [dialog.update]
 already_getting = "Cap prépare déjà la version {version}."
