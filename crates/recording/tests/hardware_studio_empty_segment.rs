@@ -28,6 +28,34 @@ fn init() {
     ffmpeg::init().expect("failed to initialize ffmpeg");
 }
 
+/// What the app does after Stop: remux a fragmented recording, then every
+/// saved segment's display must open. Returns the number of saved segments.
+fn finalize_and_open(recording_dir: &std::path::Path, fragmented: bool) -> usize {
+    cap_recording::recovery::RecoveryManager::remux_if_needed(recording_dir).unwrap_or_else(
+        |error| panic!("fragmented {fragmented}: finalizing the recording failed: {error}"),
+    );
+    let meta = RecordingMeta::load_for_project(recording_dir).unwrap();
+    let studio = meta.studio_meta().unwrap();
+    let status = studio.status();
+    assert!(
+        matches!(status, StudioRecordingStatus::Complete),
+        "fragmented {fragmented}: status after finalizing {status:?}"
+    );
+    let StudioRecordingMeta::MultipleSegments { inner } = studio else {
+        panic!("fragmented {fragmented}: not a multi-segment Studio recording");
+    };
+    for segment in &inner.segments {
+        let display = segment.display.path.to_path(recording_dir);
+        assert!(probe_media_valid(&display), "{}", display.display());
+        assert!(
+            probe_video_can_decode(&display).unwrap_or(false),
+            "{}",
+            display.display()
+        );
+    }
+    inner.segments.len()
+}
+
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn studio_segment_without_screen_frames_keeps_the_recording_with_real_screen() {
@@ -82,9 +110,11 @@ async fn studio_segment_without_screen_frames_keeps_the_recording_with_real_scre
             !matches!(status, StudioRecordingStatus::Failed { .. }),
             "fragmented {fragmented}: status {status:?}"
         );
+        let saved = inner.segments.len();
+        let opened = finalize_and_open(&recording_dir, fragmented);
+        assert_eq!(opened, saved, "fragmented {fragmented}");
         eprintln!(
-            "quick pauses, fragmented {fragmented}: kept {} of {} segments, status {status:?}",
-            inner.segments.len(),
+            "quick pauses, fragmented {fragmented}: kept {saved} of {} segments, status {status:?}",
             QUICK_PAUSES + 1
         );
     }
@@ -151,12 +181,12 @@ async fn studio_segment_without_screen_frames_keeps_the_recording_with_real_scre
             if fragmented {
                 [
                     "content/segments/segment-0/display",
-                    "content/segments/segment-2/display",
+                    "content/segments/segment-1/display",
                 ]
             } else {
                 [
                     "content/segments/segment-0/display.mp4",
-                    "content/segments/segment-2/display.mp4",
+                    "content/segments/segment-1/display.mp4",
                 ]
             },
             "fragmented {fragmented}: the two recorded segments are kept and the empty one is left out"
@@ -166,20 +196,18 @@ async fn studio_segment_without_screen_frames_keeps_the_recording_with_real_scre
                 segment.system_audio.is_some(),
                 "fragmented {fragmented}: a kept segment lost its audio"
             );
-            if !fragmented {
-                let display = segment.display.path.to_path(&recording_dir);
-                assert!(probe_media_valid(&display), "{}", display.display());
-                assert!(
-                    probe_video_can_decode(&display).unwrap_or(false),
-                    "{}",
-                    display.display()
-                );
-            }
         }
         assert!(
-            recording_dir.join("content/segments/segment-1").is_dir(),
-            "fragmented {fragmented}: the empty segment's files stay on disk"
+            recording_dir
+                .join("content/empty-segments/segment-1-0")
+                .is_dir(),
+            "fragmented {fragmented}: the empty segment's files are kept aside"
         );
+        assert!(
+            !recording_dir.join("content/segments/segment-2").exists(),
+            "fragmented {fragmented}: the next segment took the empty one's index"
+        );
+        assert_eq!(finalize_and_open(&recording_dir, fragmented), 2);
         eprintln!("fragmented {fragmented}: kept {kept:?}, status {status:?}");
     }
 }
