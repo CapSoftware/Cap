@@ -1,5 +1,3 @@
-import { MAX_UPLOAD_BYTES } from "@/lib/infra-upload";
-
 export const IMPORT_MAX_IN_FLIGHT_PER_APP = 2;
 export const IMPORT_MAX_PER_KEY_PER_HOUR = 30;
 export const IMPORT_RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -13,6 +11,8 @@ export const IMPORT_STALL_TIMEOUT_MS = 30 * 1000;
 export const IMPORT_PREFLIGHT_TIMEOUT_MS = 15 * 1000;
 export const IMPORT_MAX_REDIRECTS = 3;
 export const IMPORT_URL_MAX_LENGTH = 2_048;
-export const IMPORT_MAX_BYTES = MAX_UPLOAD_BYTES;
+// A URL import holds the file it reads in memory until the download loop is
+// fixed, so the largest import stays well inside what its function can hold.
+export const IMPORT_MAX_BYTES = 1_500_000_000;
 export const IMPORT_PART_BYTES = 16 * 1024 * 1024;
 export const IMPORT_ADMISSION_CHECK_BYTES = 1024 * 1024 * 1024;
