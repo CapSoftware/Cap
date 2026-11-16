@@ -700,9 +700,13 @@ final class EditorModel {
         let audioChanged = current.music != target.music || current.voiceVolume != target.voiceVolume
         music = target.music
         voiceVolume = target.voiceVolume
-        Task {
-            if audioChanged, !(await loadMusic()) { return }
-            show(look: target.look, timelineFrom: current.timeline, forceRebuild: audioChanged, seekTo: target.timeline.outputTime(forSource: source))
+        // The look goes back at once, so a look chosen while the music loads is newer and isn't replaced by it.
+        show(look: target.look, timelineFrom: current.timeline, forceRebuild: false, seekTo: target.timeline.outputTime(forSource: source))
+        if audioChanged {
+            Task {
+                guard await loadMusic() else { return }
+                show(look: look, timelineFrom: timeline, forceRebuild: true, seekTo: outputTime)
+            }
         }
         changed()
     }
@@ -983,6 +987,8 @@ final class EditorModel {
         guard let wanted, let url = musicURL(wanted.source) else {
             musicSource = nil
             musicWaveform = []
+            // Choosing the same song again later reads its waveform again.
+            loadedMusic = nil
             return true
         }
         beginMedia()
@@ -1249,8 +1255,13 @@ enum EditorDebug {
 
 extension EditorModel {
     /// Look changes as a person makes them: taps through backgrounds, a padding drag, the camera moved around,
-    /// a new frame shape, music, playback, then a render.
-    func runLookScript(pause: (Double) async -> Void) async {
+    /// a new frame shape, music, playback, then a render. False when a check along the way failed.
+    func runLookScript(pause: (Double) async -> Void) async -> Bool {
+        var passed = true
+        func check(_ name: String, _ ok: Bool) {
+            ProcessStats.note("Studio script check \(name): \(ok ? "ok" : "FAILED")")
+            if !ok { passed = false }
+        }
         func memory(_ stage: String) {
             ProcessStats.note("Studio script stage \(stage)")
             let footprint = ProcessStats.footprint()
@@ -1294,9 +1305,20 @@ extension EditorModel {
         setLook { $0.aspect = .auto }
         await pause(0.6)
         memory("afterLooks")
-        await setMusic(StudioMusic(source: .builtIn("lofi-beats-mirostar"), title: "Lofi Beats"))
+        let lofi = StudioMusic(source: .builtIn("lofi-beats-mirostar"), title: "Lofi Beats")
+        await setMusic(lofi)
         ProcessStats.note("Studio script stage music")
         await pause(0.4)
+        // None, then the same song again, still draws its waveform.
+        await setMusic(nil)
+        await setMusic(lofi)
+        check("waveformAfterReselect", !musicWaveform.isEmpty)
+        // Undoing a music change reloads the music; a background chosen meanwhile is newer and stays.
+        await setMusic(nil)
+        undo()
+        setLook { $0.background = .wallpaper("purple-2") }
+        await pause(1.5)
+        check("lookKeptAfterUndo", look.background == .wallpaper("purple-2") && music?.source == lofi.source)
         seek(toOutput: 0)
         await pause(0.3)
         togglePlay()
@@ -1318,6 +1340,7 @@ extension EditorModel {
         } catch {
             ProcessStats.note("Studio script export failed: \(error)")
         }
+        return passed
     }
 }
 
@@ -1329,9 +1352,9 @@ extension EditorModel {
         await pause(1.5)
         metrics.record("memoryMB.open", ProcessStats.footprint().current)
         metrics.record("peakMB.open", ProcessStats.footprint().peak)
+        // A failed check leaves the editor open, which fails the UI test waiting for it to close.
         if ProcessInfo.processInfo.environment["CAP_DEBUG_EDITOR_SCRIPT_LOOK_ONLY"] == "1" {
-            await runLookScript(pause: pause)
-            onDone()
+            if await runLookScript(pause: pause) { onDone() }
             return
         }
         let length = timeline.outputDuration
@@ -1371,9 +1394,9 @@ extension EditorModel {
         togglePlay()
         await pause(2)
         togglePlay()
-        await runLookScript(pause: pause)
+        let passed = await runLookScript(pause: pause)
         ProcessStats.note("Editor script finished: \(timeline.clips.count) clips, \(timeline.outputDuration) s")
-        onDone()
+        if passed { onDone() }
     }
 }
 #endif
