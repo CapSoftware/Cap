@@ -1001,6 +1001,23 @@ fn update_stage(
     .ok();
 }
 
+/// What a failed card says. Raw errors (HTTP statuses, API keys, paths) are
+/// logged by `finish` and replaced with a short hint; messages already
+/// written for people pass through.
+pub fn failure_message(kind: ActionKind, error: String) -> String {
+    if error == tr::editor::export::sign_in_required()
+        || error == tr::editor::export::upgrade_message()
+        || cap_utils::export_resources::is_resource_stop(&error)
+    {
+        return error;
+    }
+    match kind {
+        ActionKind::Share => tr::recordings_overlay::progress::share_failed_hint(),
+        ActionKind::Copy | ActionKind::Save => tr::recordings_overlay::progress::failed_hint(),
+    }
+    .to_string()
+}
+
 fn finish(
     this: &WeakEntity<Overlay>,
     id: u64,
@@ -1034,7 +1051,7 @@ fn finish(
         let state = match result {
             Ok(()) => ActionState::Done(kind),
             Err(_) if cancelled => ActionState::Idle,
-            Err(error) => ActionState::Failed(kind, error),
+            Err(error) => ActionState::Failed(kind, failure_message(kind, error)),
         };
         if state == ActionState::Done(ActionKind::Share)
             && let Some(entry) = overlay.entry_mut(id)
@@ -1557,6 +1574,21 @@ impl OverlayView {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
         let theme = self.theme;
+        // Light circles with dark icons in both appearances, as in Tauri
+        // (`bg-gray-1 dark:bg-gray-12`, icons `dark:text-gray-100`), so the
+        // buttons read on any thumbnail under the dark scrim.
+        let (fill, hover, active, icon_color): (gpui::Hsla, gpui::Hsla, gpui::Hsla, gpui::Hsla) =
+            if theme.is_dark() {
+                let fill = gpui::Hsla::from(theme.gray_12);
+                (fill, fill.opacity(0.9), fill.opacity(0.8), theme.gray_2.into())
+            } else {
+                (
+                    theme.gray_1.into(),
+                    theme.gray_3.into(),
+                    theme.gray_4.into(),
+                    theme.gray_12.into(),
+                )
+            };
         div()
             .id(id.into())
             .size(px(28.))
@@ -1564,13 +1596,13 @@ impl OverlayView {
             .items_center()
             .justify_center()
             .rounded_full()
-            .bg(theme.gray_1)
-            .text_color(theme.gray_12)
+            .bg(fill)
+            .text_color(icon_color)
             .shadow_sm()
             .cursor_pointer()
-            .hover(|style| style.bg(theme.gray_3))
-            .active(|style| style.bg(theme.gray_4))
-            .child(svg().path(icon).size(px(14.)).text_color(theme.gray_12))
+            .hover(move |style| style.bg(hover))
+            .active(move |style| style.bg(active))
+            .child(svg().path(icon).size(px(14.)).text_color(icon_color))
             .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
             .on_click(on_click)
             .into_any_element()

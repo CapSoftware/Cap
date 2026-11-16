@@ -173,6 +173,32 @@ fn every_state_has_the_title_its_action_shows() {
 }
 
 #[test]
+fn failed_cards_show_a_hint_instead_of_the_raw_error() {
+    let raw = "create_or_get_video/error/500 Internal Server Error".to_string();
+    assert_eq!(
+        failure_message(ActionKind::Share, raw.clone()),
+        "Check your connection and try again."
+    );
+    assert_eq!(
+        failure_message(ActionKind::Copy, raw.clone()),
+        "Something went wrong. Try again."
+    );
+    assert_eq!(
+        failure_message(ActionKind::Save, raw),
+        "Something went wrong. Try again."
+    );
+
+    for written in [
+        tr::editor::export::sign_in_required().to_string(),
+        tr::editor::export::upgrade_message().to_string(),
+        "Export stopped to protect your computer: memory pressure stayed critically high."
+            .to_string(),
+    ] {
+        assert_eq!(failure_message(ActionKind::Share, written.clone()), written);
+    }
+}
+
+#[test]
 fn details_read_like_the_tauri_strip() {
     assert_eq!(format_duration(0.4), "0:00");
     assert_eq!(format_duration(65.2), "1:05");
