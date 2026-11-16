@@ -57,7 +57,7 @@ pub fn acquire() {
         }
     }
     #[cfg(windows)]
-    acquire_windows_instance(&path);
+    let _launch_lock = acquire_windows_instance(&path);
     #[cfg(target_os = "linux")]
     let _launch_lock = match acquire_linux_instance(
         &path,
@@ -1205,8 +1205,10 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
     .detach();
 }
 
+/// Held until this launch has published its pidfile and endpoint, so the next
+/// launch finds them instead of a stale pid.
 #[cfg(windows)]
-fn acquire_windows_instance(path: &Path) {
+fn acquire_windows_instance(path: &Path) -> WindowsLaunchLock {
     use std::hash::{Hash, Hasher};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError},
@@ -1215,7 +1217,14 @@ fn acquire_windows_instance(path: &Path) {
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hasher);
-    let name = format!("Local\\CapGpui-{:016x}", hasher.finish())
+    let profile = format!("{:016x}", hasher.finish());
+    let launch_lock = match lock_windows_launch(&format!("Local\\CapGpuiLaunch-{profile}")) {
+        Ok(lock) => lock,
+        Err(error) => {
+            crate::startup::fail(format!("Could not acquire the Cap instance lock: {error}"))
+        }
+    };
+    let name = format!("Local\\CapGpui-{profile}")
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
@@ -1273,6 +1282,52 @@ fn acquire_windows_instance(path: &Path) {
 
     if let Err(error) = start_deep_link_forwarding(path) {
         crate::startup::fail(format!("Could not start Cap deep-link forwarding: {error}"));
+    }
+    launch_lock
+}
+
+/// Launches of one profile take turns through this lock, and only the holder
+/// opens the instance mutex. A launch still checking on a frozen copy would
+/// otherwise keep that mutex alive after another launch ended the copy, so
+/// both would find it taken with nobody behind it and stop. A launch that
+/// dies while holding the lock leaves it abandoned, which counts as free.
+#[cfg(windows)]
+struct WindowsLaunchLock(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for WindowsLaunchLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::ReleaseMutex};
+
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn lock_windows_launch(name: &str) -> std::io::Result<WindowsLaunchLock> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0},
+        System::Threading::{CreateMutexW, INFINITE, WaitForSingleObject},
+    };
+
+    let name = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if mutex.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    match unsafe { WaitForSingleObject(mutex, INFINITE) } {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(WindowsLaunchLock(mutex)),
+        _ => {
+            let error = std::io::Error::last_os_error();
+            let _ = unsafe { CloseHandle(mutex) };
+            Err(error)
+        }
     }
 }
 
@@ -1936,7 +1991,18 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         entries.sort();
-        assert_eq!(entries, ["acquire-returned", "cap-gpui.pid"]);
+        // The launch lock stays on disk: removing it would let two launches
+        // lock different files and both carry on.
+        assert_eq!(
+            entries,
+            ["acquire-returned", "cap-gpui.lock", "cap-gpui.pid"]
+        );
+        let lock = std::fs::metadata(fixture.directory.join("cap-gpui.lock")).unwrap();
+        assert_eq!(lock.len(), 0);
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&lock.permissions()) & 0o777,
+            0o600
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -3491,6 +3557,66 @@ mod windows_takeover_tests {
         end_windows_process(fake.pid()).unwrap();
         assert!(exited(&mut fake.child));
         assert!(!windows_process_is_cap(fake.pid()));
+    }
+
+    fn launch_lock_name() -> String {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        format!(
+            "Local\\CapGpuiLaunchTest-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
+    #[test]
+    fn a_second_launch_waits_until_the_first_releases_the_lock() {
+        let name = launch_lock_name();
+        let first = lock_windows_launch(&name).unwrap();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        let second = std::thread::spawn({
+            let name = name.clone();
+            move || {
+                let lock = lock_windows_launch(&name).unwrap();
+                acquired.send(()).unwrap();
+                drop(lock);
+            }
+        });
+        assert!(waiting.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(first);
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        second.join().unwrap();
+    }
+
+    #[test]
+    fn a_launch_that_died_holding_the_lock_does_not_block_the_next() {
+        let name = launch_lock_name();
+        std::thread::spawn({
+            let name = name.clone();
+            move || std::mem::forget(lock_windows_launch(&name).unwrap())
+        })
+        .join()
+        .unwrap();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let lock = lock_windows_launch(&name).unwrap();
+            acquired.send(()).unwrap();
+            drop(lock);
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_launch_of_another_profile_never_waits() {
+        let held = lock_windows_launch(&launch_lock_name()).unwrap();
+        let other = launch_lock_name();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let lock = lock_windows_launch(&other).unwrap();
+            acquired.send(()).unwrap();
+            drop(lock);
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(held);
     }
 
     #[test]
