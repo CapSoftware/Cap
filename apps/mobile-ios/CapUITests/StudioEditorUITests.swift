@@ -41,6 +41,42 @@ final class StudioEditorUITests: XCTestCase {
         sleep(2)
         save("s00-studio-open")
 
+        app.buttons["editor-tool-presets"].tap()
+        let ocean = app.buttons["Ocean"]
+        XCTAssertTrue(ocean.waitForExistence(timeout: 5))
+        sleep(2)
+        save("s00b-presets")
+        ocean.tap()
+        sleep(2)
+        XCTAssertTrue(ocean.isSelected)
+        save("s00c-preset-ocean")
+        // Already a preset, so saving it again isn't offered until it's changed.
+        XCTAssertFalse(app.buttons["Save as Preset"].firstMatch.isEnabled)
+        app.buttons["editor-tool-frame"].tap()
+        app.buttons["4:5"].tap()
+        sleep(1)
+        app.buttons["editor-tool-presets"].tap()
+        XCTAssertFalse(ocean.isSelected)
+        // Saved as one of your own, then made the look new recordings start with.
+        app.buttons["Save as Preset"].firstMatch.tap()
+        XCTAssertTrue(app.alerts["Save Preset"].waitForExistence(timeout: 5))
+        let field = app.alerts["Save Preset"].textFields.firstMatch
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 24) + "Launch")
+        app.alerts["Save Preset"].buttons["Save"].tap()
+        let mine = app.buttons["Launch"]
+        XCTAssertTrue(mine.waitForExistence(timeout: 5))
+        XCTAssertTrue(mine.isSelected)
+        mine.press(forDuration: 1)
+        let pin = app.buttons["Use for New Recordings"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        pin.tap()
+        sleep(1)
+        XCTAssertEqual(app.buttons["Launch"].value as? String, "Used for new recordings")
+        save("s00d-preset-saved")
+        app.buttons["Studio"].tap()
+        sleep(1)
+
         app.buttons["editor-tool-background"].tap()
         sleep(1)
         save("s01-background")

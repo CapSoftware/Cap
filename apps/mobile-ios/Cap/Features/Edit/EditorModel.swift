@@ -207,7 +207,12 @@ final class EditorModel {
             if !look.isIdentity(hasCamera: cameraSource != nil) {
                 let scene = scene
                 let size = StudioLayout.canvasSize(look: look, primary: screenSource?.info.displaySize, camera: cameraSource?.info.displaySize, longEdge: StudioLayout.previewLongEdge)
-                prewarm = Task.detached(priority: .userInitiated) { scene.renderer.prewarm(scene: scene, size: size) }
+                let presets = presetRenderer
+                prewarm = Task.detached(priority: .userInitiated) {
+                    scene.renderer.prewarm(scene: scene, size: size)
+                    // The first picture made for the interface compiles its own path; the Presets strip shouldn't pay for it.
+                    presets.prewarmImages(scene: scene)
+                }
             }
             await loadBackgroundImage()
             await loadMusic()
@@ -717,6 +722,135 @@ final class EditorModel {
         if !lookGesture { pushUndo() }
         show(look: next, timelineFrom: timeline, forceRebuild: false, seekTo: outputTime)
         changed()
+    }
+
+    // MARK: Presets
+
+    /// Each preset drawn on the paused frame, keyed by look so a renamed preset keeps its picture.
+    private(set) var presetThumbnails: [StudioLook: UIImage] = [:]
+    @ObservationIgnored private var presetThumbnailTime: Double?
+    @ObservationIgnored private var presetTask: Task<Void, Never>?
+    @ObservationIgnored private var presetRerun = false
+    /// Its own cache, so drawing a dozen looks never makes the live preview redraw its background.
+    @ObservationIgnored private lazy var presetRenderer = scene.renderer.sibling()
+    nonisolated static let presetThumbnailEdge: Double = 360
+
+    func apply(_ preset: StudioPreset) {
+        StudioSession.shared.store.presets.provideImage(for: preset.look, in: workDirectory)
+        setLook { $0 = preset.look }
+        Usage.track("studio_preset_applied", ["preset": .string(preset.isBuiltIn ? preset.id : "saved")])
+    }
+
+    /// Draws every preset on the frame that's paused on, from frames already decoded where it can. Pictures for
+    /// another moment stay up until their replacements are ready, so the strip never blinks.
+    func loadPresetThumbnails(_ presets: [StudioPreset]) {
+        guard phase == .ready, !isPlaying else { return }
+        guard presetTask == nil else {
+            presetRerun = true
+            return
+        }
+        let time = outputTime
+        let moved = presetThumbnailTime.map { abs($0 - time) > 0.25 } ?? true
+        var looks: [StudioLook] = []
+        for preset in presets where (moved || presetThumbnails[preset.look] == nil) && !looks.contains(preset.look) {
+            looks.append(preset.look)
+        }
+        guard !looks.isEmpty else { return }
+        presetThumbnailTime = time
+        let renderer = presetRenderer
+        let backgrounds = Dictionary(looks.map { ($0, presetBackgroundURL($0.background)) }, uniquingKeysWith: { a, _ in a })
+        var remembered = PresetFrames()
+        if let sources = scene.sources(near: CMTime(seconds: time, preferredTimescale: 600)) {
+            if let info = screenSource?.info, let buffer = sources.screen { remembered.screen = (info, buffer) }
+            if let info = cameraSource?.info, let buffer = sources.camera { remembered.camera = (info, buffer) }
+        }
+        let screen = screenSource
+        let camera = cameraSource
+        let sourceTime = timeline.sourceTime(forOutput: time)
+        let metrics = metrics
+        presetTask = Task { [weak self] in
+            let started = CACurrentMediaTime()
+            let frames = await Self.presetFrames(remembered: remembered, screen: screen, camera: camera, at: sourceTime)
+            for look in looks {
+                let url = backgrounds[look] ?? nil
+                let drawn = CACurrentMediaTime()
+                let image = await Task.detached(priority: .userInitiated) {
+                    Self.drawPreset(look, frames: frames, background: url.flatMap { StudioAssets.loadImage($0, maxPixels: 480) }, renderer: renderer)
+                }.value
+                metrics.record("presetThumbMs", (CACurrentMediaTime() - drawn) * 1000)
+                guard let self, !Task.isCancelled else { return }
+                if let image { presetThumbnails[look] = image }
+            }
+            metrics.record("presetStripMs", (CACurrentMediaTime() - started) * 1000)
+            guard let self else { return }
+            presetTask = nil
+            if presetRerun {
+                presetRerun = false
+                loadPresetThumbnails(StudioSession.shared.presetLibrary.all)
+            }
+        }
+    }
+
+    private func presetBackgroundURL(_ background: StudioBackground) -> URL? {
+        switch background {
+        case let .wallpaper(name):
+            return StudioAssets.wallpaperThumbnailURL(name)
+        case let .image(name):
+            let local = workDirectory.appending(path: name)
+            return FileManager.default.fileExists(atPath: local.path) ? local : StudioSession.shared.store.presets.imageURL(name)
+        default:
+            return nil
+        }
+    }
+
+    nonisolated struct PresetFrames: @unchecked Sendable {
+        var screen: (info: StudioSourceInfo, buffer: CVPixelBuffer)?
+        var camera: (info: StudioSourceInfo, buffer: CVPixelBuffer)?
+    }
+
+    /// The frames the preview last composed, or, before anything has been composed (an unstyled Cap plays without
+    /// the compositor), the same moment decoded once at a small size.
+    nonisolated private static func presetFrames(remembered: PresetFrames, screen: StudioTrackSource?, camera: StudioTrackSource?, at time: Double) async -> PresetFrames {
+        if remembered.screen != nil || remembered.camera != nil { return remembered }
+        var frames = PresetFrames()
+        async let screenFrame = decodeFrame(screen, at: time)
+        async let cameraFrame = decodeFrame(camera, at: time)
+        frames.screen = await screenFrame
+        frames.camera = await cameraFrame
+        return frames
+    }
+
+    nonisolated private static func decodeFrame(_ source: StudioTrackSource?, at time: Double) async -> (info: StudioSourceInfo, buffer: CVPixelBuffer)? {
+        guard let source else { return nil }
+        let generator = AVAssetImageGenerator(asset: source.asset)
+        // Already upright, so it's drawn with no rotation of its own.
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 720, height: 720)
+        let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = tolerance
+        generator.requestedTimeToleranceAfter = tolerance
+        let local = min(max(0, time - source.offset), max(0, source.duration - 0.1))
+        guard let image = try? await generator.image(at: CMTime(seconds: local, preferredTimescale: 600)).image,
+              let buffer = pixelBuffer(image)
+        else { return nil }
+        return (StudioSourceInfo(naturalSize: CGSize(width: image.width, height: image.height)), buffer)
+    }
+
+    nonisolated private static func pixelBuffer(_ image: CGImage) -> CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](), kCVPixelBufferCGBitmapContextCompatibilityKey as String: true] as CFDictionary
+        guard CVPixelBufferCreate(kCFAllocatorDefault, image.width, image.height, kCVPixelFormatType_32BGRA, attributes, &buffer) == kCVReturnSuccess, let buffer else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return buffer
+    }
+
+    nonisolated private static func drawPreset(_ look: StudioLook, frames: PresetFrames, background: CGImage?, renderer: StudioRenderer) -> UIImage? {
+        let scene = StudioScene(look: look, screen: frames.screen?.info, camera: frames.camera?.info, backgroundImage: background, renderer: renderer)
+        let size = StudioLayout.canvasSize(look: look, primary: frames.screen?.info.displaySize, camera: frames.camera?.info.displaySize, longEdge: presetThumbnailEdge)
+        return renderer.image(scene: scene, screen: frames.screen?.buffer, camera: frames.camera?.buffer, size: size).map { UIImage(cgImage: $0) }
     }
 
     /// Applies a look. Only what changed is redone: a new frame size or the switch between plain playback and

@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 enum EditorTool: String, CaseIterable, Identifiable {
     case trim
+    case presets
     case background
     case frame
     case camera
@@ -17,6 +18,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .trim: "Trim"
+        case .presets: "Presets"
         case .background: "Background"
         case .frame: "Frame"
         case .camera: "Camera"
@@ -27,6 +29,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .trim: "scissors"
+        case .presets: "square.stack"
         case .background: "photo.on.rectangle.angled"
         case .frame: "aspectratio"
         case .camera: "person.crop.circle"
@@ -40,6 +43,7 @@ enum EditorPanels {
         switch tool {
         case .trim: 56
         case .background: 68
+        case .presets: 132
         case .camera: 118
         case .frame, .music: 156
         }
@@ -62,6 +66,8 @@ struct EditorToolBar: View {
                             .frame(height: 24)
                         Text(tool.title)
                             .font(.caption2.weight(.medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                     .foregroundStyle(selection == tool ? Color.white : Color.white.opacity(0.5))
                     .frame(maxWidth: .infinity, minHeight: 50)
@@ -287,6 +293,224 @@ private struct Chip: View {
     }
 }
 
+struct PresetPanel: View {
+    let model: EditorModel
+    @State private var naming: Naming?
+    @State private var name = ""
+
+    private enum Naming: Equatable {
+        case new
+        case rename(StudioPreset)
+    }
+
+    private var studio: StudioSession { StudioSession.shared }
+    private var library: StudioPresetLibrary { studio.presetLibrary }
+    private static let tile = CGSize(width: 74, height: 98)
+
+    var body: some View {
+        let selected = library.preset(matching: model.look)
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    saveCard(isSaved: selected != nil)
+                    ForEach(library.all) { preset in
+                        card(preset, selected: preset.id == selected?.id)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+            }
+            .scrollIndicators(.hidden)
+            .onAppear {
+                if let selected { scroller.scrollTo(selected.id, anchor: .center) }
+            }
+        }
+        .sensoryFeedback(.selection, trigger: selected?.id)
+        .onAppear { model.loadPresetThumbnails(library.all) }
+        .onChange(of: library) { _, library in model.loadPresetThumbnails(library.all) }
+        .onChange(of: model.isPlaying) { _, playing in
+            if !playing { model.loadPresetThumbnails(library.all) }
+        }
+        .alert(naming == .new ? "Save Preset" : "Rename Preset", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("Name", text: $name)
+                .submitLabel(.done)
+            Button("Save") { finishNaming() }
+            Button("Cancel", role: .cancel) { naming = nil }
+        } message: {
+            if naming == .new { Text("Keeps this background, frame and camera layout for any recording.") }
+        }
+    }
+
+    private func saveCard(isSaved: Bool) -> some View {
+        Button {
+            name = library.uniqueName("My Look")
+            naming = .new
+        } label: {
+            VStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(width: Self.tile.width, height: Self.tile.height)
+                    .overlay {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                Text("Save")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .opacity(isSaved ? 0.4 : 1)
+        .disabled(isSaved)
+        .accessibilityLabel("Save as Preset")
+        .accessibilityHint(isSaved ? "This look is already a preset." : "")
+    }
+
+    private func card(_ preset: StudioPreset, selected: Bool) -> some View {
+        let isDefault = library.defaultPreset.id == preset.id
+        return Button {
+            model.apply(preset)
+        } label: {
+            VStack(spacing: 7) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(.white.opacity(0.06))
+                    PresetPicture(preset: preset, image: model.presetThumbnails[preset.look], tile: Self.tile)
+                }
+                .frame(width: Self.tile.width, height: Self.tile.height)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(selected ? Color.white : Color.white.opacity(0.1), lineWidth: selected ? 2.5 : 1)
+                }
+                .scaleEffect(selected ? 1.03 : 1)
+                .animation(.spring(duration: 0.22), value: selected)
+                HStack(spacing: 3) {
+                    if isDefault {
+                        Image(systemName: "pin.fill").font(.system(size: 8, weight: .semibold))
+                    }
+                    Text(preset.name).lineLimit(1)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.65))
+                .frame(maxWidth: Self.tile.width + 8)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .id(preset.id)
+        .contextMenu {
+            if !isDefault {
+                Button("Use for New Recordings", systemImage: "pin") { studio.makeDefault(preset.id) }
+            }
+            if !preset.isBuiltIn {
+                if preset.look != model.look {
+                    Button("Update to Current Look", systemImage: "arrow.triangle.2.circlepath") {
+                        studio.updatePreset(preset.id, look: model.look, from: model.workDirectory)
+                    }
+                }
+                Button("Rename", systemImage: "pencil") {
+                    name = preset.name
+                    naming = .rename(preset)
+                }
+                Button("Delete", systemImage: "trash", role: .destructive) { studio.deletePreset(preset.id) }
+            }
+        }
+        .accessibilityLabel(preset.name)
+        .accessibilityValue(isDefault ? "Used for new recordings" : "")
+        .accessibilityIdentifier("editor-preset")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func finishNaming() {
+        switch naming {
+        case .new:
+            studio.savePreset(named: name, look: model.look, from: model.workDirectory)
+        case let .rename(preset):
+            studio.renamePreset(preset.id, to: name)
+        case nil:
+            break
+        }
+        naming = nil
+    }
+}
+
+/// The same blooms as the renderer draws, in SwiftUI, for swatches and placeholders.
+struct GlowSwatch: View {
+    let glow: StudioGlow
+
+    var body: some View {
+        GeometryReader { proxy in
+            Canvas { context, size in
+                let frame = Path(CGRect(origin: .zero, size: size))
+                let long = max(size.width, size.height)
+                context.fill(frame, with: .color(swiftUI(glow.base)))
+                for bloom in glow.blooms {
+                    let color = swiftUI(bloom.color)
+                    context.fill(frame, with: .radialGradient(Gradient(colors: [color.opacity(0.95), color.opacity(0)]), center: CGPoint(x: bloom.x * size.width, y: bloom.y * size.height), startRadius: 0, endRadius: bloom.radius * long))
+                }
+            }
+            .blur(radius: StudioGlow.softness * min(proxy.size.width, proxy.size.height) * 2, opaque: true)
+        }
+    }
+
+    private func swiftUI(_ color: StudioColor) -> Color {
+        let c = color.components
+        return Color(red: c.red, green: c.green, blue: c.blue)
+    }
+}
+
+/// The preset drawn on this video's frame once it's ready, its background until then.
+private struct PresetPicture: View {
+    let preset: StudioPreset
+    let image: UIImage?
+    let tile: CGSize
+
+    var body: some View {
+        let inner = CGSize(width: tile.width - 10, height: tile.height - 10)
+        let shape = fitted(inner)
+        ZStack {
+            placeholder
+                .frame(width: shape.width, height: shape.height)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: shape.width, height: shape.height)
+                    .transition(.opacity)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+        .animation(.easeOut(duration: 0.2), value: image != nil)
+    }
+
+    private func fitted(_ box: CGSize) -> CGSize {
+        let ratio = image.map { $0.size.width / max(1, $0.size.height) } ?? preset.look.aspect.ratio.map { CGFloat($0) } ?? 9.0 / 16
+        return box.width / box.height > ratio
+            ? CGSize(width: (box.height * ratio).rounded(), height: box.height)
+            : CGSize(width: box.width, height: (box.width / ratio).rounded())
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        switch preset.look.background {
+        case let .wallpaper(name):
+            if let thumbnail = StudioAssets.wallpaperThumbnail(name) {
+                Image(uiImage: thumbnail).resizable().scaledToFill()
+            } else {
+                Color.white.opacity(0.08)
+            }
+        case .color, .gradient, .glow:
+            BackgroundPanel.fill(preset.look.background)
+        default:
+            Color.white.opacity(0.08)
+        }
+    }
+}
+
 struct BackgroundPanel: View {
     let model: EditorModel
     @State private var picked: PhotosPickerItem?
@@ -309,6 +533,10 @@ struct BackgroundPanel: View {
                         PhotoSwatch(image: photo, selected: isPhoto, side: side)
                     }
                     .accessibilityLabel("Choose a photo")
+                    divider
+                    ForEach(Array(StudioBackground.glows.enumerated()), id: \.offset) { _, background in
+                        swatch(background, label: "Glow") { Self.fill(background) }
+                    }
                     divider
                     ForEach(StudioAssets.wallpapers, id: \.self) { name in
                         swatch(.wallpaper(name), label: "Wallpaper") {
@@ -399,6 +627,8 @@ struct BackgroundPanel: View {
                 let a = from.components
                 let b = to.components
                 LinearGradient(colors: [Color(red: a.red, green: a.green, blue: a.blue), Color(red: b.red, green: b.green, blue: b.blue)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            case let .glow(id):
+                if let glow = StudioGlow.named(id) { GlowSwatch(glow: glow) } else { Color.clear }
             default:
                 Color.clear
             }

@@ -16,6 +16,7 @@ final class StudioSession {
     @ObservationIgnored private var owner: String?
     private let requests = StudioStore.requests()
     private(set) var projects: [StudioProject] = []
+    private(set) var presetLibrary = StudioPresetLibrary()
     var editing: StudioProject?
     private(set) var isFinishingScreen = false
 
@@ -37,6 +38,7 @@ final class StudioSession {
         guard owner != userId else { return }
         owner = userId
         store = StudioStore.shared(owner: userId)
+        presetLibrary = store.presets.load()
         thumbnails = [:]
         lastRecovery = .distantPast
         reload()
@@ -50,6 +52,7 @@ final class StudioSession {
         disarmScreenRecording()
         editing = nil
         projects = []
+        presetLibrary = StudioPresetLibrary()
         thumbnails = [:]
         owner = nil
         session = nil
@@ -167,7 +170,8 @@ final class StudioSession {
         let screen = await resolve(screen, in: directory)
         let camera = await resolve(camera, in: directory)
         let aligned = StudioTrackInfo.align(screen: screen, camera: camera)
-        var project = StudioProject(id: projectId, title: title, screen: aligned.screen, camera: aligned.camera)
+        let presets = store.presets
+        var project = StudioProject(id: projectId, title: title, screen: aligned.screen, camera: aligned.camera, look: presets.load().defaultPreset.look)
         guard !project.isEmpty, project.duration >= 1 else {
             store.delete(projectId)
             Usage.track("recording_discarded", ["mode": "studio", "reason": "too_short"])
@@ -176,6 +180,7 @@ final class StudioSession {
         }
         // A camera on its own is better shown large; a screen gets Cap's framing either way.
         if project.screen == nil { project.look.camera.layout = .cameraOnly }
+        presets.provideImage(for: project.look, in: directory)
         do {
             try store.save(project)
         } catch {
@@ -264,6 +269,75 @@ final class StudioSession {
         await assemble(projectId: projectId, in: store, screen: screen, camera: camera, title: Self.title(for: .now, screen: screen != nil))
     }
 
+    // MARK: Presets
+
+    @discardableResult
+    func savePreset(named name: String, look: StudioLook, from directory: URL) -> StudioPreset? {
+        var library = presetLibrary
+        let preset = StudioPreset(name: library.uniqueName(name), look: look)
+        if case let .image(file) = look.background {
+            do {
+                try store.presets.keepImage(named: file, from: directory.appending(path: file))
+            } catch {
+                session?.toasts.show(error: error)
+                return nil
+            }
+        }
+        library.saved.insert(preset, at: 0)
+        guard storePresets(library) else { return nil }
+        Usage.track("studio_preset_saved")
+        return preset
+    }
+
+    func updatePreset(_ id: String, look: StudioLook, from directory: URL) {
+        var library = presetLibrary
+        guard let index = library.saved.firstIndex(where: { $0.id == id }) else { return }
+        if case let .image(file) = look.background {
+            try? store.presets.keepImage(named: file, from: directory.appending(path: file))
+        }
+        library.saved[index].look = look
+        storePresets(library)
+    }
+
+    func renamePreset(_ id: String, to name: String) {
+        var library = presetLibrary
+        guard let index = library.saved.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != library.saved[index].name else { return }
+        var others = library
+        others.saved.remove(at: index)
+        library.saved[index].name = others.uniqueName(trimmed)
+        storePresets(library)
+    }
+
+    func deletePreset(_ id: String) {
+        var library = presetLibrary
+        library.saved.removeAll { $0.id == id }
+        if library.defaultId == id { library.defaultId = nil }
+        storePresets(library)
+    }
+
+    func makeDefault(_ id: String) {
+        var library = presetLibrary
+        library.defaultId = id == StudioPreset.builtIn[0].id ? nil : id
+        if storePresets(library) {
+            session?.toasts.show("New recordings start in \(library.defaultPreset.name)", systemImage: "pin.fill", style: .info)
+        }
+    }
+
+    @discardableResult
+    private func storePresets(_ library: StudioPresetLibrary) -> Bool {
+        do {
+            try store.presets.save(library)
+            presetLibrary = library
+            return true
+        } catch {
+            Self.log.error("Studio presets didn't save: \(String(describing: error), privacy: .public)")
+            session?.toasts.show(error: error)
+            return false
+        }
+    }
+
     static func title(for date: Date, screen: Bool) -> String {
         (screen ? "Studio Recording " : "Studio Camera ") + date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute())
     }
@@ -311,8 +385,18 @@ enum StudioAssets {
         Bundle.main.url(forResource: name, withExtension: "heic")
     }
 
+    private static var thumbnailCache: [String: UIImage] = [:]
+
+    /// Small and drawn in every strip that shows a background, so each is read from disk once.
     static func wallpaperThumbnail(_ name: String) -> UIImage? {
-        Bundle.main.url(forResource: "\(name)-thumb", withExtension: "jpg").flatMap { UIImage(contentsOfFile: $0.path) }
+        if let cached = thumbnailCache[name] { return cached }
+        let image = wallpaperThumbnailURL(name).flatMap { UIImage(contentsOfFile: $0.path) }
+        thumbnailCache[name] = image
+        return image
+    }
+
+    static func wallpaperThumbnailURL(_ name: String) -> URL? {
+        Bundle.main.url(forResource: "\(name)-thumb", withExtension: "jpg")
     }
 
     /// Decoded straight to the size it's drawn at: a 2400 px wallpaper never needs to be held at full size.

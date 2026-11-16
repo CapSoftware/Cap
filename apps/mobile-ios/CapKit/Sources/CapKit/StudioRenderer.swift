@@ -100,6 +100,13 @@ public final class StudioScene: @unchecked Sendable {
         frames.withLock { $0.map(\.time.seconds) }
     }
 
+    /// The source frames composed most recently near `time`, for drawing the same moment in another look.
+    public func sources(near time: CMTime) -> (screen: CVPixelBuffer?, camera: CVPixelBuffer?)? {
+        frames.withLock { frames in
+            frames.min { abs(CMTimeSubtract($0.time, time).seconds) < abs(CMTimeSubtract($1.time, time).seconds) }
+        }.map { ($0.screen, $0.camera) }
+    }
+
     /// Redraws the remembered frame closest to `time` with the current look. Nil if nothing near it was decoded.
     public func renderStill(near time: CMTime, tolerance: Double = 0.25) -> CVPixelBuffer? {
         let frame = frames.withLock { frames in
@@ -117,6 +124,9 @@ public final class StudioRenderer: @unchecked Sendable {
     public let context: CIContext
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private let cache = Mutex<Cache?>(nil)
+    /// The last glow drawn, kept apart from the frame cache: dragging padding or corners redraws the frame's
+    /// still parts on every step, and the glow under them hasn't changed.
+    private let glowCache = Mutex<(id: String, size: CGSize, image: CIImage)?>(nil)
     private let poolLock = NSLock()
     private var poolSize = CGSize.zero
     private var pool: CVPixelBufferPool?
@@ -136,6 +146,16 @@ public final class StudioRenderer: @unchecked Sendable {
         let screen: CGSize?
         let camera: CGSize?
         let image: ObjectIdentifier?
+    }
+
+    private init(context: CIContext) {
+        self.context = context
+    }
+
+    /// Shares this renderer's GPU context and compiled kernels but keeps its own cache, so drawing other looks (the
+    /// preset thumbnails) never evicts the background and masks the live preview is using.
+    public func sibling() -> StudioRenderer {
+        StudioRenderer(context: context)
     }
 
     public init(device: MTLDevice? = MTLCreateSystemDefaultDevice()) {
@@ -178,6 +198,21 @@ public final class StudioRenderer: @unchecked Sendable {
 
     public func render(scene: StudioScene, screen: CVPixelBuffer?, camera: CVPixelBuffer?, into output: CVPixelBuffer) {
         let size = CGSize(width: CVPixelBufferGetWidth(output), height: CVPixelBufferGetHeight(output))
+        context.render(compose(scene: scene, screen: screen, camera: camera, size: size), to: output, bounds: CGRect(origin: .zero, size: size), colorSpace: colorSpace)
+    }
+
+    public func prewarmImages(scene: StudioScene) {
+        let state = scene.current.state
+        let look = StudioScene(look: state.look, screen: nil, camera: nil, renderer: self)
+        _ = image(scene: look, screen: nil, camera: nil, size: CGSize(width: 32, height: 32))
+    }
+
+    /// For small pictures shown in the interface, at any size, without going through the video buffer pool.
+    public func image(scene: StudioScene, screen: CVPixelBuffer?, camera: CVPixelBuffer?, size: CGSize) -> CGImage? {
+        context.createCGImage(compose(scene: scene, screen: screen, camera: camera, size: size), from: CGRect(origin: .zero, size: size), format: .RGBA8, colorSpace: colorSpace)
+    }
+
+    private func compose(scene: StudioScene, screen: CVPixelBuffer?, camera: CVPixelBuffer?, size: CGSize) -> CIImage {
         let state = scene.current.state
         let cache = cached(state: state, size: size)
         var image = cache.base
@@ -187,7 +222,12 @@ public final class StudioRenderer: @unchecked Sendable {
         if let placement = cache.layout.camera, let camera, let info = state.camera {
             image = composite(camera, info: info, placement: placement, mask: cache.cameraMask, canvas: size, over: image)
         }
-        context.render(image, to: output, bounds: CGRect(origin: .zero, size: size), colorSpace: colorSpace)
+        return image
+    }
+
+    /// The look and size the cached frame parts were drawn for. For tests.
+    var cachedLook: (look: StudioLook, size: CGSize)? {
+        cache.withLock { $0.map { ($0.key.look, $0.key.size) } }
     }
 
     private func composite(_ buffer: CVPixelBuffer, info: StudioSourceInfo, placement: StudioLayout.Placement, mask: CIImage?, canvas: CGSize, over below: CIImage) -> CIImage {
@@ -289,6 +329,15 @@ public final class StudioRenderer: @unchecked Sendable {
             gradient.color0 = CIColor(red: a.red, green: a.green, blue: a.blue)
             gradient.color1 = CIColor(red: b.red, green: b.green, blue: b.blue)
             return (gradient.outputImage ?? CIImage(color: .black)).cropped(to: canvas)
+        case let .glow(id):
+            if let cached = glowCache.withLock({ $0 }), cached.id == id, cached.size == size { return cached.image }
+            guard let glow = StudioGlow.named(id) else { return CIImage(color: .black).cropped(to: canvas) }
+            let drawn = Self.glow(glow, size: size)
+            guard let buffer = makeStaticBuffer(size: size) else { return drawn }
+            context.render(drawn, to: buffer, bounds: canvas, colorSpace: colorSpace)
+            let image = CIImage(cvPixelBuffer: buffer)
+            glowCache.withLock { $0 = (id, size, image) }
+            return image
         case .wallpaper, .image:
             guard let image else { return CIImage(color: CIColor(red: 0.1, green: 0.1, blue: 0.12)).cropped(to: canvas) }
             let picture = CIImage(cgImage: image)
@@ -297,6 +346,36 @@ public final class StudioRenderer: @unchecked Sendable {
                 .transformed(by: CGAffineTransform(scaleX: fill.scale, y: fill.scale).concatenating(CGAffineTransform(translationX: fill.origin.x, y: fill.origin.y)))
                 .cropped(to: canvas)
         }
+    }
+
+    /// The blooms are laid down and blurred at an eighth of the size, then scaled up: smooth at any size for the
+    /// cost of a thumbnail, and only ever drawn once per look into the cached background.
+    static func glow(_ glow: StudioGlow, size: CGSize) -> CIImage {
+        let scale: CGFloat = 8
+        let small = CGSize(width: max(8, (size.width / scale).rounded(.up)), height: max(8, (size.height / scale).rounded(.up)))
+        let area = CGRect(origin: .zero, size: small)
+        let long = max(small.width, small.height)
+        func color(_ c: StudioColor, alpha: CGFloat = 1) -> CIColor {
+            let parts = c.components
+            return CIColor(red: parts.red, green: parts.green, blue: parts.blue, alpha: alpha)
+        }
+        var image = CIImage(color: color(glow.base)).cropped(to: area)
+        for bloom in glow.blooms {
+            let gradient = CIFilter.radialGradient()
+            gradient.center = CGPoint(x: bloom.x * small.width, y: (1 - bloom.y) * small.height)
+            gradient.radius0 = 0
+            gradient.radius1 = Float(bloom.radius * long)
+            gradient.color0 = color(bloom.color, alpha: 0.95)
+            gradient.color1 = color(bloom.color, alpha: 0)
+            if let output = gradient.outputImage { image = output.cropped(to: area).composited(over: image) }
+        }
+        let sigma = StudioGlow.softness * min(small.width, small.height)
+        let blurred = image.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: area)
+        let scaled = blurred
+            .transformed(by: CGAffineTransform(scaleX: size.width / small.width, y: size.height / small.height))
+            .cropped(to: CGRect(origin: .zero, size: size))
+        // About one level of noise, so slow gradients don't step into bands in 8-bit video.
+        return scaled.applyingFilter("CIDither", parameters: [kCIInputIntensityKey: 0.06]).cropped(to: CGRect(origin: .zero, size: size))
     }
 
     /// Layout is top-left; Core Image is bottom-left.

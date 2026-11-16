@@ -23,8 +23,12 @@ public enum StudioBackground: Codable, Sendable, Hashable {
     case gradient(from: StudioColor, to: StudioColor, angle: Double)
     case wallpaper(String)
     case image(String)
+    /// Soft blooms of colour, drawn at any size. See `StudioGlow`.
+    case glow(String)
 
     public var isNone: Bool { self == .none }
+
+    public static let glows: [StudioBackground] = StudioGlow.all.map { .glow($0.id) }
 
     /// Cap desktop's gradient presets, in the same order.
     public static let gradients: [StudioBackground] = [
@@ -51,6 +55,81 @@ public enum StudioBackground: Codable, Sendable, Hashable {
         StudioColor(71, 133, 255), StudioColor(255, 69, 0), StudioColor(255, 140, 0), StudioColor(255, 215, 0),
         StudioColor(50, 205, 50), StudioColor(0, 206, 209), StudioColor(75, 0, 130), StudioColor(128, 0, 128),
     ].map { .color($0) }
+}
+
+/// A background in the style of the system wallpapers: a few large blooms of colour over a base, blurred together.
+/// Drawn from these numbers, so it's sharp at any size and costs nothing to ship.
+public struct StudioGlow: Sendable, Hashable, Identifiable {
+    public struct Bloom: Sendable, Hashable {
+        /// Centre in unit coordinates, origin top left.
+        public var x: Double
+        public var y: Double
+        /// As a share of the frame's longer side.
+        public var radius: Double
+        public var color: StudioColor
+    }
+
+    public let id: String
+    public let base: StudioColor
+    public let blooms: [Bloom]
+
+    init(_ id: String, base: StudioColor, _ blooms: [(Double, Double, Double, StudioColor)]) {
+        self.id = id
+        self.base = base
+        self.blooms = blooms.map { Bloom(x: $0.0, y: $0.1, radius: $0.2, color: $0.3) }
+    }
+
+    /// How soft the blooms are, as a share of the frame's shorter side.
+    public static let softness: Double = 0.09
+
+    public static func named(_ id: String) -> StudioGlow? {
+        all.first { $0.id == id }
+    }
+
+    private static func c(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> StudioColor { StudioColor(r, g, b) }
+
+    public static let all: [StudioGlow] = [
+        StudioGlow("sky", base: c(206, 226, 255), [
+            (0.12, 0.08, 0.62, c(110, 168, 255)), (0.92, 0.28, 0.55, c(168, 214, 255)),
+            (0.28, 0.96, 0.7, c(92, 140, 246)), (0.88, 0.9, 0.48, c(196, 186, 255)),
+        ]),
+        StudioGlow("mint", base: c(204, 243, 228), [
+            (0.18, 0.16, 0.6, c(104, 214, 176)), (0.88, 0.34, 0.55, c(150, 232, 222)),
+            (0.36, 0.92, 0.68, c(70, 192, 196)), (0.94, 0.96, 0.42, c(196, 240, 168)),
+        ]),
+        StudioGlow("peach", base: c(255, 228, 208), [
+            (0.1, 0.1, 0.6, c(255, 166, 138)), (0.94, 0.38, 0.55, c(255, 202, 160)),
+            (0.3, 0.92, 0.68, c(255, 136, 150)), (0.84, 0.96, 0.46, c(255, 214, 128)),
+        ]),
+        StudioGlow("lavender", base: c(232, 224, 255), [
+            (0.14, 0.18, 0.6, c(184, 156, 255)), (0.92, 0.14, 0.52, c(255, 188, 238)),
+            (0.48, 0.88, 0.72, c(156, 166, 255)), (0.96, 0.8, 0.42, c(218, 178, 255)),
+        ]),
+        StudioGlow("sunset", base: c(255, 186, 124), [
+            (0.1, 0.08, 0.58, c(255, 118, 82)), (0.92, 0.24, 0.56, c(255, 88, 124)),
+            (0.38, 0.96, 0.7, c(255, 202, 92)), (0.86, 0.86, 0.46, c(226, 80, 150)),
+        ]),
+        StudioGlow("dusk", base: c(38, 20, 68), [
+            (0.1, 0.14, 0.62, c(236, 98, 146)), (0.9, 0.2, 0.56, c(142, 86, 250)),
+            (0.5, 0.98, 0.74, c(252, 150, 86)), (0.82, 0.7, 0.4, c(226, 82, 176)),
+        ]),
+        StudioGlow("aurora", base: c(6, 22, 30), [
+            (0.14, 0.3, 0.58, c(28, 192, 146)), (0.72, 0.12, 0.58, c(38, 132, 214)),
+            (0.5, 0.84, 0.66, c(112, 58, 196)), (0.96, 0.62, 0.4, c(20, 212, 184)),
+        ]),
+        StudioGlow("ocean", base: c(6, 36, 78), [
+            (0.18, 0.14, 0.62, c(22, 116, 200)), (0.86, 0.44, 0.56, c(12, 164, 186)),
+            (0.3, 0.92, 0.68, c(30, 66, 168)), (0.96, 0.96, 0.4, c(58, 196, 218)),
+        ]),
+        StudioGlow("midnight", base: c(8, 10, 28), [
+            (0.2, 0.16, 0.66, c(30, 64, 190)), (0.86, 0.42, 0.56, c(86, 40, 182)),
+            (0.36, 0.96, 0.7, c(12, 104, 192)), (0.92, 0.94, 0.38, c(132, 58, 210)),
+        ]),
+        StudioGlow("graphite", base: c(40, 42, 48), [
+            (0.18, 0.16, 0.62, c(104, 110, 124)), (0.86, 0.58, 0.58, c(26, 28, 34)),
+            (0.38, 0.96, 0.6, c(80, 86, 100)), (0.94, 0.08, 0.4, c(130, 134, 146)),
+        ]),
+    ]
 }
 
 public enum StudioAspect: String, Codable, Sendable, CaseIterable, Identifiable {

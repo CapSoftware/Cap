@@ -209,6 +209,8 @@ struct EditorView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
             }
+        case .presets:
+            PresetPanel(model: model)
         case .background:
             BackgroundPanel(model: model)
         case .frame:
