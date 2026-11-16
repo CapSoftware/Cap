@@ -16,7 +16,9 @@ export const ImportPage = ({
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
-				<h1 className="text-2xl font-medium text-gray-12">Import</h1>
+				<h1 className="text-2xl font-semibold tracking-tight text-gray-12">
+					Import
+				</h1>
 				<p className="mt-1 text-sm text-gray-10">
 					Import media from external sources or upload from your device.
 				</p>
@@ -25,16 +27,16 @@ export const ImportPage = ({
 			<div className="grid grid-cols-1 gap-5 max-w-4xl sm:grid-cols-2 lg:grid-cols-3">
 				<Link
 					href="/dashboard/import/file"
-					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-gray-5 hover:shadow-[0_6px_20px_-8px_rgba(0,0,0,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
 				>
-					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
-						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 text-gray-10 group-hover:text-gray-12 group-hover:scale-110">
-							<FontAwesomeIcon className="size-5" icon={faUpload} />
+					<div className="flex justify-center items-center w-full h-28 border-b transition-colors duration-200 bg-gray-2 border-gray-3">
+						<div className="flex justify-center items-center rounded-xl border shadow-sm transition-all duration-200 size-12 border-gray-4 bg-gray-1 text-gray-11 group-hover:text-gray-12 group-hover:-translate-y-0.5">
+							<FontAwesomeIcon className="size-4" icon={faUpload} />
 						</div>
 					</div>
 					<div className="flex flex-col gap-1 p-4">
 						<p className="text-sm font-medium text-left text-gray-12">
-							Upload File
+							Upload file
 						</p>
 						<p className="text-xs text-left text-gray-10">
 							Upload a video or image file from your device
@@ -44,10 +46,10 @@ export const ImportPage = ({
 
 				<Link
 					href={loomImportPageHref(initialDestination, "loom")}
-					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-gray-5 hover:shadow-[0_6px_20px_-8px_rgba(0,0,0,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
 				>
-					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
-						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 group-hover:scale-110">
+					<div className="flex justify-center items-center w-full h-28 border-b transition-colors duration-200 bg-gray-2 border-gray-3">
+						<div className="flex justify-center items-center rounded-xl border shadow-sm transition-all duration-200 size-12 border-gray-4 bg-gray-1 group-hover:-translate-y-0.5">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								width="22"

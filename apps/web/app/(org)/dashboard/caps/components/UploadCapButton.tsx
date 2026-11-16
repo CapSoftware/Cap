@@ -2,6 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
+import clsx from "clsx";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -40,12 +41,12 @@ export const UploadCapButton = ({
 		<>
 			<Button
 				onClick={handleClick}
-				variant="dark"
-				className="flex gap-2 items-center"
+				variant="secondary"
+				className={clsx("flex gap-2 items-center", size === "sm" && "px-4 h-9")}
 				size={size}
 			>
-				<FontAwesomeIcon className="size-3.5" icon={faUpload} />
-				Import Media
+				<FontAwesomeIcon className="size-3.5 text-gray-10" icon={faUpload} />
+				Import media
 			</Button>
 			<UpgradeModal
 				open={upgradeModalOpen}
