@@ -41,6 +41,10 @@ mod tests;
 const CARD_WIDTH: f32 = 260.;
 const CARD_HEIGHT: f32 = 150.;
 const CARD_GAP: f32 = 16.;
+const CARD_RADIUS: f32 = 12.;
+/// Layers inside the card's 1 px border. GPUI clips overflow to a rectangle,
+/// so each one rounds itself to keep the card's corners round.
+const CARD_INNER_RADIUS: f32 = CARD_RADIUS - 1.;
 const WINDOW_PADDING: f32 = 12.;
 const EDGE_OFFSET: f32 = 24.;
 const DONE_VISIBLE: Duration = Duration::from_secs(2);
@@ -1440,11 +1444,13 @@ impl OverlayView {
                 .absolute()
                 .inset_0()
                 .size_full()
+                .rounded(px(CARD_INNER_RADIUS))
                 .object_fit(ObjectFit::Cover)
                 .into_any_element(),
             None => div()
                 .absolute()
                 .inset_0()
+                .rounded(px(CARD_INNER_RADIUS))
                 .bg(theme.gray_5)
                 .into_any_element(),
         };
@@ -1452,6 +1458,7 @@ impl OverlayView {
         let actions = div()
             .absolute()
             .inset_0()
+            .rounded(px(CARD_INNER_RADIUS))
             .bg(gpui::black().opacity(0.45))
             .opacity(0.)
             .when(!busy && status.is_none(), |this| {
@@ -1551,7 +1558,7 @@ impl OverlayView {
             .flex_shrink_0()
             .w(px(CARD_WIDTH))
             .h(px(CARD_HEIGHT))
-            .rounded(px(12.))
+            .rounded(px(CARD_RADIUS))
             .overflow_hidden()
             .border_1()
             .border_color(gpui::white().opacity(0.1))
@@ -1644,6 +1651,7 @@ impl OverlayView {
             .left_0()
             .right_0()
             .bottom_0()
+            .rounded_b(px(CARD_INNER_RADIUS))
             .px(px(12.))
             .py(px(8.))
             .flex()
@@ -1685,6 +1693,7 @@ impl OverlayView {
             .items_center()
             .justify_center()
             .px(px(26.))
+            .rounded(px(CARD_INNER_RADIUS))
             .bg(gpui::black().opacity(0.85))
             .text_color(white)
             .child(
