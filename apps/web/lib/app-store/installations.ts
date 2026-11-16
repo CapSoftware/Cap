@@ -12,6 +12,7 @@ import { nanoId } from "@cap/database/helpers";
 import { appStoreInstallations } from "@cap/database/schema";
 import type { Organisation, User } from "@cap/web-domain";
 import { and, eq, inArray, or } from "drizzle-orm";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	canManageOrganizationApps,
 	memberMayInstallConnections,
@@ -38,7 +39,8 @@ export type AppStoreErrorCode =
 	| "forbidden"
 	| "invalid"
 	| "conflict"
-	| "unavailable";
+	| "unavailable"
+	| "rate_limited";
 
 export class AppStoreError extends Error {
 	constructor(
@@ -67,6 +69,24 @@ export type InstallationView = {
 	settings: PublicSettings;
 	createdAt: string;
 };
+
+// Every install, settings change, uninstall and action sends a signed request
+// to the app, so one account cannot make Cap send them without limit.
+export async function enforceAppStoreRateLimit(
+	kind: "action" | "change",
+	userId: User.UserId,
+) {
+	const ruleId =
+		kind === "action"
+			? RATE_LIMIT_IDS.APP_STORE_ACTION
+			: RATE_LIMIT_IDS.APP_STORE_CHANGE;
+	if (await isRateLimited(ruleId, { key: userId })) {
+		throw new AppStoreError(
+			"rate_limited",
+			"Too many requests. Try again in a minute",
+		);
+	}
+}
 
 export const scopeKeyFor = (scope: InstallScope, ownerId: string): string =>
 	`${scope === "user" ? "user" : "org"}:${ownerId}`;
@@ -255,6 +275,7 @@ export async function installApp(
 	input: InstallInput,
 ): Promise<{ view: InstallationView; row: InstallationRow }> {
 	const app = requireInstallableApp(input.appId);
+	await enforceAppStoreRateLimit("change", userId);
 	const organizations = await userOrganizations(userId);
 
 	let organizationId: Organisation.OrganisationId | null = null;
@@ -368,6 +389,7 @@ export async function updateInstallation(
 	settingsChanged: boolean;
 }> {
 	const { row, organizations } = await loadManagedRow(userId, installationId);
+	await enforceAppStoreRateLimit("change", userId);
 	const app = getCatalogApp(row.appId);
 	if (!app) throw new AppStoreError("not_found", "This app is not available");
 
@@ -426,6 +448,7 @@ export async function uninstallApp(
 	installationId: string,
 ): Promise<{ row: InstallationRow; settings: InstallationSettings }> {
 	const { row } = await loadManagedRow(userId, installationId);
+	await enforceAppStoreRateLimit("change", userId);
 	const settings = await readInstallationSettings(row).catch(() => ({}));
 	await db()
 		.delete(appStoreInstallations)

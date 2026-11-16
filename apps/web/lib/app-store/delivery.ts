@@ -23,6 +23,7 @@ import { getCatalogApp } from "./catalog";
 import { type ConnectionResult, sendConnectionRequest } from "./connection";
 import {
 	AppStoreError,
+	enforceAppStoreRateLimit,
 	eventIsGranted,
 	type InstallationRow,
 	installationRef,
@@ -316,6 +317,7 @@ export async function runCapAction(input: {
 	if (!app?.connection || !action) {
 		throw new AppStoreError("not_found", "This action is not available");
 	}
+	await enforceAppStoreRateLimit("action", input.userId);
 
 	const result = await sendConnectionRequest(
 		{ appId: app.id, url: app.connection.url },

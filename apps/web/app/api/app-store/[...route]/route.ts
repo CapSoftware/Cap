@@ -126,6 +126,7 @@ const STATUS: Record<AppStoreError["code"], number> = {
 	invalid: 422,
 	conflict: 409,
 	unavailable: 502,
+	rate_limited: 429,
 };
 
 const respond = <A>(

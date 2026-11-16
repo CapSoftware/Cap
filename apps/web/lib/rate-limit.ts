@@ -203,6 +203,10 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
 	/** Invite emails: organization batches per organization and per sender, and video viewer invites per owner. Suggested: 30 / 1h per key. */
 	ORGANIZATION_INVITE: "rl_organization_invite",
+	/** App Store actions run on Caps, each a signed request to the app. Suggested: 30 / 1m per key (user). */
+	APP_STORE_ACTION: "rl_app_store_action",
+	/** App Store installs, setting changes and uninstalls, each a signed lifecycle request. Suggested: 30 / 1m per key (user). */
+	APP_STORE_CHANGE: "rl_app_store_change",
 	CHECKOUT: "rl_checkout",
 	VIDEO_PASSWORD_PER_VIEWER: "rl_video_password_per_viewer",
 	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
@@ -273,6 +277,8 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		windowMs: 10 * MINUTE_MS,
 	},
 	[RATE_LIMIT_IDS.ORGANIZATION_INVITE]: { limit: 30, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.APP_STORE_ACTION]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.APP_STORE_CHANGE]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIEWER]: {
 		limit: 1,
