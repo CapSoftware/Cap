@@ -2948,10 +2948,15 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Add caption at playhead"
+captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
+captions_saved = "Captions saved"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
 delete_matches_tooltip = "Cut every match from the video"
+download_captions = "Download captions"
+download_srt = { text = "SubRip (.srt)", context = "Menu item that saves captions as an SRT subtitle file. SubRip is a format name; keep it." }
+download_vtt = { text = "WebVTT (.vtt)", context = "Menu item that saves captions as a WebVTT subtitle file. WebVTT is a format name; keep it." }
 edit_hint = "Enter to save, Esc to cancel, Tab for the next word"
 empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
 empty_title = "No transcript yet"
