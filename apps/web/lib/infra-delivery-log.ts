@@ -84,6 +84,21 @@ export function parseDeliveryRecord(
 		rangeStart !== null && rangeEnd !== null && rangeEnd >= rangeStart
 			? rangeEnd - rangeStart + 1
 			: null;
+	// CloudFront marks a transfer "Error" when the connection ends early, which
+	// also happens after the whole body was sent (a client that closes as soon
+	// as it has read the range). Only a body shorter than expected is abandoned.
+	// sc-bytes includes the response headers, so a body short by less than the
+	// header size still reads as complete; that difference is negligible. With
+	// no known length the line stays abandoned, the conservative side. The
+	// expected body never exceeds the content length, so a range that runs past
+	// the end of the object cannot make a complete transfer look short.
+	const expectedBody =
+		rangeLength !== null && contentLength !== null
+			? Math.min(rangeLength, contentLength)
+			: (rangeLength ?? contentLength);
+	const abandoned =
+		field(record, "x-edge-result-type") === "Error" &&
+		(expectedBody === null || bytes < expectedBody);
 	return {
 		day,
 		appId,
@@ -92,7 +107,7 @@ export function parseDeliveryRecord(
 		key,
 		rangeStart: rangeStart ?? 0,
 		bytes,
-		abandoned: field(record, "x-edge-result-type") === "Error",
+		abandoned,
 		bodyBytes: Math.min(
 			bytes,
 			contentLength ?? Number.POSITIVE_INFINITY,
