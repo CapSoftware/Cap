@@ -2418,7 +2418,7 @@ sign_in = "Sign in to share"
 [editor.export.destination]
 clipboard = { text = "Clipboard", context = "Export destination." }
 file = { text = "File", context = "Export destination." }
-link = { text = "Link", context = "Export destination." }
+link = { text = "Shareable Link", context = "Export destination." }
 
 [editor.export.done]
 copy_link = "Copy link"
