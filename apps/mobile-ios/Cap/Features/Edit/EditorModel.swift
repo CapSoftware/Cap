@@ -105,6 +105,7 @@ final class EditorModel {
 
     init(project: StudioProject, session: SessionModel) {
         document = .studio(project)
+        draftStore = StudioSession.shared.store
         title = project.title
         state = CapEditState(status: .available, duration: project.duration, hasEdits: false)
         self.session = session
@@ -131,6 +132,11 @@ final class EditorModel {
     }
 
     var isStudio: Bool { project != nil }
+
+    /// The account a Studio project was opened in. Signing out (or a session expiring) while it's open must not send
+    /// its saves anywhere else.
+    @ObservationIgnored private var draftStore: StudioStore?
+    private var store: StudioStore { draftStore ?? StudioSession.shared.store }
     var hasCamera: Bool { cameraSource != nil }
     var hasScreen: Bool { screenSource != nil }
 
@@ -148,7 +154,7 @@ final class EditorModel {
     var workDirectory: URL {
         switch document {
         case let .studio(project):
-            return StudioSession.shared.store.directory(for: project.id)
+            return store.directory(for: project.id)
         case let .cap(id, _):
             let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let directory = caches.appending(path: "EditorMedia/\(id.rawValue)", directoryHint: .isDirectory)
@@ -186,7 +192,7 @@ final class EditorModel {
                 }
                 screenSource = try await StudioTrackSource.load(asset: asset, offset: 0)
             case let .studio(project):
-                let store = StudioSession.shared.store
+                let store = self.store
                 async let screen = Self.loadTrack(project.screen, url: { store.url($0, in: project.id) })
                 async let camera = Self.loadTrack(project.camera, url: { store.url($0, in: project.id) })
                 screenSource = try await screen
@@ -736,7 +742,7 @@ final class EditorModel {
     nonisolated static let presetThumbnailEdge: Double = 360
 
     func apply(_ preset: StudioPreset) {
-        StudioSession.shared.store.presets.provideImage(for: preset.look, in: workDirectory)
+        store.presets.provideImage(for: preset.look, in: workDirectory)
         setLook { $0 = preset.look }
         Usage.track("studio_preset_applied", ["preset": .string(preset.isBuiltIn ? preset.id : "saved")])
     }
@@ -797,7 +803,7 @@ final class EditorModel {
             return StudioAssets.wallpaperThumbnailURL(name)
         case let .image(name):
             let local = workDirectory.appending(path: name)
-            return FileManager.default.fileExists(atPath: local.path) ? local : StudioSession.shared.store.presets.imageURL(name)
+            return FileManager.default.fileExists(atPath: local.path) ? local : store.presets.imageURL(name)
         default:
             return nil
         }
@@ -1049,16 +1055,17 @@ final class EditorModel {
     private func changed() {
         guard isStudio else { return }
         autosaveTask?.cancel()
+        let store = self.store
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, let project = self?.project else { return }
-            StudioSession.shared.save(project)
+            StudioSession.shared.save(project, in: store)
         }
     }
 
     func saveDraftNow() {
         autosaveTask?.cancel()
-        if let project { StudioSession.shared.save(project) }
+        if let project { StudioSession.shared.save(project, in: store) }
     }
 
     /// The edit at full quality with a look that no longer changes, for rendering while the editor carries on.
