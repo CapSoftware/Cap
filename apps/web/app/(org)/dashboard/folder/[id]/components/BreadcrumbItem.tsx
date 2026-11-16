@@ -28,6 +28,7 @@ interface BreadcrumbItemProps {
 	color: "normal" | "blue" | "red" | "yellow";
 	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	isLast: boolean;
+	compact?: boolean;
 }
 
 export function BreadcrumbItem({
@@ -36,6 +37,7 @@ export function BreadcrumbItem({
 	color,
 	isLast,
 	spaceId,
+	compact = false,
 }: BreadcrumbItemProps) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMoving, setIsMoving] = useState(false);
@@ -151,10 +153,14 @@ export function BreadcrumbItem({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			title={name}
-			className={clsx("relative px-1 min-w-0 rounded-md", {
-				"bg-gray-4": isDragOver,
-				"opacity-70": isMoving,
-			})}
+			className={clsx(
+				"relative min-w-0 rounded-md",
+				compact ? "px-0.5" : "px-1",
+				{
+					"bg-gray-4": isDragOver,
+					"opacity-70": isMoving,
+				},
+			)}
 		>
 			<Link
 				href={
@@ -166,7 +172,10 @@ export function BreadcrumbItem({
 			>
 				<p
 					className={clsx(
-						"tracking-tight leading-6 truncate transition-colors duration-200 hover:text-gray-12",
+						"transition-colors duration-200 hover:text-gray-12",
+						compact
+							? "leading-4 [overflow-wrap:anywhere]"
+							: "tracking-tight leading-6 truncate",
 						isDragOver ? "text-gray-12" : "text-gray-10",
 					)}
 				>

@@ -16,7 +16,6 @@ import {
 	TopBarTitle,
 	useTopBarTitleWidth,
 } from "../../../_components/TopBarTitle";
-import { useDashboardContext } from "../../../Contexts";
 import { AllFolders } from "../../../caps/components/Folders";
 import { BreadcrumbItem } from "./BreadcrumbItem";
 import { ClientMyCapsLink } from "./ClientMyCapsLink";
@@ -88,7 +87,8 @@ function DesktopPath({
 	const prefixSteps = spaceId ? 1 : 0;
 	const alwaysHidden = Math.max(0, ancestors.length - 2);
 	const maxLevel = prefixSteps + ancestors.length - alwaysHidden + 1;
-	const [level, setLevel] = useState(0);
+	const [fit, setFit] = useState({ level: 0 });
+	const level = fit.level;
 	const { setWidth } = useTopBarTitleWidth();
 
 	const showSpacesPrefix = Boolean(spaceId) && level < 1;
@@ -103,10 +103,10 @@ function DesktopPath({
 	useLayoutEffect(() => {
 		const row = rowRef.current;
 		if (!row || row.clientWidth === 0) return;
-		if (level === 0) setWidth(row.scrollWidth);
-		if (level >= maxLevel) return;
-		if (row.scrollWidth > row.clientWidth + 1) setLevel(level + 1);
-	}, [level, maxLevel, setWidth]);
+		if (fit.level === 0) setWidth(row.scrollWidth);
+		if (fit.level >= maxLevel) return;
+		if (row.scrollWidth > row.clientWidth + 1) setFit({ level: fit.level + 1 });
+	}, [fit, maxLevel, setWidth]);
 
 	useEffect(() => () => setWidth(0), [setWidth]);
 
@@ -117,7 +117,7 @@ function DesktopPath({
 		const observer = new ResizeObserver(() => {
 			if (row.clientWidth === lastWidth) return;
 			lastWidth = row.clientWidth;
-			setLevel(0);
+			setFit({ level: 0 });
 		});
 		observer.observe(row);
 		return () => observer.disconnect();
@@ -139,7 +139,10 @@ function DesktopPath({
 					<TopBarCrumbSeparator />
 				</span>
 			)}
-			<ClientMyCapsLink spaceId={spaceId} />
+			<ClientMyCapsLink
+				spaceId={spaceId}
+				className={truncateCurrent ? "min-w-[48px] shrink-[3]" : undefined}
+			/>
 			{hidden.length > 0 && (
 				<HiddenFoldersMenu hidden={hidden} spaceId={spaceId} />
 			)}
@@ -159,7 +162,7 @@ function DesktopPath({
 				<div
 					className={clsx(
 						"flex items-center",
-						truncateCurrent ? "min-w-0" : "shrink-0",
+						truncateCurrent ? "max-w-[65%] shrink-0" : "shrink-0",
 					)}
 				>
 					<TopBarCrumbSeparator />
@@ -183,32 +186,35 @@ function MobilePath({
 	breadcrumb: Crumb[];
 	spaceId?: Space.SpaceIdOrOrganisationId;
 }) {
-	const { activeSpace } = useDashboardContext();
 	const current = breadcrumb[breadcrumb.length - 1];
 	const parent =
 		breadcrumb.length > 1 ? breadcrumb[breadcrumb.length - 2] : null;
-	const rootLabel = activeSpace?.name ?? "My Caps";
-	const rootHref = spaceId ? `/dashboard/spaces/${spaceId}` : "/dashboard/caps";
 
 	return (
 		<div className="flex flex-col gap-0.5 min-w-0 lg:hidden">
-			<span className="text-xs font-normal tracking-normal leading-4 text-gray-10 [overflow-wrap:anywhere] [&_*]:leading-4">
-				<Link href={rootHref} className="hover:text-gray-12">
-					{rootLabel}
-				</Link>
-				{breadcrumb.length > 2 && <span aria-hidden> / …</span>}
+			<div className="flex flex-wrap items-center text-xs font-normal tracking-normal leading-4 text-gray-10 [&_*]:leading-4">
+				<ClientMyCapsLink spaceId={spaceId} compact />
+				{breadcrumb.length > 2 && (
+					<span aria-hidden className="px-1">
+						/ …
+					</span>
+				)}
 				{parent && (
 					<>
-						<span aria-hidden> / </span>
-						<Link
-							href={folderHref(parent.id, spaceId)}
-							className="hover:text-gray-12"
-						>
-							{parent.name}
-						</Link>
+						<span aria-hidden className="px-1">
+							/
+						</span>
+						<BreadcrumbItem
+							spaceId={spaceId}
+							id={parent.id}
+							name={parent.name}
+							color={parent.color}
+							isLast={false}
+							compact
+						/>
 					</>
 				)}
-			</span>
+			</div>
 			{current && (
 				<span className="text-gray-12 [overflow-wrap:anywhere]">
 					{current.name}
