@@ -489,6 +489,51 @@ describe("timeouts", () => {
 		expect(importErrorResponse(stop).status).toBe(422);
 	});
 
+	it("keeps a steady download going past the stall time when the head arrives in small pieces", async () => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		let sent = 0;
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(MP4_HEAD);
+				timer = setInterval(() => {
+					sent++;
+					if (sent > 30) {
+						clearInterval(timer);
+						controller.close();
+						return;
+					}
+					controller.enqueue(new Uint8Array(512));
+				}, 10);
+			},
+			cancel() {
+				clearInterval(timer);
+			},
+		});
+		const source = await openImportSource("https://media.example.com/a", {
+			isBlocked: publicNames,
+			request: async () => new Response(body, { status: 200 }),
+			stallTimeoutMs: 100,
+			totalTimeoutMs: 5_000,
+		});
+		let error: unknown;
+		let read = 0;
+		try {
+			for (;;) {
+				const next = await source.read();
+				if (next.done) break;
+				read += next.value.length;
+			}
+		} catch (caught) {
+			error = caught;
+		}
+		const stopped = source.stopped();
+		source.close();
+		clearInterval(timer);
+		expect(error).toBeUndefined();
+		expect(stopped).toBeNull();
+		expect(read).toBe(MP4_HEAD.length + 30 * 512);
+	});
+
 	it("says a preflight that runs out of time is the host, not the download budget", async () => {
 		let timer: ReturnType<typeof setInterval> | undefined;
 		const stop = await preflightImport("https://media.example.com/a", {

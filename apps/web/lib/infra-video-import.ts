@@ -275,22 +275,36 @@ export async function openImportSource(url: string, guards: DownloadGuards) {
 	// the abort. Each wait adds and removes its own listener: racing every read
 	// against one promise that never settles kept every chunk read reachable,
 	// so a large import held its whole file in memory until the function ran
-	// out of it.
+	// out of it. Each wait clears its own timer before it settles, because the
+	// caller's next read can start before any later cleanup runs.
 	const waiting = <T>(work: Promise<T>): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
-			const onAbort = () =>
-				reject(new Error("The import download was stopped"));
 			if (signal.aborted) {
 				work.catch(() => {});
-				onAbort();
+				reject(new Error("The import download was stopped"));
 				return;
 			}
-			signal.addEventListener("abort", onAbort, { once: true });
-			stall = setTimeout(() => stop("stall"), stallMs);
-			work.then(resolve, reject).finally(() => {
-				clearTimeout(stall);
+			const timer = setTimeout(() => stop("stall"), stallMs);
+			stall = timer;
+			const settle = () => {
+				clearTimeout(timer);
 				signal.removeEventListener("abort", onAbort);
-			});
+			};
+			const onAbort = () => {
+				settle();
+				reject(new Error("The import download was stopped"));
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+			work.then(
+				(value) => {
+					settle();
+					resolve(value);
+				},
+				(error) => {
+					settle();
+					reject(error);
+				},
+			);
 		});
 	const stopFor = (error: unknown) =>
 		stopped === "timeout" && !(error instanceof ImportStop) && guards.timedOut
