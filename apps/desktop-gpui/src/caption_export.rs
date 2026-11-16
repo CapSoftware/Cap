@@ -1,6 +1,3 @@
-//! Captions as subtitle files: SubRip (`.srt`) and WebVTT (`.vtt`), timed to
-//! the edited video.
-//!
 //! Cues come from the caption track the renderer draws, which is already
 //! projected through cuts, clip speeds, transitions and fullscreen holds, and
 //! are shaped the way the renderer shows them: fillers it hides are left out,
