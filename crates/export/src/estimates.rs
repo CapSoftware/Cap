@@ -162,6 +162,7 @@ async fn estimate(
         ExportSettings::Mp4(settings) => settings.resolution_base,
         ExportSettings::Gif(settings) => settings.resolution_base,
         ExportSettings::Mov(settings) => settings.resolution_base,
+        ExportSettings::Audio(_) => cap_project::XY::new(1280, 720),
     };
     if resolution.x == 0 || resolution.y == 0 {
         return Err("Invalid export resolution".into());
@@ -335,6 +336,7 @@ async fn estimate(
             ExportSettings::Mp4(settings) => settings.export(base, on_progress).await,
             ExportSettings::Gif(settings) => settings.export(base, on_progress).await,
             ExportSettings::Mov(settings) => settings.export(base, on_progress).await,
+            ExportSettings::Audio(settings) => settings.export(base, on_progress).await,
         }
     };
     tokio::pin!(export);
@@ -467,7 +469,7 @@ fn sample_plan(settings: ExportSettings) -> SamplePlan {
             timing: FrameTiming::GopAmortized,
             keyframe_interval,
         },
-        ExportSettings::Mp4(_) | ExportSettings::Mov(_) => SamplePlan {
+        ExportSettings::Mp4(_) | ExportSettings::Mov(_) | ExportSettings::Audio(_) => SamplePlan {
             windows: 4,
             window_frames: (fps / 2).max(32),
             leading_window: true,
@@ -498,7 +500,7 @@ fn keyframe_interval_frames(settings: ExportSettings) -> Option<u32> {
             .round()
             .max(1.0) as u32,
         ),
-        ExportSettings::Gif(_) | ExportSettings::Mov(_) => None,
+        ExportSettings::Gif(_) | ExportSettings::Mov(_) | ExportSettings::Audio(_) => None,
     }
 }
 
