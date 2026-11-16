@@ -58,3 +58,6 @@ harness = false
 [[bench]]
 name = "screenshot_blur"
 harness = false
+
+[dev-dependencies]
+tempfile = "3"
