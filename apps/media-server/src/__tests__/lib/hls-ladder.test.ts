@@ -256,6 +256,13 @@ function valueAfter(args: string[], flag: string) {
 }
 
 describe("buildHlsLadderArgs", () => {
+	test("holds the output to the length it is given, and only then", () => {
+		const capped = buildHlsLadderArgs(argsInput({ maxOutputSeconds: 12.5 }));
+		expect(valueAfter(capped, "-t")).toBe("12.5");
+		expect(capped.indexOf("-t")).toBeGreaterThan(capped.lastIndexOf("-i"));
+		expect(buildHlsLadderArgs(argsInput())).not.toContain("-t");
+	});
+
 	test("encodes every rendition on the GPU from one upload", () => {
 		const args = buildHlsLadderArgs(
 			argsInput({ nvenc: { options: NVENC, gpuDecode: false } }),
@@ -751,7 +758,7 @@ describe("stitchHlsLadderSlices", () => {
 	test("advertises the peak and the time-weighted average bitrate with audio", () => {
 		const stitched = stitchHlsLadderSlices(slices, { hasAudio: true });
 		expect(stitched.master).toContain(
-			'#EXT-X-STREAM-INF:BANDWIDTH=6128000,AVERAGE-BANDWIDTH=2218909,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="aud"',
+			'#EXT-X-STREAM-INF:BANDWIDTH=6192000,AVERAGE-BANDWIDTH=2218909,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="aud"',
 		);
 		expect(stitched.master).toContain('URI="audio.m3u8"');
 	});

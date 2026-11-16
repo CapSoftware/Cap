@@ -8,7 +8,10 @@ import {
 } from "@cap/database/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
-import { heldTranscriptMicroCredits } from "@/lib/infra-balance";
+import {
+	AVAILABLE_AFTER_FIELD,
+	heldTranscriptMicroCredits,
+} from "@/lib/infra-balance";
 
 export async function addCreditsToAccount({
 	accountId,
@@ -16,18 +19,20 @@ export async function addCreditsToAccount({
 	referenceId,
 	referenceType,
 	metadata,
+	executor,
 }: {
 	accountId: string;
 	amountCents: number;
 	referenceId?: string;
 	referenceType?: DeveloperCreditReferenceType;
 	metadata?: Record<string, unknown>;
+	executor?: DeveloperCreditTransaction;
 }): Promise<number> {
 	const microCreditsToAdd = Math.floor(
 		(amountCents / 100) * MICRO_CREDITS_PER_DOLLAR,
 	);
 
-	const newBalance = await db().transaction(async (tx) => {
+	const grant = async (tx: DeveloperCreditTransaction) => {
 		if (referenceId && referenceType) {
 			const [account] = await tx
 				.select({
@@ -64,6 +69,7 @@ export async function addCreditsToAccount({
 
 		const [updated] = await tx
 			.select({
+				appId: developerCreditAccounts.appId,
 				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 			})
 			.from(developerCreditAccounts)
@@ -82,13 +88,18 @@ export async function addCreditsToAccount({
 			balanceAfterMicroCredits: updated.balanceMicroCredits,
 			referenceId,
 			referenceType,
-			metadata: metadata ?? { amountCents },
+			metadata: {
+				...(metadata ?? { amountCents }),
+				[AVAILABLE_AFTER_FIELD]:
+					updated.balanceMicroCredits -
+					(await heldTranscriptMicroCredits(tx, updated.appId)),
+			},
 		});
 
 		return updated.balanceMicroCredits;
-	});
+	};
 
-	return newBalance;
+	return executor ? grant(executor) : db().transaction(grant);
 }
 
 type DeveloperCreditTransaction = Parameters<

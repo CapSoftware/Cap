@@ -1,4 +1,8 @@
-import { infraPageMetadata, requireInfraApp } from "../../infra-data";
+import {
+	getInfraApiKeys,
+	infraPageMetadata,
+	requireInfraApp,
+} from "../../infra-data";
 import { ApiKeysClient } from "./api-keys-client";
 
 export const generateMetadata = infraPageMetadata("API keys");
@@ -10,7 +14,8 @@ export default async function InfraKeysPage({
 }) {
 	const { appId } = await params;
 	const { app } = await requireInfraApp(appId);
-	const secretKey = app.apiKeys.find((k) => k.keyType === "secret");
+	const apiKeys = await getInfraApiKeys(app.id);
+	const secretKey = apiKeys.find((k) => k.keyType === "secret");
 
 	return (
 		<ApiKeysClient

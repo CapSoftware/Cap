@@ -222,4 +222,60 @@ describe("process developer video workflow", () => {
 			],
 		]);
 	});
+
+	it("keeps a video waiting past three hours while every worker answers busy, then encodes it", async () => {
+		mocks.prepare.mockResolvedValue("ready");
+		mocks.dispatch.mockResolvedValue("busy");
+		const started = Date.now();
+		const busyFor = 5 * 60 * 60;
+		let waited = 0;
+		const now = vi
+			.spyOn(Date, "now")
+			.mockImplementation(() => started + waited * 1000);
+		mocks.sleep.mockImplementation(async (wait: string) => {
+			waited += Number.parseInt(wait, 10);
+		});
+		mocks.readParts.mockImplementation(async () =>
+			waited < busyFor
+				? { mp4: "dispatch", hls: "dispatch" }
+				: { mp4: "done", hls: "done" },
+		);
+
+		const result = await run();
+		now.mockRestore();
+
+		expect(result).toEqual({ success: true });
+		expect(waited).toBeGreaterThanOrEqual(busyFor);
+		expect(mocks.fail).not.toHaveBeenCalled();
+		expect(mocks.sweep).toHaveBeenCalledWith("video-1", "encode-1");
+	});
+
+	it("still stops at the three hour deadline when one output waits for room while the other has gone quiet", async () => {
+		mocks.prepare.mockResolvedValue("ready");
+		mocks.dispatch.mockResolvedValue("busy");
+		mocks.check.mockResolvedValue("unreachable");
+		mocks.readParts.mockResolvedValue({ mp4: "dispatch", hls: "check" });
+		const started = Date.now();
+		let waited = 0;
+		const now = vi
+			.spyOn(Date, "now")
+			.mockImplementation(() => started + waited * 1000);
+		mocks.sleep.mockImplementation(async (wait: string) => {
+			waited += Number.parseInt(wait, 10);
+		});
+
+		const result = await run();
+		now.mockRestore();
+
+		expect(result).toEqual({ success: true });
+		expect(waited).toBeGreaterThanOrEqual(3 * 60 * 60);
+		expect(waited).toBeLessThan(3 * 60 * 60 + 60);
+		expect(mocks.fail.mock.calls).toEqual([
+			[
+				"video-1",
+				"encode-1",
+				"Processing took too long and was stopped. Upload the video again.",
+			],
+		]);
+	});
 });

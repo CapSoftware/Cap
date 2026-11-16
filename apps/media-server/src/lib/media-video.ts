@@ -19,12 +19,15 @@ import {
 	hdrTransferFrom,
 	SDR_COLOR_ARGS,
 } from "./hdr";
+import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import type { VideoMetadata } from "./job-manager";
 import {
 	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
+	encodeLengthLimit,
 	normalizeLocalPath,
+	outputLengthCapArgs,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
@@ -956,15 +959,26 @@ function shouldFallbackToGenericMpd(error: unknown): boolean {
 	return error instanceof Error && error.message.startsWith("DASH ");
 }
 
+export interface StreamingInputOptions {
+	allowAudioOnly?: boolean;
+}
+
 export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	options: StreamingInputOptions = {},
 	downloads?: MediaDownloads,
 ): Promise<string> {
 	if (!downloads)
 		return new MediaDownloads(abortSignal).run((group) =>
-			materializeMpdAsHlsPlaylist(manifestUrl, dirPath, group.signal, group),
+			materializeMpdAsHlsPlaylist(
+				manifestUrl,
+				dirPath,
+				group.signal,
+				options,
+				group,
+			),
 		);
 	abortSignal = downloads.signal;
 	const manifest = await downloads.text(manifestUrl, "DASH manifest");
@@ -989,6 +1003,7 @@ export async function materializeMpdAsHlsPlaylist(
 		"SegmentTemplate",
 	);
 	let segmentTotal = 0;
+	let declaresNonAudio = false;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -1010,6 +1025,7 @@ export async function materializeMpdAsHlsPlaylist(
 				representation.attributes,
 				adaptation.attributes,
 			);
+			if (type !== "audio") declaresNonAudio = true;
 			if (!type) continue;
 
 			const representationTemplate = getFirstXmlElementBlock(
@@ -1104,12 +1120,18 @@ export async function materializeMpdAsHlsPlaylist(
 		(playlist) => playlist.type === "audio",
 	);
 
-	if (videoPlaylists.length === 0) {
+	const audioOnly =
+		videoPlaylists.length === 0 &&
+		!declaresNonAudio &&
+		options.allowAudioOnly === true;
+	const variants = audioOnly ? audioPlaylists.slice(0, 1) : videoPlaylists;
+
+	if (variants.length === 0) {
 		throw new Error("DASH manifest did not contain a supported video track");
 	}
 
 	const masterPath = join(dirPath, `${randomUUID()}.m3u8`);
-	const defaultAudio = audioPlaylists[0] ?? null;
+	const defaultAudio = audioOnly ? null : (audioPlaylists[0] ?? null);
 	const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
 
 	if (defaultAudio) {
@@ -1118,7 +1140,7 @@ export async function materializeMpdAsHlsPlaylist(
 		);
 	}
 
-	for (const video of videoPlaylists) {
+	for (const video of variants) {
 		const attributes = [
 			`BANDWIDTH=${Math.round(video.bandwidth + (defaultAudio?.bandwidth ?? 0))}`,
 		];
@@ -1146,6 +1168,7 @@ export async function materializeStreamingInput(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 	trustedHosts?: readonly string[],
+	options: StreamingInputOptions = {},
 	downloads?: MediaDownloads,
 ): Promise<string> {
 	let inputPath: string;
@@ -1167,6 +1190,7 @@ export async function materializeStreamingInput(
 				videoUrl,
 				dirPath,
 				abortSignal,
+				options,
 				downloads,
 			);
 		} catch (err) {
@@ -1789,6 +1813,7 @@ async function probeVideoStreamEntries(
 	showEntries: string,
 	abortSignal?: AbortSignal,
 	keyed = false,
+	stream = "v:0",
 ): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
@@ -1797,7 +1822,7 @@ async function probeVideoStreamEntries(
 				"-v",
 				"error",
 				"-select_streams",
-				"v:0",
+				stream,
 				"-show_entries",
 				showEntries,
 				"-of",
@@ -1934,6 +1959,39 @@ async function readVideoSourceTraits(
 	};
 }
 
+const HLS_COPY_AUDIO_SAMPLE_RATES = new Set(["44100", "48000"]);
+const HLS_COPY_AUDIO_MAX_BITRATE = HLS_LADDER_COPIED_AUDIO_MAX_KBPS * 1000;
+
+// Whether the source's first audio track can go into an HLS audio rendition as
+// it is. The playlists name that rendition AAC-LC with two channels, so only
+// stereo AAC-LC qualifies, at a common rate and no more than the bitrate the
+// playlists allow for. Anything else, or a probe that fails, is encoded.
+export async function sourceAudioCopiesToHls(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<boolean> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=codec_name,profile,channels,sample_rate,bit_rate",
+		abortSignal,
+		true,
+		"a:0",
+	);
+	if (stdout === null) return false;
+	const value = (key: string) =>
+		stdout.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? null;
+	const bitrate = Number(value("bit_rate"));
+	return (
+		value("codec_name") === "aac" &&
+		value("profile") === "LC" &&
+		value("channels") === "2" &&
+		HLS_COPY_AUDIO_SAMPLE_RATES.has(value("sample_rate") ?? "") &&
+		Number.isFinite(bitrate) &&
+		bitrate > 0 &&
+		bitrate <= HLS_COPY_AUDIO_MAX_BITRATE
+	);
+}
+
 // One ffprobe for the two things that decide how a source is decoded: a
 // rotated source cannot be decoded on the GPU, and an HDR source has to be
 // converted to standard range on the CPU.
@@ -1969,6 +2027,60 @@ export async function requireVideoSourceTraits(
 	throw new Error("Could not read the colour information of the source video");
 }
 
+const EIGHT_BIT_PIXEL_FORMATS = new Set([
+	"yuv420p",
+	"yuvj420p",
+	"yuv422p",
+	"yuv444p",
+	"yuva420p",
+]);
+
+// VP8 is always 8-bit standard range, and 8-bit VP9 is what browser and
+// extension recordings are, so such a source whose colour tags cannot be
+// read is encoded as standard range instead of failing. VP9 at a higher bit
+// depth (profile 2) can carry HDR, so it keeps the requirement.
+export function colourProbeIsOptional(
+	videoCodec: string,
+	pixelFormat: string | null,
+): boolean {
+	if (videoCodec === "vp8") return true;
+	return (
+		videoCodec === "vp9" &&
+		pixelFormat !== null &&
+		EIGHT_BIT_PIXEL_FORMATS.has(pixelFormat)
+	);
+}
+
+async function videoSourceTraitsForEncode(
+	inputPath: string,
+	videoCodec: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	if (videoCodec === "vp8") {
+		return await probeVideoSourceTraits(inputPath, abortSignal);
+	}
+	try {
+		return await requireVideoSourceTraits(inputPath, abortSignal);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		if (
+			videoCodec !== "vp9" ||
+			!(error instanceof Error) ||
+			!error.message.startsWith("Could not read the colour information") ||
+			!colourProbeIsOptional(
+				videoCodec,
+				await probeH264PixelFormat(inputPath, abortSignal),
+			)
+		) {
+			throw error;
+		}
+		console.warn(
+			"[media-video] Could not read the colour information of an 8-bit VP9 source, encoding it as standard range",
+		);
+		return { rotation: null, hdr: null };
+	}
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -1999,7 +2111,11 @@ export async function processVideo(
 	const traits =
 		remuxOnly || (metadata.videoCodec === "h264" && browserPixelFormat)
 			? null
-			: await requireVideoSourceTraits(inputPath, abortSignal);
+			: await videoSourceTraitsForEncode(
+					inputPath,
+					metadata.videoCodec,
+					abortSignal,
+				);
 	abortSignal?.throwIfAborted();
 	const hdr = traits?.hdr ?? null;
 	// Created only once nothing above can throw, so a job cancelled while its
@@ -2035,6 +2151,9 @@ export async function processVideo(
 		opts.timeoutMs,
 		metadata,
 	);
+	// A damaged source is read with its timestamps rebuilt, which the probe
+	// did not see, so a recovery attempt is bounded by its deadline alone.
+	const maxOutputSeconds = resilientFlags ? null : encodeLengthLimit(metadata);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
 			? capcodecOptionsForJob(opts)
@@ -2051,6 +2170,7 @@ export async function processVideo(
 				extraInputArgs,
 				extraOutputArgs,
 				processTimeoutMs,
+				maxOutputSeconds,
 				onProgress,
 				abortSignal,
 			);
@@ -2078,6 +2198,7 @@ export async function processVideo(
 		sourceHeight: metadata.height,
 		hdr,
 		hdrColor: traits?.hdrColor,
+		maxOutputSeconds,
 		// NVENC leaves the CPU free, so decode (and scale) can use every core.
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
@@ -2168,6 +2289,7 @@ export interface ProcessVideoArgsInput {
 	hdr?: HdrTransfer | null;
 	hdrColor?: HdrColor | null;
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
+	maxOutputSeconds?: number | null;
 }
 
 export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
@@ -2275,6 +2397,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	}
 
 	ffmpegArgs.push(
+		...outputLengthCapArgs(input.maxOutputSeconds),
 		"-movflags",
 		"+faststart",
 		...input.extraOutputArgs,
@@ -2395,6 +2518,7 @@ async function processVideoWithCapcodec(
 	extraInputArgs: string[],
 	extraOutputArgs: string[],
 	processTimeoutMs: number,
+	maxOutputSeconds: number | null,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
@@ -2412,6 +2536,7 @@ async function processVideoWithCapcodec(
 		maxWidth: opts.maxWidth,
 		maxHeight: opts.maxHeight,
 		extraInputArgs,
+		maxOutputSeconds,
 		options: capcodec,
 		totalDurationUs: metadata.duration * 1_000_000,
 		onProgress,
@@ -2450,6 +2575,7 @@ async function processVideoWithCapcodec(
 			muxArgs.push("-map", "0:v:0", "-c:v", "copy", "-an");
 		}
 		muxArgs.push(
+			...outputLengthCapArgs(maxOutputSeconds),
 			"-movflags",
 			"+faststart",
 			...extraOutputArgs,

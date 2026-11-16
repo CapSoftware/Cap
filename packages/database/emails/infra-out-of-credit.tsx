@@ -47,7 +47,7 @@ export function InfraOutOfCredit({
 							{appName} is out of credit
 						</Heading>
 						<Text className="text-sm leading-6 text-black">
-							Today's storage charge for {appName} was more than its Cap Infra
+							A storage charge for {appName} was more than its Cap Infra
 							balance, so the balance is now zero.
 						</Text>
 						<Text className="text-sm leading-6 text-black">
@@ -64,8 +64,8 @@ export function InfraOutOfCredit({
 							</Link>
 						</Section>
 						<Text className="text-sm leading-6 text-black">
-							Adding credits brings the app straight back. The days it could not
-							pay for are not charged.
+							Adding credits brings the app straight back. What it could not pay
+							is not charged afterwards.
 						</Text>
 						<Footer email={email} />
 					</Container>

@@ -13,13 +13,16 @@ import {
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
 import {
+	DEFAULT_EMBED_OPTIONS,
 	INFRA_VIDEO_DISPLAY_LABELS,
 	INFRA_VIDEO_FAILURE_FALLBACK,
 	INFRA_VIDEO_PAGE_MAX,
-	INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK,
+	INFRA_VIDEO_PUBLIC_FAILURE,
+	INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
 	infraRefreshDelayMs,
 	infraVideoDisplayState,
 	infraVideoEmbedCode,
+	infraVideoEmbedUrl,
 	infraVideoFailure,
 	infraVideoIsChanging,
 	infraVideoListLimit,
@@ -35,6 +38,7 @@ const row = (overrides: Parameters<typeof developerVideo>[0] = {}) => {
 	return {
 		...video,
 		legacy: video.playbackId === null && video.processing === null,
+		takenDown: false,
 	};
 };
 
@@ -49,6 +53,7 @@ const LIST_FIELDS = [
 
 const DETAIL_FIELDS = [
 	...LIST_FIELDS,
+	"captions",
 	"embedCode",
 	"failure",
 	"height",
@@ -114,6 +119,17 @@ describe("infraVideoFailure", () => {
 		}
 	});
 
+	it("passes on the sentence about a disputed payment unchanged", () => {
+		const disputed =
+			"A payment for this app was disputed, so uploads are blocked and playback is paused. Contact us to restore it.";
+
+		expect(infraVideoFailure(disputed)).toBe(disputed);
+		expect(infraVideoFailure(`  ${disputed}\n`)).toBe(disputed);
+		expect(infraVideoFailure("A payment failed upstream")).toBe(
+			INFRA_VIDEO_FAILURE_FALLBACK,
+		);
+	});
+
 	it("replaces encoder wording with a sentence a customer can act on", () => {
 		for (const reason of [
 			"Encoded MP4 was not stored",
@@ -128,62 +144,20 @@ describe("infraVideoFailure", () => {
 	});
 });
 
-describe("infraVideoFailure for a viewer of the public page", () => {
-	const forViewer = (reason: string | null) =>
-		infraVideoFailure(reason, "viewer");
-
-	it("passes on the sentences about the file", () => {
-		for (const reason of [
-			"This file has no video track.",
-			"This file is a playlist, not a video. Upload the video file itself.",
-			"This video could not be processed. Upload it again, or export it as an MP4 and upload that.",
-			"The uploaded file is empty. Upload it again.",
-			"Video is longer than the 4 hour limit",
-		]) {
-			expect(forViewer(reason)).toBe(reason);
-			expect(infraVideoFailure(reason)).toBe(reason);
-		}
-	});
-
-	it("never passes on a sentence about credit, which the owner still gets", () => {
-		for (const reason of [
-			"Not enough credit to store this video at its measured length and size. Add at least $0.01 of credit and upload it again.",
-			"Not enough credit for the video's full length",
-		]) {
-			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
-			expect(infraVideoFailure(reason)).toBe(reason);
-		}
-	});
-
-	it("does not let billing words through behind an opening about the file", () => {
-		for (const reason of [
-			"This video could not be stored because the app is out of credit.",
-			"This video needs a balance of at least 1 to be stored.",
-			"The uploaded file was removed after a failed payment.",
-			"This file costs $2 to store.",
-			"This video is waiting for a top-up.",
-		]) {
-			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
-		}
-	});
-
-	it("replaces encoder and internal wording with the neutral sentence", () => {
-		for (const reason of [
-			"Encoded MP4 was not stored",
-			"Video processing is not available on the media server",
-			"ffmpeg exited with code 1: [url]",
-			"Processing took too long and was stopped. Upload the video again.",
-			"",
-			null,
-		]) {
-			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
-		}
-	});
-
-	it("says nothing about credit, billing or uploading in the neutral sentence", () => {
-		expect(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK).not.toMatch(
-			/credit|balance|billing|payment|upload/i,
+describe("the sentence a viewer of the public page gets", () => {
+	it("is a heading and one line with no advice and nothing about the owner's account", () => {
+		expect(INFRA_VIDEO_PUBLIC_FAILURE).toBe("This video isn't available");
+		expect(INFRA_VIDEO_PUBLIC_FAILURE_DETAIL).toBe(
+			"There is nothing to play at this link.",
 		);
+		for (const text of [
+			INFRA_VIDEO_PUBLIC_FAILURE,
+			INFRA_VIDEO_PUBLIC_FAILURE_DETAIL,
+		]) {
+			expect(text).not.toMatch(
+				/credit|balance|billing|payment|upload|export|owner|process/i,
+			);
+		}
 	});
 });
 
@@ -226,6 +200,7 @@ describe("console video payload", () => {
 		expect(detail.posterUrl).toContain("/playback-id-0123456789ab/");
 		expect(detail.stillEncoding).toBe(false);
 		expect(detail.failure).toBeNull();
+		expect(detail.captions).toEqual([]);
 
 		const sent = JSON.stringify(detail);
 		expect(sent).not.toContain("developer/app-1/video-1/video");
@@ -280,7 +255,7 @@ describe("console video payload", () => {
 
 			expect(detail.shareUrl).toBe(PAGE);
 			expect(detail.embedCode).toBe(
-				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`,
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 			);
 		});
 
@@ -310,6 +285,68 @@ describe("console video payload", () => {
 			).toMatchObject({ shareUrl: null, embedCode: null });
 		});
 
+		it("builds the snippet from the console's embed options", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+			const base = { ...DEFAULT_EMBED_OPTIONS };
+
+			expect(infraVideoEmbedCode(`${PAGE}/embed`, video, base)).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, video),
+			);
+			expect(infraVideoEmbedUrl(`${PAGE}/embed`, base)).toBe(`${PAGE}/embed`);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, {
+					color: "#F97316",
+					controls: false,
+					autoplay: true,
+					captions: true,
+					qualityMenu: false,
+				}),
+			).toBe(
+				`${PAGE}/embed?color=f97316&controls=0&autoplay=1&muted=1&captions=1&quality_menu=0`,
+			);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, { ...base, captions: true }),
+			).toBe(`${PAGE}/embed?captions=1`);
+		});
+
+		it("keeps the iframe's attributes whatever the options", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+			const attributes = (code: string) => code.replace(/ src="[^"]*"/, "");
+
+			expect(
+				attributes(
+					infraVideoEmbedCode(`${PAGE}/embed`, video, {
+						color: "#f97316",
+						controls: false,
+						autoplay: true,
+						captions: true,
+						qualityMenu: false,
+					}),
+				),
+			).toBe(attributes(infraVideoEmbedCode(`${PAGE}/embed`, video)));
+		});
+
+		it.each([
+			'red" onload="alert(1)',
+			"#12345g",
+			"3b82f6&autoplay=1",
+			"</iframe><script>alert(1)</script>",
+		])("leaves the hostile colour %j out of the snippet", (color) => {
+			const code = infraVideoEmbedCode(
+				`${PAGE}/embed`,
+				{ name: "Demo", width: 1920, height: 1080 },
+				{ ...DEFAULT_EMBED_OPTIONS, color },
+			);
+
+			expect(code).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, {
+					name: "Demo",
+					width: 1920,
+					height: 1080,
+				}),
+			);
+		});
+
 		it("keeps a video name from breaking out of the title attribute", () => {
 			const code = infraVideoEmbedCode(`${PAGE}/embed`, {
 				name: 'Demo "one" <script>alert(1)</script> & more',
@@ -321,7 +358,7 @@ describe("console video payload", () => {
 				'title="Demo &quot;one&quot; &lt;script&gt;alert(1)&lt;/script&gt; &amp; more"',
 			);
 			expect(code.match(/<script/g)).toBeNull();
-			expect(code.split('"').length).toBe(9);
+			expect(code.split('"').length).toBe(11);
 		});
 	});
 

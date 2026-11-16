@@ -532,6 +532,20 @@ describe("developer video redrive", () => {
 		expect(developerVideoRedrive(startedAt(7), now)).toBe("start");
 	});
 
+	it("times a video that waited for a free worker from its last busy answer", () => {
+		const waited = (busyHoursAgo: number) =>
+			developerVideo({
+				processing: processingState({
+					startedAt: now - 7 * 3_600_000,
+					busyAt: now - busyHoursAgo * 3_600_000,
+				}),
+			});
+
+		expect(developerVideoRedrive(waited(1), now)).toBeNull();
+		expect(developerVideoRedrive(waited(5.9), now)).toBeNull();
+		expect(developerVideoRedrive(waited(6), now)).toBe("start");
+	});
+
 	it("retries adaptive streaming only once its retry time has passed", () => {
 		const parked = (retryAt: number) =>
 			developerVideo({

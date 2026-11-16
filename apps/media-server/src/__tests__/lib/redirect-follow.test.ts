@@ -81,7 +81,7 @@ describe("redirects to a private address", () => {
 		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
 		process.env.MEDIA_SERVER_ALLOWED_HOSTS = "allowed.example";
 		await expect(
-			probeVideo("https://unlisted.example/video.mp4"),
+			probeVideo("https://8.8.8.8/video.mp4"),
 		).rejects.toBeInstanceOf(BlockedUrlError);
 	});
 

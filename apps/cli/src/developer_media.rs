@@ -15,6 +15,30 @@ pub const DEFAULT_WAIT_SECONDS: u64 = 900;
 pub const MAX_WAIT_SECONDS: u64 = 86_400;
 
 #[derive(Default)]
+pub struct Created(std::sync::Mutex<Option<(String, String)>>);
+
+impl Created {
+    pub fn record(&self, id: &str, status: &str) {
+        if let Ok(mut created) = self.0.lock() {
+            *created = Some((id.to_string(), status.to_string()));
+        }
+    }
+
+    pub fn get(&self) -> Option<(String, String)> {
+        self.0.lock().ok().and_then(|created| created.clone())
+    }
+
+    fn record_from(&self, value: &Value, object: &str) {
+        if let (Some(id), Some(status)) = (
+            value_text(value, object, "id"),
+            value_text(value, object, "status"),
+        ) {
+            self.record(id, status);
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct TranscriptOptions {
     pub name: Option<String>,
     pub language: Option<String>,
@@ -28,6 +52,7 @@ fn invalid(message: impl Into<String>) -> AgentApiError {
         retryable: false,
         retry_after_ms: None,
         request_id: None,
+        ..Default::default()
     }
 }
 
@@ -136,6 +161,7 @@ async fn put_file(target: &Value, path: &Path, content_length: u64) -> Result<()
         retryable: true,
         retry_after_ms: Some(1_000),
         request_id: None,
+        ..Default::default()
     })?;
     if response.status().is_success() {
         Ok(())
@@ -146,6 +172,7 @@ async fn put_file(target: &Value, path: &Path, content_length: u64) -> Result<()
             retryable: false,
             retry_after_ms: None,
             request_id: None,
+            ..Default::default()
         })
     }
 }
@@ -164,6 +191,7 @@ pub async fn create_transcript_from_file(
     app_id: &str,
     path: &Path,
     options: &TranscriptOptions,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let content_length = file_length(path, TRANSCRIPT_MAX_FILE_BYTES, "2 GB").await?;
@@ -176,18 +204,26 @@ pub async fn create_transcript_from_file(
         )
         .await?;
     let id = transcript_id(&created)?;
-    let target = created
-        .get("upload")
-        .filter(|target| !target.is_null())
-        .ok_or_else(|| invalid("Cap did not return an upload target"))?;
-    put_file(target, path, content_length).await?;
-    client
-        .mutate_json_confirmed(
-            Method::POST,
-            &format!("/developer/apps/{app_id}/transcripts/{id}/start"),
-            &json!({}),
-        )
+    created_resource.record(&id, "uploading");
+    let started = async {
+        let target = created
+            .get("upload")
+            .filter(|target| !target.is_null())
+            .ok_or_else(|| invalid("Cap did not return an upload target"))?;
+        put_file(target, path, content_length).await?;
+        client
+            .mutate_json_confirmed(
+                Method::POST,
+                &format!("/developer/apps/{app_id}/transcripts/{id}/start"),
+                &json!({}),
+            )
+            .await
+    };
+    let started = started
         .await
+        .map_err(|error| error.with_detail("transcriptId", id.as_str()))?;
+    created_resource.record_from(&started, "transcript");
+    Ok(started)
 }
 
 pub async fn create_transcript_from_url(
@@ -195,20 +231,23 @@ pub async fn create_transcript_from_url(
     app_id: &str,
     url: &str,
     options: &TranscriptOptions,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let parsed = url::Url::parse(url).map_err(|_| invalid("The URL is not valid"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(invalid("The URL must start with http:// or https://"));
     }
-    client
+    let created = client
         .mutate_json_confirmed(
             Method::POST,
             &format!("/developer/apps/{app_id}/transcripts"),
             &transcript_url_body(url, options),
         )
         .await
-        .map(without_upload_target)
+        .map(without_upload_target)?;
+    created_resource.record_from(&created, "transcript");
+    Ok(created)
 }
 
 pub fn transcript_path(
@@ -231,27 +270,39 @@ pub fn transcript_status(value: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-pub fn transcript_failure(value: &Value) -> AgentApiError {
-    let transcript = value.get("transcript");
-    let field = |name: &str| {
-        transcript
-            .and_then(|transcript| transcript.get(name))
-            .and_then(Value::as_str)
-    };
+fn value_text<'a>(value: &'a Value, object: &str, field: &str) -> Option<&'a str> {
+    value
+        .get(object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_str)
+}
+
+fn request_id(value: &Value) -> Option<String> {
+    value
+        .get("requestId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+pub fn transcript_failure(value: &Value, transcript_id: &str) -> AgentApiError {
     AgentApiError {
         code: "TRANSCRIPT_FAILED".to_string(),
         message: format!(
             "{} ({})",
-            field("errorMessage").unwrap_or("The transcript could not be created"),
-            field("errorCode").unwrap_or("transcription_failed")
+            value_text(value, "transcript", "errorMessage")
+                .unwrap_or("The transcript could not be created"),
+            value_text(value, "transcript", "errorCode").unwrap_or("transcription_failed")
         ),
         retryable: false,
         retry_after_ms: None,
-        request_id: value
-            .get("requestId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        request_id: request_id(value),
+        ..Default::default()
     }
+    .with_detail("transcriptId", transcript_id)
+    .with_detail("status", "error")
+    .with_hint(
+        "A failed transcript is not charged. Remove it with `cap developers transcripts delete`.",
+    )
 }
 
 pub fn validate_wait_seconds(timeout_seconds: Option<u64>) -> Result<u64, AgentApiError> {
@@ -262,45 +313,340 @@ pub fn validate_wait_seconds(timeout_seconds: Option<u64>) -> Result<u64, AgentA
     Ok(timeout)
 }
 
+fn wait_delay(attempt: u32) -> Duration {
+    let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
+    Duration::from_millis(delay.min(5_000))
+}
+
+enum WaitProgress {
+    Done,
+    Pending(String),
+}
+
+struct Wait<'a> {
+    path: String,
+    resource: &'a str,
+    id_field: &'a str,
+    id: &'a str,
+    timeout_seconds: u64,
+    resume: String,
+}
+
+impl Wait<'_> {
+    fn timed_out(&self, status: Option<&str>, request_id: Option<String>) -> AgentApiError {
+        let error = AgentApiError {
+            code: "NOT_READY".to_string(),
+            message: format!(
+                "Timed out after {} seconds waiting for the {}",
+                self.timeout_seconds, self.resource
+            ),
+            retryable: true,
+            retry_after_ms: Some(2_000),
+            request_id,
+            ..Default::default()
+        }
+        .with_detail(self.id_field, self.id)
+        .with_hint(format!("Keep waiting with `{}`.", self.resume));
+        match status {
+            Some(status) => error.with_detail("status", status),
+            None => error,
+        }
+    }
+
+    async fn run(
+        &self,
+        client: &AgentClient,
+        progress: impl Fn(&Value) -> Result<WaitProgress, AgentApiError>,
+    ) -> Result<Value, AgentApiError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(self.timeout_seconds);
+        let mut status: Option<String> = None;
+        let mut last_request_id = None;
+        let mut attempt = 0_u32;
+        loop {
+            let fetched = tokio::time::timeout_at(deadline, client.get_json(&self.path)).await;
+            let Ok(fetched) = fetched else {
+                return Err(self.timed_out(status.as_deref(), last_request_id));
+            };
+            let value = fetched.map_err(|error| error.with_detail(self.id_field, self.id))?;
+            match progress(&value).map_err(|error| error.with_detail(self.id_field, self.id))? {
+                WaitProgress::Done => return Ok(value),
+                WaitProgress::Pending(current) => status = Some(current),
+            }
+            last_request_id = request_id(&value);
+            let wake = tokio::time::Instant::now() + wait_delay(attempt);
+            if wake >= deadline {
+                tokio::time::sleep_until(deadline).await;
+                return Err(self.timed_out(status.as_deref(), last_request_id));
+            }
+            tokio::time::sleep_until(wake).await;
+            attempt = attempt.saturating_add(1);
+        }
+    }
+}
+
 pub async fn wait_for_transcript(
     client: &AgentClient,
     app_id: &str,
     transcript_id: &str,
     timeout_seconds: u64,
 ) -> Result<Value, AgentApiError> {
-    let path = transcript_path(app_id, transcript_id, false)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
-    let mut attempt = 0_u32;
-    loop {
-        let value = client.get_json(&path).await?;
-        match transcript_status(&value) {
-            Some("complete") => return Ok(value),
-            Some("error") => return Err(transcript_failure(&value)),
-            Some("uploading") => {
-                return Err(AgentApiError {
-                    code: "NOT_READY".to_string(),
-                    message: "The transcript is still waiting for its file".to_string(),
-                    retryable: false,
-                    retry_after_ms: None,
-                    request_id: None,
-                });
-            }
-            Some("queued" | "processing") => {}
-            _ => return Err(invalid("Cap returned an invalid transcript status")),
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AgentApiError {
-                code: "NOT_READY".to_string(),
-                message: "Timed out waiting for the transcript".to_string(),
-                retryable: true,
-                retry_after_ms: Some(2_000),
-                request_id: None,
-            });
-        }
-        let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
-        tokio::time::sleep(Duration::from_millis(delay.min(5_000))).await;
-        attempt = attempt.saturating_add(1);
+    let wait = Wait {
+        path: transcript_path(app_id, transcript_id, false)?,
+        resource: "transcript",
+        id_field: "transcriptId",
+        id: transcript_id,
+        timeout_seconds,
+        resume: format!("cap developers transcripts wait {app_id} {transcript_id}"),
+    };
+    wait.run(client, |value| match transcript_status(value) {
+        Some("complete") => Ok(WaitProgress::Done),
+        Some("error") => Err(transcript_failure(value, transcript_id)),
+        Some("uploading") => Err(AgentApiError::local(
+            "NOT_READY",
+            "The transcript is still waiting for its file",
+        )
+        .with_detail("status", "uploading")),
+        Some(status @ ("queued" | "processing")) => Ok(WaitProgress::Pending(status.to_string())),
+        _ => Err(invalid("Cap returned an invalid transcript status")),
+    })
+    .await
+}
+
+pub fn video_path(app_id: &str, video_id: &str) -> Result<String, AgentApiError> {
+    let app_id = opaque_id(app_id, "Developer app ID")?;
+    let video_id = opaque_id(video_id, "Developer video ID")?;
+    Ok(format!("/developer/apps/{app_id}/videos/{video_id}"))
+}
+
+pub fn video_status(value: &Value) -> Option<&str> {
+    value_text(value, "video", "status")
+}
+
+pub fn video_failure(value: &Value, video_id: &str) -> AgentApiError {
+    AgentApiError {
+        code: "VIDEO_FAILED".to_string(),
+        message: value_text(value, "video", "errorReason")
+            .unwrap_or("The video could not be processed")
+            .to_string(),
+        retryable: false,
+        retry_after_ms: None,
+        request_id: request_id(value),
+        ..Default::default()
     }
+    .with_detail("videoId", video_id)
+    .with_detail("status", "errored")
+    .with_hint("Remove it with `cap developers videos delete`, then upload the file again.")
+}
+
+pub async fn get_video(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+) -> Result<Value, AgentApiError> {
+    client.get_json(&video_path(app_id, video_id)?).await
+}
+
+pub async fn wait_for_video(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+    timeout_seconds: u64,
+) -> Result<Value, AgentApiError> {
+    let wait = Wait {
+        path: video_path(app_id, video_id)?,
+        resource: "video",
+        id_field: "videoId",
+        id: video_id,
+        timeout_seconds,
+        resume: format!("cap developers videos wait {app_id} {video_id}"),
+    };
+    wait.run(client, |value| match video_status(value) {
+        Some("ready") => Ok(WaitProgress::Done),
+        Some("errored") => Err(video_failure(value, video_id)),
+        Some("uploading") => Err(AgentApiError::local(
+            "NOT_READY",
+            "The video is still waiting for its file",
+        )
+        .with_detail("status", "uploading")
+        .with_hint("Upload the file with `cap developers videos upload`.")),
+        Some("processing") => Ok(WaitProgress::Pending("processing".to_string())),
+        _ => Err(invalid("Cap returned an invalid video status")),
+    })
+    .await
+}
+
+pub fn created_id(value: &Value, object: &str) -> Result<String, AgentApiError> {
+    value_text(value, object, "id")
+        .map(str::to_string)
+        .ok_or_else(|| invalid(format!("Cap returned a {object} without an ID")))
+}
+
+async fn app_context(client: &AgentClient, app_id: &str) -> Result<Value, AgentApiError> {
+    let app_id = opaque_id(app_id, "Developer app ID")?;
+    client
+        .get_json(&format!("/developer/apps/{app_id}/context"))
+        .await
+}
+
+fn preview(action: &str, effect: &str, target: Value) -> Value {
+    json!({
+        "dryRun": true,
+        "action": action,
+        "effect": effect,
+        "target": target,
+    })
+}
+
+fn active_keys(context: &Value) -> Vec<Value> {
+    context
+        .get("keys")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter(|key| key.get("revokedAt").is_none_or(Value::is_null))
+                .map(|key| {
+                    json!({
+                        "keyType": key.get("keyType"),
+                        "keyPrefix": key.get("keyPrefix"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn app_target(context: &Value) -> Value {
+    json!({
+        "appId": context.pointer("/app/id"),
+        "name": context.pointer("/app/name"),
+        "environment": context.pointer("/app/environment"),
+        "videoCount": context.pointer("/usage/videoCount"),
+        "storageMinutes": context.pointer("/usage/storageMinutes"),
+        "domainCount": context.get("domains").and_then(Value::as_array).map(Vec::len),
+        "activeKeys": active_keys(context),
+    })
+}
+
+pub async fn preview_app_delete(
+    client: &AgentClient,
+    app_id: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    Ok(preview(
+        "delete_developer_app",
+        "Deletes the app, revokes its keys and stops playback of its videos. Unused credit is lost.",
+        app_target(&context),
+    ))
+}
+
+pub async fn preview_key_rotation(
+    client: &AgentClient,
+    app_id: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    Ok(preview(
+        "rotate_developer_keys",
+        "Revokes the active keys at once and prints a new public and secret key one time.",
+        app_target(&context),
+    ))
+}
+
+pub fn domain_entry<'a>(context: &'a Value, domain: &str) -> Option<&'a Value> {
+    let wanted = domain.trim_end_matches('/');
+    context
+        .get("domains")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|entry| {
+            ["id", "domain"].iter().any(|field| {
+                entry
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
+            })
+        })
+}
+
+pub async fn resolve_domain(
+    client: &AgentClient,
+    app_id: &str,
+    domain: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    domain_entry(&context, domain).cloned().ok_or_else(|| {
+        AgentApiError::local("NOT_FOUND", "Domain not found in this developer app").with_hint(
+            format!("Run `cap developers get {app_id}` to list the app's domains and their ids."),
+        )
+    })
+}
+
+pub fn domain_removal_preview(app_id: &str, domain: &Value) -> Value {
+    preview(
+        "remove_developer_domain",
+        "Requests from this origin are refused once it is removed.",
+        json!({
+            "appId": app_id,
+            "domainId": domain.get("id"),
+            "domain": domain.get("domain"),
+        }),
+    )
+}
+
+pub async fn preview_video_delete(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+) -> Result<Value, AgentApiError> {
+    let value = client
+        .get_json(&format!("{}?restart=false", video_path(app_id, video_id)?))
+        .await?;
+    Ok(preview(
+        "delete_developer_video",
+        "Deletes the video and stops its playback, share and embed links.",
+        json!({
+            "appId": app_id,
+            "videoId": value.pointer("/video/id"),
+            "name": value.pointer("/video/name"),
+            "status": value.pointer("/video/status"),
+            "durationSeconds": value.pointer("/video/durationSeconds"),
+            "shareUrl": value.pointer("/video/shareUrl"),
+        }),
+    ))
+}
+
+pub async fn preview_transcript_delete(
+    client: &AgentClient,
+    app_id: &str,
+    transcript_id: &str,
+) -> Result<Value, AgentApiError> {
+    let value = client
+        .get_json(&transcript_path(app_id, transcript_id, false)?)
+        .await?;
+    Ok(preview(
+        "delete_developer_transcript",
+        "Deletes the transcript and its stored text. The charge is not refunded.",
+        json!({
+            "appId": app_id,
+            "transcriptId": value.pointer("/transcript/id"),
+            "name": value.pointer("/transcript/name"),
+            "status": value.pointer("/transcript/status"),
+            "durationSeconds": value.pointer("/transcript/durationSeconds"),
+        }),
+    ))
+}
+
+pub async fn usage(client: &AgentClient, app_id: &str) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    let field = |name: &str| context.get(name).cloned().unwrap_or(Value::Null);
+    Ok(json!({
+        "appId": context.pointer("/app/id"),
+        "name": context.pointer("/app/name"),
+        "usage": field("usage"),
+        "credits": field("credits"),
+        "billing": field("billing"),
+        "billingHint": field("billingHint"),
+        "requestId": field("requestId"),
+    }))
 }
 
 pub const NO_SPEECH_NOTE: &str =
@@ -345,6 +691,7 @@ pub async fn upload_video(
     path: &Path,
     name: Option<&str>,
     user_id: Option<&str>,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let content_length = file_length(path, VIDEO_MAX_FILE_BYTES, "5 GB").await?;
@@ -368,22 +715,30 @@ pub async fn upload_video(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("Cap returned a video without an ID"))?
         .to_string();
-    let target = created
-        .get("upload")
-        .ok_or_else(|| invalid("Cap did not return an upload target"))?;
-    put_file(target, path, content_length).await?;
-    client
-        .mutate_json_confirmed(
-            Method::POST,
-            &format!("/developer/apps/{app_id}/videos/{video_id}/complete"),
-            &json!({
-                "durationSeconds": meta.duration_in_secs,
-                "width": meta.width,
-                "height": meta.height,
-                "fps": meta.fps,
-            }),
-        )
+    created_resource.record(&video_id, "uploading");
+    let completed = async {
+        let target = created
+            .get("upload")
+            .ok_or_else(|| invalid("Cap did not return an upload target"))?;
+        put_file(target, path, content_length).await?;
+        client
+            .mutate_json_confirmed(
+                Method::POST,
+                &format!("/developer/apps/{app_id}/videos/{video_id}/complete"),
+                &json!({
+                    "durationSeconds": meta.duration_in_secs,
+                    "width": meta.width,
+                    "height": meta.height,
+                    "fps": meta.fps,
+                }),
+            )
+            .await
+    };
+    let completed = completed
         .await
+        .map_err(|error| error.with_detail("videoId", video_id.as_str()))?;
+    created_resource.record_from(&completed, "video");
+    Ok(completed)
 }
 
 #[cfg(test)]
@@ -450,7 +805,7 @@ mod tests {
             "requestId": "r1",
         });
         assert_eq!(transcript_status(&value), Some("error"));
-        let error = transcript_failure(&value);
+        let error = transcript_failure(&value, "tr-1");
         assert_eq!(error.code, "TRANSCRIPT_FAILED");
         assert!(error.message.contains("insufficient_credits"));
         assert_eq!(error.request_id.as_deref(), Some("r1"));
@@ -502,5 +857,101 @@ mod tests {
                 "userId": "user-1",
             })
         );
+    }
+
+    #[test]
+    fn video_paths_accept_ids_that_begin_with_a_dash() {
+        assert_eq!(
+            super::video_path("app_1", "-Vid0000000dash").unwrap(),
+            "/developer/apps/app_1/videos/-Vid0000000dash"
+        );
+        assert_eq!(
+            transcript_path("app_1", "-EDG5hrbuAwXDNY", false).unwrap(),
+            "/developer/apps/app_1/transcripts/-EDG5hrbuAwXDNY"
+        );
+        assert!(super::video_path("app_1", "../video").is_err());
+    }
+
+    #[test]
+    fn failed_waits_keep_the_id_they_waited_on() {
+        let transcript = transcript_failure(
+            &json!({
+                "transcript": {
+                    "status": "error",
+                    "errorCode": "source_unreachable",
+                    "errorMessage": "The URL answered 404",
+                },
+                "requestId": "r1",
+            }),
+            "-EDG5hrbuAwXDNY",
+        );
+        assert_eq!(
+            transcript.context.details["transcriptId"],
+            "-EDG5hrbuAwXDNY"
+        );
+        assert_eq!(transcript.context.details["status"], "error");
+        assert!(transcript.context.hint.is_some());
+
+        let video = super::video_failure(
+            &json!({
+                "video": { "status": "errored", "errorReason": "The file could not be decoded" },
+                "requestId": "r2",
+            }),
+            "video-1",
+        );
+        assert_eq!(video.code, "VIDEO_FAILED");
+        assert_eq!(video.message, "The file could not be decoded");
+        assert_eq!(video.context.details["videoId"], "video-1");
+        assert_eq!(video.request_id.as_deref(), Some("r2"));
+
+        let serialized = serde_json::to_value(&video).unwrap();
+        assert_eq!(serialized["videoId"], "video-1");
+        assert_eq!(serialized["code"], "VIDEO_FAILED");
+        assert!(serialized["hint"].is_string());
+        assert!(video.describe().contains("videoId: video-1"));
+    }
+
+    #[test]
+    fn server_hints_survive_parsing_and_extra_fields_are_dropped() {
+        let error: crate::caps::AgentApiError = serde_json::from_value(json!({
+            "_tag": "AgentForbiddenError",
+            "code": "FORBIDDEN",
+            "message": "The developer:read permission is required. Run `cap auth login --profile full`.",
+            "retryable": false,
+            "retryAfterMs": null,
+            "requestId": "r3",
+            "hint": "Run `cap auth login --profile full`.",
+            "requiredScopes": ["developer:read"],
+        }))
+        .unwrap();
+        assert_eq!(
+            error.context.hint.as_deref(),
+            Some("Run `cap auth login --profile full`.")
+        );
+        assert!(error.context.details.is_empty());
+        assert!(!error.describe().contains("hint:"));
+        let serialized = serde_json::to_value(&error).unwrap();
+        assert!(serialized.get("_tag").is_none());
+        assert_eq!(serialized["hint"], "Run `cap auth login --profile full`.");
+    }
+
+    #[test]
+    fn domains_resolve_by_id_or_by_origin() {
+        let context = json!({
+            "domains": [
+                { "id": "dom-1", "domain": "https://app.example.com" },
+                { "id": "-dom-2", "domain": "https://www.example.com" },
+            ],
+        });
+        let id = |value: &str| {
+            super::domain_entry(&context, value)
+                .and_then(|entry| entry.get("id"))
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(id("dom-1").as_deref(), Some("dom-1"));
+        assert_eq!(id("https://app.example.com/").as_deref(), Some("dom-1"));
+        assert_eq!(id("HTTPS://WWW.EXAMPLE.COM").as_deref(), Some("-dom-2"));
+        assert_eq!(id("https://other.example.com"), None);
     }
 }

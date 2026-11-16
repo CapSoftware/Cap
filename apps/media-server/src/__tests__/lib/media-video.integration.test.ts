@@ -1844,11 +1844,16 @@ describe("DASH segment expansion", () => {
 	): Promise<T> {
 		const originalFetch = globalThis.fetch;
 		const dir = mkdtempSync(join(tmpdir(), "cap-mpd-segments-"));
-		globalThis.fetch = (async () =>
-			new Response(manifest, {
-				status: 200,
-				statusText: "OK",
-			})) as unknown as typeof fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL) =>
+			new Response(
+				new URL(String(input)).pathname.endsWith(".mpd")
+					? manifest
+					: String(input),
+				{
+					status: 200,
+					statusText: "OK",
+				},
+			)) as unknown as typeof fetch;
 		try {
 			return await new ManifestDownloads().run((downloads) =>
 				run(dir, downloads),
@@ -1862,7 +1867,7 @@ describe("DASH segment expansion", () => {
 	async function materializeNormalized(url: string, manifest: string) {
 		return withManifest(manifest, async (dir, downloads) => {
 			let master = readFileSync(
-				await materializeMpdAsHlsPlaylist(url, dir, undefined, downloads),
+				await materializeMpdAsHlsPlaylist(url, dir, undefined, {}, downloads),
 				"utf8",
 			);
 			const paths = [...master.matchAll(/(\/[^\s"]+\.m3u8)/g)].map(
@@ -2062,6 +2067,7 @@ describe("DASH segment expansion", () => {
 					"https://cdn.example/long/manifest.mpd",
 					dir,
 					undefined,
+					{},
 					downloads,
 				),
 			).rejects.toThrow(/^DASH /);
@@ -2078,6 +2084,7 @@ describe("DASH segment expansion", () => {
 					"https://cdn.example/long/manifest.mpd",
 					dir,
 					undefined,
+					{},
 					downloads,
 				),
 			).rejects.toThrow(/^DASH /);
@@ -2094,6 +2101,7 @@ describe("DASH segment expansion", () => {
 						"https://cdn.example/day/manifest.mpd",
 						dir,
 						undefined,
+						{},
 						downloads,
 					),
 				).rejects.toThrow(/^DASH /);
@@ -2106,6 +2114,75 @@ describe("DASH segment expansion", () => {
 			},
 		);
 		expect(performance.now() - startedAt).toBeLessThan(5_000);
+	});
+
+	describe("audio-only manifests", () => {
+		const audioOnly =
+			'<MPD type="static" mediaPresentationDuration="PT0.000S"><Period id="0"><AdaptationSet id="0" contentType="audio"><Representation id="0" bandwidth="128000" codecs="opus" mimeType="audio/webm"><SegmentTemplate timescale="1000000" initialization="a-init.webm" media="a-$Number$.webm" startNumber="0"><SegmentTimeline><S t="0" d="4020000"/><S t="4020000" d="1320000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>';
+		const url = "https://cdn.example/audio/manifest.mpd?Policy=p";
+
+		test("are refused unless the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				await expect(materializeMpdAsHlsPlaylist(url, dir)).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+				await expect(materializeStreamingInput(url, dir)).rejects.toThrow(
+					"DASH template URL cannot be fetched locally",
+				);
+			});
+		});
+
+		test("become a single audio variant when the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				const master = readFileSync(
+					await materializeStreamingInput(url, dir, undefined, undefined, {
+						allowAudioOnly: true,
+					}),
+					"utf8",
+				);
+				expect(master).not.toContain("#EXT-X-MEDIA");
+				const variants = master
+					.split("\n")
+					.filter((line) => line.startsWith("#EXT-X-STREAM-INF:"));
+				expect(variants).toEqual([
+					'#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="opus"',
+				]);
+				const playlist = readFileSync(
+					master.trim().split("\n").at(-1) ?? "",
+					"utf8",
+				);
+				expect(playlist).not.toContain("https://");
+				const initName = playlist.match(/#EXT-X-MAP:URI="([^"]+)"/)?.[1];
+				expect(initName).toBeTruthy();
+				expect(readFileSync(join(dir, initName ?? ""), "utf8")).toBe(
+					"https://cdn.example/audio/a-init.webm?Policy=p",
+				);
+				expect(playlist).toContain("#EXTINF:4.020000,");
+				const segments = playlist
+					.split("\n")
+					.filter((line) => line && !line.startsWith("#"));
+				expect(segments).toHaveLength(2);
+				expect(readFileSync(join(dir, segments[1] ?? ""), "utf8")).toBe(
+					"https://cdn.example/audio/a-1.webm?Policy=p",
+				);
+			});
+		});
+
+		test("are not inferred when the video uses an unsupported segment layout", async () => {
+			const unsupportedVideo = audioOnly.replace(
+				"</Period>",
+				'<AdaptationSet id="1" contentType="video"><Representation id="1" bandwidth="1500000" codecs="vp9" mimeType="video/webm" width="1280" height="720"><SegmentList><Initialization sourceURL="v-init.webm"/><SegmentURL media="v-0.webm"/></SegmentList></Representation></AdaptationSet></Period>',
+			);
+			await withManifest(unsupportedVideo, async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(url, dir, undefined, {
+						allowAudioOnly: true,
+					}),
+				).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+			});
+		});
 	});
 
 	test.each([
@@ -2132,6 +2209,7 @@ describe("DASH segment expansion", () => {
 							"https://cdn.example/r/manifest.mpd",
 							dir,
 							undefined,
+							{},
 							downloads,
 						),
 					).rejects.toThrow(/^DASH /);

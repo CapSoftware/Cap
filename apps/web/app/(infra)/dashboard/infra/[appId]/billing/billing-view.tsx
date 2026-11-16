@@ -1,7 +1,11 @@
 import clsx from "clsx";
 import Link from "next/link";
-import type { LedgerRow, ledgerPageWindow } from "@/lib/infra-ledger";
+import type { LedgerRow } from "@/lib/infra-ledger";
 import {
+	deliveryBilledFromText,
+	INFRA_DELIVERY_BILLED_FROM,
+	INFRA_DELIVERY_PRICE,
+	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -32,6 +36,11 @@ const dollars = (value: number) => `$${value.toFixed(2)}`;
 
 const flatRates = [
 	{
+		name: "Delivery",
+		unit: INFRA_DELIVERY_PRICE_UNIT,
+		price: INFRA_DELIVERY_PRICE,
+	},
+	{
 		name: "Speech to text",
 		unit: "per audio hour",
 		price: dollars(INFRA_SPEECH_DOLLARS_PER_HOUR),
@@ -49,6 +58,7 @@ const RATE_PRICE = clsx(
 );
 
 const LEDGER_ANCHOR = "transactions";
+const AUTO_TOP_UP_ANCHOR = "auto-top-up";
 
 export type BillingAccount = {
 	balanceMicroCredits: number;
@@ -66,8 +76,8 @@ export function BillingView({
 	shortfallMicroCredits,
 	autoTopUpFailure,
 	transactions,
-	totalTransactions,
 	ledgerPage,
+	deliveryBilledFrom = null,
 }: {
 	app: { id: string; name: string };
 	account: BillingAccount | null;
@@ -76,12 +86,13 @@ export function BillingView({
 	shortfallMicroCredits: number;
 	autoTopUpFailure: { day: string; reason: string } | null;
 	transactions: LedgerRow[];
-	totalTransactions: number;
-	ledgerPage: ReturnType<typeof ledgerPageWindow>;
+	ledgerPage: { newer: string | null; older: string | null };
+	deliveryBilledFrom?: string | null;
 }) {
 	const billingPath = infraAppPath(app.id, "billing");
-	const ledgerHref = (page: number) =>
-		`${billingPath}${page > 1 ? `?page=${page}` : ""}#${LEDGER_ANCHOR}`;
+	const ledgerHref = (direction: "before" | "after", cursor: string) =>
+		`${billingPath}?${direction}=${encodeURIComponent(cursor)}#${LEDGER_ANCHOR}`;
+	const hasTransactions = transactions.length > 0 || ledgerPage.newer !== null;
 
 	return (
 		<>
@@ -112,7 +123,12 @@ export function BillingView({
 					<div className="mt-9">
 						{account ? (
 							<>
-								<TopUp appId={app.id} />
+								<TopUp
+									appId={app.id}
+									autoTopUpHref={
+										account.autoTopUpEnabled ? null : `#${AUTO_TOP_UP_ANCHOR}`
+									}
+								/>
 								<div className="mt-8 border-t border-[rgba(222,230,246,0.08)] pt-6">
 									<ProCredit appId={app.id} credit={proCredit} />
 								</div>
@@ -174,8 +190,11 @@ export function BillingView({
 						</table>
 					</div>
 					<p className="m-0 mt-4 max-w-[520px] text-pretty text-[13px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
-						Storage is charged once a day for each video at its resolution.
-						Uploading needs a balance that covers seven days of storage.{" "}
+						Each video is charged one month of storage when it becomes ready,
+						then once a day at its resolution. Uploading needs a balance that
+						covers that first month. Delivered video is charged once a day, when
+						the day's figures become final.{" "}
+						{`${deliveryBilledFromText(deliveryBilledFrom ?? INFRA_DELIVERY_BILLED_FROM)} `}
 						<Link
 							href="/docs/api/billing"
 							className={clsx(TEXT_LINK, FOCUS, "rounded-[4px]")}
@@ -187,19 +206,21 @@ export function BillingView({
 			</div>
 
 			{account && (
-				<Block
-					title="Auto top-up"
-					description="Add credits from a saved card when the balance runs low."
-				>
-					<AutoTopUp
-						appId={app.id}
-						hasCard={account.hasCard}
-						enabled={account.autoTopUpEnabled}
-						thresholdMicroCredits={account.autoTopUpThresholdMicroCredits}
-						amountCents={account.autoTopUpAmountCents}
-						failure={autoTopUpFailure}
-					/>
-				</Block>
+				<div id={AUTO_TOP_UP_ANCHOR} className="scroll-mt-24">
+					<Block
+						title="Auto top-up"
+						description="Add credits from a saved card when the balance runs low."
+					>
+						<AutoTopUp
+							appId={app.id}
+							hasCard={account.hasCard}
+							enabled={account.autoTopUpEnabled}
+							thresholdMicroCredits={account.autoTopUpThresholdMicroCredits}
+							amountCents={account.autoTopUpAmountCents}
+							failure={autoTopUpFailure}
+						/>
+					</Block>
+				</div>
 			)}
 
 			<div id={LEDGER_ANCHOR} className="scroll-mt-24">
@@ -207,7 +228,7 @@ export function BillingView({
 					title="Transactions"
 					description="Every credit and charge, newest first. Times are in UTC."
 					action={
-						totalTransactions > 0 && (
+						hasTransactions && (
 							<a
 								href={`/api/developer/credits/transactions?appId=${encodeURIComponent(app.id)}`}
 								download
@@ -219,36 +240,29 @@ export function BillingView({
 					}
 				>
 					<CreditTransactionTable transactions={transactions} />
-					{ledgerPage.pages > 1 && (
+					{(ledgerPage.newer || ledgerPage.older) && (
 						<nav
 							aria-label="Transaction pages"
-							className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pt-4"
+							className="flex flex-wrap items-center justify-end gap-2 pt-4"
 						>
-							<p className="m-0 text-[13px] tabular-nums text-[rgba(232,236,244,0.5)]">
-								{ledgerPage.from.toLocaleString("en-US")} to{" "}
-								{ledgerPage.to.toLocaleString("en-US")} of{" "}
-								{totalTransactions.toLocaleString("en-US")}
-							</p>
-							<div className="flex gap-2">
-								{ledgerPage.page > 1 && (
-									<ButtonLink
-										variant="ghost"
-										size="sm"
-										href={ledgerHref(ledgerPage.page - 1)}
-									>
-										Newer
-									</ButtonLink>
-								)}
-								{ledgerPage.page < ledgerPage.pages && (
-									<ButtonLink
-										variant="ghost"
-										size="sm"
-										href={ledgerHref(ledgerPage.page + 1)}
-									>
-										Older
-									</ButtonLink>
-								)}
-							</div>
+							{ledgerPage.newer && (
+								<ButtonLink
+									variant="ghost"
+									size="sm"
+									href={ledgerHref("after", ledgerPage.newer)}
+								>
+									Newer
+								</ButtonLink>
+							)}
+							{ledgerPage.older && (
+								<ButtonLink
+									variant="ghost"
+									size="sm"
+									href={ledgerHref("before", ledgerPage.older)}
+								>
+									Older
+								</ButtonLink>
+							)}
 						</nav>
 					)}
 				</Block>

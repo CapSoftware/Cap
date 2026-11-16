@@ -64,6 +64,7 @@ const ErrorFields = {
 	retryable: Schema.Boolean,
 	retryAfterMs: Schema.NullOr(Schema.Number),
 	requestId: Schema.String,
+	hint: Schema.optional(Schema.String),
 };
 
 export class AgentBadRequestError extends Schema.TaggedError<AgentBadRequestError>()(
@@ -89,6 +90,7 @@ export class AgentForbiddenError extends Schema.TaggedError<AgentForbiddenError>
 	{
 		...ErrorFields,
 		code: Schema.Literal("FORBIDDEN", "PASSWORD_REQUIRED", "CONTENT_DISABLED"),
+		requiredScopes: Schema.optional(Schema.Array(AgentScope)),
 	},
 	HttpApiSchema.annotations({ status: 403 }),
 ) {}
@@ -983,18 +985,25 @@ export const AgentDeveloperAutoTopUpInput = Schema.Struct({
 	amountCents: Schema.optional(Schema.Number),
 });
 
-export const AgentDeveloperApp = Schema.Struct({
+const AgentDeveloperAppFields = {
 	id: Schema.String,
 	name: Schema.String,
 	environment: Schema.Literal("development", "production"),
 	logoUrl: Schema.NullOr(Schema.String),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
+};
+
+export const AgentDeveloperAppSummary = Schema.Struct(AgentDeveloperAppFields);
+
+export const AgentDeveloperApp = Schema.Struct({
+	...AgentDeveloperAppFields,
 	capabilities: AgentActionCapabilities,
 });
 
 export const AgentDeveloperAppsResponse = Schema.Struct({
-	apps: Schema.Array(AgentDeveloperApp),
+	apps: Schema.Array(AgentDeveloperAppSummary),
+	capabilities: AgentActionCapabilities,
 	requestId: Schema.String,
 });
 
@@ -1059,6 +1068,11 @@ export const AgentDeveloperAppContextResponse = Schema.Struct({
 					"1440p": Schema.Number,
 					"2160p": Schema.Number,
 				}),
+				dailyChargeMinutesByTier: Schema.Struct({
+					"1080p": Schema.Number,
+					"1440p": Schema.Number,
+					"2160p": Schema.Number,
+				}),
 				dailyMicroCredits: Schema.Number,
 				monthlyMicroCredits: Schema.Number,
 			}),
@@ -1078,24 +1092,53 @@ export const AgentDeveloperVideoParams = Schema.Struct({
 	limit: Schema.optional(Schema.String),
 });
 
+export const AgentDeveloperVideoReadParams = Schema.Struct({
+	restart: Schema.optional(Schema.String),
+});
+
 export const AgentDeveloperVideo = Schema.Struct({
 	id: Schema.String,
 	appId: Schema.String,
 	externalUserId: Schema.NullOr(Schema.String),
 	name: Schema.String,
+	status: Schema.Literal("uploading", "processing", "ready", "errored"),
+	errorReason: Schema.NullOr(Schema.String),
+	playbackId: Schema.NullOr(Schema.String),
 	durationSeconds: Schema.NullOr(Schema.Number),
 	width: Schema.NullOr(Schema.Number),
 	height: Schema.NullOr(Schema.Number),
 	fps: Schema.NullOr(Schema.Number),
+	maxResolutionTier: Schema.String,
+	renditions: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			width: Schema.Number,
+			height: Schema.Number,
+			bitrate: Schema.Number,
+			bytes: Schema.Number,
+			codecs: Schema.NullOr(Schema.String),
+		}),
+	),
 	transcriptionStatus: Schema.NullOr(Schema.String),
+	takenDown: Schema.optional(Schema.Boolean),
+	hlsUrl: Schema.NullOr(Schema.String),
+	mp4Url: Schema.NullOr(Schema.String),
+	posterUrl: Schema.NullOr(Schema.String),
+	shareUrl: Schema.NullOr(Schema.String),
+	embedUrl: Schema.NullOr(Schema.String),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
-	capabilities: AgentActionCapabilities,
 });
 
 export const AgentDeveloperVideosResponse = Schema.Struct({
 	videos: Schema.Array(AgentDeveloperVideo),
+	capabilities: AgentActionCapabilities,
 	nextCursor: Schema.NullOr(Schema.String),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperVideoResponse = Schema.Struct({
+	video: AgentDeveloperVideo,
 	requestId: Schema.String,
 });
 
@@ -1105,6 +1148,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"topup",
 		"video_create",
 		"storage_daily",
+		"delivery_daily",
 		"transcription",
 		"refund",
 		"adjustment",
@@ -1168,8 +1212,9 @@ export const AgentDeveloperTranscript = Schema.Struct({
 		"error",
 	),
 	name: Schema.String,
-	sourceType: Schema.Literal("upload", "url"),
+	sourceType: Schema.Literal("upload", "url", "video"),
 	sourceUrl: Schema.NullOr(Schema.String),
+	videoId: Schema.NullOr(Schema.String),
 	durationSeconds: Schema.NullOr(Schema.Number),
 	language: Schema.NullOr(Schema.String),
 	wordCount: Schema.NullOr(Schema.Number),
@@ -1237,20 +1282,7 @@ export const AgentDeveloperVideoCompleteInput = Schema.Struct({
 	fps: Schema.optional(Schema.Number),
 });
 
-export const AgentDeveloperVideoCompleteResponse = Schema.Struct({
-	video: Schema.Struct({
-		id: Schema.String,
-		appId: Schema.String,
-		name: Schema.String,
-		status: Schema.String,
-		playbackId: Schema.NullOr(Schema.String),
-		durationSeconds: Schema.Number,
-		width: Schema.NullOr(Schema.Number),
-		height: Schema.NullOr(Schema.Number),
-		fps: Schema.NullOr(Schema.Number),
-	}),
-	requestId: Schema.String,
-});
+export const AgentDeveloperVideoCompleteResponse = AgentDeveloperVideoResponse;
 
 export const AgentMutationResponse = Schema.Struct({
 	resource: Schema.Struct({
@@ -1730,6 +1762,17 @@ export class AgentManagementHttpApi extends HttpApiGroup.make("agentManagement")
 			.setPath(AgentDeveloperAppPath)
 			.setUrlParams(AgentDeveloperVideoParams)
 			.addSuccess(AgentDeveloperVideosResponse),
+	)
+	.add(
+		withReadErrors(
+			HttpApiEndpoint.get(
+				"getDeveloperVideo",
+				"/developer/apps/:appId/videos/:videoId",
+			),
+		)
+			.setPath(AgentDeveloperVideoPath)
+			.setUrlParams(AgentDeveloperVideoReadParams)
+			.addSuccess(AgentDeveloperVideoResponse),
 	)
 	.add(
 		withReadErrors(

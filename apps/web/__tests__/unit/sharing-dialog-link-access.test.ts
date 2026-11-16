@@ -9,12 +9,13 @@ import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDial
 
 const mocks = vi.hoisted(() => ({
 	share: vi.fn(),
+	setPassword: vi.fn(),
 	toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 vi.mock("@/actions/caps/share", () => ({ shareCap: mocks.share }));
 vi.mock("@/actions/videos/password", () => ({
-	setVideoPassword: vi.fn(),
+	setVideoPassword: mocks.setPassword,
 	removeVideoPassword: vi.fn(),
 }));
 vi.mock("@/actions/videos/viewer-invites", () => ({
@@ -48,6 +49,8 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	mocks.share.mockReset();
 	mocks.share.mockResolvedValue({ success: true });
+	mocks.setPassword.mockReset();
+	mocks.setPassword.mockResolvedValue({ success: true });
 	mocks.toast.success.mockReset();
 	container = document.createElement("div");
 	document.body.append(container);
@@ -199,5 +202,56 @@ describe("sharing dialog link access", () => {
 			spaceIds: [],
 			public: true,
 		});
+	});
+
+	it("keeps unsaved link and password edits through a page refresh", async () => {
+		const props = {
+			allowedEmailDomain: "company.com",
+			allowLinkOverride: true,
+		};
+		await render(props);
+		await click("Anyone with the link");
+
+		const passwordSwitch = Array.from(
+			document.querySelectorAll<HTMLButtonElement>("button[role='switch']"),
+		).find((element) =>
+			element.parentElement?.textContent?.includes(
+				"Restrict access with a password",
+			),
+		);
+		if (!passwordSwitch) throw new Error("Missing password switch");
+		await act(async () => passwordSwitch.click());
+		const passwordInput = () => {
+			const input = document.querySelector<HTMLInputElement>(
+				"input[type='password']",
+			);
+			if (!input) throw new Error("Missing password input");
+			return input;
+		};
+		const setter = Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setter?.call(passwordInput(), "secret-pass");
+			passwordInput().dispatchEvent(new Event("input", { bubbles: true }));
+		});
+
+		// Inviting or removing a viewer refreshes the page, which renders the
+		// dialog again with a new sharedSpaces array.
+		await render(props);
+		expect(button("Anyone with the link")?.getAttribute("aria-pressed")).toBe(
+			"true",
+		);
+		expect(passwordInput().value).toBe("secret-pass");
+
+		await click("Save");
+		expect(mocks.share.mock.calls[0]?.[0]).toEqual({
+			capId: "video-id",
+			spaceIds: [],
+			public: true,
+			linkAccess: "anyone",
+		});
+		expect(mocks.setPassword).toHaveBeenCalledWith("video-id", "secret-pass");
 	});
 });

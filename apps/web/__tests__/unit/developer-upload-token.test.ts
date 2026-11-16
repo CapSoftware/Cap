@@ -235,6 +235,85 @@ describe("upload token size cap", () => {
 	);
 });
 
+describe("the key an upload token was made with", () => {
+	const issuedBeforeKeyIds = createDeveloperUploadToken(fields);
+
+	it("carries the id of the key", () => {
+		const token = createDeveloperUploadToken({ ...fields, keyId: "key-1" });
+
+		expect(token).not.toBe(issuedBeforeKeyIds);
+		expect(verifyDeveloperUploadToken(token, NOW)).toEqual({
+			ok: true,
+			token: { ...fields, keyId: "key-1" },
+		});
+	});
+
+	it("carries the key next to a cap", () => {
+		const token = createDeveloperUploadToken({
+			...fields,
+			maxBytes: 250_000_000,
+			keyId: "key-1",
+		});
+
+		expect(verifyDeveloperUploadToken(token, NOW)).toEqual({
+			ok: true,
+			token: { ...fields, maxBytes: 250_000_000, keyId: "key-1" },
+		});
+	});
+
+	it("still verifies a token made without a key and reports none", () => {
+		const check = verifyDeveloperUploadToken(issuedBeforeKeyIds, NOW);
+
+		expect(check).toEqual({ ok: true, token: fields });
+		expect("keyId" in (check as { token: object }).token).toBe(false);
+	});
+
+	it.each([
+		["another key", { key: "key-2" }],
+		["no key", {}],
+	])(
+		"refuses a payload rewritten to name %s under the old signature",
+		(_label, change) => {
+			const token = createDeveloperUploadToken({ ...fields, keyId: "key-1" });
+			const payload = encode({
+				v: 1,
+				app: fields.appId,
+				video: fields.videoId,
+				exp: fields.expiresAt,
+				origin: fields.corsOrigin,
+				...change,
+			});
+
+			expect(
+				verifyDeveloperUploadToken(
+					`cut_${payload}.${parts(token).signature}`,
+					NOW,
+				),
+			).toEqual({ ok: false, reason: "invalid" });
+		},
+	);
+
+	it.each(["", "k".repeat(256)])(
+		"does not issue a token with the key id %j",
+		(keyId) => {
+			expect(() => createDeveloperUploadToken({ ...fields, keyId })).toThrow();
+		},
+	);
+
+	it("answers a token of a rotated key as an invalid token that names the rotation", () => {
+		expect(uploadTokenRefusal("rotated")).toMatchObject({
+			code: "invalid_upload_token",
+			error: "Upload token is not valid",
+			hint: expect.stringMatching(
+				/rotated or revoked.*POST \/api\/developer\/v1\/uploads\/\{videoId\}\/token.*current secret key/,
+			),
+		});
+		expect(Object.keys(uploadTokenRefusal("rotated")).sort()).toEqual(
+			Object.keys(uploadTokenRefusal("invalid")).sort(),
+		);
+	});
+});
+
 describe("an expired upload token", () => {
 	it("points at the route that renews it", () => {
 		expect(uploadTokenRefusal("expired")).toMatchObject({

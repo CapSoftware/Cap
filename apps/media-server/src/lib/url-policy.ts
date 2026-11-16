@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 import type { MiddlewareHandler } from "hono";
@@ -78,9 +79,17 @@ export type UrlPolicy = {
 	allowPrivate: boolean;
 };
 
+const currentUrlPolicy = new AsyncLocalStorage<UrlPolicy>();
+
+export function withUrlPolicy<T>(policy: UrlPolicy, run: () => T): T {
+	return currentUrlPolicy.run(policy, run);
+}
+
 export function getUrlPolicy(
 	env: Record<string, string | undefined> = process.env,
 ): UrlPolicy {
+	const current = env === process.env ? currentUrlPolicy.getStore() : undefined;
+	if (current) return current;
 	const explicit = (env.MEDIA_SERVER_ALLOWED_HOSTS ?? "")
 		.split(",")
 		.map(normalizeHost)

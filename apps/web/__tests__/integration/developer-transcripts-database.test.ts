@@ -25,6 +25,8 @@ const fixture = vi.hoisted(() => ({
 	start: vi.fn(),
 	objectSize: null as number | null,
 	copies: [] as string[],
+	objects: new Map<string, string>(),
+	queries: [] as { sql: string; params: unknown[] }[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -55,8 +57,17 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	copyDeveloperObject: async (_from: string, to: string) => {
 		fixture.copies.push(to);
 	},
-	getDeveloperObjectText: async () => null,
-	deleteDeveloperObjects: async () => {},
+	getDeveloperObjectText: async (key: string) =>
+		fixture.objects.get(key) ?? null,
+	putDeveloperObject: async (key: string, body: string) => {
+		fixture.objects.set(key, body);
+	},
+	removeDeveloperObject: async (key: string) => {
+		fixture.objects.delete(key);
+	},
+	deleteDeveloperObjects: async (keys: string[]) => {
+		for (const key of keys) fixture.objects.delete(key);
+	},
 }));
 vi.mock("@/workflows/process-developer-video", () => ({
 	processDeveloperVideoWorkflow: "developer-video-workflow",
@@ -64,7 +75,8 @@ vi.mock("@/workflows/process-developer-video", () => ({
 vi.mock("@/lib/media-client", () => ({
 	isMediaServerConfigured: () => false,
 }));
-vi.mock("@/lib/media-container", () => ({
+vi.mock("@/lib/media-container", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/media-container")>()),
 	urlIsSelfContainedMedia: async () => true,
 }));
 vi.mock("@/lib/developer-video-storage", () => ({}));
@@ -88,13 +100,21 @@ const { completeDeveloperVideoUpload, createDeveloperVideoUpload } =
 const { getSpeechUsage } = await import("@/lib/developer-transcript-usage");
 const { transcriptUploadExpiry } = await import("@/lib/developer-transcripts");
 const { availableBalance } = await import("@/lib/infra-balance");
+const { disputedSince, readStandingAccount } = await import(
+	"@/lib/infra-standing"
+);
 const { getInfraAppStanding, getInfraUploadAdmission } = await import(
 	"@/lib/infra-standing"
 );
-const { getAppStorageUsage } = await import("@/lib/infra-storage");
+const { getAppStorage } = await import("@/lib/infra-storage");
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
+const { developerVideoCaptions, syncVideoCaptions, videoCaptionsKey } =
+	await import("@/lib/developer-video-captions");
+const { serializeTranscript } = await import("@/lib/developer-transcripts");
 const {
+	reconcileDeletedVideoCaptions,
 	createTranscriptFromUrl,
+	createTranscriptFromVideo,
 	createTranscriptUpload,
 	deleteTranscript,
 	expireStaleTranscripts,
@@ -222,7 +242,7 @@ const chargeStorage = async (appId: string, day: string) =>
 	chargeStorageDay({
 		appId,
 		accountId: await accountOf(appId),
-		usage: await getAppStorageUsage(appId),
+		usage: (await getAppStorage(appId)).dailyCharge,
 		dateKey: day,
 		now: new Date(),
 	});
@@ -234,6 +254,7 @@ const videoStarts = () =>
 
 const STORAGE_DAY_OF_TWO_HOURS = 340;
 const ADMISSION_FOR_TWO_HOURS = 2_380;
+const FIRST_MONTH_FOR_TWO_HOURS = 10_200;
 
 const settle = (transcriptId: string, durationSeconds: number) =>
 	settleTranscript({
@@ -261,7 +282,13 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			);
 		}
 		pool = createPool({ uri: databaseUrl, connectionLimit: 16 });
-		fixture.database = drizzle(pool);
+		fixture.database = drizzle(pool, {
+			logger: {
+				logQuery: (sql, params) => {
+					fixture.queries.push({ sql, params });
+				},
+			},
+		});
 		await database().select().from(developerTranscripts).limit(1);
 	});
 
@@ -275,6 +302,8 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		fixture.start.mockResolvedValue(undefined);
 		fixture.objectSize = null;
 		fixture.copies = [];
+		fixture.objects = new Map();
+		fixture.queries = [];
 	});
 
 	it("charges a transcript exactly once when settle attempts race", async () => {
@@ -881,7 +910,7 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 	});
 
 	it("creates an agent video with a playback id and admits it without charging", async () => {
-		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS);
+		const appId = await makeApp(FIRST_MONTH_FOR_TWO_HOURS);
 		const created = await createDeveloperVideoUpload(appId, {
 			fileName: "demo.mp4",
 			contentLength: 5_000_000,
@@ -916,12 +945,12 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(stored?.s3Key).toBe(fixture.copies[0]);
 		expect(stored?.processing?.encodeId).toBeTruthy();
 		expect(videoStarts()).toHaveLength(1);
-		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+		expect(await balanceOf(appId)).toBe(FIRST_MONTH_FOR_TWO_HOURS);
 		expect(await ledgerOf(appId)).toHaveLength(0);
 	});
 
 	it("admits a 4K agent upload at the capped price and refuses one the balance cannot store", async () => {
-		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS - 1);
+		const appId = await makeApp(FIRST_MONTH_FOR_TWO_HOURS - 1);
 		const created = await createDeveloperVideoUpload(appId, {
 			fileName: "demo.mp4",
 			contentLength: 20_000_000,
@@ -948,13 +977,13 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		});
 		expect(videoStarts()).toHaveLength(0);
 
-		await setBalance(appId, ADMISSION_FOR_TWO_HOURS);
+		await setBalance(appId, FIRST_MONTH_FOR_TWO_HOURS);
 		expect(await complete()).toMatchObject({
 			ok: true,
 			video: { status: "processing", durationSeconds: 7200 },
 		});
 		expect(videoStarts()).toHaveLength(1);
-		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+		expect(await balanceOf(appId)).toBe(FIRST_MONTH_FOR_TWO_HOURS);
 	});
 
 	it("records an agent upload once and starts it once when completions race", async () => {
@@ -1158,5 +1187,716 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			});
 		}
 		expect([...seen].sort()).toEqual([40_000, 50_000]);
+	});
+
+	const readyProcessing = () => ({
+		encodeId: "encode-1",
+		startedAt: 1_000,
+		probe: { duration: 120, width: 1920, height: 1080, fps: 30 },
+		hls: { state: "complete" as const, output: "out-1" },
+		mp4: { state: "complete" as const, output: "out-1" },
+		attempts: { hls: 1, mp4: 1 },
+		unavailableChecks: 0,
+		poster: null,
+		bytes: { source: 1_000, hls: 1_000, mp4: 1_000, poster: 0 },
+	});
+
+	const makeReadyVideo = (
+		appId: string,
+		overrides: Partial<typeof developerVideos.$inferInsert> = {},
+	) =>
+		makeStoredVideo(appId, {
+			duration: 120,
+			playbackId: id() + id(),
+			processing: readyProcessing(),
+			...overrides,
+		});
+
+	const transcriptRow = async (transcriptId: string) => {
+		const [row] = await database()
+			.select()
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.id, transcriptId));
+		if (!row) throw new Error("Transcript fixture is missing.");
+		return row;
+	};
+
+	const makeCaptionSource = async (
+		appId: string,
+		videoId: string | null,
+		text: string,
+		overrides: Partial<typeof developerTranscripts.$inferInsert> = {},
+	) => {
+		const transcriptId = overrides.id ?? id();
+		const resultKey = `developer/${appId}/transcripts/${transcriptId}/result.json`;
+		fixture.objects.set(
+			resultKey,
+			JSON.stringify({
+				text,
+				language: "en",
+				durationSeconds: 10,
+				words: text.split(" ").map((word, index) => ({
+					text: word,
+					start: index * 0.5,
+					end: index * 0.5 + 0.4,
+				})),
+				segments: [],
+			}),
+		);
+		await makeTranscript(appId, {
+			id: transcriptId,
+			status: "complete",
+			sourceType: videoId ? "video" : "upload",
+			videoId,
+			language: "en",
+			text,
+			wordCount: text.split(" ").length,
+			resultKey,
+			completedAt: new Date(),
+			requestedAt: overrides.createdAt ?? new Date(),
+			...overrides,
+		});
+		return transcriptId;
+	};
+
+	const explainLastQuery = async (containing: string) => {
+		const query = fixture.queries.findLast((entry) =>
+			entry.sql.includes(containing),
+		);
+		if (!query || !pool) throw new Error(`No query containing ${containing}`);
+		const [plan] = await pool.query(`EXPLAIN ${query.sql}`, query.params);
+		return plan as { key: string | null; rows: number; Extra: string | null }[];
+	};
+
+	it("creates a video transcript once, scoped to its app, and only for a ready video", async () => {
+		const appId = await makeApp(50_000);
+		const otherAppId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const otherVideoId = await makeReadyVideo(appId);
+		const processingVideoId = await makeStoredVideo(appId, {
+			status: "processing",
+		});
+		const deletedVideoId = await makeReadyVideo(appId, {
+			deletedAt: new Date(),
+		});
+		const idempotencyKey = `video-key-${id()}`;
+
+		const results = await Promise.all(
+			Array.from({ length: 8 }, () =>
+				createTranscriptFromVideo(appId, { videoId, idempotencyKey }),
+			),
+		);
+
+		const ids = new Set(
+			results.map((result) => (result.ok ? result.transcript.id : "failed")),
+		);
+		expect(ids.size).toBe(1);
+		expect(ids.has("failed")).toBe(false);
+		expect(fixture.start).toHaveBeenCalledTimes(1);
+		const [stored] = await database()
+			.select()
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(stored).toMatchObject({
+			sourceType: "video",
+			videoId,
+			status: "queued",
+			s3Key: `developer/${appId}/${videoId}/encode-1/out-1/video.mp4`,
+			name: "Stored fixture",
+		});
+		if (!stored) throw new Error("Transcript was not stored.");
+		expect(serializeTranscript(stored)).toMatchObject({
+			videoId,
+			source: { type: "video", url: null },
+		});
+
+		expect(
+			await createTranscriptFromVideo(appId, {
+				videoId: otherVideoId,
+				idempotencyKey,
+			}),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			message: "Idempotency key was already used with a different videoId",
+		});
+		expect(
+			await createTranscriptFromVideo(otherAppId, { videoId }),
+		).toMatchObject({ ok: false, status: 404, code: "video_not_found" });
+		expect(
+			await createTranscriptFromVideo(appId, { videoId: deletedVideoId }),
+		).toMatchObject({ ok: false, status: 404, code: "video_not_found" });
+		expect(
+			await createTranscriptFromVideo(appId, { videoId: processingVideoId }),
+		).toMatchObject({ ok: false, status: 409, code: "video_not_ready" });
+		expect(fixture.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps videoId null for transcripts that are not from a video", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const fromUrl = await createTranscriptFromUrl(
+			appId,
+			{ url: URL_A },
+			guards,
+		);
+		const fromUpload = await createTranscriptUpload(appId, {
+			fileName: "a.mp3",
+			contentLength: 1024,
+		});
+		await makeCaptionSource(appId, null, "hello there");
+
+		for (const created of [fromUrl, fromUpload]) {
+			if (!created.ok) throw new Error("Transcript was not created.");
+			expect(created.transcript.videoId).toBeNull();
+			expect(serializeTranscript(created.transcript).videoId).toBeNull();
+		}
+		const listed = await listTranscripts(appId, { limit: 10 });
+		expect(listed.transcripts).toHaveLength(3);
+		expect(listed.transcripts.every((row) => row.videoId === null)).toBe(true);
+		expect(await developerVideoCaptions({ id: videoId, appId })).toEqual([]);
+	});
+
+	it("returns the caption files of a video from one indexed query", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const filler = Array.from({ length: 3_000 }, (_, index) => ({
+			id: id(),
+			appId,
+			status: "complete" as const,
+			sourceType: index % 3 === 0 ? ("upload" as const) : ("video" as const),
+			videoId: index % 3 === 0 ? null : `filler-${index % 60}`,
+			language: "en",
+			wordCount: 4,
+		}));
+		for (let offset = 0; offset < filler.length; offset += 500) {
+			await database()
+				.insert(developerTranscripts)
+				.values(filler.slice(offset, offset + 500));
+		}
+		await makeCaptionSource(appId, videoId, "older english words");
+		await makeCaptionSource(appId, videoId, "newer english words");
+		await makeCaptionSource(appId, videoId, "deutsche worte hier", {
+			language: "de",
+		});
+		await makeCaptionSource(appId, videoId, "", {
+			language: "fr",
+			wordCount: 0,
+		});
+		await makeCaptionSource(appId, videoId, "borrado", {
+			language: "es",
+			deletedAt: new Date(),
+		});
+		await pool?.query("ANALYZE TABLE developer_transcripts");
+
+		fixture.queries = [];
+		const captions = await developerVideoCaptions({ id: videoId, appId });
+
+		expect(captions).toEqual([
+			{
+				language: "en",
+				label: "English",
+				key: `developer/${appId}/${videoId}/captions/en.vtt`,
+			},
+			{
+				language: "de",
+				label: "German",
+				key: `developer/${appId}/${videoId}/captions/de.vtt`,
+			},
+		]);
+		expect(fixture.queries).toHaveLength(1);
+		const plan = await explainLastQuery("developer_transcripts");
+		expect(plan).toHaveLength(1);
+		expect(plan[0]?.key).toBe("dev_transcripts_app_video_idx");
+		expect(Number(plan[0]?.rows)).toBeLessThan(50);
+
+		fixture.queries = [];
+		await syncVideoCaptions({ appId, videoId, language: "en" });
+		const newest = await explainLastQuery("order by");
+		expect(newest[0]?.key).toBe("dev_transcripts_app_video_idx");
+		expect(newest[0]?.Extra ?? "").not.toContain("filesort");
+	});
+
+	it("writes the newest transcript's captions, replaces them and removes them on delete", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const key = videoCaptionsKey({ id: videoId, appId }, "en");
+		const older = await makeCaptionSource(appId, videoId, "older words", {
+			createdAt: new Date("2026-11-12T10:00:00.000Z"),
+		});
+		expect(await syncVideoCaptions({ appId, videoId, language: "en" })).toEqual(
+			{ state: "written", transcriptId: older },
+		);
+		expect(fixture.objects.get(key)).toContain("older words");
+
+		const newer = await makeCaptionSource(appId, videoId, "newer words", {
+			createdAt: new Date("2026-11-12T10:00:05.000Z"),
+		});
+		expect(await syncVideoCaptions({ appId, videoId, language: "en" })).toEqual(
+			{ state: "written", transcriptId: newer },
+		);
+		expect(fixture.objects.get(key)).toContain("newer words");
+		expect(fixture.objects.get(key)).toMatch(/^WEBVTT\n\n00:00:00\.000 --> /);
+
+		expect(await deleteTranscript(appId, newer)).toEqual({ ok: true });
+		expect(fixture.objects.get(key)).toContain("older words");
+		expect(await deleteTranscript(appId, older)).toEqual({ ok: true });
+		expect(fixture.objects.has(key)).toBe(false);
+		expect(await developerVideoCaptions({ id: videoId, appId })).toEqual([]);
+	});
+
+	it("uses the transcript requested last when two were created in the same second", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const createdAt = new Date("2026-11-12T10:00:00.000Z");
+		const first = await makeCaptionSource(appId, videoId, "first words", {
+			id: `z${id().slice(1)}`,
+			createdAt,
+			requestedAt: new Date("2026-11-12T10:00:00.120Z"),
+		});
+		const second = await makeCaptionSource(appId, videoId, "second words", {
+			id: `a${id().slice(1)}`,
+			createdAt,
+			requestedAt: new Date("2026-11-12T10:00:00.870Z"),
+		});
+
+		for (let round = 0; round < 5; round++) {
+			expect(
+				await syncVideoCaptions({ appId, videoId, language: "en" }),
+			).toEqual({ state: "written", transcriptId: second });
+		}
+		expect((await transcriptRow(second)).requestedAt?.toISOString()).toBe(
+			"2026-11-12T10:00:00.870Z",
+		);
+		expect(first).not.toBe(second);
+	});
+
+	it("orders video transcripts created through the API within one second by when they were requested", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const created: string[] = [];
+		for (let index = 0; index < 3; index++) {
+			const result = await createTranscriptFromVideo(appId, { videoId });
+			if (!result.ok) throw new Error("Video transcript was not created.");
+			created.push(result.transcript.id);
+		}
+		const rows = await Promise.all(created.map(transcriptRow));
+		const times = rows.map((row) => row.requestedAt?.getTime() ?? 0);
+		expect(times.every((time) => time > 0)).toBe(true);
+		expect([...times].sort((a, b) => a - b)).toEqual(times);
+		expect(new Set(times).size).toBe(3);
+	});
+
+	it("repairs captions left by a failed delete from the hourly cleanup, reading through the status index", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const key = videoCaptionsKey({ id: videoId, appId }, "en");
+		await makeCaptionSource(appId, videoId, "older words", {
+			createdAt: new Date("2026-11-12T10:00:00.000Z"),
+		});
+		const newer = await makeCaptionSource(appId, videoId, "newer words", {
+			createdAt: new Date("2026-11-12T10:00:05.000Z"),
+		});
+		await syncVideoCaptions({ appId, videoId, language: "en" });
+		await database()
+			.update(developerTranscripts)
+			.set({ deletedAt: new Date() })
+			.where(eq(developerTranscripts.id, newer));
+		expect(fixture.objects.get(key)).toContain("newer words");
+
+		fixture.queries = [];
+		const result = await reconcileDeletedVideoCaptions();
+
+		expect(result.failed).toBe(0);
+		expect(result.finished).toBe(true);
+		expect(result.synced).toBeGreaterThanOrEqual(1);
+		expect(fixture.objects.get(key)).toContain("older words");
+		const plan = await explainLastQuery("`videoId` is not null");
+		expect(plan[0]?.key).toBe("dev_transcripts_status_updated_idx");
+	});
+
+	it("charges a transcript deleted while processing exactly once when the delete races the settle", async () => {
+		for (let round = 0; round < 24; round++) {
+			const appId = await makeApp(50_000);
+			const transcriptId = await makeTranscript(appId);
+			await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+			const [settled, deleted] = await Promise.all(
+				round % 2 === 0
+					? [settle(transcriptId, 3600), deleteTranscript(appId, transcriptId)]
+					: [
+							new Promise<Awaited<ReturnType<typeof settle>>>((resolve) =>
+								setTimeout(() => resolve(settle(transcriptId, 3600)), 2),
+							),
+							deleteTranscript(appId, transcriptId),
+						],
+			);
+
+			expect(settled).toMatchObject({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+			});
+			expect(await balanceOf(appId)).toBe(40_000);
+			expect(await ledgerOf(appId)).toEqual([
+				expect.objectContaining({
+					type: "transcription",
+					amount: -10_000,
+					referenceId: transcriptId,
+				}),
+			]);
+			const row = await transcriptRow(transcriptId);
+			expect(deleted).toEqual({ ok: true });
+			expect(row).toMatchObject({
+				status: "complete",
+				billedMicroCredits: 10_000,
+				reservedMicroCredits: 0,
+				text: null,
+			});
+			expect(row.deletedAt).toBeInstanceOf(Date);
+			expect(await getTranscript(appId, transcriptId)).toBeNull();
+			expect(await settle(transcriptId, 3600)).toMatchObject({
+				state: "complete",
+				alreadySettled: true,
+			});
+			expect(await balanceOf(appId)).toBe(40_000);
+			expect(await getAvailableTranscriptBalance(appId)).toBe(40_000);
+		}
+	});
+
+	it("keeps the hold of a transcript deleted while processing, and charges it when it settles", async () => {
+		const appId = await makeApp(12_000);
+		const transcriptId = await makeTranscript(appId);
+		await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+		expect(await deleteTranscript(appId, transcriptId)).toEqual({ ok: true });
+
+		expect(await getAvailableTranscriptBalance(appId)).toBe(2_000);
+		expect(await getSpeechUsage(appId)).toMatchObject({
+			balanceMicroCredits: 12_000,
+			heldMicroCredits: 10_000,
+			availableMicroCredits: 2_000,
+		});
+		const spend = await database().transaction((tx) =>
+			debitDeveloperUsage(tx, {
+				appId,
+				microCredits: 5_000,
+				type: "video_create",
+				referenceId: id(),
+				referenceType: "developer_video",
+			}),
+		);
+		expect(spend).toEqual({ state: "insufficient" });
+
+		expect(await settle(transcriptId, 3600)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(await balanceOf(appId)).toBe(2_000);
+		expect(await getAvailableTranscriptBalance(appId)).toBe(2_000);
+		expect((await listTranscripts(appId, { limit: 10 })).transcripts).toEqual(
+			[],
+		);
+	});
+
+	it("charges nothing for a transcript deleted before it was processing or after it failed", async () => {
+		const appId = await makeApp(50_000);
+		for (const status of ["uploading", "queued", "error"] as const) {
+			const transcriptId = await makeTranscript(appId, { status });
+			await deleteTranscript(appId, transcriptId);
+
+			expect(await settle(transcriptId, 3600)).toEqual({
+				state: "skipped",
+				reason: "deleted",
+			});
+			expect((await transcriptRow(transcriptId)).status).toBe(status);
+		}
+		expect(await balanceOf(appId)).toBe(50_000);
+		expect(await ledgerOf(appId)).toEqual([]);
+		expect(await getAvailableTranscriptBalance(appId)).toBe(50_000);
+	});
+
+	it("admits exactly 20 transcripts when 40 are created at once", async () => {
+		const appId = await makeApp(500_000);
+
+		const results = await Promise.all(
+			Array.from({ length: 40 }, (_, index) =>
+				createTranscriptFromUrl(
+					appId,
+					{ url: `https://media.example.com/clip-${index}.mp3` },
+					guards,
+				),
+			),
+		);
+
+		expect(results.filter((result) => result.ok)).toHaveLength(20);
+		const refused = results.filter((result) => !result.ok);
+		expect(refused).toHaveLength(20);
+		for (const result of refused) {
+			expect(result).toMatchObject({
+				status: 429,
+				code: "too_many_transcripts",
+			});
+		}
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(rows).toHaveLength(20);
+		expect(fixture.start).toHaveBeenCalledTimes(20);
+
+		const [first] = results;
+		if (!first?.ok) {
+			const admitted = results.find((result) => result.ok);
+			if (!admitted?.ok) throw new Error("Nothing was admitted.");
+			await deleteTranscript(appId, admitted.transcript.id);
+		} else {
+			await deleteTranscript(appId, first.transcript.id);
+		}
+		expect(
+			(await createTranscriptFromUrl(appId, { url: URL_A }, guards)).ok,
+		).toBe(true);
+		expect(
+			await createTranscriptFromUrl(appId, { url: URL_A }, guards),
+		).toMatchObject({ ok: false, status: 429 });
+	});
+
+	it("starts only as many uploads as there are slots when they are started at once", async () => {
+		const appId = await makeApp(500_000);
+		for (let index = 0; index < 18; index++) await makeTranscript(appId);
+		const uploads: string[] = [];
+		for (let index = 0; index < 8; index++) {
+			const created = await createTranscriptUpload(appId, {
+				fileName: `clip-${index}.mp3`,
+				contentLength: 1024,
+			});
+			if (!created.ok) throw new Error("Upload transcript was not created.");
+			uploads.push(created.transcript.id);
+		}
+		fixture.objectSize = 1024;
+
+		const results = await Promise.all(
+			uploads.map((transcriptId) => startTranscriptUpload(appId, transcriptId)),
+		);
+
+		expect(results.filter((result) => result.ok)).toHaveLength(2);
+		expect(
+			results.filter((result) => !result.ok && result.status === 429),
+		).toHaveLength(6);
+		expect(fixture.start).toHaveBeenCalledTimes(2);
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(rows.filter((row) => row.status === "queued")).toHaveLength(2);
+		expect(rows.filter((row) => row.status === "uploading")).toHaveLength(6);
+	});
+
+	it("does not let another app's transcripts use this app's slots", async () => {
+		const busy = await makeApp(500_000);
+		const quiet = await makeApp(500_000);
+		for (let index = 0; index < 20; index++) await makeTranscript(busy);
+
+		expect(
+			await createTranscriptFromUrl(busy, { url: URL_A }, guards),
+		).toMatchObject({ ok: false, status: 429 });
+		expect(
+			(await createTranscriptFromUrl(quiet, { url: URL_A }, guards)).ok,
+		).toBe(true);
+	});
+
+	it("admits every copy of a repeated request or start that races for the last slot", async () => {
+		for (let round = 0; round < 6; round++) {
+			const appId = await makeApp(500_000);
+			for (let index = 0; index < 19; index++) await makeTranscript(appId);
+			fixture.start.mockClear();
+			const key = `race-key-${id()}`;
+
+			const creates = await Promise.all(
+				Array.from({ length: 4 }, () =>
+					createTranscriptFromUrl(
+						appId,
+						{ url: URL_A, idempotencyKey: key },
+						guards,
+					),
+				),
+			);
+
+			expect(creates.every((result) => result.ok)).toBe(true);
+			expect(
+				new Set(
+					creates.map((result) => (result.ok ? result.transcript.id : "")),
+				),
+			).toHaveProperty("size", 1);
+			expect(fixture.start).toHaveBeenCalledTimes(1);
+			expect(
+				await createTranscriptFromUrl(appId, { url: URL_A }, guards),
+			).toMatchObject({ ok: false, status: 429 });
+		}
+
+		for (let round = 0; round < 6; round++) {
+			const appId = await makeApp(500_000);
+			for (let index = 0; index < 19; index++) await makeTranscript(appId);
+			const created = await createTranscriptUpload(appId, {
+				fileName: "clip.mp3",
+				contentLength: 1024,
+			});
+			if (!created.ok) throw new Error("Upload transcript was not created.");
+			fixture.objectSize = 1024;
+			fixture.start.mockClear();
+
+			const starts = await Promise.all(
+				Array.from({ length: 4 }, () =>
+					startTranscriptUpload(appId, created.transcript.id),
+				),
+			);
+
+			expect(starts.every((result) => result.ok)).toBe(true);
+			expect(fixture.start).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	it("admits a transcript while another request holds the credit account, and keeps the ceiling exact", async () => {
+		const appId = await makeApp(500_000);
+		for (let index = 0; index < 18; index++) await makeTranscript(appId);
+		if (!pool) throw new Error("No pool");
+		const holder = await pool.getConnection();
+		try {
+			await holder.query("START TRANSACTION");
+			await holder.query(
+				"SELECT id FROM developer_credit_accounts WHERE appId = ? FOR UPDATE",
+				[appId],
+			);
+			const started = Date.now();
+			const created = await createTranscriptFromUrl(
+				appId,
+				{ url: URL_A },
+				guards,
+			);
+			const waited = Date.now() - started;
+			expect(created.ok).toBe(true);
+			expect(waited).toBeLessThan(1_000);
+		} finally {
+			await holder.query("ROLLBACK");
+			holder.release();
+		}
+
+		const results = await Promise.all(
+			Array.from({ length: 12 }, (_, index) =>
+				createTranscriptFromUrl(
+					appId,
+					{ url: `https://media.example.com/race-${index}.mp3` },
+					guards,
+				),
+			),
+		);
+		expect(results.filter((result) => result.ok)).toHaveLength(1);
+		const rows = await database()
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.appId, appId));
+		expect(
+			rows.filter((row) => ["queued", "processing"].includes(row.status)),
+		).toHaveLength(20);
+	});
+
+	it("never deadlocks when transcript creates, uploads, video inserts and a storage charge race on one app", async () => {
+		const today = new Date().toISOString().slice(0, 10);
+		for (let round = 0; round < 3; round++) {
+			const appId = await makeApp(5_000_000);
+			const settled = await Promise.allSettled([
+				...Array.from({ length: 25 }, (_, index) =>
+					createTranscriptFromUrl(
+						appId,
+						{ url: `https://media.example.com/race-${round}-${index}.mp3` },
+						guards,
+					),
+				),
+				...Array.from({ length: 10 }, (_, index) =>
+					createDeveloperVideoUpload(appId, {
+						fileName: `race-${index}.mp4`,
+						contentLength: 1_000_000,
+					}),
+				),
+				...Array.from({ length: 5 }, () =>
+					database().insert(developerVideos).values({
+						id: id(),
+						appId,
+						name: "Concurrent insert",
+						maxResolutionTier: "1080p",
+					}),
+				),
+				chargeStorage(appId, today),
+			]);
+
+			expect(
+				settled.flatMap((result) =>
+					result.status === "rejected" ? [String(result.reason)] : [],
+				),
+			).toEqual([]);
+			const created = settled
+				.slice(0, 25)
+				.map((result) =>
+					result.status === "fulfilled"
+						? (result.value as { ok: boolean })
+						: null,
+				);
+			expect(created.filter((result) => result?.ok)).toHaveLength(20);
+			const uploads = settled
+				.slice(25, 35)
+				.map((result) =>
+					result.status === "fulfilled"
+						? (result.value as { ok: boolean })
+						: null,
+				);
+			expect(uploads.every((result) => result?.ok)).toBe(true);
+			const rows = await database()
+				.select({ status: developerTranscripts.status })
+				.from(developerTranscripts)
+				.where(eq(developerTranscripts.appId, appId));
+			expect(rows.filter((row) => row.status === "queued")).toHaveLength(20);
+		}
+	}, 120_000);
+
+	it("decides a dispute and a review written in the same second by the larger id, in both reads", async () => {
+		const second = new Date("2026-11-13T06:00:00.000Z");
+		for (const [first, last, disputed] of [
+			[
+				{ id: `z${id().slice(1)}`, type: "manual" },
+				{ id: `a${id().slice(1)}`, type: "stripe_dispute" },
+				false,
+			],
+			[
+				{ id: `z${id().slice(1)}`, type: "stripe_dispute" },
+				{ id: `a${id().slice(1)}`, type: "manual" },
+				true,
+			],
+		] as const) {
+			const appId = await makeApp(50_000);
+			const accountId = await accountOf(appId);
+			for (const row of [first, last]) {
+				await database().insert(developerCreditTransactions).values({
+					id: row.id,
+					accountId,
+					type: "adjustment",
+					amountMicroCredits: 0,
+					balanceAfterMicroCredits: 50_000,
+					referenceId: row.id,
+					referenceType: row.type,
+					createdAt: second,
+				});
+			}
+
+			const expected = disputed ? second.toISOString() : null;
+			expect(
+				(await disputedSince(database() as never, accountId))?.toISOString() ??
+					null,
+			).toBe(expected);
+			expect(
+				(await readStandingAccount(appId))?.disputedAt?.toISOString() ?? null,
+			).toBe(expected);
+			expect((await getInfraAppStanding(appId)).state).toBe(
+				disputed ? "paused" : "active",
+			);
+		}
 	});
 });

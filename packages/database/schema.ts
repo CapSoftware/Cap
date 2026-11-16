@@ -17,6 +17,7 @@ import {
 	bigint,
 	boolean,
 	customType,
+	date,
 	datetime,
 	float,
 	foreignKey,
@@ -1905,6 +1906,7 @@ export const developerVideos = mysqlTable(
 		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
 		errorReason: varchar("errorReason", { length: 512 }),
 		processing: json("processing").$type<DeveloperVideoProcessingState>(),
+		storagePaidUntil: timestamp("storagePaidUntil"),
 		deletedAt: timestamp("deletedAt"),
 		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1916,6 +1918,22 @@ export const developerVideos = mysqlTable(
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
 		uniqueIndex("playback_id_idx").on(table.playbackId),
 		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
+		index("app_storage_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.status,
+			table.maxResolutionTier,
+			table.width,
+			table.height,
+			table.storagePaidUntil,
+			table.duration,
+			table.createdAt,
+		),
+		index("first_month_due_idx").on(
+			table.storagePaidUntil,
+			table.status,
+			table.createdAt,
+		),
 	],
 );
 
@@ -1926,7 +1944,7 @@ export type DeveloperTranscriptStatus =
 	| "complete"
 	| "error";
 
-export type DeveloperTranscriptSourceType = "upload" | "url";
+export type DeveloperTranscriptSourceType = "upload" | "url" | "video";
 
 export const developerTranscripts = mysqlTable(
 	"developer_transcripts",
@@ -1945,11 +1963,13 @@ export const developerTranscripts = mysqlTable(
 			.$type<DeveloperTranscriptStatus>(),
 		sourceType: varchar("sourceType", {
 			length: 8,
-			enum: ["upload", "url"],
+			enum: ["upload", "url", "video"],
 		})
 			.notNull()
 			.$type<DeveloperTranscriptSourceType>(),
 		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		videoId: nanoIdNullable("videoId"),
+		requestedAt: timestamp("requestedAt", { fsp: 3 }),
 		s3Key: varchar("s3Key", { length: 512 }),
 		resultKey: varchar("resultKey", { length: 512 }),
 		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
@@ -2002,6 +2022,26 @@ export const developerTranscripts = mysqlTable(
 			table.status,
 			table.updatedAt,
 		),
+		index("dev_transcripts_app_completed_idx").on(
+			table.appId,
+			table.status,
+			table.completedAt,
+			table.durationSeconds,
+			table.billedMicroCredits,
+		),
+		index("dev_transcripts_app_status_held_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+			table.deletedAt,
+			table.reservedMicroCredits,
+		),
+		index("dev_transcripts_app_video_idx").on(
+			table.appId,
+			table.videoId,
+			table.requestedAt,
+			table.id,
+		),
 	],
 );
 
@@ -2035,6 +2075,7 @@ export const developerCreditAccounts = mysqlTable(
 	(table) => [
 		uniqueIndex("app_id_unique").on(table.appId),
 		index("owner_idx").on(table.ownerId),
+		index("auto_top_up_idx").on(table.autoTopUpEnabled),
 	],
 );
 
@@ -2042,6 +2083,7 @@ export type DeveloperCreditTransactionType =
 	| "topup"
 	| "video_create"
 	| "storage_daily"
+	| "delivery_daily"
 	| "transcription"
 	| "refund"
 	| "adjustment"
@@ -2057,9 +2099,12 @@ export type DeveloperCreditReferenceType =
 	| "manual"
 	| "pro_monthly_credit"
 	| "storage_day"
+	| "delivery_day"
 	| "auto_top_up"
 	| "auto_top_up_failed"
-	| "auto_top_up_pending";
+	| "auto_top_up_pending"
+	| "stripe_refund"
+	| "stripe_dispute";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -2072,6 +2117,7 @@ export const developerCreditTransactions = mysqlTable(
 				"topup",
 				"video_create",
 				"storage_daily",
+				"delivery_daily",
 				"transcription",
 				"refund",
 				"adjustment",
@@ -2100,9 +2146,12 @@ export const developerCreditTransactions = mysqlTable(
 				"manual",
 				"pro_monthly_credit",
 				"storage_day",
+				"delivery_day",
 				"auto_top_up",
 				"auto_top_up_failed",
 				"auto_top_up_pending",
+				"stripe_refund",
+				"stripe_dispute",
 			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),
@@ -2125,6 +2174,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.referenceId,
 			table.referenceType,
 		),
+		index("reference_type_id_idx").on(table.referenceType, table.referenceId),
 	],
 );
 
@@ -2148,6 +2198,119 @@ export const developerDailyStorageSnapshots = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 	},
 	(table) => [unique("app_date_unique").on(table.appId, table.snapshotDate)],
+);
+
+export const DEVELOPER_DELIVERY_TIERS = [
+	"360p",
+	"720p",
+	"1080p",
+	"1440p",
+	"2160p",
+	"audio",
+] as const;
+
+export type DeveloperDeliveryTier = (typeof DEVELOPER_DELIVERY_TIERS)[number];
+
+export const developerDeliveryDaily = mysqlTable(
+	"developer_delivery_daily",
+	{
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		day: date("day", { mode: "string" }).notNull(),
+		tier: varchar("tier", {
+			length: 8,
+			enum: DEVELOPER_DELIVERY_TIERS,
+		}).notNull(),
+		seconds: bigint("seconds", { mode: "number" }).notNull().default(0),
+		bytes: bigint("bytes", { mode: "number" }).notNull().default(0),
+		requests: int("requests").notNull().default(0),
+		abandonedBytes: bigint("abandonedBytes", { mode: "number" })
+			.notNull()
+			.default(0),
+		final: boolean("final").notNull().default(false),
+		finalizedAt: timestamp("finalizedAt"),
+		updatedAt: timestamp("updatedAt").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.appId, table.day, table.tier] }),
+		index("day_idx").on(table.day),
+	],
+);
+
+export const developerDeliveryLogFiles = mysqlTable(
+	"developer_delivery_log_files",
+	{
+		logFile: varchar("logFile", { length: 191 }).notNull().primaryKey(),
+		etag: varchar("etag", { length: 128 }).notNull(),
+		logHour: datetime("logHour").notNull(),
+		parts: json("parts").notNull().$type<unknown[]>(),
+		processedAt: timestamp("processedAt").notNull(),
+	},
+	(table) => [index("log_hour_idx").on(table.logHour)],
+);
+
+export const developerWebhookEndpoints = mysqlTable(
+	"developer_webhook_endpoints",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		url: varchar("url", { length: 2048 }).notNull(),
+		secretPrefix: varchar("secretPrefix", { length: 12 }).notNull(),
+		encryptedSecret: encryptedText("encryptedSecret").notNull(),
+		events: json("events").notNull().$type<string[]>(),
+		enabled: boolean("enabled").notNull().default(true),
+		disabledReason: varchar("disabledReason", { length: 32 }),
+		lastDeliveryAt: timestamp("lastDeliveryAt"),
+		lastDeliveryStatus: varchar("lastDeliveryStatus", {
+			length: 16,
+			enum: ["succeeded", "failed"],
+		}),
+		lastResponseStatus: int("lastResponseStatus"),
+		lastErrorCode: varchar("lastErrorCode", { length: 32 }),
+		consecutiveFailures: int("consecutiveFailures").notNull().default(0),
+		failingSince: timestamp("failingSince"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("dev_webhooks_app_list_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
+export const developerVideoImports = mysqlTable(
+	"developer_video_imports",
+	{
+		videoId: nanoId("videoId").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		keyId: nanoId("keyId").notNull(),
+		sourceUrl: varchar("sourceUrl", { length: 2048 }).notNull(),
+		state: varchar("state", {
+			length: 16,
+			enum: ["downloading", "complete", "failed"],
+		})
+			.notNull()
+			.default("downloading"),
+		bytes: bigint("bytes", { mode: "number", unsigned: true }),
+		errorCode: varchar("errorCode", { length: 32 }),
+		startedAt: timestamp("startedAt").notNull().defaultNow(),
+		finishedAt: timestamp("finishedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		index("dev_imports_app_state_idx").on(table.appId, table.state),
+		index("dev_imports_key_created_idx").on(table.keyId, table.createdAt),
+	],
 );
 
 export const developerAppsRelations = relations(
@@ -2238,6 +2401,16 @@ export const developerDailyStorageSnapshotsRelations = relations(
 	({ one }) => ({
 		app: one(developerApps, {
 			fields: [developerDailyStorageSnapshots.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerWebhookEndpointsRelations = relations(
+	developerWebhookEndpoints,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerWebhookEndpoints.appId],
 			references: [developerApps.id],
 		}),
 	}),

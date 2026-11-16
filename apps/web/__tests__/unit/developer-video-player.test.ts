@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	standing: vi.fn(),
 	redrive: vi.fn(),
+	captions: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -27,6 +28,9 @@ vi.mock("@/lib/infra-standing", () => ({
 }));
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
+}));
+vi.mock("@/lib/developer-video-captions", () => ({
+	developerVideoCaptionTracks: mocks.captions,
 }));
 
 const { loadDeveloperVideoPlayer } = await import(
@@ -54,6 +58,7 @@ beforeEach(() => {
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
 	mocks.redrive.mockResolvedValue(false);
+	mocks.captions.mockResolvedValue([]);
 });
 
 const MINUTE = 60_000;
@@ -65,6 +70,56 @@ const uploadedLongAgo = () =>
 	});
 
 describe("developer video player data", () => {
+	it.each([
+		["a ready video", () => ready()],
+		["a paused app's video", () => ready()],
+		["a video still uploading", uploadedLongAgo],
+	])(
+		"shows %s that Cap took down as unavailable, without redriving it",
+		async (name, video) => {
+			if (name === "a paused app's video") {
+				mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+			}
+			mocks.store.video = {
+				...video(),
+				metadata: {
+					__capTakedown: { at: "2026-11-13T12:00:00.000Z", metadata: null },
+				},
+			};
+
+			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
+				kind: "taken_down",
+				name: "",
+				width: 16,
+				height: 9,
+			});
+			expect(mocks.standing).not.toHaveBeenCalled();
+			expect(mocks.redrive).not.toHaveBeenCalled();
+		},
+	);
+
+	it("shows a video taken down while its stalled processing was retried as unavailable", async () => {
+		mocks.store.video = uploadedLongAgo();
+		mocks.redrive.mockImplementation(async () => {
+			if (!mocks.store.video) throw new Error("missing video");
+			mocks.store.video = {
+				...mocks.store.video,
+				metadata: {
+					__capTakedown: { at: "2026-11-13T12:00:00.000Z", metadata: null },
+				},
+			};
+			return true;
+		});
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
+			kind: "taken_down",
+			name: "",
+			width: 16,
+			height: 9,
+		});
+		expect(mocks.redrive).toHaveBeenCalledTimes(1);
+	});
+
 	it("plays the adaptive stream with the MP4 behind it and the poster", async () => {
 		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
 			kind: "playing",
@@ -73,8 +128,38 @@ describe("developer video player data", () => {
 			height: 1080,
 			source: { hls: `${BASE}/master.m3u8`, mp4: `${BASE}/video.mp4` },
 			poster: `${BASE}/poster.jpg`,
+			captions: null,
 		});
 		expect(mocks.standing).toHaveBeenCalledWith("app-1");
+	});
+
+	it("lists the captions of a video that has them", async () => {
+		const english = {
+			language: "en",
+			label: "English",
+			url: `${BASE}/captions-en.vtt`,
+		};
+		mocks.captions.mockResolvedValue([english]);
+
+		const player = await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(player).toMatchObject({ kind: "playing", captions: [english] });
+		expect(mocks.captions).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: "video-1",
+				appId: "app-1",
+				playbackId: PLAYBACK_ID,
+			}),
+		);
+	});
+
+	it("looks up no captions for a video that cannot play yet", async () => {
+		mocks.store.video = ready({ status: "processing", processing: null });
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "processing",
+		});
+		expect(mocks.captions).not.toHaveBeenCalled();
 	});
 
 	it("plays the MP4 while the adaptive stream is still encoding", async () => {
@@ -150,52 +235,32 @@ describe("developer video player data", () => {
 	});
 
 	it.each([
-		"This file has no video track.",
-		"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
-		"The uploaded file is empty. Upload it again.",
-		"Video is longer than the 4 hour limit",
-	])("shows a viewer the reason about the file: %s", async (errorReason) => {
-		mocks.store.video = developerVideo({ status: "errored", errorReason });
-
-		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
-			kind: "failed",
-			reason: errorReason,
-		});
-	});
-
-	it.each([
+		["a reason about the file", "This file has no video track."],
+		[
+			"advice written for the uploader",
+			"This video could not be processed. Upload it again, or export it as an MP4 and upload that.",
+		],
 		[
 			"the app's credit shortfall",
 			"Not enough credit to store this video at its measured length and size. Add at least $0.05 of credit and upload it again.",
 		],
 		[
-			"a shorter credit refusal",
-			"Not enough credit for the video's full length",
-		],
-		[
-			"a file sentence that mentions credit",
-			"This video could not be stored because the app is out of credit.",
-		],
-		[
 			"a raw encoder string",
 			"ffmpeg exited 1: /tmp/cap-media-server/abc/input.mp4: Invalid data found",
 		],
-		[
-			"an internal processing reason",
-			"Processing failed because of a problem on our side. Upload the video again.",
-		],
 		["a missing reason", null],
-	])(
-		"shows a viewer one neutral sentence instead of %s",
-		async (_, errorReason) => {
-			mocks.store.video = developerVideo({ status: "errored", errorReason });
+	])("keeps %s away from a viewer", async (_, errorReason) => {
+		mocks.store.video = developerVideo({ status: "errored", errorReason });
 
-			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
-				kind: "failed",
-				reason: "Its owner can see what went wrong.",
-			});
-		},
-	);
+		const player = await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(player).toEqual({
+			name: expect.any(String),
+			width: expect.any(Number),
+			height: expect.any(Number),
+			kind: "failed",
+		});
+	});
 
 	it("offers nothing to play while the app is paused", async () => {
 		mocks.standing.mockResolvedValue({

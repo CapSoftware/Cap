@@ -21,5 +21,8 @@
 	},
 	"trustedDependencies": [
 		"node-av"
-	]
+	],
+	"patchedDependencies": {
+		"mediabunny@1.45.2": "patches/mediabunny@1.45.2.patch"
+	}
 }

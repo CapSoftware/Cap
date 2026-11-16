@@ -30,6 +30,10 @@
 		{
 			"path": "/api/cron/developer-transcripts-cleanup",
 			"schedule": "47 * * * *"
+		},
+		{
+			"path": "/api/cron/developer-delivery",
+			"schedule": "23 * * * *"
 		}
 	],
 	"functions": {

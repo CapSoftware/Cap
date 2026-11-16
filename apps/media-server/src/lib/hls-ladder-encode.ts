@@ -17,6 +17,7 @@ import {
 import type { VideoMetadata } from "./job-manager";
 import {
 	decodeThreadsFromEnv,
+	encodeLengthLimit,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
@@ -25,6 +26,7 @@ import {
 	getProcessTimeoutMs,
 	requireVideoSourceTraits,
 	runTranscodeCommand,
+	sourceAudioCopiesToHls,
 	sourceHasAudio,
 } from "./media-video";
 import {
@@ -97,6 +99,10 @@ export async function encodeHlsLadder(
 			// this one. Falling back would quietly encode a variable frame rate
 			// source on its opening rate whenever the server is busy.
 			if (error instanceof ProbeBusyError) throw error;
+			// A slice has to land on the frame grid its neighbours use. Guessing
+			// the rate here while another worker measured it would put the slices
+			// on different grids, so the slice fails and is sent again.
+			if (options.range) throw error;
 			if (!probeSignal.aborted) {
 				console.warn(
 					"[hls-ladder] Could not read frame timing, using the probed frame rate:",
@@ -143,6 +149,7 @@ export async function encodeHlsLadder(
 			Math.max(0, metadata.duration - range.startSeconds))
 		: metadata.duration;
 	const timeoutMs = getProcessTimeoutMs(sliceSeconds, PROCESS_TIMEOUT_MS);
+	const maxOutputSeconds = encodeLengthLimit(metadata);
 	const totalDurationUs = sliceSeconds * 1_000_000;
 	const argsInput = {
 		inputPath,
@@ -154,6 +161,7 @@ export async function encodeHlsLadder(
 		range,
 		hdr,
 		hdrColor,
+		maxOutputSeconds,
 	};
 
 	const encodeVideo = async (): Promise<"nvenc" | "libx264"> => {
@@ -213,13 +221,23 @@ export async function encodeHlsLadder(
 		const audioPlaylistName = `${HLS_LADDER_AUDIO_NAME}.m3u8`;
 		const separateAudio =
 			wantsAudio && range
-				? runTranscodeCommand(
-						buildHlsAudioArgs({ inputPath, outputDir: dir }),
-						join(dir, audioPlaylistName),
-						metadata.duration * 1_000_000,
-						getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
-						undefined,
-						signal,
+				? // The whole video's audio rides with the first slice, so encoding it
+					// would hold that slice to the speed of one AAC encode (about 90 s
+					// for an hour). Stereo AAC-LC is copied instead, in seconds.
+					sourceAudioCopiesToHls(inputPath, signal).then((copy) =>
+						runTranscodeCommand(
+							buildHlsAudioArgs({
+								inputPath,
+								outputDir: dir,
+								maxOutputSeconds,
+								copy,
+							}),
+							join(dir, audioPlaylistName),
+							metadata.duration * 1_000_000,
+							getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
+							undefined,
+							signal,
+						),
 					)
 				: Promise.resolve();
 		const video = encodeVideo();
