@@ -165,9 +165,11 @@ final class StudioEditorUITests: XCTestCase {
         wait(for: [enabled], timeout: 15)
         save("s20-studio-recorder")
         record.tap()
+        let started = Date()
         sleep(5)
         save("s21-studio-recording")
         app.buttons["Stop recording"].tap()
+        let recorded = Date().timeIntervalSince(started)
         // The editor opens on the recording.
         let opened = app.buttons["Split"].waitForExistence(timeout: 20)
         if !opened { save("s21b-after-stop") }
@@ -177,8 +179,10 @@ final class StudioEditorUITests: XCTestCase {
         save("s22-studio-recorded")
         let length = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Edited length'")).firstMatch
         XCTAssertTrue(length.exists)
-        // About five seconds recorded; never the debug file's own length.
-        XCTAssertTrue(length.label.contains("0:04") || length.label.contains("0:05") || length.label.contains("0:06"), length.label)
+        // As long as the time between the taps (a screenshot in between can stretch it); never the debug file's own length.
+        let parts = length.label.replacingOccurrences(of: "Edited length ", with: "").split(separator: ":").compactMap { Double($0) }
+        let seconds = parts.count == 2 ? parts[0] * 60 + parts[1] : -1
+        XCTAssertLessThanOrEqual(abs(seconds - recorded), 2, "\(length.label) after \(recorded) s")
         app.buttons["Done"].tap()
         // Back on the recorder, the recording waits as a draft.
         XCTAssertTrue(app.descendants(matching: .any)["studio-drafts"].waitForExistence(timeout: 10))
