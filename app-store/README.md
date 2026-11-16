@@ -130,16 +130,19 @@ Installed for one person, a connection hears about that person's Caps. Installed
 
 ### Verifying requests
 
-Every request is signed with Ed25519. Fetch Cap's public keys once from `https://cap.so/.well-known/cap-app-store-keys.json` (or the same path on a self-hosted Cap), then check each request. In TypeScript, copy [`packages/app-store/src/signing.ts`](../packages/app-store/src/signing.ts) into your server (it only needs Node's `crypto`) and call:
+Every request is signed with Ed25519. Fetch Cap's public keys from `https://cap.so/.well-known/cap-app-store-keys.json` (or the same path on a self-hosted Cap), then check each request. When a request names a `kid` you do not have, fetch the keys again before refusing it. In TypeScript, copy [`packages/app-store/src/signing.ts`](../packages/app-store/src/signing.ts) and [`packages/app-store/src/constants.ts`](../packages/app-store/src/constants.ts) into your server (they only need Node's `crypto`) and call:
 
 ```ts
+import { verifyCapRequest } from "./signing";
 
 const body = await request.text();
-const result = verifyCapRequest({ headers: request.headers, body, keys });
+const result = verifyCapRequest({ headers: request.headers, body, keys, appId: "my-app" });
 if (!result.ok) return new Response("Unauthorized", { status: 401 });
 ```
 
-Outside TypeScript, verify `v1.{Cap-Timestamp}.{Cap-Request-Id}.{body}` against the base64url `v1` value in `Cap-Signature` using the key whose `kid` matches, and reject timestamps more than five minutes old.
+Cap signs every app's requests with the same key, so always pass your `appId`: it refuses a request Cap signed for another app. Read the request kind and action from the signed body, not from headers or the URL, and ignore a `Cap-Request-Id` you have already handled, since a signed request stays valid for five minutes.
+
+Outside TypeScript, verify `v1.{Cap-Timestamp}.{Cap-Request-Id}.{body}` against the base64url `v1` value in `Cap-Signature` using the key whose `kid` matches, reject timestamps more than five minutes old, and check that the body's `app.id` is your app's id and its `kind` matches `Cap-Request-Kind`.
 
 ## The rules
 

@@ -100,7 +100,25 @@ export type VerifyFailure =
 	| "bad_signature_header"
 	| "unknown_key"
 	| "stale_timestamp"
-	| "bad_signature";
+	| "bad_signature"
+	| "kind_mismatch"
+	| "wrong_app";
+
+// The signature covers the body, not the Cap-Request-Kind header or the URL,
+// so the kind and the target app are read from the signed body. A request Cap
+// signed for one app can otherwise be replayed to another app, or with a
+// different kind header, within the timestamp tolerance.
+function signedFields(body: string): { kind: unknown; appId: unknown } {
+	try {
+		const parsed: unknown = JSON.parse(body);
+		if (!parsed || typeof parsed !== "object")
+			return { kind: null, appId: null };
+		const { kind, app } = parsed as { kind?: unknown; app?: { id?: unknown } };
+		return { kind, appId: app?.id };
+	} catch {
+		return { kind: null, appId: null };
+	}
+}
 
 const headerValue = (
 	headers: Headers | Record<string, string | undefined>,
@@ -114,6 +132,8 @@ export function verifyCapRequest(input: {
 	headers: Headers | Record<string, string | undefined>;
 	body: string;
 	keys: CapPublicKeySet;
+	// Your app's id. When set, requests Cap signed for another app are refused.
+	appId?: string;
 	now?: number;
 	toleranceSeconds?: number;
 }):
@@ -155,7 +175,11 @@ export function verifyCapRequest(input: {
 	} catch {
 		valid = false;
 	}
-	return valid
-		? { ok: true, requestId, kind }
-		: { ok: false, reason: "bad_signature" };
+	if (!valid) return { ok: false, reason: "bad_signature" };
+	const signed = signedFields(input.body);
+	if (signed.kind !== kind) return { ok: false, reason: "kind_mismatch" };
+	if (input.appId !== undefined && signed.appId !== input.appId) {
+		return { ok: false, reason: "wrong_app" };
+	}
+	return { ok: true, requestId, kind };
 }

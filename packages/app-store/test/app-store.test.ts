@@ -470,6 +470,36 @@ describe("request signing", () => {
 		const web = new Headers(headers);
 		expect(verifyCapRequest({ headers: web, body, keys, now }).ok).toBe(true);
 	});
+
+	it("refuses a signed request replayed with another kind or to another app", () => {
+		const now = 1_800_000_000_000;
+		const body = JSON.stringify({
+			kind: "action",
+			action: "send",
+			app: { id: "first-app", version: "1.0.0" },
+		});
+		const headers = signCapRequest({
+			key,
+			body,
+			requestId: "req_1",
+			kind: "action",
+			now,
+		});
+		expect(
+			verifyCapRequest({ headers, body, keys, now, appId: "first-app" }),
+		).toEqual({ ok: true, requestId: "req_1", kind: "action" });
+		expect(
+			verifyCapRequest({
+				headers: { ...headers, "Cap-Request-Kind": "lifecycle" },
+				body,
+				keys,
+				now,
+			}),
+		).toEqual({ ok: false, reason: "kind_mismatch" });
+		expect(
+			verifyCapRequest({ headers, body, keys, now, appId: "second-app" }),
+		).toEqual({ ok: false, reason: "wrong_app" });
+	});
 });
 
 describe("action results", () => {
