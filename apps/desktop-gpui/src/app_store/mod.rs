@@ -495,12 +495,17 @@ async fn fetch_catalog(server: &str) -> Result<Option<Catalog>, String> {
     let bytes = response.bytes().await.map_err(|error| error.to_string())?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
     let catalog = Catalog::parse(&value).ok_or("catalog has an unknown format")?;
+    // A full or read-only disk only costs the offline copy: the catalog that
+    // just arrived is still the one to show.
     let path = catalog_cache_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
     let temporary = path.with_extension("partial");
-    if std::fs::write(&temporary, &bytes).is_ok() && std::fs::rename(&temporary, &path).is_err() {
+    let cached = path
+        .parent()
+        .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
+        && std::fs::write(&temporary, &bytes).is_ok()
+        && std::fs::rename(&temporary, &path).is_ok();
+    if !cached {
+        let _ = std::fs::remove_file(&temporary);
         tracing::warn!("Could not cache the App Store catalog");
     }
     Ok(Some(catalog))
