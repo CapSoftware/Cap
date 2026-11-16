@@ -3,6 +3,10 @@ import { createPool, type Pool } from "mysql2/promise";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS,
+	lockDeliveryTable,
+} from "../fixtures/delivery-table-lock";
 
 const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
@@ -107,6 +111,7 @@ describe.runIf(Boolean(databaseUrl))(
 	"delivered minutes against a real database",
 	() => {
 		let pool: Pool;
+		let unlock: (() => Promise<void>) | undefined;
 
 		beforeAll(async () => {
 			if (!databaseUrl) throw new Error("Missing isolated test database.");
@@ -117,18 +122,23 @@ describe.runIf(Boolean(databaseUrl))(
 				!/^\/cap_infra_[a-z0-9_]+$/.test(url.pathname)
 			)
 				throw new Error("These tests require a session-scoped local database.");
+			unlock = await lockDeliveryTable(databaseUrl);
 			pool = createPool({ uri: databaseUrl, connectionLimit: 4 });
 			fixture.database = drizzle(pool);
 			fixture.appId = "deliveryapp0001";
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(new Date("2026-11-20T12:00:00Z"));
 			await pool.query("DROP TABLE IF EXISTS developer_delivery_daily");
-		});
+		}, DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS);
 
 		afterAll(async () => {
 			vi.useRealTimers();
-			await pool?.query("DROP TABLE IF EXISTS developer_delivery_daily");
-			await pool?.end();
+			try {
+				await pool?.query("DROP TABLE IF EXISTS developer_delivery_daily");
+				await pool?.end();
+			} finally {
+				await unlock?.();
+			}
 		});
 
 		it("reports no delivery while the table does not exist", async () => {

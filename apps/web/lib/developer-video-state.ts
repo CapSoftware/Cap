@@ -2,8 +2,19 @@ import type {
 	DeveloperVideoPart,
 	DeveloperVideoPartState,
 	DeveloperVideoProcessingState,
+	DeveloperVideoSlice,
+	DeveloperVideoSlicedHls,
+	DeveloperVideoSliceResult,
 	DeveloperVideoStatus,
 } from "@cap/database/types";
+import {
+	finishedSlices,
+	SLICED_HLS,
+	slicedHlsBytes,
+	slicedHlsPlayback,
+	sliceIsFinished,
+	slicesMatch,
+} from "./developer-video-slices";
 
 // The MP4 comes first: it is the quicker output, so it is sent to the encoder first.
 export const DEVELOPER_VIDEO_PARTS = ["mp4", "hls"] as const;
@@ -202,6 +213,15 @@ export function settlePart(
 	outcome: DeveloperVideoPartOutcome,
 ): DeveloperVideoProcessingState | null {
 	if (!runningWithToken(state[part], token)) return null;
+	return reconcileSlicedHls(settleRunningPart(state, part, token, outcome));
+}
+
+function settleRunningPart(
+	state: DeveloperVideoProcessingState,
+	part: DeveloperVideoPart,
+	token: string,
+	outcome: DeveloperVideoPartOutcome,
+): DeveloperVideoProcessingState {
 	if (outcome.type === "complete") {
 		return {
 			...state,
@@ -260,7 +280,19 @@ export function failUnfinishedParts(
 			};
 		}
 	}
-	return next;
+	const sliced = next.sliced;
+	return reconcileSlicedHls(
+		sliced?.state === "encoding"
+			? {
+					...next,
+					sliced: {
+						...sliced,
+						state: "abandoned",
+						reason: developerVideoFailureReason(reason),
+					},
+				}
+			: next,
+	);
 }
 
 function partWasLost(
@@ -296,8 +328,23 @@ export function retryUnavailableHls(
 			next = { ...next, [part]: { state: "pending" } };
 		}
 	}
+	const sliced = slicedHlsEncoding(next);
+	if (sliced) {
+		const slices = sliced.slices.map((slice) =>
+			slice.job.state === "running" &&
+			now - slice.job.startedAt >= STALE_PROCESSING_MS
+				? { ...slice, job: { state: "pending" as const } }
+				: slice,
+		);
+		if (slices.some((slice, index) => slice !== sliced.slices[index])) {
+			next = { ...next, sliced: { ...sliced, slices } };
+		}
+	}
 	const states = DEVELOPER_VIDEO_PARTS.map((part) => state[part].state);
-	const waiting = states.includes("complete") && states.includes("pending");
+	const waiting =
+		states.includes("pending") &&
+		(states.includes("complete") ||
+			(sliced !== null && finishedSlices(sliced).length > 0));
 	if (next === state && !waiting) return null;
 	// Stamping the retry is what stops the next read from claiming it again
 	// before the workflow has picked the part up.
@@ -308,16 +355,21 @@ export function resolveDeveloperVideoStatus(
 	state: DeveloperVideoProcessingState,
 	previous: DeveloperVideoStatus,
 ): { status: DeveloperVideoStatus; errorReason: string | null } {
-	if (previous === "ready") return { status: "ready", errorReason: null };
 	const parts = DEVELOPER_VIDEO_PARTS.map((part) => state[part]);
-	if (parts.some((part) => part.state === "complete")) {
+	const playable =
+		parts.some((part) => part.state === "complete") ||
+		slicedHlsPlayback(state) !== null;
+	const unfinished = parts.some(
+		(part) => part.state === "pending" || part.state === "running",
+	);
+	// A ready video stays ready. The one exception is a video that became ready
+	// on its first slices alone: if the rest could not be made, by slices or as
+	// one job, and there is no MP4 either, what it has is not the whole video.
+	if (previous === "ready" && (!state.sliced || playable || unfinished)) {
 		return { status: "ready", errorReason: null };
 	}
-	if (
-		parts.some((part) => part.state === "pending" || part.state === "running")
-	) {
-		return { status: "processing", errorReason: null };
-	}
+	if (playable) return { status: "ready", errorReason: null };
+	if (unfinished) return { status: "processing", errorReason: null };
 	const failure =
 		[state.mp4, state.hls].find((part) => part.state === "failed") ??
 		[state.mp4, state.hls].find((part) => part.state === "unavailable");
@@ -378,9 +430,375 @@ export function developerVideoRedrive(
 			video.updatedAt.getTime(),
 			video.processing.startedAt,
 		);
+		const sliced = slicedHlsEncoding(video.processing);
+		if (sliced) {
+			return partWasLost(mp4, now, lastStarted) ||
+				slicesWereLost(sliced, now, lastStarted)
+				? "retry-hls"
+				: null;
+		}
 		return [mp4, hls].some((part) => partWasLost(part, now, lastStarted))
 			? "retry-hls"
 			: null;
 	}
 	return null;
+}
+
+// Slices are encoded while the hls part waits. Once that part is complete,
+// the single job owns adaptive streaming.
+export function slicedHlsEncoding(
+	state: DeveloperVideoProcessingState,
+): DeveloperVideoSlicedHls | null {
+	return state.sliced?.state === "encoding" && state.hls.state !== "complete"
+		? state.sliced
+		: null;
+}
+
+// A finished single job replaces slices that are still encoding. Slices that
+// were given up stay stored, and counted, only while the single job that
+// replaces them is still to come.
+function reconcileSlicedHls(
+	state: DeveloperVideoProcessingState,
+): DeveloperVideoProcessingState {
+	const { sliced, hls } = state;
+	if (!sliced) return state;
+	if (sliced.state === "encoding" && hls.state === "complete") {
+		return {
+			...state,
+			sliced: {
+				...sliced,
+				state: "abandoned",
+				reason: "Replaced by a single encode",
+			},
+		};
+	}
+	if (
+		sliced.state === "abandoned" &&
+		(hls.state === "failed" || hls.state === "unavailable") &&
+		state.bytes.hls !== 0
+	) {
+		return { ...state, bytes: { ...state.bytes, hls: 0 } };
+	}
+	return state;
+}
+
+function slicesWereLost(
+	sliced: DeveloperVideoSlicedHls,
+	now: number,
+	lastStarted: number,
+): boolean {
+	const running = sliced.slices.flatMap((slice) =>
+		slice.job.state === "running" ? [slice.job] : [],
+	);
+	if (running.some((job) => now - job.startedAt >= STALE_PROCESSING_MS)) {
+		return true;
+	}
+	return running.length === 0 && now - lastStarted >= NEVER_STARTED_GRACE_MS;
+}
+
+export interface SlicedHlsStep {
+	dispatch: number[];
+	check: number[];
+	finalize: boolean;
+}
+
+// What the slices need next: the earliest ones not yet sent, up to the number
+// one video may have encoding at a time, the quiet jobs to ask about, and the
+// final write once every slice is in.
+export function slicedHlsStep(
+	sliced: DeveloperVideoSlicedHls,
+	now: number,
+): SlicedHlsStep {
+	const actions = sliced.slices.map((slice) =>
+		developerVideoPartAction(slice.job, now),
+	);
+	const inFlight = sliced.slices.filter(
+		(slice, index) =>
+			slice.job.state === "running" && actions[index] !== "dispatch",
+	).length;
+	const due = actions.flatMap((action, index) =>
+		action === "dispatch" ? [index] : [],
+	);
+	return {
+		dispatch: due.slice(0, Math.max(0, SLICED_HLS.maxInFlight - inFlight)),
+		check: actions.flatMap((action, index) =>
+			action === "check" ? [index] : [],
+		),
+		finalize: sliced.slices.every((slice) => sliceIsFinished(slice)),
+	};
+}
+
+export function slicedHlsAction(
+	sliced: DeveloperVideoSlicedHls,
+	now: number,
+): DeveloperVideoPartAction {
+	const step = slicedHlsStep(sliced, now);
+	if (step.finalize || step.dispatch.length > 0) return "dispatch";
+	return step.check.length > 0 ? "check" : "wait";
+}
+
+function withSlice(
+	state: DeveloperVideoProcessingState,
+	sliced: DeveloperVideoSlicedHls,
+	index: number,
+	slice: DeveloperVideoSlice,
+): DeveloperVideoProcessingState {
+	return {
+		...state,
+		sliced: {
+			...sliced,
+			slices: sliced.slices.map((current, at) =>
+				at === index ? slice : current,
+			),
+		},
+	};
+}
+
+interface RunningSlice {
+	sliced: DeveloperVideoSlicedHls;
+	index: number;
+	slice: DeveloperVideoSlice;
+	job: Extract<DeveloperVideoPartState, { state: "running" }>;
+}
+
+export function findRunningSlice(
+	state: DeveloperVideoProcessingState,
+	token: string,
+): RunningSlice | null {
+	const sliced = slicedHlsEncoding(state);
+	if (!sliced) return null;
+	for (const [index, slice] of sliced.slices.entries()) {
+		if (runningWithToken(slice.job, token)) {
+			return { sliced, index, slice, job: slice.job };
+		}
+	}
+	return null;
+}
+
+export function beginSlices(
+	state: DeveloperVideoProcessingState,
+	input: { tokens: string[]; now: number },
+): {
+	state: DeveloperVideoProcessingState;
+	begun: { index: number; token: string }[];
+} | null {
+	const sliced = slicedHlsEncoding(state);
+	if (!sliced) return null;
+	const { dispatch } = slicedHlsStep(sliced, input.now);
+	const begun = dispatch.flatMap((index, at) => {
+		const token = input.tokens[at];
+		return token ? [{ index, token }] : [];
+	});
+	if (begun.length === 0) return null;
+	const slices = sliced.slices.map((slice, index) => {
+		const pick = begun.find((entry) => entry.index === index);
+		if (!pick) return slice;
+		return {
+			...slice,
+			job: {
+				state: "running" as const,
+				token: pick.token,
+				jobId: null,
+				startedAt: input.now,
+			},
+			attempts:
+				slice.job.state === "pending" ? slice.attempts + 1 : slice.attempts,
+		};
+	});
+	return { state: { ...state, sliced: { ...sliced, slices } }, begun };
+}
+
+export function markSliceDispatched(
+	state: DeveloperVideoProcessingState,
+	input: { token: string; jobId: string },
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, input.token);
+	if (!found) return null;
+	return withSlice(state, found.sliced, found.index, {
+		...found.slice,
+		job: { ...found.job, jobId: input.jobId },
+	});
+}
+
+export function markSliceChecked(
+	state: DeveloperVideoProcessingState,
+	input: { token: string; now: number },
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, input.token);
+	if (!found) return null;
+	const { notFoundAt: _notFoundAt, ...alive } = found.job;
+	return withSlice(state, found.sliced, found.index, {
+		...found.slice,
+		job: { ...alive, checkedAt: input.now },
+	});
+}
+
+export function markSliceNotFound(
+	state: DeveloperVideoProcessingState,
+	input: { token: string; now: number },
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, input.token);
+	if (!found || found.job.notFoundAt !== undefined) return null;
+	return withSlice(state, found.sliced, found.index, {
+		...found.slice,
+		job: { ...found.job, notFoundAt: input.now },
+	});
+}
+
+export function releaseSlice(
+	state: DeveloperVideoProcessingState,
+	token: string,
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, token);
+	if (!found) return null;
+	return withSlice(state, found.sliced, found.index, {
+		...found.slice,
+		job: { state: "pending" },
+		attempts: Math.max(0, found.slice.attempts - 1),
+	});
+}
+
+// Gives up on slices and leaves adaptive streaming to one job for the whole
+// video, which gets a single attempt. The finished slices stay where they
+// are, so a video that is already playing from them keeps playing until that
+// job has an answer.
+export function abandonSlicedHls(
+	state: DeveloperVideoProcessingState,
+	reason: string,
+): DeveloperVideoProcessingState {
+	const { sliced } = state;
+	if (!sliced || sliced.state !== "encoding") return state;
+	return reconcileSlicedHls({
+		...state,
+		sliced: {
+			...sliced,
+			state: "abandoned",
+			reason: developerVideoFailureReason(reason),
+		},
+		attempts:
+			state.hls.state === "pending"
+				? { ...state.attempts, hls: DEVELOPER_VIDEO_MAX_PART_ATTEMPTS - 1 }
+				: state.attempts,
+	});
+}
+
+const LOST_SLICE = "A slice of the video kept losing its encode job";
+
+// A slice whose job ended with its server is sent again without costing an
+// attempt. One that keeps vanishing is treated as a slice that cannot be made.
+export function requeueLostSlice(
+	state: DeveloperVideoProcessingState,
+	token: string,
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, token);
+	if (!found) return null;
+	if (found.slice.lostJobs >= DEVELOPER_VIDEO_MAX_LOST_JOBS) {
+		return abandonSlicedHls(
+			withSlice(state, found.sliced, found.index, {
+				...found.slice,
+				job: { state: "failed", reason: LOST_SLICE },
+			}),
+			LOST_SLICE,
+		);
+	}
+	return withSlice(state, found.sliced, found.index, {
+		...found.slice,
+		job: { state: "pending" },
+		attempts: Math.max(0, found.slice.attempts - 1),
+		lostJobs: found.slice.lostJobs + 1,
+	});
+}
+
+export type DeveloperVideoSliceOutcome =
+	| {
+			type: "complete";
+			result: DeveloperVideoSliceResult;
+			posterBytes?: number;
+	  }
+	| { type: "failed"; reason: string };
+
+const MISMATCHED_SLICES = "Slices were encoded with different renditions";
+
+export function settleSlice(
+	state: DeveloperVideoProcessingState,
+	token: string,
+	outcome: DeveloperVideoSliceOutcome,
+): DeveloperVideoProcessingState | null {
+	const found = findRunningSlice(state, token);
+	if (!found) return null;
+	const { sliced, index, slice } = found;
+	const other = finishedSlices(sliced)[0]?.slice;
+	const failure =
+		outcome.type === "failed"
+			? outcome.reason
+			: other &&
+					!slicesMatch(other.result.renditions, outcome.result.renditions)
+				? MISMATCHED_SLICES
+				: null;
+	if (outcome.type === "failed" || failure !== null) {
+		const reason = developerVideoFailureReason(failure ?? MISMATCHED_SLICES);
+		if (slice.attempts < DEVELOPER_VIDEO_MAX_PART_ATTEMPTS) {
+			return withSlice(state, sliced, index, {
+				...slice,
+				job: { state: "pending" },
+			});
+		}
+		return abandonSlicedHls(
+			withSlice(state, sliced, index, {
+				...slice,
+				job: { state: "failed", reason },
+			}),
+			reason,
+		);
+	}
+
+	const slices = sliced.slices.map((current, at) =>
+		at === index
+			? {
+					...slice,
+					job: { state: "complete" as const, output: token },
+					result: outcome.result,
+				}
+			: current,
+	);
+	const first = index === 0;
+	const next: DeveloperVideoSlicedHls = {
+		...sliced,
+		slices,
+		hasAudio: first ? outcome.result.audioBytes > 0 : sliced.hasAudio,
+		// Decided once, when the start of the video is first in: a video that
+		// already plays from its MP4 gets its adaptive stream when it is whole.
+		exposed:
+			sliced.exposed === null && sliceIsFinished(slices[0])
+				? state.mp4.state !== "complete"
+				: sliced.exposed,
+	};
+	const posterBytes = first ? (outcome.posterBytes ?? 0) : 0;
+	return {
+		...state,
+		sliced: next,
+		poster: state.poster ?? (posterBytes > 0 ? { output: token } : null),
+		bytes: {
+			...state.bytes,
+			hls: slicedHlsBytes(next),
+			poster: state.bytes.poster + posterBytes,
+		},
+	};
+}
+
+// Every slice is in and the whole ladder has been written to the slices'
+// folder, so the hls part is complete and points at it like any other ladder.
+export function completeSlicedHls(
+	state: DeveloperVideoProcessingState,
+): DeveloperVideoProcessingState | null {
+	const sliced = slicedHlsEncoding(state);
+	if (!sliced || !sliced.slices.every((slice) => sliceIsFinished(slice))) {
+		return null;
+	}
+	return {
+		...state,
+		hls: { state: "complete", output: sliced.output },
+		sliced: { ...sliced, state: "complete" },
+		bytes: { ...state.bytes, hls: slicedHlsBytes(sliced) },
+	};
 }

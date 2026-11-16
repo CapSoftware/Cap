@@ -97,8 +97,7 @@ export const ImportFilePage = () => {
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
 					Back to Import
 				</Link>
-				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
-				<p className="mt-1 text-sm text-gray-10">
+				<p className="text-sm text-gray-10">
 					Upload a video or image file from your device.
 				</p>
 			</div>
