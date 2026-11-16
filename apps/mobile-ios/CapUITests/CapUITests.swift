@@ -305,6 +305,29 @@ final class CapUITests: XCTestCase {
         XCTAssertFalse(limit.exists)
     }
 
+    /// Photos runs the change block off the main thread, so a block isolated to the main actor stops the app here.
+    func testSaveToPhotos() {
+        // Starts from no decision, so an earlier denial can't stop the save before it reaches Photos.
+        XCUIApplication().resetAuthorizationStatus(for: .photos)
+        let app = launch(route: "cap:cap_london")
+        let more = app.buttons["More"].firstMatch
+        waitFor(more, 15)
+        more.tap()
+        let save = app.buttons["Save to Photos"].firstMatch
+        waitFor(save)
+        save.tap()
+        let saved = app.staticTexts["Saved to Photos"]
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons.matching(NSPredicate(format: "label BEGINSWITH 'Allow'")).firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while !saved.exists, Date() < deadline {
+            XCTAssertNotEqual(app.state, .notRunning, "Cap stopped while saving to Photos")
+            if allow.exists { allow.tap() }
+        }
+        XCTAssertTrue(saved.exists, "Missing the Saved to Photos toast")
+        XCTAssertEqual(app.state, .runningForeground)
+        shot("93-saved-to-photos")
+    }
+
     func testScopeBar() {
         let app = launch()
         let myCaps = app.buttons["My Caps"]

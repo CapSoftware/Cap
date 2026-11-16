@@ -302,8 +302,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 								<Link
 									href={`/dashboard/spaces/${space.id}`}
 									className={clsx(
-										"flex relative z-10 items-center px-3 h-9 truncate rounded-lg transition-colors group/space",
-										sidebarCollapsed ? "justify-center px-0" : "",
+										"flex relative z-10 px-3 rounded-lg transition-colors group/space",
+										sidebarCollapsed
+											? "justify-center items-center px-0 h-9"
+											: "items-start py-2 min-h-9",
 										!activeSpaceParams(space.id) && "dashboard-nav-hover",
 									)}
 								>
@@ -315,14 +317,14 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 										)}
 										className={clsx(
 											"relative flex-shrink-0",
-											sidebarCollapsed ? "size-6" : "size-[18px]",
+											sidebarCollapsed ? "size-6" : "mt-px size-[18px]",
 										)}
 									/>
 									{!sidebarCollapsed && (
 										<>
 											<span
 												className={clsx(
-													"ml-2.5 text-sm truncate transition-colors group-hover/space:text-gray-12",
+													"ml-2.5 min-w-0 text-sm leading-5 line-clamp-2 transition-colors [overflow-wrap:anywhere] group-hover/space:text-gray-12",
 													activeSpaceParams(space.id)
 														? "font-medium text-gray-12"
 														: "text-gray-11",
@@ -333,7 +335,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 											{space.hasPassword && (
 												<FontAwesomeIcon
 													icon={faLock}
-													className="ml-1.5 size-2.5 text-amber-600"
+													className="mt-[5px] ml-1.5 size-2.5 shrink-0 text-amber-600"
 												/>
 											)}
 											{!space.primary && space.currentUserCanManage && (
@@ -341,7 +343,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 													type="button"
 													onClick={(e) => handleDeleteSpace(e, space)}
 													className={
-														"flex justify-center items-center -mr-1.5 ml-auto rounded-md opacity-0 transition-all size-6 group-hover/space:opacity-100 focus-visible:opacity-100 hover:bg-gray-4"
+														"flex justify-center items-center -my-0.5 -mr-1.5 ml-auto rounded-md opacity-0 transition-all size-6 shrink-0 group-hover/space:opacity-100 focus-visible:opacity-100 hover:bg-gray-4"
 													}
 													aria-label={`Delete ${space.name} space`}
 												>
