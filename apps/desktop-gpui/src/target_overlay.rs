@@ -1017,12 +1017,11 @@ fn legacy_area_selection_in(root: &std::path::Path) -> Result<Option<serde_json:
             }
         };
         let hex = String::from_utf8_lossy(&output.stdout);
-        if hex.trim().is_empty() {
-            continue;
-        }
-        return Ok(
+        if let Some(value) =
             decode_webkit_storage_hex(&hex).and_then(|text| serde_json::from_str(&text).ok())
-        );
+        {
+            return Ok(Some(value));
+        }
     }
     if unreadable { Err(()) } else { Ok(None) }
 }
@@ -6061,6 +6060,21 @@ mod snap_to_ratio_tests {
             .unwrap();
         assert!(status.success());
         assert_eq!(legacy_area_selection_in(&root.join("other")), Ok(None));
+
+        // A damaged value in the newest database falls through to an older
+        // copy that still parses.
+        let damaged = root.join("Default/newer/LocalStorage");
+        std::fs::create_dir_all(&damaged).unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(damaged.join("localstorage.sqlite3"))
+            .arg(format!(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);\
+                 INSERT INTO ItemTable VALUES ('{LEGACY_AREA_SELECTION_KEY}', X'7B00');"
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root), Ok(Some(legacy_060())));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
