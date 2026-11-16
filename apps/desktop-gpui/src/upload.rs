@@ -2819,6 +2819,117 @@ mod tests {
         }
     }
 
+    async fn strict_put_server() -> (String, Arc<Mutex<Vec<Vec<String>>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/bucket/object", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                let header_end = loop {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break None;
+                    }
+                    raw.extend_from_slice(&buf[..read]);
+                    if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(end);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let lines: Vec<String> = String::from_utf8_lossy(&raw[..header_end])
+                    .lines()
+                    .skip(1)
+                    .map(str::to_owned)
+                    .collect();
+                let header = |name: &str| {
+                    lines
+                        .iter()
+                        .filter(|line| {
+                            line.split_once(':')
+                                .is_some_and(|(key, _)| key.eq_ignore_ascii_case(name))
+                        })
+                        .count()
+                };
+                let length: usize = lines
+                    .iter()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        if key.eq_ignore_ascii_case("content-length") {
+                            value.trim().parse().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let mut body = raw.len() - header_end - 4;
+                while body < length {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    body += read;
+                }
+                let response: &[u8] = if header("content-type") > 1 {
+                    b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                } else {
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                };
+                seen.lock().unwrap().push(lines);
+                socket.write_all(response).await.ok();
+            }
+        });
+        (url, requests)
+    }
+
+    #[tokio::test]
+    async fn signed_uploads_send_one_content_type_on_the_wire() {
+        let (url, requests) = strict_put_server().await;
+        for (subpath, signed_type, sent_type) in [
+            ("segments/manifest.json", Some("application/json"), "application/json"),
+            ("segments/recording.json", Some("application/json"), "application/json"),
+            ("screenshot/screen-capture.jpg", Some("image/jpeg"), "image/jpeg"),
+            ("screenshot/screen-capture.png", Some("image/png"), "image/png"),
+            ("segments/video/segment_001.m4s", Some("video/mp4"), "video/mp4"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            ("segments/manifest.json", None, "application/json"),
+        ] {
+            let headers = signed_type
+                .map(|value| HashMap::from([("Content-Type".to_string(), value.to_string())]))
+                .unwrap_or_default();
+            upload_signed_bytes_inner(
+                SignedUploadTarget {
+                    url: url.clone(),
+                    headers,
+                },
+                subpath,
+                vec![7; 32],
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{subpath} with {signed_type:?}: {error}"));
+            let lines = requests.lock().unwrap().pop().unwrap();
+            let content_types: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    if key.eq_ignore_ascii_case("content-type") {
+                        Some(value.trim())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(content_types, [sent_type], "{subpath}");
+        }
+    }
+
     #[test]
     fn signed_upload_request_sends_one_content_type() {
         let client = reqwest::Client::new();
