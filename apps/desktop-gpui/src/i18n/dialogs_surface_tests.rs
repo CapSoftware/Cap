@@ -906,6 +906,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Creating shareable link",
         ),
         (
+            tr::recordings_overlay::progress::failed_hint(),
+            "Something went wrong. Try again.",
+        ),
+        (
             tr::recordings_overlay::progress::link_copied(),
             "Shareable link copied",
         ),
@@ -937,6 +941,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (
             tr::recordings_overlay::progress::share_failed(),
             "Couldn't create the link",
+        ),
+        (
+            tr::recordings_overlay::progress::share_failed_hint(),
+            "Check your connection and try again.",
         ),
     ];
     for (translated, literal) in pairs {
