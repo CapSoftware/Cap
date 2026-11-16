@@ -100,7 +100,7 @@ const useFolderViewPreferences = (scope: string) => {
 };
 
 const controlClass =
-	"flex items-center justify-center h-8 text-[13px] font-medium rounded-lg border transition-colors duration-200 text-gray-11 bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6 hover:text-gray-12";
+	"flex items-center justify-center h-8 text-[13px] font-medium rounded-lg border transition-colors duration-200 text-gray-11 bg-gray-1 border-gray-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:bg-gray-2 hover:border-gray-5 hover:text-gray-12";
 
 type FolderItem = Omit<FolderDataType, "layout" | "canMove" | "moveRootLabel">;
 
@@ -144,12 +144,12 @@ export const FoldersSection = ({
 					type="button"
 					onClick={toggleCollapsed}
 					aria-expanded={!collapsed}
-					className="flex gap-2.5 items-center min-w-0 text-left rounded-lg group -ml-1 pl-1 pr-2 py-0.5 transition-colors hover:bg-gray-3"
+					className="flex gap-2 items-center py-0.5 pr-2 pl-1.5 -ml-1.5 min-w-0 text-left rounded-lg transition-colors group hover:bg-gray-3"
 				>
 					<h1
 						className={clsx(
-							"font-medium truncate text-gray-12",
-							headingSize === "lg" ? "text-2xl" : "text-xl",
+							"font-semibold tracking-tight truncate text-gray-12",
+							headingSize === "lg" ? "text-lg" : "text-base",
 						)}
 					>
 						{title}
@@ -210,7 +210,7 @@ export const FoldersSection = ({
 								))}
 							</DropdownMenuContent>
 						</DropdownMenu>
-						<fieldset className="flex overflow-hidden rounded-lg border border-gray-5 bg-gray-3">
+						<fieldset className="flex gap-0.5 p-0.5 rounded-lg bg-gray-3">
 							<legend className="sr-only">Folder layout</legend>
 							{(
 								[
@@ -225,10 +225,10 @@ export const FoldersSection = ({
 									aria-pressed={layout === option.value}
 									onClick={() => updateLayout(option.value)}
 									className={clsx(
-										"flex justify-center items-center w-8 h-8 transition-colors duration-200",
+										"flex justify-center items-center w-8 h-7 rounded-md transition-colors duration-200",
 										layout === option.value
-											? "bg-gray-5 text-gray-12"
-											: "text-gray-10 hover:bg-gray-4 hover:text-gray-12",
+											? "bg-gray-1 text-gray-12 shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+											: "text-gray-10 hover:text-gray-12",
 									)}
 								>
 									<FontAwesomeIcon icon={option.icon} className="size-3.5" />

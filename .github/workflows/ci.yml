@@ -360,16 +360,16 @@ jobs:
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
-      # setup.js strips the local symbols from Microsoft's ONNX Runtime dylib
-      # before Cap bundles it; the C API ort loads through must still resolve
-      # and run a real inference.
+      # The ONNX Runtime setup.js prepares must load through ort's C API and
+      # run a real inference on every platform Cap ships. On macOS setup.js
+      # also strips the dylib's local symbols, so check the API still resolves.
       - name: Test the prepared ONNX Runtime
-        if: ${{ runner.os == 'macOS' }}
         shell: bash
         run: |
           set -euo pipefail
-          dylib=target/native-deps/onnxruntime/lib/libonnxruntime.dylib
-          nm -gU "$dylib" | grep -q OrtGetApiBase
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            nm -gU target/native-deps/onnxruntime/lib/libonnxruntime.dylib | grep -q OrtGetApiBase
+          fi
           cargo test --locked -p cap-camera-effects --lib segmentation::tests::inference_runs_from_a_caller_with_a_tiny_stack -- --ignored --exact
 
       # The test build compiles every line the binary build does (the app has

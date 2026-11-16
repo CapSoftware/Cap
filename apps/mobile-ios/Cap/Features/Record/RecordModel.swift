@@ -24,6 +24,8 @@ final class RecordModel {
     private(set) var position: AVCaptureDevice.Position = .front
     private(set) var hasMicrophone = false
     private(set) var isFlipping = false
+    /// The angle the running recording was started at. It can turn half a turn, never between portrait and landscape.
+    private(set) var recordingRotationAngle: CGFloat?
 
     @ObservationIgnored let capture = CameraCapture()
     @ObservationIgnored private let session: SessionModel
@@ -34,6 +36,7 @@ final class RecordModel {
     @ObservationIgnored private var wantsCamera = true
     var captureMode: CaptureMode = .instant
     @ObservationIgnored private var studio: (writer: StudioTrackWriter, projectId: String, store: StudioStore)?
+    @ObservationIgnored private var rotationAngle: CGFloat = 90
 
     init(session: SessionModel, folderId: String?) {
         self.session = session
@@ -122,6 +125,17 @@ final class RecordModel {
         }
     }
 
+    /// A recording keeps the shape it started with, so a quarter turn waits until it ends. A half turn, or a flip to a
+    /// camera mounted the other way up, still applies, which keeps the picture upright.
+    func setRotationAngle(_ angle: CGFloat) {
+        rotationAngle = angle
+        if let recording = recordingRotationAngle {
+            guard CameraCapture.sameShape(angle, recording) else { return }
+            recordingRotationAngle = angle
+        }
+        capture.setRotationAngle(angle)
+    }
+
     func teardown() {
         if isRecording { discard() }
         capture.stop()
@@ -136,10 +150,11 @@ final class RecordModel {
             return
         }
         let recordings = session.services.recordings
+        let format = CameraCapture.format(rotationAngle: rotationAngle)
         let job = RecordingJob(
             userId: session.credentials.userId,
             title: Self.title(for: .now),
-            format: .init(width: CameraCapture.format.width, height: CameraCapture.format.height, fps: CameraCapture.format.fps),
+            format: .init(width: format.width, height: format.height, fps: format.fps),
             organizationId: session.organizationId,
             folderId: folderId,
             hasAudio: hasMicrophone
@@ -149,7 +164,7 @@ final class RecordModel {
         do {
             writer = try SegmentWriter(
                 directory: recordings.directory(for: jobId),
-                video: CameraCapture.format,
+                video: format,
                 audio: hasMicrophone,
                 onSegment: { segment in recordings.add(segment, to: jobId) },
                 onFailure: { [weak self] error in
@@ -161,6 +176,7 @@ final class RecordModel {
             return
         }
         self.jobId = jobId
+        recordingRotationAngle = rotationAngle
         stopping = false
         RecordingUploads.markActive(jobId, true)
         RecordingCoordinator.shared.activeModel = self
@@ -210,7 +226,7 @@ final class RecordModel {
             RecordingUploads.markActive(jobId, false)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
             await throwAway(jobId)
-            phase = .ready
+            becomeReady()
             return
         }
         // Hand over before clearing the active flag, or a resume pass in between would treat it as a crash.
@@ -224,7 +240,7 @@ final class RecordModel {
         // Stays on the recorder: the upload carries on in the list while the next one is recorded.
         RecentRecordings.shared.stopped(jobId: jobId, kind: .camera)
         RecordingCoordinator.shared.cameraRecordingStopped()
-        phase = .ready
+        becomeReady()
     }
 
     func discard() {
@@ -234,7 +250,7 @@ final class RecordModel {
             UIApplication.shared.isIdleTimerDisabled = false
             capture.cancelRecording()
             studio.store.delete(studio.projectId)
-            phase = .ready
+            becomeReady()
             return
         }
         guard isRecording || phase == .finishing, let jobId else { return }
@@ -243,8 +259,14 @@ final class RecordModel {
         UIApplication.shared.isIdleTimerDisabled = false
         capture.cancelRecording()
         RecordingUploads.markActive(jobId, false)
-        phase = .ready
+        becomeReady()
         Task { await throwAway(jobId) }
+    }
+
+    private func becomeReady() {
+        phase = .ready
+        recordingRotationAngle = nil
+        capture.setRotationAngle(rotationAngle)
     }
 
     private func throwAway(_ jobId: String) async {
@@ -280,6 +302,7 @@ final class RecordModel {
             return
         }
         studio = (writer, projectId, store)
+        recordingRotationAngle = rotationAngle
         stopping = false
         RecordingCoordinator.shared.activeModel = self
         capture.beginRecording(writer)
@@ -312,7 +335,7 @@ final class RecordModel {
             capture.endRecording { continuation.resume(returning: $0) }
         }
         self.studio = nil
-        phase = .ready
+        becomeReady()
         guard var info = studio.writer.info else {
             studio.store.delete(studio.projectId)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
