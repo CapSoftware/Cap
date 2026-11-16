@@ -177,11 +177,61 @@ describe("parseDeliveryLine", () => {
 		expect(parseDeliveryLine(line({ "cs-method": method }))).toBeNull();
 	});
 
-	it("marks an edge Error transfer as abandoned and ignores empty responses", () => {
+	it("marks an edge Error transfer cut short as abandoned and ignores empty responses", () => {
 		expect(
-			parseDeliveryLine(line({ "x-edge-result-type": "Error" })),
-		).toMatchObject({ abandoned: true, bytes: 100400 });
+			parseDeliveryLine(
+				line({ "x-edge-result-type": "Error", "sc-bytes": "600" }),
+			),
+		).toMatchObject({ abandoned: true, bytes: 600 });
 		expect(parseDeliveryLine(line({ "sc-bytes": "0" }))).toBeNull();
+	});
+
+	it("counts an edge Error transfer whose whole range was sent as delivered", () => {
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"x-edge-detailed-result-type": "ClientCommError",
+				}),
+			),
+		).toMatchObject({ abandoned: false, bytes: 100400, bodyBytes: 100000 });
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"sc-range-start": "-",
+					"sc-range-end": "-",
+				}),
+			),
+		).toMatchObject({ abandoned: false, bodyBytes: 100000 });
+	});
+
+	it("measures an edge Error transfer against the content length when the range runs past it", () => {
+		const pastTheEnd = {
+			"x-edge-result-type": "Error",
+			"sc-content-len": "1000",
+			"sc-range-start": "0",
+			"sc-range-end": "2000000",
+		};
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "1100" })),
+		).toMatchObject({ abandoned: false, bodyBytes: 1000 });
+		expect(
+			parseDeliveryLine(line({ ...pastTheEnd, "sc-bytes": "500" })),
+		).toMatchObject({ abandoned: true, bodyBytes: 500 });
+	});
+
+	it("keeps an edge Error transfer with no known length abandoned", () => {
+		expect(
+			parseDeliveryLine(
+				line({
+					"x-edge-result-type": "Error",
+					"sc-content-len": "-",
+					"sc-range-start": "-",
+					"sc-range-end": "-",
+				}),
+			),
+		).toMatchObject({ abandoned: true, bytes: 100400 });
 	});
 
 	it("caps body bytes at what left the edge, the content length and the range", () => {
@@ -711,6 +761,22 @@ describe("meterDeliveryLog", () => {
 			["2026-11-12", APP, VIDEO, "audio", 1, 50, 0, 0],
 			["2026-11-13", APP, VIDEO, "720p", 1, 100400, 4000, 0],
 			["2026-11-12", APP, VIDEO, "1080p", 0, 0, 0, 9000],
+		]);
+	});
+
+	it("meters an edge Error transfer that sent its whole range as delivered seconds", async () => {
+		const result = await meterDeliveryLog(
+			gz([
+				line({
+					"x-edge-result-type": "Error",
+					"x-edge-detailed-result-type": "ClientCommError",
+				}),
+				line({ "x-edge-result-type": "Error", "sc-bytes": "600" }),
+			]),
+			new FakeResolver(),
+		);
+		expect(result.parts).toEqual([
+			["2026-11-12", APP, VIDEO, "720p", 1, 100400, 4000, 600],
 		]);
 	});
 

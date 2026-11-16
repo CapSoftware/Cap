@@ -137,6 +137,12 @@ extension View {
         background(.background.secondary, in: .rect(cornerRadius: CapTheme.cardRadius))
     }
 
+    /// A horizontal scroll view draws into the safe area, which on a folded iPhone Duo puts its items under the
+    /// system rail beside the clock. Clipped to its own frame they stop at the rail; the vertical slack keeps glass edges.
+    func clipsToSafeArea() -> some View {
+        mask { Rectangle().padding(.vertical, -24) }
+    }
+
     func readableWidth(_ maxWidth: CGFloat = 620) -> some View {
         modifier(ReadableWidth(maxWidth: maxWidth))
     }
