@@ -12,10 +12,12 @@ import {
 } from "../../loom-importer/media";
 import {
 	canSkipMissingSegments,
+	EmptyHlsPlaylistError,
 	listMediaPlaylistResources,
 	parseHlsAttributes,
 	selectHlsTracks,
 	UnsupportedStreamError,
+	withoutAudioRendition,
 } from "../../loom-importer/streaming";
 
 describe("selectHlsTracks", () => {
@@ -60,6 +62,33 @@ describe("selectHlsTracks", () => {
 		expect(
 			selectHlsTracks("#EXTM3U\n#EXTINF:4,\nhttps://cdn.loom.com/a.ts"),
 		).toBeNull();
+	});
+
+	test("drops the audio rendition and the variant's audio group", () => {
+		const selected = selectHlsTracks(master);
+		if (!selected) throw new Error("expected a selection");
+		const videoOnly = withoutAudioRendition(selected);
+		expect(videoOnly.video).toBe("/m/video-5500.m3u8");
+		expect(videoOnly.audio).toBeNull();
+		expect(videoOnly.masterLines).toEqual([
+			"#EXTM3U",
+			"#EXT-X-VERSION:3",
+			'#EXT-X-STREAM-INF:BANDWIDTH=5500000,RESOLUTION=2400x1350,CODECS="avc1.4d002a,mp4a.40.2"',
+			"/m/video-5500.m3u8",
+		]);
+		expect(
+			withoutAudioRendition({
+				video: "v.m3u8",
+				audio: "a.m3u8",
+				masterLines: [
+					'#EXT-X-STREAM-INF:AUDIO="audio",BANDWIDTH=10,CLOSED-CAPTIONS=NONE',
+					"v.m3u8",
+				],
+			}).masterLines,
+		).toEqual([
+			"#EXT-X-STREAM-INF:BANDWIDTH=10,CLOSED-CAPTIONS=NONE",
+			"v.m3u8",
+		]);
 	});
 
 	test("parses quoted attribute values containing commas", () => {
@@ -112,6 +141,25 @@ describe("listMediaPlaylistResources", () => {
 		expect(() => listMediaPlaylistResources(playlist)).toThrow(
 			UnsupportedStreamError,
 		);
+	});
+
+	test("reports a valid playlist without segments as empty", () => {
+		expect(() =>
+			listMediaPlaylistResources(
+				[
+					"#EXTM3U",
+					"#EXT-X-VERSION:3",
+					"#EXT-X-TARGETDURATION:0",
+					"#EXT-X-MEDIA-SEQUENCE:0",
+					"#EXT-X-PLAYLIST-TYPE:VOD",
+					"",
+					"#EXT-X-ENDLIST",
+				].join("\n"),
+			),
+		).toThrow(EmptyHlsPlaylistError);
+		expect(() =>
+			listMediaPlaylistResources('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"'),
+		).toThrow(EmptyHlsPlaylistError);
 	});
 
 	test("accepts an explicit unencrypted key tag", () => {
