@@ -394,9 +394,20 @@ pub struct InstantRulesHold {
     key: String,
 }
 
+/// The upload queue knows a recording by its canonical path, Stop by the path
+/// it recorded to; they differ under a symlinked recordings folder and on
+/// Windows, so both sides key holds by the resolved folder while it exists.
+fn hold_key(project_dir: &Path) -> String {
+    event_key(
+        &project_dir
+            .canonicalize()
+            .unwrap_or_else(|_| project_dir.to_path_buf()),
+    )
+}
+
 impl InstantRulesHold {
     pub(crate) fn take(project_dir: &Path) -> Self {
-        let key = event_key(project_dir);
+        let key = hold_key(project_dir);
         *instant_rule_holds().lock().entry(key.clone()).or_default() += 1;
         Self { key }
     }
@@ -425,11 +436,11 @@ pub fn hold_instant_rules(project_dir: &Path) -> Option<InstantRulesHold> {
 }
 
 pub fn instant_rules_running(project_dir: &Path) -> bool {
-    instant_rule_holds().is_held(&event_key(project_dir))
+    instant_rule_holds().is_held(&hold_key(project_dir))
 }
 
 pub async fn instant_rules_finished(project_dir: &Path) {
-    let key = event_key(project_dir);
+    let key = hold_key(project_dir);
     let holds = instant_rule_holds();
     loop {
         let mut released = std::pin::pin!(holds.released.notified());

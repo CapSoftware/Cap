@@ -907,6 +907,39 @@ async fn upload_completed_for_a_screenshot_keeps_its_image() {
 /// Delete-after-upload waits on this: a hold taken at Stop stays until the
 /// last one is dropped, and a waiter wakes only then.
 #[tokio::test]
+async fn instant_rules_hold_the_folder_the_queue_resolves() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("recordings");
+    let project = real.join("instant.cap");
+    std::fs::create_dir_all(&project).unwrap();
+    #[cfg(unix)]
+    let recorded_to = {
+        let link = root.path().join("linked-recordings");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        link.join("instant.cap")
+    };
+    #[cfg(not(unix))]
+    let recorded_to = project.clone();
+    let queued = project.canonicalize().unwrap();
+    assert_ne!(recorded_to, queued);
+
+    let hold = InstantRulesHold::take(&recorded_to);
+    assert!(instant_rules_running(&queued));
+    let waiter = tokio::spawn({
+        let queued = queued.clone();
+        async move { instant_rules_finished(&queued).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished());
+    drop(hold);
+    tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!instant_rules_running(&queued));
+}
+
+#[tokio::test]
 async fn instant_rules_hold_the_folder_until_every_hold_is_released() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("instant.cap");
