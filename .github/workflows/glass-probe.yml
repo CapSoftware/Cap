@@ -143,7 +143,7 @@ jobs:
           db="/Library/Application Support/com.apple.TCC/TCC.db"
           now=$(date +%s)
           for client in "$app" /bin/bash /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener; do
-            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);"
+            sudo sqlite3 -cmd ".timeout 10000" "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);"
           done
           sudo killall tccd || true
           sleep 2
