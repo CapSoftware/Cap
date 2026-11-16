@@ -457,8 +457,7 @@ async fn finalize_studio(
         let placement = camera_snapshot
             .and_then(|snapshot| snapshot.placement)
             .filter(|_| camera_recorded);
-        let shape = camera_recorded
-            .then(|| camera_snapshot.map_or_else(current_camera_shape, |snapshot| snapshot.shape));
+        let shape = recorded_camera_shape(camera_recorded, camera_snapshot);
         let preset_applied = apply_default_preset_to_project_config(
             &project_path,
             &crate::presets::PresetsStore::load(),
@@ -1702,6 +1701,7 @@ fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::pat
 pub(crate) fn preparing_presentation(
     project: &cap_project::ProjectConfiguration,
     camera_snapshot: Option<StudioCameraSnapshot>,
+    camera_recorded: bool,
 ) -> Result<cap_project::ProjectConfiguration, String> {
     let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
         "animated_gradients",
@@ -1717,11 +1717,11 @@ pub(crate) fn preparing_presentation(
         config.audio.improve = true;
         config.audio.isolation = crate::store::studio_sound_isolation();
     }
-    if let Some(snapshot) = camera_snapshot {
-        apply_preview_shape(&mut config.camera, snapshot.shape);
-        if let Some(placement) = snapshot.placement {
-            placement.apply(&mut config.camera);
-        }
+    if let Some(shape) = recorded_camera_shape(camera_recorded, camera_snapshot) {
+        apply_preview_shape(&mut config.camera, shape);
+    }
+    if let Some(placement) = camera_snapshot.and_then(|snapshot| snapshot.placement) {
+        placement.apply(&mut config.camera);
     }
     Ok(config)
 }
@@ -1791,6 +1791,24 @@ fn current_camera_shape() -> crate::store::CameraShape {
         .camera_window
         .map(|state| state.shape)
         .unwrap_or_default()
+}
+
+/// The bubble's shape for a recording with a camera track. Without a snapshot
+/// (the bubble was closed while the camera kept recording) the saved shape is
+/// used, the same fallback blur takes.
+fn recorded_camera_shape(
+    camera_recorded: bool,
+    camera_snapshot: Option<StudioCameraSnapshot>,
+) -> Option<crate::store::CameraShape> {
+    recorded_camera_shape_with(camera_recorded, camera_snapshot, current_camera_shape)
+}
+
+fn recorded_camera_shape_with(
+    camera_recorded: bool,
+    camera_snapshot: Option<StudioCameraSnapshot>,
+    saved: impl FnOnce() -> crate::store::CameraShape,
+) -> Option<crate::store::CameraShape> {
+    camera_recorded.then(|| camera_snapshot.map_or_else(saved, |snapshot| snapshot.shape))
 }
 
 /// The Tauri app's `apply_recording_camera_preview_state`: the bubble's shape
@@ -4269,6 +4287,30 @@ mod tests {
             assert!(finalized.camera.mirror);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preparing_and_final_shape_use_the_saved_shape_without_a_snapshot() {
+        use crate::store::CameraShape;
+        let snapshot = StudioCameraSnapshot {
+            blur: BlurMode::Off,
+            shape: CameraShape::Full,
+            placement: None,
+        };
+        let saved = || CameraShape::Round;
+        assert_eq!(
+            recorded_camera_shape_with(true, Some(snapshot), saved),
+            Some(CameraShape::Full)
+        );
+        assert_eq!(
+            recorded_camera_shape_with(true, None, saved),
+            Some(CameraShape::Round)
+        );
+        assert_eq!(
+            recorded_camera_shape_with(false, Some(snapshot), saved),
+            None
+        );
+        assert_eq!(recorded_camera_shape_with(false, None, saved), None);
     }
 
     #[test]
