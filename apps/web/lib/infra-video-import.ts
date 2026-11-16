@@ -6,7 +6,7 @@ import {
 	developerVideos,
 } from "@cap/database/schema";
 import type { DeveloperVideoResolutionTier } from "@cap/database/types";
-import { and, count, eq, gt, isNull, min } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNull, lt, min } from "drizzle-orm";
 import { apiErrorBody } from "@/lib/api-errors";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
 import { announceDeveloperVideoEvent } from "@/lib/developer-webhook-dispatch";
@@ -31,6 +31,8 @@ import {
 	IMPORT_PART_BYTES,
 	IMPORT_PREFLIGHT_TIMEOUT_MS,
 	IMPORT_RATE_WINDOW_MS,
+	IMPORT_REAP_AFTER_MS,
+	IMPORT_RETRY_WINDOW_MS,
 	IMPORT_STALE_SLOT_MS,
 	IMPORT_STALL_TIMEOUT_MS,
 	IMPORT_TOTAL_TIMEOUT_MS,
@@ -67,6 +69,7 @@ export type ImportErrorCode =
 	| "unsupported_format"
 	| "too_large"
 	| "timeout"
+	| "download_timeout"
 	| "insufficient_credits"
 	| "storage_failed"
 	| "cancelled";
@@ -93,7 +96,11 @@ const IMPORT_MESSAGES: Record<
 	},
 	timeout: {
 		status: 422,
-		hint: `The file must download within ${IMPORT_TOTAL_TIMEOUT_MS / 60_000} minutes. For slow hosts or very large files, use POST /api/developer/v1/uploads instead.`,
+		hint: "Check that the host answers and sends the file steadily, or upload the file with POST /api/developer/v1/uploads instead.",
+	},
+	download_timeout: {
+		status: 422,
+		hint: `The file must download within ${IMPORT_TOTAL_TIMEOUT_MS / 60_000} minutes. Upload larger files with POST /api/developer/v1/uploads, or serve the file from a faster host.`,
 	},
 	storage_failed: {
 		status: 500,
@@ -130,6 +137,18 @@ const URL_NOT_ALLOWED_MESSAGES: Record<string, string> = {
 	private_address: "The URL must point to a public address",
 };
 
+export const downloadTimedOut = () =>
+	new ImportStop(
+		"download_timeout",
+		`The file did not finish downloading within ${IMPORT_TOTAL_TIMEOUT_MS / 60_000} minutes. Upload it with POST /api/developer/v1/uploads, or serve it from a faster host`,
+	);
+
+const preflightTimedOut = () =>
+	new ImportStop(
+		"timeout",
+		`The URL did not start sending the file within ${IMPORT_PREFLIGHT_TIMEOUT_MS / 1000} seconds`,
+	);
+
 const tooLarge = () =>
 	new ImportStop(
 		"too_large",
@@ -144,12 +163,7 @@ export function importStopFor(
 	stopped: "timeout" | "stall" | null,
 ): ImportStop {
 	if (error instanceof ImportStop) return error;
-	if (stopped === "timeout") {
-		return new ImportStop(
-			"timeout",
-			`The file at the URL did not finish downloading within ${IMPORT_TOTAL_TIMEOUT_MS / 60_000} minutes`,
-		);
-	}
+	if (stopped === "timeout") return downloadTimedOut();
 	if (stopped === "stall") {
 		return new ImportStop(
 			"timeout",
@@ -236,6 +250,7 @@ function uploadContentType(contentType: string | null): string | undefined {
 
 type DownloadGuards = PublicMediaGuards & {
 	totalTimeoutMs?: number;
+	timedOut?: () => ImportStop;
 	stallTimeoutMs?: number;
 	maxBytes?: number;
 };
@@ -255,24 +270,32 @@ export async function openImportSource(url: string, guards: DownloadGuards) {
 	);
 	const stallMs = guards.stallTimeoutMs ?? IMPORT_STALL_TIMEOUT_MS;
 	let stall: ReturnType<typeof setTimeout> | undefined;
+	const { signal } = controller;
 	// Settles as soon as either timer fires, even if the source never notices
-	// the abort.
-	const aborted = new Promise<never>((_, reject) => {
-		controller.signal.addEventListener(
-			"abort",
-			() => reject(new Error("The import download was stopped")),
-			{ once: true },
-		);
-	});
-	aborted.catch(() => {});
-	const waiting = async <T>(work: Promise<T>): Promise<T> => {
-		stall = setTimeout(() => stop("stall"), stallMs);
-		try {
-			return await Promise.race([work, aborted]);
-		} finally {
-			clearTimeout(stall);
-		}
-	};
+	// the abort. Each wait adds and removes its own listener: racing every read
+	// against one promise that never settles kept every chunk read reachable,
+	// so a large import held its whole file in memory until the function ran
+	// out of it.
+	const waiting = <T>(work: Promise<T>): Promise<T> =>
+		new Promise<T>((resolve, reject) => {
+			const onAbort = () =>
+				reject(new Error("The import download was stopped"));
+			if (signal.aborted) {
+				work.catch(() => {});
+				onAbort();
+				return;
+			}
+			signal.addEventListener("abort", onAbort, { once: true });
+			stall = setTimeout(() => stop("stall"), stallMs);
+			work.then(resolve, reject).finally(() => {
+				clearTimeout(stall);
+				signal.removeEventListener("abort", onAbort);
+			});
+		});
+	const stopFor = (error: unknown) =>
+		stopped === "timeout" && !(error instanceof ImportStop) && guards.timedOut
+			? guards.timedOut()
+			: importStopFor(error, stopped);
 	const close = () => {
 		clearTimeout(total);
 		clearTimeout(stall);
@@ -301,9 +324,10 @@ export async function openImportSource(url: string, guards: DownloadGuards) {
 		return {
 			contentLength: opened.contentLength,
 			contentType: opened.response.headers.get("content-type"),
-			signal: controller.signal,
+			signal,
 			read: () => waiting(reader.read()),
 			stopped: () => stopped,
+			stopFor,
 			close: () => {
 				reader.cancel().catch(() => {});
 				close();
@@ -311,7 +335,7 @@ export async function openImportSource(url: string, guards: DownloadGuards) {
 		};
 	} catch (error) {
 		close();
-		throw importStopFor(error, stopped);
+		throw stopFor(error);
 	}
 }
 
@@ -356,6 +380,7 @@ export async function preflightImport(
 ): Promise<ImportPreflight> {
 	const source = await openImportSource(url, {
 		totalTimeoutMs: IMPORT_PREFLIGHT_TIMEOUT_MS,
+		timedOut: preflightTimedOut,
 		...guards,
 	});
 	try {
@@ -372,7 +397,7 @@ export async function preflightImport(
 			contentType: source.contentType,
 		};
 	} catch (error) {
-		throw importStopFor(error, source.stopped());
+		throw source.stopFor(error);
 	} finally {
 		source.close();
 	}
@@ -996,8 +1021,8 @@ export async function runInfraVideoImport(
 
 	// A step run again after its function was stopped must not start a second
 	// full download once the first one's time is up.
-	if (now() - job.startedAt.getTime() > IMPORT_TOTAL_TIMEOUT_MS + 60_000) {
-		await failImportedVideo(appId, videoId, importStopFor(null, "timeout"));
+	if (now() - job.startedAt.getTime() > IMPORT_RETRY_WINDOW_MS) {
+		await failImportedVideo(appId, videoId, downloadTimedOut());
 		return "failed";
 	}
 
@@ -1122,7 +1147,7 @@ export async function runInfraVideoImport(
 		if (completed.body.code === "file_too_large") throw tooLarge();
 		throw new ImportStop("storage_failed", "The file could not be stored");
 	} catch (error) {
-		const stop = importStopFor(error, source?.stopped() ?? null);
+		const stop = source ? source.stopFor(error) : importStopFor(error, null);
 		source?.close();
 		if (uploadId) {
 			await abortInfraUpload({ appId, videoId, uploadId }).catch(() => {});
@@ -1140,4 +1165,104 @@ export async function runInfraVideoImport(
 		await failImportedVideo(appId, videoId, stop);
 		return "failed";
 	}
+}
+
+const REAP_BATCH = 50;
+
+class LeftAlone extends Error {}
+
+// A download whose function was stopped (out of memory, a crash, a deploy)
+// records nothing, so its video would wait in uploading for good. Only a
+// video still waiting for its file is failed: one whose completion already
+// moved it on, or that was deleted, is left to the code that owns it. Rows
+// are taken in the same order as failImportedVideo, import first, so the two
+// never wait on each other.
+async function reapImport(appId: string, videoId: string, cutoff: Date) {
+	const stop = downloadTimedOut();
+	try {
+		await db().transaction(async (tx) => {
+			const [claimed] = await tx
+				.update(developerVideoImports)
+				.set({ state: "failed", errorCode: stop.code, finishedAt: new Date() })
+				.where(
+					and(
+						eq(developerVideoImports.videoId, videoId),
+						eq(developerVideoImports.state, "downloading"),
+						lt(developerVideoImports.startedAt, cutoff),
+					),
+				);
+			if (claimed.affectedRows === 0) throw new LeftAlone();
+			const [errored] = await tx
+				.update(developerVideos)
+				.set({
+					status: "errored",
+					errorReason: `Import failed: ${stop.message}`.slice(0, 512),
+				})
+				.where(
+					and(
+						eq(developerVideos.id, videoId),
+						eq(developerVideos.appId, appId),
+						eq(developerVideos.status, "uploading"),
+						isNull(developerVideos.duration),
+						isNull(developerVideos.deletedAt),
+					),
+				);
+			if (errored.affectedRows === 0) throw new LeftAlone();
+		});
+	} catch (error) {
+		if (error instanceof LeftAlone) return false;
+		throw error;
+	}
+	announceDeveloperVideoEvent(
+		{ id: videoId, appId },
+		{ type: "video.errored" },
+	);
+	return true;
+}
+
+export async function reapStalledImports(
+	now: Date = new Date(),
+): Promise<{ reaped: number; failed: number }> {
+	const cutoff = new Date(now.getTime() - IMPORT_REAP_AFTER_MS);
+	let stalled: { appId: string; videoId: string }[];
+	try {
+		stalled = await db()
+			.select({
+				appId: developerVideoImports.appId,
+				videoId: developerVideoImports.videoId,
+			})
+			.from(developerVideoImports)
+			.innerJoin(
+				developerVideos,
+				eq(developerVideos.id, developerVideoImports.videoId),
+			)
+			.where(
+				and(
+					eq(developerVideoImports.state, "downloading"),
+					lt(developerVideoImports.startedAt, cutoff),
+					eq(developerVideos.status, "uploading"),
+					isNull(developerVideos.duration),
+					isNull(developerVideos.deletedAt),
+				),
+			)
+			.orderBy(asc(developerVideoImports.startedAt))
+			.limit(REAP_BATCH);
+	} catch (error) {
+		if (isMissingImportTable(error)) return { reaped: 0, failed: 0 };
+		throw error;
+	}
+	let reaped = 0;
+	let failed = 0;
+	for (const { appId, videoId } of stalled) {
+		try {
+			if (await reapImport(appId, videoId, cutoff)) reaped++;
+		} catch (error) {
+			failed++;
+			console.error("[developer-import] Failed to end a stalled import", {
+				videoId,
+				message: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return { reaped, failed };
 }
