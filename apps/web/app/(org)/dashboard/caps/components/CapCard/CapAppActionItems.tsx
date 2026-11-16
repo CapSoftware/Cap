@@ -4,14 +4,7 @@ import { DropdownMenuItem, DropdownMenuSeparator } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-
-type CapAction = {
-	installationId: string;
-	appName: string;
-	iconUrl: string;
-	actionId: string;
-	title: string;
-};
+import { type CapAction, capActionLabel } from "./cap-action-label";
 
 type ActionResult =
 	| { type: "toast"; message: string }
@@ -74,25 +67,29 @@ export function CapAppActionItems({ videoId }: { videoId: Video.VideoId }) {
 	return (
 		<>
 			<DropdownMenuSeparator />
-			{data.map((action) => (
-				<DropdownMenuItem
-					key={`${action.installationId}:${action.actionId}`}
-					onClick={(event) => {
-						event.stopPropagation();
-						run(action);
-					}}
-					className="flex gap-2 items-center rounded-lg"
-				>
-					<img
-						src={action.iconUrl}
-						alt=""
-						width={14}
-						height={14}
-						className="size-3.5 rounded-[3px]"
-					/>
-					<p className="text-sm text-gray-12">{action.title}</p>
-				</DropdownMenuItem>
-			))}
+			<div className="max-h-[40vh] overflow-y-auto">
+				{data.map((action) => (
+					<DropdownMenuItem
+						key={`${action.installationId}:${action.actionId}`}
+						onClick={(event) => {
+							event.stopPropagation();
+							run(action);
+						}}
+						className="flex gap-2 items-center rounded-lg"
+					>
+						<img
+							src={action.iconUrl}
+							alt=""
+							width={14}
+							height={14}
+							className="size-3.5 rounded-[3px]"
+						/>
+						<p className="text-sm text-gray-12">
+							{capActionLabel(action, data)}
+						</p>
+					</DropdownMenuItem>
+				))}
+			</div>
 		</>
 	);
 }
