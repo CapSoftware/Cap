@@ -58,6 +58,7 @@ pub struct AppStore {
     pub action_errors: HashMap<String, ActionError>,
     account: Option<String>,
     loading_account: Option<String>,
+    refresh_queued: bool,
     cap_actions: HashMap<String, Vec<CapAction>>,
     cap_actions_pending: BTreeSet<String>,
     cap_actions_failed: HashMap<String, Instant>,
@@ -420,18 +421,33 @@ struct SyncResult {
 }
 
 pub fn refresh(cx: &mut App) {
+    start_refresh(cx, false);
+}
+
+// After an install or removal the next sync must start after the change, so
+// one that arrives while a sync is running waits for it instead of being
+// dropped.
+fn refresh_after_change(cx: &mut App) {
+    start_refresh(cx, true);
+}
+
+fn start_refresh(cx: &mut App, after_change: bool) {
     if !cx.has_global::<AppStore>() {
         return;
     }
-    // A sync already running for this account will bring the same answer, so
+    // A sync already running for this account brings the same answer, so
     // opening the Apps page right after launch does not send every request
     // twice. A sign-in or sign-out changes the account and starts a new one.
     let account = current_account();
     let store = cx.global::<AppStore>();
     if store.state == SyncState::Loading && store.loading_account == account {
+        if after_change {
+            cx.update_global::<AppStore, _>(|store, _| store.refresh_queued = true);
+        }
         return;
     }
     let generation = cx.update_global::<AppStore, _>(|store, _| {
+        store.refresh_queued = false;
         store.loading_account = account;
         store.state = SyncState::Loading;
         store.generation += 1;
@@ -473,6 +489,14 @@ pub fn refresh(cx: &mut App) {
             })
         });
         if applied {
+            let queued = cx.update(|cx| {
+                cx.update_global::<AppStore, _>(|store, _| {
+                    std::mem::take(&mut store.refresh_queued)
+                })
+            });
+            if queued {
+                cx.update(refresh_after_change);
+            }
             load_assets(cx, false).await;
         }
     })
@@ -714,7 +738,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
         local.insert(app.id.clone());
         write_local_installs(&local);
         cx.update_global::<AppStore, _>(|store, _| store.local_installs = local);
-        refresh(cx);
+        refresh_after_change(cx);
         return Some(InstallOutcome::Installed);
     }
     cx.update_global::<AppStore, _>(|store, _| {
@@ -747,7 +771,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
                     store.action_errors.insert(id.clone(), ActionError::Install);
                 }
             });
-            refresh(cx);
+            refresh_after_change(cx);
         });
     })
     .detach();
@@ -802,7 +826,7 @@ pub fn uninstall(app_id: String, cx: &mut App) {
                         .insert(app_id.clone(), ActionError::Remove);
                 }
             });
-            refresh(cx);
+            refresh_after_change(cx);
         });
     })
     .detach();
