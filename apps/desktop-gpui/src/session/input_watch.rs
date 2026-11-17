@@ -298,11 +298,10 @@ fn presence_for_current(
 
 fn list_presence(watched: &WatchedInputs) -> Presence {
     Presence {
-        microphone: watched.microphone.as_ref().map(|label| {
-            microphone::MicrophoneFeed::list_names()
-                .iter()
-                .any(|name| name == label)
-        }),
+        microphone: watched
+            .microphone
+            .as_ref()
+            .map(|label| microphone::MicrophoneFeed::is_connected(label)),
         camera: watched.camera.as_ref().map(|device_id| {
             cap_camera::list_cameras().any(|camera| camera.device_id() == device_id)
         }),

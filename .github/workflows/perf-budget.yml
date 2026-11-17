@@ -65,9 +65,20 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Workload groups (scripts/verify/perf-ab.py GROUPS) run side by side, one
+  # runner each; every base and head pair still shares one machine. In one
+  # job they took about 19 minutes, 8 of them on report-only playback.
   measure:
+    name: measure (${{ matrix.group }})
     needs: scope
     if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - export
+          - export-camera-and-seek
+          - playback
     runs-on: blacksmith-6vcpu-macos-26
     timeout-minutes: 120
     steps:
@@ -123,12 +134,13 @@ jobs:
             --head "$RUNNER_TEMP/perf/head/binaries.json" \
             --fixtures "$RUNNER_TEMP/perf/fixtures" \
             --out "$RUNNER_TEMP/perf/runs" \
+            --group "${{ matrix.group }}" \
             --summary "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: perf-budget
+          name: perf-budget-${{ matrix.group }}
           path: ${{ runner.temp }}/perf/runs/**/perf-budget.md
           if-no-files-found: ignore
 
