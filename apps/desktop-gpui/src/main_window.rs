@@ -2508,8 +2508,6 @@ impl MainWindow {
         self.start_recording_as(target, excluded_windows, None, cx);
     }
 
-    /// A Start shortcut's recording: `mode` for this recording only, with the
-    /// selected mode left as it is.
     pub fn start_recording_in_mode(
         &mut self,
         target: ScreenCaptureTarget,

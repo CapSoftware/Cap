@@ -7293,8 +7293,6 @@ pub fn arm_record_picker(kind: TargetType, cx: &mut App) {
     .ok();
 }
 
-/// A picker for one capture in `mode`, with the selected mode left alone:
-/// the shortcuts' half of [`arm_record_picker`] and [`arm_screenshot_picker`].
 pub fn arm_picker(kind: TargetType, mode: Mode, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, _window, cx| view.arm_overlay_for(kind, mode, cx))

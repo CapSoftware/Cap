@@ -118,15 +118,10 @@ impl HotkeyAction {
 /// only (#3597).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModePlan {
-    /// Starts straight away in this mode.
     Start(Mode),
-    /// Opens the picker in this mode.
     Picker(TargetType, Mode),
-    /// Captures without a picker; the mode is never consulted.
     Capture,
-    /// Selects this mode in the main window.
     Select(Mode),
-    /// Has nothing to do with the mode.
     Unrelated,
 }
 

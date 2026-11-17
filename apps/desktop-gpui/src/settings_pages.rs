@@ -199,7 +199,6 @@ struct ListeningHotkey {
     action: &'static str,
     modifiers: gpui::Modifiers,
     error: Option<fn() -> &'static str>,
-    /// Keys another shortcut already uses, waiting for Replace (or Enter).
     conflict: Option<ShortcutConflict>,
 }
 
@@ -979,7 +978,6 @@ fn page_shortcuts() -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
-/// The shortcuts on the page, other than `action`, that `hotkey` runs.
 fn shortcut_owners(
     bindings: &Map<String, Value>,
     hotkey: &Hotkey,
@@ -997,8 +995,6 @@ fn shortcut_owners(
         .collect()
 }
 
-/// Bind `hotkey` to `action`, taking it off every other shortcut so one press
-/// never runs two. Returns the first shortcut it was taken from.
 fn assign_shortcut(
     bindings: &mut Map<String, Value>,
     action: &'static str,
@@ -1707,8 +1703,6 @@ impl SettingsWindow {
         true
     }
 
-    /// Replace pressed (or Enter): the keys move here from the shortcut that
-    /// had them.
     fn shortcuts_replace(&mut self, cx: &mut Context<Self>) {
         let Some(listening) = self.pages.listening.as_mut() else {
             return;
