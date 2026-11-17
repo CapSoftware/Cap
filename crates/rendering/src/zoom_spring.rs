@@ -791,8 +791,6 @@ impl ZoomSegmentIndex {
             .any(|&(start, end)| timeline_secs >= start && timeline_secs <= end)
     }
 
-    /// The first segment starting at or after `timeline_secs` and within
-    /// `lead_secs` of it, for zooms that start moving early.
     fn starting_within(&self, timeline_secs: f64, lead_secs: f64) -> Option<usize> {
         let next = self.starts.partition_point(|&start| start < timeline_secs);
         self.starts
@@ -820,7 +818,6 @@ pub struct ZoomTransformTimeline {
     time_map_ordered: bool,
     recording_clip: Option<u32>,
     prefer_outgoing: bool,
-    /// How far ahead of a segment its zoom-in starts; 0 starts on time.
     lead_in_secs: f64,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
@@ -973,7 +970,9 @@ impl ZoomTransformTimeline {
 
         // Seed the simulations at rest on the t=0 target so the very first
         // frame is already correct and `samples` is never empty.
-        let initial = timeline.targets_at(0.0, XY::new(0.5, 0.5));
+        // Seeded without the lead-in: a zoom starting within it still has to
+        // animate in from the unzoomed opening frame.
+        let initial = timeline.targets_with_lead(0.0, XY::new(0.5, 0.5), 0.0);
         let mut center_sim = SpringMassDamperSimulation::new(spring_config);
         center_sim.set_position(initial.center);
         center_sim.set_velocity(XY::new(0.0, 0.0));
@@ -1263,14 +1262,23 @@ impl ZoomTransformTimeline {
     }
 
     fn targets_at(&self, timeline_secs: f64, held_center: XY<f32>) -> StepTargets {
+        self.targets_with_lead(timeline_secs, held_center, self.lead_in_secs)
+    }
+
+    fn targets_with_lead(
+        &self,
+        timeline_secs: f64,
+        held_center: XY<f32>,
+        lead_in_secs: f64,
+    ) -> StepTargets {
         let snap = self.segment_index.snaps_at(timeline_secs);
         let active = self.segment_index.active_at(timeline_secs).or_else(|| {
             // An early zoom aims at the upcoming segment's framing; instant
             // segments keep their cut.
-            (self.lead_in_secs > 0.0 && !snap)
+            (lead_in_secs > 0.0 && !snap)
                 .then(|| {
                     self.segment_index
-                        .starting_within(timeline_secs, self.lead_in_secs)
+                        .starting_within(timeline_secs, lead_in_secs)
                 })
                 .flatten()
                 .filter(|&index| !self.zoom_segments[index].instant_animation)
@@ -1484,6 +1492,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn early_zooms_near_the_start_still_animate_in() {
+        // Starts before, at and after the lead-in all open unzoomed, and a
+        // start just past the lead-in moves like one just inside it.
+        let spring = early(ScreenMovementSpring::NEW_PROJECT);
+        for start in [0.0, 0.2, 0.35, 0.36, 0.5] {
+            let timeline = precomputed(&[manual_segment(start, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+            assert_eq!(timeline.samples[0].amount, 1.0, "start {start}");
+            assert!(amount_at(&timeline, 0.016) < 1.1, "start {start}");
+        }
+        let at_lead = precomputed(&[manual_segment(0.35, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+        let after_lead = precomputed(&[manual_segment(0.36, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+        assert!((amount_at(&at_lead, 0.6) - amount_at(&after_lead, 0.616)).abs() < 0.05);
     }
 
     #[test]
