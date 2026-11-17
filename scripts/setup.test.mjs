@@ -17,9 +17,43 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { crc32 } from "node:zlib";
 
 const execFile = promisify(execFileCallback);
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+
+// A stored (uncompressed) zip, so the fixture needs no zip tool.
+function zipArchive(name, contents) {
+	const fileName = Buffer.from(name);
+	const data = Buffer.from(contents);
+	const header = (signature, size) => {
+		const buffer = Buffer.alloc(size);
+		buffer.writeUInt32LE(signature, 0);
+		return buffer;
+	};
+	const local = header(0x04034b50, 30);
+	local.writeUInt16LE(20, 4);
+	local.writeUInt16LE(0x21, 12);
+	local.writeUInt32LE(crc32(data), 14);
+	local.writeUInt32LE(data.length, 18);
+	local.writeUInt32LE(data.length, 22);
+	local.writeUInt16LE(fileName.length, 26);
+	const central = header(0x02014b50, 46);
+	central.writeUInt16LE(20, 4);
+	central.writeUInt16LE(20, 6);
+	central.writeUInt16LE(0x21, 14);
+	central.writeUInt32LE(crc32(data), 16);
+	central.writeUInt32LE(data.length, 20);
+	central.writeUInt32LE(data.length, 24);
+	central.writeUInt16LE(fileName.length, 28);
+	const centralOffset = local.length + fileName.length + data.length;
+	const end = header(0x06054b50, 22);
+	end.writeUInt16LE(1, 8);
+	end.writeUInt16LE(1, 10);
+	end.writeUInt32LE(central.length + fileName.length, 12);
+	end.writeUInt32LE(centralOffset, 16);
+	return Buffer.concat([local, fileName, data, central, fileName, end]);
+}
 
 test(
 	"setup retries failed downloads without poisoning the archive cache",
@@ -57,26 +91,23 @@ test(
 		const nativeLibrary = "synthetic native library\n";
 		const onnxLibrary = "synthetic ONNX library\n";
 		const archives = new Map();
-		for (const [url, entry, contents] of [
-			[nativeUrl, "lib/libavcodec.so.61", nativeLibrary],
-			[onnxUrl, "runtimes/linux-x64/native/libonnxruntime.so", onnxLibrary],
-		]) {
-			const archive = path.join(fixture, "assets", path.basename(url));
+		{
+			const archive = path.join(fixture, "assets", nativeName);
 			const directory = `${archive}.contents`;
-			mkdirSync(path.dirname(path.join(directory, entry)), { recursive: true });
-			writeFileSync(path.join(directory, entry), contents);
-			if (url.endsWith(".nupkg"))
-				await execFile(
-					"bsdtar",
-					["--format", "zip", "-cf", archive, "-C", directory, "runtimes"],
-					{ signal: t.signal },
-				);
-			else
-				await execFile("tar", ["-cJf", archive, "-C", directory, "."], {
-					signal: t.signal,
-				});
-			archives.set(url, readFileSync(archive));
+			mkdirSync(path.join(directory, "lib"), { recursive: true });
+			writeFileSync(
+				path.join(directory, "lib/libavcodec.so.61"),
+				nativeLibrary,
+			);
+			await execFile("tar", ["-cJf", archive, "-C", directory, "."], {
+				signal: t.signal,
+			});
+			archives.set(nativeUrl, readFileSync(archive));
 		}
+		archives.set(
+			onnxUrl,
+			zipArchive("runtimes/linux-x64/native/libonnxruntime.so", onnxLibrary),
+		);
 		// The synthetic package stands in for Microsoft's, so pin its hash in
 		// this fixture's copy of setup.js.
 		const onnxHash = createHash("sha256")
