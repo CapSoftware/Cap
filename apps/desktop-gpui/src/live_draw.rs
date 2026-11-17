@@ -1061,10 +1061,11 @@ mod tests {
             draft.seal();
         }
         let runs: Vec<&[Pt]> = chunks(&draft.points).collect();
-        assert_eq!(runs.len(), 3);
-        assert_eq!(draft.sealed.len(), runs.len() - 1);
-        assert_eq!(&draft.points[draft.sealed_from..], runs[runs.len() - 1]);
-        assert_eq!(draft.into_paths().map(|paths| paths.len()), Some(runs.len()));
+        let count = runs.len();
+        assert_eq!(count, 3);
+        assert_eq!(draft.sealed.len(), count - 1);
+        assert_eq!(&draft.points[draft.sealed_from..], runs[count - 1]);
+        assert_eq!(draft.into_paths().map(|paths| paths.len()), Some(count));
     }
 
     #[test]

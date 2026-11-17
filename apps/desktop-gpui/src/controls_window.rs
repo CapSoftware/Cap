@@ -364,11 +364,7 @@ impl ControlsWindow {
                     .size(px(18.))
                     .text_color(icon_color),
             )
-            .tooltip(move |_, cx| {
-                ui::Tooltip::new(&theme, label)
-                    .keys(keys.clone())
-                    .view(cx)
-            })
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).keys(keys.clone()).view(cx))
             .when(available, |this| {
                 this.active(|style| style.bg(theme.blue_4))
                     .on_click(|_, _, cx| live_draw::toggle(cx))
@@ -411,11 +407,16 @@ impl ControlsWindow {
                     this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
                         .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
                 })
-                .child(svg().path(tool.icon()).size(px(18.)).text_color(if selected {
-                    theme.blue_9
-                } else {
-                    theme.gray_11
-                }))
+                .child(
+                    svg()
+                        .path(tool.icon())
+                        .size(px(18.))
+                        .text_color(if selected {
+                            theme.blue_9
+                        } else {
+                            theme.gray_11
+                        }),
+                )
                 .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
                 .on_click(move |_, _, cx| live_draw::set_tool(tool, cx))
         });
@@ -457,11 +458,15 @@ impl ControlsWindow {
         let undo = self
             .action_button("draw-undo", "icons/undo.svg", !has_ink)
             .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::undo()).view(cx))
-            .when(has_ink, |this| this.on_click(|_, _, cx| live_draw::undo(cx)));
+            .when(has_ink, |this| {
+                this.on_click(|_, _, cx| live_draw::undo(cx))
+            });
         let clear = self
             .action_button("draw-clear", "icons/eraser.svg", !has_ink)
             .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::clear()).view(cx))
-            .when(has_ink, |this| this.on_click(|_, _, cx| live_draw::clear(cx)));
+            .when(has_ink, |this| {
+                this.on_click(|_, _, cx| live_draw::clear(cx))
+            });
 
         div()
             .h(px(40.))
@@ -809,9 +814,7 @@ impl ControlsWindow {
                                     }))
                                 },
                             ))
-                            .when(draw_offered, |this| {
-                                this.child(self.render_draw(cx))
-                            })
+                            .when(draw_offered, |this| this.child(self.render_draw(cx)))
                             // Studio's marker button takes the slot of the
                             // settings menu, which has no popover yet.
                             .child(if studio {

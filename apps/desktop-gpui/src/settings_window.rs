@@ -3967,10 +3967,11 @@ impl SettingsWindow {
                         self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
                             .into_any_element(),
                     ),
-                ]
-                .into_iter()
-                .chain(keep_drawings)
-                .collect())
+                ])
+                .when_some(keep_drawings, |card, row| {
+                    card.child(ui::Card::settings_divider(&self.theme))
+                        .child(row)
+                })
                 .into_any_element(),
             ],
         )
