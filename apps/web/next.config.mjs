@@ -45,6 +45,7 @@ const nextConfig = {
 		"/infra/llms-full.txt": ["./content/docs/api/*.mdx"],
 	},
 	transpilePackages: [
+		"@cap/app-store",
 		"@cap/ui",
 		"@cap/utils",
 		"@cap/web-api-contract",
@@ -108,6 +109,16 @@ const nextConfig = {
 				source: "/((?!api/auth/).*)",
 				headers: [
 					{ key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+				],
+			},
+			{
+				source: "/app-store/:path*",
+				headers: [
+					{
+						key: "Cache-Control",
+						value: "public, max-age=31536000, immutable",
+					},
+					{ key: "Access-Control-Allow-Origin", value: "*" },
 				],
 			},
 		];

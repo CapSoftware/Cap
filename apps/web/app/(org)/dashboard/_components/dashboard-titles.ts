@@ -4,6 +4,7 @@ const exact: Record<string, DashboardCrumb[]> = {
 	"/dashboard/caps": [{ label: "My Caps" }],
 	"/dashboard/caps/record": [{ label: "Record a Cap" }],
 	"/dashboard/analytics": [{ label: "Analytics" }],
+	"/dashboard/apps": [{ label: "Apps" }],
 	"/dashboard/import": [{ label: "Import Media" }],
 	"/dashboard/import/file": [
 		{ label: "Import Media", href: "/dashboard/import" },
@@ -23,6 +24,7 @@ const exact: Record<string, DashboardCrumb[]> = {
 const prefixes: [string, DashboardCrumb[]][] = [
 	["/dashboard/settings/organization", [{ label: "Organization Settings" }]],
 	["/dashboard/folder/", [{ label: "My Caps", href: "/dashboard/caps" }]],
+	["/dashboard/apps/", [{ label: "Apps", href: "/dashboard/apps" }]],
 ];
 
 export function dashboardTitle(pathname: string | null): DashboardCrumb[] {

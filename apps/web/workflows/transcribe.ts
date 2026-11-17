@@ -21,6 +21,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
+import { emitAppStoreEventSafely } from "@/lib/app-store/announce";
 import {
 	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,
@@ -908,6 +909,11 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	await emitAppStoreEventSafely(
+		"cap.transcript.ready",
+		videoId as Video.VideoId,
+	);
 
 	// The canonical transcript supersedes the provisional live transcript, so
 	// drop the artifact and its metadata flag. Never fatal: a leftover live

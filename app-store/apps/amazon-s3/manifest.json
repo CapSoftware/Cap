@@ -1,0 +1,14 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "amazon-s3",
+	"name": "Amazon S3",
+	"version": "1.0.0",
+	"description": "Store your recordings in your own S3 or S3-compatible bucket, such as Cloudflare R2.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["storage"],
+	"keywords": ["bucket", "r2", "storage"],
+	"privacyPolicy": "https://cap.so/privacy",
+	"builtin": "amazon-s3"
+}

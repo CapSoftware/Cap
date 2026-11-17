@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { emitCapReadySafely } from "@/lib/app-store/announce";
 import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
@@ -419,6 +420,7 @@ async function queueProcessedVideoTranscription(
 ): Promise<void> {
 	"use step";
 
+	await emitCapReadySafely(Video.VideoId.make(videoId));
 	if (!serverEnv().ASSEMBLY_API_KEY) return;
 	try {
 		const [owner] = await db()

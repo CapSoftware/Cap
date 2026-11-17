@@ -16,6 +16,7 @@ import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
 import { setGeneratedAiContent } from "@/lib/ai-content-metadata";
+import { emitAppStoreEventSafely } from "@/lib/app-store/announce";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -401,6 +402,8 @@ async function saveResults(
 		.update(videos)
 		.set({ metadata: metadataUpdate })
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	await emitAppStoreEventSafely("cap.summary.ready", videoId as Video.VideoId);
 
 	if (
 		generatedTitle &&

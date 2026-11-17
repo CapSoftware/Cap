@@ -276,6 +276,66 @@ pub struct CaptionPreset {
     pub fade_duration: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptionPresetValues {
+    pub id: String,
+    pub font_weight: u32,
+    pub size: u32,
+    pub color: String,
+    pub background_color: String,
+    pub background_opacity: u32,
+    pub outline: bool,
+    pub outline_color: String,
+    pub highlight_color: String,
+    pub active_word_highlight: bool,
+    pub highlight_style: String,
+    pub animation: String,
+    pub uppercase: bool,
+    pub fade_duration: f32,
+}
+
+impl From<&CaptionPreset> for CaptionPresetValues {
+    fn from(preset: &CaptionPreset) -> Self {
+        Self {
+            id: preset.id.to_string(),
+            font_weight: preset.font_weight,
+            size: preset.size,
+            color: preset.color.to_string(),
+            background_color: preset.background_color.to_string(),
+            background_opacity: preset.background_opacity,
+            outline: preset.outline,
+            outline_color: preset.outline_color.to_string(),
+            highlight_color: preset.highlight_color.to_string(),
+            active_word_highlight: preset.active_word_highlight,
+            highlight_style: preset.highlight_style.to_string(),
+            animation: preset.animation.to_string(),
+            uppercase: preset.uppercase,
+            fade_duration: preset.fade_duration,
+        }
+    }
+}
+
+impl CaptionPresetValues {
+    pub fn from_app(app_id: &str, style: &crate::app_store::CaptionStyle) -> Self {
+        Self {
+            id: format!("app:{app_id}:{}", style.id),
+            font_weight: style.font_weight,
+            size: style.size,
+            color: style.color.clone(),
+            background_color: style.background_color.clone(),
+            background_opacity: style.background_opacity.min(100),
+            outline: style.outline,
+            outline_color: style.outline_color.clone(),
+            highlight_color: style.highlight_color.clone(),
+            active_word_highlight: style.active_word_highlight,
+            highlight_style: style.highlight_style.clone(),
+            animation: style.animation.clone(),
+            uppercase: style.uppercase,
+            fade_duration: style.fade_duration.clamp(0., 1.),
+        }
+    }
+}
+
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
     CaptionPreset {
         id: "classic",
@@ -3406,13 +3466,25 @@ impl EditorWindow {
     ) -> AnyElement {
         let theme = self.theme;
         let active = settings.preset.clone();
+        let app_styles: Vec<(CaptionPresetValues, SharedString, Option<SharedString>)> =
+            crate::app_store::try_get(cx)
+                .map(|store| {
+                    store
+                        .caption_styles()
+                        .into_iter()
+                        .map(|(app_id, style)| {
+                            (
+                                CaptionPresetValues::from_app(&app_id, &style),
+                                SharedString::from(style.name),
+                                style.description.map(SharedString::from),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
-        div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(px(8.))
-            .children(CAPTION_PRESETS.iter().enumerate().map(|(index, preset)| {
+        let built_in = div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+            CAPTION_PRESETS.iter().enumerate().map(|(index, preset)| {
                 let selected = active == preset.id;
                 div()
                     .id(SharedString::from(format!("caption-preset-{}", preset.id)))
@@ -3440,7 +3512,7 @@ impl EditorWindow {
                             inset: false,
                         }])
                     })
-                    .child(self.caption_preset_preview(preset))
+                    .child(self.caption_preset_preview(&CaptionPresetValues::from(preset)))
                     .child(
                         div()
                             .px(px(2.))
@@ -3456,20 +3528,91 @@ impl EditorWindow {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.apply_caption_preset(index, window, cx);
                     }))
-            }))
+            }),
+        );
+
+        if app_styles.is_empty() {
+            return built_in.into_any_element();
+        }
+
+        let from_apps =
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(8.))
+                .children(app_styles.into_iter().map(|(values, name, description)| {
+                    let selected = active == values.id;
+                    let preview = self.caption_preset_preview(&values);
+                    div()
+                        .id(SharedString::from(format!("caption-preset-{}", values.id)))
+                        .w(px(187.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .p(px(6.))
+                        .rounded(px(8.))
+                        .bg(self.panel_bg())
+                        .border_1()
+                        .border_color(if selected {
+                            Hsla::from(theme.blue_9)
+                        } else {
+                            Hsla::from(theme.gray_3)
+                        })
+                        .when(selected, |this| {
+                            this.shadow(vec![gpui::BoxShadow {
+                                color: Hsla::from(theme.blue_9),
+                                offset: gpui::point(px(0.), px(0.)),
+                                blur_radius: px(0.),
+                                spread_radius: px(1.),
+                                inset: false,
+                            }])
+                        })
+                        .child(preview)
+                        .child(
+                            div()
+                                .px(px(2.))
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(name.clone()),
+                        )
+                        .when_some(description, |this, description| {
+                            this.tooltip(move |_window, cx| {
+                                ui::Tooltip::new(&theme, description.clone()).view(cx)
+                            })
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.apply_caption_values(values.clone(), window, cx);
+                        }))
+                }));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(built_in)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(tr::editor::app_store::from_apps()),
+            )
+            .child(from_apps)
             .into_any_element()
     }
 
     /// `CaptionPresetPreview` (`CaptionsTab.tsx:182-238`).
-    fn caption_preset_preview(&self, preset: &CaptionPreset) -> AnyElement {
+    fn caption_preset_preview(&self, preset: &CaptionPresetValues) -> AnyElement {
         let words = ["Make", "it", "pop"];
-        let color = crate::editor_sidebar::hex_to_rgb(preset.color)
+        let color = crate::editor_sidebar::hex_to_rgb(&preset.color)
             .map(|rgba| gpui::rgba(u32::from_be_bytes(rgba)))
             .unwrap_or_else(|| gpui::rgba(0xffffffff));
-        let highlight = crate::editor_sidebar::hex_to_rgb(preset.highlight_color)
+        let highlight = crate::editor_sidebar::hex_to_rgb(&preset.highlight_color)
             .map(|rgba| gpui::rgba(u32::from_be_bytes(rgba)))
             .unwrap_or_else(|| gpui::rgba(0xffffffff));
-        let background = crate::editor_sidebar::hex_to_rgb(preset.background_color)
+        let background = crate::editor_sidebar::hex_to_rgb(&preset.background_color)
             .map(|rgba| {
                 let mut colour = Hsla::from(gpui::rgba(u32::from_be_bytes(rgba)));
                 colour.a = preset.background_opacity as f32 / 100.;
@@ -3530,6 +3673,15 @@ impl EditorWindow {
         let Some(preset) = CAPTION_PRESETS.get(index) else {
             return;
         };
+        self.apply_caption_values(CaptionPresetValues::from(preset), window, cx);
+    }
+
+    fn apply_caption_values(
+        &mut self,
+        preset: CaptionPresetValues,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.edit_project("caption-preset", window, cx, move |project| {
             // Unlike the keyboard tab, the source's caption setters bail when
             // there is no captions block. `applyCaptionPreset` goes through the
@@ -3538,18 +3690,18 @@ impl EditorWindow {
                 return false;
             };
             let settings = &mut captions.settings;
-            settings.preset = preset.id.to_string();
+            settings.preset = preset.id;
             settings.font_weight = preset.font_weight;
             settings.size = preset.size;
-            settings.color = preset.color.to_string();
-            settings.background_color = preset.background_color.to_string();
+            settings.color = preset.color;
+            settings.background_color = preset.background_color;
             settings.background_opacity = preset.background_opacity;
             settings.outline = preset.outline;
-            settings.outline_color = preset.outline_color.to_string();
-            settings.highlight_color = preset.highlight_color.to_string();
+            settings.outline_color = preset.outline_color;
+            settings.highlight_color = preset.highlight_color;
             settings.active_word_highlight = preset.active_word_highlight;
-            settings.highlight_style = preset.highlight_style.to_string();
-            settings.animation = preset.animation.to_string();
+            settings.highlight_style = preset.highlight_style;
+            settings.animation = preset.animation;
             settings.uppercase = preset.uppercase;
             settings.fade_duration = preset.fade_duration;
             true

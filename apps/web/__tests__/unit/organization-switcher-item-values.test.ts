@@ -34,6 +34,7 @@ vi.mock("@/components/Tooltip", () => ({
 }));
 vi.mock("@/components/UsageButton", () => ({ UsageButton: () => null }));
 vi.mock("@/app/(org)/dashboard/_components/AnimatedIcons", () => ({
+	AppsIcon: () => null,
 	CapIcon: () => null,
 	ChartLineIcon: () => null,
 	CodeIcon: () => null,

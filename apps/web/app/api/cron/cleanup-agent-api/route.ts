@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { cleanupExpiredAgentApiRecords } from "@/lib/agent-api-cleanup";
+import { cleanupAppStoreEvents } from "@/lib/app-store/cleanup";
 import { cleanupExpiredMcpRecords } from "@/lib/mcp-cleanup";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,9 @@ export async function GET(request: Request) {
 	const deleted = await cleanupExpiredAgentApiRecords();
 	await cleanupExpiredMcpRecords().catch((error: unknown) => {
 		console.error("MCP credential cleanup failed", error);
+	});
+	await cleanupAppStoreEvents().catch((error: unknown) => {
+		console.error("App Store event cleanup failed", error);
 	});
 	return NextResponse.json({ success: true, deleted });
 }

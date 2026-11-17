@@ -1,0 +1,14 @@
+{
+	"$schema": "../../manifest.schema.json",
+	"apiVersion": 1,
+	"id": "slack",
+	"name": "Slack",
+	"version": "1.0.0",
+	"description": "Play Cap links right inside Slack with rich previews for everyone in your workspace.",
+	"author": { "name": "Cap", "github": "CapSoftware" },
+	"license": "MIT",
+	"categories": ["communication"],
+	"keywords": ["unfurl", "chat", "preview"],
+	"privacyPolicy": "https://cap.so/privacy",
+	"builtin": "slack"
+}

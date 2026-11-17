@@ -15,6 +15,13 @@ describe("dashboard top bar titles", () => {
 		]);
 	});
 
+	it("titles the App Store and links app pages back to it", () => {
+		expect(labels("/dashboard/apps")).toEqual(["Apps"]);
+		expect(dashboardTitle("/dashboard/apps/discord")).toEqual([
+			{ label: "Apps", href: "/dashboard/apps" },
+		]);
+	});
+
 	it("names browse spaces the same as the space breadcrumb parent", () => {
 		expect(labels("/dashboard/spaces/browse")).toEqual(["Spaces"]);
 	});

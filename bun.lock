@@ -127,6 +127,7 @@
         "@aws-sdk/cloudfront-signer": "^3.821.0",
         "@aws-sdk/s3-presigned-post": "^3.485.0",
         "@aws-sdk/s3-request-presigner": "^3.485.0",
+        "@cap/app-store": "workspace:*",
         "@cap/database": "workspace:*",
         "@cap/env": "workspace:*",
         "@cap/infra-mcp": "workspace:*",
@@ -295,6 +296,15 @@
         "sst": "3.17.14",
       },
     },
+    "packages/app-store": {
+      "name": "@cap/app-store",
+      "dependencies": {
+        "effect": "^3.18.4",
+      },
+      "devDependencies": {
+        "vitest": "^3.2.0",
+      },
+    },
     "packages/config": {
       "name": "config",
       "version": "0.0.0",
@@ -372,7 +382,7 @@
     },
     "packages/infra-mcp": {
       "name": "@cap/infra-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "cap-infra-mcp": "./dist/bin.js",
       },
@@ -827,6 +837,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.2.0", "", { "os": "win32", "cpu": "x64" }, "sha512-Nawu5nHjP/zPKTIryh2AavzTc/KEg4um/MxWdXW0A6P/RZOyIpa7+QSjeXwAwX/utJGaCoXRPWtF3m5U/bB3Ww=="],
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
+
+    "@cap/app-store": ["@cap/app-store@workspace:packages/app-store"],
 
     "@cap/chrome-extension": ["@cap/chrome-extension@workspace:apps/chrome-extension"],
 

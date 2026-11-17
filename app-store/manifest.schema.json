@@ -1,0 +1,826 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$defs": {
+		"CapAppManifest": {
+			"type": "object",
+			"required": [
+				"apiVersion",
+				"id",
+				"name",
+				"version",
+				"description",
+				"author",
+				"license",
+				"categories"
+			],
+			"properties": {
+				"$schema": {
+					"type": "string"
+				},
+				"apiVersion": {
+					"type": "number",
+					"enum": [1],
+					"description": "The App Store API version this app is written for."
+				},
+				"id": {
+					"type": "string",
+					"description": "Unique kebab-case id. Must match the folder name.",
+					"title": "maxLength(40)",
+					"minLength": 3,
+					"maxLength": 40,
+					"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+				},
+				"name": {
+					"type": "string",
+					"description": "Shown in the store. Title Case, 2 to 30 characters.",
+					"title": "maxLength(30)",
+					"minLength": 2,
+					"maxLength": 30
+				},
+				"version": {
+					"type": "string",
+					"description": "Semver like 1.2.3. Raise it whenever anything in the app folder changes.",
+					"pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+				},
+				"description": {
+					"type": "string",
+					"description": "One sentence, 10 to 140 characters, ending with a full stop.",
+					"title": "maxLength(140)",
+					"minLength": 10,
+					"maxLength": 140
+				},
+				"author": {
+					"type": "object",
+					"required": ["name", "github"],
+					"properties": {
+						"name": {
+							"type": "string",
+							"description": "a string at most 60 character(s) long",
+							"title": "maxLength(60)",
+							"minLength": 1,
+							"maxLength": 60
+						},
+						"github": {
+							"type": "string",
+							"description": "a string matching the pattern ^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$",
+							"pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+						},
+						"url": {
+							"type": "string",
+							"description": "a string matching the pattern ^https:\\/\\/[^\\s]+$",
+							"title": "maxLength(512)",
+							"maxLength": 512,
+							"pattern": "^https:\\/\\/[^\\s]+$"
+						}
+					},
+					"additionalProperties": false
+				},
+				"license": {
+					"type": "string",
+					"enum": [
+						"MIT",
+						"Apache-2.0",
+						"BSD-2-Clause",
+						"BSD-3-Clause",
+						"ISC",
+						"MPL-2.0",
+						"Unlicense",
+						"CC0-1.0",
+						"CC-BY-4.0"
+					],
+					"description": "The license your app is published under."
+				},
+				"categories": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"enum": [
+							"backgrounds",
+							"captions",
+							"color",
+							"communication",
+							"productivity",
+							"project-management",
+							"documentation",
+							"storage",
+							"automation",
+							"developer-tools",
+							"sales",
+							"education"
+						]
+					},
+					"description": "an array of at most 3 item(s)",
+					"title": "maxItems(3)",
+					"minItems": 1,
+					"maxItems": 3
+				},
+				"keywords": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"description": "a string at most 24 character(s) long",
+						"title": "maxLength(24)",
+						"minLength": 2,
+						"maxLength": 24
+					},
+					"description": "an array of at most 8 item(s)",
+					"title": "maxItems(8)",
+					"maxItems": 8
+				},
+				"homepage": {
+					"type": "string",
+					"description": "a string matching the pattern ^https:\\/\\/[^\\s]+$",
+					"title": "maxLength(512)",
+					"maxLength": 512,
+					"pattern": "^https:\\/\\/[^\\s]+$"
+				},
+				"support": {
+					"type": "string",
+					"description": "a string matching the pattern ^https:\\/\\/[^\\s]+$",
+					"title": "maxLength(512)",
+					"maxLength": 512,
+					"pattern": "^https:\\/\\/[^\\s]+$"
+				},
+				"privacyPolicy": {
+					"type": "string",
+					"description": "Required for apps with a connection, because Cap sends them data.",
+					"title": "maxLength(512)",
+					"maxLength": 512,
+					"pattern": "^https:\\/\\/[^\\s]+$"
+				},
+				"screenshots": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"description": "a string matching the pattern ^(?:[a-z0-9][a-z0-9_-]*\\/)*[a-z0-9][a-z0-9_-]*\\.(?:png|jpg|jpeg|webp)$",
+						"pattern": "^(?:[a-z0-9][a-z0-9_-]*\\/)*[a-z0-9][a-z0-9_-]*\\.(?:png|jpg|jpeg|webp)$"
+					},
+					"description": "an array of at most 6 item(s)",
+					"title": "maxItems(6)",
+					"maxItems": 6
+				},
+				"builtin": {
+					"type": "string",
+					"enum": ["slack", "amazon-s3", "google-drive"],
+					"description": "Only for apps published by Cap that use one of Cap's own integrations."
+				},
+				"backgrounds": {
+					"type": "array",
+					"items": {
+						"anyOf": [
+							{
+								"type": "object",
+								"required": ["id", "name", "image"],
+								"properties": {
+									"id": {
+										"type": "string",
+										"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+										"title": "maxLength(40)",
+										"minLength": 1,
+										"maxLength": 40,
+										"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+									},
+									"name": {
+										"type": "string",
+										"description": "a string at most 30 character(s) long",
+										"title": "maxLength(30)",
+										"minLength": 1,
+										"maxLength": 30
+									},
+									"image": {
+										"type": "string",
+										"description": "a string matching the pattern ^(?:[a-z0-9][a-z0-9_-]*\\/)*[a-z0-9][a-z0-9_-]*\\.(?:png|jpg|jpeg|webp)$",
+										"pattern": "^(?:[a-z0-9][a-z0-9_-]*\\/)*[a-z0-9][a-z0-9_-]*\\.(?:png|jpg|jpeg|webp)$"
+									}
+								},
+								"additionalProperties": false
+							},
+							{
+								"type": "object",
+								"required": ["id", "name", "gradient"],
+								"properties": {
+									"id": {
+										"type": "string",
+										"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+										"title": "maxLength(40)",
+										"minLength": 1,
+										"maxLength": 40,
+										"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+									},
+									"name": {
+										"type": "string",
+										"description": "a string at most 30 character(s) long",
+										"title": "maxLength(30)",
+										"minLength": 1,
+										"maxLength": 30
+									},
+									"gradient": {
+										"type": "object",
+										"required": ["from", "to", "angle"],
+										"properties": {
+											"from": {
+												"type": "string",
+												"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+												"pattern": "^#[0-9A-Fa-f]{6}$"
+											},
+											"to": {
+												"type": "string",
+												"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+												"pattern": "^#[0-9A-Fa-f]{6}$"
+											},
+											"angle": {
+												"$ref": "#/$defs/Int",
+												"description": "a number between 0 and 359",
+												"title": "between(0, 359)",
+												"minimum": 0,
+												"maximum": 359
+											}
+										},
+										"additionalProperties": false
+									}
+								},
+								"additionalProperties": false
+							},
+							{
+								"type": "object",
+								"required": ["id", "name", "color"],
+								"properties": {
+									"id": {
+										"type": "string",
+										"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+										"title": "maxLength(40)",
+										"minLength": 1,
+										"maxLength": 40,
+										"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+									},
+									"name": {
+										"type": "string",
+										"description": "a string at most 30 character(s) long",
+										"title": "maxLength(30)",
+										"minLength": 1,
+										"maxLength": 30
+									},
+									"color": {
+										"type": "string",
+										"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+										"pattern": "^#[0-9A-Fa-f]{6}$"
+									}
+								},
+								"additionalProperties": false
+							}
+						]
+					},
+					"description": "an array of at most 24 item(s)",
+					"title": "maxItems(24)",
+					"minItems": 1,
+					"maxItems": 24
+				},
+				"captionStyles": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"required": [
+							"id",
+							"name",
+							"fontWeight",
+							"size",
+							"color",
+							"backgroundColor",
+							"backgroundOpacity",
+							"outline",
+							"outlineColor",
+							"highlightColor",
+							"activeWordHighlight",
+							"highlightStyle",
+							"animation",
+							"uppercase",
+							"fadeDuration"
+						],
+						"properties": {
+							"id": {
+								"type": "string",
+								"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+								"title": "maxLength(40)",
+								"minLength": 1,
+								"maxLength": 40,
+								"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+							},
+							"name": {
+								"type": "string",
+								"description": "a string at most 30 character(s) long",
+								"title": "maxLength(30)",
+								"minLength": 1,
+								"maxLength": 30
+							},
+							"description": {
+								"type": "string",
+								"description": "a string at most 80 character(s) long",
+								"title": "maxLength(80)",
+								"minLength": 1,
+								"maxLength": 80
+							},
+							"fontWeight": {
+								"type": "number",
+								"enum": [400, 500, 700]
+							},
+							"size": {
+								"$ref": "#/$defs/Int",
+								"description": "a number between 12 and 200",
+								"title": "between(12, 200)",
+								"minimum": 12,
+								"maximum": 200
+							},
+							"color": {
+								"type": "string",
+								"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+								"pattern": "^#[0-9A-Fa-f]{6}$"
+							},
+							"backgroundColor": {
+								"type": "string",
+								"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+								"pattern": "^#[0-9A-Fa-f]{6}$"
+							},
+							"backgroundOpacity": {
+								"$ref": "#/$defs/Int",
+								"description": "a number between 0 and 100",
+								"title": "between(0, 100)",
+								"minimum": 0,
+								"maximum": 100
+							},
+							"outline": {
+								"type": "boolean"
+							},
+							"outlineColor": {
+								"type": "string",
+								"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+								"pattern": "^#[0-9A-Fa-f]{6}$"
+							},
+							"highlightColor": {
+								"type": "string",
+								"description": "a string matching the pattern ^#[0-9A-Fa-f]{6}$",
+								"pattern": "^#[0-9A-Fa-f]{6}$"
+							},
+							"activeWordHighlight": {
+								"type": "boolean"
+							},
+							"highlightStyle": {
+								"type": "string",
+								"enum": ["color", "pill"]
+							},
+							"animation": {
+								"type": "string",
+								"enum": ["none", "bounce", "pop"]
+							},
+							"uppercase": {
+								"type": "boolean"
+							},
+							"fadeDuration": {
+								"type": "number",
+								"description": "a number between 0 and 1",
+								"title": "between(0, 1)",
+								"minimum": 0,
+								"maximum": 1
+							}
+						},
+						"additionalProperties": false
+					},
+					"description": "an array of at most 12 item(s)",
+					"title": "maxItems(12)",
+					"minItems": 1,
+					"maxItems": 12
+				},
+				"colorLooks": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"required": ["id", "name", "values"],
+						"properties": {
+							"id": {
+								"type": "string",
+								"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+								"title": "maxLength(40)",
+								"minLength": 1,
+								"maxLength": 40,
+								"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+							},
+							"name": {
+								"type": "string",
+								"description": "a string at most 30 character(s) long",
+								"title": "maxLength(30)",
+								"minLength": 1,
+								"maxLength": 30
+							},
+							"description": {
+								"type": "string",
+								"description": "a string at most 80 character(s) long",
+								"title": "maxLength(80)",
+								"minLength": 1,
+								"maxLength": 80
+							},
+							"values": {
+								"type": "object",
+								"required": [],
+								"properties": {
+									"intensity": {
+										"type": "number",
+										"description": "a number between 0 and 1",
+										"title": "between(0, 1)",
+										"minimum": 0,
+										"maximum": 1
+									},
+									"exposure": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"contrast": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"saturation": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"temperature": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"tint": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"fade": {
+										"type": "number",
+										"description": "a number between 0 and 1",
+										"title": "between(0, 1)",
+										"minimum": 0,
+										"maximum": 1
+									},
+									"splitTone": {
+										"type": "number",
+										"description": "a number between -1 and 1",
+										"title": "between(-1, 1)",
+										"minimum": -1,
+										"maximum": 1
+									},
+									"vignette": {
+										"type": "number",
+										"description": "a number between 0 and 1",
+										"title": "between(0, 1)",
+										"minimum": 0,
+										"maximum": 1
+									},
+									"grain": {
+										"type": "number",
+										"description": "a number between 0 and 1",
+										"title": "between(0, 1)",
+										"minimum": 0,
+										"maximum": 1
+									}
+								},
+								"additionalProperties": false
+							}
+						},
+						"additionalProperties": false
+					},
+					"description": "an array of at most 12 item(s)",
+					"title": "maxItems(12)",
+					"minItems": 1,
+					"maxItems": 12
+				},
+				"connection": {
+					"type": "object",
+					"required": ["url"],
+					"properties": {
+						"url": {
+							"type": "string",
+							"description": "Base URL of your server. Cap sends signed requests to {url}/lifecycle, {url}/events and {url}/actions/{actionId}.",
+							"title": "maxLength(512)",
+							"maxLength": 512,
+							"pattern": "^(?:https:\\/\\/[^\\s]+|\\/api\\/app-store\\/first-party\\/[a-z0-9-]+)$"
+						},
+						"permissions": {
+							"type": "array",
+							"items": {
+								"type": "string",
+								"enum": ["cap.transcript", "cap.summary", "cap.comments"]
+							}
+						},
+						"events": {
+							"type": "array",
+							"items": {
+								"type": "string",
+								"enum": [
+									"cap.ready",
+									"cap.transcript.ready",
+									"cap.summary.ready",
+									"cap.comment.created"
+								]
+							}
+						},
+						"settings": {
+							"type": "array",
+							"items": {
+								"anyOf": [
+									{
+										"type": "object",
+										"required": ["key", "label", "type"],
+										"properties": {
+											"key": {
+												"type": "string",
+												"description": "a string matching the pattern ^[a-z][a-zA-Z0-9]{0,39}$",
+												"pattern": "^[a-z][a-zA-Z0-9]{0,39}$"
+											},
+											"label": {
+												"type": "string",
+												"description": "a string at most 40 character(s) long",
+												"title": "maxLength(40)",
+												"minLength": 1,
+												"maxLength": 40
+											},
+											"description": {
+												"type": "string",
+												"description": "a string at most 160 character(s) long",
+												"title": "maxLength(160)",
+												"minLength": 1,
+												"maxLength": 160
+											},
+											"required": {
+												"type": "boolean"
+											},
+											"type": {
+												"type": "string",
+												"enum": ["text"]
+											},
+											"placeholder": {
+												"type": "string",
+												"description": "a string at most 80 character(s) long",
+												"title": "maxLength(80)",
+												"minLength": 1,
+												"maxLength": 80
+											},
+											"default": {
+												"type": "string",
+												"description": "a string at most 500 character(s) long",
+												"title": "maxLength(500)",
+												"maxLength": 500
+											}
+										},
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"required": ["key", "label", "type"],
+										"properties": {
+											"key": {
+												"type": "string",
+												"description": "a string matching the pattern ^[a-z][a-zA-Z0-9]{0,39}$",
+												"pattern": "^[a-z][a-zA-Z0-9]{0,39}$"
+											},
+											"label": {
+												"type": "string",
+												"description": "a string at most 40 character(s) long",
+												"title": "maxLength(40)",
+												"minLength": 1,
+												"maxLength": 40
+											},
+											"description": {
+												"type": "string",
+												"description": "a string at most 160 character(s) long",
+												"title": "maxLength(160)",
+												"minLength": 1,
+												"maxLength": 160
+											},
+											"required": {
+												"type": "boolean"
+											},
+											"type": {
+												"type": "string",
+												"enum": ["url"]
+											},
+											"placeholder": {
+												"type": "string",
+												"description": "a string at most 80 character(s) long",
+												"title": "maxLength(80)",
+												"minLength": 1,
+												"maxLength": 80
+											},
+											"default": {
+												"type": "string",
+												"description": "a string matching the pattern ^https:\\/\\/[^\\s]+$",
+												"title": "maxLength(512)",
+												"maxLength": 512,
+												"pattern": "^https:\\/\\/[^\\s]+$"
+											}
+										},
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"required": ["key", "label", "type"],
+										"properties": {
+											"key": {
+												"type": "string",
+												"description": "a string matching the pattern ^[a-z][a-zA-Z0-9]{0,39}$",
+												"pattern": "^[a-z][a-zA-Z0-9]{0,39}$"
+											},
+											"label": {
+												"type": "string",
+												"description": "a string at most 40 character(s) long",
+												"title": "maxLength(40)",
+												"minLength": 1,
+												"maxLength": 40
+											},
+											"description": {
+												"type": "string",
+												"description": "a string at most 160 character(s) long",
+												"title": "maxLength(160)",
+												"minLength": 1,
+												"maxLength": 160
+											},
+											"required": {
+												"type": "boolean"
+											},
+											"type": {
+												"type": "string",
+												"enum": ["secret"]
+											},
+											"placeholder": {
+												"type": "string",
+												"description": "a string at most 80 character(s) long",
+												"title": "maxLength(80)",
+												"minLength": 1,
+												"maxLength": 80
+											}
+										},
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"required": ["key", "label", "type", "options"],
+										"properties": {
+											"key": {
+												"type": "string",
+												"description": "a string matching the pattern ^[a-z][a-zA-Z0-9]{0,39}$",
+												"pattern": "^[a-z][a-zA-Z0-9]{0,39}$"
+											},
+											"label": {
+												"type": "string",
+												"description": "a string at most 40 character(s) long",
+												"title": "maxLength(40)",
+												"minLength": 1,
+												"maxLength": 40
+											},
+											"description": {
+												"type": "string",
+												"description": "a string at most 160 character(s) long",
+												"title": "maxLength(160)",
+												"minLength": 1,
+												"maxLength": 160
+											},
+											"required": {
+												"type": "boolean"
+											},
+											"type": {
+												"type": "string",
+												"enum": ["select"]
+											},
+											"options": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"required": ["value", "label"],
+													"properties": {
+														"value": {
+															"type": "string",
+															"description": "a string at most 64 character(s) long",
+															"title": "maxLength(64)",
+															"minLength": 1,
+															"maxLength": 64
+														},
+														"label": {
+															"type": "string",
+															"description": "a string at most 40 character(s) long",
+															"title": "maxLength(40)",
+															"minLength": 1,
+															"maxLength": 40
+														}
+													},
+													"additionalProperties": false
+												},
+												"description": "an array of at most 50 item(s)",
+												"title": "maxItems(50)",
+												"minItems": 1,
+												"maxItems": 50
+											},
+											"default": {
+												"type": "string",
+												"description": "a string at most 64 character(s) long",
+												"title": "maxLength(64)",
+												"minLength": 1,
+												"maxLength": 64
+											}
+										},
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"required": ["key", "label", "type"],
+										"properties": {
+											"key": {
+												"type": "string",
+												"description": "a string matching the pattern ^[a-z][a-zA-Z0-9]{0,39}$",
+												"pattern": "^[a-z][a-zA-Z0-9]{0,39}$"
+											},
+											"label": {
+												"type": "string",
+												"description": "a string at most 40 character(s) long",
+												"title": "maxLength(40)",
+												"minLength": 1,
+												"maxLength": 40
+											},
+											"description": {
+												"type": "string",
+												"description": "a string at most 160 character(s) long",
+												"title": "maxLength(160)",
+												"minLength": 1,
+												"maxLength": 160
+											},
+											"type": {
+												"type": "string",
+												"enum": ["toggle"]
+											},
+											"default": {
+												"type": "boolean"
+											}
+										},
+										"additionalProperties": false
+									}
+								]
+							},
+							"description": "an array of at most 20 item(s)",
+							"title": "maxItems(20)",
+							"maxItems": 20
+						},
+						"actions": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["id", "title", "target"],
+								"properties": {
+									"id": {
+										"type": "string",
+										"description": "a string matching the pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+										"title": "maxLength(40)",
+										"minLength": 1,
+										"maxLength": 40,
+										"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+									},
+									"title": {
+										"type": "string",
+										"description": "a string at most 30 character(s) long",
+										"title": "maxLength(30)",
+										"minLength": 2,
+										"maxLength": 30
+									},
+									"target": {
+										"type": "string",
+										"enum": ["cap"]
+									}
+								},
+								"additionalProperties": false
+							},
+							"description": "an array of at most 5 item(s)",
+							"title": "maxItems(5)",
+							"maxItems": 5
+						}
+					},
+					"additionalProperties": false
+				}
+			},
+			"additionalProperties": false,
+			"description": "Describes a Cap App. See https://github.com/CapSoftware/Cap/tree/main/app-store",
+			"title": "Cap App manifest"
+		},
+		"Int": {
+			"type": "integer",
+			"description": "an integer",
+			"title": "int"
+		}
+	},
+	"$ref": "#/$defs/CapAppManifest"
+}

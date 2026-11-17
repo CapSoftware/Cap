@@ -61,6 +61,7 @@ jobs:
               - 'Cargo.lock'
             gpui:
               - '.gitattributes'
+              - 'packages/app-store/test/fixtures/**'
               - 'scripts/setup.js'
               - 'apps/desktop-gpui/**'
               - 'apps/media-server/src/__tests__/fixtures/**'
@@ -98,6 +99,12 @@ jobs:
       - name: Test workspace tooling
         run: |
           node --test scripts/bun-scripts.test.mjs
+
+      - name: Validate App Store apps
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          bun app-store validate --base FETCH_HEAD
+          bun run --cwd packages/app-store test
 
       - name: Test Loops profile sync
         run: |
