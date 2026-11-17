@@ -2253,6 +2253,7 @@ manual_help = "手动缩放会固定在你在下方选择的位置。"
 mixed = "不一致"
 mode = "缩放模式"
 positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
+start_early = "提前开始缩放"
 title = "缩放 {number}"
 
 [editor.side_panel]

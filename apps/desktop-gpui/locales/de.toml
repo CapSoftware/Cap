@@ -2253,6 +2253,7 @@ manual_help = "Der manuelle Zoom bleibt auf der Stelle, die Sie unten wählen."
 mixed = "Gemischt"
 mode = "Zoom-Modus"
 positions_mixed = "Die Segmente zoomen auf unterschiedliche Stellen. Ziehen Sie, um alle auf dieselbe Stelle zu setzen."
+start_early = "Zooms früher starten"
 title = "Zoom {number}"
 
 [editor.side_panel]

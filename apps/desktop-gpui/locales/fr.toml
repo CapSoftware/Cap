@@ -2253,6 +2253,7 @@ manual_help = "Le zoom manuel reste sur le point fixe que vous choisissez ci-des
 mixed = "Mixte"
 mode = "Mode de zoom"
 positions_mixed = "Les segments zooment sur des points différents. Faites glisser pour tous les placer au même endroit."
+start_early = "Lancer les zooms plus tôt"
 title = "Zoom {number}"
 
 [editor.side_panel]

@@ -2253,6 +2253,7 @@ manual_help = "手動ズームは下で選んだ位置に固定されます。"
 mixed = "混在"
 mode = "ズームモード"
 positions_mixed = "セグメントごとにズーム位置が異なります。ドラッグするとすべて同じ位置に移動します。"
+start_early = "ズームを早めに開始"
 title = "ズーム{number}"
 
 [editor.side_panel]
