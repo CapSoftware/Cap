@@ -7,7 +7,8 @@
 //! is opened on a feed of its own first, and only once it works is the live
 //! source moved onto it, so a device that fails to open never touches the
 //! recording. Instant's camera is the on-screen bubble, which the recording
-//! does not hold, so switching it is just a new preview selection.
+//! does not hold, so switching it is a new preview selection, kept only once
+//! the new camera opens.
 
 use std::{sync::Arc, time::Instant};
 
@@ -194,16 +195,52 @@ impl RecordingSession {
     ) {
         match request {
             InputRequest::Camera(selection) => {
-                self.remember_input(&InputRequest::Camera(selection.clone()));
-                Feeds::global(cx).update(cx, |feeds, cx| {
-                    let selected = selection.is_some();
-                    feeds.set_camera(selection, cx);
-                    if selected {
-                        feeds.resume_camera_preview(cx);
-                    }
+                let previous = Feeds::global(cx).read(cx).camera.clone();
+                let ready = Feeds::global(cx).update(cx, |feeds, cx| {
+                    show_camera(feeds, selection.clone(), cx);
+                    feeds.input_readiness().camera
                 });
-                self.input_switch.error = None;
-                self.finish_input_switch(generation, cx);
+                let Some(ready) = ready.filter(|_| selection.is_some() && previous != selection)
+                else {
+                    self.remember_input(&InputRequest::Camera(selection));
+                    self.input_switch.error = None;
+                    self.finish_input_switch(generation, cx);
+                    return;
+                };
+                // The bubble is what Instant records: keep the working camera
+                // unless the new one actually opens.
+                let opening = gpui_tokio::Tokio::spawn_result(cx, async move {
+                    ready.await.map_err(anyhow::Error::msg)
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = opening.await;
+                    this.update(cx, |this, cx| {
+                        if generation != this.recording_generation {
+                            return;
+                        }
+                        let request = InputRequest::Camera(selection.clone());
+                        match result {
+                            Ok(_) => {
+                                this.remember_input(&request);
+                                this.input_switch.error = None;
+                            }
+                            Err(error) => {
+                                tracing::warn!("instant camera switch failed: {error:#}");
+                                Feeds::global(cx).update(cx, |feeds, cx| {
+                                    if feeds.camera == selection {
+                                        show_camera(feeds, previous.clone(), cx);
+                                    }
+                                });
+                                this.input_switch.error = Some(
+                                    tr::controls::settings::switch_failed(&request.device_label()),
+                                );
+                            }
+                        }
+                        this.finish_input_switch(generation, cx);
+                    })
+                    .ok();
+                })
+                .detach();
             }
             InputRequest::Microphone(None) => {
                 self.set_instant_microphone_muted(true);
@@ -372,6 +409,15 @@ impl RecordingSession {
 
     fn still_switching(&self, generation: u64) -> bool {
         generation == self.recording_generation && matches!(self.phase, Phase::Recording { .. })
+    }
+}
+
+/// Points the preview at `selection` and brings the bubble back for a camera.
+fn show_camera(feeds: &mut Feeds, selection: Option<SelectedCamera>, cx: &mut Context<Feeds>) {
+    let selected = selection.is_some();
+    feeds.set_camera(selection, cx);
+    if selected {
+        feeds.resume_camera_preview(cx);
     }
 }
 
