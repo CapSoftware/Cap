@@ -41,6 +41,15 @@ interface SelectedCapsBarProps {
 	};
 }
 
+const capsNoun = (count: number) => (count === 1 ? "Cap" : "Caps");
+
+const secondaryMotion = {
+	initial: { opacity: 0, y: 3 },
+	animate: { opacity: 1, y: 0 },
+	exit: { opacity: 0, y: -3 },
+	transition: { duration: 0.16, ease: "easeOut" },
+} as const;
+
 export const SelectedCapsBar = ({
 	selectedCaps,
 	setSelectedCaps,
@@ -65,7 +74,7 @@ export const SelectedCapsBar = ({
 			{selectedCaps.length > 0 && (
 				<>
 					<motion.div
-						className="flex fixed inset-x-3 bottom-24 z-50 gap-3 justify-between items-center p-3 mx-auto max-w-2xl rounded-xl border shadow-lg sm:inset-x-0 sm:bottom-12 border-gray-2 bg-gray-1"
+						className="flex flex-wrap fixed inset-x-3 bottom-[152px] z-50 gap-x-3 gap-y-2 justify-between items-center p-3 mx-auto max-w-2xl rounded-xl border shadow-lg sm:inset-x-0 sm:bottom-12 sm:max-lg:max-w-[min(42rem,calc(100vw-200px))] border-gray-2 bg-gray-1"
 						initial={{ opacity: 0, y: 10, scale: 0.9 }}
 						animate={{ opacity: 1, y: 0, scale: 1 }}
 						exit={{
@@ -80,49 +89,59 @@ export const SelectedCapsBar = ({
 							scale: { type: "spring", damping: 15, stiffness: 300 },
 						}}
 					>
-						<div className="flex flex-col min-w-0">
+						<div className="flex flex-col gap-0.5 min-w-0">
 							<output
 								aria-live="polite"
-								className="flex gap-1 text-sm font-medium whitespace-nowrap text-gray-10"
+								className="flex gap-1 items-baseline text-sm font-medium leading-5 whitespace-nowrap text-gray-12"
 							>
 								<NumberFlow
 									value={selectedCaps.length}
-									className="tabular-nums text-md text-gray-12"
+									locales="en-US"
+									className="tabular-nums"
 								/>
-								<span className="hidden sm:inline">
-									cap{selectedCaps.length !== 1 ? "s" : ""}
-								</span>
-								selected
+								<span>{capsNoun(selectedCaps.length)} selected</span>
 							</output>
-							{selection?.canSelectAllMatching && !selection.isAllMatching ? (
-								<button
-									type="button"
-									onClick={() => void selection.selectAllMatching()}
-									disabled={selection.isSelectingAll}
-									className="self-start text-xs font-medium text-blue-11 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-60"
-								>
-									{selection.isSelectingAll
-										? "Selecting..."
-										: (selection.totalCount ?? 0) > selection.selectAllLimit
-											? `Select the first ${selection.selectAllLimit.toLocaleString("en-US")}`
-											: `Select all ${selection.totalCount?.toLocaleString("en-US")}`}
-								</button>
-							) : selection?.isAllMatching ? (
-								<p className="text-xs text-gray-10">
-									{selection.matchingTruncated
-										? `The first ${selection.selectAllLimit.toLocaleString("en-US")} are selected`
-										: "Every Cap here is selected"}
-								</p>
-							) : (
-								moveLocation &&
-								moveRootLabel && (
-									<p className="hidden text-xs truncate sm:block text-gray-10">
-										Drag them onto a folder, or use Move
-									</p>
-								)
-							)}
+							<AnimatePresence initial={false} mode="popLayout">
+								{selection?.canSelectAllMatching && !selection.isAllMatching ? (
+									<motion.button
+										key="select-all"
+										type="button"
+										{...secondaryMotion}
+										onClick={() => void selection.selectAllMatching()}
+										disabled={selection.isSelectingAll}
+										className="self-start text-xs font-medium leading-4 rounded-sm text-blue-11 hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-60"
+									>
+										{selection.isSelectingAll
+											? "Selecting..."
+											: (selection.totalCount ?? 0) > selection.selectAllLimit
+												? `Select the first ${selection.selectAllLimit.toLocaleString("en-US")}`
+												: `Select all ${selection.totalCount?.toLocaleString("en-US")}`}
+									</motion.button>
+								) : selection?.isAllMatching ? (
+									<motion.p
+										key="all-selected"
+										{...secondaryMotion}
+										className="text-xs leading-4 text-gray-10"
+									>
+										{selection.matchingTruncated
+											? `The first ${selection.selectAllLimit.toLocaleString("en-US")} are selected`
+											: "Every Cap here is selected"}
+									</motion.p>
+								) : (
+									moveLocation &&
+									moveRootLabel && (
+										<motion.p
+											key="drag-tip"
+											{...secondaryMotion}
+											className="hidden text-xs leading-4 truncate sm:block text-gray-10"
+										>
+											Drag them onto a folder, or use Move
+										</motion.p>
+									)
+								)}
+							</AnimatePresence>
 						</div>
-						<div className="flex gap-2 shrink-0">
+						<div className="flex gap-2 ml-auto shrink-0">
 							{moveLocation && moveRootLabel && (
 								<Button
 									variant="gray"
@@ -179,9 +198,7 @@ export const SelectedCapsBar = ({
 										title="Delete selected Caps"
 										description={`Are you sure you want to delete ${
 											selectedCaps.length
-										} cap${
-											selectedCaps.length === 1 ? "" : "s"
-										}? This action cannot be undone.`}
+										} ${capsNoun(selectedCaps.length)}? This action cannot be undone.`}
 										confirmLabel={isDeleting ? "Deleting..." : "Delete"}
 										cancelLabel="Cancel"
 										confirmVariant="dark"
