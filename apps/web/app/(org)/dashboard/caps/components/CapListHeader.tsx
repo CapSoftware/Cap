@@ -39,19 +39,20 @@ export function SelectAllCheckbox({
 			disabled={disabled}
 			onClick={onToggle}
 			className={clsx(
-				"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-colors shrink-0",
-				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-50",
+				"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-[background-color,border-color,transform] duration-150 shrink-0 active:scale-90",
+				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-2 disabled:opacity-50",
 				state === "none"
 					? "border-gray-5 bg-gray-1 hover:border-gray-7"
 					: "bg-blue-9 border-blue-9",
 			)}
 		>
-			{state !== "none" && (
-				<FontAwesomeIcon
-					icon={state === "all" ? faCheck : faMinus}
-					className="text-white size-3"
-				/>
-			)}
+			<FontAwesomeIcon
+				icon={state === "some" ? faMinus : faCheck}
+				className={clsx(
+					"text-white size-3 transition-[opacity,transform] duration-150 ease-out",
+					state === "none" ? "opacity-0 scale-50" : "opacity-100 scale-100",
+				)}
+			/>
 		</button>
 	);
 }

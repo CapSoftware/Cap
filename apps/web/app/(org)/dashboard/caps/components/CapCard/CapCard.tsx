@@ -461,7 +461,8 @@ export const CapCard = ({
 				{anyCapSelected && !sharedCapCard && (
 					<button
 						type="button"
-						aria-label={`Select ${cap.name}`}
+						tabIndex={-1}
+						aria-hidden="true"
 						className="absolute inset-0 z-10"
 						onClick={handleSelectClick}
 					/>
@@ -770,15 +771,19 @@ export const CapCard = ({
 					>
 						<div
 							className={clsx(
-								"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-colors cursor-pointer",
+								"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-[background-color,border-color,transform] duration-150 cursor-pointer active:scale-90",
 								isSelected
 									? "bg-blue-9 border-blue-9"
 									: "border-gray-5 bg-gray-1 hover:border-gray-7",
 							)}
 						>
-							{isSelected && (
-								<FontAwesomeIcon icon={faCheck} className="text-white size-3" />
-							)}
+							<FontAwesomeIcon
+								icon={faCheck}
+								className={clsx(
+									"text-white size-3 transition-[opacity,transform] duration-150 ease-out",
+									isSelected ? "opacity-100 scale-100" : "opacity-0 scale-50",
+								)}
+							/>
 						</div>
 					</button>
 				)}
