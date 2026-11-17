@@ -729,8 +729,11 @@ struct FileFingerprint {
     modified: Option<std::time::SystemTime>,
     #[cfg(unix)]
     inode: (u64, u64),
+    #[cfg(windows)]
+    file_id: (u64, u128),
 }
 
+#[cfg(not(windows))]
 fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
     let metadata = std::fs::symlink_metadata(path)?;
     #[cfg(unix)]
@@ -741,6 +744,71 @@ fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
         #[cfg(unix)]
         inode: (metadata.dev(), metadata.ino()),
     })
+}
+
+/// Windows stamps file times from a clock that ticks about every 15 ms, so a
+/// same-size file renamed over the copy within one tick matches on length and
+/// time alone. The volume serial and file id tell the two files apart. The
+/// handle asks only for attributes and shares everything, so it never blocks
+/// another reader, writer or delete, and it is closed before this returns.
+#[cfg(windows)]
+fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    Ok(FileFingerprint {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        file_id: windows_file_id(&file)?,
+    })
+}
+
+#[cfg(windows)]
+fn windows_file_id(file: &std::fs::File) -> std::io::Result<(u64, u128)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx,
+    };
+    let handle = file.as_raw_handle();
+    let mut id = std::mem::MaybeUninit::<FILE_ID_INFO>::zeroed();
+    // SAFETY: `handle` is open for the life of `file`, and the buffer is a
+    // FILE_ID_INFO of the size passed.
+    let found = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            id.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if found != 0 {
+        // SAFETY: the call succeeded, so it filled the zeroed buffer.
+        let id = unsafe { id.assume_init() };
+        return Ok((
+            id.VolumeSerialNumber,
+            u128::from_le_bytes(id.FileId.Identifier),
+        ));
+    }
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: as above, with a BY_HANDLE_FILE_INFORMATION buffer.
+    if unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the call succeeded, so it filled the zeroed buffer.
+    let info = unsafe { info.assume_init() };
+    Ok((
+        u64::from(info.dwVolumeSerialNumber),
+        (u128::from(info.nFileIndexHigh) << 32) | u128::from(info.nFileIndexLow),
+    ))
 }
 
 impl GpuiAutomationHost {

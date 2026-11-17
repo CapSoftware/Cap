@@ -897,6 +897,16 @@ async fn delete_is_refused_when_the_saved_copy_is_not_the_one_this_run_wrote() {
     let copy = replaced.last_output().unwrap();
     let other = root.path().join("other.png");
     std::fs::write(&other, b"png bytes").unwrap();
+    let saved_at = std::fs::symlink_metadata(&copy)
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&other)
+        .unwrap()
+        .set_modified(saved_at)
+        .unwrap();
     std::fs::rename(&other, &copy).unwrap();
     let error = check(&replaced).unwrap_err();
     assert!(
