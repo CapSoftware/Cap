@@ -216,6 +216,26 @@ pub enum CornerStyle {
     Rounded,
 }
 
+/// How `BackgroundConfiguration::padding` turns into margins in auto aspect.
+///
+/// `Proportional` grows each side by the same fraction of its own length, so a
+/// 16:9 screen gets wider side margins than top and bottom ones. `Even` puts
+/// the same margin on every side, a fraction of the shorter side. Projects
+/// saved without the field keep `Proportional`.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PaddingMode {
+    #[default]
+    Proportional,
+    Even,
+}
+
+impl PaddingMode {
+    pub fn is_proportional(&self) -> bool {
+        *self == Self::Proportional
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -359,6 +379,11 @@ pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: f64,
     pub padding: f64,
+    /// Absent in every project saved before the setting existed, which keeps
+    /// their framing. Skipped when proportional so those files round-trip
+    /// unchanged.
+    #[serde(skip_serializing_if = "PaddingMode::is_proportional")]
+    pub padding_mode: PaddingMode,
     pub rounding: f64,
     pub rounding_type: CornerStyle,
     pub inset: u32,
@@ -396,6 +421,7 @@ impl Default for BackgroundConfiguration {
             source: BackgroundSource::default(),
             blur: 0.0,
             padding: 0.0,
+            padding_mode: PaddingMode::default(),
             rounding: 0.0,
             rounding_type: CornerStyle::default(),
             inset: 0,
@@ -3213,7 +3239,30 @@ impl ProjectStyleCache {
     }
 }
 
+/// Rounding a new project gets when its background first gains padding.
+/// Squircle corners at 5.5% of the shorter screen side match a 16 px fully
+/// smoothed corner on a 1080p screen to within 2 px² per corner.
+pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
+
 impl ProjectConfiguration {
+    /// Where a new recording or import starts. Differs from `Default` (which
+    /// is what an older project missing a field reads as) only in framing:
+    /// even padding, and a soft shadow fitted to a 0.3 opacity drop shadow
+    /// with a 160 px blur. At zero padding both padding modes lay out
+    /// identically and the card fills the frame, so neither shows until the
+    /// card has room around it.
+    pub fn for_new_project() -> Self {
+        let mut config = Self::default();
+        config.background.padding_mode = PaddingMode::Even;
+        config.background.shadow = 50.0;
+        config.background.advanced_shadow = Some(ShadowConfiguration {
+            size: 0.0,
+            opacity: 62.4,
+            blur: 46.7,
+        });
+        config
+    }
+
     pub fn with_preset(&self, mut preset: Self) -> Self {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
@@ -3727,6 +3776,45 @@ mod tests {
         assert!(restored.show_filler_words);
         assert_eq!(restored.filler_language.as_deref(), Some("en"));
         assert!(restored.uppercase);
+    }
+
+    #[test]
+    fn padding_mode_is_proportional_for_saved_projects_and_only_written_when_even() {
+        let saved: BackgroundConfiguration =
+            serde_json::from_str(r#"{"padding":10.0,"rounding":7.5}"#).unwrap();
+        assert_eq!(saved.padding_mode, PaddingMode::Proportional);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("paddingMode").is_none());
+
+        let project = ProjectConfiguration::default();
+        let bytes = serde_json::to_vec(&project).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("paddingMode"));
+
+        let mut even = saved.clone();
+        even.padding_mode = PaddingMode::Even;
+        let written = serde_json::to_value(&even).unwrap();
+        assert_eq!(written["paddingMode"], "even");
+        let restored: BackgroundConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(restored.padding_mode, PaddingMode::Even);
+    }
+
+    #[test]
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+        let fresh = ProjectConfiguration::for_new_project();
+        assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
+        assert_eq!(fresh.background.padding, 0.0);
+        assert_eq!(fresh.background.rounding, 0.0);
+
+        let mut framing_reset = serde_json::to_value(&fresh).unwrap();
+        let default = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        for key in ["paddingMode", "shadow", "advancedShadow"] {
+            framing_reset["background"][key] = default["background"][key].clone();
+        }
+        framing_reset["background"]
+            .as_object_mut()
+            .unwrap()
+            .remove("paddingMode");
+        assert_eq!(framing_reset, default);
     }
 
     #[test]
