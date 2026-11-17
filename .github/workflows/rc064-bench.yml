@@ -69,6 +69,15 @@ jobs:
           start=$(date +%s)
           cargo build --locked --release -p cap-export --example export-benchmark-runner
           echo "build seconds: $(( $(date +%s) - start ))"
+      - name: FFmpeg framework next to the example binaries (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          fw="$(find "$GITHUB_WORKSPACE/target" -maxdepth 4 -type d -name Spacedrive.framework -not -path '*/release/*' | head -1)"
+          echo "framework: $fw"
+          test -n "$fw"
+          mkdir -p target/release/Frameworks
+          ln -sfn "$fw" target/release/Frameworks/Spacedrive.framework
+          ls target/release/Frameworks/Spacedrive.framework/Libraries | head -3
       - name: Sampler
         shell: bash
         run: |
@@ -200,6 +209,33 @@ jobs:
           killall tccd || true
           sudo killall tccd || true
           sleep 2
+      - name: FFmpeg framework next to the example binaries (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          fw="$(find "$GITHUB_WORKSPACE/target" -maxdepth 4 -type d -name Spacedrive.framework -not -path '*/release/*' | head -1)"
+          echo "framework: $fw"
+          test -n "$fw"
+          mkdir -p target/release/Frameworks
+          ln -sfn "$fw" target/release/Frameworks/Spacedrive.framework
+          ls target/release/Frameworks/Spacedrive.framework/Libraries | head -3
+      - name: Install virtual audio device (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch: got $actual, expected $expected" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite")
+          $store.Add($cert)
+          $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed with exit code $LASTEXITCODE" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
       - name: Sampler
         shell: bash
         run: |
