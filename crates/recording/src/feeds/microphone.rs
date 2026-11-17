@@ -128,14 +128,14 @@ fn cancellable_system_stream_ready(
 
 fn microphone_stream_error_handler(
     error_sender: flume::Sender<StreamError>,
-    mut on_first_error: impl FnMut() + Send + 'static,
+    mut on_first_error: impl FnMut(&StreamError) + Send + 'static,
 ) -> impl FnMut(StreamError) + Send + 'static {
     let mut logged = false;
     move |error| {
         if !logged {
             error!("Microphone stream error: {error}");
             logged = true;
-            on_first_error();
+            on_first_error(&error);
         }
         if error_sender.is_empty() {
             let _ = error_sender.try_send(error);
@@ -485,6 +485,8 @@ fn enqueue_microphone_samples(
 struct StreamHealth {
     id: u32,
     failed: AtomicBool,
+    #[cfg(windows)]
+    device_lost: AtomicBool,
 }
 
 #[cfg(any(target_os = "linux", windows))]
@@ -493,6 +495,8 @@ impl StreamHealth {
         Self {
             id,
             failed: AtomicBool::new(false),
+            #[cfg(windows)]
+            device_lost: AtomicBool::new(false),
         }
     }
 }
@@ -700,20 +704,15 @@ impl RecordingSubscription {
 
     pub(crate) fn error(&self) -> Option<String> {
         let mut state = self.state.lock().unwrap();
-        if !state.retired
-            && state.failure.is_none()
-            && (state
-                .current
-                .as_ref()
-                .is_some_and(|stream| stream.failed.load(Ordering::Acquire))
-                || state
-                    .pending
-                    .as_ref()
-                    .is_some_and(|stream| stream.failed.load(Ordering::Acquire)))
-        {
+        if !state.retired && state.failure.is_none() && state.backend_failed() {
             state.failure = Some("Requested microphone backend failed".into());
         }
         state.failure.clone()
+    }
+
+    pub(crate) fn device_lost(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        !state.retired && state.current_device_lost()
     }
 
     pub(crate) fn accepts_frame(&self, id: u32) -> bool {
@@ -729,17 +728,7 @@ impl RecordingSubscription {
 
     pub(crate) fn retire(&self) -> Option<String> {
         let mut state = self.state.lock().unwrap();
-        if !state.retired
-            && state.failure.is_none()
-            && (state
-                .current
-                .as_ref()
-                .is_some_and(|stream| stream.failed.load(Ordering::Acquire))
-                || state
-                    .pending
-                    .as_ref()
-                    .is_some_and(|stream| stream.failed.load(Ordering::Acquire)))
-        {
+        if !state.retired && state.failure.is_none() && state.backend_failed() {
             state.failure = Some("Requested microphone backend failed at Stop".into());
         }
         state.retired = true;
@@ -789,8 +778,42 @@ impl RecordingSubscription {
                 .as_ref()
                 .is_some_and(|pending| pending.id == id)
         {
-            state.failure.get_or_insert(error);
+            if state.current_device_lost() {
+                state.pending = None;
+            } else {
+                state.failure.get_or_insert(error);
+            }
         }
+    }
+}
+
+#[cfg(windows)]
+impl RecordingSubscriptionState {
+    fn current_device_lost(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|stream| stream.device_lost.load(Ordering::Acquire))
+    }
+
+    fn backend_failed(&self) -> bool {
+        let failed = |stream: &Option<Arc<StreamHealth>>| {
+            stream
+                .as_ref()
+                .is_some_and(|stream| stream.failed.load(Ordering::Acquire))
+        };
+        failed(&self.current) || (failed(&self.pending) && !self.current_device_lost())
+    }
+}
+
+// WASAPI reports a removed endpoint as DeviceNotAvailable. The recording keeps
+// going on silence and takes the device back when it returns, as on macOS and
+// Linux; any other backend error still fails the requested microphone.
+#[cfg(windows)]
+fn record_stream_error(health: &StreamHealth, error: &StreamError) {
+    if matches!(error, StreamError::DeviceNotAvailable) {
+        health.device_lost.store(true, Ordering::Release);
+    } else {
+        health.failed.store(true, Ordering::Release);
     }
 }
 
@@ -1463,8 +1486,10 @@ impl MicrophoneFeed {
                         let actor = actor_ref.clone();
                         #[cfg(target_os = "linux")]
                         let cancel = system_stream_cancel.clone();
-                        move || {
-                            #[cfg(any(target_os = "linux", windows))]
+                        move |_error: &StreamError| {
+                            #[cfg(windows)]
+                            record_stream_error(&health, _error);
+                            #[cfg(target_os = "linux")]
                             health.failed.store(true, Ordering::Release);
                             #[cfg(target_os = "linux")]
                             if pulse_input_role == crate::sources::screen_capture::PulseInputRole::SystemAudio
@@ -2552,6 +2577,18 @@ impl Message<WindowsReconnectFailed> for MicrophoneFeed {
             if let Some(subscription) = &sender.subscription {
                 subscription.fail_reconnect(msg.id, msg.error.clone());
             }
+        }
+        if let State::Locked { inner, .. } = &self.state
+            && self
+                .stream_health
+                .get(&inner.id)
+                .is_some_and(|health| health.device_lost.load(Ordering::Acquire))
+            && self
+                .recording_reconnect
+                .as_ref()
+                .is_some_and(|pending| pending.generation == msg.generation && pending.id == msg.id)
+        {
+            self.recording_reconnect = None;
         }
     }
 }
@@ -5078,6 +5115,82 @@ mod recording_subscription_tests {
             actor.kill();
             actor.wait_for_stop().await;
         }
+    }
+
+    #[tokio::test]
+    async fn removed_device_keeps_the_recording_and_retries_while_other_errors_fail_it() {
+        for (error, survives) in [
+            (StreamError::DeviceNotAvailable, true),
+            (
+                StreamError::BackendSpecific {
+                    err: cpal::BackendSpecificError {
+                        description: "backend".into(),
+                    },
+                },
+                false,
+            ),
+        ] {
+            let (feed, token, _native) = fixture();
+            let health = feed.stream_health.get(&7).unwrap().clone();
+            let actor = MicrophoneFeed::spawn(feed);
+            let config = config();
+            let lock = Arc::new(MicrophoneFeedLock {
+                generation: 3,
+                actor: actor.clone(),
+                audio_info: AudioInfo::from_stream_config_with_buffer(&config, None),
+                config,
+                buffer_size_frames: None,
+                drop_tx: None,
+                device_name: "requested".into(),
+                recording_muted: Arc::new(AtomicBool::new(false)),
+                _token: token,
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let pipeline = OutputPipeline::builder(temp.path().join("unused.ogg"))
+                .with_audio_source::<crate::sources::Microphone>(lock.clone())
+                .build::<SinkMuxer>(())
+                .await
+                .unwrap();
+            record_stream_error(&health, &error);
+            if survives {
+                tokio::time::sleep(Duration::from_millis(2600)).await;
+                let (_, id, pending, _, subscriptions, counter) =
+                    actor.ask(Snapshot).await.unwrap();
+                assert_eq!((id, pending, subscriptions), (7, None, 1));
+                assert!(counter > 8, "a reopen of the missing device was attempted");
+            }
+            let stopped = tokio::time::timeout(Duration::from_secs(2), pipeline.stop())
+                .await
+                .unwrap();
+            assert_eq!(stopped.is_ok(), survives);
+            drop(lock);
+            actor.kill();
+            actor.wait_for_stop().await;
+        }
+    }
+
+    #[test]
+    fn removed_device_replacement_commits_after_failed_attempts() {
+        let lost = Arc::new(StreamHealth::new(7));
+        let subscription =
+            RecordingSubscription::new(3, tokio_util::sync::CancellationToken::new());
+        subscription.state.lock().unwrap().current = Some(lost.clone());
+        record_stream_error(&lost, &StreamError::DeviceNotAvailable);
+        assert!(subscription.device_lost());
+        let missing = Arc::new(StreamHealth::new(8));
+        subscription.begin_reconnect(missing.clone());
+        drop(StreamExitHealth {
+            health: missing,
+            expected: false,
+        });
+        assert!(subscription.error().is_none());
+        subscription.fail_reconnect(8, "DeviceNotFound".into());
+        assert!(subscription.error().is_none());
+        subscription.begin_reconnect(Arc::new(StreamHealth::new(9)));
+        subscription.commit_reconnect(9);
+        assert!(subscription.accepts_frame(9));
+        assert!(!subscription.device_lost());
+        assert!(subscription.retire().is_none());
     }
 
     #[test]
