@@ -13,13 +13,18 @@ import type {
 } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import clsx from "clsx";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { type DragEvent, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { reorderSpaceVideos } from "@/actions/spaces/video-order";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
+import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
+import { CAP_DRAG_TYPE, parseCapDrag } from "@/lib/move-items";
 import { parsePageParam } from "@/lib/page-param";
 import {
 	canManageOrganizationMembers,
@@ -28,15 +33,25 @@ import {
 	getEffectiveSpaceRole,
 } from "@/lib/permissions/roles";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import {
+	type ReorderPlacement,
+	reorderIds,
+	type SpaceVideoOrder,
+} from "@/lib/space-video-order";
 import { CollectionShareControl } from "../../_components/CollectionShareControl";
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
+import {
+	CapListHeader,
+	PageSizeSelect,
+} from "../../caps/components/CapListHeader";
 import { CapPagination } from "../../caps/components/CapPagination";
 import { DragHint } from "../../caps/components/DragHint";
 import type { FolderDataType } from "../../caps/components/Folder";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
+import { useCapSelection } from "../../caps/components/useCapSelection";
 import { useCapsMoved } from "../../caps/components/useCapsMoved";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
@@ -47,6 +62,7 @@ import {
 	type OrganizationMemberData,
 } from "./components/OrganizationIndicator";
 import { SharedCapCard } from "./components/SharedCapCard";
+import { SpaceOrderSelect } from "./components/SpaceOrderSelect";
 import type { SpaceMemberData } from "./page";
 
 type SharedVideoData = {
@@ -104,6 +120,8 @@ export const SharedCaps = ({
 	analyticsEnabled,
 	organizationData,
 	thumbnails,
+	pageSize = DEFAULT_DASHBOARD_PAGE_SIZE,
+	videoOrder = "newest",
 }: {
 	data: SharedVideoData;
 	count: number;
@@ -121,16 +139,16 @@ export const SharedCaps = ({
 		ownerId: User.UserId;
 	};
 	thumbnails?: SeededThumbnails;
+	pageSize?: number;
+	videoOrder?: SpaceVideoOrder;
 }) => {
 	const params = useSearchParams();
 	const pathname = usePathname();
 	const router = useRouter();
 	const page = parsePageParam(params.get("page"));
 	const { activeOrganization } = useDashboardContext();
-	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
-	const totalPages = Math.ceil(count / limit);
-	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
+	const totalPages = Math.ceil(count / pageSize);
 	const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
 	const [isSpaceSettingsOpen, setIsSpaceSettingsOpen] = useState(false);
 	const [
@@ -173,25 +191,118 @@ export const SharedCaps = ({
 		organizationData?.name ??
 		activeOrganization?.organization.name ??
 		"All organization";
+	const [orderedData, setOrderedData] = useState(data);
+	useEffect(() => setOrderedData(data), [data]);
+	const pageIds = useMemo(
+		() => orderedData.map((video) => video.id),
+		[orderedData],
+	);
+	const selectAllView = useMemo(
+		() =>
+			spaceData
+				? ({ type: "space", spaceId } as const)
+				: ({
+						type: "organization",
+						organizationId: organizationData?.id ?? spaceId,
+					} as const),
+		[spaceData, spaceId, organizationData?.id],
+	);
+	const selection = useCapSelection({
+		pageIds,
+		enabled: canManageCurrentSharedCollection,
+		totalCount: count,
+		view: selectAllView,
+	});
+	const selectedCaps = selection.selected;
+	const setSelectedCaps = selection.setSelected;
 	useCapsMoved((ids) =>
 		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
 	);
-	const handleCapSelection = (capId: Video.VideoId) => {
-		setSelectedCaps((current) =>
-			current.includes(capId)
-				? current.filter((id) => id !== capId)
-				: [...current, capId],
+
+	const canReorder =
+		Boolean(spaceData) && canManageCurrentSpace && videoOrder === "custom";
+	const [dropTarget, setDropTarget] = useState<{
+		id: Video.VideoId;
+		side: "before" | "after";
+	} | null>(null);
+
+	useEffect(() => {
+		if (!canReorder) return;
+		const clear = () => setDropTarget(null);
+		window.addEventListener("dragend", clear);
+		window.addEventListener("drop", clear, true);
+		return () => {
+			window.removeEventListener("dragend", clear);
+			window.removeEventListener("drop", clear, true);
+		};
+	}, [canReorder]);
+
+	const reorderTo = async (
+		videoIds: Video.VideoId[],
+		placement: ReorderPlacement,
+	) => {
+		const previous = orderedData;
+		if (placement.type !== "start" || page === 1) {
+			const byId = new Map(previous.map((video) => [video.id, video]));
+			setOrderedData(
+				reorderIds(pageIds, videoIds, placement).flatMap((id) => {
+					const video = byId.get(id as Video.VideoId);
+					return video ? [video] : [];
+				}),
+			);
+		}
+		try {
+			await reorderSpaceVideos({ spaceId, videoIds, placement });
+		} catch {
+			setOrderedData(previous);
+			toast.error("Couldn't save the new order. Please try again.");
+		}
+		router.refresh();
+	};
+
+	const handleReorderDragOver = (
+		event: DragEvent<HTMLFieldSetElement>,
+		id: Video.VideoId,
+	) => {
+		if (!event.dataTransfer.types.includes(CAP_DRAG_TYPE)) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = "move";
+		const rect = event.currentTarget.getBoundingClientRect();
+		const side =
+			event.clientX < rect.left + rect.width / 2 ? "before" : "after";
+		setDropTarget((current) =>
+			current?.id === id && current.side === side ? current : { id, side },
 		);
+	};
+
+	const handleReorderDrop = (
+		event: DragEvent<HTMLFieldSetElement>,
+		id: Video.VideoId,
+	) => {
+		if (!event.dataTransfer.types.includes(CAP_DRAG_TYPE)) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const side =
+			dropTarget?.id === id
+				? dropTarget.side
+				: event.clientX <
+						event.currentTarget.getBoundingClientRect().left +
+							event.currentTarget.getBoundingClientRect().width / 2
+					? "before"
+					: "after";
+		setDropTarget(null);
+		const payload = parseCapDrag(event.dataTransfer.getData(CAP_DRAG_TYPE));
+		if (!payload) return;
+		const movedIds = payload.ids.filter((videoId) => pageIds.includes(videoId));
+		if (movedIds.length === 0 || movedIds.includes(id)) return;
+		void reorderTo(movedIds, { type: side, targetId: id });
 	};
 
 	const spaceMemberCount = spaceMembers?.length || 0;
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const analyticsQuery = useVideosAnalyticsQuery(
-		data.map((video) => video.id),
-		analyticsEnabled,
-	);
+	const analyticsQuery = useVideosAnalyticsQuery(pageIds, analyticsEnabled);
 
 	const analytics = analyticsQuery.data || {};
 
@@ -342,7 +453,13 @@ export const SharedCaps = ({
 	return (
 		<div className="flex relative flex-col w-full h-full">
 			{spaceSettingsDialog}
-			<DragHint caps="Drop on a folder to move" />
+			<DragHint
+				caps={
+					canReorder
+						? "Drop between Caps to reorder, or on a folder to move"
+						: "Drop on a folder to move"
+				}
+			/>
 			{canManageCurrentSharedCollection && (
 				<NewFolderDialog
 					open={openNewFolderDialog}
@@ -439,15 +556,28 @@ export const SharedCaps = ({
 				/>
 			)}
 
-			{data.length > 0 && (
+			{orderedData.length > 0 && (
 				<>
-					<h2 className="mb-5 text-lg font-semibold tracking-tight text-gray-12">
-						Videos and screenshots
-					</h2>
+					<CapListHeader
+						title="Videos and screenshots"
+						count={count}
+						selectionState={
+							canManageCurrentSharedCollection ? selection.pageState : undefined
+						}
+						onToggleSelectAll={selection.togglePage}
+						actions={
+							<>
+								{spaceData && canManageCurrentSpace && (
+									<SpaceOrderSelect spaceId={spaceId} order={videoOrder} />
+								)}
+								<PageSizeSelect pageSize={pageSize} />
+							</>
+						}
+					/>
 					<SeededThumbnailsProvider value={thumbnails}>
 						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-							{data.map((cap) => {
-								return (
+							{orderedData.map((cap, index) => {
+								const card = (
 									<SharedCapCard
 										key={cap.id}
 										cap={cap}
@@ -472,18 +602,68 @@ export const SharedCaps = ({
 										}
 										onSelectToggle={
 											canManageCurrentSharedCollection
-												? () => handleCapSelection(cap.id)
+												? (options) => selection.toggle(cap.id, options)
 												: undefined
 										}
 										selectedIds={selectedCaps}
+										href={
+											spaceData
+												? `/s/${cap.id}?space=${encodeURIComponent(spaceId)}`
+												: undefined
+										}
+										reorder={
+											canReorder
+												? {
+														onMoveToStart:
+															page === 1 && index === 0
+																? undefined
+																: () =>
+																		void reorderTo([cap.id], { type: "start" }),
+														onMoveEarlier:
+															page === 1 && index === 0
+																? undefined
+																: () =>
+																		void reorderTo([cap.id], {
+																			type: "earlier",
+																		}),
+														onMoveLater:
+															page >= totalPages &&
+															index === orderedData.length - 1
+																? undefined
+																: () =>
+																		void reorderTo([cap.id], { type: "later" }),
+													}
+												: undefined
+										}
 									/>
+								);
+								if (!canReorder) return card;
+								const indicator =
+									dropTarget?.id === cap.id ? dropTarget.side : null;
+								return (
+									<fieldset
+										key={cap.id}
+										className="relative min-w-0"
+										onDragOver={(event) => handleReorderDragOver(event, cap.id)}
+										onDrop={(event) => handleReorderDrop(event, cap.id)}
+									>
+										{card}
+										<span
+											aria-hidden
+											className={clsx(
+												"absolute -inset-y-1 w-[3px] rounded-full bg-blue-9 transition-opacity duration-150 pointer-events-none",
+												indicator === "before" ? "-left-3" : "-right-3",
+												indicator ? "opacity-100" : "opacity-0",
+											)}
+										/>
+									</fieldset>
 								);
 							})}
 						</div>
 					</SeededThumbnailsProvider>
 				</>
 			)}
-			{(data.length > limit || data.length === limit || page !== 1) && (
+			{(data.length >= pageSize || page !== 1) && (
 				<div className="mt-4">
 					<CapPagination
 						currentPage={page}
@@ -500,6 +680,7 @@ export const SharedCaps = ({
 					setSelectedCaps={setSelectedCaps}
 					moveLocation={moveLocation}
 					moveRootLabel={moveRootLabel}
+					selection={selection}
 				/>
 			)}
 		</div>
