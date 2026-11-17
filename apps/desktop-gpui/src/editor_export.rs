@@ -409,7 +409,7 @@ pub struct ExportUi {
 
 /// What the project renders from: its output size before any export scaling
 /// (crop and padding included) and its highest recorded frame rate.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ExportSource {
     pub size: Option<XY<u32>>,
     pub fps: Option<u32>,
