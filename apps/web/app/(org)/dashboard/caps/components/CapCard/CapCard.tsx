@@ -10,6 +10,7 @@ import {
 } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
+import { getCustomThumbnailMetadata } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
@@ -34,6 +35,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { FolderInput } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
@@ -70,6 +72,11 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
+
+const CustomThumbnailDialog = dynamic(
+	() => import("@/components/custom-thumbnail/CustomThumbnailDialog"),
+	{ ssr: false },
+);
 
 const { circumference } = getProgressCircleConfig();
 
@@ -199,6 +206,8 @@ export const CapCard = ({
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
+	const [thumbnailDialogMounted, setThumbnailDialogMounted] = useState(false);
+	const [isThumbnailDialogOpen, setIsThumbnailDialogOpen] = useState(false);
 	const { user, setUpgradeModalOpen } = useDashboardContext();
 	const [editUpgradeModalOpen, setEditUpgradeModalOpen] = useState(false);
 
@@ -251,6 +260,7 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+	const customThumbnail = getCustomThumbnailMetadata(cap.metadata);
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
 	// A drag carries at most MAX_MOVE_ITEMS ids; larger selections ("Select
 	// all") go through the Move button, which sends them in batches.
@@ -652,6 +662,19 @@ export const CapCard = ({
 											<p className="text-sm text-gray-12">Edit video</p>
 										</DropdownMenuItem>
 									)}
+									{cap.isScreenshot !== true && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												setThumbnailDialogMounted(true);
+												setIsThumbnailDialogOpen(true);
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faImage} />
+											<p className="text-sm text-gray-12">Thumbnail</p>
+										</DropdownMenuItem>
+									)}
 									<DropdownMenuItem
 										onClick={() => {
 											if (!user.isPro) setUpgradeModalOpen(true);
@@ -701,6 +724,20 @@ export const CapCard = ({
 						</DropdownMenuContent>
 					</DropdownMenu>
 
+					{thumbnailDialogMounted && (
+						<CustomThumbnailDialog
+							open={isThumbnailDialogOpen}
+							onOpenChange={setIsThumbnailDialogOpen}
+							videoId={cap.id}
+							hasCustomThumbnail={customThumbnail !== null}
+							canPickFrame={
+								!cap.hasActiveUpload &&
+								(cap.source?.type === "desktopMP4" ||
+									cap.source?.type === "webMP4")
+							}
+							initialFrameTime={customThumbnail?.time ?? null}
+						/>
+					)}
 					<ConfirmationDialog
 						open={confirmOpen}
 						icon={<FontAwesomeIcon icon={faVideo} />}
