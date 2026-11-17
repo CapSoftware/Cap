@@ -184,7 +184,7 @@ fn track_label(kind: TrackKind) -> &'static str {
 
 fn track_icon(kind: TrackKind) -> &'static str {
     match kind {
-        TrackKind::Screen => "icons/monitor.svg",
+        TrackKind::Screen => "icons/monitor-outline.svg",
         TrackKind::Camera => "icons/camera.svg",
         TrackKind::Microphone => "icons/microphone.svg",
         TrackKind::SystemAudio => "icons/audio-on.svg",
