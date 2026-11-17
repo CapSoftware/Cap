@@ -2456,32 +2456,58 @@ fn held_time_before(holds: &[(f64, f64)], time: f64) -> f64 {
 /// preference -- the mode the caption override panel uses. The `"incoming"`
 /// arm serves only the legacy non-source-timed inversion, which this build
 /// never produces.
+///
+/// `recording_clip` is the clip a caption is tied to
+/// (`CaptionSegment::recording_clip`): where its clip overlaps another, as in
+/// a crossfade, the time maps through that clip, the only one it shows in.
+/// A clip trimmed past its media end (a held tail) counts toward
+/// `source_range` only up to that end: past it the source clock is the next
+/// clip's, as in caption projection.
+/// Returns the source time and the recording clip it was mapped through.
 pub fn map_edited_time_to_source(
     edited_time: f64,
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
     source_range: Option<(f64, f64)>,
-) -> Option<f64> {
+    recording_clip: Option<u32>,
+) -> Option<(f64, u32)> {
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
+    let media_end = |clip: u32| {
+        let clip = clip as usize;
+        (clip + 1 < recording_durations.len())
+            .then(|| recording_durations[..=clip].iter().sum::<f64>())
+    };
+    let mut in_range = None;
     let mut fallback = None;
-    for mapping in build_source_to_edited_mappings(timeline, recording_durations) {
+    for (mapping, segment) in build_source_to_edited_mappings(timeline, recording_durations)
+        .into_iter()
+        .zip(&timeline.segments)
+    {
         let edited_end =
             mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
         if edited_time >= mapping.edited_start && edited_time <= edited_end {
-            let source_time =
-                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale;
-            if let Some((range_start, range_end)) = source_range
-                && range_start < mapping.source_end
+            let hit = (
+                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale,
+                segment.recording_clip,
+            );
+            if recording_clip == Some(segment.recording_clip) {
+                return Some(hit);
+            }
+            if in_range.is_none()
+                && let Some((range_start, range_end)) = source_range
+                && range_start
+                    < media_end(segment.recording_clip)
+                        .map_or(mapping.source_end, |end| mapping.source_end.min(end))
                 && range_end > mapping.source_start
             {
-                return Some(source_time);
+                in_range = Some(hit);
             }
             if fallback.is_none() {
-                fallback = Some(source_time);
+                fallback = Some(hit);
             }
         }
     }
-    fallback
+    in_range.or(fallback)
 }
 
 /// `syncCaptionWordsWithText` (`captions.ts:593-632`): keep word timings when
@@ -2567,19 +2593,17 @@ pub fn write_caption_edit_to_source(
     };
 
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
-        map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
-    {
+    let tie = source.recording_clip;
+    let map =
+        |time| map_edited_time_to_source(time, timeline, recording_durations, source_range, tie);
+    if let Some((start, _)) = map(track_start) {
         source.start = start as f32;
     }
-    if let Some(end) =
-        map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
-    {
+    if let Some((end, clip)) = map(track_end) {
         source.end = end as f32;
-    }
-    // Over a clip's held tail (past its media end) the source clock already
-    // belongs to the next clip, so the caption is tied to the clip it sits on.
-    if let Some((clip, _)) = timeline.source_for_output_time((track_start + track_end) / 2.0) {
+        // Over a clip's held tail (past its media end) the source clock
+        // already belongs to the next clip, so the caption is tied to the
+        // clip its end was mapped through.
         source.recording_clip =
             cap_project::held_tail_clip(clip, f64::from(source.end), recording_durations);
     }
@@ -3455,6 +3479,91 @@ mod tests {
         assert_eq!(track(&mut project), [(8.0, 9.0)]);
         assert_eq!(moved(&mut project, 1.0, 2.0), None);
         assert_eq!(track(&mut project), [(1.0, 2.0)]);
+    }
+
+    // Greptile's crossfade case: clips 4..14 (a held tail from 10 s) and
+    // 0..10 of two 10 s recordings, with a 1 s crossfade. A caption tied to
+    // the first clip and one of the second clip both show at 9.2..9.8, inside
+    // the fade. Retyping either keeps it on its own clip and moment.
+    #[test]
+    fn retyping_a_caption_inside_a_crossfade_keeps_its_clip() {
+        let mut tied = caption("caption-tail", 13.2, 13.8, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![tied, caption("next", 10.2, 10.8, &[("next", 10.2, 10.8)])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        let track = |project: &mut ProjectConfiguration| {
+            cap_project::synchronize_captions(project, &durations);
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| {
+                    let near = |time: f64| (time * 1000.0).round() / 1000.0;
+                    (segment.text.clone(), near(segment.start), near(segment.end))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut before = track(&mut project);
+        before.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            before,
+            [
+                ("next".to_string(), 9.2, 9.8),
+                ("typed".to_string(), 9.2, 9.8)
+            ]
+        );
+        let retype = |project: &mut ProjectConfiguration, id: &str, text: &str| {
+            let timeline = project.timeline.as_mut().unwrap();
+            let index = timeline
+                .caption_segments
+                .iter()
+                .position(|item| source_caption_id(&item.id) == id)
+                .unwrap();
+            timeline.caption_segments[index].text = text.to_string();
+            write_caption_edit_to_source(project, index, &durations);
+            let source = project
+                .captions
+                .as_ref()
+                .unwrap()
+                .segments
+                .iter()
+                .find(|segment| segment.id == id)
+                .unwrap();
+            let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+            (near(source.start), near(source.end), source.recording_clip)
+        };
+        assert_eq!(
+            retype(&mut project, "caption-tail", "tail"),
+            (13.2, 13.8, Some(0))
+        );
+        assert_eq!(retype(&mut project, "next", "after"), (10.2, 10.8, None));
+        let mut after = track(&mut project);
+        after.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            after,
+            [
+                ("after".to_string(), 9.2, 9.8),
+                ("tail".to_string(), 9.2, 9.8)
+            ]
+        );
     }
 
     #[test]

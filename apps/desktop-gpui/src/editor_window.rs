@@ -6101,11 +6101,12 @@ fn split_caption_segment(
     };
     let split_output = track.start + at;
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    let Some(split_source) = crate::transcription::map_edited_time_to_source(
+    let Some((split_source, _)) = crate::transcription::map_edited_time_to_source(
         split_output,
         timeline,
         recording_durations,
         source_range,
+        source.recording_clip,
     ) else {
         return false;
     };
