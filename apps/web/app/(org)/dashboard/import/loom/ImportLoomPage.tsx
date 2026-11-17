@@ -30,7 +30,7 @@ import { faFileCsv } from "@fortawesome/free-solid-svg-icons/faFileCsv";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons/faTriangleExclamation";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -301,6 +301,7 @@ export const ImportLoomPage = ({
 }) => {
 	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
+	const queryClient = useQueryClient();
 	const searchParams = useSearchParams();
 	const prefilledLoomUrl = searchParams?.get("url")?.trim() ?? "";
 	const prefilledMode: Mode =
@@ -671,6 +672,9 @@ export const ImportLoomPage = ({
 					)} started.`,
 				);
 				router.refresh();
+				void queryClient.invalidateQueries({
+					queryKey: ["loom-import-overview"],
+				});
 			} else {
 				toast.error(finalResult.error || "No Loom videos were imported.");
 			}
