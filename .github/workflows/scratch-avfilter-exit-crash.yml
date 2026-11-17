@@ -54,8 +54,10 @@ jobs:
           New-Item -ItemType Directory -Force $proj | Out-Null
           & "$env:RUNNER_TEMP\ff\ffmpeg-7.1-full_build-shared\bin\ffmpeg.exe" -v error -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=2" -f lavfi -i "sine=frequency=440:duration=2" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest "$proj\display.mp4"
           '{"pretty_name":"Exit crash probe","display":{"path":"display.mp4","fps":30}}' | Set-Content -Encoding ascii "$proj\recording-meta.json"
+          '{}' | Set-Content -Encoding ascii "$proj\project-config.json"
           & "$env:RUNNER_TEMP\cap\cap-cli.exe" export $proj -o "$env:RUNNER_TEMP\probe.mp4" --force-ffmpeg-decoder
           "probe export exit $LASTEXITCODE"
+          $global:LASTEXITCODE = 0
           Get-Item "$env:RUNNER_TEMP\probe.mp4" -ErrorAction SilentlyContinue | Format-List Length
 
       - name: Count crashes (product processes)
