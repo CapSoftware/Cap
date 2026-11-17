@@ -74,23 +74,24 @@ export type CapRequest = LifecycleRequest | EventRequest | ActionRequest;
 
 export const ACTION_MESSAGE_MAX_LENGTH = 140;
 
+// Shown to people as a toast or notice, so text-direction, zero-width and
+// control characters (which can make a message read as something else) are
+// refused like they are in listing text.
+const ActionMessage = Schema.String.pipe(
+	Schema.minLength(1),
+	Schema.maxLength(ACTION_MESSAGE_MAX_LENGTH),
+	Schema.filter((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+);
+
 export const ActionResult = Schema.Union(
 	Schema.Struct({
 		type: Schema.Literal("toast"),
-		message: Schema.String.pipe(
-			Schema.minLength(1),
-			Schema.maxLength(ACTION_MESSAGE_MAX_LENGTH),
-		),
+		message: ActionMessage,
 	}),
 	Schema.Struct({
 		type: Schema.Literal("open"),
 		url: HttpsUrl,
-		message: Schema.optional(
-			Schema.String.pipe(
-				Schema.minLength(1),
-				Schema.maxLength(ACTION_MESSAGE_MAX_LENGTH),
-			),
-		),
+		message: Schema.optional(ActionMessage),
 	}),
 );
 export type ActionResult = typeof ActionResult.Type;

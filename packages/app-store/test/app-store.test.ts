@@ -544,6 +544,16 @@ describe("action results", () => {
 			parseActionResult({ type: "open", url: "javascript:alert(1)" }),
 		).toBeNull();
 		expect(parseActionResult({ type: "html", body: "<b>" })).toBeNull();
+		expect(
+			parseActionResult({ type: "toast", message: "Posted \u202Eetadpu" }),
+		).toBeNull();
+		expect(
+			parseActionResult({
+				type: "open",
+				url: "https://example.com/x",
+				message: "Op\u200Ben",
+			}),
+		).toBeNull();
 		expect(parseActionResult({ type: "toast", message: "" })).toBeNull();
 	});
 });
