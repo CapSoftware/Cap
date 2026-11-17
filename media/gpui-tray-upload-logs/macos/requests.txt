@@ -1,0 +1,2 @@
+03:16:00 POST /api/desktop/logs content-type=multipart/form-data bytes=4490 auth=no has_log=True has_diagnostics=True
+03:17:09 POST /api/desktop/logs content-type=multipart/form-data bytes=7273 auth=no has_log=True has_diagnostics=True
