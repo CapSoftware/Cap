@@ -148,11 +148,14 @@ impl ExporterBuilder {
 
         cap_project::clamp_timeline_to_sources(
             &mut project_config,
-            &recordings
-                .segments
-                .iter()
-                .map(|segment| segment.display.duration)
-                .collect::<Vec<_>>(),
+            &cap_project::late_audio_trim_limits(
+                studio_meta,
+                &recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect::<Vec<_>>(),
+            ),
         );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(

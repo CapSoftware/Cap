@@ -630,11 +630,14 @@ impl EditorInstance {
 
         cap_project::clamp_timeline_to_sources(
             &mut project,
-            &recordings
-                .segments
-                .iter()
-                .map(|segment| segment.display.duration)
-                .collect::<Vec<_>>(),
+            &cap_project::late_audio_trim_limits(
+                meta,
+                &recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect::<Vec<_>>(),
+            ),
         );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
         cap_project::synchronize_captions(

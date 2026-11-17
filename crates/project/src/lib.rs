@@ -24,7 +24,7 @@ pub use caption_words::{
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
-pub use late_audio::migrate_late_audio_alignment;
+pub use late_audio::{late_audio_trim_limits, migrate_late_audio_alignment};
 pub use meta::*;
 pub use shapes::*;
 
