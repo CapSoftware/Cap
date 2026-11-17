@@ -61,9 +61,26 @@ pub(crate) struct InputSwitchState {
     queued: Vec<InputRequest>,
     pub(super) error: Option<String>,
     timer_frozen_at: Option<Instant>,
+    /// Inputs a failed Studio switch left off the recording: the new device
+    /// did not attach and neither did the previous one, though `Feeds` still
+    /// names it.
+    unattached: Vec<InputKind>,
 }
 
 impl InputSwitchState {
+    /// Choosing the device `Feeds` already names changes nothing, unless a
+    /// failed switch left that input off the recording.
+    fn already_selected(&self, kind: InputKind) -> bool {
+        !self.unattached.contains(&kind)
+    }
+
+    fn settle(&mut self, kind: InputKind, attached: bool) {
+        self.unattached.retain(|unattached| *unattached != kind);
+        if !attached {
+            self.unattached.push(kind);
+        }
+    }
+
     fn submit(&mut self, request: InputRequest) -> Option<InputRequest> {
         if self.pending.is_some() {
             self.queued.retain(|queued| queued.kind() != request.kind());
@@ -90,6 +107,10 @@ struct StudioSwitchOutcome {
     /// `Some(true)` when the recording was left paused (a resume failed),
     /// `Some(false)` when it runs again, `None` when the actor never answered.
     paused: Option<bool>,
+    /// `Some(true)` when the recording holds the input `Feeds` names,
+    /// `Some(false)` when it holds none, `None` when the old input was never
+    /// detached.
+    holds_selection: Option<bool>,
 }
 
 impl RecordingSession {
@@ -349,7 +370,7 @@ impl RecordingSession {
                 InputRequest::Camera(Feeds::global(cx).read(cx).camera.clone())
             }
         };
-        if previous == request {
+        if previous == request && self.input_switch.already_selected(request.kind()) {
             self.input_switch.error = None;
             self.finish_input_switch(generation, cx);
             return;
@@ -375,6 +396,9 @@ impl RecordingSession {
                 {
                     this.phase = Phase::Recording { paused: true };
                     this.input_switch.timer_frozen_at = None;
+                }
+                if let Some(attached) = outcome.holds_selection {
+                    this.input_switch.settle(requested.kind(), attached);
                 }
                 if outcome.error.is_none() {
                     this.remember_input(&requested);
@@ -457,6 +481,7 @@ async fn studio_switch(
                     &request.device_label(),
                 )),
                 paused: Some(false),
+                holds_selection: None,
             };
         }
     }
@@ -472,6 +497,7 @@ async fn studio_switch(
     .await;
 
     let mut error = None;
+    let mut holds_selection = None;
     if let Err(detach_error) = detached {
         tracing::warn!("detaching the old input failed: {detach_error:#}");
         error = Some(tr::controls::settings::switch_failed(
@@ -479,7 +505,7 @@ async fn studio_switch(
         ));
     } else if current(cx) {
         match attach_selection(this, cx, &handle, &request).await {
-            Ok(()) => {}
+            Ok(()) => holds_selection = Some(true),
             Err(attach_error) => {
                 tracing::warn!(
                     device = %request.device_label(),
@@ -488,10 +514,16 @@ async fn studio_switch(
                 error = Some(tr::controls::settings::switch_failed(
                     &request.device_label(),
                 ));
-                if current(cx)
-                    && let Err(restore_error) = attach_selection(this, cx, &handle, &previous).await
-                {
-                    tracing::error!("restoring the previous input failed: {restore_error:#}");
+                holds_selection = Some(false);
+                if current(cx) {
+                    match attach_selection(this, cx, &handle, &previous).await {
+                        Ok(()) => holds_selection = Some(true),
+                        Err(restore_error) => {
+                            tracing::error!(
+                                "restoring the previous input failed: {restore_error:#}"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -501,6 +533,7 @@ async fn studio_switch(
         return StudioSwitchOutcome {
             error,
             paused: Some(was_paused),
+            holds_selection,
         };
     }
     let resume = handle.clone();
@@ -508,6 +541,7 @@ async fn studio_switch(
         Ok(()) => StudioSwitchOutcome {
             error,
             paused: Some(false),
+            holds_selection,
         },
         Err(resume_error) => {
             tracing::error!("resuming after an input switch failed: {resume_error:#}");
@@ -521,6 +555,7 @@ async fn studio_switch(
                     "{resume_error:#}. Use Stop if recording cannot continue safely."
                 )),
                 paused,
+                holds_selection,
             }
         }
     }
@@ -645,6 +680,24 @@ mod tests {
         assert_eq!(state.pending, Some(InputKind::Camera));
         assert_eq!(state.finish(), Some(mic("b")));
         assert_eq!(state.finish(), None);
+    }
+
+    /// A Studio switch whose new device and whose restore both failed leaves
+    /// the input off the recording while `Feeds` still names the old device.
+    /// Choosing that device again must retry the attach instead of being
+    /// skipped as a no-op, until an attach works.
+    #[test]
+    fn an_input_left_off_the_recording_is_reattached_when_chosen_again() {
+        let mut state = InputSwitchState::default();
+        assert!(state.already_selected(InputKind::Microphone));
+        state.settle(InputKind::Microphone, false);
+        assert!(!state.already_selected(InputKind::Microphone));
+        assert!(state.already_selected(InputKind::Camera));
+        state.settle(InputKind::Microphone, false);
+        assert!(!state.already_selected(InputKind::Microphone));
+        state.settle(InputKind::Microphone, true);
+        assert!(state.already_selected(InputKind::Microphone));
+        assert!(state.unattached.is_empty());
     }
 
     /// A camera open that fails because Stop parked the bubble must neither
