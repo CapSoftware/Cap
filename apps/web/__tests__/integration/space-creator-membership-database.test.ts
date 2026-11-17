@@ -15,9 +15,6 @@ import { deleteOrganizationMembership } from "@/lib/organization-member-removal"
 import { FoldersPolicy } from "../../../../packages/web-backend/src/Folders/FoldersPolicy";
 import { Spaces } from "../../../../packages/web-backend/src/Spaces";
 
-// Space access through the real Spaces and Folders policies against a real
-// migrated MySQL database, covering creators who leave the organization.
-
 const fixture = vi.hoisted(() => ({ database: undefined as unknown }));
 
 vi.mock("server-only", () => ({}));
