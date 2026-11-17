@@ -1080,6 +1080,34 @@ fn macos_device_name_released(device_id: coreaudio::sys::AudioDeviceID) -> Optio
     Some(unsafe { CFString::wrap_under_create_rule(device_name) }.to_string())
 }
 
+/// Every ALSA card's name, the name cpal gives the card's input device,
+/// without opening any of its PCMs.
+#[cfg(target_os = "linux")]
+fn alsa_card_names() -> Vec<String> {
+    use std::ffi::{CStr, c_char, c_int};
+
+    #[link(name = "asound")]
+    unsafe extern "C" {
+        fn snd_card_next(card: *mut c_int) -> c_int;
+        fn snd_card_get_name(card: c_int, name: *mut *mut c_char) -> c_int;
+    }
+
+    let mut names = Vec::new();
+    let mut card: c_int = -1;
+    while unsafe { snd_card_next(&mut card) } >= 0 && card >= 0 {
+        let mut name: *mut c_char = std::ptr::null_mut();
+        if unsafe { snd_card_get_name(card, &mut name) } >= 0 && !name.is_null() {
+            names.push(
+                unsafe { CStr::from_ptr(name) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            unsafe { libc::free(name.cast()) };
+        }
+    }
+    names
+}
+
 #[cfg(not(target_os = "macos"))]
 fn list_input_device_names() -> Vec<String> {
     let host = cpal::default_host();
@@ -1158,6 +1186,22 @@ impl MicrophoneFeed {
 
     pub fn list_names() -> Vec<String> {
         list_input_device_names()
+    }
+
+    /// Whether the input device with this name is still plugged in.
+    ///
+    /// On Linux, [`Self::list_names`] lists a sound card only if it can open
+    /// it, and ALSA hardware PCMs are exclusive: the card a feed is recording
+    /// from drops out of that list. A card counts as present for as long as
+    /// ALSA still has it, which needs no PCM to be opened.
+    pub fn is_connected(name: &str) -> bool {
+        #[cfg(target_os = "linux")]
+        if alsa_card_names().iter().any(|card| card == name) {
+            return true;
+        }
+        list_input_device_names()
+            .iter()
+            .any(|listed| listed == name)
     }
 
     pub fn list_with_settings(settings: Option<&MicrophoneDeviceSettings>) -> MicrophonesMap {
