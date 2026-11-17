@@ -868,6 +868,35 @@ impl ActiveRecording {
         }
     }
 
+    /// The feeds this recording opened for itself at start, when the app's
+    /// feed could not be locked.
+    pub(crate) fn owned_microphone_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
+        self._mic_feed.as_ref().map(|feed| feed.0.clone())
+    }
+
+    pub(crate) fn owned_camera_actor(&self) -> Option<ActorRef<CameraFeed>> {
+        self._camera_feed.as_ref().map(|feed| feed.0.clone())
+    }
+
+    /// A switch moved the recording off its own start-up feed; it is no
+    /// longer the one to reopen.
+    pub(crate) fn release_owned_microphone(&mut self) {
+        self._mic_feed = None;
+        self._mic_errors = None;
+    }
+
+    pub(crate) fn release_owned_camera(&mut self) {
+        self._camera_feed = None;
+    }
+
+    pub(crate) fn switched_microphone_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
+        self.switched_microphone
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|switched| switched._feed.0.clone())
+    }
+
     pub(crate) fn studio_handle(&self) -> Option<studio_recording::ActorHandle> {
         match &self.handle {
             Handle::Studio(handle) => Some(handle.clone()),
