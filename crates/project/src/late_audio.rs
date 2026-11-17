@@ -340,7 +340,13 @@ fn shift_captions(
     captions.segments = Vec::with_capacity(segments.len());
     for (clip, mut segment) in segments {
         let start_clip = clip.or_else(|| clip_of(segment.start));
-        let mut end_clip = start_clip;
+        // A caption without words that runs into the next clip ends on that
+        // clip's clock, as a worded one does through its last word; a part
+        // cut for one clip stays on it.
+        let mut end_clip = match clip {
+            None if segment.words.is_empty() => clip_of(segment.end).or(start_clip),
+            _ => start_clip,
+        };
         let mut segment_moved = false;
         for word in &mut segment.words {
             let clip = clip_of(word.start);
@@ -1461,6 +1467,74 @@ mod tests {
         crate::synchronize_captions(&mut before, &[10.0, 10.0]);
         assert_eq!(rendered_track(&before).len(), 1);
         assert_captions_render_the_same(&before, &meta(4.05), &[10.0, 10.0]);
+    }
+
+    // Typed captions (no words) running across an untouched late clip's
+    // edges move each end with the clip it is in, as worded captions do: one
+    // from the late clip into the next keeps its part over the next clip
+    // instead of collapsing at the late clip's end, and one from the clip
+    // before into the late clip follows the late audio at its end.
+    #[test]
+    fn typed_captions_across_an_untouched_late_clip_keep_each_side() {
+        let durations = [10.0, 10.0, 10.0];
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 0.0, "end": 10.0, "timescale": 1.0 },
+                    { "recordingSegment": 1, "start": 0.0, "end": 10.0, "timescale": 1.0 },
+                    { "recordingSegment": 2, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        let typed = |id: &str, start: f32, end: f32| CaptionSegment {
+            id: id.into(),
+            start,
+            end,
+            text: id.into(),
+            words: Vec::new(),
+            recording_clip: None,
+        };
+        project.captions = Some(CaptionsData {
+            segments: vec![
+                typed("caption-into", 8.0, 12.0),
+                typed("caption-out", 18.0, 22.0),
+            ],
+            source_timed: true,
+            ..Default::default()
+        });
+        crate::synchronize_captions(&mut project, &durations);
+        migrate_late_audio_alignment(&mut project, &meta_late_middle(), || durations.to_vec());
+        assert_eq!(late_clip_start(&project), 0.0, "restored, not edited");
+        let near = |time: f32| (f64::from(time) * 100.0).round() / 100.0;
+        let captions: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|c| (c.id.as_str(), near(c.start), near(c.end), c.recording_clip))
+            .collect();
+        assert_eq!(
+            captions,
+            [
+                ("caption-into", 8.0, 16.0, None),
+                ("caption-out", 20.0, 22.0, None)
+            ]
+        );
+        let track: Vec<_> = rendered_track(&project)
+            .into_iter()
+            .map(|c| (c.2, near(c.0 as f32), near(c.1 as f32)))
+            .collect();
+        assert_eq!(
+            track,
+            [
+                ("caption-into".to_string(), 8.0, 10.0),
+                ("caption-into".to_string(), 10.0, 16.0),
+                ("caption-out".to_string(), 20.0, 22.0)
+            ]
+        );
     }
 
     // An untouched late clip keeps its current behaviour: its captions follow
