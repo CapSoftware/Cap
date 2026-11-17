@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推奨）"
 label = "最大キャプチャフレームレート"
 
+[settings.general.recording.keep_drawings]
+description = "描画は消去するまで残ります。オフにすると、描いてから数秒で消えます。"
+label = "描画を画面に残す"
+
 [settings.general.recording.marker_sound]
 description = "Studio録画中にマーカーを追加すると短い音を鳴らします。マイクやシステムオーディオに録音される場合があります。"
 label = "マーカー追加時に音を鳴らす"
@@ -470,6 +474,7 @@ screenshot_window = "ウィンドウのスクリーンショット"
 start_instant = "Instant録画を開始"
 start_studio = "Studio録画を開始"
 stop = "録画を停止"
+toggle_drawing = "画面に描く"
 
 [settings.shortcuts.effect]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます"
@@ -503,6 +508,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します"
 studio = "選択した画面またはウィンドウをStudioモードで録画します"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます"
+toggle_drawing = "録画中に画面への描画を開始または終了します"
 
 [settings.shortcuts.sentence]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます。"
@@ -536,6 +542,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します。"
 studio = "選択した画面またはウィンドウをStudioモードで録画します。"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます。"
+toggle_drawing = "録画中に画面への描画を開始または終了します。"
 
 [settings.cli]
 command = "コマンド"
@@ -604,6 +611,9 @@ uploading = "アップロード中..."
 confirm_body = "Capは画面全体に点滅パターンを表示し、処理ごとに約{seconds}秒間大きなビープ音を鳴らします。ヘッドフォンを外し、音が聞こえる音量にして、終わるまでコンピュータに触れないでください。"
 confirm_title = "診断を実行しますか？"
 description = "点滅とビープ音の短いテストパターンを録画し、映像と音声のずれを測定して、ディスプレイ、カメラ、マイク、ディスク容量、録画設定の状態を記録します。送信を選ぶまで、何も送信されません。"
+duration_description = "長く実行するほど、ゆっくりしたずれを検出しやすくなります。"
+duration_label = "テスト時間"
+duration_option = "{seconds}秒"
 mic_description = "マイクも録音し、ビープ音を正しいタイミングで拾えているか確認します。マイクに実際に聞こえるスピーカーが必要です。"
 mic_label = "マイクをテスト"
 mode_description = "テストする処理を選びます。「両方」を選ぶと、Studioモードの後にInstantモードを実行します。"
@@ -1211,8 +1221,31 @@ resuming = "再開中…"
 saving = "保存中…"
 starting = "開始中"
 
+[controls.disconnected]
+camera = "カメラが切断されました。カメラのオーバーレイなしで録画を続けます。"
+microphone = "マイクが切断されました。再接続されるまで無音で録音します。"
+
 [controls.marker]
 add = "マーカーを追加"
+
+[controls.draw]
+arrow = "矢印、⇧で45°にスナップ"
+clear = "すべて消去"
+highlighter = "蛍光ペン、⇧で直線"
+pen = "ペン、⇧で直線"
+rectangle = "四角形、⇧で正方形"
+start = "画面に描く"
+stop = "描画を終了"
+undo = "取り消す"
+window_unavailable = "描画は画面録画と範囲録画で使えます"
+
+[controls.settings]
+locked = "この録画では変更できません"
+not_in_recording = "この録画では未使用"
+open = "録画設定"
+show_camera_preview = "カメラプレビューを表示"
+switch_failed = "{device} に切り替えられませんでした。録画は続行中です。"
+switching = "切り替え中…"
 
 [camera]
 waiting_title = "カメラへのアクセスを待っています"
@@ -1228,6 +1261,8 @@ mirror_title = "反転を使用できません"
 [camera.issue]
 access_message = "クリックして、システム設定でCapにカメラの使用を許可してください。"
 access_title = "カメラへのアクセスが必要です"
+disconnected_message = "選択したカメラから映像が届かなくなりました。"
+disconnected_title = "カメラが切断されました"
 generic = "選択したカメラを起動できませんでした。別のカメラを選ぶか、このカメラを接続し直してください。"
 invalid_format = "このカメラから使用可能なキャプチャフォーマットを取得できませんでした。"
 not_found = "このカメラは使用できなくなりました。接続されていて、システムの権限で許可されているか確認してください。"
@@ -2534,6 +2569,7 @@ format = "形式"
 frame_rate = "フレームレート"
 quality = "品質"
 resolution = "解像度"
+tracks = "トラック"
 
 [editor.export.stats]
 calculating = "計算中…"
@@ -2545,6 +2581,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "サイズを精査中…"
 refining_time = "時間を精査中…"
 unavailable = "利用不可"
+
+[editor.export.tracks]
+aligned = "各トラックはカットや速度の変更に沿うため、どの動画編集ソフトでも揃います。映像は背景やエフェクトなしで書き出されます。"
+audio_detail = "WAV · 48 kHz"
+camera = "カメラ"
+choose_one = "書き出すトラックを1つ以上選んでください。"
+cta = "トラックを書き出す"
+exported = "トラックを書き出しました"
+exporting = "トラックを書き出し中"
+file_count = { other = "{count}ファイル" }
+file_only = "トラックはフォルダ内に個別のファイルとして保存されます。"
+files = "ファイル"
+format = "トラック"
+microphone = "マイク"
+open_folder = "フォルダを開く"
+screen = "画面"
+studio_only = "個別のトラックはStudioモードでのみ録画されます。"
+system_audio = "システム音声"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "ターボ書き出し"

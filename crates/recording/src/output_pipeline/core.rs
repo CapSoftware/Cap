@@ -5152,6 +5152,13 @@ impl PipelineStopSignal {
 #[error("Screen capture stopped from macOS sharing controls")]
 pub struct PipelineStoppedByUser;
 
+/// The muxer never received a video frame, so the track has no media to
+/// finalize: an empty output rather than a broken one. Studio leaves such a
+/// segment out and keeps the rest of the recording.
+#[derive(Debug, thiserror::Error)]
+#[error("No video frames were captured")]
+pub struct NoVideoFramesCaptured;
+
 #[derive(Clone, Debug)]
 pub struct PipelineDoneError(Arc<anyhow::Error>);
 

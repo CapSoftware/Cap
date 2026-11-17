@@ -331,6 +331,7 @@ pub(crate) struct PagesState {
     diagnostic: DiagnosticStatus,
     diagnostic_mode: diagnostics::SyncMode,
     diagnostic_mic: bool,
+    diagnostic_duration_secs: u64,
     /// Set for the length of a run; the Cancel button flips it and the runner's
     /// watchdog kills the self-test subprocess. It stays readable after Cancel
     /// so the run's later stages can still see it.
@@ -434,6 +435,7 @@ impl PagesState {
             diagnostic: DiagnosticStatus::Idle,
             diagnostic_mode: diagnostics::SyncMode::Both,
             diagnostic_mic: false,
+            diagnostic_duration_secs: diagnostics::DEFAULT_DURATION_SECS,
             diagnostic_cancel: None,
             diagnostic_cancelling: false,
             diagnostic_payload: None,
@@ -941,7 +943,18 @@ const RECORDING_SHORTCUTS: [&str; 7] = [
     "cycleRecordingMode",
 ];
 
-const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
+#[cfg(target_os = "macos")]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
+    "stopRecording",
+    "togglePauseRecording",
+    "restartRecording",
+    store::RECORDING_MARKER_HOTKEY,
+    store::DRAW_HOTKEY,
+];
+
+/// Drawing on screen is macOS only, so its shortcut is too.
+#[cfg(not(target_os = "macos"))]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
     "stopRecording",
     "togglePauseRecording",
     "restartRecording",
@@ -1101,6 +1114,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
+        store::DRAW_HOTKEY => tr::settings::shortcuts::label::toggle_drawing(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1272,6 +1286,10 @@ fn shortcut_effect(
         store::RECORDING_MARKER_HOTKEY => ShortcutEffect {
             phrase: tr::settings::shortcuts::effect::add_marker,
             sentence: tr::settings::shortcuts::sentence::add_marker,
+        },
+        store::DRAW_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::toggle_drawing,
+            sentence: tr::settings::shortcuts::sentence::toggle_drawing,
         },
         _ => return None,
     };
@@ -1774,7 +1792,7 @@ impl SettingsWindow {
             ),
         ];
 
-        let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+        let while_recording = rows_for(WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
@@ -2971,7 +2989,7 @@ impl SettingsWindow {
         // A stray click costs a couple of minutes of hijacked screen and loud
         // beeps, so it is confirmed the way the Tauri app confirms it.
         let message =
-            tr::settings::feedback::diagnostic::confirm_body(diagnostics::DEFAULT_DURATION_SECS);
+            tr::settings::feedback::diagnostic::confirm_body(self.pages.diagnostic_duration_secs);
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(
                 tr::settings::feedback::diagnostic::confirm_title(),
@@ -3005,7 +3023,7 @@ impl SettingsWindow {
         let options = diagnostics::SyncTestOptions {
             mode: self.pages.diagnostic_mode,
             microphone: self.pages.diagnostic_mic,
-            duration_secs: diagnostics::DEFAULT_DURATION_SECS,
+            duration_secs: self.pages.diagnostic_duration_secs,
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.pages.diagnostic_cancel = Some(cancel.clone());
@@ -3195,16 +3213,14 @@ impl SettingsWindow {
             let (log, report, diagnostics_json) = cx
                 .background_executor()
                 .spawn(async move {
-                    let log = diagnostics::log_tail();
                     match payload {
                         Some(payload) => (
-                            log,
+                            diagnostics::log_tail(),
                             Some(payload.report_json),
                             Some(payload.diagnostics_json),
                         ),
                         None => {
-                            let diagnostics_json =
-                                serde_json::to_string(&diagnostics::collect_log_diagnostics()).ok();
+                            let (log, diagnostics_json) = diagnostics::log_upload_payload();
                             (log, None, diagnostics_json)
                         }
                     }
@@ -3302,11 +3318,38 @@ impl SettingsWindow {
             }
         }));
 
+        let duration = self.pages.diagnostic_duration_secs;
+        let duration_control = ui::SegmentedControl::settings(
+            &theme,
+            "diagnostic-duration",
+            diagnostics::DURATION_CHOICES_SECS
+                .iter()
+                .map(|seconds| {
+                    ui::SegmentOption::new(
+                        tr::settings::feedback::diagnostic::duration_option(*seconds),
+                        *seconds == duration,
+                    )
+                    .disabled(running)
+                })
+                .collect(),
+        )
+        .on_select(cx.listener(|this, index: &usize, _window, cx| {
+            if let Some(seconds) = ui::option_at(diagnostics::DURATION_CHOICES_SECS, *index) {
+                this.pages.diagnostic_duration_secs = seconds;
+                cx.notify();
+            }
+        }));
+
         let options = self.rows(vec![
             self.setting_row(
                 tr::settings::feedback::diagnostic::mode_label(),
                 Some(tr::settings::feedback::diagnostic::mode_description()),
                 mode_control.into_any_element(),
+            ),
+            self.setting_row(
+                tr::settings::feedback::diagnostic::duration_label(),
+                Some(tr::settings::feedback::diagnostic::duration_description()),
+                duration_control.into_any_element(),
             ),
             self.setting_row(
                 tr::settings::feedback::diagnostic::mic_label(),
@@ -8508,7 +8551,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 14);
+        assert_eq!(shown.len(), 14 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8695,6 +8738,7 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in a Studio recording".into(),
+            "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
         }
     }
@@ -8739,7 +8783,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 31, "every effect message is reachable");
+        assert_eq!(
+            checked.len(),
+            31 + usize::from(crate::live_draw::SUPPORTED),
+            "every effect message is reachable"
+        );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 

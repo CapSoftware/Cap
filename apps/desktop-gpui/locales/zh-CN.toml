@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推荐）"
 label = "最大捕获帧率"
 
+[settings.general.recording.keep_drawings]
+description = "绘制内容会一直保留，直到你清除。关闭后，每笔绘制会在几秒后淡出。"
+label = "在屏幕上保留绘制内容"
+
 [settings.general.recording.marker_sound]
 description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
 label = "添加标记时播放提示音"
@@ -470,6 +474,7 @@ screenshot_window = "截取窗口"
 start_instant = "开始 Instant 录制"
 start_studio = "开始 Studio 录制"
 stop = "停止录制"
+toggle_drawing = "在屏幕上绘制"
 
 [settings.shortcuts.effect]
 add_marker = "在 Studio 录制中标记此刻"
@@ -503,6 +508,7 @@ screenshot_window_save = "截取指针所在的窗口并保存到你的资料库
 stop = "停止当前录制"
 studio = "以 Studio 模式录制所选屏幕或窗口"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
+toggle_drawing = "在录制时开始或停止在屏幕上绘制"
 
 [settings.shortcuts.sentence]
 add_marker = "在 Studio 录制中标记此刻。"
@@ -536,6 +542,7 @@ screenshot_window_save = "截取指针所在的窗口并保存到你的资料库
 stop = "停止当前录制。"
 studio = "以 Studio 模式录制所选屏幕或窗口。"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器。"
+toggle_drawing = "在录制时开始或停止在屏幕上绘制。"
 
 [settings.cli]
 command = "命令"
@@ -604,6 +611,9 @@ uploading = "正在上传..."
 confirm_body = "Cap 将以闪烁图案占据你的屏幕并播放响亮的提示音，每条处理流程约 {seconds} 秒。请摘下耳机，不要静音，并在完成前不要操作电脑。"
 confirm_title = "运行诊断？"
 description = "录制一段闪烁并发出提示音的简短测试图案，测量画面与声音的偏移程度，并记录你的显示器、摄像头、麦克风、磁盘空间和录制设置。在你选择发送之前，不会发送任何内容。"
+duration_description = "运行时间越长，越容易发现缓慢的偏移。"
+duration_label = "测试时长"
+duration_option = "{seconds} 秒"
 mic_description = "同时录制你的麦克风，检查它是否及时听到提示音。扬声器的声音需要能被麦克风实际收到。"
 mic_label = "测试麦克风"
 mode_description = "要测试的处理流程。“两者”会先运行 Studio 部分，再运行 Instant 部分。"
@@ -1211,8 +1221,31 @@ resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
 
+[controls.disconnected]
+camera = "摄像头已断开。录制将在没有摄像头画面的情况下继续。"
+microphone = "麦克风已断开。重新连接前将录制静音。"
+
 [controls.marker]
 add = "添加标记"
+
+[controls.draw]
+arrow = "箭头，按住 ⇧ 对齐 45°"
+clear = "全部清除"
+highlighter = "荧光笔，按住 ⇧ 画直线"
+pen = "画笔，按住 ⇧ 画直线"
+rectangle = "矩形，按住 ⇧ 画正方形"
+start = "在屏幕上绘制"
+stop = "停止绘制"
+undo = "撤销"
+window_unavailable = "绘制适用于显示器和区域录制"
+
+[controls.settings]
+locked = "本次录制中无法更改"
+not_in_recording = "本次录制未使用"
+open = "录制设置"
+show_camera_preview = "显示摄像头预览"
+switch_failed = "无法切换到 {device}。录制仍在继续。"
+switching = "正在切换…"
 
 [camera]
 waiting_title = "正在等待摄像头权限"
@@ -1228,6 +1261,8 @@ mirror_title = "镜像不可用"
 [camera.issue]
 access_message = "点击以在系统设置中允许 Cap 使用你的摄像头。"
 access_title = "需要摄像头权限"
+disconnected_message = "所选摄像头已停止发送视频。"
+disconnected_title = "摄像头已断开"
 generic = "无法启动所选摄像头。请选择其他摄像头，或重新连接此摄像头。"
 invalid_format = "此摄像头未提供可用的捕获格式。"
 not_found = "此摄像头已不可用。请检查它是否已连接，并已在系统权限中允许。"
@@ -2534,6 +2569,7 @@ format = "格式"
 frame_rate = "帧率"
 quality = "画质"
 resolution = "分辨率"
+tracks = "轨道"
 
 [editor.export.stats]
 calculating = "正在计算…"
@@ -2545,6 +2581,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "正在精确估算大小…"
 refining_time = "正在精确估算用时…"
 unavailable = "不可用"
+
+[editor.export.tracks]
+aligned = "各轨道会跟随你的剪辑和速度，在任何视频编辑软件中都能对齐。视频不含背景和效果。"
+audio_detail = "WAV · 48 kHz"
+camera = "摄像头"
+choose_one = "请至少选择一个要导出的轨道。"
+cta = "导出轨道"
+exported = "轨道已导出"
+exporting = "正在导出轨道"
+file_count = { other = "{count} 个文件" }
+file_only = "轨道会以单独文件的形式保存到一个文件夹中。"
+files = "文件"
+format = "轨道"
+microphone = "麦克风"
+open_folder = "打开文件夹"
+screen = "屏幕"
+studio_only = "只有 Studio 模式会录制单独的轨道。"
+system_audio = "系统音频"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "极速导出"
