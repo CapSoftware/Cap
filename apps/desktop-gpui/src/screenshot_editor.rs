@@ -1095,6 +1095,10 @@ impl ScreenshotEditorWindow {
             }
         })
         .detach();
+        // Every shortcut (Cmd+C included) is a key listener on the root div,
+        // and with nothing focused gpui dispatches keys to the root view only,
+        // so the editor ignored the keyboard until something in it was clicked.
+        window.focus(&this.focus, cx);
 
         this
     }
@@ -5578,6 +5582,32 @@ mod tests {
                     median(&mut result.render_ms),
                 );
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod open_focus {
+        use super::*;
+
+        #[gpui::test]
+        fn shortcuts_work_before_the_window_is_clicked(cx: &mut gpui::TestAppContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (export_tx, _export_rx) = tokio::sync::mpsc::channel(1);
+            let (editor, cx) = cx.add_window_view(|window, cx| {
+                ScreenshotEditorWindow::new(project.path().into(), window, cx)
+            });
+            editor.update(cx, |editor, _| editor.export_tx = Some(export_tx));
+
+            cx.simulate_keystrokes("p");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.active_popover == Some(Popover::Padding));
+            });
+
+            cx.simulate_keystrokes("cmd-c");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.exporting);
+                assert!(editor.export_status == ExportStatus::Rendering);
+            });
         }
     }
 
