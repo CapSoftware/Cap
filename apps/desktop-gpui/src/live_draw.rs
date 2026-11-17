@@ -851,16 +851,24 @@ fn open_panel<V: Render + 'static>(
     // fresh turn with nothing borrowed (see `platform::place_overlay_panel`).
     cx.spawn(async move |cx| {
         let open = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
-        if open {
-            platform::place_overlay_panel(
-                &native,
-                frame.x,
-                frame.y,
-                frame.width,
-                frame.height,
-                level,
-            );
+        if !open {
+            return;
         }
+        platform::place_overlay_panel(
+            &native,
+            frame.x,
+            frame.y,
+            frame.width,
+            frame.height,
+            level,
+        );
+        // Opened hidden, the panel's display link never started; without
+        // this the canvas keeps its first, empty frame.
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, _| platform::kick_display_link(window))
+                .ok();
+        });
     })
     .detach();
     Some(handle)
