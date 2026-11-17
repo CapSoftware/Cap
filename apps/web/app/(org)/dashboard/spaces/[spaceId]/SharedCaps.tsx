@@ -41,6 +41,7 @@ import {
 } from "@/lib/permissions/roles";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import {
+	MAX_REORDER_ITEMS,
 	type ReorderPlacement,
 	reorderIds,
 	reorderShortcutDirection,
@@ -330,9 +331,12 @@ export const SharedCaps = ({
 		setDropTarget(null);
 		const payload = parseCapDrag(event.dataTransfer.getData(CAP_DRAG_TYPE));
 		if (!payload) return;
-		const movedIds = payload.ids.filter((videoId) => pageIds.includes(videoId));
-		if (movedIds.length === 0 || movedIds.includes(id)) return;
-		void reorderTo(movedIds, { type: side, targetId: id });
+		if (payload.ids.length === 0 || payload.ids.includes(id)) return;
+		if (payload.ids.length > MAX_REORDER_ITEMS) {
+			toast.error(`You can reorder up to ${MAX_REORDER_ITEMS} Caps at once`);
+			return;
+		}
+		void reorderTo(payload.ids, { type: side, targetId: id });
 	};
 
 	const spaceMemberCount = spaceMembers?.length || 0;
