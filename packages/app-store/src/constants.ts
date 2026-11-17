@@ -143,7 +143,7 @@ export const LIMITS = {
 	iconMaxBytes: 256 * 1024,
 	backgroundMinWidth: 1920,
 	backgroundMinHeight: 1080,
-	backgroundMaxDimension: 7680,
+	backgroundMaxDimension: 3840,
 	backgroundMaxBytes: 8 * 1024 * 1024,
 	screenshotsMax: 6,
 	screenshotWidth: 2000,

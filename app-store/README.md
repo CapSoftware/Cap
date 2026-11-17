@@ -44,7 +44,7 @@ Images or gradients that appear in an Apps tab of the editor's background picker
 ]
 ```
 
-Images are PNG, JPEG or WebP, at least 1920x1080, at most 7680 pixels on a side and 8 MB each. 2560x1440 JPEG is the sweet spot: Cap renders backgrounds at up to 2560 pixels wide. Up to 24 per app.
+Images are PNG, JPEG or WebP, at least 1920x1080, at most 3840 pixels on a side and 8 MB each. 2560x1440 JPEG is the sweet spot: Cap renders backgrounds at up to 2560 pixels wide. Up to 24 per app.
 
 ### Caption styles
 
