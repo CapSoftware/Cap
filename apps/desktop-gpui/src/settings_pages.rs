@@ -941,7 +941,18 @@ const RECORDING_SHORTCUTS: [&str; 7] = [
     "cycleRecordingMode",
 ];
 
-const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
+#[cfg(target_os = "macos")]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
+    "stopRecording",
+    "togglePauseRecording",
+    "restartRecording",
+    store::RECORDING_MARKER_HOTKEY,
+    store::DRAW_HOTKEY,
+];
+
+/// Drawing on screen is macOS only, so its shortcut is too.
+#[cfg(not(target_os = "macos"))]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
     "stopRecording",
     "togglePauseRecording",
     "restartRecording",
@@ -1101,6 +1112,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
+        store::DRAW_HOTKEY => tr::settings::shortcuts::label::toggle_drawing(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1272,6 +1284,10 @@ fn shortcut_effect(
         store::RECORDING_MARKER_HOTKEY => ShortcutEffect {
             phrase: tr::settings::shortcuts::effect::add_marker,
             sentence: tr::settings::shortcuts::sentence::add_marker,
+        },
+        store::DRAW_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::toggle_drawing,
+            sentence: tr::settings::shortcuts::sentence::toggle_drawing,
         },
         _ => return None,
     };
@@ -1774,7 +1790,7 @@ impl SettingsWindow {
             ),
         ];
 
-        let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+        let while_recording = rows_for(WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
@@ -8384,7 +8400,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 14);
+        assert_eq!(shown.len(), 14 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8571,6 +8587,7 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in a Studio recording".into(),
+            "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
         }
     }
@@ -8615,7 +8632,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 31, "every effect message is reachable");
+        assert_eq!(
+            checked.len(),
+            31 + usize::from(crate::live_draw::SUPPORTED),
+            "every effect message is reachable"
+        );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 

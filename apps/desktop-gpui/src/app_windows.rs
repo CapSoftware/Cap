@@ -40,7 +40,12 @@ use crate::{
 
 /// Matches the Tauri `InProgressRecording` window and
 /// `fake_window.rs` position math.
-pub const CONTROLS_WIDTH: f32 = 352.;
+/// One button wider where the bar carries the draw button.
+pub const CONTROLS_WIDTH: f32 = if crate::live_draw::SUPPORTED {
+    384.
+} else {
+    352.
+};
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
 /// inside its frame, so without an issue to show the window is only this
@@ -597,6 +602,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
             cx.update(|cx| {
+                if crate::live_draw::escape(cx) {
+                    return;
+                }
                 if TargetSelect::global(cx).read(cx).mode.is_some() && !cancel_area_drags(cx) {
                     dismiss_target_overlays(cx);
                 }
@@ -627,8 +635,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
-        let markers = session.read(cx).markers_available();
-        crate::hotkeys::set_recording_scope(markers, cx);
+        let scopes = crate::hotkeys::RecordingScopes {
+            markers: session.read(cx).markers_available(),
+            drawing: crate::live_draw::availability(session.read(cx)).is_ok(),
+        };
+        crate::hotkeys::set_recording_scopes(scopes, cx);
+        if !recording {
+            crate::live_draw::end(cx);
+        }
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }
@@ -7390,9 +7404,10 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
-/// Grow the bar's window upward to `height` to make room for the cards above
-/// the bar (an issue, the settings panel), or shrink it back, leaving the bar
-/// where it is. `setFrame` re-enters gpui, so call this from a task.
+/// Grow the bar's window upward to `height` to make room for what sits above
+/// the bar (an issue, the drawing tools, the settings panel), or shrink it
+/// back, leaving the bar where it is. `setFrame` re-enters gpui, so call this
+/// from a task.
 pub(crate) fn fit_controls(native: &platform::NativeWindow, height: f32, scale: f32) {
     let height = f64::from(height);
     let (x, y, width, current) = platform::window_frame(native);
