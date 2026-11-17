@@ -30,12 +30,14 @@ export function spaceVideoOrderBy(
 	return [desc(columns.effectiveCreatedAt), desc(columns.id)];
 }
 
+type QueryExecutor = Pick<ReturnType<typeof db>, "select">;
+
 export async function getSpaceRootVideoOrder(
 	spaceId: Space.SpaceIdOrOrganisationId,
 	order: SpaceVideoOrder,
-	options: { includeScreenshots?: boolean } = {},
+	options: { includeScreenshots?: boolean; executor?: QueryExecutor } = {},
 ) {
-	const rows = await db()
+	const rows = await (options.executor ?? db())
 		.select({
 			id: videos.id,
 			isScreenshot: videos.isScreenshot,

@@ -79,15 +79,27 @@ export async function reorderSpaceVideos(input: {
 	const placement = input.placement;
 	const id = await requireSpaceManager(input.spaceId);
 
-	const current = await getSpaceRootVideoOrder(id, "custom");
-	const currentIds = current.map((row) => row.id as string);
-	const nextOrder = reorderIds(currentIds, videoIds, placement);
-	const changes = positionChanges(
-		current.map((row) => ({ id: row.id, position: row.position })),
-		nextOrder,
-	);
-
-	await db().transaction(async (tx) => {
+	// The space row is locked before the order is read, so two moves (two
+	// managers, or quick moves by one) apply one after the other instead of
+	// both computing positions from the same starting order.
+	const { nextOrder, changed } = await db().transaction(async (tx) => {
+		await tx
+			.select({ id: spaces.id })
+			.from(spaces)
+			.where(eq(spaces.id, id))
+			.for("update");
+		const current = await getSpaceRootVideoOrder(id, "custom", {
+			executor: tx,
+		});
+		const nextOrder = reorderIds(
+			current.map((row) => row.id as string),
+			videoIds,
+			placement,
+		);
+		const changes = positionChanges(
+			current.map((row) => ({ id: row.id, position: row.position })),
+			nextOrder,
+		);
 		for (let i = 0; i < changes.length; i += POSITION_WRITE_CHUNK) {
 			const chunk = changes.slice(i, i + POSITION_WRITE_CHUNK);
 			await tx
@@ -115,8 +127,9 @@ export async function reorderSpaceVideos(input: {
 			.update(spaces)
 			.set({ settings: videoOrderPatch("custom") })
 			.where(eq(spaces.id, id));
+		return { nextOrder, changed: changes.length };
 	});
 
 	revalidatePath(`/dashboard/spaces/${id}`);
-	return { order: nextOrder, changed: changes.length };
+	return { order: nextOrder, changed };
 }
