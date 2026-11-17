@@ -6177,7 +6177,7 @@ mod tests {
             AspectRatio::Tall,
         ] {
             let (output, offset, size) =
-                layout_at_base(&options, &even_project(10.0, Some(aspect)));
+                layout_at_base(&options, &even_project(10.0, Some(aspect.clone())));
             let canvas_margin = f64::from(output.0.min(output.1)) * 0.1 / 1.2;
             let margin = offset.x.min(offset.y);
             assert!(
@@ -6213,9 +6213,9 @@ mod tests {
                 Some(AspectRatio::Classic),
                 Some(AspectRatio::Tall),
             ] {
-                let even = even_project(0.0, aspect);
+                let even = even_project(0.0, aspect.clone());
                 let proportional = ProjectConfiguration {
-                    aspect_ratio: aspect,
+                    aspect_ratio: aspect.clone(),
                     ..ProjectConfiguration::default()
                 };
                 for resolution in [
@@ -6258,7 +6258,7 @@ mod tests {
             let options = render_options(width, height);
             for aspect in [None, Some(AspectRatio::Wide), Some(AspectRatio::Vertical)] {
                 for padding in [0.1, 3.3, 10.0, 25.0, 40.0, 100.0] {
-                    let project = even_project(padding, aspect);
+                    let project = even_project(padding, aspect.clone());
                     for resolution in [XY::new(1920, 1080), XY::new(width, height)] {
                         let output =
                             ProjectUniforms::get_output_size(&options, &project, resolution);
