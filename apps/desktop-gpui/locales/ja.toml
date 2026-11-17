@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推奨）"
 label = "最大キャプチャフレームレート"
 
+[settings.general.recording.keep_drawings]
+description = "描画は消去するまで残ります。オフにすると、描いてから数秒で消えます。"
+label = "描画を画面に残す"
+
 [settings.general.recording.marker_sound]
 description = "Studio録画中にマーカーを追加すると短い音を鳴らします。マイクやシステムオーディオに録音される場合があります。"
 label = "マーカー追加時に音を鳴らす"
@@ -470,6 +474,7 @@ screenshot_window = "ウィンドウのスクリーンショット"
 start_instant = "Instant録画を開始"
 start_studio = "Studio録画を開始"
 stop = "録画を停止"
+toggle_drawing = "画面に描く"
 
 [settings.shortcuts.effect]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます"
@@ -503,6 +508,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します"
 studio = "選択した画面またはウィンドウをStudioモードで録画します"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます"
+toggle_drawing = "録画中に画面への描画を開始または終了します"
 
 [settings.shortcuts.sentence]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます。"
@@ -536,6 +542,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します。"
 studio = "選択した画面またはウィンドウをStudioモードで録画します。"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます。"
+toggle_drawing = "録画中に画面への描画を開始または終了します。"
 
 [settings.cli]
 command = "コマンド"
@@ -1209,8 +1216,23 @@ resuming = "再開中…"
 saving = "保存中…"
 starting = "開始中"
 
+[controls.disconnected]
+camera = "カメラが切断されました。カメラのオーバーレイなしで録画を続けます。"
+microphone = "マイクが切断されました。再接続されるまで無音で録音します。"
+
 [controls.marker]
 add = "マーカーを追加"
+
+[controls.draw]
+arrow = "矢印、⇧で45°にスナップ"
+clear = "すべて消去"
+highlighter = "蛍光ペン、⇧で直線"
+pen = "ペン、⇧で直線"
+rectangle = "四角形、⇧で正方形"
+start = "画面に描く"
+stop = "描画を終了"
+undo = "取り消す"
+window_unavailable = "描画は画面録画と範囲録画で使えます"
 
 [controls.settings]
 locked = "この録画では変更できません"
@@ -1234,6 +1256,8 @@ mirror_title = "反転を使用できません"
 [camera.issue]
 access_message = "クリックして、システム設定でCapにカメラの使用を許可してください。"
 access_title = "カメラへのアクセスが必要です"
+disconnected_message = "選択したカメラから映像が届かなくなりました。"
+disconnected_title = "カメラが切断されました"
 generic = "選択したカメラを起動できませんでした。別のカメラを選ぶか、このカメラを接続し直してください。"
 invalid_format = "このカメラから使用可能なキャプチャフォーマットを取得できませんでした。"
 not_found = "このカメラは使用できなくなりました。接続されていて、システムの権限で許可されているか確認してください。"

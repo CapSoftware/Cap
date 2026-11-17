@@ -20,6 +20,7 @@ use crate::theme::LocaleFont as _;
 use crate::{
     devices::CameraOption,
     feeds::{DeviceOrModelID, Feeds, SelectedCamera},
+    live_draw::{self, DrawMode, Tool},
     recording::RecordingMode,
     session::{InputKind, InputRequest, Phase, RecordingSession},
     theme::Theme,
@@ -37,8 +38,9 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
+    draw_mode: Entity<DrawMode>,
     /// The window height last asked of the platform: the bar, plus the issue
-    /// card and the settings panel when they are up.
+    /// card, the drawing tools and the settings panel when they are up.
     fitted_height: f32,
     settings_open: bool,
     /// Linux only: free space under the bar's window when the panel opened.
@@ -63,6 +65,8 @@ const SETTINGS_PANEL_MAX_HEIGHT: f32 = 360.;
 /// The card above the bar keeps this gap to it, like the issue card.
 const SETTINGS_PANEL_GAP: f32 = 8.;
 const SETTINGS_LINUX_SCREEN_MARGIN: f32 = 8.;
+/// The drawing tools' row above the bar, with its gap.
+const DRAW_TOOLS_HEIGHT: f32 = 48.;
 
 /// The panel's height for its rows: the camera preview switch, then each
 /// heading with its rows, the dividers between them, padding and border.
@@ -84,7 +88,8 @@ fn settings_panel_cap(issue: bool, room_below: f32) -> f32 {
     if cfg!(target_os = "linux") {
         let window =
             crate::app_windows::CONTROLS_HEIGHT + room_below.max(0.) - SETTINGS_LINUX_SCREEN_MARGIN;
-        (window - controls_height(issue, None) - SETTINGS_PANEL_GAP)
+        // Linux has no drawing tools.
+        (window - controls_height(issue, false, None) - SETTINGS_PANEL_GAP)
             .clamp(2. * SETTINGS_ROW_HEIGHT, SETTINGS_PANEL_MAX_HEIGHT)
     } else {
         SETTINGS_PANEL_MAX_HEIGHT
@@ -99,12 +104,15 @@ fn room_below(window: &Window, cx: &gpui::App) -> f32 {
     f32::from(display.visible_bounds().bottom() - window.bounds().bottom()).max(0.)
 }
 
-/// The bar window's height: the bar, the issue card when one is up, and the
-/// settings panel when it is open.
-fn controls_height(issue: bool, settings_panel: Option<f32>) -> f32 {
+/// The bar window's height: the bar, the issue card when one is up, the
+/// drawing tools while drawing, and the settings panel when it is open.
+fn controls_height(issue: bool, draw_tools: bool, settings_panel: Option<f32>) -> f32 {
     let mut height = crate::app_windows::CONTROLS_BAR_HEIGHT;
     if issue {
         height += crate::app_windows::CONTROLS_HEIGHT - crate::app_windows::CONTROLS_BAR_HEIGHT;
+    }
+    if draw_tools {
+        height += DRAW_TOOLS_HEIGHT;
     }
     if let Some(panel) = settings_panel {
         height += panel + SETTINGS_PANEL_GAP;
@@ -151,6 +159,12 @@ impl ControlsWindow {
             cx.notify();
         })
         .detach();
+        let draw_mode = live_draw::mode(cx);
+        cx.observe_in(&draw_mode, window, |this, _, window, cx| {
+            this.fit_window(window, cx);
+            cx.notify();
+        })
+        .detach();
         cx.observe_in(&Feeds::global(cx), window, |this, _, window, cx| {
             this.fit_window(window, cx);
             cx.notify();
@@ -175,6 +189,7 @@ impl ControlsWindow {
             _tick: gpui::Task::ready(()),
             ticking_live: false,
             level_bar,
+            draw_mode,
             fitted_height: crate::app_windows::CONTROLS_BAR_HEIGHT,
             settings_open: false,
             room_below: crate::app_windows::CONTROLS_BOTTOM_OFFSET as f32,
@@ -197,6 +212,7 @@ impl ControlsWindow {
         session
             .error
             .clone()
+            .or_else(|| disconnected_issue(session.disconnected_inputs()))
             .or_else(|| session.input_switch_error().map(str::to_owned))
             .or_else(|| {
                 (session.paused_for_sleep && session.is_paused())
@@ -219,7 +235,8 @@ impl ControlsWindow {
                 settings_panel_cap(issue, self.room_below),
             )
         });
-        let height = controls_height(issue, panel);
+        let draw_tools = self.draw_mode.read(cx).drawing;
+        let height = controls_height(issue, draw_tools, panel);
         if height == self.fitted_height {
             return;
         }
@@ -398,16 +415,7 @@ impl ControlsWindow {
         let lit = session
             .marker_added_at()
             .is_some_and(|added| added.elapsed() < MARKER_ACKNOWLEDGEMENT);
-        let shortcut: Vec<String> = crate::store::hotkeys_raw()
-            .get(crate::store::RECORDING_MARKER_HOTKEY)
-            .and_then(crate::store::hotkey_from_value)
-            .map(|hotkey| {
-                crate::settings_pages::hotkey_display_keys(&hotkey)
-                    .iter()
-                    .map(|key| crate::settings_pages::hotkey_key_text(key).to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let shortcut = shortcut_keys(crate::store::RECORDING_MARKER_HOTKEY);
 
         let icon_color: gpui::Hsla = if !available {
             Theme::with_alpha(theme.gray_11, 0.5)
@@ -479,6 +487,183 @@ impl ControlsWindow {
                     }))
             })
             .into_any_element()
+    }
+
+    /// The pen: draw on screen. Lit while drawing; dimmed with the reason in
+    /// its tooltip where the recording cannot carry the strokes.
+    fn render_draw(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let availability = live_draw::availability(self.session.read(cx));
+        let available = availability.is_ok();
+        let drawing = self.draw_mode.read(cx).drawing;
+        let (label, keys) = if drawing {
+            (tr::controls::draw::stop(), vec!["Esc".to_string()])
+        } else if availability == Err(live_draw::Unavailable::WindowRecording) {
+            (tr::controls::draw::window_unavailable(), Vec::new())
+        } else {
+            (
+                tr::controls::draw::start(),
+                shortcut_keys(crate::store::DRAW_HOTKEY),
+            )
+        };
+        let icon_color: gpui::Hsla = if drawing {
+            theme.blue_9.into()
+        } else if available {
+            theme.gray_11.into()
+        } else {
+            Theme::with_alpha(theme.gray_11, 0.5)
+        };
+        div()
+            .id("draw")
+            .w(px(28.))
+            .h(px(32.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.))
+            .when(drawing, |this| this.bg(theme.blue_3))
+            .when(available && !drawing, |this| {
+                this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+            })
+            .child(
+                svg()
+                    .path("icons/pencil.svg")
+                    .size(px(18.))
+                    .text_color(icon_color),
+            )
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).keys(keys.clone()).view(cx))
+            .when(available, |this| {
+                this.active(|style| style.bg(theme.blue_4))
+                    .on_click(|_, _, cx| live_draw::toggle(cx))
+            })
+            .into_any_element()
+    }
+
+    fn render_draw_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let mode = self.draw_mode.read(cx);
+        let (selected_tool, selected_color, has_ink) = (mode.tool, mode.color, mode.has_ink);
+        let divider = || {
+            div()
+                .w(px(1.))
+                .h(px(20.))
+                .mx(px(6.))
+                .flex_shrink_0()
+                .bg(theme.gray_5)
+        };
+        let tool_label = |tool: Tool| match tool {
+            Tool::Pen => tr::controls::draw::pen(),
+            Tool::Highlighter => tr::controls::draw::highlighter(),
+            Tool::Arrow => tr::controls::draw::arrow(),
+            Tool::Rectangle => tr::controls::draw::rectangle(),
+        };
+        let tools = Tool::ALL.into_iter().map(|tool| {
+            let selected = tool == selected_tool;
+            let label = tool_label(tool);
+            div()
+                .id(tool_id(tool))
+                .w(px(28.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .when(selected, |this| this.bg(theme.blue_3))
+                .when(!selected, |this| {
+                    this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+                        .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
+                })
+                .child(
+                    svg()
+                        .path(tool.icon())
+                        .size(px(18.))
+                        .text_color(if selected {
+                            theme.blue_9
+                        } else {
+                            theme.gray_11
+                        }),
+                )
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
+                .on_click(move |_, _, cx| live_draw::set_tool(tool, cx))
+        });
+        let colors = live_draw::COLORS.iter().enumerate().map(|(index, color)| {
+            let selected = index == selected_color;
+            let swatch = gpui::rgb(*color);
+            div()
+                .id(("draw-color", index))
+                .w(px(20.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(move |_, _, cx| live_draw::set_color(index, cx))
+                .child(
+                    div()
+                        .size(px(20.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .border(px(2.))
+                        .border_color(if selected {
+                            Theme::with_alpha(theme.gray_12, 0.85)
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .child(
+                            div()
+                                .size(px(if selected { 12. } else { 14. }))
+                                .rounded_full()
+                                .bg(swatch)
+                                .border_1()
+                                .border_color(Theme::with_alpha(theme.gray_12, 0.15)),
+                        ),
+                )
+        });
+        let undo = self
+            .action_button("draw-undo", "icons/undo.svg", !has_ink)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::undo()).view(cx))
+            .when(has_ink, |this| {
+                this.on_click(|_, _, cx| live_draw::undo(cx))
+            });
+        let clear = self
+            .action_button("draw-clear", "icons/eraser.svg", !has_ink)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::controls::draw::clear()).view(cx))
+            .when(has_ink, |this| {
+                this.on_click(|_, _, cx| live_draw::clear(cx))
+            });
+
+        div()
+            .h(px(40.))
+            .mb(px(8.))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .p(px(4.))
+            .rounded(px(16.))
+            .bg(theme.gray_1)
+            .border_1()
+            .border_color(theme.gray_5)
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.1),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .children(tools)
+            .child(divider())
+            .children(colors)
+            .child(divider())
+            .child(undo)
+            .child(clear)
     }
 
     fn render_stop(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -563,21 +748,22 @@ impl ControlsWindow {
         let has_microphone = self.has_microphone
             && (session.mode() == Some(RecordingMode::Instant)
                 || Feeds::global(cx).read(cx).microphone.is_some());
+        let disconnected = has_microphone && session.disconnected_inputs().microphone;
         self.level_bar.update(cx, |bar, cx| {
             bar.configure(
-                has_microphone && !muted,
+                has_microphone && !muted && !disconnected,
                 theme.blue_9.into(),
                 theme.gray_10.into(),
                 cx,
             );
         });
 
-        let icon = if !has_microphone || muted {
+        let icon = if !has_microphone || muted || disconnected {
             "icons/mic-off.svg"
         } else {
             "icons/microphone.svg"
         };
-        let icon_color: gpui::Hsla = if muted {
+        let icon_color: gpui::Hsla = if muted || disconnected {
             theme.red_9.into()
         } else if has_microphone {
             theme.gray_12.into()
@@ -605,7 +791,7 @@ impl ControlsWindow {
                     }))
             })
             .child(svg().path(icon).size(px(20.)).text_color(icon_color))
-            .when(has_microphone && !muted, |this| {
+            .when(has_microphone && !muted && !disconnected, |this| {
                 this.child(self.level_bar.clone())
             })
     }
@@ -1054,6 +1240,7 @@ impl ControlsWindow {
         let theme = self.theme;
         let session = self.session.read(cx);
         let studio = session.mode() == Some(RecordingMode::Studio);
+        let draw_offered = live_draw::offered(session);
         let paused = session.is_paused();
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
@@ -1158,6 +1345,7 @@ impl ControlsWindow {
                                     }))
                                 },
                             ))
+                            .when(draw_offered, |this| this.child(self.render_draw(cx)))
                             .when(studio, |this| this.child(self.render_marker(cx)))
                             .child(self.render_settings_button(cx)),
                     ),
@@ -1233,8 +1421,33 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
+            .when(self.draw_mode.read(cx).drawing, |this| {
+                this.child(self.render_draw_tools(cx))
+            })
             .child(self.render_bar(cx))
     }
+}
+
+fn tool_id(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Pen => "draw-pen",
+        Tool::Highlighter => "draw-highlighter",
+        Tool::Arrow => "draw-arrow",
+        Tool::Rectangle => "draw-rectangle",
+    }
+}
+
+fn shortcut_keys(action: &str) -> Vec<String> {
+    crate::store::hotkeys_raw()
+        .get(action)
+        .and_then(crate::store::hotkey_from_value)
+        .map(|hotkey| {
+            crate::settings_pages::hotkey_display_keys(&hotkey)
+                .iter()
+                .map(|key| crate::settings_pages::hotkey_key_text(key).to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn recording_issue_text(error: String) -> impl IntoElement + Styled {
@@ -1257,6 +1470,19 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         )
 }
 
+fn disconnected_issue(disconnected: crate::session::DisconnectedInputs) -> Option<String> {
+    let lines: Vec<&str> = [
+        disconnected
+            .microphone
+            .then(tr::controls::disconnected::microphone),
+        disconnected.camera.then(tr::controls::disconnected::camera),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 fn tick_delay(live: bool, elapsed: Duration) -> Duration {
     if live {
         until_next_second(elapsed)
@@ -1276,14 +1502,23 @@ mod repaint_tests {
     use super::*;
 
     #[test]
-    fn the_window_grows_for_the_issue_and_the_settings_panel() {
+    fn the_window_grows_for_the_issue_the_drawing_tools_and_the_settings_panel() {
         let bar = crate::app_windows::CONTROLS_BAR_HEIGHT;
         let with_issue = crate::app_windows::CONTROLS_HEIGHT;
-        assert_eq!(controls_height(false, None), bar);
-        assert_eq!(controls_height(true, None), with_issue);
+        assert_eq!(controls_height(false, false, None), bar);
+        assert_eq!(controls_height(true, false, None), with_issue);
         let panel = settings_panel_height(3, 2, SETTINGS_PANEL_MAX_HEIGHT);
-        assert_eq!(controls_height(false, Some(panel)), bar + panel + 8.);
-        assert_eq!(controls_height(true, Some(panel)), with_issue + panel + 8.);
+        assert_eq!(controls_height(false, false, Some(panel)), bar + panel + 8.);
+        assert_eq!(
+            controls_height(true, false, Some(panel)),
+            with_issue + panel + 8.
+        );
+        assert_eq!(controls_height(false, true, None), bar + 48.);
+        assert_eq!(controls_height(true, true, None), with_issue + 48.);
+        assert_eq!(
+            controls_height(true, true, Some(panel)),
+            with_issue + 48. + panel + 8.
+        );
     }
 
     #[test]
@@ -1301,7 +1536,7 @@ mod repaint_tests {
         for issue in [false, true] {
             for room in [48., 120., 400.] {
                 let panel = settings_panel_height(40, 40, settings_panel_cap(issue, room));
-                let grown = controls_height(issue, Some(panel))
+                let grown = controls_height(issue, false, Some(panel))
                     .max(crate::app_windows::CONTROLS_HEIGHT)
                     - crate::app_windows::CONTROLS_HEIGHT;
                 assert!(

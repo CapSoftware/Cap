@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推荐）"
 label = "最大捕获帧率"
 
+[settings.general.recording.keep_drawings]
+description = "绘制内容会一直保留，直到你清除。关闭后，每笔绘制会在几秒后淡出。"
+label = "在屏幕上保留绘制内容"
+
 [settings.general.recording.marker_sound]
 description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
 label = "添加标记时播放提示音"
@@ -470,6 +474,7 @@ screenshot_window = "截取窗口"
 start_instant = "开始 Instant 录制"
 start_studio = "开始 Studio 录制"
 stop = "停止录制"
+toggle_drawing = "在屏幕上绘制"
 
 [settings.shortcuts.effect]
 add_marker = "在 Studio 录制中标记此刻"
@@ -503,6 +508,7 @@ screenshot_window_save = "截取指针所在的窗口并保存到你的资料库
 stop = "停止当前录制"
 studio = "以 Studio 模式录制所选屏幕或窗口"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
+toggle_drawing = "在录制时开始或停止在屏幕上绘制"
 
 [settings.shortcuts.sentence]
 add_marker = "在 Studio 录制中标记此刻。"
@@ -536,6 +542,7 @@ screenshot_window_save = "截取指针所在的窗口并保存到你的资料库
 stop = "停止当前录制。"
 studio = "以 Studio 模式录制所选屏幕或窗口。"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器。"
+toggle_drawing = "在录制时开始或停止在屏幕上绘制。"
 
 [settings.cli]
 command = "命令"
@@ -1209,8 +1216,23 @@ resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
 
+[controls.disconnected]
+camera = "摄像头已断开。录制将在没有摄像头画面的情况下继续。"
+microphone = "麦克风已断开。重新连接前将录制静音。"
+
 [controls.marker]
 add = "添加标记"
+
+[controls.draw]
+arrow = "箭头，按住 ⇧ 对齐 45°"
+clear = "全部清除"
+highlighter = "荧光笔，按住 ⇧ 画直线"
+pen = "画笔，按住 ⇧ 画直线"
+rectangle = "矩形，按住 ⇧ 画正方形"
+start = "在屏幕上绘制"
+stop = "停止绘制"
+undo = "撤销"
+window_unavailable = "绘制适用于显示器和区域录制"
 
 [controls.settings]
 locked = "本次录制中无法更改"
@@ -1234,6 +1256,8 @@ mirror_title = "镜像不可用"
 [camera.issue]
 access_message = "点击以在系统设置中允许 Cap 使用你的摄像头。"
 access_title = "需要摄像头权限"
+disconnected_message = "所选摄像头已停止发送视频。"
+disconnected_title = "摄像头已断开"
 generic = "无法启动所选摄像头。请选择其他摄像头，或重新连接此摄像头。"
 invalid_format = "此摄像头未提供可用的捕获格式。"
 not_found = "此摄像头已不可用。请检查它是否已连接，并已在系统权限中允许。"
