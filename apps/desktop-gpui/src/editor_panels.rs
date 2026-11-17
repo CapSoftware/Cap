@@ -4456,7 +4456,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// Project-wide: every zoom-in starts moving a moment before its segment.
     fn zoom_start_early_field(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let enabled = self.project.screen_movement_spring.start_zooms_early;
