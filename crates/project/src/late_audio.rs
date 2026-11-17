@@ -40,7 +40,8 @@ const EDIT_REACH_SECS: f64 = 3.0;
 ///   not clamped either; a caption in the held tail, which the shared source
 ///   clock would put in the next clip, is tied to its own clip
 ///   (`CaptionSegment::recording_clip`), and one running into another clip
-///   is split where the clips meet.
+///   is split where the clips meet. So is a caption without words running
+///   between a late clip, edited or not, and another clip.
 ///
 /// `recording_durations` (each clip's display duration, the source clock
 /// captions use) is only read when such a segment has a timeline, markers or
@@ -306,9 +307,12 @@ fn shift_captions(
 
     // A caption running from an edited late clip into another clip is split
     // where the clips meet, so each part moves with, and is tied to, its own
-    // clip (its times near the boundary cannot say which). Each part already
-    // showed separately, one per timeline segment, so nothing on screen
-    // changes; extra parts keep the caption's style.
+    // clip (its times near the boundary cannot say which). So is a caption
+    // without words running from or into any late clip: its two ends alone
+    // cannot move with two clips. Each part already showed separately, one
+    // per timeline segment, so nothing on screen changes; extra parts keep
+    // the caption's style. Words move with their own clip, so a transcribed
+    // caption across an untouched late clip needs no cut.
     let mut ids: std::collections::HashSet<String> =
         captions.segments.iter().map(|c| c.id.clone()).collect();
     let mut split_ids = Vec::new();
@@ -317,7 +321,10 @@ fn shift_captions(
     let mut segments = Vec::with_capacity(captions.segments.len());
     for segment in std::mem::take(&mut captions.segments) {
         let parts = split_at_clips(&segment, &clip_of, &clip_start);
-        if parts.len() < 2 || !parts.iter().any(|(clip, _)| edited_late(*clip)) {
+        let cut_for = |clip: Option<usize>| {
+            edited_late(clip) || (segment.words.is_empty() && clip.and_then(late).is_some())
+        };
+        if parts.len() < 2 || !parts.iter().any(|(clip, _)| cut_for(*clip)) {
             segments.push((None, segment));
             continue;
         }
@@ -340,13 +347,7 @@ fn shift_captions(
     captions.segments = Vec::with_capacity(segments.len());
     for (clip, mut segment) in segments {
         let start_clip = clip.or_else(|| clip_of(segment.start));
-        // A caption without words that runs into the next clip ends on that
-        // clip's clock, as a worded one does through its last word; a part
-        // cut for one clip stays on it.
-        let mut end_clip = match clip {
-            None if segment.words.is_empty() => clip_of(segment.end).or(start_clip),
-            _ => start_clip,
-        };
+        let mut end_clip = start_clip;
         let mut segment_moved = false;
         for word in &mut segment.words {
             let clip = clip_of(word.start);
@@ -1470,10 +1471,12 @@ mod tests {
     }
 
     // Typed captions (no words) running across an untouched late clip's
-    // edges move each end with the clip it is in, as worded captions do: one
-    // from the late clip into the next keeps its part over the next clip
-    // instead of collapsing at the late clip's end, and one from the clip
-    // before into the late clip follows the late audio at its end.
+    // edges are cut where the clips meet and each part moves with its clip,
+    // as a worded caption's words do: one from the clip before into the late
+    // clip keeps its first part and its late part follows the late audio
+    // (without stretching over the late clip's first seconds, which it never
+    // covered), and one from the late clip into the next keeps its part over
+    // the next clip while its late part is held at the media end.
     #[test]
     fn typed_captions_across_an_untouched_late_clip_keep_each_side() {
         let durations = [10.0, 10.0, 10.0];
@@ -1519,8 +1522,10 @@ mod tests {
         assert_eq!(
             captions,
             [
-                ("caption-into", 8.0, 16.0, None),
-                ("caption-out", 20.0, 22.0, None)
+                ("caption-into", 8.0, 10.0, Some(0)),
+                ("caption-into-1", 14.0, 16.0, Some(1)),
+                ("caption-out", 20.0, 20.0, Some(1)),
+                ("caption-out-1", 20.0, 22.0, Some(2))
             ]
         );
         let track: Vec<_> = rendered_track(&project)
@@ -1531,7 +1536,7 @@ mod tests {
             track,
             [
                 ("caption-into".to_string(), 8.0, 10.0),
-                ("caption-into".to_string(), 10.0, 16.0),
+                ("caption-into".to_string(), 14.0, 16.0),
                 ("caption-out".to_string(), 20.0, 22.0)
             ]
         );
@@ -1582,6 +1587,111 @@ mod tests {
                 ("early".to_string(), 16.0, 17.0),
                 ("next".to_string(), 20.5, 21.0)
             ]
+        );
+    }
+
+    // Two 10 s clips, untouched on the timeline; `late` is the clip whose
+    // mic came back 4 s in. Returns what the caption track draws after the
+    // migration, as (text, start, end) to 0.01 s, the same after a reload.
+    fn migrate_untouched(late: usize, captions: Vec<CaptionSegment>) -> Vec<(String, f64, f64)> {
+        let StudioRecordingMeta::MultipleSegments { mut inner } = meta(0.06) else {
+            unreachable!()
+        };
+        inner.segments[late].mic.as_mut().unwrap().start_time = Some(4.05);
+        let meta = StudioRecordingMeta::MultipleSegments { inner };
+        let mut project = legacy_project();
+        project.captions = Some(CaptionsData {
+            segments: captions,
+            source_timed: true,
+            ..Default::default()
+        });
+        crate::synchronize_captions(&mut project, &durations());
+        let timeline = project.timeline.as_ref().unwrap().segments.clone();
+        migrate_late_audio_alignment(&mut project, &meta, durations);
+        let after = &project.timeline.as_ref().unwrap().segments;
+        assert!(
+            timeline
+                .iter()
+                .zip(after)
+                .all(|(a, b)| a.start == b.start && a.end == b.end),
+            "restored, not edited"
+        );
+        let shown = |project: &ProjectConfiguration| {
+            let mut track: Vec<_> = rendered_track(project)
+                .into_iter()
+                .map(|c| {
+                    (
+                        c.2,
+                        (c.0 * 100.0).round() / 100.0,
+                        (c.1 * 100.0).round() / 100.0,
+                    )
+                })
+                .collect();
+            track.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            track
+        };
+        let mut reloaded: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        crate::synchronize_captions(&mut reloaded, &durations());
+        assert_eq!(shown(&project), shown(&reloaded));
+        for caption in &project.captions.as_ref().unwrap().segments {
+            assert!(caption.start <= caption.end, "{caption:?}");
+        }
+        shown(&project)
+    }
+
+    fn typed(id: &str, start: f32, end: f32) -> CaptionSegment {
+        let mut caption = words_caption(id, &[(id, start, end)]);
+        caption.words.clear();
+        caption
+    }
+
+    // Greptile's case: a typed caption (no words) from an untouched late clip
+    // into the next one. Its part over the late clip follows the audio and,
+    // like any caption there, is held at the media end; its part over the
+    // next clip stays where it was instead of vanishing with the first.
+    #[test]
+    fn a_typed_caption_out_of_an_untouched_late_clip_keeps_its_next_clip_part() {
+        let shown = migrate_untouched(0, vec![typed("typed", 8.0, 12.0), typed("wide", 4.0, 12.0)]);
+        assert_eq!(
+            shown,
+            vec![
+                ("wide".to_string(), 8.0, 10.0),
+                ("typed".to_string(), 10.0, 12.0),
+                ("wide".to_string(), 10.0, 12.0),
+            ]
+        );
+    }
+
+    // The reverse: only the second clip is late. The first clip's part stays,
+    // the late clip's part follows that clip's audio.
+    #[test]
+    fn a_typed_caption_into_an_untouched_late_clip_moves_only_its_late_part() {
+        let shown = migrate_untouched(1, vec![typed("typed", 8.0, 12.0)]);
+        assert_eq!(
+            shown,
+            vec![
+                ("typed".to_string(), 8.0, 10.0),
+                ("typed".to_string(), 14.0, 16.0),
+            ]
+        );
+    }
+
+    // A caption with words whose end lies in another clip than its last
+    // word: only its words draw, each with its own clip, in either order.
+    #[test]
+    fn a_caption_ending_past_its_last_words_clip_keeps_its_words() {
+        let mut caption = words_caption("words", &[("a", 5.0, 6.0), ("b", 7.0, 7.5)]);
+        caption.end = 10.5;
+        // "b" lands past the late clip's media end, held there like any
+        // word of that clip.
+        assert_eq!(
+            migrate_untouched(0, vec![caption.clone()]),
+            vec![("a".to_string(), 9.0, 10.0)]
+        );
+        assert_eq!(
+            migrate_untouched(1, vec![caption]),
+            vec![("a b".to_string(), 5.0, 7.5)]
         );
     }
 
