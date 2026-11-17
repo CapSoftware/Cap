@@ -23,6 +23,8 @@ pub use macos::*;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_dmabuf_import;
+#[cfg(target_os = "linux")]
 mod linux_shm;
 #[cfg(target_os = "linux")]
 pub use linux::*;
@@ -167,8 +169,7 @@ impl ScreenCaptureTarget {
                 {
                     let display_bounds = self.display()?.raw_handle().physical_bounds()?;
                     let window_bounds = window.raw_handle().physical_bounds()?;
-
-                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
+                    let relative = PhysicalBounds::new(
                         PhysicalPosition::new(
                             window_bounds.position().x() - display_bounds.position().x(),
                             window_bounds.position().y() - display_bounds.position().y(),
@@ -177,7 +178,11 @@ impl ScreenCaptureTarget {
                             window_bounds.size().width(),
                             window_bounds.size().height(),
                         ),
-                    )));
+                    );
+
+                    return Some(CursorCropBounds::new_windows(
+                        window_crop_on_display(relative, display_bounds.size()).unwrap_or(relative),
+                    ));
                 }
 
                 #[cfg(target_os = "linux")]
@@ -380,16 +385,65 @@ pub struct Config {
     show_cursor: bool,
     #[cfg(target_os = "linux")]
     linux_source: LinuxCaptureSource,
+    /// Capture this window itself rather than a crop of its display.
+    #[cfg(any(target_os = "macos", windows))]
+    window: Option<WindowId>,
 }
 
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
+
+/// `bounds` shrunk to whole, even pixel dimensions at `scale`. The encoder
+/// needs even frames; a region an odd number of pixels across would be read
+/// whole and squeezed a pixel smaller, resampling, and so softening, every
+/// line of text. Reading the even region instead copies pixels one to one.
+#[cfg(target_os = "macos")]
+pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
+    let size = bounds.size();
+    let pixels = |points: f64| ensure_even((points * scale).floor() as u32) as f64 / scale;
+    LogicalBounds::new(
+        bounds.position(),
+        LogicalSize::new(pixels(size.width()), pixels(size.height())),
+    )
+}
 
 #[cfg(windows)]
 pub type CropBounds = PhysicalBounds;
 
 #[cfg(target_os = "linux")]
 pub type CropBounds = PhysicalBounds;
+
+/// The part of a window that lies on its display, in display pixels. A
+/// screen-region capture cannot copy pixels from past the display's edge, and
+/// asking it to dropped every frame (#3594).
+#[cfg(any(windows, test))]
+pub(crate) fn window_crop_on_display(
+    window: PhysicalBounds,
+    display: PhysicalSize,
+) -> Option<PhysicalBounds> {
+    let axis = |position: f64, size: f64, extent: f64| {
+        if !position.is_finite() || !size.is_finite() || !extent.is_finite() {
+            return None;
+        }
+        let start = position.clamp(0.0, extent);
+        let end = (position + size).clamp(0.0, extent);
+        (end - start >= 2.0).then_some((start, end - start))
+    };
+    let (x, width) = axis(
+        window.position().x(),
+        window.size().width(),
+        display.width(),
+    )?;
+    let (y, height) = axis(
+        window.position().y(),
+        window.size().height(),
+        display.height(),
+    )?;
+    Some(PhysicalBounds::new(
+        PhysicalPosition::new(x, y),
+        PhysicalSize::new(width, height),
+    ))
+}
 
 #[cfg(any(windows, target_os = "linux", test))]
 pub(crate) fn logical_area_to_physical_bounds(
@@ -436,8 +490,8 @@ fn logical_axis_to_physical(
     let start = position.clamp(0.0, logical_extent);
     let end = (position + size).clamp(0.0, logical_extent);
     let scale = physical_extent / logical_extent;
-    let physical_start = start.min(end) * scale;
-    let physical_end = start.max(end) * scale;
+    let physical_start = (start.min(end) * scale).round();
+    let physical_end = (start.max(end) * scale).round();
     let min_size = 2.0_f64.min(physical_extent);
     let size = (physical_end - physical_start).clamp(min_size, physical_extent);
     let position = physical_start.min(physical_extent - size).max(0.0);
@@ -471,6 +525,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
+        #[cfg(any(target_os = "macos", windows))] window: Option<WindowId>,
         #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
@@ -481,21 +536,29 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
+        // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
+        #[cfg(target_os = "macos")]
+        let crop_bounds = crop_bounds
+            .map(|bounds| even_pixel_crop(bounds, display.raw_handle().scale().unwrap_or(1.0)));
+
         let native_output_size: PhysicalSize = {
             #[cfg(target_os = "macos")]
             {
                 crop_bounds.and_then(|b| {
                     let logical_size = b.size();
                     let scale = display.raw_handle().scale()?;
-                    let width = ensure_even((logical_size.width() * scale) as u32) as f64;
-                    let height = ensure_even((logical_size.height() * scale) as u32) as f64;
+                    let width = ensure_even((logical_size.width() * scale).round() as u32) as f64;
+                    let height = ensure_even((logical_size.height() * scale).round() as u32) as f64;
                     Some(PhysicalSize::new(width, height))
                 })
             }
 
             #[cfg(target_os = "windows")]
             {
-                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+                window
+                    .as_ref()
+                    .and_then(window_capture_size)
+                    .or_else(|| crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0)))
             }
 
             #[cfg(target_os = "linux")]
@@ -533,6 +596,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 show_cursor,
                 #[cfg(target_os = "linux")]
                 linux_source,
+                #[cfg(any(target_os = "macos", windows))]
+                window,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
@@ -759,6 +824,44 @@ mod tests {
             panic!("window target must retain a window source");
         };
         assert_eq!(selected, id);
+    }
+
+    #[test]
+    fn window_crop_stays_on_its_display() {
+        let display = PhysicalSize::new(1920.0, 1080.0);
+        let crop = |x: f64, y: f64, width: f64, height: f64| {
+            window_crop_on_display(
+                PhysicalBounds::new(
+                    PhysicalPosition::new(x, y),
+                    PhysicalSize::new(width, height),
+                ),
+                display,
+            )
+            .map(|bounds| {
+                (
+                    bounds.position().x(),
+                    bounds.position().y(),
+                    bounds.size().width(),
+                    bounds.size().height(),
+                )
+            })
+        };
+
+        assert_eq!(
+            crop(100.0, 50.0, 800.0, 600.0),
+            Some((100.0, 50.0, 800.0, 600.0))
+        );
+        assert_eq!(
+            crop(1000.0, 500.0, 1000.0, 700.0),
+            Some((1000.0, 500.0, 920.0, 580.0))
+        );
+        assert_eq!(
+            crop(-8.0, -8.0, 1936.0, 1096.0),
+            Some((0.0, 0.0, 1920.0, 1080.0))
+        );
+        assert_eq!(crop(1919.0, 0.0, 400.0, 400.0), None);
+        assert_eq!(crop(2000.0, 0.0, 400.0, 400.0), None);
+        assert_eq!(crop(f64::NAN, 0.0, 400.0, 400.0), None);
     }
 
     #[test]
@@ -1055,6 +1158,38 @@ mod tests {
     }
 
     #[test]
+    fn fractional_area_edges_round_to_pixels_and_stay_inside_the_display() {
+        for (position, size, expected) in [
+            (100.2, 800.4, (150.0, 1201.0)),
+            (-0.2, 100.4, (0.0, 150.0)),
+            (1279.8, 10.0, (1918.0, 2.0)),
+        ] {
+            assert_eq!(
+                logical_axis_to_physical(position, size, 1280.0, 1920.0),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn full_overlay_selection_keeps_native_resolution_at_fractional_scales() {
+        for scale in [1.25, 1.5, 1.75] {
+            let physical = PhysicalSize::new(1920.0, 1080.0);
+            let logical = LogicalSize::new(physical.width() / scale, physical.height() / scale);
+            let overlay_size = LogicalSize::new(
+                f64::from(logical.width() as f32),
+                f64::from(logical.height() as f32),
+            );
+            let selection = LogicalBounds::new(LogicalPosition::new(0.0, 0.0), overlay_size);
+            let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+            let output = constrain_capture_size(crop.size(), None);
+
+            assert_eq!(output.width(), physical.width(), "scale {scale}");
+            assert_eq!(output.height(), physical.height(), "scale {scale}");
+        }
+    }
+
+    #[test]
     fn partial_selection_scales_by_display_dpi() {
         // 150% display: logical 1280x720 backed by physical 1920x1080.
         let logical = LogicalSize::new(1280.0, 720.0);
@@ -1071,5 +1206,26 @@ mod tests {
         assert_eq!(crop.position().y(), 150.0);
         assert_eq!(crop.size().width(), 750.0);
         assert_eq!(crop.size().height(), 450.0);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod even_pixel_crop_tests {
+    use super::*;
+
+    #[test]
+    fn crops_read_whole_even_pixels() {
+        let odd = LogicalBounds::new(LogicalPosition::new(8., 8.), LogicalSize::new(1690., 753.));
+        let even = even_pixel_crop(odd, 1.0);
+        assert_eq!(even.size().width(), 1690.);
+        assert_eq!(even.size().height(), 752.);
+        assert_eq!(even.position().x(), 8.);
+        // At 2x, a half point is a whole pixel: 753.5 pt is 1507 px, read as 1506.
+        let retina = even_pixel_crop(
+            LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(845., 753.5)),
+            2.0,
+        );
+        assert_eq!(retina.size().width() * 2.0, 1690.);
+        assert_eq!(retina.size().height() * 2.0, 1506.);
     }
 }

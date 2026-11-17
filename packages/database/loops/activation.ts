@@ -1,11 +1,21 @@
+import { placeholders } from "./sql";
+
 export const legacyActivationQuery = `
 	SELECT
 		EXISTS(SELECT 1 FROM videos WHERE ownerId = ? LIMIT 1) AS hasVideo,
 		EXISTS(SELECT 1 FROM videos WHERE ownerId = ? AND public = 1 LIMIT 1) AS hasSharedVideo
 `;
 
-export const activationQuery = `
+export const batchLegacyActivationQuery = (users: number) => `
 	SELECT
+		u.id AS userId,
+		EXISTS(SELECT 1 FROM videos WHERE ownerId = u.id LIMIT 1) AS hasVideo,
+		EXISTS(SELECT 1 FROM videos WHERE ownerId = u.id AND public = 1 LIMIT 1) AS hasSharedVideo
+	FROM users u
+	WHERE u.id IN (${placeholders(users)})
+`;
+
+const activationSignals = `
 		MAX(CASE WHEN u.video_id IS NOT NULL OR (j.video_id IS NOT NULL AND j.state <> 'verified') THEN 1 ELSE 0 END) AS hasPendingUpload,
 		MAX(CASE WHEN u.video_id IS NULL
 			AND v.duration > 0
@@ -24,6 +34,15 @@ export const activationQuery = `
 		MAX(GREATEST(DATE_ADD(v.createdAt, INTERVAL 5 MINUTE), COALESCE(v.firstViewEmailSentAt, v.createdAt))) AS lastActivationNotificationAt
 	FROM videos v
 	LEFT JOIN video_uploads u ON u.video_id = v.id
-	LEFT JOIN video_processing_jobs j ON j.video_id = v.id
+	LEFT JOIN video_processing_jobs j ON j.video_id = v.id`;
+
+export const activationQuery = `
+	SELECT ${activationSignals}
 	WHERE v.ownerId = ? AND v.isScreenshot = 0
+`;
+
+export const batchActivationQuery = (users: number) => `
+	SELECT v.ownerId AS userId, ${activationSignals}
+	WHERE v.ownerId IN (${placeholders(users)}) AND v.isScreenshot = 0
+	GROUP BY v.ownerId
 `;

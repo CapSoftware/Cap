@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@cap/ui/button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Rive, useRive } from "@/lib/rive";
 

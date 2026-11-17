@@ -5,15 +5,20 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
 import { readQueueHealth } from "../../packages/database/loops/health";
-import { enqueueLoopsSync } from "../../packages/database/loops/queue";
 import {
-	claimJob,
+	claimJobs,
 	completeUnchangedJob,
 	deferJob,
-} from "../../packages/database/loops/worker";
+} from "../../packages/database/loops/jobs";
+import { enqueueLoopsSync } from "../../packages/database/loops/queue";
 import { loopsSyncJobs } from "../../packages/database/schema";
 
 const url = process.env.LOOPS_TEST_DATABASE_URL;
+const claimJob = async (
+	database: Connection,
+	token: string,
+	allowedUserIds: string[],
+) => (await claimJobs(database, token, allowedUserIds, 1))[0];
 const ids = Array.from({ length: 7 }, () =>
 	User.UserId.make(randomUUID().replaceAll("-", "").slice(0, 15)),
 );

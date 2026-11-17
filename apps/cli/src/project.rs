@@ -24,12 +24,13 @@ pub struct ProjectInspection {
 }
 
 pub fn config_get(project_path: PathBuf) -> Result<(), String> {
+    RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     let config = match cap_project::ProjectConfiguration::load(&project_path) {
         Ok(config) => config,
         // Instant and un-edited studio recordings have no project-config.json; return the
         // effective default the editor/exporter would use rather than erroring.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::from_str("{}")
-            .map_err(|e| format!("Failed to build default project config: {e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
         Err(e) => return Err(format!("Failed to load project config: {e}")),
     };
     crate::write_json(&config)
@@ -42,6 +43,8 @@ pub fn config_set(
 ) -> Result<(), String> {
     let config: cap_project::ProjectConfiguration = serde_json::from_str(settings_json)
         .map_err(|e| format!("Invalid project config JSON: {e}"))?;
+    RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     // write() validates internally before its atomic temp-file-then-rename.
     config
         .write(&project_path)

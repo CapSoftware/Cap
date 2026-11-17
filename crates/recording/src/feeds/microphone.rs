@@ -3079,7 +3079,7 @@ impl Message<Unlock> for MicrophoneFeed {
 /// Test-only microphone feeds driven by a synthetic device instead of
 /// hardware, so recording tests exercise the real feed, lock and pipeline
 /// paths with samples whose capture times are known exactly.
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod synthetic {
     use super::*;
 

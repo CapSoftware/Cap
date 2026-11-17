@@ -67,7 +67,7 @@ export const Testimonials = ({ eyebrow = true }: { eyebrow?: boolean }) => (
 								<span className="block truncate text-[14px] font-medium text-[#111111]">
 									{quote.name}
 								</span>
-								<span className="block truncate text-[13px] text-[rgba(17,17,17,0.5)]">
+								<span className="block truncate text-[13px] text-[rgba(17,17,17,0.64)]">
 									{quote.handle}
 								</span>
 							</span>

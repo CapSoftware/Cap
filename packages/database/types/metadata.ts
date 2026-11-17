@@ -6,6 +6,35 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	loomImportRun?: {
+		runId: string;
+		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
+		importPriority?: "customer" | "bulk";
+		mediaDispatch?: {
+			attemptId: string;
+			videoId?: string;
+			state: "accepted" | "rejected" | "uncertain";
+			jobId?: string;
+			worker?: "importer" | "media" | null;
+		};
+	};
+	loomImportUpload?: {
+		attemptId: string;
+		ownerId: string;
+		organizationId: string | null;
+		source?: { key: string; uploadId: string };
+		output: { key: string; uploadId: string };
+	};
+	loomDeferredProcessing?: {
+		rawFileKey: string;
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
+	transcribeOnView?: boolean;
+	loomPreviewGif?: {
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;
@@ -103,6 +132,16 @@ export interface VideoMetadata {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
 	};
+	/**
+	 * Thumbnail the owner picked. `file` lives under
+	 * `<ownerId>/<videoId>/thumbnail/` and changes with every pick.
+	 */
+	customThumbnail?: {
+		file: string;
+		source: "upload" | "frame";
+		time?: number;
+		updatedAt: string;
+	};
 }
 
 export interface VideoCallToAction {
@@ -111,6 +150,11 @@ export interface VideoCallToAction {
 	headline?: string;
 	color?: string;
 	showWhilePlaying?: boolean;
+}
+
+export interface OrganizationDefaultCallToAction extends VideoCallToAction {
+	enabledAt: string;
+	includeExisting?: boolean;
 }
 
 export type VideoEditRange = {

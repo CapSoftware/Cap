@@ -2,9 +2,10 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos } from "@cap/database/schema";
+import { folders, sharedVideos, spaceVideos } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { canViewFolder } from "@/actions/folders/folder-access";
 
 export async function getFolderVideoIds(
 	folderId: Folder.FolderId,
@@ -19,6 +20,19 @@ export async function getFolderVideoIds(
 
 		if (!folderId) {
 			throw new Error("Folder ID is required");
+		}
+
+		const [folder] = await db()
+			.select({
+				organizationId: folders.organizationId,
+				spaceId: folders.spaceId,
+				createdById: folders.createdById,
+			})
+			.from(folders)
+			.where(eq(folders.id, folderId));
+
+		if (!folder || !(await canViewFolder(user.id, folder))) {
+			throw new Error("Folder not found");
 		}
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;

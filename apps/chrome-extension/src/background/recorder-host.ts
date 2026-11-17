@@ -56,6 +56,16 @@ const createOffscreenDocument = () =>
 		);
 	});
 
+export const closeRecorderHost = () => {
+	if (!capabilities.supportsOffscreen) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		chrome.offscreen.closeDocument(() => {
+			void chrome.runtime.lastError;
+			resolve();
+		});
+	});
+};
+
 export const ensureRecorderHost = async () => {
 	if (!capabilities.supportsOffscreen) return;
 	const contexts = await getRecorderContexts();

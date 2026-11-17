@@ -33,11 +33,12 @@ use cpal::{
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use crate::audio::{AudioSegment, MusicTracks, PrerenderedAudioBuffer};
+use crate::audio::{AudioSegment, MusicTracks, PlaybackAudioCache, PrerenderedAudioBuffer};
 use crate::preparing_audio::{
     PreparingAudioBuffer, PreparingAudioOutputHandle, PreparingAudioOutputSnapshot,
     PreparingAudioSources,
 };
+use crate::{preview_speed::PreviewSpeedHandle, preview_stretch::PreviewStretcher};
 
 /// How long to wait for the live callback to acknowledge a newly installed
 /// source before reporting "no audio". A running stream acknowledges within
@@ -62,6 +63,128 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
+    pub preview_speed: PreviewSpeedHandle,
+}
+
+/// Seconds of audio/video disagreement, at 1x, before the audio re-seats on
+/// the video playhead. Faster previews scale it so it stays the same in wall
+/// time: the video playhead already leads by one display tick, which is more
+/// timeline time at higher speeds.
+const VIDEO_SYNC_TOLERANCE_SECS: f64 = 0.04;
+const STRETCH_SCRATCH_FRAMES: usize = 1024;
+/// Wall seconds over which a speed change's lead or lag is played out.
+const SPEED_CHANGE_CATCH_UP_SECS: f64 = 0.5;
+
+/// The preview-speed half of an ordinary source: the shared speed and the
+/// stretcher that plays the timeline mix faster or slower without changing
+/// its pitch. Allocated at install, off the audio thread.
+///
+/// Audio is rendered one device delay ahead of when it is heard, so the
+/// rendered position leads the video by `latency * speed`. When the speed
+/// changes, that lead must change too, and the audio already queued in the
+/// device can't. Seeking would skip or repeat speech, so the stage records
+/// the difference as `pending_shift` and plays it out by rendering slightly
+/// slower or faster than the new speed for a moment. The drift check ignores
+/// the part of the error still being played out. A source is installed with
+/// the 1x lead, so starting at another speed is a change from 1x too.
+struct PreviewSpeedStage {
+    speed: PreviewSpeedHandle,
+    stretcher: Box<PreviewStretcher>,
+    scratch: Box<[f32]>,
+    channels: usize,
+    sample_rate: f64,
+    last_speed: f64,
+    pending_shift: f64,
+}
+
+impl PreviewSpeedStage {
+    fn new(speed: PreviewSpeedHandle, output_info: AudioInfo) -> Self {
+        let channels = output_info.channels.max(1);
+        Self {
+            speed,
+            stretcher: Box::new(PreviewStretcher::new(output_info.sample_rate, channels)),
+            scratch: vec![0.0; STRETCH_SCRATCH_FRAMES * channels].into_boxed_slice(),
+            channels,
+            sample_rate: f64::from(output_info.sample_rate.max(1)),
+            last_speed: 1.0,
+            pending_shift: 0.0,
+        }
+    }
+
+    fn note_speed(&mut self, speed: f64, latency_secs: f64) {
+        if self.last_speed != speed {
+            self.pending_shift += latency_secs.max(0.0) * (self.last_speed - speed);
+            self.last_speed = speed;
+        }
+    }
+
+    fn engaged(&self, speed: f64) -> bool {
+        speed != 1.0 || self.pending_shift != 0.0 || self.stretcher.is_active()
+    }
+
+    fn playhead_secs<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &self,
+        audio: &PrerenderedAudioBuffer<T>,
+    ) -> Option<f64> {
+        self.stretcher
+            .position()
+            .map(|frames| frames / f64::from(audio.sample_rate().max(1)))
+    }
+
+    fn sync_video_playhead<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &mut self,
+        audio: &mut PrerenderedAudioBuffer<T>,
+        playhead_rx: &mut watch::Receiver<f64>,
+        latency_secs: f64,
+        speed: f64,
+    ) {
+        if !playhead_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        let video_playhead = *playhead_rx.borrow_and_update();
+        let rendered = self
+            .playhead_secs(audio)
+            .unwrap_or_else(|| audio.current_playhead_secs());
+        let target = video_playhead + latency_secs.max(0.0) * speed;
+        let unexplained = rendered - target - self.pending_shift;
+        if unexplained.abs() > VIDEO_SYNC_TOLERANCE_SECS * speed.max(1.0) {
+            audio.set_playhead(target);
+            self.stretcher.seek(audio.read_frame());
+            self.pending_shift = 0.0;
+        }
+    }
+
+    fn render<T: FromSampleBytes + cpal::FromSample<f32>>(
+        &mut self,
+        audio: &mut PrerenderedAudioBuffer<T>,
+        buffer: &mut [T],
+        speed: f64,
+    ) {
+        let frames = (buffer.len() / self.channels) as f64;
+        let effective = if self.pending_shift == 0.0 {
+            speed
+        } else {
+            (speed - self.pending_shift / SPEED_CHANGE_CATCH_UP_SECS)
+                .clamp((speed * 0.5).max(0.25), (speed * 1.5).min(4.0))
+        };
+        let scratch_len = self.scratch.len();
+        for chunk in buffer.chunks_mut(scratch_len) {
+            let scratch = &mut self.scratch[..chunk.len()];
+            self.stretcher.render(scratch, effective, audio);
+            for (sample, value) in chunk.iter_mut().zip(scratch.iter()) {
+                *sample = <T as cpal::Sample>::from_sample(*value);
+            }
+        }
+        if self.pending_shift != 0.0 {
+            let remaining = self.pending_shift - (speed - effective) * frames / self.sample_rate;
+            self.pending_shift =
+                if remaining.signum() != self.pending_shift.signum() || remaining.abs() < 1e-4 {
+                    0.0
+                } else {
+                    remaining
+                };
+        }
+    }
 }
 
 enum ControlMsg {
@@ -543,6 +666,7 @@ struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
     refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
+    preview_speed: Option<Box<PreviewSpeedStage>>,
     playhead_rx: watch::Receiver<f64>,
     ack: Option<SourceAcknowledgement>,
     preparing_request: Option<Arc<PreparingAudioRequest>>,
@@ -816,8 +940,17 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
                         ActiveSourceBuffer::Ordinary(replacement),
                     ) = (&current.buffer, &mut source.buffer)
                     {
-                        let playhead = previous.current_audible_playhead(0.0);
-                        if !replacement.try_align_prepared_playhead(playhead) {
+                        let playhead = current
+                            .preview_speed
+                            .as_ref()
+                            .and_then(|stage| stage.playhead_secs(previous))
+                            .unwrap_or_else(|| previous.current_audible_playhead(0.0));
+                        if replacement.try_align_prepared_playhead(playhead) {
+                            if let Some(mut stage) = current.preview_speed.take() {
+                                stage.stretcher.seek(replacement.read_frame());
+                                source.preview_speed = Some(stage);
+                            }
+                        } else {
                             let sender = retire_tx.clone();
                             let _ = sender.send(ControlMsg::Realign(Box::new(move || {
                                 if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
@@ -911,8 +1044,21 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
     match &mut source.buffer {
         ActiveSourceBuffer::Ordinary(audio) => {
-            sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
-            audio.fill(buffer);
+            let stage = source.preview_speed.as_deref_mut().and_then(|stage| {
+                let speed = stage.speed.get().as_f64();
+                stage.note_speed(speed, latency_secs);
+                stage.engaged(speed).then_some((stage, speed))
+            });
+            match stage {
+                Some((stage, speed)) => {
+                    stage.sync_video_playhead(audio, &mut source.playhead_rx, latency_secs, speed);
+                    stage.render(audio, buffer, speed);
+                }
+                None => {
+                    sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
+                    audio.fill(buffer);
+                }
+            }
         }
         ActiveSourceBuffer::Preparing(audio) => {
             if audio.fill(buffer, latency_secs) == 0 {
@@ -950,6 +1096,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     output_info: AudioInfo,
     use_device_latency_hint: bool,
     install_tx: &std_mpsc::Sender<SourceCommand<T>>,
+    cache: &PlaybackAudioCache,
 ) -> Result<(), String> {
     let preparing_request = ack.preparing_request();
     if preparing_request
@@ -965,6 +1112,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         duration_secs,
         start_playhead_secs,
         playhead_rx,
+        preview_speed,
     } = *spec;
 
     if !(duration_secs.is_finite() && duration_secs > 0.0) {
@@ -1009,13 +1157,14 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
         PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
     } else {
-        PrerenderedAudioBuffer::<T>::new(
+        PrerenderedAudioBuffer::<T>::new_cached(
             segments,
             music,
             &project,
             output_info,
             duration_secs,
             start_playhead,
+            cache,
         )
     };
     if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
@@ -1050,6 +1199,10 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         generation,
         refresh_revision,
         buffer: ActiveSourceBuffer::Ordinary(buffer),
+        preview_speed: Some(Box::new(PreviewSpeedStage::new(
+            preview_speed,
+            output_info.for_ffmpeg_output(),
+        ))),
         playhead_rx,
         ack: Some(ack),
         preparing_request,
@@ -1114,6 +1267,7 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             generation,
             refresh_revision: 0,
             buffer: ActiveSourceBuffer::Preparing(buffer),
+            preview_speed: None,
             playhead_rx,
             ack: Some(SourceAcknowledgement::Preparing(request.clone())),
             preparing_request: Some(request.clone()),
@@ -1134,6 +1288,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
 
     let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<f32>>();
     let stop = Arc::new(AtomicBool::new(false));
+    let cache = PlaybackAudioCache::default();
 
     let pump = {
         let stop = stop.clone();
@@ -1191,6 +1346,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!(%error, "Could not update headless audio playback");
                 }
@@ -1210,6 +1366,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                         output_info,
                         false,
                         &source_tx,
+                        &cache,
                     ) {
                         Ok(()) => ack_rx.recv_timeout(SOURCE_ACK_TIMEOUT).is_ok(),
                         Err(e) => {
@@ -1235,6 +1392,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!("Failed to install preparing headless audio source: {error}");
                     request.complete(false);
@@ -1352,6 +1510,7 @@ fn control_thread_offline(
         HEADLESS_SAMPLE_RATE,
         HEADLESS_CHANNELS,
     );
+    let cache = PlaybackAudioCache::default();
     while let Ok(msg) = control_rx.recv() {
         match msg {
             ControlMsg::Refresh {
@@ -1367,6 +1526,7 @@ fn control_thread_offline(
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!(%error, "Could not update offline audio playback");
                 }
@@ -1384,6 +1544,7 @@ fn control_thread_offline(
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 )
                 .inspect_err(|e| error!("Failed to install offline audio source: {e}"))
                 .is_ok();
@@ -1566,9 +1727,18 @@ where
         .map_err(|e| format!("Failed to start audio output stream: {e}"))?;
 
     let install_tx = source_tx.clone();
+    let cache = PlaybackAudioCache::default();
     let install = Box::new(
         move |spec: Box<PlaySpec>, generation: u64, ack: SourceAcknowledgement| {
-            install_source::<T>(spec, generation, ack, output_info, true, &install_tx)
+            install_source::<T>(
+                spec,
+                generation,
+                ack,
+                output_info,
+                true,
+                &install_tx,
+                &cache,
+            )
         },
     );
 
@@ -1630,18 +1800,153 @@ mod tests {
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
                 playhead_rx,
+                preview_speed: PreviewSpeedHandle::default(),
             }),
             0,
             SourceAcknowledgement::Ordinary(ack_tx),
             output_info,
             use_device_latency_hint,
             &install_tx,
+            &PlaybackAudioCache::default(),
         )
         .unwrap();
         let SourceCommand::Install(source) = install_rx.recv().unwrap() else {
             panic!("expected installed audio source");
         };
         (*source, playhead_tx)
+    }
+
+    struct SpeedSwitchRun {
+        backward_seeks: u32,
+        forward_skips: u32,
+        peak_offset: f64,
+        settled_offset: f64,
+    }
+
+    /// Plays a silent timeline through a source on a device that holds
+    /// `latency` seconds of audio, with the video clock switching from one
+    /// preview speed to another, and follows what the device plays. The
+    /// source starts one device delay ahead of the video, as `install_source`
+    /// places it on a real output.
+    fn run_speed_switch(latency: f64, from: f64, to: f64) -> SpeedSwitchRun {
+        ffmpeg::init().unwrap();
+        const RATE: u32 = 48_000;
+        const BLOCK: usize = 480;
+        let tick = BLOCK as f64 / f64::from(RATE);
+        let speed = PreviewSpeedHandle::new(crate::PreviewSpeed::from_f64(from).unwrap());
+        let (playhead_tx, playhead_rx) = watch::channel(0.0);
+        let (install_tx, install_rx) = std_mpsc::channel();
+        let (ack_tx, _ack_rx) = std_mpsc::channel();
+        install_source(
+            Box::new(PlaySpec {
+                segments: Vec::new(),
+                music: MusicTracks::new(),
+                project: ProjectConfiguration::default(),
+                duration_secs: 60.0,
+                start_playhead_secs: latency,
+                playhead_rx,
+                preview_speed: speed.clone(),
+            }),
+            0,
+            SourceAcknowledgement::Ordinary(ack_tx),
+            AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, RATE, 2),
+            false,
+            &install_tx,
+            &PlaybackAudioCache::default(),
+        )
+        .unwrap();
+        let SourceCommand::Install(mut source) = install_rx.recv().unwrap() else {
+            panic!("expected installed audio source");
+        };
+        let render_position = |source: &ActiveSource<f32>| match &source.buffer {
+            ActiveSourceBuffer::Ordinary(audio) => source
+                .preview_speed
+                .as_ref()
+                .and_then(|stage| stage.playhead_secs(audio))
+                .unwrap_or_else(|| audio.current_playhead_secs()),
+            ActiveSourceBuffer::Preparing(_) => unreachable!(),
+        };
+
+        let queued_blocks = (latency / tick).round() as usize;
+        let switch_block = 300;
+        let blocks = 900;
+        let mut buffer = vec![0.0f32; BLOCK * 2];
+        let mut video = 0.0f64;
+        let mut device = std::collections::VecDeque::new();
+        let mut run = SpeedSwitchRun {
+            backward_seeks: 0,
+            forward_skips: 0,
+            peak_offset: 0.0,
+            settled_offset: 0.0,
+        };
+        let mut settled = Vec::new();
+        for block in 0..blocks {
+            if block == switch_block {
+                speed.set(crate::PreviewSpeed::from_f64(to).unwrap());
+            }
+            let current = speed.get().as_f64();
+            playhead_tx.send(video).unwrap();
+            let before = render_position(&source);
+            render_source_block(&mut source, &mut buffer, latency);
+            let after = render_position(&source);
+            if after < before - 1e-6 {
+                run.backward_seeks += 1;
+            }
+            if after - before > tick * 4.0 + 1e-6 {
+                run.forward_skips += 1;
+            }
+            device.push_back(before);
+            if device.len() > queued_blocks {
+                let audible = device.pop_front().unwrap();
+                let offset = audible - video;
+                if block >= switch_block {
+                    run.peak_offset = run.peak_offset.max(offset.abs());
+                }
+                if block >= blocks - 100 {
+                    settled.push(offset);
+                }
+            }
+            video += tick * current;
+        }
+        run.settled_offset = settled.iter().sum::<f64>() / settled.len() as f64;
+        run
+    }
+
+    #[test]
+    fn speed_changes_on_a_slow_output_neither_repeat_nor_skip_audio() {
+        for (from, to) in [
+            (2.0, 1.0),
+            (1.0, 2.0),
+            (1.0, 3.0),
+            (3.0, 1.0),
+            (2.0, 0.5),
+            (0.5, 1.5),
+        ] {
+            let latency = 0.2;
+            let run = run_speed_switch(latency, from, to);
+            assert_eq!(run.backward_seeks, 0, "{from}x to {to}x repeated audio");
+            assert_eq!(run.forward_skips, 0, "{from}x to {to}x skipped audio");
+            assert!(
+                run.settled_offset.abs() < 0.02 * f64::max(to, 1.0),
+                "{from}x to {to}x settled {:.1} ms off the video",
+                run.settled_offset * 1000.0
+            );
+            assert!(
+                run.peak_offset <= latency * (from - to).abs() + 0.05,
+                "{from}x to {to}x drifted {:.1} ms while switching",
+                run.peak_offset * 1000.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_steady_speed_on_a_slow_output_stays_in_sync() {
+        for speed in [0.5, 1.0, 2.0, 3.0] {
+            let run = run_speed_switch(0.2, speed, speed);
+            assert_eq!(run.backward_seeks, 0, "{speed}x repeated audio");
+            assert_eq!(run.forward_skips, 0, "{speed}x skipped audio");
+            assert!(run.settled_offset.abs() < 0.02 * speed);
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub struct BufferedResampler {
     resampler: ffmpeg::software::resampling::Context,
     buffer: VecDeque<(ffmpeg::frame::Audio, i64)>,
     sample_index: usize,
+    last_buffered_end: Option<i64>,
     // used to account for cases where pts is rounded down instead of up
     min_next_pts: Option<i64>,
 }
@@ -27,6 +28,7 @@ impl BufferedResampler {
             resampler,
             buffer: VecDeque::new(),
             sample_index: 0,
+            last_buffered_end: None,
             min_next_pts: None,
         })
     }
@@ -101,6 +103,40 @@ impl BufferedResampler {
         }
     }
 
+    fn push_resampled_frame(&mut self, frame: ffmpeg::frame::Audio, pts: i64) {
+        let skip = self
+            .last_buffered_end
+            .map_or(0, |end| end.saturating_sub(pts).max(0) as usize)
+            .min(frame.samples());
+        if skip == frame.samples() {
+            return;
+        }
+
+        let pts = pts + skip as i64;
+        let frame = if skip == 0 {
+            frame
+        } else {
+            let samples = frame.samples() - skip;
+            let mut trimmed =
+                ffmpeg::frame::Audio::new(frame.format(), samples, frame.channel_layout());
+            trimmed.set_rate(frame.rate());
+            let packed = frame.format().is_packed();
+            let planes = if packed { 1 } else { frame.channels() as usize };
+            let sample_bytes =
+                frame.format().bytes() * if packed { frame.channels() as usize } else { 1 };
+            for plane in 0..planes {
+                let start = skip * sample_bytes;
+                let end = start + samples * sample_bytes;
+                trimmed.data_mut(plane)[..samples * sample_bytes]
+                    .copy_from_slice(&frame.data(plane)[start..end]);
+            }
+            trimmed
+        };
+
+        self.last_buffered_end = Some(pts + frame.samples() as i64);
+        self.buffer.push_back((frame, pts));
+    }
+
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
         if !self.accepts(&frame) && !self.rebuild_for(&frame) {
             return;
@@ -126,7 +162,7 @@ impl BufferedResampler {
 
         let mut next_pts = resampled_pts + resampled_frame.samples() as i64;
 
-        self.buffer.push_back((resampled_frame, resampled_pts));
+        self.push_resampled_frame(resampled_frame, resampled_pts);
 
         while self.resampler.delay().is_some() {
             let mut resampled_frame = ffmpeg::frame::Audio::new(
@@ -140,7 +176,7 @@ impl BufferedResampler {
                 break;
             }
 
-            self.buffer.push_back((resampled_frame, next_pts));
+            self.push_resampled_frame(resampled_frame, next_pts);
 
             next_pts += samples as i64;
         }
@@ -406,22 +442,39 @@ mod test {
         }
 
         #[test]
-        fn overlapping_resampled_pts_treated_as_zero_gap() {
-            // Non-integer rate ratios (44.1k -> 48k) round consecutive
-            // resampled pts so a frame can start a sample before the previous
-            // frame ends. The overlap must count as zero gap — the unclamped
-            // subtraction used to wrap to a huge unsigned "gap" and blow up
-            // frame retrieval.
+        fn overlapping_resampled_pts_do_not_duplicate_samples() {
             let mut bufferer = create_resampler(IN_RATE);
 
-            bufferer.buffer.push_back((make_input_frame(100, 0), 0));
-            bufferer.buffer.push_back((make_input_frame(100, 0), 99));
+            bufferer.push_resampled_frame(make_input_frame(100, 0), 0);
+            bufferer.push_resampled_frame(make_input_frame(100, 0), 99);
 
-            assert_eq!(bufferer.remaining_samples(), 200);
+            assert_eq!(bufferer.remaining_samples(), 199);
 
-            let out_frame = bufferer.get_frame(200).expect("both frames are buffered");
-            assert_eq!(out_frame.samples(), 200);
+            let out_frame = bufferer.get_frame(199).expect("both frames are buffered");
+            assert_eq!(out_frame.samples(), 199);
             assert_eq!(out_frame.pts(), Some(0));
+        }
+
+        #[test]
+        fn overlapping_planar_frames_trim_each_channel() {
+            let sample_format = format::Sample::U8(cap_media_info::Type::Planar);
+            let info = AudioInfo::new_raw(sample_format, IN_RATE, 2);
+            let mut bufferer = BufferedResampler::new(info, info).unwrap();
+            let mut first = ffmpeg::frame::Audio::new(sample_format, 4, ChannelLayout::STEREO);
+            first.data_mut(0)[..4].copy_from_slice(&[1, 2, 3, 4]);
+            first.data_mut(1)[..4].copy_from_slice(&[11, 12, 13, 14]);
+            bufferer.push_resampled_frame(first, 0);
+
+            let mut second = ffmpeg::frame::Audio::new(sample_format, 4, ChannelLayout::STEREO);
+            second.data_mut(0)[..4].copy_from_slice(&[4, 5, 6, 7]);
+            second.data_mut(1)[..4].copy_from_slice(&[14, 15, 16, 17]);
+            bufferer.push_resampled_frame(second, 3);
+
+            let (frame, pts) = bufferer.buffer.back().unwrap();
+            assert_eq!(*pts, 4);
+            assert_eq!(frame.samples(), 3);
+            assert_eq!(&frame.data(0)[..3], &[5, 6, 7]);
+            assert_eq!(&frame.data(1)[..3], &[15, 16, 17]);
         }
 
         #[test]
@@ -435,6 +488,7 @@ mod test {
             .unwrap();
 
             let mut total = 0usize;
+            let mut next_pts = None;
             for k in 0..64i64 {
                 let mut frame = ffmpeg::frame::Audio::new(
                     cap_media_info::Sample::U8(cap_media_info::Type::Packed),
@@ -446,16 +500,24 @@ mod test {
                 frame.set_pts(Some(k * 1024));
                 bufferer.add_frame(frame);
                 while let Some(out) = bufferer.get_frame(960) {
+                    if let Some(expected) = next_pts {
+                        assert!(out.pts().unwrap() >= expected);
+                    }
+                    next_pts = Some(out.pts().unwrap() + out.samples() as i64);
                     total += out.samples();
                 }
             }
             while let Some(out) = bufferer.flush(960) {
+                if let Some(expected) = next_pts {
+                    assert!(out.pts().unwrap() >= expected);
+                }
+                next_pts = Some(out.pts().unwrap() + out.samples() as i64);
                 total += out.samples();
             }
 
             let expected = (64.0 * 1024.0 * 48_000.0 / 44_100.0) as isize;
             assert!(
-                ((total as isize) - expected).abs() < 2_000,
+                ((total as isize) - expected).abs() < 4,
                 "drained {total} output samples, expected about {expected}"
             );
         }

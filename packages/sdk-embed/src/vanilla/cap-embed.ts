@@ -7,7 +7,7 @@ export function createEmbedUrl(options: EmbedOptions): string {
 	const params = new URLSearchParams();
 	params.set("sdk", "1");
 	params.set("pk", options.publicKey);
-	if (options.autoplay) params.set("autoplay", "1");
+	if (options.autoplay) params.set("autoplay", "true");
 	if (options.branding?.logoUrl) params.set("logo", options.branding.logoUrl);
 	if (options.branding?.accentColor)
 		params.set("accent", options.branding.accentColor);

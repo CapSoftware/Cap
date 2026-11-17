@@ -1,12 +1,10 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
-import {
-	faArrowLeft,
-	faEnvelope,
-	faExclamationCircle,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
+import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -26,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 import {
@@ -105,6 +104,10 @@ export function SignupForm() {
 				return;
 			} else if (error === "SignupBlocked") {
 				return;
+			} else if (error === "DisposableEmail") {
+				return toast.error(
+					"Temporary email addresses can't be used with Cap. Please use your work or personal email.",
+				);
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(
@@ -169,6 +172,13 @@ export function SignupForm() {
 		});
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "signup" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
 	};
 

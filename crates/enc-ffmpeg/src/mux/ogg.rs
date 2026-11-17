@@ -28,6 +28,8 @@ pub enum FinishError {
     AlreadyFinished,
     #[error("{0}")]
     WriteTrailerFailed(ffmpeg::Error),
+    #[error("Output writer did not finish")]
+    StorageStalled(#[from] crate::mux::write_behind::StorageStalled),
 }
 
 impl OggFile {
@@ -91,7 +93,7 @@ impl OggFile {
                 |output| encoder.flush_to(output),
                 |output: &mut OggOutput, flush_result| (flush_result, output.0.write_trailer()),
             )
-            .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
+            .map_err(FinishError::StorageStalled)?;
         trailer_result.map_err(FinishError::WriteTrailerFailed)?;
 
         Ok(flush_result)
@@ -201,6 +203,20 @@ mod tests {
             std::fs::metadata(&behind).unwrap().len()
         );
         assert!((probed_duration_secs(&behind) - probed_duration_secs(&inline)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sustained_44k1_input_keeps_its_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio-input.ogg");
+
+        write_recording(path.clone(), 44_100, 44_100 * 5);
+
+        let duration = probed_duration_secs(&path);
+        assert!(
+            (duration - 5.0).abs() < 0.02,
+            "expected 5s of audio, probed {duration}s"
+        );
     }
 
     #[test]

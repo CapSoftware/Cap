@@ -6,24 +6,17 @@ import Link from "next/link";
 import { trackEvent } from "@/app/utils/analytics";
 import { LoomMark } from "@/components/icons/LoomMark";
 import { MigratePromoBadge } from "@/components/MigratePromoBadge";
-import { Eyebrow } from "./Eyebrow";
-import { BAND, BODY_TEXT, BTN_PRIMARY, grainBg, MODE_THEME } from "./theme";
+import { BODY_TEXT, BTN_PRIMARY } from "./theme";
 
 export const LoomBridge = () => (
 	<section className="px-5 pb-4 pt-2">
-		<div
-			className="mx-auto flex max-w-[1200px] flex-col items-start justify-between gap-8 rounded-[20px] p-8 lg:flex-row lg:items-center lg:p-12"
-			style={grainBg(BAND)}
-		>
+		<div className="mx-auto flex max-w-[1120px] flex-col items-start justify-between gap-8 rounded-[24px] bg-white p-8 shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_1px_2px_rgba(17,17,17,0.03)] lg:flex-row lg:items-center lg:p-12">
 			<div className="max-w-[560px]">
-				<Eyebrow accent={MODE_THEME.instant.accent}>
-					Switching from Loom
-				</Eyebrow>
-				<h2 className="mt-5 text-balance text-[clamp(28px,3.2vw,40px)] font-normal leading-[1.05] tracking-[-0.03em] text-[#111111]">
+				<h2 className="text-balance text-[clamp(28px,3.2vw,40px)] font-normal leading-[1.05] tracking-[-0.03em] text-[#111111]">
 					Bring your whole Loom library with you
 				</h2>
 				<p
-					className={`${BODY_TEXT} mt-4 max-w-[500px] text-[16px] leading-[1.5] text-[rgba(17,17,17,0.78)]`}
+					className={`${BODY_TEXT} mt-4 max-w-[500px] text-[16px] leading-[1.5] text-[rgba(17,17,17,0.64)]`}
 				>
 					Paste a Loom link or upload a CSV of your library and Cap re-hosts
 					every video with its title, a transcript and chapters. Your recordings

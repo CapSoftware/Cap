@@ -56,6 +56,7 @@ fn recorded_image_shape(image: &image::RgbaImage) -> Option<cap_cursor_info::Cur
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
+    texture_bind_group: Option<(wgpu::Texture, BindGroup)>,
     cursors: HashMap<String, CursorTexture>,
     circle_cursor: Option<CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
@@ -216,6 +217,7 @@ impl CursorLayer {
         Self {
             statics,
             bind_group: None,
+            texture_bind_group: None,
             cursors: Default::default(),
             circle_cursor: None,
             prev_is_svg_assets_enabled: None,
@@ -453,6 +455,7 @@ impl CursorLayer {
         let time_s = segment_frames.recording_time;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
+            self.bind_group = None;
             return;
         };
 
@@ -563,6 +566,7 @@ impl CursorLayer {
             }
             let Some(tex) = self.cursors.get(&interpolated_cursor.cursor_id) else {
                 error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
+                self.bind_group = None;
                 return;
             };
             tex
@@ -651,10 +655,26 @@ impl CursorLayer {
             bytemuck::cast_slice(&[cursor_uniforms]),
         );
 
-        self.bind_group = Some(
-            self.statics
-                .create_bind_group(&constants.device, &cursor_texture.texture),
-        );
+        let texture = &cursor_texture.texture;
+        if self
+            .texture_bind_group
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != texture)
+        {
+            self.texture_bind_group = Some((
+                texture.clone(),
+                self.statics.create_bind_group(&constants.device, texture),
+            ));
+        }
+        self.bind_group = self
+            .texture_bind_group
+            .as_ref()
+            .map(|(_, bind_group)| bind_group.clone());
+    }
+
+    #[cfg(test)]
+    pub fn bind_group(&self) -> Option<&BindGroup> {
+        self.bind_group.as_ref()
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -788,14 +808,6 @@ fn compute_cursor_idle_opacity(
     let idx = cursor
         .moves
         .partition_point(|e| e.time_ms <= current_time_ms);
-    let has_upcoming_move = cursor
-        .moves
-        .get(idx)
-        .is_some_and(|e| e.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS);
-
-    if has_upcoming_move {
-        return 1.0;
-    }
 
     let last_index = if moves_ordered {
         idx.checked_sub(1)
@@ -809,29 +821,67 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     };
 
-    let last_move = &cursor.moves[last_index];
-
-    let time_since_move = (current_time_ms - last_move.time_ms).max(0.0);
-
+    // A move to the position the pointer already had is a shape change under
+    // a still pointer, not movement, so idleness counts from the move that
+    // brought the pointer there and resumes at the next one that leaves it.
+    // Both scans stop where the answer can no longer change: a cursor at rest
+    // since before the fade horizon is fully hidden whenever it arrived, and
+    // only moves inside the resume lookahead can fade it back in.
+    let fade_horizon_ms = current_time_ms - hide_delay_ms - CURSOR_IDLE_FADE_OUT_MS;
+    let at_rest_since = moves_at_same_position_before(&cursor.moves, last_index, fade_horizon_ms);
+    let time_since_move = (current_time_ms - cursor.moves[at_rest_since].time_ms).max(0.0);
     let fade_out = if time_since_move <= hide_delay_ms {
         1.0
     } else {
-        let delta = time_since_move - hide_delay_ms;
-        let fade = 1.0 - smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, delta);
-        fade.clamp(0.0, 1.0) as f32
+        1.0 - smoothstep64(
+            0.0,
+            CURSOR_IDLE_FADE_OUT_MS,
+            time_since_move - hide_delay_ms,
+        )
     };
 
-    if fade_out == 0.0 {
-        return 0.0;
+    // Fade in ahead of the next move so a resuming cursor is already fully
+    // visible when it starts moving, instead of fading in again after it.
+    let resting = &cursor.moves[last_index];
+    let fade_in = cursor
+        .moves
+        .get(idx..)
+        .and_then(|later| {
+            later
+                .iter()
+                .take_while(|next| {
+                    next.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS
+                })
+                .find(|next| !same_position(next, resting))
+        })
+        .map(|next| next.time_ms - current_time_ms)
+        .filter(|until_move| *until_move <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS)
+        .map_or(0.0, |until_move| {
+            1.0 - smoothstep64(0.0, CURSOR_IDLE_RESUME_LOOKAHEAD_MS, until_move)
+        });
+
+    (fade_out + (1.0 - fade_out) * fade_in).clamp(0.0, 1.0) as f32
+}
+
+fn same_position(a: &CursorMoveEvent, b: &CursorMoveEvent) -> bool {
+    a.x == b.x && a.y == b.y
+}
+
+/// The first index of the run of moves ending at `index` that all share its
+/// position, or the first one in that run at or before `horizon_ms`.
+fn moves_at_same_position_before(
+    moves: &[CursorMoveEvent],
+    index: usize,
+    horizon_ms: f64,
+) -> usize {
+    let mut start = index;
+    while start > 0
+        && moves[start].time_ms > horizon_ms
+        && same_position(&moves[start - 1], &moves[index])
+    {
+        start -= 1;
     }
-
-    let elapsed_moves = if moves_ordered {
-        &cursor.moves[..idx]
-    } else {
-        &cursor.moves[..]
-    };
-    let opacity = compute_cursor_fade_in(elapsed_moves, current_time_ms, hide_delay_ms);
-    (opacity * fade_out).clamp(0.0, 1.0)
+    start
 }
 
 fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -841,30 +891,6 @@ fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
 
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-fn compute_cursor_fade_in(
-    moves: &[CursorMoveEvent],
-    current_time_ms: f64,
-    hide_delay_ms: f64,
-) -> f32 {
-    let resume_time = moves
-        .windows(2)
-        .rev()
-        .find(|pair| {
-            let prev = &pair[0];
-            let next = &pair[1];
-            next.time_ms <= current_time_ms && next.time_ms - prev.time_ms > hide_delay_ms
-        })
-        .map(|pair| pair[1].time_ms);
-
-    let Some(resume_time_ms) = resume_time else {
-        return 1.0;
-    };
-
-    let time_since_resume = (current_time_ms - resume_time_ms).max(0.0);
-
-    smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, time_since_resume) as f32
 }
 
 fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) -> f32 {
@@ -1396,29 +1422,24 @@ mod tests {
     }
 
     #[test]
-    fn opacity_fades_in_after_long_inactivity() {
-        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
-
-        let hide_delay_ms = 2000.0;
-
-        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms, true);
-        assert_eq!(at_resume, 0.0);
-
-        let halfway = compute_cursor_idle_opacity(
-            &cursor,
-            5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
-            hide_delay_ms,
-            true,
-        );
-        assert!((halfway - 0.5).abs() < 0.05);
-
-        let after_fade = compute_cursor_idle_opacity(
-            &cursor,
-            5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
-            hide_delay_ms,
-            true,
-        );
-        assert_eq!(after_fade, 1.0);
+    fn opacity_never_dips_while_a_hidden_cursor_resumes() {
+        for moves in [
+            vec![(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)],
+            vec![(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (5050.0, 0.6, 0.5)],
+            vec![(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (5300.0, 0.6, 0.5)],
+        ] {
+            let cursor = cursor_events(&moves);
+            let mut previous = 0.0;
+            for time in 4700..6000 {
+                let opacity = compute_cursor_idle_opacity(&cursor, f64::from(time), 1000.0, true);
+                assert!(
+                    opacity >= previous,
+                    "{moves:?}: opacity fell from {previous} to {opacity} at {time}ms"
+                );
+                previous = opacity;
+            }
+            assert_eq!(previous, 1.0);
+        }
     }
 
     fn idle_opacity_both_paths(cursor: &CursorEvents, time_ms: f64, hide_delay_ms: f64) -> f32 {
@@ -1442,19 +1463,19 @@ mod tests {
             (5000.0, 0.6, 0.6),
             (5010.0, 0.7, 0.7),
         ]);
-        for (time, expected) in [(0.0, 1.0), (5000.0, 1.0), (5200.0, 0.5), (5400.0, 1.0)] {
+        for (time, expected) in [(0.0, 1.0), (4875.0, 0.5), (5000.0, 1.0), (5200.0, 1.0)] {
             assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
         }
     }
 
     #[test]
-    fn opacity_preserves_lookahead_boundary_and_resume_fade() {
+    fn opacity_preserves_lookahead_boundary_and_resume() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
         for (time, expected) in [
             (4749.999, 0.0),
-            (4750.0, 1.0),
-            (4999.0, 1.0),
-            (5000.0, 0.0),
+            (4750.0, 0.0),
+            (4875.0, 0.5),
+            (5000.0, 1.0),
             (5400.0, 1.0),
         ] {
             assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
@@ -1470,14 +1491,13 @@ mod tests {
             (10000.0, 0.7, 0.7),
         ]);
         for (time, expected) in [
-            (10200.0, 0.5),
+            (9875.0, 0.5),
             (8000.0, 0.0),
-            (5200.0, 0.5),
+            (6210.0, 0.5),
             (5000.0, 1.0),
-            (5400.0, 1.0),
-            (10000.0, 0.0),
-            (10400.0, 1.0),
-            (5200.0, 0.5),
+            (10000.0, 1.0),
+            (4875.0, 0.5),
+            (6210.0, 0.5),
         ] {
             assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
         }
@@ -1493,9 +1513,54 @@ mod tests {
     }
 
     #[test]
+    fn a_shape_change_under_a_still_pointer_does_not_wake_an_idle_cursor() {
+        let mut shape_changed = cursor_events(&[(0.0, 0.2, 0.2), (3000.0, 0.2, 0.2)]);
+        shape_changed.moves[1].cursor_id = "ibeam".into();
+        let unchanged = cursor_events(&[(0.0, 0.2, 0.2)]);
+        for time in [1000.0, 1200.0, 1400.0, 2500.0, 3000.0, 3100.0, 6000.0] {
+            assert_eq!(
+                idle_opacity_both_paths(&shape_changed, time, 1000.0),
+                idle_opacity_both_paths(&unchanged, time, 1000.0),
+                "at {time}ms"
+            );
+        }
+
+        // Moving away afterwards still fades the cursor back in ahead of it.
+        shape_changed.moves.push(move_event(5000.0, 0.5, 0.5));
+        for (time, expected) in [(4749.999, 0.0), (4875.0, 0.5), (5000.0, 1.0)] {
+            assert_eq!(
+                idle_opacity_both_paths(&shape_changed, time, 1000.0),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn long_runs_of_shape_changes_fade_like_a_single_rest() {
+        // An animated cursor under a still pointer for ten minutes: a shape
+        // event every 33 ms at the same position.
+        let mut animated = cursor_events(&[(0.0, 0.2, 0.2)]);
+        animated.moves.extend((1..18_000).map(|i| {
+            let mut event = move_event(f64::from(i) * 33.0, 0.2, 0.2);
+            event.cursor_id = format!("frame-{}", i % 8);
+            event
+        }));
+        let resting = cursor_events(&[(0.0, 0.2, 0.2)]);
+        for time in [
+            0.0, 900.0, 1000.0, 1200.0, 1400.0, 5000.0, 300_000.0, 593_000.0,
+        ] {
+            assert_eq!(
+                idle_opacity_both_paths(&animated, time, 1000.0),
+                idle_opacity_both_paths(&resting, time, 1000.0),
+                "at {time}ms"
+            );
+        }
+    }
+
+    #[test]
     fn opacity_preserves_recent_resume_for_out_of_order_history() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (4000.0, 0.6, 0.6)]);
-        assert_eq!(idle_opacity_both_paths(&cursor, 5200.0, 1000.0), 0.25);
+        assert_eq!(idle_opacity_both_paths(&cursor, 5200.0, 1000.0), 0.5);
     }
 
     fn click_event(time_ms: f64, down: bool) -> CursorClickEvent {

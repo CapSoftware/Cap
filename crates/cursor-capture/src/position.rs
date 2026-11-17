@@ -136,7 +136,7 @@ impl std::fmt::Debug for RelativeCursorPosition {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// Needs to be logical coordinates on macOS and physical on Windows
 /// This type is opqaue on purpose as the logical/physical invariants need to hold
 pub struct CursorCropBounds {

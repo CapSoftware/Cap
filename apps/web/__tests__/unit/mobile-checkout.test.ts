@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as startGuestCheckout } from "@/app/api/settings/billing/guest-checkout/route";
 import { GET } from "@/app/mobile/checkout/complete/route";
@@ -9,11 +10,12 @@ import {
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
+	env: { WEB_URL: "https://cap.so" } as Record<string, string | undefined>,
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: {},
-	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+	serverEnv: () => checkoutMocks.env,
 }));
 
 vi.mock("@cap/utils", () => ({
@@ -23,6 +25,10 @@ vi.mock("@cap/utils", () => ({
 		},
 	}),
 	isValidStripePlanPriceId: (id: string) => id === "price_pro",
+	STRIPE_PLAN_IDS: {
+		development: { monthly: "price_pro", yearly: "price_pro_yearly" },
+		production: { monthly: "price_pro_live", yearly: "price_pro_live_yr" },
+	},
 }));
 
 vi.mock("@/lib/server-analytics", () => ({
@@ -30,15 +36,16 @@ vi.mock("@/lib/server-analytics", () => ({
 }));
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>
-	new Request("https://cap.so/api/settings/billing/guest-checkout", {
+	new NextRequest("https://cap.so/api/settings/billing/guest-checkout", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("checkout redirects", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		checkoutMocks.env = { WEB_URL: "https://cap.so" };
 		checkoutMocks.create.mockResolvedValue({
 			id: "cs_test",
 			url: "https://pay.cap.so/session",
@@ -87,6 +94,32 @@ describe("checkout redirects", () => {
 				guestCheckout: "true",
 			},
 		});
+	});
+
+	it("routes web guests to the in-app checkout once it is configured", async () => {
+		checkoutMocks.env = {
+			WEB_URL: "https://cap.so",
+			STRIPE_SECRET_KEY: "sk_test_x",
+			STRIPE_PUBLISHABLE_KEY: "pk_test_x",
+		};
+
+		const web = await startGuestCheckout(
+			makeGuestCheckoutRequest({ priceId: "price_pro", quantity: 4 }),
+		);
+		expect(await web.json()).toEqual({
+			url: "/checkout?plan=monthly&seats=4",
+		});
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
+
+		const mobile = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: "price_pro",
+				quantity: 1,
+				platform: "mobile",
+			}),
+		);
+		expect(await mobile.json()).toEqual({ url: "https://pay.cap.so/session" });
+		expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects non-allowlisted arbitrary priceId with 400", async () => {

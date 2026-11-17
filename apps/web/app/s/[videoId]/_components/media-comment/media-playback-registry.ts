@@ -60,9 +60,8 @@ export function releasePlayback(
 	if (!resumeMain) return;
 	resumeMain = false;
 	if (!options?.resumeMain) return;
-	// Guard against the store already running: `play()` on a playing element is
-	// a no-op, but skipping it keeps us out of its subscriber notifications.
-	if (mainStore && !mainStore.getPlaying()) mainStore.play();
+	// A rejected play() can settle before the main video's queued pause event.
+	if (mainStore?.getElement()?.paused) mainStore.play();
 }
 
 /**

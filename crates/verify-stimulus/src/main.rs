@@ -114,6 +114,7 @@ mod app {
             go_at: None,
             window: None,
             surface: None,
+            occluder: None,
             size: (0, 0),
             shown: None,
             ready: false,
@@ -340,6 +341,8 @@ mod app {
         go_at: Option<(Instant, u64)>,
         window: Option<Arc<Window>>,
         surface: Option<canvas::Canvas>,
+        /// The magenta window in front of the stimulus, when the spec asks.
+        occluder: Option<(Arc<Window>, canvas::Canvas)>,
         size: (u32, u32),
         shown: Option<u32>,
         ready: bool,
@@ -663,6 +666,31 @@ mod app {
             }
             window.request_redraw();
             self.window = Some(window);
+            if let Some((x, y, w, h)) = self.spec.occluder {
+                let attrs = Window::default_attributes()
+                    .with_title(cap_verify::stimulus::OCCLUDER_TITLE)
+                    .with_window_level(WindowLevel::AlwaysOnTop)
+                    .with_decorations(false)
+                    .with_resizable(false)
+                    .with_position(LogicalPosition::new(x, y))
+                    .with_inner_size(LogicalSize::new(w, h));
+                match event_loop
+                    .create_window(attrs)
+                    .map_err(|e| e.to_string())
+                    .and_then(|window| {
+                        let window = Arc::new(window);
+                        canvas::new(&window).map(|canvas| (window, canvas))
+                    }) {
+                    Ok((window, canvas)) => {
+                        window.request_redraw();
+                        self.occluder = Some((window, canvas));
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("occluder: {e}"));
+                        event_loop.exit();
+                    }
+                }
+            }
         }
 
         fn user_event(&mut self, event_loop: &ActiveEventLoop, command: Command) {
@@ -681,12 +709,23 @@ mod app {
             }
         }
 
-        fn window_event(
-            &mut self,
-            event_loop: &ActiveEventLoop,
-            _id: WindowId,
-            event: WindowEvent,
-        ) {
+        fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+            if let Some((window, canvas)) = self
+                .occluder
+                .as_mut()
+                .filter(|(window, _)| window.id() == id)
+            {
+                if let WindowEvent::RedrawRequested = event {
+                    let size = window.inner_size();
+                    // BGRA magenta: nothing the stimulus draws has colour.
+                    canvas::present(canvas, size.width.max(1), size.height.max(1), |bytes| {
+                        for pixel in bytes.chunks_exact_mut(4) {
+                            pixel.copy_from_slice(&[255, 0, 255, 255]);
+                        }
+                    });
+                }
+                return;
+            }
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => {

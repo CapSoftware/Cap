@@ -1,0 +1,16 @@
+[
+	[
+		{ "text": "So", "start": 0.4, "end": 0.64 },
+		{ "text": "um", "start": 1.12, "end": 1.36 },
+		{ "text": "I", "start": 1.84, "end": 2.08 },
+		{ "text": "think", "start": 2.16, "end": 2.4 },
+		{ "text": "we", "start": 2.56, "end": 2.8 },
+		{ "text": "should", "start": 2.96, "end": 3.2 },
+		{ "text": "I", "start": 3.2, "end": 3.44 },
+		{ "text": "start", "start": 4.0, "end": 4.4799995 },
+		{ "text": "with", "start": 4.72, "end": 4.9599996 },
+		{ "text": "the", "start": 5.28, "end": 5.52 },
+		{ "text": "the", "start": 5.52, "end": 5.7599998 },
+		{ "text": "dashboard.", "start": 5.76, "end": 6.3999996 }
+	]
+]

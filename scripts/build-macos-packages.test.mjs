@@ -11,7 +11,7 @@ import {
 } from "./build-macos-packages.mjs";
 
 const target = "x86_64-apple-darwin";
-const config = ["--config", "src-tauri/tauri.prod.conf.json"];
+const config = ["--config", "release.conf.json"];
 const intelTimestampFailure = [
 	"/Users/runner/work/Cap/Cap/target/x86_64-apple-darwin/release/bundle/macos/Cap.app/Contents/Frameworks/Spacedrive.framework/Versions/Current/Libraries/libavdevice.61.3.100.dylib: replacing existing signature",
 	"/Users/runner/work/Cap/Cap/target/x86_64-apple-darwin/release/bundle/macos/Cap.app/Contents/Frameworks/Spacedrive.framework/Versions/Current/Libraries/libavdevice.61.3.100.dylib: A timestamp was expected but was not found.",
@@ -60,7 +60,7 @@ function harness(results) {
 	};
 }
 
-test("macOS packaging uses the ScreenCaptureKit minimum across both app manifests", () => {
+test("macOS packaging uses the app manifest's ScreenCaptureKit minimum", () => {
 	const minimum = resolveMacosDeploymentTarget();
 	assert.equal(minimum, "12.3");
 	assert.equal(resolveMacosDeploymentTarget(""), minimum);
@@ -82,10 +82,7 @@ test("the GPUI app is packaged by rebundling its prebuilt binary on every attemp
 	const result = await buildMacosPackages(
 		target,
 		["--bundles", "app,dmg", "--verbose"],
-		{
-			...fixture.options,
-			bundleOnly: true,
-		},
+		fixture.options,
 	);
 	assert.equal(result.code, 0);
 	const bundle = [
@@ -238,7 +235,7 @@ test("only retries exact timestamp diagnostics with a terminal Tauri signing err
 			"failed to bundle project: failed to sign app\n",
 			"/Users/runner/work/Cap/Cap/target/x86_64-apple-darwin/release/bundle/macos/Cap.app: The specified item could not be found in the keychain.\nfailed to bundle project: failed to sign app\n",
 		),
-		`${intelTimestampFailure}error: could not compile cap-desktop\n`,
+		`${intelTimestampFailure}error: could not compile cap-desktop-gpui\n`,
 		"warning: A timestamp was expected but was not found.\nError failed to bundle project: failed to sign app\n",
 	]) {
 		assert.equal(isTimestampSigningFailure(output), false, output);
@@ -255,7 +252,7 @@ test("successful builds never retry even if their output contains a timestamp di
 	assert.deepEqual(fixture.delays, []);
 });
 
-test("timestamp retries only rebundle and preserve the target, config and signing environment", async () => {
+test("timestamp retries rebundle and preserve the target, config and signing environment", async () => {
 	const fixture = harness([
 		{ code: 1, output: intelTimestampFailure },
 		{ code: 1, output: armTimestampFailure },
@@ -284,11 +281,7 @@ test("timestamp retries only rebundle and preserve the target, config and signin
 	];
 	assert.deepEqual(
 		fixture.calls.map((call) => call.args),
-		[
-			["build:tauri", "--target", target, ...args, ...minimumConfig],
-			bundleArguments,
-			bundleArguments,
-		],
+		[bundleArguments, bundleArguments, bundleArguments],
 	);
 	for (const call of fixture.calls) {
 		assert.deepEqual(call.env, {
@@ -329,7 +322,7 @@ test("a retry cannot reuse the previous attempt's timestamp diagnostic", async (
 
 test("compiler, certificate, notarization and signal failures are terminal", async () => {
 	for (const result of [
-		{ code: 1, output: "error: could not compile cap-desktop\n" },
+		{ code: 1, output: "error: could not compile cap-desktop-gpui\n" },
 		{
 			code: 1,
 			output:
@@ -466,7 +459,7 @@ test("the executor cancels the child process group and waits for close", async (
 	const kills = [];
 	const output = [];
 	let settled = false;
-	const operation = executeMacosCommand(["build:tauri"], {
+	const operation = executeMacosCommand(["tauri", "bundle"], {
 		env: {},
 		signal: controller.signal,
 		onOutput: (stream, chunk) => output.push({ stream, chunk }),
@@ -521,7 +514,7 @@ test("unsupported platforms and arguments fail before executing bun", async () =
 
 test("timestamp signing retries tolerate nested Bun script failure messages", () => {
 	const failure =
-		'/Applications/Cap.app: A timestamp was expected but was not found.\nError failed to bundle project: failed to sign app\nerror: script "tauri" exited with code 1\nerror: script "build:tauri" exited with code 1';
+		'/Applications/Cap.app: A timestamp was expected but was not found.\nError failed to bundle project: failed to sign app\nerror: script "tauri" exited with code 1\nerror: script "gpui:build" exited with code 1';
 	assert.equal(isTimestampSigningFailure(failure), true);
 	assert.equal(
 		isTimestampSigningFailure(`${failure}\nError unrelated packaging failure`),

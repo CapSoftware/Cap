@@ -1,12 +1,52 @@
 import { db } from "@cap/database";
 import {
 	organizationMembers,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
 } from "@cap/database/schema";
-import type { User, Video } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import type { Organisation, User, Video } from "@cap/web-domain";
+import { and, eq, isNull } from "drizzle-orm";
+
+type ViewerDownloadSettings = { disableDownloads?: boolean } | null | undefined;
+
+// Viewers can download by default. The organization can turn it off for every
+// cap and the owner for a single cap, and either one being off wins. This only
+// decides whether viewers may download at all: callers still run the view gates
+// (privacy, email restriction, password, share limit) before signing a URL.
+export function areViewerDownloadsEnabled({
+	videoSettings,
+	organizationSettings,
+}: {
+	videoSettings: ViewerDownloadSettings;
+	organizationSettings: ViewerDownloadSettings;
+}): boolean {
+	return (
+		organizationSettings?.disableDownloads !== true &&
+		videoSettings?.disableDownloads !== true
+	);
+}
+
+export async function videoAllowsViewerDownloads(video: {
+	orgId: Organisation.OrganisationId;
+	settings: ViewerDownloadSettings;
+}): Promise<boolean> {
+	if (video.settings?.disableDownloads === true) return false;
+
+	const [organization] = await db()
+		.select({ settings: organizations.settings })
+		.from(organizations)
+		.where(
+			and(eq(organizations.id, video.orgId), isNull(organizations.tombstoneAt)),
+		);
+	if (!organization) return false;
+
+	return areViewerDownloadsEnabled({
+		videoSettings: video.settings,
+		organizationSettings: organization.settings,
+	});
+}
 
 // Download access must not be broader than view access. VideosPolicy.canView
 // grants org members access only through an explicit sharedVideos row (see
@@ -24,49 +64,37 @@ export async function canUserDownloadVideo({
 }): Promise<boolean> {
 	if (userId === ownerId) return true;
 
-	const sharedOrgs = await db()
-		.select({ organizationId: sharedVideos.organizationId })
-		.from(sharedVideos)
-		.where(eq(sharedVideos.videoId, videoId));
-
-	if (sharedOrgs.length > 0) {
-		const [orgMembership] = await db()
+	const [organizationMembership, spaceMembership] = await Promise.allSettled([
+		db()
 			.select({ id: organizationMembers.id })
-			.from(organizationMembers)
-			.where(
+			.from(sharedVideos)
+			.innerJoin(
+				organizationMembers,
 				and(
+					eq(sharedVideos.organizationId, organizationMembers.organizationId),
 					eq(organizationMembers.userId, userId),
-					inArray(
-						organizationMembers.organizationId,
-						sharedOrgs.map((org) => org.organizationId),
-					),
 				),
 			)
-			.limit(1);
-
-		if (orgMembership) return true;
-	}
-
-	const sharedSpaces = await db()
-		.select({ spaceId: spaceVideos.spaceId })
-		.from(spaceVideos)
-		.where(eq(spaceVideos.videoId, videoId));
-
-	if (sharedSpaces.length === 0) return false;
-
-	const [spaceMembership] = await db()
-		.select({ id: spaceMembers.id })
-		.from(spaceMembers)
-		.where(
-			and(
-				eq(spaceMembers.userId, userId),
-				inArray(
-					spaceMembers.spaceId,
-					sharedSpaces.map((space) => space.spaceId),
+			.where(eq(sharedVideos.videoId, videoId))
+			.limit(1),
+		db()
+			.select({ id: spaceMembers.id })
+			.from(spaceVideos)
+			.innerJoin(
+				spaceMembers,
+				and(
+					eq(spaceVideos.spaceId, spaceMembers.spaceId),
+					eq(spaceMembers.userId, userId),
 				),
-			),
-		)
-		.limit(1);
+			)
+			.where(eq(spaceVideos.videoId, videoId))
+			.limit(1),
+	]);
 
-	return Boolean(spaceMembership);
+	if (organizationMembership.status === "rejected")
+		throw organizationMembership.reason;
+	if (organizationMembership.value[0]) return true;
+	if (spaceMembership.status === "rejected") throw spaceMembership.reason;
+
+	return Boolean(spaceMembership.value[0]);
 }

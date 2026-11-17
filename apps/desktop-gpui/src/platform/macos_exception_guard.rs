@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 use objc2::{
     ffi, msg_send,
-    rc::Id,
+    rc::Retained,
     runtime::{AnyClass, AnyObject, Imp, Sel},
     sel,
 };
@@ -46,9 +46,7 @@ impl GuardedMethod {
         if self.original.get().is_some() || class.verify_sel::<(), ()>(selector).is_err() {
             return false;
         }
-        let method = unsafe {
-            ffi::class_getInstanceMethod((class as *const AnyClass).cast(), selector.as_ptr())
-        };
+        let method = unsafe { ffi::class_getInstanceMethod(class, selector) };
         if method.is_null() {
             return false;
         }
@@ -63,7 +61,7 @@ impl GuardedMethod {
         if self.original.set(original).is_err() {
             return false;
         }
-        unsafe { ffi::method_setImplementation(method, Some(guard_imp)) };
+        let _ = unsafe { ffi::method_setImplementation(method, guard_imp) };
         true
     }
 
@@ -72,12 +70,12 @@ impl GuardedMethod {
             return false;
         };
         let exception = unsafe { cap_call_void_imp_catching(original, receiver, selector) };
-        let Some(exception) = (unsafe { Id::from_raw(exception) }) else {
+        let Some(exception) = (unsafe { Retained::from_raw(exception) }) else {
             return false;
         };
         tracing::warn!(
             exception = %describe(&exception),
-            selector = %selector.name(),
+            selector = %selector.name().to_string_lossy(),
             "ignored an AppKit exception that would have crashed the app"
         );
         true
@@ -110,7 +108,7 @@ unsafe extern "C" fn touch_bar_finder_invalidate(receiver: *mut AnyObject, selec
 
 /// Call once on the main thread, before the app's run loop starts.
 pub(super) fn install() {
-    let Some(class) = AnyClass::get("_NSTouchBarFinderObservation") else {
+    let Some(class) = AnyClass::get(c"_NSTouchBarFinderObservation") else {
         tracing::info!("AppKit has no Touch Bar finder observation class; nothing to guard");
         return;
     };
@@ -124,7 +122,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use objc2::{
-        ClassType, msg_send, msg_send_id,
+        ClassType, msg_send,
         runtime::{ClassBuilder, NSObject},
     };
 
@@ -145,7 +143,7 @@ mod tests {
         static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
         CLASS.get_or_init(|| {
             let mut builder =
-                ClassBuilder::new("CapExceptionGuardTestObservation", NSObject::class()).unwrap();
+                ClassBuilder::new(c"CapExceptionGuardTestObservation", NSObject::class()).unwrap();
             unsafe {
                 builder.add_method(
                     sel!(invalidate),
@@ -170,7 +168,7 @@ mod tests {
                 sel!(invalidate),
             )
         };
-        let exception = unsafe { Id::from_raw(exception) }
+        let exception = unsafe { Retained::from_raw(exception) }
             .expect("removing an unregistered observer must throw");
         let description = describe(&exception);
         assert!(
@@ -186,7 +184,7 @@ mod tests {
         assert!(TEST_GUARD.install(class, sel!(invalidate), guarded));
         assert!(!TEST_GUARD.install(class, sel!(invalidate), guarded));
 
-        let instance: Id<NSObject> = unsafe { msg_send_id![class, new] };
+        let instance: Retained<NSObject> = unsafe { msg_send![class, new] };
         for _ in 0..3 {
             let before = removal_calls();
             let _: () = unsafe { msg_send![&instance, invalidate] };
@@ -197,10 +195,10 @@ mod tests {
     #[test]
     fn appkit_still_has_the_touch_bar_finder_method_this_guards() {
         assert!(
-            AnyClass::get("NSApplication").is_some(),
+            AnyClass::get(c"NSApplication").is_some(),
             "AppKit is not loaded"
         );
-        let class = AnyClass::get("_NSTouchBarFinderObservation")
+        let class = AnyClass::get(c"_NSTouchBarFinderObservation")
             .expect("AppKit renamed _NSTouchBarFinderObservation; re-check the guard");
         assert!(class.verify_sel::<(), ()>(sel!(invalidate)).is_ok());
     }

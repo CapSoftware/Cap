@@ -1,6 +1,6 @@
 #![cfg(target_os = "windows")]
 
-use scap_targets::{Window, WindowId};
+use scap_targets::{Window, WindowId, platform::WindowListCache};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
@@ -9,12 +9,13 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, LPARAM, WPARAM},
         UI::{
             HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness},
             WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
-                SW_MINIMIZE, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+                CreateWindowExW, DestroyWindow, DispatchMessageW, IDI_APPLICATION, IDI_WARNING,
+                LoadIconW, MSG, PM_REMOVE, PeekMessageW, SW_MINIMIZE, SendMessageW, ShowWindow,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETICON, WS_CHILD,
                 WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
             },
         },
@@ -76,6 +77,17 @@ fn window_fixture_process() {
 
     let normal = TestWindow::new(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WINDOW_EX_STYLE(0), None);
     let popup = TestWindow::new(WS_POPUP | WS_VISIBLE, WINDOW_EX_STYLE(0), Some(normal.0));
+    for (window, resource) in [(&normal, IDI_APPLICATION), (&popup, IDI_WARNING)] {
+        let icon = unsafe { LoadIconW(None, resource) }.expect("load fixture icon");
+        unsafe {
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(0)),
+                Some(LPARAM(icon.0 as isize)),
+            )
+        };
+    }
     let hidden = TestWindow::new(WS_OVERLAPPEDWINDOW, WINDOW_EX_STYLE(0), None);
     let child = TestWindow::new(WS_CHILD | WS_VISIBLE, WINDOW_EX_STYLE(0), Some(normal.0));
     let tool = TestWindow::new(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WS_EX_TOOLWINDOW, None);
@@ -141,6 +153,8 @@ fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
     assert_eq!(ids.len(), 6);
     let own = TestWindow::new(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WINDOW_EX_STYLE(0), None);
     let windows = Window::list();
+    let mut cache = WindowListCache::default();
+    let cached_windows = cache.list();
     assert!(!windows.iter().any(|window| window.id() == own.id()));
 
     for id in &ids[..2] {
@@ -152,6 +166,14 @@ fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
         assert!(window.raw_handle().is_on_screen());
         assert!(window.name().is_some_and(|name| !name.is_empty()));
         assert!(window.owner_name().is_some());
+        assert!(cached_windows.iter().any(|cached| cached.id() == *id));
+        assert_eq!(cache.is_valid(window), window.raw_handle().is_valid());
+        assert_eq!(
+            cache.is_on_screen(window),
+            window.raw_handle().is_on_screen()
+        );
+        assert_eq!(cache.owner_name(window), window.owner_name());
+        assert_eq!(cache.app_icon(window), window.app_icon());
         assert!(window.display().is_some());
         assert!(window.display_relative_logical_bounds().is_some());
         assert_eq!(
@@ -178,6 +200,22 @@ fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
             "ineligible window {id} must stay excluded"
         );
     }
+    let cached_eligible: Vec<_> = cached_windows
+        .iter()
+        .filter(|window| cache.is_valid(window) && cache.is_on_screen(window))
+        .map(Window::id)
+        .collect();
+    for id in &ids {
+        assert_eq!(cached_eligible.contains(id), eligible.contains(id));
+    }
+    let icons: Vec<_> = ids[..2]
+        .iter()
+        .map(|id| {
+            let window = windows.iter().find(|window| window.id() == *id).unwrap();
+            cache.app_icon(window).expect("fixture window icon")
+        })
+        .collect();
+    assert_ne!(icons[0], icons[1]);
     fixture
         .0
         .stdin

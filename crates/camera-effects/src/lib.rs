@@ -404,6 +404,7 @@ pub struct BlurProcessor {
     last_output_status: Option<BlurOutputStatus>,
     frame_synchronous: bool,
     frame_time: Option<f32>,
+    output_format: wgpu::TextureFormat,
     // Keep last: must drop after every other field (see BlurSessionHandle).
     _blur_session: BlurSessionHandle,
 }
@@ -560,6 +561,7 @@ impl BlurProcessor {
             last_output_status: None,
             frame_synchronous: false,
             frame_time: None,
+            output_format,
             _blur_session: blur_session,
         })
     }
@@ -824,13 +826,8 @@ impl BlurProcessor {
             wgpu::TextureFormat::Rgba16Float,
             tex_usage,
         );
-        let output_texture = create_rgba_texture(
-            "Blur Output",
-            width,
-            height,
-            wgpu::TextureFormat::Rgba8Unorm,
-            tex_usage,
-        );
+        let output_texture =
+            create_rgba_texture("Blur Output", width, height, self.output_format, tex_usage);
         let mask_texture = create_mask_texture(device, self.mask_dimensions);
 
         self.textures = Some(ProcessorTextures {

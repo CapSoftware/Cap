@@ -21,6 +21,11 @@ fn no_edit(_: &mut ProjectConfiguration) {}
 fn case_id(fixture: &str, edit: &str, format: Format, fps: u32, decoder: Decoder) -> String {
     let format = match format {
         Format::Mp4 => "mp4",
+        Format::Mp4Turbo {
+            failing_chunk: None,
+            ..
+        } => "mp4-turbo",
+        Format::Mp4Turbo { .. } => "mp4-turbo-fallback",
         Format::Gif => "gif",
         Format::Mov => "mov",
     };
@@ -75,7 +80,7 @@ fn run_project(
                 let ext = match format {
                     Format::Gif => "gif",
                     Format::Mov => "mov",
-                    Format::Mp4 => "mp4",
+                    Format::Mp4 | Format::Mp4Turbo { .. } => "mp4",
                 };
                 let run = ExportRun {
                     custom_bpp: None,
@@ -104,7 +109,7 @@ fn run_project(
                             &frames,
                             &path,
                             fps,
-                            format == Format::Mp4,
+                            matches!(format, Format::Mp4 | Format::Mp4Turbo { .. }),
                         );
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
@@ -266,6 +271,199 @@ fn basic() {
         false,
     ));
     common::assert_passed(failures);
+}
+
+/// The turbo export split into three chunks, so chunk seams land inside
+/// cuts, speed changes, transitions, scene changes and held frames.
+#[test]
+fn turbo() {
+    let turbo = Format::Mp4Turbo {
+        chunks: 3,
+        failing_chunk: None,
+    };
+    let fallback = Format::Mp4Turbo {
+        chunks: 3,
+        failing_chunk: Some(2),
+    };
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
+        catalog::basic(report::tier()),
+        &[
+            Variant {
+                edit: "full",
+                apply: no_edit,
+            },
+            Variant {
+                edit: "cuts-speeds-reorder",
+                apply: cuts_speeds_reorder,
+            },
+            Variant {
+                edit: "transition",
+                apply: transition,
+            },
+            Variant {
+                edit: "hide-camera-scene",
+                apply: hide_camera_scene,
+            },
+        ],
+        &[(turbo, 30), (turbo, 60)],
+        &Decoder::all(),
+        RES,
+        false,
+    ));
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        &[Variant {
+            edit: "full",
+            apply: no_edit,
+        }],
+        &[(turbo, 60)],
+        &Decoder::all(),
+        RES,
+        false,
+    ));
+    failures.extend(run(
+        catalog::basic(report::tier()),
+        &[Variant {
+            edit: "cuts-speeds-reorder",
+            apply: cuts_speeds_reorder,
+        }],
+        &[(fallback, 30)],
+        &[Decoder::Default],
+        RES,
+        false,
+    ));
+    failures.extend(turbo_cancellation());
+    common::assert_passed(failures);
+}
+
+fn turbo_spool_files() -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(std::env::temp_dir())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("cap-turbo-"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Stopping a turbo export from the progress callback or the user's cancel
+/// flag ends every chunk, leaves no output and removes the chunk spools. A
+/// destination that appears while turbo runs is left alone, whether turbo
+/// then finishes or fails: the export fails rather than falling back to a
+/// standard export that would overwrite it.
+fn turbo_cancellation() -> Vec<String> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let spec = catalog::vfr_holds(report::tier());
+    let decoder = if cfg!(target_os = "windows") {
+        Decoder::Ffmpeg
+    } else {
+        Decoder::Default
+    };
+    let mut failures = Vec::new();
+    for mode in ["progress", "flag", "taken", "taken-failed"] {
+        let id = format!(
+            "export/{}/turbo-cancel-{mode}/{}",
+            spec.name,
+            decoder.label()
+        );
+        if !report::selected(&id) {
+            continue;
+        }
+        let project = common::project(&spec);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
+        let dir = common::scratch_dir(&id);
+        let out = dir.path().join("cancelled.mp4");
+        let spools_before = turbo_spool_files();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let taken = out.clone();
+        let result = common::runtime().block_on(async {
+            let mut base = cap_export::ExporterBase::builder(project.path.clone())
+                .with_config(project.config())
+                .with_force_ffmpeg_decoder(decoder == Decoder::Ffmpeg)
+                .with_output_path(out.clone())
+                .build_for_mp4(cancel)
+                .await
+                .map_err(|e| format!("exporter build: {e}"))?;
+            if mode == "taken-failed" {
+                base.fail_turbo_chunk(2);
+            }
+            cap_export::mp4::Mp4ExportSettings {
+                fps: 60,
+                resolution_base: XY::new(RES.0, RES.1),
+                compression: cap_export::mp4::ExportCompression::Social,
+                custom_bpp: None,
+                force_ffmpeg_decoder: decoder == Decoder::Ffmpeg,
+                optimize_filesize: false,
+            }
+            .export_prepared_turbo(
+                base,
+                cap_export::mp4::turbo::TurboOptions {
+                    chunks: Some(3),
+                    strict: !mode.starts_with("taken"),
+                },
+                move |frame| {
+                    if mode.starts_with("taken") {
+                        if !taken.exists() {
+                            let _ = std::fs::write(&taken, "taken");
+                        }
+                        return true;
+                    }
+                    if frame < 60 {
+                        return true;
+                    }
+                    if mode == "flag" {
+                        flag.store(true, Ordering::Relaxed);
+                        return true;
+                    }
+                    false
+                },
+            )
+            .await
+        });
+        if mode.starts_with("taken") {
+            if result.is_ok() || result.as_ref().map_err(String::as_str) == Err("Export cancelled")
+            {
+                case.problem("error", format!("taken destination returned {result:?}"));
+            }
+            if std::fs::read(&out).ok().as_deref() != Some(&b"taken"[..]) {
+                case.problem("error", "export overwrote a destination created meanwhile");
+            }
+        } else {
+            if result.as_ref().map_err(String::as_str) != Err("Export cancelled") {
+                case.problem("error", format!("cancelled export returned {result:?}"));
+            }
+            if out.exists() {
+                case.problem("error", "cancelled export left an output file");
+            }
+        }
+        let leftover: Vec<_> = turbo_spool_files()
+            .into_iter()
+            .filter(|path| !spools_before.contains(path))
+            .collect();
+        if !leftover.is_empty() {
+            case.problem(
+                "error",
+                format!("cancelled export left spools {leftover:?}"),
+            );
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    failures
 }
 
 #[test]
@@ -654,7 +852,6 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
     }
     let audio = media::decode_audio(&output, None).expect("decode instant audio");
     let mono = audio.mono();
-    let mut mic_offset_ms = None;
     for source in [AudioSource::Mic, AudioSource::System] {
         let expected: Vec<(u32, f64)> = emitted
             .audio
@@ -795,21 +992,7 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
                 ),
             );
         }
-        if source == AudioSource::Mic {
-            mic_offset_ms = Some((av * 1e4).round() / 10.0);
-        }
         if av.abs() > 0.005 {
-            if source == AudioSource::System
-                && case.id == "export/instant/output/mp4/native"
-                && let Some(mic_offset_ms) = mic_offset_ms
-            {
-                case.measure(&sync_class, "mic-offset-ms", mic_offset_ms);
-                case.measure(
-                    &sync_class,
-                    "system-minus-mic-ms",
-                    ((av * 1e3 - mic_offset_ms) * 10.0).round() / 10.0,
-                );
-            }
             case.measure(&sync_class, "offset-ms", (av * 1e4).round() / 10.0);
             case.problem(
                 &sync_class,
@@ -1507,4 +1690,76 @@ fn recorded_epoch_audio_head() {
         }
     }
     common::assert_passed(failures);
+}
+
+fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
+    config.camera.background_blur.mode = cap_project::BackgroundBlurMode::Light;
+    let segments: Vec<cap_project::CaptionTrackSegment> = (0..12)
+        .map(|i| {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("caption-{i}"),
+                "start": f64::from(i) * 0.6,
+                "end": f64::from(i) * 0.6 + 0.5,
+                "text": format!("Caption number {i} on the timeline"),
+            }))
+            .unwrap()
+        })
+        .collect();
+    config.captions = Some(cap_project::CaptionsData {
+        segments: segments
+            .iter()
+            .map(|segment| cap_project::CaptionSegment {
+                id: segment.id.clone(),
+                start: segment.start as f32,
+                end: segment.end as f32,
+                text: segment.text.clone(),
+                words: Vec::new(),
+            })
+            .collect(),
+        settings: cap_project::CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    config
+        .timeline
+        .as_mut()
+        .expect("verification projects have a timeline")
+        .caption_segments = segments;
+}
+
+/// Every export with camera background blur starts a segmentation session.
+/// Where ONNX Runtime has no DirectML, the second one in a process used to end
+/// it (a null call inside ort's DirectML registration), so a second export, or
+/// an export after the editor preview, crashed on Windows.
+#[test]
+fn camera_blur_exports_twice_in_one_process() {
+    if !report::selected("export/multi-segment/camera-blur-twice") {
+        return;
+    }
+    let project = common::project(&catalog::multi_segment(report::tier()));
+    let mut config = project.config();
+    camera_blur_and_captions(&mut config);
+    let rt = common::runtime();
+    let dir = common::scratch_dir("export/multi-segment/camera-blur-twice");
+    for attempt in 0..2 {
+        let run = ExportRun {
+            custom_bpp: None,
+            fps: 30,
+            resolution: (1920, 1080),
+            format: Format::Mp4,
+            decoder: Decoder::Default,
+        };
+        let path = dir.path().join(format!("attempt-{attempt}.mp4"));
+        let output = rt
+            .block_on(common::export(&project, config.clone(), &run, &path))
+            .unwrap_or_else(|error| panic!("export {attempt} failed: {error}"));
+        let frames = common::read_output(&output, None);
+        assert!(
+            frames.len() > 30,
+            "export {attempt} wrote {} frames",
+            frames.len()
+        );
+    }
 }

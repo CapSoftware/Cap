@@ -10,6 +10,7 @@ if (dsn) {
 		replaysSessionSampleRate: 0,
 		replaysOnErrorSampleRate: 0,
 		maxBreadcrumbs: 30,
+		denyUrls: [/^(?:chrome|moz|safari(?:-web)?)-extension:\/\//i],
 		integrations: (integrations) =>
 			integrations.filter(
 				({ name }) => name !== "BrowserTracing" && name !== "BrowserSession",

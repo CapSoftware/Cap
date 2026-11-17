@@ -4,17 +4,24 @@ mod completed_audio;
 mod editor;
 mod editor_instance;
 mod export_audio;
+mod join_fade;
 mod playback;
 mod preparing_audio;
 mod preparing_editor;
 mod preparing_handoff;
 mod preparing_playback;
 mod preparing_preview;
+mod preview_speed;
+mod preview_stretch;
 mod segments;
 mod telemetry;
 mod thumbnail;
 
-pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
+#[cfg(feature = "test-hooks")]
+pub use audio::set_progressive_audio_allocation_limit;
+pub use audio::{
+    AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches, voice_eq_filters,
+};
 #[cfg(feature = "test-hooks")]
 pub use audio_output::OfflineAudioSink;
 pub use audio_output::{
@@ -54,8 +61,10 @@ pub use preparing_preview::{
     PreparingPreviewExit, PreparingPreviewInput, PreparingPreviewOptions, PreparingPreviewReady,
     PreparingPreviewSegment, PreparingPreviewStopHandle,
 };
+pub use preview_speed::{PreviewSpeed, PreviewSpeedHandle};
 pub use segments::{
     audio_segment_from_decoded, get_audio_segments, load_music_tracks, load_music_tracks_uncached,
+    music_track_ranges,
 };
 pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,

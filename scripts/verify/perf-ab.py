@@ -50,7 +50,7 @@ def run_once(side, target, case, tier, fixtures, report):
         CAP_VERIFY_CASE=case,
         CAP_VERIFY_TIER=tier,
     )
-    report.mkdir(parents=True, exist_ok=True)
+    report.mkdir(parents=True)
     started = time.monotonic()
     with (report / "test.log").open("w") as log:
         process = subprocess.Popen(
@@ -87,7 +87,7 @@ def main():
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--fixtures", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out", required=True, help="use a fresh path for each comparison; existing reports are preserved")
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--summary")
     args = parser.parse_args()

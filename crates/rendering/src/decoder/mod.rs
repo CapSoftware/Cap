@@ -148,6 +148,10 @@ pub struct DecodedFrame {
     matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    // Borrowed decoded planes: the cache owns the AVFrame instead of copying
+    // its planes into `data`. Layers use the backing as the per-frame storage
+    // identity so re-requesting the same decoded frame skips the upload.
+    ffmpeg_backing: Option<Arc<::ffmpeg::frame::Video>>,
     #[cfg(target_os = "macos")]
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
@@ -232,7 +236,8 @@ impl SendableImageBuf {
 
 #[derive(Clone)]
 pub(crate) struct DecodedFrameStorageIdentity {
-    data: Weak<Vec<u8>>,
+    data: Option<Weak<Vec<u8>>>,
+    ffmpeg_backing: Option<Weak<::ffmpeg::frame::Video>>,
     width: u32,
     height: u32,
     format: PixelFormat,
@@ -242,7 +247,18 @@ pub(crate) struct DecodedFrameStorageIdentity {
 
 impl DecodedFrameStorageIdentity {
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.data.ptr_eq(&other.data)
+        let same_storage = match (&self.data, &other.data) {
+            (Some(data), Some(other_data)) => data.ptr_eq(other_data),
+            (None, None) => true,
+            _ => false,
+        };
+        let same_ffmpeg_backing = match (&self.ffmpeg_backing, &other.ffmpeg_backing) {
+            (Some(backing), Some(other_backing)) => backing.ptr_eq(other_backing),
+            (None, None) => true,
+            _ => false,
+        };
+        same_storage
+            && same_ffmpeg_backing
             && self.width == other.width
             && self.height == other.height
             && self.format == other.format
@@ -254,7 +270,7 @@ impl DecodedFrameStorageIdentity {
 impl fmt::Debug for DecodedFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DecodedFrame")
-            .field("data_len", &self.data.len())
+            .field("data_len", &self.byte_len())
             .field("width", &self.width)
             .field("height", &self.height)
             .field("format", &self.format)
@@ -274,6 +290,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -292,6 +309,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -317,6 +335,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: frame.y_pitch as u32,
             uv_stride: frame.uv_pitch as u32,
+            ffmpeg_backing: None,
             cuda_nv12: Some(frame),
         }
     }
@@ -335,6 +354,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -359,6 +379,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -366,6 +387,59 @@ impl DecodedFrame {
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
+    }
+
+    fn with_ffmpeg_backing(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format,
+            matrix: YuvMatrix::Bt601,
+            y_stride,
+            uv_stride,
+            ffmpeg_backing: Some(frame),
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
+        }
+    }
+
+    pub(crate) fn new_nv12_with_ffmpeg_frame(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self::with_ffmpeg_backing(frame, width, height, PixelFormat::Nv12, y_stride, uv_stride)
+    }
+
+    pub(crate) fn new_yuv420p_with_ffmpeg_frame(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self::with_ffmpeg_backing(
+            frame,
+            width,
+            height,
+            PixelFormat::Yuv420p,
+            y_stride,
+            uv_stride,
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -384,6 +458,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
         }
     }
@@ -403,6 +478,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -427,6 +503,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
@@ -446,6 +523,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
@@ -467,6 +545,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            ffmpeg_backing: None,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
@@ -503,6 +582,11 @@ impl DecodedFrame {
             .and_then(|b| b.uv_handle())
     }
 
+    /// Returns the frame's contiguous CPU bytes when it has them.
+    ///
+    /// Borrowed FFmpeg YUV frames expose their planes through [`Self::y_plane`],
+    /// [`Self::uv_plane`], [`Self::u_plane`] and [`Self::v_plane`] instead and
+    /// return an empty slice here.
     pub fn data(&self) -> &[u8] {
         #[cfg(target_os = "macos")]
         if self.data.is_empty()
@@ -562,7 +646,13 @@ impl DecodedFrame {
 
     pub(crate) fn storage_identity(&self) -> DecodedFrameStorageIdentity {
         DecodedFrameStorageIdentity {
-            data: Arc::downgrade(&self.data),
+            // Borrowed planes have no `data` allocation of their own: reuse of
+            // the same AVFrame must match through `ffmpeg_backing` instead.
+            data: self
+                .ffmpeg_backing
+                .is_none()
+                .then(|| Arc::downgrade(&self.data)),
+            ffmpeg_backing: self.ffmpeg_backing.as_ref().map(Arc::downgrade),
             width: self.width,
             height: self.height,
             format: self.format,
@@ -571,7 +661,17 @@ impl DecodedFrame {
         }
     }
 
+    fn ffmpeg_plane(&self, index: usize, stride: u32, height: u32) -> Option<&[u8]> {
+        let frame = self.ffmpeg_backing.as_ref()?;
+        let size = (stride as usize).checked_mul(height as usize)?;
+        frame.data(index).get(..size)
+    }
+
     pub fn y_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return self.ffmpeg_plane(0, self.y_stride, self.height);
+        }
+
         match self.format {
             PixelFormat::Nv12 | PixelFormat::Yuv420p => {
                 let y_size = self
@@ -585,6 +685,13 @@ impl DecodedFrame {
     }
 
     pub fn uv_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Nv12 => self.ffmpeg_plane(1, self.uv_stride, self.height.div_ceil(2)),
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Nv12 => {
                 let y_size = self
@@ -598,6 +705,15 @@ impl DecodedFrame {
     }
 
     pub fn u_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Yuv420p => {
+                    self.ffmpeg_plane(1, self.uv_stride, self.height.div_ceil(2))
+                }
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Yuv420p => {
                 let y_size = self
@@ -616,6 +732,15 @@ impl DecodedFrame {
     }
 
     pub fn v_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Yuv420p => {
+                    self.ffmpeg_plane(2, self.uv_stride, self.height.div_ceil(2))
+                }
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Yuv420p => {
                 let y_size = self
@@ -727,6 +852,10 @@ pub(crate) const EXPORT_STALL_LIMIT: Duration = Duration::from_secs(120);
 enum FrameDeadline {
     /// Playback: a missed deadline returns no frame so the caller can move on.
     Drop,
+    /// The first frame after a seek or for a paused preview. Nothing asks for
+    /// it again, so on macOS a missed deadline switches to software decoding
+    /// at once, which then answers it.
+    Initial,
     /// Offline export: a missed deadline keeps waiting for the same reply.
     Wait,
 }
@@ -754,6 +883,60 @@ struct MacOsDecoderFallback {
     path: PathBuf,
     fps: u32,
     decoder: tokio::sync::OnceCell<Result<AsyncVideoDecoderHandle, String>>,
+    stall: Mutex<PrimaryStall>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct PrimaryStall {
+    timed_out_rounds: u32,
+    last_timeout: Option<tokio::time::Instant>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacOsDecoderFallback {
+    /// A single playback timeout is a busy machine, not a dead reader: only a
+    /// reader that misses this many playback rounds in a row without
+    /// delivering any frame is replaced by software decoding.
+    const MAX_TIMED_OUT_ROUNDS: u32 = 3;
+
+    fn new(name: &'static str, path: PathBuf, fps: u32) -> Self {
+        Self {
+            name,
+            path,
+            fps,
+            decoder: tokio::sync::OnceCell::new(),
+            stall: Mutex::new(PrimaryStall::default()),
+        }
+    }
+
+    fn primary_answered(&self) {
+        *self
+            .stall
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = PrimaryStall::default();
+    }
+
+    /// Playback keeps many requests in flight, and one slow decode times them
+    /// out together; only a request sent after the previous timeout starts a
+    /// new round.
+    fn primary_stalled(&self, sent_at: tokio::time::Instant) -> bool {
+        let mut stall = self
+            .stall
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if stall.last_timeout.is_none_or(|last| sent_at >= last) {
+            stall.timed_out_rounds += 1;
+            stall.last_timeout = Some(tokio::time::Instant::now());
+        }
+        stall.timed_out_rounds >= Self::MAX_TIMED_OUT_ROUNDS
+    }
+}
+
+enum FrameReply {
+    Frame(DecodedFrame),
+    NoFrame,
+    TimedOut,
 }
 
 impl AsyncVideoDecoderHandle {
@@ -789,7 +972,7 @@ impl AsyncVideoDecoderHandle {
             Self::INITIAL_SEEK_TIMEOUT_MS,
             self.max_fallback_distance
                 .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
-            FrameDeadline::Drop,
+            FrameDeadline::Initial,
         )
         .await
         .ok()
@@ -836,12 +1019,24 @@ impl AsyncVideoDecoderHandle {
                     Err(_) => Ok(None),
                 };
             }
-            let primary = self
-                .request_frame(time, timeout_ms, max_fallback_distance, deadline)
-                .await;
-            if let Ok(Some(frame)) = primary {
-                return Ok(Some(frame));
-            }
+            let sent_at = tokio::time::Instant::now();
+            let (fallback_reason, primary) = match self
+                .send_frame_request(time, timeout_ms, max_fallback_distance, deadline)
+                .await
+            {
+                Ok(FrameReply::Frame(frame)) => {
+                    fallback.primary_answered();
+                    return Ok(Some(frame));
+                }
+                Ok(FrameReply::TimedOut)
+                    if deadline == FrameDeadline::Drop && !fallback.primary_stalled(sent_at) =>
+                {
+                    return Ok(None);
+                }
+                Ok(FrameReply::TimedOut) => ("AVAssetReader stopped answering", Ok(None)),
+                Ok(FrameReply::NoFrame) => ("AVAssetReader returned no frame", Ok(None)),
+                Err(stalled) => ("AVAssetReader stalled", Err(stalled)),
+            };
             let result = fallback
                 .decoder
                 .get_or_init(|| async {
@@ -858,8 +1053,7 @@ impl AsyncVideoDecoderHandle {
                         false,
                     )
                     .await?;
-                    decoder.status.fallback_reason =
-                        Some("AVAssetReader returned no frame".to_string());
+                    decoder.status.fallback_reason = Some(fallback_reason.to_string());
                     Ok(decoder)
                 })
                 .await;
@@ -886,6 +1080,21 @@ impl AsyncVideoDecoderHandle {
         max_fallback_distance: u32,
         deadline: FrameDeadline,
     ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        self.send_frame_request(time, timeout_ms, max_fallback_distance, deadline)
+            .await
+            .map(|reply| match reply {
+                FrameReply::Frame(frame) => Some(frame),
+                FrameReply::NoFrame | FrameReply::TimedOut => None,
+            })
+    }
+
+    async fn send_frame_request(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+        deadline: FrameDeadline,
+    ) -> Result<FrameReply, DecodeStalled> {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
@@ -902,13 +1111,14 @@ impl AsyncVideoDecoderHandle {
                 time = adjusted_time,
                 "decoder thread is gone; frame request dropped"
             );
-            return Ok(None);
+            return Ok(FrameReply::NoFrame);
         }
 
         let started = tokio::time::Instant::now();
         loop {
             match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut rx).await {
-                Ok(result) => return Ok(result.ok()),
+                Ok(Ok(frame)) => return Ok(FrameReply::Frame(frame)),
+                Ok(Err(_)) => return Ok(FrameReply::NoFrame),
                 Err(_) if deadline == FrameDeadline::Wait => {
                     let waited = started.elapsed();
                     if waited >= EXPORT_STALL_LIMIT {
@@ -932,7 +1142,7 @@ impl AsyncVideoDecoderHandle {
                         timeout_ms = timeout_ms,
                         "Frame decode request timed out"
                     );
-                    return Ok(None);
+                    return Ok(FrameReply::TimedOut);
                 }
             }
         }
@@ -1515,12 +1725,11 @@ pub async fn spawn_decoder(
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                         #[cfg(target_os = "macos")]
-                        fallback: Some(Arc::new(MacOsDecoderFallback {
+                        fallback: Some(Arc::new(MacOsDecoderFallback::new(
                             name,
-                            path: path.clone(),
+                            path.clone(),
                             fps,
-                            decoder: tokio::sync::OnceCell::new(),
-                        })),
+                        ))),
                         #[cfg(target_os = "macos")]
                         sequential_access: Some(sequential_access),
                     })
@@ -1844,6 +2053,61 @@ mod tests {
             !original
                 .storage_identity()
                 .matches(&distinct.storage_identity())
+        );
+    }
+
+    #[test]
+    fn ffmpeg_backed_storage_identity_follows_the_shared_planes() {
+        let width = 4;
+        let height = 4;
+        let backing = Arc::new(::ffmpeg::frame::Video::new(
+            ::ffmpeg::format::Pixel::NV12,
+            width,
+            height,
+        ));
+        let y_stride = backing.stride(0) as u32;
+        let uv_stride = backing.stride(1) as u32;
+        let first = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::clone(&backing),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+        let repeated = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::clone(&backing),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+        let distinct = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::new(::ffmpeg::frame::Video::new(
+                ::ffmpeg::format::Pixel::NV12,
+                width,
+                height,
+            )),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+
+        assert!(
+            first
+                .storage_identity()
+                .matches(&repeated.storage_identity())
+        );
+        assert!(
+            !first
+                .storage_identity()
+                .matches(&distinct.storage_identity())
+        );
+        assert!(
+            !first.storage_identity().matches(
+                &DecodedFrame::new_nv12(vec![0; 24], width, height, y_stride, uv_stride)
+                    .storage_identity()
+            )
         );
     }
 
@@ -2448,15 +2712,22 @@ mod managed_worker_tests {
                 fallback_reason: None,
             },
             max_fallback_distance: 2,
-            fallback: Some(Arc::new(MacOsDecoderFallback {
-                name: "screen",
-                path: directory.path().to_path_buf(),
-                fps: 30,
-                decoder: tokio::sync::OnceCell::new(),
-            })),
+            fallback: Some(Arc::new(MacOsDecoderFallback::new(
+                "screen",
+                directory.path().to_path_buf(),
+                30,
+            ))),
             sequential_access: None,
         };
         let cloned = decoder.clone();
+        for _ in 1..MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+            let (first, second) = tokio::join!(
+                decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
+                cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
+            );
+            assert!(matches!((first, second), (Ok(None), Ok(None))));
+            assert_eq!(decoder.decoder_type(), DecoderType::AVAssetReader);
+        }
         let (first, second) = tokio::join!(
             decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
             cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
@@ -2468,14 +2739,20 @@ mod managed_worker_tests {
         );
         assert_eq!(decoder.decoder_type(), DecoderType::FFmpegSoftware);
         assert_eq!(cloned.decoder_type(), DecoderType::FFmpegSoftware);
-        assert!(decoder.fallback_reason().is_some());
+        assert_eq!(
+            decoder.fallback_reason(),
+            Some("AVAssetReader stopped answering")
+        );
         let (reference, join) = ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
         assert_eq!(
             frame_pixels(&first),
             frame_pixels(&reference.get_frame_initial(0.0).await.unwrap())
         );
         let pending_before = receiver.try_iter().count();
-        assert_eq!(pending_before, 2);
+        assert_eq!(
+            pending_before,
+            2 * MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS as usize
+        );
         assert!(decoder.get_frame_initial(0.5).await.is_some());
         assert_eq!(receiver.try_iter().count(), 0);
         drop(reference);

@@ -1,44 +1,36 @@
 import { db } from "@cap/database";
-import { organizations, users, videoEdits, videos } from "@cap/database/schema";
+import { organizations, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
-	type User,
 	Video,
 } from "@cap/web-domain";
-import { AssemblyAI } from "assemblyai";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
-import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
-	ASSEMBLYAI_SPEECH_MODELS,
 	ASSEMBLYAI_SUPPORTED_LANGUAGES,
+	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
 import {
-	getEditTranscriptObjectKey,
-	serializeEditTranscript,
-} from "@/lib/edit-transcript";
-import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
-import { startAiGeneration } from "@/lib/generate-ai";
-import {
-	applyChunkToLiveTranscript,
-	canPromoteLiveTranscript,
-	createEmptyLiveTranscript,
 	getLiveTranscriptObjectKey,
 	isNoSpokenAudioError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
 	type LiveTranscriptState,
-	liveTranscriptToEditTranscript,
-	offsetChunkWords,
 	parseLiveTranscript,
 	planNextLiveChunk,
 } from "@/lib/live-transcribe-core";
+import {
+	finishLiveTranscription,
+	liveContextSeconds,
+	promoteLiveTranscript,
+	writeLiveChunk,
+	writeLiveChunkGap,
+} from "@/lib/live-transcribe-runner";
 import { downloadConcatenatedSegmentsToBuffer } from "@/lib/segments-audio-download";
-import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -96,7 +88,7 @@ export async function liveTranscribeWorkflow(
 
 	const init = await initLiveTranscription(videoId, userId);
 	if (!init.ok) {
-		await finishLiveTranscription(videoId, userId, "stopped");
+		await finishLiveTranscriptionStep(videoId, userId, "stopped");
 		return {
 			success: true,
 			message: `Live transcription skipped: ${init.reason}`,
@@ -133,6 +125,8 @@ export async function liveTranscribeWorkflow(
 				// leave a gap for the canonical transcription to fill.
 				skipPastFailedChunk:
 					failuresAtIndex >= LIVE_TRANSCRIBE.MAX_CHUNK_ATTEMPTS,
+				// A retry drops the context in case the earlier audio is what fails.
+				withContext: failuresAtIndex === 0,
 			});
 
 			if (result.outcome === "chunk") {
@@ -175,7 +169,7 @@ export async function liveTranscribeWorkflow(
 	} catch (error) {
 		// A step exhausted its retries; make sure the artifact and metadata
 		// never advertise a live transcription that is no longer running.
-		await finishLiveTranscription(videoId, userId, "stopped");
+		await finishLiveTranscriptionStep(videoId, userId, "stopped");
 		throw error;
 	}
 
@@ -183,7 +177,7 @@ export async function liveTranscribeWorkflow(
 		// Full gap-free coverage: promote the live transcript to canonical and
 		// skip the duplicate full transcription pass entirely. On any failure
 		// the full-pass fallback is queued so transcription still lands fast.
-		const promotion = await promoteLiveTranscript(videoId, userId);
+		const promotion = await promoteLiveTranscriptStep(videoId, userId);
 		if (promotion.promoted) {
 			return {
 				success: true,
@@ -195,7 +189,7 @@ export async function liveTranscribeWorkflow(
 		);
 	}
 
-	await finishLiveTranscription(
+	await finishLiveTranscriptionStep(
 		videoId,
 		userId,
 		outcome === "done" ? "complete" : "stopped",
@@ -281,10 +275,12 @@ async function processNextLiveChunk(options: {
 	targetSeconds: number;
 	language: string;
 	skipPastFailedChunk: boolean;
+	withContext: boolean;
 }): Promise<ChunkStepResult> {
 	"use step";
 
 	const { videoId, userId, lastProcessedIndex, targetSeconds } = options;
+	const contextSeconds = options.withContext ? liveContextSeconds() : 0;
 
 	const [video] = await db()
 		.select()
@@ -340,6 +336,7 @@ async function processNextLiveChunk(options: {
 					manifest: decoded.right,
 					lastProcessedIndex,
 					targetSeconds,
+					contextSeconds,
 				});
 				if (next.action !== "wait") {
 					decision = next;
@@ -369,34 +366,14 @@ async function processNextLiveChunk(options: {
 		// The gap MUST be durably recorded before the cursor advances, or a
 		// later promotion could ship a transcript that silently misses speech.
 		try {
-			const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
-			const existing = await bucket
-				.getObject(artifactKey)
-				.pipe(runWorkflowPromise)
-				.catch(() => Option.none<string>());
-			const artifact =
-				(Option.isSome(existing)
-					? parseLiveTranscript(existing.value)
-					: null) ?? createEmptyLiveTranscript(new Date().toISOString());
-			await bucket
-				.putObject(
-					artifactKey,
-					JSON.stringify({
-						...artifact,
-						hasGaps: true,
-						lastAudioSegmentIndex: Math.max(
-							artifact.lastAudioSegmentIndex,
-							chunkEndIndex,
-						),
-						transcribedDurationMs: Math.max(
-							artifact.transcribedDurationMs,
-							decision.startMs + decision.durationMs,
-						),
-						updatedAt: new Date().toISOString(),
-					}),
-					{ contentType: "application/json" },
-				)
-				.pipe(runWorkflowPromise);
+			const gap = await writeLiveChunkGap({
+				bucket,
+				ownerId: video.ownerId,
+				videoId,
+				lastAudioSegmentIndex: chunkEndIndex,
+				endMs: decision.startMs + decision.durationMs,
+			});
+			if (gap.status !== "written") return { outcome: "canonical-done" };
 		} catch (error) {
 			return {
 				outcome: "chunk-failed",
@@ -406,7 +383,6 @@ async function processNextLiveChunk(options: {
 				}`,
 			};
 		}
-		await touchLiveClaim(videoId);
 		return {
 			outcome: "chunk",
 			lastAudioSegmentIndex: chunkEndIndex,
@@ -420,7 +396,7 @@ async function processNextLiveChunk(options: {
 			bucket
 				.getInternalSignedObjectUrl(segSource.getAudioInitKey())
 				.pipe(runWorkflowPromise),
-			...decision.entries.map((entry) =>
+			...[...decision.context, ...decision.entries].map((entry) =>
 				bucket
 					.getInternalSignedObjectUrl(segSource.getAudioSegmentKey(entry.index))
 					.pipe(runWorkflowPromise),
@@ -433,9 +409,7 @@ async function processNextLiveChunk(options: {
 		// ffmpeg — the binary doesn't exist in the serverless runtime.
 		const audioBuffer = await downloadConcatenatedSegmentsToBuffer(segmentUrls);
 
-		const client = new AssemblyAI({
-			apiKey: serverEnv().ASSEMBLY_API_KEY as string,
-		});
+		const client = createAssemblyAIClient();
 		const language = (
 			ASSEMBLYAI_SUPPORTED_LANGUAGES as readonly string[]
 		).includes(options.language)
@@ -452,58 +426,26 @@ async function processNextLiveChunk(options: {
 			throw new Error(transcript.error ?? "AssemblyAI chunk failed");
 		}
 
-		const words = noSpokenAudio
-			? []
-			: offsetChunkWords(
-					transcript.words,
-					decision.startMs,
-					decision.durationMs,
-				);
-
-		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
-		const existing = await bucket
-			.getObject(artifactKey)
-			.pipe(runWorkflowPromise)
-			.catch(() => Option.none<string>());
-		const artifact =
-			(Option.isSome(existing) ? parseLiveTranscript(existing.value) : null) ??
-			createEmptyLiveTranscript(new Date().toISOString());
-
-		const updated = applyChunkToLiveTranscript(artifact, {
-			startMs: decision.startMs,
-			durationMs: decision.durationMs,
-			lastAudioSegmentIndex: chunkEndIndex,
-			words,
+		// Polling + the AssemblyAI round trip can take minutes, so the write
+		// re-checks that the canonical pipeline didn't complete meanwhile.
+		const write = await writeLiveChunk({
+			bucket,
+			ownerId: video.ownerId,
+			videoId,
+			chunk: {
+				startMs: decision.startMs,
+				durationMs: decision.durationMs,
+				contextMs: decision.contextMs,
+				lastAudioSegmentIndex: chunkEndIndex,
+			},
+			words: noSpokenAudio ? [] : transcript.words,
 			languageCode:
 				typeof transcript.language_code === "string"
 					? transcript.language_code
 					: null,
-			nowIso: new Date().toISOString(),
 		});
-
-		// Polling + the AssemblyAI round trip can take minutes; re-check that the
-		// canonical pipeline didn't complete meanwhile, or this write would
-		// re-create the artifact it just deleted (an orphan billed forever).
-		const [current] = await db()
-			.select({ transcriptionStatus: videos.transcriptionStatus })
-			.from(videos)
-			.where(eq(videos.id, videoId as Video.VideoId));
-		if (
-			current?.transcriptionStatus === "COMPLETE" ||
-			current?.transcriptionStatus === "SKIPPED" ||
-			current?.transcriptionStatus === "NO_AUDIO"
-		) {
-			return { outcome: "canonical-done" };
-		}
-
-		const body = JSON.stringify(updated);
-		await bucket
-			.putObject(artifactKey, body, { contentType: "application/json" })
-			.pipe(runWorkflowPromise);
-
-		// Freshness-stamp the claim so other transcription triggers (post-mux
-		// webhook, share-page retries) keep deferring to this workflow.
-		await touchLiveClaim(videoId);
+		if (write.status !== "written") return { outcome: "canonical-done" };
+		const updated = write.artifact;
 
 		// If this chunk completed full coverage of a finished recording, tell
 		// the workflow to promote right away instead of paying another poll
@@ -517,7 +459,7 @@ async function processNextLiveChunk(options: {
 			: ({ action: "wait" } as const);
 
 		console.log(
-			`[liveTranscribe] ${videoId} chunk ${lastProcessedIndex + 1}..${chunkEndIndex} (${decision.durationMs}ms, ${words.length} words)`,
+			`[liveTranscribe] ${videoId} chunk ${lastProcessedIndex + 1}..${chunkEndIndex} (${decision.durationMs}ms + ${decision.contextMs}ms context, ${updated.words.length} words total)`,
 		);
 
 		return {
@@ -540,321 +482,16 @@ async function processNextLiveChunk(options: {
 	}
 }
 
-/**
- * Re-stamp the live claim's freshness so other transcription triggers keep
- * deferring to this workflow (lib/transcribe.ts checks the stamp age). A
- * no-op once the claim was cleared or finished.
- */
-async function touchLiveClaim(videoId: string): Promise<void> {
-	try {
-		await db()
-			.update(videos)
-			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript.updatedAt', ${new Date().toISOString()})`,
-				updatedAt: sql`${videos.updatedAt}`,
-			})
-			.where(
-				and(
-					eq(videos.id, videoId as Video.VideoId),
-					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.liveTranscript.status')) = 'active'`,
-				),
-			);
-	} catch (error) {
-		console.warn(
-			`[liveTranscribe] Failed to stamp live claim for ${videoId}`,
-			error,
-		);
-	}
-}
-
-type PromotionResult = { promoted: boolean; reason?: string };
-
-/**
- * Promote the completed live transcript to the canonical transcript: write
- * transcription.vtt + the encrypted edit transcript from the accumulated
- * words, claim transcriptionStatus, queue AI generation, and clean up the
- * provisional artifact. Never throws. Any failure releases the claim (if
- * held) and queues the normal full-pass so the video still transcribes.
- */
-async function promoteLiveTranscript(
-	videoId: string,
-	userId: string,
-): Promise<PromotionResult> {
+async function promoteLiveTranscriptStep(videoId: string, userId: string) {
 	"use step";
-
-	try {
-		const [video] = await db()
-			.select()
-			.from(videos)
-			.where(eq(videos.id, videoId as Video.VideoId));
-
-		if (!video || video.ownerId !== userId) {
-			return { promoted: false, reason: "video not found" };
-		}
-		if (video.transcriptionStatus !== null) {
-			return {
-				promoted: false,
-				reason: `canonical status is ${video.transcriptionStatus}`,
-			};
-		}
-
-		const [bucket] = await Storage.getAccessForVideo(
-			decodeStorageVideo(video),
-		).pipe(runWorkflowPromise);
-		const segSource = new Video.SegmentsSource({
-			videoId,
-			ownerId: video.ownerId,
-		});
-
-		const manifestContent = await bucket
-			.getObject(segSource.getManifestKey())
-			.pipe(runWorkflowPromise);
-		const manifestJson = Option.getOrNull(manifestContent);
-		if (!manifestJson) {
-			return { promoted: false, reason: "manifest missing" };
-		}
-		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(
-			JSON.parse(manifestJson),
-		);
-		if (Either.isLeft(decoded)) {
-			return { promoted: false, reason: "manifest invalid" };
-		}
-
-		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
-		const existing = await bucket
-			.getObject(artifactKey)
-			.pipe(runWorkflowPromise);
-		const artifact = Option.isSome(existing)
-			? parseLiveTranscript(existing.value)
-			: null;
-		if (!artifact) {
-			return { promoted: false, reason: "live artifact missing" };
-		}
-
-		const eligible = canPromoteLiveTranscript(artifact, decoded.right);
-		if (!eligible.ok) {
-			await queueFullPassFallback(videoId, userId);
-			return { promoted: false, reason: eligible.reason };
-		}
-
-		const claim = await db()
-			.update(videos)
-			.set({ transcriptionStatus: "PROCESSING" })
-			.where(
-				and(
-					eq(videos.id, videoId as Video.VideoId),
-					isNull(videos.transcriptionStatus),
-				),
-			);
-		const affectedRows = Array.isArray(claim)
-			? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
-			: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
-		if (affectedRows === 0) {
-			return { promoted: false, reason: "canonical claim held elsewhere" };
-		}
-
-		try {
-			await bucket
-				.putObject(
-					`${video.ownerId}/${videoId}/transcription.vtt`,
-					artifact.vtt,
-					{ contentType: "text/vtt" },
-				)
-				.pipe(runWorkflowPromise);
-
-			// Same rule as the full-pass save: the word transcript must describe
-			// the original media, so edited videos keep their own.
-			const [edit] = await db()
-				.select({ videoId: videoEdits.videoId })
-				.from(videoEdits)
-				.where(eq(videoEdits.videoId, videoId as Video.VideoId));
-			if (!edit) {
-				await bucket
-					.putObject(
-						getEditTranscriptObjectKey(video.ownerId, videoId),
-						encryptEditTranscriptObject(
-							serializeEditTranscript(
-								liveTranscriptToEditTranscript(
-									artifact,
-									ASSEMBLYAI_SPEECH_MODELS[0],
-								),
-							),
-							video.ownerId,
-							videoId,
-						),
-						{ contentType: "application/octet-stream" },
-					)
-					.pipe(runWorkflowPromise);
-			}
-
-			await db()
-				.update(videos)
-				.set({ transcriptionStatus: "COMPLETE" })
-				.where(
-					and(
-						eq(videos.id, videoId as Video.VideoId),
-						eq(videos.transcriptionStatus, "PROCESSING"),
-					),
-				);
-		} catch (error) {
-			// Release the claim so the fallback can transcribe from scratch.
-			await db()
-				.update(videos)
-				.set({ transcriptionStatus: null })
-				.where(
-					and(
-						eq(videos.id, videoId as Video.VideoId),
-						eq(videos.transcriptionStatus, "PROCESSING"),
-					),
-				);
-			await queueFullPassFallback(videoId, userId);
-			return {
-				promoted: false,
-				reason: error instanceof Error ? error.message : String(error),
-			};
-		}
-
-		// Post-COMPLETE housekeeping: never fatal, never releases the claim.
-		try {
-			await bucket.deleteObject(artifactKey).pipe(runWorkflowPromise);
-		} catch (error) {
-			console.warn(
-				`[liveTranscribe] Failed to delete promoted artifact for ${videoId}`,
-				error,
-			);
-		}
-		try {
-			await db()
-				.update(videos)
-				.set({
-					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
-					updatedAt: sql`${videos.updatedAt}`,
-				})
-				.where(eq(videos.id, videoId as Video.VideoId));
-		} catch (error) {
-			console.warn(
-				`[liveTranscribe] Failed to clear live flag for ${videoId}`,
-				error,
-			);
-		}
-		try {
-			const [owner] = await db()
-				.select({
-					email: users.email,
-					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-				})
-				.from(users)
-				.where(eq(users.id, userId as User.UserId));
-			if (isAiGenerationEnabledForUser(owner)) {
-				await startAiGeneration(videoId as Video.VideoId, userId);
-			}
-		} catch (error) {
-			console.warn(
-				`[liveTranscribe] Failed to queue AI generation for ${videoId}`,
-				error,
-			);
-		}
-
-		return { promoted: true };
-	} catch (error) {
-		return {
-			promoted: false,
-			reason: error instanceof Error ? error.message : String(error),
-		};
-	}
+	return promoteLiveTranscript(videoId, userId);
 }
 
-/**
- * When promotion can't happen, immediately queue the normal full
- * transcription (early-from-segments) instead of waiting for the post-mux
- * queue, so a declined promotion costs seconds, not a minute.
- */
-async function queueFullPassFallback(
-	videoId: string,
-	userId: string,
-): Promise<void> {
-	try {
-		const [owner] = await db()
-			.select({
-				email: users.email,
-				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-			})
-			.from(users)
-			.where(eq(users.id, userId as User.UserId));
-
-		await transcribeVideo(
-			videoId as Video.VideoId,
-			userId,
-			isAiGenerationEnabledForUser(owner),
-			{ earlyFromSegments: true },
-		);
-	} catch (error) {
-		console.warn(
-			`[liveTranscribe] Full-pass fallback queue failed for ${videoId}`,
-			error,
-		);
-	}
-}
-
-async function finishLiveTranscription(
+async function finishLiveTranscriptionStep(
 	videoId: string,
 	userId: string,
 	state: LiveTranscriptState,
-): Promise<void> {
+) {
 	"use step";
-
-	try {
-		await db()
-			.update(videos)
-			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript.status', ${state}, '$.liveTranscript.updatedAt', ${new Date().toISOString()})`,
-				updatedAt: sql`${videos.updatedAt}`,
-			})
-			.where(eq(videos.id, videoId as Video.VideoId));
-	} catch (error) {
-		console.warn(
-			`[liveTranscribe] Failed to update metadata for ${videoId}`,
-			error,
-		);
-	}
-
-	try {
-		const [video] = await db()
-			.select()
-			.from(videos)
-			.where(eq(videos.id, videoId as Video.VideoId));
-		if (!video || video.ownerId !== userId) return;
-
-		const [bucket] = await Storage.getAccessForVideo(
-			decodeStorageVideo(video),
-		).pipe(runWorkflowPromise);
-		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
-		const existing = await bucket
-			.getObject(artifactKey)
-			.pipe(runWorkflowPromise)
-			.catch(() => Option.none<string>());
-		if (Option.isNone(existing)) return;
-
-		const artifact = parseLiveTranscript(existing.value);
-		if (!artifact || artifact.state === state) return;
-
-		await bucket
-			.putObject(
-				artifactKey,
-				JSON.stringify({
-					...artifact,
-					state,
-					updatedAt: new Date().toISOString(),
-				}),
-				{ contentType: "application/json" },
-			)
-			.pipe(runWorkflowPromise);
-	} catch (error) {
-		console.warn(
-			`[liveTranscribe] Failed to finalize artifact for ${videoId}`,
-			error,
-		);
-	}
+	await finishLiveTranscription(videoId, userId, state);
 }

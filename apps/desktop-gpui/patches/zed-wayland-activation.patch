@@ -1,0 +1,57 @@
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 7dd2d38..b597e4d 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -844,6 +844,14 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+         anyhow::bail!("Retained window visibility is unsupported by this backend")
+     }
+     fn activate(&self);
++    /// Activates the window with a token the compositor issued to another
++    /// client, such as the `XDG_ACTIVATION_TOKEN` a launcher gave a second
++    /// instance of the app. Focus stealing prevention honours it where a
++    /// token the window requests for itself is refused.
++    fn activate_with_token(&self, token: String) {
++        let _ = token;
++        self.activate();
++    }
+     /// Requests that the operating system draw attention to this window.
+     fn request_attention(&self) {}
+     fn is_active(&self) -> bool;
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 75c3539..c543c6b 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5810,6 +5810,12 @@ impl Window {
+         self.platform_window.activate();
+     }
+ 
++    /// Activates this window with a token the compositor issued to another
++    /// client. See [`PlatformWindow::activate_with_token`].
++    pub fn activate_window_with_token(&self, token: String) {
++        self.platform_window.activate_with_token(token);
++    }
++
+     /// Requests that the operating system draw attention to this window.
+     pub fn request_attention(&self) {
+         self.platform_window.request_attention();
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 5d8e991..e98c640 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -2134,6 +2134,16 @@ impl PlatformWindow for WaylandWindow {
+         }
+     }
+ 
++    fn activate_with_token(&self, token: String) {
++        let state = self.borrow();
++        if let Some(activation) = &state.globals.activation {
++            activation.activate(token, &state.surface);
++            return;
++        }
++        drop(state);
++        self.activate();
++    }
++
+     fn request_attention(&self) {}
+ 
+     fn is_active(&self) -> bool {

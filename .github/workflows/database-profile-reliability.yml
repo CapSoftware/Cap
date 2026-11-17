@@ -53,6 +53,7 @@ jobs:
         run: >-
           bun test
           scripts/loops/activation.test.ts
+          scripts/loops/batch.test.ts
           scripts/loops/sources.test.ts
           scripts/loops/profile.test.ts
           scripts/loops/lifecycle.test.ts

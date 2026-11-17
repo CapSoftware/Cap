@@ -2,6 +2,7 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
@@ -9,10 +10,14 @@ import {
 	verifySsoLoginIntent,
 } from "@cap/database/auth/sso-state";
 import { serverEnv } from "@cap/env";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
+import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+} from "@/lib/email-code-rate-limit";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +61,7 @@ async function readSignInBody(request: NextRequest) {
 				json: payload.json === "true",
 				callbackUrl:
 					typeof payload.callbackUrl === "string" ? payload.callbackUrl : null,
+				email: typeof payload.email === "string" ? payload.email : null,
 			};
 		}
 		if (contentType?.includes("application/x-www-form-urlencoded")) {
@@ -63,6 +69,7 @@ async function readSignInBody(request: NextRequest) {
 			return {
 				json: body.get("json") === "true",
 				callbackUrl: body.get("callbackUrl"),
+				email: body.get("email"),
 			};
 		}
 	} catch {
@@ -71,13 +78,66 @@ async function readSignInBody(request: NextRequest) {
 	return null;
 }
 
+function authErrorUrl(error: string) {
+	const url = new URL("/api/auth/error", serverEnv().WEB_URL);
+	url.searchParams.set("error", error);
+	return url.toString();
+}
+
+async function emailCodeLimitResponse(
+	request: NextRequest,
+	nextauth: string[],
+) {
+	if (nextauth[1] !== "email") return null;
+	if (nextauth[0] === "signin" && request.method === "POST") {
+		const body = await readSignInBody(request);
+		const email = normalizeSignInEmail(body?.email);
+		if (!email || !(await isEmailCodeSendLimited(email, request.headers))) {
+			return null;
+		}
+		const url = authErrorUrl("EmailSignin");
+		return body?.json
+			? NextResponse.json({ url }, { status: 429 })
+			: NextResponse.redirect(url, 302);
+	}
+	if (nextauth[0] === "callback") {
+		const query = request.nextUrl.searchParams;
+		const email = normalizeSignInEmail(query.get("email"));
+		if (
+			!email ||
+			!query.get("token") ||
+			!(await isEmailCodeVerifyLimited(email, request.headers))
+		) {
+			return null;
+		}
+		return NextResponse.redirect(authErrorUrl("Verification"), 302);
+	}
+	return null;
+}
+
+function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
+	if (nextauth[0] !== "callback" || nextauth[1] !== "email") return request;
+	const email = request.nextUrl.searchParams.get("email");
+	const identifier = normalizeSignInEmail(email);
+	if (!identifier || identifier === email) return request;
+	const url = request.nextUrl.clone();
+	url.searchParams.set("email", identifier);
+	return new NextRequest(url, request);
+}
+
 async function handler(
 	request: NextRequest,
 	context: { params: Promise<{ nextauth: string[] }> },
 ) {
 	const { nextauth } = await context.params;
+	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
+	if (limitedResponse) return limitedResponse;
 	if (nextauth[1] !== "workos") {
-		return NextAuth(request, context, authOptions());
+		return NextAuth(
+			withSignInEmailIdentifier(request, nextauth),
+			context,
+			authOptions(),
+		);
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");

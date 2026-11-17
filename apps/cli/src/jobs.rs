@@ -45,7 +45,18 @@ fn local_error(code: &str, message: impl Into<String>) -> AgentApiError {
         retryable: false,
         retry_after_ms: None,
         request_id: None,
+        ..Default::default()
     }
+}
+
+pub fn validate_wait_timeout(timeout: u64) -> Result<(), AgentApiError> {
+    if timeout == 0 || timeout > 86_400 {
+        return Err(local_error(
+            "INVALID_REQUEST",
+            "--timeout must be between 1 and 86400 seconds",
+        ));
+    }
+    Ok(())
 }
 
 pub async fn wait_operation(
@@ -53,73 +64,76 @@ pub async fn wait_operation(
     operation_id: &str,
     timeout: u64,
 ) -> Result<Value, AgentApiError> {
-    if timeout == 0 || timeout > 86_400 {
-        return Err(local_error(
-            "INVALID_REQUEST",
-            "--timeout must be between 1 and 86400 seconds",
-        ));
-    }
+    validate_wait_timeout(timeout)?;
     let operation_id = opaque_id(operation_id, "Operation ID")?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
-    let mut attempt = 0_u32;
-    loop {
-        let operation = client
-            .get_json(&format!("/operations/{operation_id}"))
-            .await?;
-        match operation.get("state").and_then(Value::as_str) {
-            Some("succeeded") => return Ok(operation),
-            Some("failed") => {
-                let message = operation
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Cap operation failed");
-                return Err(local_error("OPERATION_FAILED", message));
+    let mut request_id = None;
+    let wait = async {
+        let mut attempt = 0_u32;
+        loop {
+            let operation = client
+                .get_json(&format!("/operations/{operation_id}"))
+                .await?;
+            request_id = operation
+                .get("requestId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match operation.get("state").and_then(Value::as_str) {
+                Some("succeeded") => return Ok(operation),
+                Some("failed") => {
+                    let message = operation
+                        .get("error")
+                        .and_then(|error| error.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Cap operation failed");
+                    return Err(local_error("OPERATION_FAILED", message));
+                }
+                Some("queued" | "running") => {}
+                _ => {
+                    return Err(local_error(
+                        "TEMPORARY_UNAVAILABLE",
+                        "Cap returned an invalid operation state",
+                    ));
+                }
             }
-            Some("queued" | "running") => {}
-            _ => {
-                return Err(local_error(
-                    "TEMPORARY_UNAVAILABLE",
-                    "Cap returned an invalid operation state",
-                ));
-            }
+            let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
+            tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
+            attempt = attempt.saturating_add(1);
         }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AgentApiError {
+    };
+    tokio::time::timeout(Duration::from_secs(timeout), wait)
+        .await
+        .unwrap_or_else(|_| {
+            Err(AgentApiError {
                 code: "NOT_READY".to_string(),
                 message: "Timed out waiting for the Cap operation".to_string(),
                 retryable: true,
                 retry_after_ms: Some(2_000),
-                request_id: operation
-                    .get("requestId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            });
-        }
-        let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
-        tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
-        attempt = attempt.saturating_add(1);
-    }
+                request_id,
+                ..Default::default()
+            })
+        })
 }
 
 impl JobsArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
-        let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
+        let client = AgentClient::from_credentials()?;
         match self.command {
             JobsCommands::Get(args) => {
-                let operation_id = opaque_id(&args.operation_id, "Operation ID")
-                    .map_err(|error| error.to_string())?;
+                let operation_id = opaque_id(&args.operation_id, "Operation ID")?;
                 let value = client
                     .get_json(&format!("/operations/{operation_id}"))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                print_value(&value, resolve_format(global_json, args.format))
+                    .await?;
+                Ok(print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
             JobsCommands::Wait(args) => {
-                let value = wait_operation(&client, &args.operation_id, args.timeout)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                print_value(&value, resolve_format(global_json, args.format))
+                let value = wait_operation(&client, &args.operation_id, args.timeout).await?;
+                Ok(print_value(
+                    &value,
+                    resolve_format(global_json, args.format),
+                )?)
             }
         }
     }

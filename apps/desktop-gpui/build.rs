@@ -3,6 +3,7 @@ mod diagnostic_build;
 
 fn main() {
     diagnostic_build::emit();
+    cap_i18n_build::build("locales");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rerun-if-changed=native/exception_guard.m");
         cc::Build::new()
@@ -21,7 +22,7 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=cap-gpui=/STACK:16777216");
     }
 
-    let icon = "../desktop/src-tauri/icons/icon.ico";
+    let icon = "icons/icon.ico";
     println!("cargo:rerun-if-changed={icon}");
     tauri_winres::WindowsResource::new()
         .set_icon_with_id(icon, "1")

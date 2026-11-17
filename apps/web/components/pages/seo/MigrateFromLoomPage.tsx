@@ -32,7 +32,7 @@ import {
 	proofPoints,
 } from "./migrate-from-loom-content";
 
-const CHIP = `${MONO} rounded-full px-2 py-1 text-[10.5px] uppercase leading-none tracking-[0.05em]`;
+const CHIP = "rounded-full px-2 py-1 text-[12px] leading-none";
 
 const ImportPreview = () => (
 	<div aria-hidden="true" className="relative mx-auto w-full max-w-[520px]">
@@ -60,9 +60,7 @@ const ImportPreview = () => (
 
 				<div className="my-3 flex items-center gap-2 px-1">
 					<span className="h-px flex-1 bg-[#E1E7EE]" />
-					<span
-						className={`${MONO} text-[10.5px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.45)]`}
-					>
+					<span className="text-[12px] text-[rgba(17,17,17,0.45)]">
 						Fetched from Loom · Re-hosted on Cap
 					</span>
 					<span className="h-px flex-1 bg-[#E1E7EE]" />
@@ -195,9 +193,7 @@ const HowItWorks = () => (
 						className="flex flex-col rounded-[20px] p-7"
 						style={grainBg(BAND)}
 					>
-						<span
-							className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
-						>
+						<span className="text-[13.5px] text-[rgba(17,17,17,0.5)]">
 							Step {index + 1}
 						</span>
 						<h3 className="mt-5 text-[21px] font-normal leading-[1.15] tracking-[-0.02em] text-[#111111]">
@@ -228,9 +224,7 @@ const WhatComesAcross = () => (
 			</div>
 			<div className="mt-12 grid gap-4 lg:grid-cols-2">
 				<div className="rounded-[20px] bg-white p-7 shadow-[0_0_0_1px_rgba(17,17,17,0.05)]">
-					<p
-						className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[#1B6E45]`}
-					>
+					<p className="text-[13.5px] text-[#1B6E45]">
 						Imported with every video
 					</p>
 					<ul className="mt-5 divide-y divide-[#E1E7EE]">
@@ -254,9 +248,7 @@ const WhatComesAcross = () => (
 					</ul>
 				</div>
 				<div className="rounded-[20px] p-7" style={grainBg(BAND)}>
-					<p
-						className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.55)]`}
-					>
+					<p className="text-[13.5px] text-[rgba(17,17,17,0.55)]">
 						Stays on Loom
 					</p>
 					<ul className="mt-5 divide-y divide-[rgba(17,17,17,0.08)]">
@@ -327,16 +319,10 @@ const Teams = () => (
 			</div>
 			<div className="rounded-[16px] bg-[#111111] p-5 shadow-[0_30px_60px_-40px_rgba(17,17,17,0.6)]">
 				<div className="flex items-center justify-between">
-					<span
-						className={`${MONO} text-[11px] uppercase tracking-[0.05em] text-[rgba(255,255,255,0.5)]`}
-					>
+					<span className={`${MONO} text-[11px] text-[rgba(255,255,255,0.5)]`}>
 						loom-library.csv
 					</span>
-					<span
-						className={`${MONO} text-[11px] uppercase tracking-[0.05em] text-[#8FDCBB]`}
-					>
-						Up to 500 rows
-					</span>
+					<span className="text-[12.5px] text-[#8FDCBB]">Up to 500 rows</span>
 				</div>
 				<pre
 					className={`${MONO} mt-4 overflow-x-auto whitespace-pre text-[12px] leading-[1.8] text-[#F8FAFC]`}
@@ -388,7 +374,7 @@ const Comparison = () => (
 						<tr className="border-b border-[#E1E7EE]">
 							<th
 								scope="col"
-								className={`${MONO} px-6 py-4 text-[12px] font-normal uppercase tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
+								className="px-6 py-4 text-[13.5px] font-normal text-[rgba(17,17,17,0.5)]"
 							>
 								Feature
 							</th>

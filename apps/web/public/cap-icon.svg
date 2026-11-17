@@ -1,7 +1,109 @@
-<svg width="1631" height="1631" viewBox="0 0 1631 1631" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect x="20.3875" y="20.3875" width="1590.23" height="1590.23" rx="305.813" fill="white"/>
-<rect x="20.3875" y="20.3875" width="1590.23" height="1590.23" rx="305.813" stroke="#E7EAF0" stroke-width="40.7751"/>
-<path d="M815.501 1467.9C1175.81 1467.9 1467.9 1175.81 1467.9 815.501C1467.9 455.191 1175.81 163.101 815.501 163.101C455.191 163.101 163.101 455.191 163.101 815.501C163.101 1175.81 455.191 1467.9 815.501 1467.9Z" fill="#4785FF"/>
-<path d="M815.503 1345.58C1108.25 1345.58 1345.58 1108.26 1345.58 815.504C1345.58 522.747 1108.25 285.426 815.503 285.426C522.746 285.426 285.425 522.753 285.425 815.504C285.425 1108.26 522.752 1345.58 815.503 1345.58Z" fill="#ADC9FF"/>
-<path d="M815.507 1223.26C1040.7 1223.26 1223.26 1040.7 1223.26 815.506C1223.26 590.312 1040.7 407.759 815.507 407.759C590.313 407.759 407.76 590.312 407.76 815.506C407.76 1040.7 590.313 1223.26 815.507 1223.26Z" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="Cap">
+  <defs>
+    <clipPath id="cap-tclip">
+      <rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75"/>
+    </clipPath>
+    <radialGradient id="cap-td" cx="20" cy="6" r="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#C4D6FA" stop-opacity="0.14"/>
+    </radialGradient>
+    <linearGradient id="cap-ttop" x1="20" y1="0" x2="20" y2="9" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="cap-tb08" x="-80%" y="-80%" width="260%" height="260%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.8"/>
+    </filter>
+    <linearGradient id="cap-eol" x1="20" y1="0" x2="20" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4785FF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#4785FF" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="cap-erim" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.58"/>
+      <stop offset="0.32" stop-color="#fff" stop-opacity="0.087"/>
+      <stop offset="0.68" stop-color="#fff" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.52"/>
+    </linearGradient>
+    <clipPath id="cap-eclip">
+      <rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75"/>
+    </clipPath>
+    <filter id="cap-egb" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1"/>
+    </filter>
+    <filter id="cap-egl" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="0.35"/>
+    </filter>
+    <linearGradient id="cap-mr1" x1="8.48" y1="8.48" x2="31.52" y2="31.52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="0.38" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="cap-mr2" x1="10.64" y1="10.64" x2="29.36" y2="29.36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="0.38" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="cap-mr3" x1="12.8" y1="12.8" x2="27.2" y2="27.2" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="0.38" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.2"/>
+    </linearGradient>
+    <filter id="cap-ml1" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.8"/>
+      <feOffset dy="0.35"/>
+      <feColorMatrix values="0 0 0 0 0.1  0 0 0 0 0.27  0 0 0 0 0.75  0 0 0 0.24 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="cap-ml2" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.7"/>
+      <feOffset dy="0.3"/>
+      <feColorMatrix values="0 0 0 0 0.1  0 0 0 0 0.27  0 0 0 0 0.75  0 0 0 0.26 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="cap-ml3" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.7"/>
+      <feOffset dy="0.3"/>
+      <feColorMatrix values="0 0 0 0 0.1  0 0 0 0 0.27  0 0 0 0 0.75  0 0 0 0.28 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75" fill="#FFFFFF"/>
+  <g clip-path="url(#cap-tclip)">
+    <rect width="40" height="40" fill="url(#cap-td)"/>
+    <rect x="3" y="1.2" width="34" height="5" rx="2.5" fill="url(#cap-ttop)" opacity="0.9" filter="url(#cap-tb08)"/>
+  </g>
+  <g clip-path="url(#cap-eclip)">
+    <rect x="0.25" y="0.25" width="39.5" height="39.5" rx="7.75" stroke="#4785FF" stroke-opacity="0.238" stroke-width="2.8" filter="url(#cap-egb)"/>
+  </g>
+  <rect x="1.224" y="1.224" width="37.55" height="37.55" rx="6.775" stroke="url(#cap-erim)" stroke-width="1.15"/>
+  <g filter="url(#cap-egl)" stroke="#fff" stroke-linecap="round" stroke-width="0.9" opacity="0.21">
+    <path d="M1.25 14V8.6A6.75 6.75 0 0 1 8 1.25H15"/>
+    <path d="M38.75 26V31.4A6.75 6.75 0 0 1 32 38.75H25" opacity="0.7"/>
+  </g>
+  <rect x="0.35" y="0.35" width="39.3" height="39.3" rx="7.65" stroke="url(#cap-eol)" stroke-width="0.7"/>
+  <g filter="url(#cap-ml1)">
+    <circle cx="20" cy="20" r="16" fill="#4785FF"/>
+  </g>
+  <circle cx="20" cy="20" r="15.7" stroke="url(#cap-mr1)" stroke-width="0.6"/>
+  <g filter="url(#cap-ml2)">
+    <circle cx="20" cy="20" r="13" fill="#ADC9FF"/>
+  </g>
+  <circle cx="20" cy="20" r="12.75" stroke="url(#cap-mr2)" stroke-width="0.5"/>
+  <g filter="url(#cap-ml3)">
+    <circle cx="20" cy="20" r="10" fill="#FFFFFF"/>
+  </g>
+  <circle cx="20" cy="20" r="9.75" stroke="url(#cap-mr3)" stroke-width="0.5"/>
 </svg>

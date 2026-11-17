@@ -7,7 +7,8 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import { getCustomThumbnailVersion } from "@cap/web-backend/src/Storage/custom-thumbnail";
+import { Video } from "@cap/web-domain";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 export type PublicShareVideoCandidate = {
@@ -19,6 +20,7 @@ export type PublicShareVideoCandidate = {
 	hasPassword: boolean;
 	hasInheritedPassword: boolean;
 	allowedEmailDomain: string | null;
+	linkOpenToAnyone: boolean;
 	isScreenshot: boolean;
 	hasActiveUpload: boolean;
 	sourceType:
@@ -32,6 +34,7 @@ export type PublicShareVideoCandidate = {
 	width: number | null;
 	height: number | null;
 	duration: number | null;
+	thumbnailVersion?: string | null;
 };
 
 export type PublicShareVideo = Omit<
@@ -40,6 +43,7 @@ export type PublicShareVideo = Omit<
 	| "hasPassword"
 	| "hasInheritedPassword"
 	| "allowedEmailDomain"
+	| "linkOpenToAnyone"
 	| "isScreenshot"
 	| "hasActiveUpload"
 	| "jobStatus"
@@ -52,7 +56,8 @@ export const isPublicShareVideoCandidateEligible = (
 	video.public &&
 	!video.hasPassword &&
 	!video.hasInheritedPassword &&
-	(video.allowedEmailDomain?.trim().length ?? 0) === 0 &&
+	((video.allowedEmailDomain?.trim().length ?? 0) === 0 ||
+		video.linkOpenToAnyone) &&
 	!video.isScreenshot &&
 	!video.hasActiveUpload &&
 	(video.sourceType !== "MediaConvert" ||
@@ -73,6 +78,8 @@ export async function getPublicShareVideo(
 				Boolean,
 			),
 			allowedEmailDomain: organizations.allowedEmailDomain,
+			videoSettings: videos.settings,
+			organizationSettings: organizations.settings,
 			isScreenshot: videos.isScreenshot,
 			hasActiveUpload:
 				sql<boolean>`${videoUploads.videoId} IS NOT NULL AND ${videoUploads.phase} <> 'complete'`.mapWith(
@@ -86,6 +93,9 @@ export async function getPublicShareVideo(
 			width: videos.width,
 			height: videos.height,
 			duration: videos.duration,
+			customThumbnailFile: sql<
+				string | null
+			>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customThumbnail.file'))`,
 		})
 		.from(videos)
 		.innerJoin(
@@ -109,9 +119,18 @@ export async function getPublicShareVideo(
 		.where(and(eq(spaceVideos.videoId, videoId), isNotNull(spaces.password)))
 		.limit(1);
 
+	const { videoSettings, organizationSettings, customThumbnailFile, ...rest } =
+		video;
 	const candidate: PublicShareVideoCandidate = {
-		...video,
+		...rest,
+		linkOpenToAnyone: Video.isLinkOpenToAnyone(
+			videoSettings,
+			organizationSettings,
+		),
 		hasInheritedPassword: Boolean(inheritedPassword),
+		thumbnailVersion: getCustomThumbnailVersion({
+			customThumbnail: { file: customThumbnailFile },
+		}),
 	};
 
 	if (!isPublicShareVideoCandidateEligible(candidate)) return null;
@@ -125,5 +144,6 @@ export async function getPublicShareVideo(
 		width: candidate.width,
 		height: candidate.height,
 		duration: candidate.duration,
+		thumbnailVersion: candidate.thumbnailVersion,
 	};
 }

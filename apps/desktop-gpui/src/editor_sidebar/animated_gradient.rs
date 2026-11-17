@@ -107,6 +107,76 @@ impl AnimatedGradientState {
     }
 }
 
+/// The catalog's own labels are the English ones the Tauri app shares.
+fn control_label(control: &AnimatedGradientControl) -> SharedString {
+    SharedString::new_static(match control.key {
+        AnimatedGradientParameter::Direction => {
+            tr::editor::sidebar::animated_gradient::control::direction()
+        }
+        AnimatedGradientParameter::FlowScale => {
+            tr::editor::sidebar::animated_gradient::control::flow_scale()
+        }
+        AnimatedGradientParameter::FlowStrength => {
+            tr::editor::sidebar::animated_gradient::control::flow_strength()
+        }
+        AnimatedGradientParameter::Curvature => {
+            tr::editor::sidebar::animated_gradient::control::curvature()
+        }
+        AnimatedGradientParameter::Detail => {
+            tr::editor::sidebar::animated_gradient::control::detail()
+        }
+        AnimatedGradientParameter::Relief => {
+            tr::editor::sidebar::animated_gradient::control::relief()
+        }
+        AnimatedGradientParameter::Light => {
+            tr::editor::sidebar::animated_gradient::control::highlights()
+        }
+        AnimatedGradientParameter::Shade => {
+            tr::editor::sidebar::animated_gradient::control::shading()
+        }
+        AnimatedGradientParameter::Ripples => {
+            tr::editor::sidebar::animated_gradient::control::ripple_size()
+        }
+        AnimatedGradientParameter::GrainAmount => {
+            tr::editor::sidebar::animated_gradient::control::grain_amount()
+        }
+        AnimatedGradientParameter::GrainSize => {
+            tr::editor::sidebar::animated_gradient::control::grain_size()
+        }
+        AnimatedGradientParameter::Exposure => {
+            tr::editor::sidebar::animated_gradient::control::exposure()
+        }
+        AnimatedGradientParameter::Contrast => {
+            tr::editor::sidebar::animated_gradient::control::contrast()
+        }
+        AnimatedGradientParameter::Vibrance => {
+            tr::editor::sidebar::animated_gradient::control::vibrance()
+        }
+        AnimatedGradientParameter::MotionSpeed => {
+            tr::editor::sidebar::animated_gradient::control::motion_speed()
+        }
+    })
+}
+
+fn group_label(name: &str) -> SharedString {
+    match name {
+        "Flow" => SharedString::new_static(tr::editor::sidebar::animated_gradient::group::flow()),
+        "Lighting" => {
+            SharedString::new_static(tr::editor::sidebar::animated_gradient::group::lighting())
+        }
+        "Texture" => {
+            SharedString::new_static(tr::editor::sidebar::animated_gradient::group::texture())
+        }
+        "Colour" => {
+            SharedString::new_static(tr::editor::sidebar::animated_gradient::group::colour())
+        }
+        "Animation" => {
+            SharedString::new_static(tr::editor::sidebar::animated_gradient::group::animation())
+        }
+        _ => SharedString::from(name.to_string()),
+    }
+}
+
 fn control_groups(catalog: &AnimatedGradientCatalog) -> Vec<(&str, Vec<&AnimatedGradientControl>)> {
     let mut groups: Vec<(&str, Vec<&AnimatedGradientControl>)> = Vec::new();
     for control in &catalog.controls {
@@ -238,7 +308,9 @@ fn slider_unit(key: AnimatedGradientParameter) -> &'static str {
 fn format_control_value(control: &AnimatedGradientControl, value: f32) -> String {
     match control.key {
         AnimatedGradientParameter::Direction => format!("{}\u{b0}", value.round() as i32),
-        AnimatedGradientParameter::MotionSpeed if value == 0. => "Still".into(),
+        AnimatedGradientParameter::MotionSpeed if value == 0. => {
+            tr::editor::sidebar::animated_gradient::still().into()
+        }
         _ if control.step < 1. => format!("{value:.1}"),
         _ => format!("{}", value.round() as i32),
     }
@@ -453,7 +525,7 @@ impl EditorWindow {
         }
         let input = cx.new(|cx| {
             let mut input = ui::TextInputState::single_line(window, cx);
-            input.set_placeholder("Name this gradient");
+            input.set_placeholder(tr::editor::sidebar::animated_gradient::name_placeholder());
             input
         });
         self.push_text_subscription(cx.subscribe_in(
@@ -503,7 +575,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_background(
+        self.edit_background_without_timeline(
             "animated-gradient-setting",
             |project| match &mut project.background.source {
                 BackgroundSource::AnimatedGradient { config } => change(config),
@@ -692,9 +764,9 @@ impl EditorWindow {
         let mut library = read_library();
         if library.save_preset(&name, &config).is_none() {
             self.sidebar.animated_gradient.error = Some(if name.trim().is_empty() {
-                "Enter a name for this gradient.".to_string()
+                tr::editor::sidebar::animated_gradient::name_required().to_string()
             } else {
-                format!("You can save up to {MAX_SAVED} gradients. Delete one to add another.")
+                tr::editor::sidebar::animated_gradient::limit_reached(MAX_SAVED)
             });
         } else if write_setting("presets", &library.presets) {
             self.sidebar.animated_gradient.library.presets = library.presets;
@@ -702,7 +774,7 @@ impl EditorWindow {
             self.close_animated_gradient_save(cx);
         } else {
             self.sidebar.animated_gradient.error =
-                Some("Could not save this gradient. Try again.".into());
+                Some(tr::editor::sidebar::animated_gradient::save_failed().into());
         }
         cx.notify();
     }
@@ -715,7 +787,7 @@ impl EditorWindow {
             self.sidebar.animated_gradient.error = None;
         } else {
             self.sidebar.animated_gradient.error =
-                Some("Could not delete this gradient. Try again.".into());
+                Some(tr::editor::sidebar::animated_gradient::delete_failed().into());
         }
         cx.notify();
     }
@@ -729,7 +801,7 @@ impl EditorWindow {
         let error = state.error.clone().or_else(|| {
             state
                 .persistence_failed
-                .then(|| "Could not remember your animated gradient settings.".to_string())
+                .then(|| tr::editor::sidebar::animated_gradient::remember_failed().to_string())
         });
 
         div()
@@ -772,7 +844,10 @@ impl EditorWindow {
             .text_color(Hsla::from(theme.editor.text_3))
             .cursor_pointer()
             .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
-            .tooltip(move |_window, cx| ui::Tooltip::new(&theme, "Randomize").view(cx))
+            .tooltip(move |_window, cx| {
+                ui::Tooltip::new(&theme, tr::editor::sidebar::animated_gradient::randomize())
+                    .view(cx)
+            })
             .child(
                 svg()
                     .path("icons/shuffle.svg")
@@ -800,6 +875,12 @@ impl EditorWindow {
 
         let save_row = state.save_open.then(|| {
             let input = state.name_input.clone();
+            if let Some(input) = &input {
+                input.update(cx, |input, _| {
+                    input
+                        .set_placeholder(tr::editor::sidebar::animated_gradient::name_placeholder())
+                });
+            }
             let name_empty = input
                 .as_ref()
                 .is_none_or(|input| input.read(cx).text().trim().is_empty());
@@ -833,13 +914,13 @@ impl EditorWindow {
                                     this.focus_root(window, cx);
                                 }))
                         })
-                        .child("Save"),
+                        .child(tr::common::save()),
                 )
                 .child(icon_button(
                     &theme,
                     "animated-gradient-save-cancel",
                     "icons/x.svg",
-                    "Cancel",
+                    tr::common::cancel(),
                     false,
                     cx.listener(|this, _, window, cx| {
                         this.close_animated_gradient_save(cx);
@@ -849,14 +930,14 @@ impl EditorWindow {
                 .into_any_element()
         });
 
-        ui::Field::section(&theme, "Presets")
+        ui::Field::section(&theme, tr::editor::sidebar::animated_gradient::presets())
             .value(
                 header_button(
                     &theme,
                     "animated-gradient-save-toggle",
                     "icons/save.svg",
-                    "Save",
-                    "Save the current gradient",
+                    tr::common::save(),
+                    tr::editor::sidebar::animated_gradient::save_tooltip(),
                     save_disabled,
                     save_open,
                     cx.listener(move |this, _, window, cx| {
@@ -882,7 +963,7 @@ impl EditorWindow {
                             div()
                                 .text_size(px(11.))
                                 .text_color(Hsla::from(theme.editor.text_3))
-                                .child("Saved"),
+                                .child(tr::editor::sidebar::animated_gradient::saved()),
                         )
                         .child(swatch_rows(saved))
                     }),
@@ -938,7 +1019,13 @@ impl EditorWindow {
                         .shadow_sm()
                         .cursor_pointer()
                         .hover(|this| this.bg(Hsla::from(theme.red_11)))
-                        .tooltip(move |_window, cx| ui::Tooltip::new(&theme, "Delete").view(cx))
+                        .tooltip(move |_window, cx| {
+                            ui::Tooltip::new(
+                                &theme,
+                                tr::editor::sidebar::animated_gradient::delete(),
+                            )
+                            .view(cx)
+                        })
                         .child(
                             svg()
                                 .path("icons/x.svg")
@@ -1074,7 +1161,7 @@ impl EditorWindow {
                     &theme,
                     "animated-gradient-remove-stop",
                     "icons/trash.svg",
-                    "Remove colour",
+                    tr::editor::sidebar::animated_gradient::remove_colour(),
                     count <= MIN_STOPS,
                     cx.listener(move |this, _, window, cx| {
                         this.remove_animated_gradient_stop(selected, window, cx);
@@ -1082,14 +1169,14 @@ impl EditorWindow {
                 ))
         });
 
-        ui::Field::section(&theme, "Colours")
+        ui::Field::section(&theme, tr::editor::sidebar::animated_gradient::colours())
             .value(
                 header_button(
                     &theme,
                     "animated-gradient-add-stop",
                     "icons/plus.svg",
-                    "Add",
-                    "Add a colour",
+                    tr::common::add(),
+                    tr::editor::sidebar::animated_gradient::add_colour(),
                     count >= MAX_STOPS,
                     false,
                     cx.listener(|this, _, window, cx| {
@@ -1117,7 +1204,7 @@ impl EditorWindow {
         let theme = self.theme;
         let control = AnimatedGradientParameter::MotionSpeed.control();
         let value = AnimatedGradientParameter::MotionSpeed.get(config);
-        ui::Field::inline(&theme, "Motion")
+        ui::Field::inline(&theme, tr::editor::sidebar::animated_gradient::motion())
             .value_text(format_control_value(&control, value))
             .child(self.slider_flex(
                 SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
@@ -1144,7 +1231,9 @@ impl EditorWindow {
             groups
                 .iter()
                 .enumerate()
-                .map(|(index, (name, _))| ui::SegmentOption::new(name.to_string(), index == active))
+                .map(|(index, (name, _))| {
+                    ui::SegmentOption::new(group_label(name), index == active)
+                })
                 .collect(),
         )
         .item_padding(px(6.), px(4.))
@@ -1160,7 +1249,7 @@ impl EditorWindow {
             .iter()
             .map(|control| {
                 let value = control.key.get(config);
-                ui::Field::inline(&theme, control.label.clone())
+                ui::Field::inline(&theme, control_label(control))
                     .value_text(format_control_value(control, value))
                     .child(self.slider_flex(
                         SliderKey::AnimatedGradient(control.key),
@@ -1181,7 +1270,7 @@ impl EditorWindow {
                     .child(div().flex().flex_1().child(disclosure_row(
                         &theme,
                         "animated-gradient-fine-tune",
-                        "Fine-tune",
+                        tr::editor::sidebar::animated_gradient::fine_tune(),
                         open,
                         cx.listener(|this, _, window, cx| {
                             this.sidebar.animated_gradient.fine_tune_open.toggle();
@@ -1193,8 +1282,8 @@ impl EditorWindow {
                             &theme,
                             "animated-gradient-reset",
                             "icons/rotate-ccw.svg",
-                            "Reset",
-                            "Reset fine-tune settings",
+                            tr::common::reset(),
+                            tr::editor::sidebar::animated_gradient::reset_tooltip(),
                             false,
                             false,
                             cx.listener(|this, _, window, cx| {

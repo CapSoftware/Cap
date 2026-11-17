@@ -82,7 +82,7 @@ step.
 - `cap screenshot` — capture a still of a screen/window (`--json` → `{path,width,height}`).
 - `cap targets` (`screens`/`windows`/`cameras`/`mics`) — enumerate capture inputs.
 - `cap project inspect` / `validate` / `config get|set` — inspect and edit `.cap` projects.
-- `cap recordings list` — list `.cap` recordings in the desktop library.
+- `cap recordings list` — list `.cap` recordings across Desktop's current, default, and previously used storage folders. Use `--dir <path>` to list only that directory.
 - `cap upload` — upload a `.cap` project or video file and get a shareable link.
 - `cap update` — download and install the latest Cap Desktop bundle, then repair the `cap` shim.
 - `cap doctor` / `version` / `guide` — diagnostics, version info, and the agent capability manifest.

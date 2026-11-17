@@ -645,43 +645,4 @@ mod tests {
             Some("track absent")
         );
     }
-    #[test]
-    fn instant_system_audio_expectation_requires_the_microphone_timeline() {
-        let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
-        let entries: Vec<_> = entries
-            .iter()
-            .filter(|entry| {
-                entry.class == "sync-system" && entry.case == "export/instant/output/mp4/native"
-            })
-            .collect();
-        assert_eq!(entries.len(), 1);
-        assert!(!entries[0].flaky);
-        let metrics = |offset: f64, mic: f64| {
-            BTreeMap::from([
-                ("count".into(), cap_verify_expect::Range::at(1.0)),
-                ("offset-ms".into(), cap_verify_expect::Range::at(offset)),
-                ("mic-offset-ms".into(), cap_verify_expect::Range::at(mic)),
-                (
-                    "system-minus-mic-ms".into(),
-                    cap_verify_expect::Range::at(((offset - mic) * 10.0_f64).round() / 10.0),
-                ),
-            ])
-        };
-        let accepts = |metrics: &BTreeMap<String, cap_verify_expect::Range>| {
-            cap_verify_expect::within(&entries[0].bound, Some(metrics)).is_ok()
-        };
-        for (offset, mic) in [(14.0, 14.0), (13.3, 13.3), (15.4, 15.0)] {
-            assert!(accepts(&metrics(offset, mic)));
-        }
-        // The -60 ms and -6.7 ms mixer modes, and system audio off the mic.
-        for (offset, mic) in [(-46.1, 13.9), (7.8, 14.5), (16.0, 14.5), (14.0, 35.0)] {
-            assert!(!accepts(&metrics(offset, mic)));
-        }
-        let mut absent = metrics(14.0, 14.0);
-        absent.remove("system-minus-mic-ms");
-        assert!(!accepts(&absent));
-        for platform in ["macos", "windows", "linux"] {
-            assert!(entries[0].matches("export/instant/output/mp4/native", platform));
-        }
-    }
 }

@@ -8,6 +8,7 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
+import { visitorCountry } from "@/lib/visitor-country";
 import { currencyForCountry } from "@/utils/currency";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					const override =
 						process.env.VERCEL_ENV !== "production" ? urlParams.country : null;
 					const country =
-						override || request.headers["x-vercel-ip-country"] || null;
+						override || visitorCountry(request.headers["x-vercel-ip-country"]);
 
 					return HttpServerResponse.unsafeJson(
 						{ currency: currencyForCountry(country), country },

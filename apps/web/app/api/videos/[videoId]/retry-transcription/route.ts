@@ -1,16 +1,23 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	PROCESSING_RETRY_RATE_MESSAGE,
+	processingRetryLimited,
+} from "@/lib/processing-retry-limit";
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-transcription">,
 ) {
 	try {
-		const user = await getCurrentUser();
+		const user = isCrossSiteCookieWrite(request)
+			? null
+			: await getCurrentUser();
 		if (!user) {
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
 		}
@@ -34,6 +41,13 @@ export async function POST(
 		const video = videoQuery[0];
 		if (!video || video.ownerId !== user.id) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
+		}
+
+		if (await processingRetryLimited(user.id, request.headers)) {
+			return Response.json(
+				{ error: PROCESSING_RETRY_RATE_MESSAGE },
+				{ status: 429 },
+			);
 		}
 
 		// Reset status to null - this will trigger automatic retry via get-status.ts

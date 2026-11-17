@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gpuiDirectory } from "./bundle-gpui.mjs";
@@ -30,17 +30,19 @@ if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
 	);
 }
 
-const metadata = JSON.parse(
-	runCommand("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
-		cwd: path.join(repoRoot, "apps", "desktop", "src-tauri"),
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "inherit"],
-	}).stdout,
-);
-const version = metadata.packages.find(
-	(pkg) => pkg.name === "cap-desktop",
-)?.version;
-if (!version) throw new Error("Desktop version is missing from Cargo metadata");
+const manifest = await readFile(path.join(gpuiDirectory, "Cargo.toml"), "utf8");
+const packageStart = manifest.indexOf("[package]");
+const packageEnd = manifest.indexOf("\n[", packageStart + 1);
+const version =
+	packageStart === -1
+		? undefined
+		: /^version\s*=\s*"([^"]+)"$/m.exec(
+				manifest.slice(
+					packageStart,
+					packageEnd === -1 ? manifest.length : packageEnd,
+				),
+			)?.[1];
+if (!version) throw new Error("Desktop version is missing from Cargo.toml");
 
 runCommand(
 	"node",

@@ -8,6 +8,7 @@ pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
 pub mod log_redaction;
+pub mod markers;
 pub mod memory_profiling;
 mod output_pipeline;
 pub mod output_validation;
@@ -79,9 +80,21 @@ pub struct RecordingOptions {
     pub mode: RecordingMode,
 }
 
+/// The window a capture should record by itself: only for a window target
+/// with window-only capture on.
+pub fn window_only_target(
+    target: &ScreenCaptureTarget,
+    window_only: bool,
+) -> Option<scap_targets::WindowId> {
+    target.window().filter(|_| window_only)
+}
+
 #[derive(Clone)]
 pub struct RecordingBaseInputs {
     pub capture_target: ScreenCaptureTarget,
+    /// For a window target on macOS and Windows: record only that window,
+    /// following it, instead of the region of the screen it starts in.
+    pub window_only: bool,
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,

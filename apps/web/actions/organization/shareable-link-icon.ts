@@ -6,10 +6,12 @@ import { organizations, users } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import { Organisation } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import { runPromise } from "@/lib/server";
+import { normalizeHexColor } from "@/lib/share-call-to-action";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 const allowedImageTypes = new Set(["image/jpeg", "image/png"]);
@@ -149,10 +151,10 @@ export async function updateShareableLinkIconPreference({
 	await db()
 		.update(organizations)
 		.set({
-			settings: {
+			settings: organizationSettingsKeepingRowOwnedKeys({
 				...(organization.settings ?? {}),
 				shareableLinkUseOrganizationIcon: useOrganizationIcon,
-			},
+			}),
 		})
 		.where(eq(organizations.id, organization.id));
 
@@ -169,10 +171,10 @@ export async function hideShareableLinkCapLogo(
 	await db()
 		.update(organizations)
 		.set({
-			settings: {
+			settings: organizationSettingsKeepingRowOwnedKeys({
 				...(organization.settings ?? {}),
 				hideShareableLinkCapLogo: true,
-			},
+			}),
 		})
 		.where(eq(organizations.id, organization.id));
 
@@ -200,4 +202,31 @@ export async function selectShareableLinkBrandingOrganization(
 	revalidatePath("/dashboard");
 
 	return { success: true };
+}
+
+export async function updateShareableLinkBrandColor({
+	organizationId,
+	color,
+}: {
+	organizationId: Organisation.OrganisationId;
+	color: string | null;
+}) {
+	const playerColor = color === null ? null : normalizeHexColor(color);
+	if (color !== null && !playerColor) {
+		throw new Error("Enter a hex color like #1F6FEB");
+	}
+
+	const organization = await getManageableProOrganization(organizationId);
+	const patch = JSON.stringify({ branding: { playerColor } });
+
+	await db()
+		.update(organizations)
+		.set({
+			metadata: sql`JSON_MERGE_PATCH(COALESCE(${organizations.metadata}, JSON_OBJECT()), CAST(${patch} AS JSON))`,
+		})
+		.where(eq(organizations.id, organization.id));
+
+	revalidateOrganizationBrandingPaths();
+
+	return { success: true, color: playerColor };
 }

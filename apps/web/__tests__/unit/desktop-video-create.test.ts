@@ -124,10 +124,18 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 	invalidateGoogleDriveStorageQuotaCache: vi.fn(),
 }));
 
+vi.mock("@/lib/server-analytics", () => ({
+	trackServerEvent: vi.fn(),
+}));
+
 // The live-transcription stack drags in the whole workflow graph
 // (server-only modules included); these tests only care that create works.
 vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
+}));
+
+vi.mock("@/lib/desktop-share-url", () => ({
+	getDesktopShareUrl: vi.fn(async () => undefined),
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -143,6 +151,8 @@ const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
 const { maybeStartLiveTranscription } = await import("@/lib/live-transcribe");
+const { trackServerEvent } = await import("@/lib/server-analytics");
+const { getDesktopShareUrl } = await import("@/lib/desktop-share-url");
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -440,6 +450,74 @@ describe("DELETE /delete", () => {
 		expect(deletion.deleteVideo).not.toHaveBeenCalled();
 		expect(mockDb.delete).not.toHaveBeenCalled();
 	});
+
+	it("reports why the desktop app cleaned up an Instant start after deleting it", async () => {
+		mockDb.where.mockResolvedValue([
+			{ video: { ...ownedVideo, source: { type: "desktopSegments" } } },
+		]);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed&cause=microphone",
+			{
+				method: "DELETE",
+				headers: { "X-Cap-Desktop-Features": "googleDriveUpload,gpui" },
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toBe(true);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{
+				reason: "start-failed",
+				cause: "microphone",
+				app: "gpui",
+				sourceType: "desktopSegments",
+			},
+		);
+	});
+
+	it.each([
+		"https://cap.test/delete?videoId=video-1",
+		"https://cap.test/delete?videoId=video-1&reason=unknown&cause=microphone",
+	])(
+		"deletes without reporting when no known reason is sent: %s",
+		async (url) => {
+			const response = await app.request(url, { method: "DELETE" });
+			expect(response.status).toBe(200);
+			expect(await response.json()).toBe(true);
+			expect(deletion.deleteVideo).toHaveBeenCalledExactlyOnceWith("video-1");
+			expect(trackServerEvent).not.toHaveBeenCalled();
+		},
+	);
+
+	it("drops an unknown cause and labels other desktop apps", async () => {
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=interrupted&cause=../../etc",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(200);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{ reason: "interrupted", cause: null, app: "desktop", sourceType: null },
+		);
+	});
+
+	it("reports nothing when the deletion itself fails", async () => {
+		deletion.deleteVideo.mockReturnValue(
+			Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error("Provider deletion failed"),
+				}),
+			),
+		);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(500);
+		expect(trackServerEvent).not.toHaveBeenCalled();
+	});
 });
 
 describe("GET /create", () => {
@@ -666,6 +744,68 @@ describe("GET /create", () => {
 			orgId: "org-2",
 			ownerId: "user-1",
 		});
+	});
+
+	it("returns the share link for the new video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([
+				{ id: "org-2", name: "Team", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/new-video",
+		);
+
+		const response = await app.request("https://cap.test/create?orgId=org-2");
+
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-2", body.id);
+		expect(body).toMatchObject({
+			share_url: "https://videos.team.test/s/new-video",
+		});
+	});
+
+	it("returns the share link for an existing video's organization", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where.mockResolvedValueOnce([
+			{
+				id: "0123456789abcde",
+				ownerId: "user-1",
+				orgId: "org-3",
+				isScreenshot: false,
+				source: { type: "desktopMP4" },
+			},
+		]);
+		vi.mocked(getDesktopShareUrl).mockResolvedValueOnce(
+			"https://videos.team.test/s/0123456789abcde",
+		);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&orgId=org-1",
+		);
+
+		expect(response.status).toBe(200);
+		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-3", "0123456789abcde");
+		expect(await response.json()).toMatchObject({
+			id: "0123456789abcde",
+			share_url: "https://videos.team.test/s/0123456789abcde",
+		});
+		expect(mockDb.transaction).not.toHaveBeenCalled();
 	});
 
 	it("creates a missing video with an explicitly reserved ID", async () => {

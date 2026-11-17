@@ -1,0 +1,3 @@
+NSCameraUsageDescription = "CapはCapsであなたを録画するためにカメラを使用します。";
+NSMicrophoneUsageDescription = "CapはCapsであなたの声を録音するためにマイクを使用します。";
+NSScreenCaptureUsageDescription = "CapはCapsを作成するために画面を録画します。";

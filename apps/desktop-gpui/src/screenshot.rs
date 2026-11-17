@@ -8,8 +8,7 @@
 //! {name}.cap/` holding `original.png`, a Studio `SingleSegment` meta whose
 //! display track is the PNG at `fps: 0`, and a project config whose
 //! background is transparent white with no shadow (`recording.rs:2963-2985`).
-//! Known deviations from that command: no native notification and no `ScreenshotTaken`
-//! automations (no automation runner here).
+//! Known deviation from that command: no native notification.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -29,7 +28,67 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
 
+    #[cfg(target_os = "linux")]
+    if cap_recording::screenshot::uses_wayland_portal()
+        && matches!(
+            target,
+            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+        )
+        && !WAYLAND_SCREENSHOTS_ALLOWED.load(std::sync::atomic::Ordering::Acquire)
+    {
+        // Asked while the picker still has focus: GNOME Shell shows the
+        // permission question only for the focused app, and the capture below
+        // hides the picker first.
+        let request = gpui_tokio::Tokio::spawn_result(
+            cx,
+            cap_recording::screenshot::request_wayland_screenshot_permission(),
+        );
+        cx.spawn(async move |cx| match request.await {
+            Ok(()) => {
+                WAYLAND_SCREENSHOTS_ALLOWED.store(true, std::sync::atomic::Ordering::Release);
+                tracing::info!("the desktop allows Cap's screenshots");
+                cx.update(|cx| capture(target, cx));
+            }
+            // The picker is still up, so the user can try again.
+            Err(error) => tracing::error!("screenshot capture failed: {error:#}"),
+        })
+        .detach();
+        return;
+    }
+    capture(target, cx);
+}
+
+/// Set once the screenshot portal has answered a request: the permission it
+/// may have asked for is granted for the rest of the session.
+#[cfg(target_os = "linux")]
+static WAYLAND_SCREENSHOTS_ALLOWED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn capture(target: ScreenCaptureTarget, cx: &mut App) {
+    // A Wayland compositor keeps drawing a closed window while it animates it
+    // away, and the animation can outlast the pause below (KWin's fade does
+    // at slower animation speeds), which left the selection overlay in the
+    // screenshot. The overlays present an empty frame first and are closed
+    // once the compositor has shown it, so nothing of theirs is left to
+    // animate. The pause stays for what the compositor itself draws around a
+    // closing window, such as Hyprland's border.
+    #[cfg(target_os = "linux")]
+    if cap_recording::screenshot::uses_wayland_portal()
+        && let Some(emptied) = app_windows::empty_overlays_for_screenshot(cx)
+    {
+        cx.spawn(async move |cx| {
+            emptied.await;
+            cx.update(|cx| capture_without_overlays(target, cx));
+        })
+        .detach();
+        return;
+    }
+    capture_without_overlays(target, cx);
+}
+
+fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
+    let automation_target = crate::automation::screenshot_target(&target);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
         if settle {
@@ -52,7 +111,16 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
                 None
             }
         };
-        cx.update(|cx| app_windows::screenshot_finished(captured, cx));
+        let (editor_choice, rule_deletes) = match (&captured, automation_target) {
+            (Some(png), Some(target)) => {
+                let choice = crate::automation::screenshot_editor_choice(Some(&target), png);
+                let deletes = crate::automation::screenshot_rule_deletes(Some(&target), png);
+                crate::automation::screenshot_taken(png.clone(), target);
+                (choice, deletes)
+            }
+            _ => (None, false),
+        };
+        cx.update(|cx| app_windows::screenshot_finished(captured, editor_choice, rule_deletes, cx));
     })
     .detach();
 }

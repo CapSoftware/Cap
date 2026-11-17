@@ -3,6 +3,7 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
+	HttpApiSchema,
 	OpenApi,
 } from "@effect/platform";
 import { Schema } from "effect";
@@ -30,6 +31,20 @@ export const isMobileRecordingDurationAllowed = ({
 	durationSeconds <=
 		mobileFreeRecordingDurationSeconds +
 			mobileRecordingDurationToleranceSeconds;
+
+// The total and the segment durations are both client-reported; gating on the larger stops a client that
+// only understates the total. Authoritative enforcement needs the length measured after processing.
+export const mobileRecordingGateDurationSeconds = ({
+	durationSeconds,
+	videoSegments,
+}: {
+	durationSeconds: number;
+	videoSegments: ReadonlyArray<{ duration: number }>;
+}) =>
+	Math.max(
+		durationSeconds,
+		videoSegments.reduce((total, segment) => total + segment.duration, 0),
+	);
 
 export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	try {
@@ -152,12 +167,81 @@ export const MobileEmailSessionVerifyInput = Schema.Struct({
 	code: Schema.String,
 });
 
+export class MobileTooManyRequests extends HttpApiSchema.EmptyError<MobileTooManyRequests>()(
+	{
+		tag: "TooManyRequests",
+		status: 429,
+	},
+) {}
+
 export const MobileAccountDeletionInput = Schema.Struct({
 	confirmation: Schema.Literal("DELETE"),
 });
 
 export const MobileUserBlockInput = Schema.Struct({
 	userId: UserId,
+});
+
+export const MobileNotificationPreferences = Schema.Struct({
+	comments: Schema.Boolean,
+	replies: Schema.Boolean,
+	views: Schema.Boolean,
+	anonymousViews: Schema.Boolean,
+	reactions: Schema.Boolean,
+});
+
+export const MobileNotificationPreferencesInput = Schema.Struct({
+	comments: Schema.optional(Schema.Boolean),
+	replies: Schema.optional(Schema.Boolean),
+	views: Schema.optional(Schema.Boolean),
+	anonymousViews: Schema.optional(Schema.Boolean),
+	reactions: Schema.optional(Schema.Boolean),
+});
+
+export const MobilePushTokenInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.pattern(/^[0-9a-fA-F]{32,200}$/)),
+	environment: Schema.Literal("sandbox", "production"),
+});
+
+export const MobilePushTokenRemoveInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.maxLength(200)),
+});
+
+export const mobileEventBatchLimit = 50;
+
+const MobileAppVersion = Schema.String.pipe(
+	Schema.pattern(/^\d{1,10}(\.\d{1,10}){0,3}$/),
+);
+
+export const MobileEventValue = Schema.Union(
+	Schema.String.pipe(Schema.maxLength(120)),
+	Schema.Number.pipe(Schema.finite()),
+	Schema.Boolean,
+);
+
+export const MobileEvent = Schema.Struct({
+	name: Schema.String.pipe(Schema.pattern(/^[a-z][a-z0-9_]{0,63}$/)),
+	timestamp: Schema.Number.pipe(Schema.finite()),
+	properties: Schema.optional(
+		Schema.Record({
+			key: Schema.String.pipe(Schema.maxLength(40)),
+			value: MobileEventValue,
+		}),
+	),
+});
+
+export const MobileEventsInput = Schema.Struct({
+	sentAt: Schema.Number.pipe(Schema.finite()),
+	app: Schema.Struct({
+		version: MobileAppVersion,
+		build: Schema.String.pipe(Schema.pattern(/^\d{1,20}$/)),
+		os: MobileAppVersion,
+		device: Schema.Literal("phone", "tablet"),
+	}),
+	events: Schema.Array(MobileEvent).pipe(
+		Schema.minItems(1),
+		Schema.maxItems(mobileEventBatchLimit),
+	),
 });
 
 export const MobileContentReportInput = Schema.Struct({
@@ -219,6 +303,8 @@ export const MobileUploadProgress = Schema.Struct({
 	processingError: Schema.NullOr(Schema.String),
 });
 
+export const MobileLinkAccess = Schema.Literal("anyone", "restricted");
+
 export const MobileCapSummary = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
@@ -238,6 +324,8 @@ export const MobileCapSummary = Schema.Struct({
 	reactionCount: Schema.Number,
 	upload: Schema.NullOr(MobileUploadProgress),
 	ownedByCurrentUser: Schema.optional(Schema.Boolean),
+	linkAccess: Schema.optional(MobileLinkAccess),
+	linkRestricted: Schema.optional(Schema.Boolean),
 });
 
 export const MobileComment = Schema.Struct({
@@ -261,6 +349,25 @@ export const MobileChapter = Schema.Struct({
 	start: Schema.Number,
 });
 
+export const MobileViewerSettings = Schema.Struct({
+	disableSummary: Schema.Boolean,
+	disableCaptions: Schema.Boolean,
+	disableChapters: Schema.Boolean,
+	disableReactions: Schema.Boolean,
+	disableTranscript: Schema.Boolean,
+	disableComments: Schema.Boolean,
+});
+
+export const MobileCapViewer = Schema.Struct({
+	settings: MobileViewerSettings,
+	defaultPlaybackSpeed: Schema.Number,
+	canDownload: Schema.Boolean,
+	isScreenshot: Schema.Boolean,
+	overShareLimit: Schema.Boolean,
+	ownerImageUrl: Schema.NullOr(Schema.String),
+	aiGenerationStatus: Schema.NullOr(Schema.String),
+});
+
 export const MobileCapDetail = Schema.Struct({
 	cap: MobileCapSummary,
 	summary: Schema.NullOr(Schema.String),
@@ -270,6 +377,24 @@ export const MobileCapDetail = Schema.Struct({
 	),
 	comments: Schema.Array(MobileComment),
 	shareUrl: Schema.String,
+	viewer: Schema.optional(MobileCapViewer),
+});
+
+export const MobileCapAccessResponse = Schema.Struct({
+	status: Schema.Literal("granted", "password_required", "restricted"),
+});
+
+export const MobileCapUnlockInput = Schema.Struct({
+	password: Schema.String,
+});
+
+export const MobileCapUnlockResponse = Schema.Struct({
+	accessToken: Schema.String,
+	expiresAt: Schema.String,
+});
+
+export const MobileCapViewInput = Schema.Struct({
+	sessionId: Schema.String,
 });
 
 export const MobileCapsListParams = Schema.Struct({
@@ -327,6 +452,7 @@ export const MobileProfileImageInput = Schema.Struct({
 
 export const MobileCapSharingInput = Schema.Struct({
 	public: Schema.Boolean,
+	linkAccess: Schema.optional(MobileLinkAccess),
 });
 
 export const MobileCapTitleInput = Schema.Struct({
@@ -335,6 +461,19 @@ export const MobileCapTitleInput = Schema.Struct({
 
 export const MobileCapPasswordInput = Schema.Struct({
 	password: Schema.NullOr(Schema.String),
+});
+
+export const MobileCapEditState = Schema.Struct({
+	status: Schema.Literal("available", "pro_required", "not_editable", "busy"),
+	duration: Schema.Number,
+	hasEdits: Schema.Boolean,
+});
+
+export const MobileCapEditInput = Schema.Struct({
+	sourceDuration: Schema.Number,
+	keepRanges: Schema.Array(
+		Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+	).pipe(Schema.minItems(1), Schema.maxItems(500)),
 });
 
 export const MobileFolderCreateInput = Schema.Struct({
@@ -386,6 +525,11 @@ export const MobileAnalyticsRange = Schema.Literal(
 
 export const MobileAnalyticsParams = Schema.Struct({
 	range: Schema.optional(MobileAnalyticsRange),
+});
+
+export const MobileOrganizationAnalyticsParams = Schema.Struct({
+	range: Schema.optional(MobileAnalyticsRange),
+	spaceId: Schema.optional(Schema.String),
 });
 
 export const MobileAnalyticsBreakdown = Schema.Struct({
@@ -547,7 +691,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.post("verifyEmailSession", "/session/email/verify")
@@ -556,7 +701,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.post("revokeSession", "/session/revoke")
@@ -584,6 +730,56 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.get(
+			"getNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.patch(
+			"updateNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.setPayload(MobileNotificationPreferencesInput)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("registerPushToken", "/user/push-tokens")
+			.setHeaders(MobileAuthHeaders)
+			.setPayload(MobilePushTokenInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("removePushToken", "/user/push-tokens/remove")
+			.setPayload(MobilePushTokenRemoveInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("trackEvents", "/events")
+			.setPayload(MobileEventsInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.InternalServerError)
+			.addError(HttpApiError.BadRequest)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.get("bootstrap", "/bootstrap")
@@ -660,6 +856,34 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.get("getCapAccess", "/caps/:id/access")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileCapAccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("unlockCap", "/caps/:id/unlock")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileCapUnlockInput)
+			.addSuccess(MobileCapUnlockResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("trackCapView", "/caps/:id/views")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileCapViewInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
 		HttpApiEndpoint.post("reportCap", "/caps/:id/report")
 			.setPath(MobileVideoPath)
 			.setPayload(MobileContentReportInput)
@@ -684,6 +908,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPayload(MobileCapSharingInput)
 			.addSuccess(MobileCapSummary)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Conflict)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	)
@@ -716,6 +941,39 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.get("getCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileCapEditState)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("saveCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileCapEditInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
+	)
+	.add(
+		HttpApiEndpoint.post("restoreCapEdit", "/caps/:id/edit/restore")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
+	)
+	.add(
 		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback")
 			.setPath(MobileVideoPath)
 			.addSuccess(MobilePlaybackResponse)
@@ -735,6 +993,15 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 		HttpApiEndpoint.get("getCapAnalytics", "/caps/:id/analytics")
 			.setPath(MobileVideoPath)
 			.setUrlParams(MobileAnalyticsParams)
+			.addSuccess(MobileAnalyticsResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.InternalServerError),
+	)
+	.add(
+		HttpApiEndpoint.get("getOrganizationAnalytics", "/analytics")
+			.setUrlParams(MobileOrganizationAnalyticsParams)
 			.addSuccess(MobileAnalyticsResponse)
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.Forbidden)
