@@ -1267,6 +1267,10 @@ enum Scrub {
     Press { time: f64 },
 }
 
+/// The narrowest an audio fade's double-click target gets, so a short fade
+/// can still be reset.
+const FADE_RESET_MIN_PX: f64 = 8.;
+
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
@@ -2002,6 +2006,7 @@ fn clip_menu_row(
 enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
+    CaptionDownload,
 }
 
 struct OpenToolbarMenu {
@@ -2646,6 +2651,97 @@ impl EditorWindow {
         }
         self.project_changed(window, cx);
         true
+    }
+
+    /// A double-click on a zoom or scene handle runs that edge to its
+    /// neighbour, and one inside an audio fade resets it. The segment the
+    /// first click selected stays selected, as it did in 0.6.0. `pointer_time`
+    /// is the time under the pointer without the snap to zero near the
+    /// timeline's start, the same mapping the hit test used.
+    #[allow(clippy::too_many_arguments)]
+    fn double_click_segment(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        hit: edits::Hit,
+        pointer_time: f64,
+        secs_per_pixel: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let selection = self.selection.clone();
+        let changed = match (kind, hit) {
+            (TrackKind::Zoom | TrackKind::Scene, edits::Hit::Handle { index, start }) => {
+                let segments = self.timeline.segments(kind);
+                if index >= segments.len() {
+                    return false;
+                }
+                let edge =
+                    edits::fill_gap_edge(segments, lane, index, start, self.total_duration());
+                let changed = self.edit(
+                    |timeline| {
+                        if start {
+                            edits::set_segment_start(timeline, kind, index, edge)
+                        } else {
+                            edits::set_segment_end(timeline, kind, index, edge)
+                        }
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.set_preview_time(edge);
+                    self.note_edit("fill-gap", Some(kind));
+                }
+                changed
+            }
+            // A short fade lies wholly inside the 10 px trim-handle zone, so a
+            // handle hit can be a fade double-click too.
+            (TrackKind::Audio, edits::Hit::Body { index } | edits::Hit::Handle { index, .. }) => {
+                let Some(fade_in) = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.audio_segments.get(index))
+                    .and_then(|segment| {
+                        edits::fade_reset_at(
+                            segment.start,
+                            segment.end,
+                            segment.fade_in,
+                            segment.fade_out,
+                            pointer_time,
+                            FADE_RESET_MIN_PX * secs_per_pixel,
+                        )
+                    })
+                else {
+                    return false;
+                };
+                let changed = self.edit(
+                    |timeline| {
+                        let Some(segment) = timeline.audio_segments.get_mut(index) else {
+                            return false;
+                        };
+                        if fade_in {
+                            segment.fade_in = 0.;
+                        } else {
+                            segment.fade_out = 0.;
+                        }
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.note_edit("fade-reset", Some(kind));
+                }
+                changed
+            }
+            _ => return false,
+        };
+        if changed {
+            self.set_selection(selection, cx);
+        }
+        changed
     }
 
     fn edit(
@@ -4937,6 +5033,20 @@ impl EditorWindow {
                 window,
                 cx,
             );
+            return;
+        }
+
+        if event.click_count == 2
+            && self.double_click_segment(
+                kind,
+                lane,
+                hit,
+                position + x * secs_per_pixel,
+                secs_per_pixel,
+                window,
+                cx,
+            )
+        {
             return;
         }
 
@@ -7375,6 +7485,9 @@ impl EditorWindow {
         self.name_input
             .update(cx, |input, cx| input.set_text(draft.clone(), cx));
         tracing::info!(name = %draft, "renamed project");
+        // The main window, Settings and the tray list recordings by name, and
+        // closing the editor refreshes them only when the thumbnail changed.
+        cx.defer(crate::app_windows::refresh_library_after_delete);
         cx.notify();
         Ok(())
     }
@@ -7702,7 +7815,76 @@ impl EditorWindow {
                 .iter()
                 .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
                 .collect(),
+            ToolbarMenu::CaptionDownload => crate::caption_export::CaptionFormat::ALL
+                .iter()
+                .map(|format| ui::MenuItem::new(format.label(), false))
+                .collect(),
         }
+    }
+
+    pub(crate) fn caption_download_menu_open(&self) -> bool {
+        self.toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::CaptionDownload)
+    }
+
+    pub(crate) fn open_caption_download_menu(
+        &mut self,
+        trigger_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_toolbar_menu(ToolbarMenu::CaptionDownload, trigger_bounds, window, cx);
+    }
+
+    pub(crate) fn download_captions(
+        &mut self,
+        format: crate::caption_export::CaptionFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cues = crate::caption_export::cues(&self.project);
+        if cues.is_empty() {
+            return;
+        }
+        let contents = crate::caption_export::format(&cues, format);
+        let extension = format.extension();
+        let pretty_name = self
+            .summary()
+            .map(|summary| summary.pretty_name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Cap Recording".into());
+        let name = crate::editor_export::export_file_name(&pretty_name, extension);
+        tracing::info!(format = extension, cues = cues.len(), "caption download");
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = crate::platform::save_file_panel_async(&name, &[extension], cx).await
+            else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { std::fs::write(&path, contents) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match written {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "captions saved");
+                    this.show_notice(tr::editor::transcript::captions_saved(), window, cx);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "saving captions failed");
+                    this.show_notice(
+                        tr::editor::transcript::captions_save_failed(error.to_string()),
+                        window,
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_toolbar_menu(
@@ -7780,6 +7962,11 @@ impl EditorWindow {
                     self.set_preview_speed(*speed, window, cx);
                 }
             }
+            ToolbarMenu::CaptionDownload => {
+                if let Some(format) = crate::caption_export::CaptionFormat::ALL.get(index) {
+                    self.download_captions(*format, window, cx);
+                }
+            }
         }
         cx.notify();
         window.refresh();
@@ -7794,6 +7981,7 @@ impl EditorWindow {
                 .min_width(match kind {
                     ToolbarMenu::AspectRatio => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
+                    ToolbarMenu::CaptionDownload => px(160.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);

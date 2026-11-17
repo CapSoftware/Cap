@@ -1212,6 +1212,14 @@ starting = "Iniciando"
 [controls.marker]
 add = "Añadir marcador"
 
+[controls.settings]
+locked = "No se puede cambiar en esta grabación"
+not_in_recording = "No está en esta grabación"
+open = "Ajustes de grabación"
+show_camera_preview = "Mostrar vista previa de la cámara"
+switch_failed = "No se pudo cambiar a {device}. La grabación continúa."
+switching = "Cambiando…"
+
 [camera]
 waiting_title = "Esperando acceso a la cámara"
 
@@ -2966,10 +2974,15 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Añadir subtítulo en el cabezal"
+captions_save_failed = "No se pudieron guardar los subtítulos: {error}"
+captions_saved = "Subtítulos guardados"
 cleanup = "Limpiar"
 cleanup_tooltip = "Quitar muletillas y acortar pausas"
 delete_matches = "Eliminar todo"
 delete_matches_tooltip = "Cortar del vídeo cada coincidencia"
+download_captions = "Descargar subtítulos"
+download_srt = "SubRip (.srt)"
+download_vtt = "WebVTT (.vtt)"
 edit_hint = "Intro para guardar, Esc para cancelar, Tab para la siguiente palabra"
 empty_description = "Transcribe esta grabación en este ordenador y luego edita el vídeo editando su texto."
 empty_title = "Aún no hay transcripción"

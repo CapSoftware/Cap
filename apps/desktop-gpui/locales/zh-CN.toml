@@ -1212,6 +1212,14 @@ starting = "正在开始"
 [controls.marker]
 add = "添加标记"
 
+[controls.settings]
+locked = "本次录制中无法更改"
+not_in_recording = "本次录制未使用"
+open = "录制设置"
+show_camera_preview = "显示摄像头预览"
+switch_failed = "无法切换到 {device}。录制仍在继续。"
+switching = "正在切换…"
+
 [camera]
 waiting_title = "正在等待摄像头权限"
 
@@ -2966,10 +2974,15 @@ zoom = "缩放"
 
 [editor.transcript]
 add_caption = "在播放头处添加字幕"
+captions_save_failed = "无法保存字幕：{error}"
+captions_saved = "字幕已保存"
 cleanup = "清理"
 cleanup_tooltip = "移除填充词并缩短停顿"
 delete_matches = "全部删除"
 delete_matches_tooltip = "从视频中剪掉所有匹配项"
+download_captions = "下载字幕"
+download_srt = "SubRip（.srt）"
+download_vtt = "WebVTT（.vtt）"
 edit_hint = "按 Enter 保存，按 Esc 取消，按 Tab 编辑下一个单词"
 empty_description = "在这台电脑上转写此录制内容，然后通过编辑文字来编辑视频。"
 empty_title = "还没有转写内容"
