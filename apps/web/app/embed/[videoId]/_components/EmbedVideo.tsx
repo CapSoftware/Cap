@@ -56,7 +56,7 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: Omit<typeof videos.$inferSelect, "password"> & {
+		data: Omit<typeof videos.$inferSelect, "password" | "archivedAt"> & {
 			hasActiveUpload: boolean | undefined;
 		};
 		branding: SharePageBranding | null;

@@ -4,7 +4,10 @@ import type { ImageUpload, Organisation, User } from "@cap/web-domain";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 
-export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
+export type VideoData = Omit<
+	typeof videos.$inferSelect,
+	"ownerId" | "archivedAt"
+> & {
 	owner: VideoOwner;
 	organizationMembers?: User.UserId[];
 	organizationId?: Organisation.OrganisationId;

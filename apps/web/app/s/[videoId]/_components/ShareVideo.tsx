@@ -21,12 +21,14 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import type { SpaceUpNext } from "@/lib/space-up-next";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import { useContinueFromUpNext } from "./up-next-playback";
 import {
 	isRecordingUpload,
 	shouldDeferPlaybackSource,
@@ -65,6 +67,10 @@ const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 const importUpgradeModal = () =>
 	import("@/components/UpgradeModal").then((m) => m.UpgradeModal);
 const UpgradeModal = dynamic(importUpgradeModal, { ssr: false });
+const UpNextOverlay = dynamic(
+	() => import("./UpNextOverlay").then((m) => m.UpNextOverlay),
+	{ ssr: false },
+);
 
 type AiGenerationStatus =
 	| "QUEUED"
@@ -106,6 +112,7 @@ export const ShareVideo = forwardRef<
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
+		upNext?: SpaceUpNext | null;
 	}
 >(
 	(
@@ -131,11 +138,13 @@ export const ShareVideo = forwardRef<
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
 			callToAction = null,
+			upNext = null,
 		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+		useContinueFromUpNext(videoRef, data.id);
 		const router = useRouter();
 		const handleUploadComplete = useCallback(() => {
 			router.refresh();
@@ -629,6 +638,13 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
+						/>
+					)}
+					{upNext && !isActivelyRecording && (
+						<UpNextOverlay
+							upNext={upNext}
+							videoRef={videoRef}
+							holdAutoplay={callToAction !== null}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

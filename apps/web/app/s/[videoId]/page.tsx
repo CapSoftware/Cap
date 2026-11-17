@@ -79,6 +79,7 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
+import { getSpaceUpNext } from "@/lib/space-up-next";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	areViewerDownloadsEnabled,
@@ -499,7 +500,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"password" | "settings" | "ownerId"
+		"password" | "settings" | "ownerId" | "archivedAt"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -876,6 +877,19 @@ async function AuthorizedContent({
 		return null;
 	});
 
+	const upNextPromise =
+		user && searchParams.space && !video.isScreenshot
+			? getSpaceUpNext({ spaceParam: searchParams.space, videoId }).catch(
+					(error) => {
+						console.error(
+							`[ShareVideoPage] Up next lookup failed for ${videoId}:`,
+							error,
+						);
+						return null;
+					},
+				)
+			: Promise.resolve(null);
+
 	const videoHasEditsPromise = memberCanDownloadPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
 		return db()
@@ -908,6 +922,7 @@ async function AuthorizedContent({
 		resolvedImages,
 		dashboardDestination,
 		serverPlaybackSource,
+		upNext,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -924,6 +939,7 @@ async function AuthorizedContent({
 		imagesPromise,
 		dashboardDestinationPromise,
 		serverPlaybackSourcePromise,
+		upNextPromise,
 		viewNotificationPromise,
 	]);
 
@@ -1087,6 +1103,7 @@ async function AuthorizedContent({
 					/>
 				}
 				dashboardDestination={dashboardDestination}
+				upNext={upNext}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
 				serverPlaybackUrl={
