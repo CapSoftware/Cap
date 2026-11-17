@@ -2,8 +2,8 @@ use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
     ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, OverlayTrackKind, ProjectConfiguration, ProjectStyleCache, RecordingMeta,
-    SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
+    FrameStyle, OverlayTrackKind, PaddingMode, ProjectConfiguration, ProjectStyleCache,
+    RecordingMeta, SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
@@ -3835,8 +3835,108 @@ impl ProjectUniforms {
         padding / 100.0 * SCREEN_MAX_PADDING
     }
 
+    /// The even-padding ratio `r`: every side of the screen gets `r` times
+    /// the shorter crop side as margin in auto aspect. `None` in
+    /// proportional mode and at zero padding, where both modes are the same
+    /// layout and the proportional path keeps it bit-exact.
+    fn even_padding_ratio(project: &ProjectConfiguration) -> Option<f64> {
+        if project.background.padding_mode != PaddingMode::Even {
+            return None;
+        }
+        let padding = project.background.padding;
+        let ratio = if padding.is_finite() {
+            padding.clamp(0.0, 100.0) / 100.0
+        } else {
+            0.0
+        };
+        (ratio > 0.0).then_some(ratio)
+    }
+
+    /// Fraction of the canvas's shorter side inset on every edge to get the
+    /// area the screen fits in. Growing a canvas by `r` times the content's
+    /// shorter side and insetting it by this fraction of the canvas's shorter
+    /// side lands back on the content.
+    fn even_canvas_inset(ratio: f64) -> f64 {
+        ratio / (1.0 + 2.0 * ratio)
+    }
+
     fn round_base_dimension(value: f64) -> u32 {
         ((value.ceil() as u32).saturating_add(1) & !1).max(2)
+    }
+
+    /// Even-padding canvas size.
+    fn even_base_size(crop: &Crop, aspect: Option<f64>, ratio: f64) -> (u32, u32) {
+        let crop_size = XY::new(f64::from(crop.size.x), f64::from(crop.size.y));
+        let Some(target_aspect) = aspect else {
+            let margin = crop_size.x.min(crop_size.y) * ratio;
+            return (
+                ((crop_size.x + 2.0 * margin) as u32).saturating_add(1) & !1,
+                ((crop_size.y + 2.0 * margin) as u32).saturating_add(1) & !1,
+            );
+        };
+        // Smallest canvas of the target aspect whose area, inset on every
+        // edge by `even_canvas_inset` of its shorter side, holds the crop at
+        // its own size, so a fixed aspect keeps source resolution. `share`
+        // is each axis's length over the canvas's shorter side; solving
+        // `axis * (1 - 2 * inset * share) = crop` per axis gives these.
+        let grow = 1.0 + 2.0 * ratio;
+        let height_share = target_aspect.min(1.0);
+        let width_share = target_aspect.recip().min(1.0);
+        let height = crop_size.y * grow / (grow - 2.0 * ratio * height_share);
+        let width = crop_size.x * grow / (grow - 2.0 * ratio * width_share);
+        let (width, height) = if width / target_aspect > height {
+            (width, width / target_aspect)
+        } else {
+            (height * target_aspect, height)
+        };
+        (
+            Self::round_even_base_dimension(width),
+            Self::round_even_base_dimension(height),
+        )
+    }
+
+    /// `round_base_dimension` with float noise from the inset divisions
+    /// (1296.0000000000002) kept from rounding up a whole extra pair.
+    fn round_even_base_dimension(value: f64) -> u32 {
+        Self::round_base_dimension(value - 1e-6)
+    }
+
+    /// Even-padding display offset. Auto aspect follows the proportional
+    /// path's shape (offset per axis, content fills the rest) so output
+    /// rounding is absorbed the same way.
+    fn even_display_offset(
+        output_size: XY<f64>,
+        crop: &Crop,
+        aspect: Option<f64>,
+        cropped_aspect: f64,
+        ratio: f64,
+        output_scale: f64,
+    ) -> XY<f64> {
+        let Some(_) = aspect else {
+            let margin = f64::from(crop.size.x.min(crop.size.y)) * ratio * output_scale;
+            return XY::new(margin, margin);
+        };
+        let margin = output_size.x.min(output_size.y) * Self::even_canvas_inset(ratio);
+        let available = XY::new(
+            (output_size.x - 2.0 * margin).max(1.0),
+            (output_size.y - 2.0 * margin).max(1.0),
+        );
+        let content = if cropped_aspect <= output_size.x / output_size.y {
+            XY::new(available.y * cropped_aspect, available.y)
+        } else {
+            XY::new(available.x, available.x / cropped_aspect)
+        };
+        (output_size - content) / 2.0
+    }
+
+    fn aspect_ratio_value(aspect: &AspectRatio) -> f64 {
+        match aspect {
+            AspectRatio::Square => 1.0,
+            AspectRatio::Wide => 16.0 / 9.0,
+            AspectRatio::Vertical => 9.0 / 16.0,
+            AspectRatio::Classic => 4.0 / 3.0,
+            AspectRatio::Tall => 3.0 / 4.0,
+        }
     }
 
     fn fixed_aspect_base_size(crop: &Crop, target_aspect: f64, padding_factor: f64) -> (u32, u32) {
@@ -3882,6 +3982,10 @@ impl ProjectUniforms {
 
     pub fn get_base_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
+        if let Some(ratio) = Self::even_padding_ratio(project) {
+            let aspect = project.aspect_ratio.as_ref().map(Self::aspect_ratio_value);
+            return Self::even_base_size(&crop, aspect, ratio);
+        }
         let padding_factor = Self::auto_padding_factor(project);
 
         match &project.aspect_ratio {
@@ -4055,6 +4159,23 @@ impl ProjectUniforms {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
         let crop = Self::get_crop(options, project);
+
+        if let Some(ratio) = Self::even_padding_ratio(project) {
+            let (base_w, base_h) = Self::get_base_size(options, project);
+            let output_scale = f64::min(
+                output_size.x / f64::max(base_w as f64, 1.0),
+                output_size.y / f64::max(base_h as f64, 1.0),
+            );
+            let aspect = project.aspect_ratio.as_ref().map(Self::aspect_ratio_value);
+            return Coord::new(Self::even_display_offset(
+                output_size,
+                &crop,
+                aspect,
+                cropped_aspect,
+                ratio,
+                output_scale,
+            ));
+        }
 
         if project.aspect_ratio.is_none() {
             let (base_w, base_h) = Self::get_base_size(options, project);
@@ -4495,13 +4616,15 @@ impl ProjectUniforms {
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
         let base_crop = Self::get_crop(options, project);
         let base_padding = project.background.padding;
+        let base_padding_mode = project.background.padding_mode;
         let styled_project = constants
             .project_styles
             .resolve(shared_project, timeline_time);
         let project = styled_project.as_ref();
         let styled_crop = Self::get_crop(options, project);
-        let has_layout_override =
-            base_crop.size != styled_crop.size || base_padding != project.background.padding;
+        let has_layout_override = base_crop.size != styled_crop.size
+            || base_padding != project.background.padding
+            || base_padding_mode != project.background.padding_mode;
         let display_layout = if has_layout_override {
             Self::styled_display_layout(options, project, output_size, resolution_base, source_size)
         } else {
@@ -5962,6 +6085,210 @@ mod tests {
 
         assert_eq!((width, height), (1200, 600));
         assert_eq!(offset.coord, XY::new(100.0, 50.0));
+    }
+
+    fn even_project(padding: f64, aspect_ratio: Option<AspectRatio>) -> ProjectConfiguration {
+        let mut project = ProjectConfiguration {
+            aspect_ratio,
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = padding;
+        project.background.padding_mode = PaddingMode::Even;
+        project
+    }
+
+    fn layout_at_base(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+    ) -> ((u32, u32), XY<f64>, XY<f64>) {
+        let base = ProjectUniforms::get_base_size(options, project);
+        let resolution = XY::new(base.0, base.1);
+        let output = ProjectUniforms::get_output_size(options, project, resolution);
+        let layout =
+            ProjectUniforms::display_layout(options, project, resolution, options.screen_size);
+        (output, layout.content_offset, layout.content_size)
+    }
+
+    #[test]
+    fn even_padding_puts_the_same_margin_on_every_side() {
+        // 10% of the shorter side: 108 px around a 1080p screen, on a
+        // 2136 x 1296 canvas.
+        let options = render_options(1920, 1080);
+        let (output, offset, size) = layout_at_base(&options, &even_project(10.0, None));
+        assert_eq!(output, (2136, 1296));
+        assert_eq!(offset, XY::new(108.0, 108.0));
+        assert_eq!(size, XY::new(1920.0, 1080.0));
+
+        for ((width, height), margin) in [((1080, 1920), 108.0), ((3440, 1440), 144.0)] {
+            let options = render_options(width, height);
+            let (output, offset, size) = layout_at_base(&options, &even_project(10.0, None));
+            assert_eq!(offset, XY::new(margin, margin), "{width}x{height}");
+            assert_eq!(size, XY::new(f64::from(width), f64::from(height)));
+            assert_eq!(output.0 % 2, 0);
+            assert_eq!(output.1 % 2, 0);
+        }
+    }
+
+    #[test]
+    fn even_padding_follows_the_crop_and_scales_with_the_output() {
+        let options = render_options(1920, 1080);
+        let mut project = even_project(10.0, None);
+        project.background.crop = Some(Crop {
+            position: XY::new(100, 50),
+            size: XY::new(1000, 500),
+        });
+        let (output, offset, size) = layout_at_base(&options, &project);
+        assert_eq!(output, (1100, 600));
+        assert_eq!(offset, XY::new(50.0, 50.0));
+        assert_eq!(size, XY::new(1000.0, 500.0));
+
+        // A 1080p export of the 1080p screen: same proportions, scaled.
+        let project = even_project(10.0, None);
+        let resolution = XY::new(1920, 1080);
+        let output = ProjectUniforms::get_output_size(&options, &project, resolution);
+        let layout =
+            ProjectUniforms::display_layout(&options, &project, resolution, options.screen_size);
+        assert_eq!(output, (1780, 1080));
+        assert!((layout.content_offset.x - 90.0).abs() < 1e-9);
+        assert!((layout.content_offset.y - 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn even_padding_in_a_fixed_aspect_insets_the_canvas_evenly() {
+        let options = render_options(1920, 1080);
+        // 16:9 keeps the screen at source size: 108 px above and below,
+        // centred across.
+        let (output, offset, size) =
+            layout_at_base(&options, &even_project(10.0, Some(AspectRatio::Wide)));
+        assert_eq!(output, (2304, 1296));
+        for (got, want) in [
+            (offset.x, 192.0),
+            (offset.y, 108.0),
+            (size.x, 1920.0),
+            (size.y, 1080.0),
+        ] {
+            assert!((got - want).abs() < 1e-9, "{got} vs {want}");
+        }
+
+        for aspect in [
+            AspectRatio::Square,
+            AspectRatio::Vertical,
+            AspectRatio::Classic,
+            AspectRatio::Tall,
+        ] {
+            let (output, offset, size) =
+                layout_at_base(&options, &even_project(10.0, Some(aspect)));
+            let canvas_margin = f64::from(output.0.min(output.1)) * 0.1 / 1.2;
+            let margin = offset.x.min(offset.y);
+            assert!(
+                (margin - canvas_margin).abs() < 1.0,
+                "{aspect:?}: {margin} vs {canvas_margin}"
+            );
+            assert!(
+                size.x >= 1919.0 && size.y >= 1079.0,
+                "{aspect:?} kept {size:?}"
+            );
+            assert!(
+                (size.x / size.y - 1920.0 / 1080.0).abs() < 1e-6,
+                "{aspect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_padding_lays_out_the_same_in_both_modes() {
+        for (width, height) in [
+            (1920, 1080),
+            (1918, 1077),
+            (1081, 1923),
+            (3441, 1439),
+            (7, 5),
+        ] {
+            let options = render_options(width, height);
+            for aspect in [
+                None,
+                Some(AspectRatio::Wide),
+                Some(AspectRatio::Square),
+                Some(AspectRatio::Vertical),
+                Some(AspectRatio::Classic),
+                Some(AspectRatio::Tall),
+            ] {
+                let even = even_project(0.0, aspect);
+                let proportional = ProjectConfiguration {
+                    aspect_ratio: aspect,
+                    ..ProjectConfiguration::default()
+                };
+                for resolution in [
+                    XY::new(1920, 1080),
+                    XY::new(1280, 720),
+                    XY::new(width, height),
+                ] {
+                    let a = ProjectUniforms::display_layout(
+                        &options,
+                        &even,
+                        resolution,
+                        options.screen_size,
+                    );
+                    let b = ProjectUniforms::display_layout(
+                        &options,
+                        &proportional,
+                        resolution,
+                        options.screen_size,
+                    );
+                    assert_eq!(
+                        ProjectUniforms::get_output_size(&options, &even, resolution),
+                        ProjectUniforms::get_output_size(&options, &proportional, resolution)
+                    );
+                    assert_eq!(
+                        a.content_offset, b.content_offset,
+                        "{width}x{height} {aspect:?}"
+                    );
+                    assert_eq!(
+                        a.content_size, b.content_size,
+                        "{width}x{height} {aspect:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn even_padding_keeps_odd_sources_inside_even_outputs() {
+        for (width, height) in [(1917, 1079), (1001, 1999), (641, 479)] {
+            let options = render_options(width, height);
+            for aspect in [None, Some(AspectRatio::Wide), Some(AspectRatio::Vertical)] {
+                for padding in [0.1, 3.3, 10.0, 25.0, 40.0, 100.0] {
+                    let project = even_project(padding, aspect);
+                    for resolution in [XY::new(1920, 1080), XY::new(width, height)] {
+                        let output =
+                            ProjectUniforms::get_output_size(&options, &project, resolution);
+                        assert_eq!(output.0 % 2, 0);
+                        assert_eq!(output.1 % 2, 0);
+                        let layout = ProjectUniforms::display_layout(
+                            &options,
+                            &project,
+                            resolution,
+                            options.screen_size,
+                        );
+                        assert!(layout.content_offset.x >= 0.0 && layout.content_offset.y >= 0.0);
+                        assert!(
+                            layout.content_offset.x + layout.content_size.x
+                                <= f64::from(output.0) + 1e-6
+                        );
+                        assert!(
+                            layout.content_offset.y + layout.content_size.y
+                                <= f64::from(output.1) + 1e-6
+                        );
+                        let source = f64::from(width) / f64::from(height);
+                        let shown = layout.content_size.x / layout.content_size.y;
+                        assert!(
+                            (shown / source - 1.0).abs() < 0.01,
+                            "{width}x{height} {aspect:?} {padding}: {shown} vs {source}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
