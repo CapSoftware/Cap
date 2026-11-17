@@ -32,6 +32,7 @@ import {
 	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getCustomThumbnailKey } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
@@ -465,7 +466,12 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
-	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	const publishedThumbnail =
+		getCustomThumbnailKey({
+			id: video.id,
+			ownerId: video.ownerId,
+			metadata: Option.getOrNull(video.metadata),
+		}) ?? getPublishedRecordingThumbnailKey(video);
 	if (publishedThumbnail) {
 		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
 	}

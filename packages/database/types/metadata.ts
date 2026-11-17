@@ -132,6 +132,16 @@ export interface VideoMetadata {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
 	};
+	/**
+	 * Thumbnail the owner picked. `file` lives under
+	 * `<ownerId>/<videoId>/thumbnail/` and changes with every pick.
+	 */
+	customThumbnail?: {
+		file: string;
+		source: "upload" | "frame";
+		time?: number;
+		updatedAt: string;
+	};
 }
 
 export interface VideoCallToAction {
