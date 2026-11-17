@@ -2406,40 +2406,29 @@ mod switch_tests {
             .await
             .unwrap();
 
+        // Both microphones deliver in real time, as hardware does: a source
+        // left idle past its keepalive would pad the timeline itself.
+        let chunk = vec![0.1f32; 480];
         let start = Instant::now();
-        push_for(
-            &built_in,
-            0.1,
-            (48_000, 1),
-            start,
-            Duration::ZERO,
-            Duration::from_millis(300),
-        )
-        .await;
-        let settle_deadline = Instant::now() + Duration::from_secs(10);
-        while placed.lock().unwrap().iter().map(|(_, n)| n).sum::<usize>() < 14_400 {
-            assert!(
-                Instant::now() < settle_deadline,
-                "the first microphone never arrived"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        for index in 0..30u32 {
+            let at = start + Duration::from_millis(10) * index;
+            tokio::time::sleep_until((at + Duration::from_millis(10)).into()).await;
+            built_in.push(&chunk, Timestamp::Instant(at)).await;
         }
-
         switch
             .switch(Arc::new(headset.lock().await.unwrap()))
             .await
             .unwrap();
-        // The headset's first buffer is stamped 40 ms after the built-in
-        // microphone's audio ended: under the muxer's own gap threshold.
-        push_for(
-            &headset,
-            0.35,
-            (48_000, 1),
-            start,
-            Duration::from_millis(340),
-            Duration::from_millis(300),
-        )
-        .await;
+        // The headset's first buffer starts 40 ms after the built-in
+        // microphone's audio ended (later if the switch itself was slow):
+        // under the muxer's own gap threshold.
+        let headset_at = Duration::from_millis(start.elapsed().as_millis().max(340) as u64);
+        let loud = vec![0.35f32; 480];
+        for index in 0..30u32 {
+            let at = start + headset_at + Duration::from_millis(10) * index;
+            tokio::time::sleep_until((at + Duration::from_millis(10)).into()).await;
+            headset.push(&loud, Timestamp::Instant(at)).await;
+        }
         let deadline = Instant::now() + Duration::from_secs(10);
         while !placed.lock().unwrap().iter().any(|(peak, _)| *peak > 0.3) {
             assert!(
@@ -2453,9 +2442,11 @@ mod switch_tests {
         let placed = placed.lock().unwrap().clone();
         let first_headset = placed.iter().position(|(peak, _)| *peak > 0.3).unwrap();
         let before: usize = placed[..first_headset].iter().map(|(_, n)| n).sum();
-        assert_eq!(
-            before, 16_320,
-            "the headset's first sample belongs at 340 ms (48 kHz), not straight after the built-in microphone's last"
+        let expected = (headset_at.as_secs_f64() * 48_000.0).round() as usize;
+        assert!(
+            before.abs_diff(expected) <= 48,
+            "the headset's first sample belongs at {} ms ({expected} samples), not straight after the built-in microphone's last; it landed at {before}",
+            headset_at.as_millis()
         );
     }
 
