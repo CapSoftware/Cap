@@ -134,7 +134,6 @@ impl ExportFormatKind {
     }
 }
 
-/// A track this project can export, with what its row says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackOption {
     pub kind: TrackKind,
@@ -223,8 +222,6 @@ fn selected_tracks(options: &[TrackOption], excluded: &[TrackKind]) -> Vec<Track
     }
 }
 
-/// Bytes the selected tracks take: the video bitrate the encoder targets and
-/// 24-bit stereo PCM for audio.
 fn estimated_tracks_bytes(
     options: &[TrackOption],
     selected: &[TrackKind],
@@ -402,8 +399,6 @@ pub struct ExportUi {
     pub copy_link_pressed: bool,
     bpp_track: ui::SliderTrack,
     bpp_dragging: bool,
-    /// Tracks this project can export, in [`TrackKind::ALL`] order. Empty
-    /// when the project has no separate tracks.
     pub track_options: Vec<TrackOption>,
     pub tracks: Vec<TrackKind>,
     excluded_tracks: Vec<TrackKind>,
