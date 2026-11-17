@@ -163,7 +163,101 @@ export function parseShareCallToAction(
 	settings: unknown,
 ): ShareCallToAction | null {
 	if (!isRecord(settings)) return null;
-	const stored = settings.callToAction;
+	return parseStoredCallToAction(settings.callToAction);
+}
+
+export type WorkspaceCallToAction = {
+	callToAction: ShareCallToAction;
+	enabledAt: string;
+	includeExisting: boolean;
+};
+
+export function parseWorkspaceCallToAction(
+	organizationSettings: unknown,
+): WorkspaceCallToAction | null {
+	if (!isRecord(organizationSettings)) return null;
+	const stored = organizationSettings.defaultCallToAction;
+	if (!isRecord(stored)) return null;
+	const callToAction = parseStoredCallToAction(stored);
+	if (!callToAction) return null;
+	const enabledAt =
+		typeof stored.enabledAt === "string" ? stored.enabledAt : null;
+	if (!enabledAt || Number.isNaN(Date.parse(enabledAt))) return null;
+	return {
+		callToAction,
+		enabledAt,
+		includeExisting: stored.includeExisting === true,
+	};
+}
+
+export function workspaceCallToActionCoversVideo(
+	workspace: WorkspaceCallToAction,
+	videoCreatedAt: Date | string | null | undefined,
+) {
+	if (workspace.includeExisting) return true;
+	if (!videoCreatedAt) return false;
+	const created =
+		videoCreatedAt instanceof Date
+			? videoCreatedAt.getTime()
+			: Date.parse(videoCreatedAt);
+	return Number.isFinite(created) && created >= Date.parse(workspace.enabledAt);
+}
+
+export type CallToActionSource = "video" | "workspace" | "off";
+
+export type ResolvedCallToAction = {
+	callToAction: ShareCallToAction | null;
+	source: CallToActionSource | null;
+	workspaceCallToAction: ShareCallToAction | null;
+};
+
+export function resolveShareCallToAction({
+	videoSettings,
+	organizationSettings,
+	videoCreatedAt,
+}: {
+	videoSettings: unknown;
+	organizationSettings: unknown;
+	videoCreatedAt: Date | string | null | undefined;
+}): ResolvedCallToAction {
+	const workspace = parseWorkspaceCallToAction(organizationSettings);
+	const workspaceCallToAction =
+		workspace && workspaceCallToActionCoversVideo(workspace, videoCreatedAt)
+			? workspace.callToAction
+			: null;
+
+	const stored = isRecord(videoSettings) ? videoSettings.callToAction : null;
+	if (stored === false) {
+		return { callToAction: null, source: "off", workspaceCallToAction };
+	}
+
+	const own = parseStoredCallToAction(stored);
+	if (own) return { callToAction: own, source: "video", workspaceCallToAction };
+
+	if (workspaceCallToAction) {
+		return {
+			callToAction: workspaceCallToAction,
+			source: "workspace",
+			workspaceCallToAction,
+		};
+	}
+
+	return { callToAction: null, source: null, workspaceCallToAction: null };
+}
+
+export function withoutWorkspaceCallToAction<T extends object>(
+	organizationSettings: T | null | undefined,
+): T | null {
+	if (!organizationSettings) return null;
+	if (!("defaultCallToAction" in organizationSettings)) {
+		return organizationSettings;
+	}
+	const { defaultCallToAction: _private, ...rest } =
+		organizationSettings as T & { defaultCallToAction?: unknown };
+	return rest as T;
+}
+
+function parseStoredCallToAction(stored: unknown): ShareCallToAction | null {
 	if (!isRecord(stored)) return null;
 	if (typeof stored.label !== "string" || typeof stored.url !== "string") {
 		return null;
