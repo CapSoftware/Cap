@@ -187,7 +187,7 @@ type TranscriptionStatus =
 
 interface ShareProps {
 	data: VideoData;
-	upNext?: SpaceUpNext | null;
+	upNext?: Promise<SpaceUpNext | null> | null;
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
 	posterUrl?: string | null;

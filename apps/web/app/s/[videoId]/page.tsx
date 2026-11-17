@@ -919,7 +919,7 @@ async function AuthorizedContent({
 						return null;
 					},
 				)
-			: Promise.resolve(null);
+			: null;
 
 	const videoHasEditsPromise = memberCanDownloadPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
@@ -954,7 +954,6 @@ async function AuthorizedContent({
 		dashboardDestination,
 		serverPlaybackSource,
 		posterUrl,
-		upNext,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -972,7 +971,6 @@ async function AuthorizedContent({
 		dashboardDestinationPromise,
 		serverPlaybackSourcePromise,
 		posterUrlPromise,
-		upNextPromise,
 		viewNotificationPromise,
 	]);
 
@@ -1155,7 +1153,7 @@ async function AuthorizedContent({
 					/>
 				}
 				dashboardDestination={dashboardDestination}
-				upNext={upNext}
+				upNext={upNextPromise}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
 				serverPlaybackUrl={

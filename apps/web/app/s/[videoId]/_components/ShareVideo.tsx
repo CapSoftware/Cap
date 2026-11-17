@@ -11,6 +11,9 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
+	type RefObject,
+	Suspense,
+	use,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
@@ -72,6 +75,28 @@ const UpNextOverlay = dynamic(
 	{ ssr: false },
 );
 
+// The next Cap is looked up after the page starts streaming, so opening a Cap
+// from a large Space does not wait on the Space's order before first paint.
+function UpNextWhenReady({
+	upNext,
+	videoRef,
+	holdAutoplay,
+}: {
+	upNext: Promise<SpaceUpNext | null>;
+	videoRef: RefObject<HTMLVideoElement | null>;
+	holdAutoplay: boolean;
+}) {
+	const next = use(upNext);
+	if (!next) return null;
+	return (
+		<UpNextOverlay
+			upNext={next}
+			videoRef={videoRef}
+			holdAutoplay={holdAutoplay}
+		/>
+	);
+}
+
 type AiGenerationStatus =
 	| "QUEUED"
 	| "PROCESSING"
@@ -113,7 +138,7 @@ export const ShareVideo = forwardRef<
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
-		upNext?: SpaceUpNext | null;
+		upNext?: Promise<SpaceUpNext | null> | null;
 	}
 >(
 	(
@@ -645,11 +670,13 @@ export const ShareVideo = forwardRef<
 						/>
 					)}
 					{upNext && !isActivelyRecording && (
-						<UpNextOverlay
-							upNext={upNext}
-							videoRef={videoRef}
-							holdAutoplay={callToAction !== null}
-						/>
+						<Suspense fallback={null}>
+							<UpNextWhenReady
+								upNext={upNext}
+								videoRef={videoRef}
+								holdAutoplay={callToAction !== null}
+							/>
+						</Suspense>
 					)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
