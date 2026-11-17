@@ -18,6 +18,9 @@ use crate::app_sounds::AppSound;
 use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
+mod input_switch;
+pub use input_switch::{InputKind, InputRequest};
+
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
 /// `Recording`, matching the `recording`/`paused` variants of the Tauri bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,6 +486,7 @@ pub struct RecordingSession {
     /// When the last marker went in, for the controls bar's acknowledgement.
     marker_added_at: Option<Instant>,
     pub paused_for_sleep: bool,
+    input_switch: input_switch::InputSwitchState,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -537,6 +541,7 @@ impl RecordingSession {
             marker_count: 0,
             marker_added_at: None,
             paused_for_sleep: false,
+            input_switch: input_switch::InputSwitchState::default(),
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -603,7 +608,10 @@ impl RecordingSession {
     }
 
     pub fn pause_unavailable(&self) -> bool {
-        self.pause_pending() || self.pause_uncertain() || self.pipeline_failed
+        self.pause_pending()
+            || self.pause_uncertain()
+            || self.pipeline_failed
+            || self.input_switch_pending().is_some()
     }
 
     /// The live (or last) recording's mode -- the bar exposes mic mute for
@@ -685,6 +693,13 @@ impl RecordingSession {
         self.active
             .as_ref()
             .is_some_and(|active| active.mic_mute.is_some())
+    }
+
+    /// Whether the live recording started with a camera.
+    pub fn started_with_camera(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(ActiveRecording::started_with_camera)
     }
 
     /// Flip the recording-scoped mic mute. No-op without a live mic.
@@ -1046,6 +1061,7 @@ impl RecordingSession {
         let project_dir = active.project_dir.clone();
         let done = active.done_fut();
         self.active = Some(active);
+        self.input_switch = input_switch::InputSwitchState::default();
         self.phase = Phase::Recording { paused: false };
         crate::automation::recording_started(&project_dir);
         // A fresh mic lock always starts unmuted.
@@ -1538,7 +1554,7 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
-        if self.pipeline_failed {
+        if self.pipeline_failed || self.input_switch_pending().is_some() {
             return;
         }
         let Some((ticket, registration)) =
@@ -1643,7 +1659,8 @@ impl RecordingSession {
     /// straight away instead, because its pause keeps capture running.
     pub fn sleep_should_wait(&self) -> bool {
         self.phase == Phase::Stopping
-            || (self.pause_pending() && self.mode() != Some(recording::RecordingMode::Instant))
+            || ((self.pause_pending() || self.input_switch_pending().is_some())
+                && self.mode() != Some(recording::RecordingMode::Instant))
     }
 
     pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {

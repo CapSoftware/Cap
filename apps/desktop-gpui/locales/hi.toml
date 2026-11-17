@@ -1230,6 +1230,14 @@ stop = "ड्रॉ करना बंद करें"
 undo = "पूर्ववत करें"
 window_unavailable = "ड्रॉइंग डिस्प्ले और एरिया रिकॉर्डिंग में काम करती है"
 
+[controls.settings]
+locked = "इस रिकॉर्डिंग में बदला नहीं जा सकता"
+not_in_recording = "इस रिकॉर्डिंग में नहीं"
+open = "रिकॉर्डिंग सेटिंग्स"
+show_camera_preview = "कैमरा प्रीव्यू दिखाएँ"
+switch_failed = "{device} पर स्विच नहीं हो सका। रिकॉर्डिंग जारी है।"
+switching = "बदला जा रहा है…"
+
 [camera]
 waiting_title = "कैमरा एक्सेस का इंतज़ार है"
 

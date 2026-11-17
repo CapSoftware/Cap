@@ -42,9 +42,9 @@ use crate::{
 /// `fake_window.rs` position math.
 /// One button wider where the bar carries the draw button.
 pub const CONTROLS_WIDTH: f32 = if crate::live_draw::SUPPORTED {
-    352.
+    384.
 } else {
-    320.
+    352.
 };
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
@@ -52,9 +52,7 @@ pub const CONTROLS_HEIGHT: f32 = 150.;
 /// tall and the app under the empty space above the bar stays clickable.
 pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
 const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
-/// The drawing tools' row above the bar, with its gap.
-const CONTROLS_DRAW_TOOLS_HEIGHT: f32 = 48.;
-const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
+pub(crate) const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
 #[cfg(any(target_os = "macos", test))]
@@ -316,6 +314,10 @@ pub struct AppWindows {
     /// Where the camera bubble sat before a window picker parked it inside the
     /// highlighted window -- see [`CameraPark`].
     pub camera_park: CameraPark,
+    /// The recording bar's "Show camera preview" turned the bubble off. It
+    /// is hidden, not closed, so a Studio capture keeps excluding the same
+    /// window when it comes back.
+    camera_preview_hidden: bool,
     #[cfg(target_os = "linux")]
     clean_capture: Option<CleanCaptureUi>,
     #[cfg(target_os = "linux")]
@@ -585,6 +587,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main_closed_by_user: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
+        camera_preview_hidden: false,
         #[cfg(target_os = "linux")]
         clean_capture: None,
         #[cfg(target_os = "linux")]
@@ -653,9 +656,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             }
             close_controls(&session, cx);
             close_target_overlays(cx);
+            // The clean-capture lease keeps the bubble closed until it is
+            // released, so the hidden preview reopens only after it.
             #[cfg(target_os = "linux")]
             if !restore_clean_capture_ui(cx) {
                 return;
+            }
+            if cx.global::<AppWindows>().camera_preview_hidden {
+                set_camera_preview_shown(true, cx);
             }
             let (finished_studio, studio_behaviour, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
@@ -3129,6 +3137,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
+        camera_preview_hidden: _,
         #[cfg(target_os = "linux")]
             clean_capture: _,
         #[cfg(target_os = "linux")]
@@ -4444,6 +4453,7 @@ pub fn open_camera_window(cx: &mut App) {
 }
 
 pub fn close_camera_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().camera_preview_hidden = false;
     if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
         #[cfg(not(target_os = "macos"))]
         if let Some(previous) = handle
@@ -7270,6 +7280,63 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn camera_window_id(cx: &mut App) -> Option<scap_targets::WindowId> {
+    camera_window_number(cx).and_then(|number| number.to_string().parse().ok())
+}
+
+pub(crate) fn camera_preview_shown(cx: &App) -> bool {
+    let windows = cx.global::<AppWindows>();
+    windows.camera.is_some() && !windows.camera_preview_hidden
+}
+
+/// The bar's "Show camera preview". Hides and shows the bubble in place;
+/// Linux has no native hide for it, so there it closes and reopens.
+pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        if shown {
+            open_camera_window(cx);
+            // A bubble that could not open yet (a clean capture still holds
+            // it) stays hidden, so the next reopen tries again.
+            if cx.global::<AppWindows>().camera.is_some() {
+                cx.global_mut::<AppWindows>().camera_preview_hidden = false;
+            }
+        }
+        return;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let _ = handle;
+        if !shown {
+            close_camera_window(cx);
+            // Closing clears the flag; keep the choice so the end of the
+            // recording reopens the preview, as the other platforms do.
+            cx.global_mut::<AppWindows>().camera_preview_hidden = true;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if cx.global::<AppWindows>().camera_preview_hidden != shown {
+            return;
+        }
+        cx.global_mut::<AppWindows>().camera_preview_hidden = !shown;
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        if let Some(native) = native {
+            cx.spawn(async move |_| {
+                if shown {
+                    platform::order_front_native(&native);
+                } else {
+                    platform::hide_native(&native);
+                }
+            })
+            .detach();
+        }
+    }
+}
+
 fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
@@ -7329,16 +7396,12 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
-/// Grow the bar's window upward to make room for an issue card or the
-/// drawing tools above the bar, or shrink it back to the bar alone, leaving
-/// the bar where it is. `setFrame` re-enters gpui, so call this from a task.
-pub(crate) fn fit_controls_to_issue(
-    native: &platform::NativeWindow,
-    issue: bool,
-    draw_tools: bool,
-    scale: f32,
-) {
-    let height = f64::from(controls_height(issue, draw_tools));
+/// Grow the bar's window upward to `height` to make room for what sits above
+/// the bar (an issue, the drawing tools, the settings panel), or shrink it
+/// back, leaving the bar where it is. `setFrame` re-enters gpui, so call this
+/// from a task.
+pub(crate) fn fit_controls(native: &platform::NativeWindow, height: f32, scale: f32) {
+    let height = f64::from(height);
     let (x, y, width, current) = platform::window_frame(native);
     if width <= 0. {
         return;
@@ -7357,19 +7420,6 @@ pub(crate) fn fit_controls_to_issue(
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (native, x, y, current, height, scale);
-}
-
-fn controls_height(issue: bool, draw_tools: bool) -> f32 {
-    let base = if issue {
-        CONTROLS_HEIGHT
-    } else {
-        CONTROLS_BAR_HEIGHT
-    };
-    if draw_tools {
-        base + CONTROLS_DRAW_TOOLS_HEIGHT
-    } else {
-        base
-    }
 }
 
 /// Open the bar. Returns the native window number for capture exclusion.
@@ -8269,9 +8319,48 @@ mod tests {
             main_closed_by_user: false,
             editor_hidden_for_picker: None,
             camera_park: CameraPark::default(),
+            camera_preview_hidden: false,
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    /// Linux hides the bar's camera preview by closing its window. The choice
+    /// must survive the close, or the end of the recording never reopens it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_linux_camera_preview_is_reopened_after_recording(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            windows.camera = Some(WindowHandle::new((u64::MAX - 1).into()));
+            cx.set_global(windows);
+            assert!(camera_preview_shown(cx));
+            set_camera_preview_shown(false, cx);
+            assert!(!camera_preview_shown(cx));
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
+    }
+
+    /// A clean capture keeps the bubble closed until its lease is released.
+    /// Asking to show the preview while the lease holds must keep it hidden,
+    /// so the reopen after the lease is released still brings it back.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_camera_preview_stays_hidden_while_a_clean_capture_holds_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            let mut lease = pending_clean_capture(RecordingMode::Studio, false);
+            lease.gate.started = true;
+            windows.clean_capture = Some(lease);
+            windows.camera_preview_hidden = true;
+            cx.set_global(windows);
+            set_camera_preview_shown(true, cx);
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
     }
 
     #[cfg(target_os = "linux")]

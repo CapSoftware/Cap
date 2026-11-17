@@ -1230,6 +1230,14 @@ stop = "Arrêter de dessiner"
 undo = "Annuler"
 window_unavailable = "Le dessin fonctionne dans les enregistrements d'écran et de zone"
 
+[controls.settings]
+locked = "Non modifiable dans cet enregistrement"
+not_in_recording = "Absent de cet enregistrement"
+open = "Réglages d'enregistrement"
+show_camera_preview = "Afficher l'aperçu de la caméra"
+switch_failed = "Impossible de passer à {device}. L'enregistrement continue."
+switching = "Changement…"
+
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
 

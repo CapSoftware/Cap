@@ -1232,6 +1232,14 @@ stop = "Stop drawing"
 undo = "Undo"
 window_unavailable = "Drawing works in display and area recordings"
 
+[controls.settings]
+locked = "Can't change in this recording"
+not_in_recording = "Not in this recording"
+open = "Recording settings"
+show_camera_preview = "Show camera preview"
+switch_failed = "Couldn't switch to {device}. The recording continues."
+switching = "Switching…"
+
 [camera]
 waiting_title = "Waiting for camera access"
 

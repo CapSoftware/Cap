@@ -1230,6 +1230,14 @@ stop = "Zeichnen beenden"
 undo = "Rückgängig"
 window_unavailable = "Zeichnen funktioniert bei Bildschirm- und Bereichsaufnahmen"
 
+[controls.settings]
+locked = "In dieser Aufnahme nicht änderbar"
+not_in_recording = "Nicht in dieser Aufnahme"
+open = "Aufnahmeeinstellungen"
+show_camera_preview = "Kameravorschau anzeigen"
+switch_failed = "Wechsel zu {device} nicht möglich. Die Aufnahme läuft weiter."
+switching = "Wird gewechselt…"
+
 [camera]
 waiting_title = "Warten auf Kamerazugriff"
 

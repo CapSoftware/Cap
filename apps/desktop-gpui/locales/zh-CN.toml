@@ -1230,6 +1230,14 @@ stop = "停止绘制"
 undo = "撤销"
 window_unavailable = "绘制适用于显示器和区域录制"
 
+[controls.settings]
+locked = "本次录制中无法更改"
+not_in_recording = "本次录制未使用"
+open = "录制设置"
+show_camera_preview = "显示摄像头预览"
+switch_failed = "无法切换到 {device}。录制仍在继续。"
+switching = "正在切换…"
+
 [camera]
 waiting_title = "正在等待摄像头权限"
 
