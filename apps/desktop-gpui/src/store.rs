@@ -154,6 +154,8 @@ pub struct ExportPrefs {
     pub turbo: bool,
     #[serde(default)]
     pub gif_quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_tracks: Option<Vec<String>>,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.

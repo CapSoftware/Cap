@@ -38,6 +38,7 @@ const FORMATTED: &[&str] = &[
     "main.storage.blocked",
     "main.storage.can_start",
     "main.storage.check_failed",
+    "controls.settings.switch_failed",
 ];
 
 #[test]
@@ -291,6 +292,20 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::pause::pausing(), "Pausing recording…"),
         (tr::controls::pause::resume(), "Resume recording"),
         (tr::controls::marker::add(), "Add marker"),
+        (tr::controls::settings::open(), "Recording settings"),
+        (
+            tr::controls::settings::show_camera_preview(),
+            "Show camera preview",
+        ),
+        (tr::controls::settings::switching(), "Switching…"),
+        (
+            tr::controls::settings::locked(),
+            "Can't change in this recording",
+        ),
+        (
+            tr::controls::settings::not_in_recording(),
+            "Not in this recording",
+        ),
         (tr::controls::pause::pause(), "Pause recording"),
         (
             tr::controls::low_storage(),
@@ -637,6 +652,14 @@ fn main_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+}
+
+#[test]
+fn a_failed_input_switch_names_the_device_and_says_recording_continues() {
+    assert_eq!(
+        tr::controls::settings::switch_failed("USB Mic"),
+        "Couldn't switch to USB Mic. The recording continues."
+    );
 }
 
 #[test]

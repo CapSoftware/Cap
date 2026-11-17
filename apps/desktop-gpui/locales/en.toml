@@ -1214,6 +1214,14 @@ starting = { text = "Starting", max_px = 73, size = 14 }
 [controls.marker]
 add = "Add marker"
 
+[controls.settings]
+locked = "Can't change in this recording"
+not_in_recording = "Not in this recording"
+open = "Recording settings"
+show_camera_preview = "Show camera preview"
+switch_failed = "Couldn't switch to {device}. The recording continues."
+switching = "Switching…"
+
 [camera]
 waiting_title = "Waiting for camera access"
 
@@ -2534,6 +2542,7 @@ format = "Format"
 frame_rate = "Frame rate"
 quality = "Quality"
 resolution = "Resolution"
+tracks = "Tracks"
 
 [editor.export.stats]
 calculating = "Calculating…"
@@ -2545,6 +2554,25 @@ output_value = { text = "{width}×{height} · {fps} fps", context = "Output size
 refining_size = "Refining size…"
 refining_time = "Refining time…"
 unavailable = "Unavailable"
+
+[editor.export.tracks]
+aligned = "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects."
+audio_detail = "WAV · 48 kHz"
+camera = "Camera"
+choose_one = "Choose at least one track to export."
+cta = "Export Tracks"
+exported = "Tracks exported"
+exporting = "Exporting tracks"
+file_count = { one = "{count} file", other = "{count} files", context = "How many files a tracks export writes." }
+file_only = "Tracks are saved as separate files in a folder."
+files = "Files"
+format = { text = "Tracks", context = "Export format: separate screen, camera and audio files." }
+microphone = "Microphone"
+open_folder = "Open Folder"
+screen = "Screen"
+studio_only = "Separate tracks are only recorded in Studio Mode."
+system_audio = "System audio"
+video_detail = { text = "MP4 · {width}×{height}", context = "Video track file type and size, for example MP4 · 1920×1080." }
 
 [editor.export.turbo]
 title = "Turbo export"

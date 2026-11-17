@@ -1212,6 +1212,14 @@ starting = "Iniciando"
 [controls.marker]
 add = "Añadir marcador"
 
+[controls.settings]
+locked = "No se puede cambiar en esta grabación"
+not_in_recording = "No está en esta grabación"
+open = "Ajustes de grabación"
+show_camera_preview = "Mostrar vista previa de la cámara"
+switch_failed = "No se pudo cambiar a {device}. La grabación continúa."
+switching = "Cambiando…"
+
 [camera]
 waiting_title = "Esperando acceso a la cámara"
 
@@ -2532,6 +2540,7 @@ format = "Formato"
 frame_rate = "Velocidad de fotogramas"
 quality = "Calidad"
 resolution = "Resolución"
+tracks = "Pistas"
 
 [editor.export.stats]
 calculating = "Calculando…"
@@ -2543,6 +2552,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "Ajustando tamaño…"
 refining_time = "Ajustando tiempo…"
 unavailable = "No disponible"
+
+[editor.export.tracks]
+aligned = "Las pistas siguen tus cortes y tu velocidad, así que encajan en cualquier editor de vídeo. El vídeo sale limpio, sin fondo ni efectos."
+audio_detail = "WAV · 48 kHz"
+camera = "Cámara"
+choose_one = "Elige al menos una pista para exportar."
+cta = "Exportar pistas"
+exported = "Pistas exportadas"
+exporting = "Exportando pistas"
+file_count = { one = "{count} archivo", other = "{count} archivos" }
+file_only = "Las pistas se guardan como archivos separados en una carpeta."
+files = "Archivos"
+format = "Pistas"
+microphone = "Micrófono"
+open_folder = "Abrir carpeta"
+screen = "Pantalla"
+studio_only = "Las pistas separadas solo se graban en el modo Studio."
+system_audio = "Audio del sistema"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportación turbo"
