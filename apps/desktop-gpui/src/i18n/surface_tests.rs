@@ -270,6 +270,21 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::stop::resuming(), "Resuming…"),
         (tr::controls::stop::pausing(), "Pausing…"),
         (tr::controls::stop::paused(), "Paused"),
+        (tr::controls::draw::start(), "Draw on screen"),
+        (tr::controls::draw::stop(), "Stop drawing"),
+        (
+            tr::controls::draw::window_unavailable(),
+            "Drawing works in display and area recordings",
+        ),
+        (tr::controls::draw::pen(), "Pen, ⇧ for a straight line"),
+        (
+            tr::controls::draw::highlighter(),
+            "Highlighter, ⇧ for a straight line",
+        ),
+        (tr::controls::draw::arrow(), "Arrow, ⇧ snaps to 45°"),
+        (tr::controls::draw::rectangle(), "Rectangle, ⇧ for a square"),
+        (tr::controls::draw::undo(), "Undo"),
+        (tr::controls::draw::clear(), "Clear all"),
         (tr::controls::stop::error(), "Error"),
         (tr::controls::confirm::restart_title(), "Confirm Restart"),
         (

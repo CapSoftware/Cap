@@ -488,6 +488,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
         (tr::settings::shortcuts::label::add_marker(), "Add marker"),
+        (
+            tr::settings::shortcuts::label::toggle_drawing(),
+            "Draw on screen",
+        ),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),

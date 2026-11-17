@@ -8544,6 +8544,7 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in a Studio recording".into(),
+            "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
         }
     }
@@ -8588,7 +8589,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 31, "every effect message is reachable");
+        assert_eq!(
+            checked.len(),
+            31 + usize::from(crate::live_draw::SUPPORTED),
+            "every effect message is reachable"
+        );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 
