@@ -327,10 +327,14 @@ describe.runIf(Boolean(databaseUrl))(
 				[v3, v4].sort(),
 			);
 
+			expect((await listCapIdsInView({ type: "space", spaceId })).ids).toEqual(
+				await order("custom"),
+			);
+
 			await setSpaceVideoOrder(spaceId, "oldest");
-			expect(
-				(await listCapIdsInView({ type: "space", spaceId })).ids.sort(),
-			).toEqual([v1, v2, v3, v4, v5].sort());
+			expect((await listCapIdsInView({ type: "space", spaceId })).ids).toEqual(
+				[v1, v2, v3, v4, v5],
+			);
 		}, 120_000);
 
 		it("summarises Loom imports by member for admins only", async () => {

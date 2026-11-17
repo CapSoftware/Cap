@@ -35,9 +35,13 @@ type QueryExecutor = Pick<ReturnType<typeof db>, "select">;
 export async function getSpaceRootVideoOrder(
 	spaceId: Space.SpaceIdOrOrganisationId,
 	order: SpaceVideoOrder,
-	options: { includeScreenshots?: boolean; executor?: QueryExecutor } = {},
+	options: {
+		includeScreenshots?: boolean;
+		executor?: QueryExecutor;
+		limit?: number;
+	} = {},
 ) {
-	const rows = await (options.executor ?? db())
+	const query = (options.executor ?? db())
 		.select({
 			id: videos.id,
 			isScreenshot: videos.isScreenshot,
@@ -60,7 +64,11 @@ export async function getSpaceRootVideoOrder(
 				effectiveCreatedAt: videos.effectiveCreatedAt,
 				id: videos.id,
 			}),
-		);
+		)
+		.$dynamic();
+	const rows = await (options.limit === undefined
+		? query
+		: query.limit(options.limit));
 
 	return options.includeScreenshots === false
 		? rows.filter((row) => !row.isScreenshot)
