@@ -468,6 +468,7 @@ pub fn frame_source(project: &ProjectConfiguration, frame: u32, fps: u32) -> Opt
 enum VideoJob {
     Frame(DecodedFrame),
     Repeat,
+    Black,
 }
 
 struct VideoTrackWriter {
@@ -530,8 +531,10 @@ fn write_video_track(
     let mut converter = Nv12Converter::default();
     let mut current = black_nv12(width, height);
     for (index, job) in jobs.into_iter().enumerate() {
-        if let VideoJob::Frame(decoded) = job {
-            converter.fill(&decoded, &mut current)?;
+        match job {
+            VideoJob::Frame(decoded) => converter.fill(&decoded, &mut current)?,
+            VideoJob::Black => fill_black(&mut current),
+            VideoJob::Repeat => {}
         }
         let timestamp = Duration::from_secs_f64(index as f64 / fps as f64);
         file.queue_video_frame(current.clone(), timestamp)
@@ -547,9 +550,13 @@ fn write_video_track(
 
 fn black_nv12(width: u32, height: u32) -> frame::Video {
     let mut frame = frame::Video::new(Pixel::NV12, width, height);
+    fill_black(&mut frame);
+    frame
+}
+
+fn fill_black(frame: &mut frame::Video) {
     frame.data_mut(0).fill(16);
     frame.data_mut(1).fill(128);
-    frame
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -945,7 +952,13 @@ async fn run_video_pass<F: FnMut(TrackProgress)>(
             writer.send(screen_frame.map_or(VideoJob::Repeat, VideoJob::Frame))?;
         }
         if let Some(writer) = camera {
-            writer.send(camera_frame.map_or(VideoJob::Repeat, VideoJob::Frame))?;
+            // A clip recorded without a camera is black on the camera track;
+            // only a frame the decoder failed to return repeats the last one.
+            writer.send(match camera_frame {
+                Some(frame) => VideoJob::Frame(frame),
+                None if wants_camera => VideoJob::Repeat,
+                None => VideoJob::Black,
+            })?;
         }
         reporter.advance();
     }
