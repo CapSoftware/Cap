@@ -1431,7 +1431,7 @@ impl EditorWindow {
 
     /// The background tab's own arms -- each one the call site's `onChange`
     /// verbatim, side effects included.
-    fn apply_bg_slider(
+    pub(crate) fn apply_bg_slider(
         &mut self,
         slider: BgSlider,
         value: f32,
