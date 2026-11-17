@@ -106,29 +106,50 @@ fn shift_captions(project: &mut ProjectConfiguration, shifts: &[(usize, f64)], d
         clip_start.push(cumulative);
         cumulative += duration;
     }
-    // Each caption belongs to the clip its original start falls in, and moves
-    // at most once, so one clamped to a clip's end never re-enters the next.
+    // Every time is moved with the clip its original start falls in, once, so
+    // a caption spanning a pause moves each word with its own clip and a time
+    // clamped to one clip's end never re-enters the next.
+    let clip_of = |time: f32| {
+        let time = f64::from(time);
+        (0..durations.len())
+            .find(|&i| (clip_start[i]..clip_start[i] + durations[i]).contains(&time))
+    };
+    let move_in = |time: f32, clip: Option<usize>| -> Option<f32> {
+        let clip = clip?;
+        let &(_, shift) = shifts.iter().find(|(index, _)| *index == clip)?;
+        Some(((f64::from(time) + shift).min(clip_start[clip] + durations[clip])) as f32)
+    };
     let mut moved = false;
     for segment in &mut captions.segments {
-        let source = f64::from(segment.start);
-        let Some(index) = (0..durations.len())
-            .find(|&i| (clip_start[i]..clip_start[i] + durations[i]).contains(&source))
-        else {
-            continue;
-        };
-        let Some(&(_, shift)) = shifts.iter().find(|(clip, _)| *clip == index) else {
-            continue;
-        };
-        let end = (clip_start[index] + durations[index]) as f32;
-        let shift = shift as f32;
-        let clamp = |time: f32| (time + shift).min(end);
-        segment.start = clamp(segment.start);
-        segment.end = clamp(segment.end);
+        let start_clip = clip_of(segment.start);
+        let mut end_clip = start_clip;
+        let mut segment_moved = false;
         for word in &mut segment.words {
-            word.start = clamp(word.start);
-            word.end = clamp(word.end);
+            let clip = clip_of(word.start);
+            end_clip = clip;
+            if let (Some(start), Some(end)) = (move_in(word.start, clip), move_in(word.end, clip)) {
+                word.start = start;
+                word.end = end;
+                segment_moved = true;
+            }
         }
-        moved = true;
+        if let Some(start) = move_in(segment.start, start_clip) {
+            segment.start = start;
+            segment_moved = true;
+        }
+        if let Some(end) = move_in(segment.end, end_clip) {
+            segment.end = end;
+            segment_moved = true;
+        }
+        if segment_moved {
+            if let Some(first) = segment.words.iter().map(|w| w.start).reduce(f32::min) {
+                segment.start = segment.start.min(first);
+            }
+            if let Some(last) = segment.words.iter().map(|w| w.end).reduce(f32::max) {
+                segment.end = segment.end.max(last);
+            }
+            moved = true;
+        }
     }
     if moved {
         captions
@@ -358,6 +379,71 @@ mod tests {
             .map(|s| s.start)
             .collect();
         assert_eq!(starts, vec![10.0, 16.0]);
+    }
+
+    fn spanning_caption() -> CaptionSegment {
+        let word = |start: f32, end: f32| CaptionWord {
+            text: "w".into(),
+            start,
+            end,
+        };
+        CaptionSegment {
+            id: "span".into(),
+            start: 5.0,
+            end: 10.8,
+            text: "w w".into(),
+            words: vec![word(5.0, 5.5), word(10.2, 10.8)],
+        }
+    }
+
+    fn word_times(project: &ProjectConfiguration) -> (f32, f32, Vec<(f32, f32)>) {
+        let segment = &project.captions.as_ref().unwrap().segments[0];
+        (
+            segment.start,
+            segment.end,
+            segment.words.iter().map(|w| (w.start, w.end)).collect(),
+        )
+    }
+
+    // A caption that runs from a normal clip into a late one: only the words
+    // in the late clip move.
+    #[test]
+    fn caption_spanning_into_a_late_clip_moves_only_its_late_words() {
+        let mut project = legacy_project();
+        project.captions = Some(CaptionsData {
+            segments: vec![spanning_caption()],
+            source_timed: true,
+            ..Default::default()
+        });
+        migrate_late_audio_alignment(&mut project, &meta(4.05), || vec![10.0, 10.0]);
+        let (start, end, words) = word_times(&project);
+        assert_eq!(start, 5.0);
+        assert!(close(end, 14.8));
+        assert_eq!(words[0], (5.0, 5.5));
+        assert!(close(words[1].0, 14.2) && close(words[1].1, 14.8));
+    }
+
+    // The reverse: a caption from a late clip into a normal one keeps the
+    // normal clip's words where they are instead of clamping them.
+    #[test]
+    fn caption_spanning_out_of_a_late_clip_keeps_its_normal_words() {
+        let mut project = legacy_project();
+        let StudioRecordingMeta::MultipleSegments { mut inner } = meta(0.06) else {
+            unreachable!()
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(4.05);
+        let meta = StudioRecordingMeta::MultipleSegments { inner };
+        project.captions = Some(CaptionsData {
+            segments: vec![spanning_caption()],
+            source_timed: true,
+            ..Default::default()
+        });
+        migrate_late_audio_alignment(&mut project, &meta, || vec![10.0, 10.0]);
+        let (start, end, words) = word_times(&project);
+        assert!(close(start, 9.0));
+        assert_eq!(end, 10.8);
+        assert!(close(words[0].0, 9.0) && close(words[0].1, 9.5));
+        assert_eq!(words[1], (10.2, 10.8));
     }
 
     #[test]
