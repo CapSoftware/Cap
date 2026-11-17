@@ -213,7 +213,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
     "pencil.svg",
-    // Clears the drawing tools' strokes while recording.
     "eraser.svg",
     "arrow-up-right.svg",
     "more-horizontal.svg",

@@ -909,7 +909,6 @@ fn tool_id(tool: Tool) -> &'static str {
     }
 }
 
-/// The keycaps of a stored shortcut, for a tooltip.
 fn shortcut_keys(action: &str) -> Vec<String> {
     crate::store::hotkeys_raw()
         .get(action)

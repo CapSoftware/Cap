@@ -33,7 +33,6 @@ impl Card {
         )
     }
 
-    /// The hairline between two rows of a [`Card::settings_rows`] card.
     pub fn settings_divider(theme: &Theme) -> Div {
         div().mx(px(12.)).h(px(1.)).bg(theme.settings_border())
     }
