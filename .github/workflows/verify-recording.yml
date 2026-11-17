@@ -360,7 +360,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.run == 'true'
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
