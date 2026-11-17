@@ -1,0 +1,55 @@
+== before/report-step1-drag
+2026-11-17T15:41:34.314088Z  INFO cap_gpui::hotkeys: global hotkey action=ScreenshotArea
+2026-11-17T15:41:34.314287Z  INFO cap_gpui::main_window: recording mode changed mode="Screenshot" target_select="Screenshot"
+== before/screenshot-area
+2026-11-17T15:37:10.957965Z  INFO cap_gpui::hotkeys: global hotkey action=ScreenshotArea
+2026-11-17T15:37:10.958191Z  INFO cap_gpui::main_window: recording mode changed mode="Screenshot" target_select="Screenshot"
+== before/start-instant
+2026-11-17T15:37:19.017180Z  INFO cap_gpui::hotkeys: global hotkey action=StartInstantRecording
+2026-11-17T15:37:19.017689Z  INFO cap_gpui::main_window: recording mode changed mode="Instant" target_select="Instant"
+== before/start-studio
+2026-11-17T15:36:59.413431Z  INFO cap_gpui::hotkeys: global hotkey action=StartStudioRecording
+2026-11-17T15:36:59.413673Z  INFO cap_gpui::main_window: recording mode changed mode="Studio" target_select="Studio"
+== before/start-studio-2
+2026-11-17T15:37:54.660005Z  INFO cap_gpui::hotkeys: global hotkey action=StartStudioRecording
+2026-11-17T15:37:54.660100Z  INFO cap_gpui::main_window: recording mode changed mode="Studio" target_select="Studio"
+== before/start-studio-3
+2026-11-17T15:38:21.779283Z  INFO cap_gpui::hotkeys: global hotkey action=StartStudioRecording
+2026-11-17T15:38:21.779417Z  INFO cap_gpui::main_window: recording mode changed mode="Studio" target_select="Studio"
+2026-11-17T15:38:23.788258Z  INFO cap_gpui::recording: starting recording dir=before/start-studio-3/profile/recordings/Display 1 (Display) 2026-11-17 03.38 PM.cap
+== after/cycle
+2026-11-17T15:40:52.278546Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="cycleRecordingMode" selected=Some(Studio)
+2026-11-17T15:40:52.278640Z  INFO cap_gpui::hotkeys: global hotkey action=CycleRecordingMode
+2026-11-17T15:40:52.278704Z  INFO cap_gpui::main_window: recording mode changed mode="Instant" target_select="Instant"
+== after/report-steps
+2026-11-17T15:40:43.168916Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="screenshotArea" selected=Some(Studio)
+2026-11-17T15:40:43.169045Z  INFO cap_gpui::hotkeys: global hotkey action=ScreenshotArea
+2026-11-17T15:40:45.278883Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="openRecordingPickerArea" selected=Some(Studio)
+2026-11-17T15:40:45.279011Z  INFO cap_gpui::hotkeys: global hotkey action=OpenRecordingPickerArea
+== after/report-steps-drag
+2026-11-17T15:41:23.604791Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="screenshotArea" selected=Some(Studio)
+2026-11-17T15:41:23.604919Z  INFO cap_gpui::hotkeys: global hotkey action=ScreenshotArea
+2026-11-17T15:41:25.724127Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="openRecordingPickerArea" selected=Some(Studio)
+2026-11-17T15:41:25.724261Z  INFO cap_gpui::hotkeys: global hotkey action=OpenRecordingPickerArea
+== after/screenshot-area
+2026-11-17T15:39:52.833878Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="screenshotArea" selected=Some(Studio)
+2026-11-17T15:39:52.833969Z  INFO cap_gpui::hotkeys: global hotkey action=ScreenshotArea
+== after/start-instant
+2026-11-17T15:40:00.870119Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="startInstantRecording" selected=Some(Studio)
+2026-11-17T15:40:00.870191Z  INFO cap_gpui::hotkeys: global hotkey action=StartInstantRecording
+== after/start-selected-instant
+2026-11-17T15:40:24.048446Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="startRecording" selected=Some(Instant)
+2026-11-17T15:40:24.048594Z  INFO cap_gpui::hotkeys: global hotkey action=StartRecording
+== after/start-selected-screenshot
+2026-11-17T15:40:33.130800Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="startRecording" selected=Some(Screenshot)
+2026-11-17T15:40:33.130928Z  INFO cap_gpui::hotkeys: global hotkey action=StartRecording
+2026-11-17T15:40:33.131794Z  INFO cap_gpui::screenshot: taking a screenshot kind="Display"
+2026-11-17T15:40:33.144730Z  INFO cap_gpui::screenshot: screenshot captured path=after/start-selected-screenshot/profile/screenshots/Display 1 (Display) 2026-11-17 03.40 PM.cap/original.png
+== after/start-selected-studio
+2026-11-17T15:40:09.962254Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="startRecording" selected=Some(Studio)
+2026-11-17T15:40:09.962379Z  INFO cap_gpui::hotkeys: global hotkey action=StartRecording
+2026-11-17T15:40:12.022171Z  INFO cap_gpui::recording: starting recording dir=after/start-selected-studio/profile/recordings/Display 1 (Display) 2026-11-17 03.40 PM.cap
+== after/start-studio
+2026-11-17T15:39:38.748061Z  INFO cap_gpui::hotkeys: CAP_GPUI_AUTO_HOTKEY key="startStudioRecording" selected=Some(Instant)
+2026-11-17T15:39:38.748145Z  INFO cap_gpui::hotkeys: global hotkey action=StartStudioRecording
+2026-11-17T15:39:40.805405Z  INFO cap_gpui::recording: starting recording dir=after/start-studio/profile/recordings/Display 1 (Display) 2026-11-17 03.39 PM.cap
