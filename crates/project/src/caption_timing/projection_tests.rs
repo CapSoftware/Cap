@@ -243,7 +243,8 @@ fn baseline_projection(
             .collect();
     }
 
-    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mut mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    end_mappings_at_media(&mut mappings, timeline, recording_durations);
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {

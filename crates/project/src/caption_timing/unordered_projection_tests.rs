@@ -236,7 +236,8 @@ fn baseline_projection(
             .collect();
     }
 
-    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mut mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    end_mappings_at_media(&mut mappings, timeline, recording_durations);
     let mappings_ordered = mappings
         .iter()
         .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())

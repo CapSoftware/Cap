@@ -120,6 +120,28 @@ fn build_source_to_edited_mappings(
         .collect()
 }
 
+/// A clip trimmed past its media end (a migrated late-audio clip, see
+/// `migrate_late_audio_alignment`) holds its last frame there; the source
+/// clock beyond its end belongs to the next recording clip, whose captions
+/// must not show twice. The last clip has no next one, so its captions past
+/// the media end (audio running longer than the screen) still show.
+fn end_mappings_at_media(
+    mappings: &mut [SourceToEditedMapping],
+    timeline: &TimelineConfiguration,
+    recording_durations: &[f64],
+) {
+    for (mapping, segment) in mappings.iter_mut().zip(&timeline.segments) {
+        let clip = segment.recording_clip as usize;
+        if clip + 1 < recording_durations.len()
+            && let Some(&duration) = recording_durations.get(clip)
+            && segment.end > duration
+        {
+            let media_end = mapping.source_start - segment.start + duration;
+            mapping.source_end = media_end.max(mapping.source_start);
+        }
+    }
+}
+
 pub fn transcription_source_ranges(
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
@@ -266,7 +288,8 @@ fn map_captions_to_edited_timeline(
             .collect();
     }
 
-    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mut mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    end_mappings_at_media(&mut mappings, timeline, recording_durations);
     let mappings_ordered = mappings
         .iter()
         .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())
