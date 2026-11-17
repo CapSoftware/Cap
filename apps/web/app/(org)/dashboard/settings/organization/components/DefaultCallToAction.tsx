@@ -4,6 +4,7 @@ import { MousePointer2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { playerColorFromOrganizationMetadata } from "@/lib/player-brand";
 import {
 	callToActionDestinationLabel,
 	parseWorkspaceCallToAction,
@@ -133,6 +134,9 @@ export function DefaultCallToAction() {
 					callToAction={callToAction}
 					onSaved={() => router.refresh()}
 					onUpgradeRequest={() => setUpgradeModalOpen(true)}
+					brandColor={playerColorFromOrganizationMetadata(
+						activeOrganization?.organization.metadata,
+					)}
 				/>
 			)}
 		</SettingsSection>

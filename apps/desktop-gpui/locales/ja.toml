@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推奨）"
 label = "最大キャプチャフレームレート"
 
+[settings.general.recording.keep_drawings]
+description = "描画は消去するまで残ります。オフにすると、描いてから数秒で消えます。"
+label = "描画を画面に残す"
+
 [settings.general.recording.marker_sound]
 description = "Studio録画中にマーカーを追加すると短い音を鳴らします。マイクやシステムオーディオに録音される場合があります。"
 label = "マーカー追加時に音を鳴らす"
@@ -470,6 +474,7 @@ screenshot_window = "ウィンドウのスクリーンショット"
 start_instant = "Instant録画を開始"
 start_studio = "Studio録画を開始"
 stop = "録画を停止"
+toggle_drawing = "画面に描く"
 
 [settings.shortcuts.effect]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます"
@@ -503,6 +508,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します"
 studio = "選択した画面またはウィンドウをStudioモードで録画します"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます"
+toggle_drawing = "録画中に画面への描画を開始または終了します"
 
 [settings.shortcuts.sentence]
 add_marker = "Studio録画のこの瞬間にマーカーを付けます。"
@@ -536,6 +542,7 @@ screenshot_window_save = "ポインタの下のウィンドウをキャプチャ
 stop = "現在の録画を停止します。"
 studio = "選択した画面またはウィンドウをStudioモードで録画します。"
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます。"
+toggle_drawing = "録画中に画面への描画を開始または終了します。"
 
 [settings.cli]
 command = "コマンド"
@@ -1215,6 +1222,17 @@ microphone = "マイクが切断されました。再接続されるまで無音
 
 [controls.marker]
 add = "マーカーを追加"
+
+[controls.draw]
+arrow = "矢印、⇧で45°にスナップ"
+clear = "すべて消去"
+highlighter = "蛍光ペン、⇧で直線"
+pen = "ペン、⇧で直線"
+rectangle = "四角形、⇧で正方形"
+start = "画面に描く"
+stop = "描画を終了"
+undo = "取り消す"
+window_unavailable = "描画は画面録画と範囲録画で使えます"
 
 [controls.settings]
 locked = "この録画では変更できません"
@@ -2546,6 +2564,7 @@ format = "形式"
 frame_rate = "フレームレート"
 quality = "品質"
 resolution = "解像度"
+tracks = "トラック"
 
 [editor.export.stats]
 calculating = "計算中…"
@@ -2557,6 +2576,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "サイズを精査中…"
 refining_time = "時間を精査中…"
 unavailable = "利用不可"
+
+[editor.export.tracks]
+aligned = "各トラックはカットや速度の変更に沿うため、どの動画編集ソフトでも揃います。映像は背景やエフェクトなしで書き出されます。"
+audio_detail = "WAV · 48 kHz"
+camera = "カメラ"
+choose_one = "書き出すトラックを1つ以上選んでください。"
+cta = "トラックを書き出す"
+exported = "トラックを書き出しました"
+exporting = "トラックを書き出し中"
+file_count = { other = "{count}ファイル" }
+file_only = "トラックはフォルダ内に個別のファイルとして保存されます。"
+files = "ファイル"
+format = "トラック"
+microphone = "マイク"
+open_folder = "フォルダを開く"
+screen = "画面"
+studio_only = "個別のトラックはStudioモードでのみ録画されます。"
+system_audio = "システム音声"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "ターボ書き出し"

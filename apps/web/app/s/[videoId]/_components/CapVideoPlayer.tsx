@@ -38,7 +38,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
 } from "./upload-progress";
-import { VideoPreviewGif } from "./VideoPreviewGif";
+import { VideoPoster, VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -110,6 +110,7 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
+	muted?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
 	blockPlaybackDuringProcessing?: boolean;
@@ -147,6 +148,7 @@ interface Props {
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
 	callToAction?: ShareCallToAction | null;
+	posterUrl?: string | null;
 }
 
 export function CapVideoPlayer({
@@ -162,6 +164,7 @@ export function CapVideoPlayer({
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
+	muted = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
 	blockPlaybackDuringProcessing = false,
@@ -187,6 +190,7 @@ export function CapVideoPlayer({
 	showFloatingVolumeControl = false,
 	onUploadComplete,
 	callToAction = null,
+	posterUrl = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -881,24 +885,35 @@ export function CapVideoPlayer({
 					</TooltipContent>
 				</Tooltip>
 			)}
-			<VideoPreviewGif
-				videoId={videoId}
-				preload={
-					!disablePreviewGif &&
-					!hasActiveUpload &&
-					!hasPlayedOnce &&
-					!showUploadFailureOverlay &&
-					!showPlaybackResolutionError
-				}
-				visible={
-					!disablePreviewGif &&
-					videoLoaded &&
-					!hasPlayedOnce &&
-					!showUploadFailureOverlay &&
-					!showPlaybackResolutionError &&
-					Boolean(resolvedSrc.data)
-				}
-			/>
+			{posterUrl ? (
+				<VideoPoster
+					src={posterUrl}
+					visible={
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError
+					}
+				/>
+			) : (
+				<VideoPreviewGif
+					videoId={videoId}
+					preload={
+						!disablePreviewGif &&
+						!hasActiveUpload &&
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError
+					}
+					visible={
+						!disablePreviewGif &&
+						videoLoaded &&
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError &&
+						Boolean(resolvedSrc.data)
+					}
+				/>
+			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
@@ -915,6 +930,7 @@ export function CapVideoPlayer({
 					}
 					playsInline
 					autoPlay={autoplay}
+					muted={muted || undefined}
 				>
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
@@ -1014,7 +1030,7 @@ export function CapVideoPlayer({
 							exit={{ opacity: 0, y: 10 }}
 							transition={{ duration: 0.2 }}
 							onClick={() => videoRef.current?.play()}
-							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+							className="player-brand-play flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
 						>
 							<FontAwesomeIcon
 								icon={faPlay}

@@ -298,6 +298,16 @@ fn english_matches_the_literals_it_replaced() {
             "Play a sound for markers".into(),
         ),
         (
+            tr::settings::general::recording::keep_drawings::label(),
+            "Keep drawings on screen".into(),
+        ),
+        (
+            tr::settings::general::recording::keep_drawings::description(),
+            "Drawings stay until you clear them. When off, each one fades a few seconds \
+                             after you draw it."
+                .into(),
+        ),
+        (
             tr::settings::general::recording::marker_sound::description(),
             "Plays a short sound when you add a marker during a Studio recording. Your \
                              microphone or system audio can pick it up."

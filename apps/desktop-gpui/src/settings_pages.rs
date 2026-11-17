@@ -941,7 +941,18 @@ const RECORDING_SHORTCUTS: [&str; 7] = [
     "cycleRecordingMode",
 ];
 
-const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
+#[cfg(target_os = "macos")]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
+    "stopRecording",
+    "togglePauseRecording",
+    "restartRecording",
+    store::RECORDING_MARKER_HOTKEY,
+    store::DRAW_HOTKEY,
+];
+
+/// Drawing on screen is macOS only, so its shortcut is too.
+#[cfg(not(target_os = "macos"))]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
     "stopRecording",
     "togglePauseRecording",
     "restartRecording",
@@ -1101,6 +1112,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
+        store::DRAW_HOTKEY => tr::settings::shortcuts::label::toggle_drawing(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1272,6 +1284,10 @@ fn shortcut_effect(
         store::RECORDING_MARKER_HOTKEY => ShortcutEffect {
             phrase: tr::settings::shortcuts::effect::add_marker,
             sentence: tr::settings::shortcuts::sentence::add_marker,
+        },
+        store::DRAW_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::toggle_drawing,
+            sentence: tr::settings::shortcuts::sentence::toggle_drawing,
         },
         _ => return None,
     };
@@ -1774,7 +1790,7 @@ impl SettingsWindow {
             ),
         ];
 
-        let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+        let while_recording = rows_for(WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
@@ -3195,16 +3211,14 @@ impl SettingsWindow {
             let (log, report, diagnostics_json) = cx
                 .background_executor()
                 .spawn(async move {
-                    let log = diagnostics::log_tail();
                     match payload {
                         Some(payload) => (
-                            log,
+                            diagnostics::log_tail(),
                             Some(payload.report_json),
                             Some(payload.diagnostics_json),
                         ),
                         None => {
-                            let diagnostics_json =
-                                serde_json::to_string(&diagnostics::collect_log_diagnostics()).ok();
+                            let (log, diagnostics_json) = diagnostics::log_upload_payload();
                             (log, None, diagnostics_json)
                         }
                     }
@@ -4230,11 +4244,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let expiry = license.expiry_date.map(|ms| {
-            chrono::DateTime::from_timestamp_millis(ms as i64)
-                .map(|date| date.format("%-m/%-d/%Y").to_string())
-                .unwrap_or_else(|| ms.to_string())
-        });
+        let expiry = license_expiry_label(license.expiry_date);
 
         div()
             .flex()
@@ -8291,9 +8301,56 @@ async fn http_json(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The license server stores lifetime keys with its "never renews" date,
+/// `new Date("2038-01-19 03:14:07")` (the 32-bit `time_t` limit) parsed in the
+/// server's own time zone, and returns it as `expiryDate`. Within a day of that
+/// instant is a lifetime key, which has no expiry to show.
+const LIFETIME_LICENSE_EXPIRY_MS: i64 = 2_147_483_647_000;
+const LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
+    let ms = expiry_ms?;
+    if ((ms as i64) - LIFETIME_LICENSE_EXPIRY_MS).abs() <= LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS {
+        return None;
+    }
+    Some(
+        chrono::DateTime::from_timestamp_millis(ms as i64)
+            .map(|date| date.format("%-m/%-d/%Y").to_string())
+            .unwrap_or_else(|| ms.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_license_has_no_expiry_label() {
+        assert_eq!(license_expiry_label(Some(2_147_483_647_000.)), None);
+        let hour = 60. * 60. * 1000.;
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. + 8. * hour)),
+            None
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 14. * hour)),
+            None
+        );
+    }
+
+    #[test]
+    fn yearly_license_keeps_its_expiry_label() {
+        assert_eq!(license_expiry_label(None), None);
+        assert_eq!(
+            license_expiry_label(Some(1_826_323_200_000.)).as_deref(),
+            Some("11/16/2027")
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 3. * 24. * 60. * 60. * 1000.))
+                .as_deref(),
+            Some("1/16/2038")
+        );
+    }
 
     fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
         Hotkey {
@@ -8341,7 +8398,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 14);
+        assert_eq!(shown.len(), 14 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8528,6 +8585,7 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in a Studio recording".into(),
+            "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
         }
     }
@@ -8572,7 +8630,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 31, "every effect message is reachable");
+        assert_eq!(
+            checked.len(),
+            31 + usize::from(crate::live_draw::SUPPORTED),
+            "every effect message is reachable"
+        );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 
