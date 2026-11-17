@@ -245,9 +245,14 @@ export const Caps = ({
 				// Deleting is immediate and permanent, so the key only counts on the
 				// page itself: not inside an open dialog (Move, Share), not while a
 				// held key repeats, and not while the previous delete is running.
+				// The shortcut skips the confirmation dialog, so it only acts on
+				// Caps the viewer can see; "Select all" can reach thousands of
+				// Caps across pages, which must go through the confirmed button.
+				const pageIdSet = new Set<string>(pageIds);
 				if (
 					!e.repeat &&
 					!isDeletingCaps &&
+					selectedCaps.every((id) => pageIdSet.has(id)) &&
 					!["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") &&
 					!(active instanceof HTMLElement && active.isContentEditable) &&
 					!active?.closest('[role="dialog"], [role="alertdialog"]')
@@ -266,7 +271,7 @@ export const Caps = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [selectedCaps, deleteCaps, isDeletingCaps]);
+	}, [selectedCaps, deleteCaps, isDeletingCaps, pageIds]);
 
 	if (
 		!isArchivedView &&
