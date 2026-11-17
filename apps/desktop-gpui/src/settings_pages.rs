@@ -199,6 +199,13 @@ struct ListeningHotkey {
     action: &'static str,
     modifiers: gpui::Modifiers,
     error: Option<fn() -> &'static str>,
+    /// Keys another shortcut already uses, waiting for Replace (or Enter).
+    conflict: Option<ShortcutConflict>,
+}
+
+struct ShortcutConflict {
+    hotkey: Hotkey,
+    owner: &'static str,
 }
 
 struct SavedShortcut {
@@ -933,7 +940,8 @@ impl SettingsWindow {
 
 const SCREENSHOT_SHORTCUTS: [&str; 3] = ["screenshotArea", "screenshotWindow", "screenshotDisplay"];
 
-const RECORDING_SHORTCUTS: [&str; 7] = [
+const RECORDING_SHORTCUTS: [&str; 8] = [
+    "startRecording",
     "startStudioRecording",
     "startInstantRecording",
     "openRecordingPickerArea",
@@ -962,6 +970,48 @@ const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
 ];
 
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
+
+fn page_shortcuts() -> impl Iterator<Item = &'static str> {
+    SCREENSHOT_SHORTCUTS
+        .iter()
+        .chain(RECORDING_SHORTCUTS.iter())
+        .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        .copied()
+}
+
+/// The shortcuts on the page, other than `action`, that `hotkey` runs.
+fn shortcut_owners(
+    bindings: &Map<String, Value>,
+    hotkey: &Hotkey,
+    action: &str,
+) -> Vec<&'static str> {
+    page_shortcuts()
+        .filter(|other| *other != action)
+        .filter(|other| {
+            bindings
+                .get(*other)
+                .and_then(store::hotkey_from_value)
+                .as_ref()
+                == Some(hotkey)
+        })
+        .collect()
+}
+
+/// Bind `hotkey` to `action`, taking it off every other shortcut so one press
+/// never runs two. Returns the first shortcut it was taken from.
+fn assign_shortcut(
+    bindings: &mut Map<String, Value>,
+    action: &'static str,
+    hotkey: &Hotkey,
+) -> Option<&'static str> {
+    let owners = shortcut_owners(bindings, hotkey, action);
+    for owner in &owners {
+        bindings.remove(*owner);
+    }
+    let value = serde_json::to_value(hotkey).unwrap_or(Value::Null);
+    bindings.insert(action.to_string(), value);
+    owners.first().copied()
+}
 
 #[derive(Clone, Copy)]
 struct OutcomeOption {
@@ -1103,6 +1153,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "screenshotArea" => tr::settings::shortcuts::label::screenshot_area(),
         "screenshotWindow" => tr::settings::shortcuts::label::screenshot_window(),
         "screenshotDisplay" => tr::settings::shortcuts::label::screenshot_display(),
+        "startRecording" => tr::settings::shortcuts::label::start_selected(),
         "startStudioRecording" => tr::settings::shortcuts::label::start_studio(),
         "startInstantRecording" => tr::settings::shortcuts::label::start_instant(),
         "openRecordingPickerArea" => tr::settings::shortcuts::label::record_area(),
@@ -1139,7 +1190,7 @@ fn shortcut_effect(
     mode: crate::main_window::Mode,
 ) -> Option<ShortcutEffect> {
     use crate::main_window::Mode;
-    use store::{PostScreenshotBehaviour as Shot, PostStudioBehaviour as Studio};
+    use store::PostScreenshotBehaviour as Shot;
 
     let shot = settings.post_screenshot_behaviour;
     let effect = match action {
@@ -1198,29 +1249,32 @@ fn shortcut_effect(
                 sentence: tr::settings::shortcuts::sentence::screenshot_display_save,
             },
         },
-        "startStudioRecording" => match settings.post_studio_recording_behaviour {
-            Studio::OpenEditor => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::studio_open_editor,
-                sentence: tr::settings::shortcuts::sentence::studio_open_editor,
-            },
-            Studio::ShowOverlay | Studio::DoNothing => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::studio,
-                sentence: tr::settings::shortcuts::sentence::studio,
+        "startStudioRecording" => studio_start_effect(settings),
+        "startInstantRecording" => instant_start_effect(settings),
+        "startRecording" => match mode {
+            Mode::Studio => studio_start_effect(settings),
+            Mode::Instant => instant_start_effect(settings),
+            Mode::Screenshot => match shot {
+                Shot::OpenEditor => ShortcutEffect {
+                    phrase: tr::settings::shortcuts::effect::selected_screenshot_open_editor,
+                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_open_editor,
+                },
+                Shot::Copy => ShortcutEffect {
+                    phrase: tr::settings::shortcuts::effect::selected_screenshot_copy,
+                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_copy,
+                },
+                Shot::CopyAndOpenEditor => ShortcutEffect {
+                    phrase:
+                        tr::settings::shortcuts::effect::selected_screenshot_copy_and_open_editor,
+                    sentence:
+                        tr::settings::shortcuts::sentence::selected_screenshot_copy_and_open_editor,
+                },
+                Shot::Save => ShortcutEffect {
+                    phrase: tr::settings::shortcuts::effect::selected_screenshot_save,
+                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_save,
+                },
             },
         },
-        "startInstantRecording" => {
-            if settings.disable_auto_open_links {
-                ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::instant_copy,
-                    sentence: tr::settings::shortcuts::sentence::instant_copy,
-                }
-            } else {
-                ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::instant_copy_and_open,
-                    sentence: tr::settings::shortcuts::sentence::instant_copy_and_open,
-                }
-            }
-        }
         // `Mode::for_recording`: a "Record …" shortcut records in Studio when
         // the saved mode is Screenshot.
         "openRecordingPickerArea" => match mode {
@@ -1286,9 +1340,41 @@ fn shortcut_effect(
     Some(effect)
 }
 
+fn studio_start_effect(settings: &store::GeneralSettings) -> ShortcutEffect {
+    match settings.post_studio_recording_behaviour {
+        store::PostStudioBehaviour::OpenEditor => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::studio_open_editor,
+            sentence: tr::settings::shortcuts::sentence::studio_open_editor,
+        },
+        store::PostStudioBehaviour::ShowOverlay | store::PostStudioBehaviour::DoNothing => {
+            ShortcutEffect {
+                phrase: tr::settings::shortcuts::effect::studio,
+                sentence: tr::settings::shortcuts::sentence::studio,
+            }
+        }
+    }
+}
+
+fn instant_start_effect(settings: &store::GeneralSettings) -> ShortcutEffect {
+    if settings.disable_auto_open_links {
+        ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::instant_copy,
+            sentence: tr::settings::shortcuts::sentence::instant_copy,
+        }
+    } else {
+        ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::instant_copy_and_open,
+            sentence: tr::settings::shortcuts::sentence::instant_copy_and_open,
+        }
+    }
+}
+
 fn description_follows_outcome(action: &str) -> bool {
     SCREENSHOT_SHORTCUTS.contains(&action)
-        || matches!(action, "startStudioRecording" | "startInstantRecording")
+        || matches!(
+            action,
+            "startRecording" | "startStudioRecording" | "startInstantRecording"
+        )
 }
 
 /// gpui on macOS reports ⌘⇧4 as `cmd-$` with Shift cleared, so this restores
@@ -1512,6 +1598,7 @@ impl SettingsWindow {
             action,
             modifiers: window.modifiers(),
             error: None,
+            conflict: None,
         });
         // Keys must reach the root's on_key_down, not a focused field.
         self.focus_root(window, cx);
@@ -1568,6 +1655,10 @@ impl SettingsWindow {
             self.shortcuts_cancel(cx);
             return true;
         }
+        if bare && keystroke.key == "enter" && listening.conflict.is_some() {
+            self.shortcuts_replace(cx);
+            return true;
+        }
         if bare && matches!(keystroke.key.as_str(), "backspace" | "delete") {
             self.pages.listening = None;
             self.pages.hotkeys.remove(action);
@@ -1585,6 +1676,7 @@ impl SettingsWindow {
             .filter(|code| global_hotkey::hotkey::Code::from_str(code).is_ok())
         else {
             listening.error = Some(UNSUPPORTED_KEY);
+            listening.conflict = None;
             cx.notify();
             return true;
         };
@@ -1597,24 +1689,39 @@ impl SettingsWindow {
         };
         if shortcut_needs_modifier(&hotkey) {
             listening.error = Some(NEEDS_MODIFIER);
+            listening.conflict = None;
             cx.notify();
             return true;
         }
 
-        let mut moved_from = None;
-        for other in SCREENSHOT_SHORTCUTS
-            .iter()
-            .chain(RECORDING_SHORTCUTS.iter())
-            .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        if let Some(owner) = shortcut_owners(&self.pages.hotkeys, &hotkey, action)
+            .first()
+            .copied()
         {
-            if *other != action && self.shortcut_binding(other).as_ref() == Some(&hotkey) {
-                self.pages.hotkeys.remove(*other);
-                moved_from.get_or_insert(*other);
-            }
+            listening.error = None;
+            listening.conflict = Some(ShortcutConflict { hotkey, owner });
+            cx.notify();
+            return true;
         }
+        self.shortcuts_save(action, hotkey, cx);
+        true
+    }
 
-        let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
-        self.pages.hotkeys.insert(action.to_string(), value);
+    /// Replace pressed (or Enter): the keys move here from the shortcut that
+    /// had them.
+    fn shortcuts_replace(&mut self, cx: &mut Context<Self>) {
+        let Some(listening) = self.pages.listening.as_mut() else {
+            return;
+        };
+        let action = listening.action;
+        let Some(conflict) = listening.conflict.take() else {
+            return;
+        };
+        self.shortcuts_save(action, conflict.hotkey, cx);
+    }
+
+    fn shortcuts_save(&mut self, action: &'static str, hotkey: Hotkey, cx: &mut Context<Self>) {
+        let moved_from = assign_shortcut(&mut self.pages.hotkeys, action, &hotkey);
         self.pages.listening = None;
         self.shortcuts_commit(cx);
         self.pages.shortcut_saved = Some(SavedShortcut { action, moved_from });
@@ -1633,7 +1740,6 @@ impl SettingsWindow {
             })
             .ok();
         }));
-        true
     }
 
     /// Persist the map and swap the OS registrations. Deferred because the
@@ -1997,9 +2103,14 @@ impl SettingsWindow {
                 None,
             )
         } else if let Some(listening) = listening {
-            match listening.error {
-                Some(error) => (error().into(), red, None),
-                None => (
+            match (listening.error, &listening.conflict) {
+                (Some(error), _) => (error().into(), red, None),
+                (None, Some(conflict)) => (
+                    tr::settings::shortcuts::conflict(shortcut_label(conflict.owner)),
+                    amber,
+                    None,
+                ),
+                (None, None) => (
                     tr::settings::shortcuts::recording_hint().into(),
                     theme.settings_muted(),
                     None,
@@ -2007,6 +2118,21 @@ impl SettingsWindow {
             }
         } else if unavailable && binding.is_some() {
             (tr::settings::shortcuts::unavailable().into(), amber, None)
+        } else if let Some(shared) =
+            binding
+                .as_ref()
+                .filter(|_| saved.is_none())
+                .and_then(|binding| {
+                    shortcut_owners(&self.pages.hotkeys, binding, action)
+                        .first()
+                        .copied()
+                })
+        {
+            (
+                tr::settings::shortcuts::shared(shortcut_label(shared)),
+                amber,
+                None,
+            )
         } else if let (Some(saved), Some(binding)) = (saved, binding.as_ref()) {
             let keys = hotkey_inline_text(binding);
             let phrase = effect.map_or("", |effect| (effect.phrase)());
@@ -2032,6 +2158,20 @@ impl SettingsWindow {
         let group: SharedString = format!("shortcut-row-{action}").into();
 
         let field = self.render_shortcut_field(action, binding.as_ref(), listening, cx);
+        let replace = listening
+            .filter(|listening| listening.conflict.is_some())
+            .map(|_| {
+                div()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(self.button(
+                        SharedString::from(format!("shortcut-replace-{action}")),
+                        (ui::ButtonVariant::Gray, None),
+                        tr::settings::shortcuts::replace(),
+                        false,
+                        cx,
+                        |this, _window, cx| this.shortcuts_replace(cx),
+                    ))
+            });
         let clear = div()
             .id(SharedString::from(format!("shortcut-clear-{action}")))
             .flex()
@@ -2121,7 +2261,11 @@ impl SettingsWindow {
                     .justify_end()
                     .gap(px(4.))
                     .flex_shrink_0()
-                    .child(clear)
+                    .when_some(replace, |this, replace| this.gap(px(8.)).child(replace))
+                    .when(
+                        listening.is_none_or(|listening| listening.conflict.is_none()),
+                        |this| this.child(clear),
+                    )
                     .child(field),
             )
             .into_any_element()
@@ -2151,6 +2295,21 @@ impl SettingsWindow {
             .cursor_pointer();
 
         let field = match (listening, binding) {
+            (
+                Some(ListeningHotkey {
+                    conflict: Some(conflict),
+                    ..
+                }),
+                _,
+            ) => base
+                .border_color(theme.settings_text())
+                .bg(theme.settings_card_bg())
+                .children(
+                    hotkey_display_keys(&conflict.hotkey)
+                        .iter()
+                        .map(|key| shortcut_key_cap(&theme, key)),
+                )
+                .into_any_element(),
             (Some(listening), _) => {
                 let held = held_modifier_keys(listening.modifiers);
                 let mut field = base
@@ -2199,7 +2358,7 @@ impl SettingsWindow {
                         .px(px(4.))
                         .text_size(px(12.))
                         .text_color(theme.settings_muted())
-                        .child(tr::settings::shortcuts::record_shortcut()),
+                        .child(tr::settings::shortcuts::not_set()),
                 )
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -8417,7 +8576,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 14 + usize::from(crate::live_draw::SUPPORTED));
+        assert_eq!(shown.len(), 15 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8596,6 +8755,17 @@ mod tests {
             "startInstantRecording" => {
                 format!("record your selected screen or window in Instant mode{instant_stop}")
             }
+            "startRecording" => match mode {
+                crate::main_window::Mode::Studio => {
+                    assembled_effect("startStudioRecording", settings, mode)
+                }
+                crate::main_window::Mode::Instant => {
+                    assembled_effect("startInstantRecording", settings, mode)
+                }
+                crate::main_window::Mode::Screenshot => {
+                    format!("capture your selected screen or window and {screenshot}")
+                }
+            },
             "openRecordingPickerArea" => format!("select an area, then {picker}"),
             "openRecordingPickerWindow" => format!("choose a window, then {picker}"),
             "openRecordingPickerDisplay" => format!("choose a display, then {picker}"),
@@ -8608,6 +8778,103 @@ mod tests {
             "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
         }
+    }
+
+    /// Keys another shortcut already has wait for Replace; nothing moves
+    /// until then, and Replace takes them off every other shortcut.
+    #[test]
+    fn a_used_combo_names_its_owner_and_moves_only_on_replace() {
+        let mut bindings = Map::new();
+        let keys = hotkey("KeyR", true, false, false, true);
+        let other = hotkey("KeyS", true, false, false, true);
+        bindings.insert(
+            "openRecordingPickerArea".into(),
+            serde_json::to_value(&keys).unwrap(),
+        );
+        bindings.insert(
+            "screenshotArea".into(),
+            serde_json::to_value(&other).unwrap(),
+        );
+
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "startStudioRecording"),
+            vec!["openRecordingPickerArea"]
+        );
+        assert!(shortcut_owners(&bindings, &keys, "openRecordingPickerArea").is_empty());
+        assert!(
+            shortcut_owners(
+                &bindings,
+                &hotkey("KeyR", false, true, false, true),
+                "startStudioRecording"
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            assign_shortcut(&mut bindings, "startStudioRecording", &keys),
+            Some("openRecordingPickerArea")
+        );
+        assert!(!bindings.contains_key("openRecordingPickerArea"));
+        assert_eq!(
+            bindings
+                .get("startStudioRecording")
+                .and_then(store::hotkey_from_value),
+            Some(keys.clone())
+        );
+        assert_eq!(
+            bindings
+                .get("screenshotArea")
+                .and_then(store::hotkey_from_value),
+            Some(other)
+        );
+        assert_eq!(
+            assign_shortcut(&mut bindings, "startStudioRecording", &keys),
+            None
+        );
+    }
+
+    /// Two shortcuts on one combo from an older store both keep firing, so
+    /// each row names the other; Replace clears every copy.
+    #[test]
+    fn a_combo_shared_from_an_older_store_is_flagged_on_both_rows() {
+        let mut bindings = Map::new();
+        let keys = hotkey("F5", false, false, false, false);
+        for action in ["stopRecording", "restartRecording"] {
+            bindings.insert(action.into(), serde_json::to_value(&keys).unwrap());
+        }
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "stopRecording"),
+            vec!["restartRecording"]
+        );
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "restartRecording"),
+            vec!["stopRecording"]
+        );
+        assert_eq!(
+            assign_shortcut(&mut bindings, "togglePauseRecording", &keys),
+            Some("stopRecording")
+        );
+        assert_eq!(bindings.len(), 1);
+    }
+
+    /// "Start in selected mode" reads like the shortcut the selected mode
+    /// would run.
+    #[test]
+    fn the_selected_mode_start_describes_the_selected_mode() {
+        use crate::main_window::Mode;
+        let settings = store::GeneralSettings::default();
+        assert_eq!(
+            sentence("startRecording", &settings, Mode::Studio),
+            sentence("startStudioRecording", &settings, Mode::Studio)
+        );
+        assert_eq!(
+            sentence("startRecording", &settings, Mode::Instant),
+            sentence("startInstantRecording", &settings, Mode::Instant)
+        );
+        assert!(
+            sentence("startRecording", &settings, Mode::Screenshot)
+                .starts_with("Capture your selected screen or window")
+        );
     }
 
     #[test]
@@ -8652,7 +8919,7 @@ mod tests {
         }
         assert_eq!(
             checked.len(),
-            28 + usize::from(crate::live_draw::SUPPORTED),
+            32 + usize::from(crate::live_draw::SUPPORTED),
             "every effect message is reachable"
         );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
