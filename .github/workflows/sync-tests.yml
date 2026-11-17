@@ -45,22 +45,28 @@ permissions:
   contents: read
 
 jobs:
-  # Each runner's steps are split into parts that run side by side on the same
-  # runner image, so every step keeps its environment. One job per runner took
-  # about 25 minutes, most of it these steps one after another: the
-  # timestamp tests (5 to 12 min), the synthetic device matrix (3.5 min on
-  # every runner) and the Linux playback harness (7 to 10 min). macOS keeps two
-  # parts: hosted macOS runs at most five jobs at once for the organisation.
+  # Each runner's steps are split into parts that run side by side, so every
+  # step keeps its environment. One job per runner took about 25 minutes, most
+  # of it these steps one after another: the timestamp tests (5 to 12 min), the
+  # synthetic device matrix (3.5 min on every runner) and the Linux playback
+  # harness (7 to 10 min).
+  #
+  # macOS runs on Blacksmith: hosted macOS runs at most five jobs at once for
+  # the organisation, and two hosted parts queued 6.5 and 25 minutes (run
+  # 44154886695). Blacksmith Macs have no hardware video encoder, so the
+  # encoder crates also run on one hosted Mac, which has VideoToolbox's.
   sync-tests:
     name: sync-tests (${{ matrix.runner }}, ${{ matrix.parts }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-latest
+          - runner: blacksmith-6vcpu-macos-15
             parts: timestamp
-          - runner: macos-latest
+          - runner: blacksmith-6vcpu-macos-15
             parts: units,matrix
+          - runner: macos-latest
+            parts: encoders
           - runner: windows-2022
             parts: timestamp
           - runner: windows-2022
@@ -218,6 +224,13 @@ jobs:
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
       # sources that deliver at a different rate than configured.
+      - name: Hardware encoder tests (macOS)
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
+        shell: bash
+        run: |
+          cargo test --locked -p cap-enc-ffmpeg
+          cargo test --locked -p cap-enc-avfoundation
+
       - name: AVFoundation encoder tests (macOS)
         if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
