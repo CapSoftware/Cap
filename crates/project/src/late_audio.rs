@@ -238,7 +238,7 @@ mod tests {
         let mut project = legacy_project();
         project.clips[1] = clip(1, 0.25, 4.3, false);
         migrate_late_audio_alignment(&mut project, &meta(4.05), Vec::new);
-        let clip1 = project.clips[1];
+        let clip1 = &project.clips[1];
         assert!(!clip1.offsets_auto_calculated);
         assert!(close(clip1.offsets.mic, -3.75));
         assert!(close(clip1.offsets.system_audio, 0.3));
