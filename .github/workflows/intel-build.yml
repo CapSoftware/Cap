@@ -38,13 +38,17 @@ on:
       - 'scripts/sync-desktop-versions.mjs'
       - 'scripts/verify-windows-stack.mjs'
       - '.github/workflows/intel-build.yml'
+  # A pull request that changes this workflow proves it.
+  pull_request:
+    paths:
+      - '.github/workflows/intel-build.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: intel-build-${{ github.ref }}
+  group: intel-build-${{ github.event.pull_request.number || github.ref }}
   # An hour-long build cancelled by every push would never finish; GitHub
   # keeps one pending run, the newest push.
   cancel-in-progress: false
