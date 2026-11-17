@@ -396,6 +396,76 @@ fn rules_choose_the_screenshot_editor_and_skip_wins() {
 }
 
 #[tokio::test]
+async fn waiting_on_an_event_returns_once_its_rules_finish() {
+    let events: &'static RunningEvents = Box::leak(Box::new(RunningEvents::new()));
+    let project = event_key(Path::new("/recordings/a.cap"));
+    let wait = |trigger, key: String| {
+        tokio::time::timeout(Duration::from_millis(50), async move {
+            events.finished(trigger, &key).await
+        })
+    };
+
+    assert!(
+        wait(Trigger::StudioRecordingFinished, project.clone())
+            .await
+            .is_ok()
+    );
+    let running = events
+        .claim(Trigger::StudioRecordingFinished, project.clone())
+        .unwrap();
+    assert!(
+        wait(Trigger::StudioRecordingFinished, project.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        wait(Trigger::UploadCompleted, project.clone())
+            .await
+            .is_ok()
+    );
+    assert!(
+        wait(
+            Trigger::StudioRecordingFinished,
+            event_key(Path::new("/recordings/b.cap"))
+        )
+        .await
+        .is_ok()
+    );
+
+    let waiter = tokio::spawn(wait(Trigger::StudioRecordingFinished, project.clone()));
+    tokio::task::yield_now().await;
+    drop(running);
+    assert!(waiter.await.unwrap().is_ok());
+}
+
+#[test]
+fn only_a_screenshot_rule_that_can_delete_drops_the_overlay_card() {
+    let ctx = TriggerContext::new().with_capture_target(CaptureTargetKind::Window);
+    let deletes =
+        |rules: Vec<AutomationRule>| rules_delete(&store(rules), Trigger::ScreenshotTaken, &ctx);
+    let shot = |id: &str, enabled: bool, actions: Vec<Action>| {
+        rule(id, Trigger::ScreenshotTaken, enabled, actions)
+    };
+    let save_then_delete = vec![save_action(Path::new("/shots")), Action::DeleteLocalFiles];
+
+    assert!(!deletes(vec![]));
+    assert!(deletes(vec![shot("save", true, save_then_delete.clone())]));
+    assert!(!deletes(vec![shot("off", false, save_then_delete.clone())]));
+    assert!(!deletes(vec![shot(
+        "lone",
+        true,
+        vec![Action::DeleteLocalFiles]
+    )]));
+    assert!(!deletes(vec![shot("open", true, vec![Action::OpenEditor])]));
+    assert!(!deletes(vec![rule(
+        "studio",
+        Trigger::StudioRecordingFinished,
+        true,
+        save_then_delete,
+    )]));
+}
+
+#[tokio::test]
 async fn open_editor_leaves_an_editor_choice_already_made_alone() {
     for trigger in [Trigger::StudioRecordingFinished, Trigger::ScreenshotTaken] {
         let host = GpuiAutomationHost::for_trigger(trigger);
@@ -827,6 +897,15 @@ async fn delete_is_refused_when_the_saved_copy_is_not_the_one_this_run_wrote() {
     let copy = replaced.last_output().unwrap();
     let other = root.path().join("other.png");
     std::fs::write(&other, b"png bytes").unwrap();
+    // Same length and modified time as the copy, so only file identity
+    // (inode, or the NTFS file index on Windows) can tell them apart.
+    let copy_modified = std::fs::metadata(&copy).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&other)
+        .unwrap()
+        .set_modified(copy_modified)
+        .unwrap();
     std::fs::rename(&other, &copy).unwrap();
     let error = check(&replaced).unwrap_err();
     assert!(

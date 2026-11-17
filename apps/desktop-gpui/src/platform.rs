@@ -451,6 +451,41 @@ pub(crate) async fn open_file_panel_from_app_async(
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
+/// `save_file_panel_async` parented to the calling window but not owned by
+/// it: the chosen path survives that window closing, so the caller must check
+/// its own state before using it. With no owner to show an alert in, a failed
+/// dialog comes back as a short message for the caller to show; raw portal
+/// errors are logged instead.
+#[cfg(target_os = "linux")]
+pub(crate) async fn save_file_panel_async_unowned(
+    suggested: &str,
+    extensions: &[&str],
+    cx: &mut gpui::AsyncWindowContext,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let parent = cx
+        .update(|window, _| LinuxFileDialogParent::from_window(window))
+        .ok()
+        .flatten();
+    linux_save_file_panel(suggested, extensions, None, parent, cx)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "native file dialog failed");
+            unowned_dialog_message(&error)
+        })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unowned_dialog_message(error: &LinuxFileDialogError) -> String {
+    match error {
+        LinuxFileDialogError::BeforeDispatch(_) | LinuxFileDialogError::NativeResponse(_) => {
+            crate::i18n::tr::dialog::file::unavailable_title().into()
+        }
+        LinuxFileDialogError::Busy
+        | LinuxFileDialogError::Indeterminate(_)
+        | LinuxFileDialogError::RestartRequired => error.message(),
+    }
+}
+
 pub(crate) async fn save_file_panel_async(
     suggested: &str,
     extensions: &[&str],
@@ -2024,6 +2059,83 @@ mod mac {
         native.0.ignoresMouseEvents() == click_through
     }
 
+    thread_local! {
+        static DRAW_CURSOR: std::cell::OnceCell<Option<Retained<AnyObject>>> =
+            const { std::cell::OnceCell::new() };
+    }
+
+    /// A pen with its nib on the hot spot, dark ink inside a light outline so
+    /// it reads over any content, at 2x for Retina.
+    fn build_draw_cursor() -> Option<Retained<AnyObject>> {
+        use objc2::{class, msg_send};
+
+        const POINTS: u32 = 24;
+        const SCALE: u32 = 2;
+        let pen = r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>"#;
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="white" stroke-width="4.5">{pen}</g><g stroke="black" stroke-width="1.75" fill="white">{pen}</g></svg>"#
+        );
+        let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).ok()?;
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(POINTS * SCALE, POINTS * SCALE)?;
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(SCALE as f32, SCALE as f32),
+            &mut pixmap.as_mut(),
+        );
+        let png = pixmap.encode_png().ok()?;
+        unsafe {
+            let data: *mut AnyObject = msg_send![
+                class!(NSData),
+                dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
+                length: png.len(),
+            ];
+            if data.is_null() {
+                return None;
+            }
+            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let image: *mut AnyObject = msg_send![image, initWithData: data];
+            let image = Retained::from_raw(image)?;
+            let size = f64::from(POINTS);
+            let _: () = msg_send![&*image, setSize: objc2_foundation::NSSize::new(size, size)];
+            let cursor: *mut AnyObject = msg_send![class!(NSCursor), alloc];
+            let cursor: *mut AnyObject = msg_send![
+                cursor,
+                initWithImage: &*image,
+                hotSpot: objc2_foundation::NSPoint::new(2.5, 21.5),
+            ];
+            Retained::from_raw(cursor)
+        }
+    }
+
+    /// The pen while drawing on screen. The drawing panel never becomes the
+    /// key window, so gpui's cursor rects do not apply to it; the cursor is
+    /// set directly on pointer events instead. `set` registers the image with
+    /// the window server over a synchronous message each time, which profiled
+    /// as most of the main thread's work while drawing, so it only runs when
+    /// something else has replaced the pen.
+    pub fn set_draw_cursor() {
+        use objc2::{class, msg_send};
+        DRAW_CURSOR.with(|cursor| {
+            let Some(cursor) = cursor.get_or_init(build_draw_cursor) else {
+                return;
+            };
+            let current: *mut AnyObject = unsafe { msg_send![class!(NSCursor), currentCursor] };
+            if !std::ptr::eq(current.cast_const(), &**cursor) {
+                let _: () = unsafe { msg_send![&**cursor, set] };
+            }
+        });
+    }
+
+    pub fn reset_cursor() {
+        use objc2::{class, msg_send};
+        unsafe {
+            let arrow: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
+            if !arrow.is_null() {
+                let _: () = msg_send![arrow, set];
+            }
+        }
+    }
+
     /// `orderOut:` -- hide without closing, the way the Tauri main window
     /// hides while the recording controls bar is up. Takes the retained
     /// handle for the same reason [`place_overlay_panel`] does: ordering a
@@ -3256,6 +3368,8 @@ mod stub {
     pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
         false
     }
+    pub fn set_draw_cursor() {}
+    pub fn reset_cursor() {}
     pub fn native_window(_window: &Window) -> Option<NativeWindow> {
         None
     }
@@ -3728,6 +3842,27 @@ mod file_dialog_tests {
         sync::atomic::AtomicU8,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn unowned_dialog_failures_read_without_raw_portal_errors() {
+        let raw = "org.freedesktop.portal.Error.Failed: zbus";
+        for error in [
+            LinuxFileDialogError::BeforeDispatch(raw.into()),
+            LinuxFileDialogError::NativeResponse(raw.into()),
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, "File dialog unavailable");
+        }
+        for error in [
+            LinuxFileDialogError::Busy,
+            LinuxFileDialogError::Indeterminate(raw.into()),
+            LinuxFileDialogError::RestartRequired,
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, error.message());
+            assert!(!message.contains(raw));
+        }
+    }
 
     #[test]
     fn active_native_dialog_rejects_repeated_requests() {

@@ -163,17 +163,34 @@ fn has_enabled_rule(store: &AutomationsStore, trigger: Trigger) -> bool {
 /// while its run lasts, so a second report of the same event during the run
 /// (an upload finishing inside an Upload action, say) is dropped, and a later
 /// capture that reuses the path runs its rules again.
-struct RunningEvents(Mutex<HashSet<(Trigger, String)>>);
+struct RunningEvents {
+    events: Mutex<HashSet<(Trigger, String)>>,
+    released: tokio::sync::Notify,
+}
 
 impl RunningEvents {
     fn new() -> Self {
-        Self(Mutex::new(HashSet::new()))
+        Self {
+            events: Mutex::new(HashSet::new()),
+            released: tokio::sync::Notify::new(),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<(Trigger, String)>> {
-        self.0
+        self.events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn finished(&self, trigger: Trigger, key: &str) {
+        loop {
+            let mut released = std::pin::pin!(self.released.notified());
+            released.as_mut().enable();
+            if !self.lock().contains(&(trigger, key.to_string())) {
+                return;
+            }
+            released.await;
+        }
     }
 
     fn claim(&'static self, trigger: Trigger, key: String) -> Option<RunningEvent> {
@@ -197,6 +214,7 @@ impl Drop for RunningEvent {
         self.events
             .lock()
             .remove(&(self.trigger, std::mem::take(&mut self.key)));
+        self.events.released.notify_waiters();
     }
 }
 
@@ -291,6 +309,15 @@ pub fn studio_recording_finished(project_dir: PathBuf) {
         event_key(&project_dir),
         move |store| studio_context(project_dir, store),
     );
+}
+
+/// Returns once the rules a finished Studio recording started are done. They
+/// can render into the project's own export file or upload it, so anything
+/// else that writes that file waits for them first.
+pub async fn studio_rules_finished(project_dir: &Path) {
+    running_events()
+        .finished(Trigger::StudioRecordingFinished, &event_key(project_dir))
+        .await;
 }
 
 fn studio_context(project_dir: PathBuf, store: &AutomationsStore) -> TriggerContext {
@@ -585,6 +612,25 @@ pub fn screenshot_editor_choice(
     )
 }
 
+/// Whether a matching rule can delete this capture, so no recordings overlay
+/// card should point at a file that is about to go.
+pub fn screenshot_rule_deletes(target: Option<&ScreenshotTarget>, image_path: &Path) -> bool {
+    let (Some(target), Some(store)) = (target, store_for(Trigger::ScreenshotTaken)) else {
+        return false;
+    };
+    rules_delete(
+        &store,
+        Trigger::ScreenshotTaken,
+        &screenshot_context(image_path.to_path_buf(), target),
+    )
+}
+
+fn rules_delete(store: &AutomationsStore, trigger: Trigger, ctx: &TriggerContext) -> bool {
+    cap_automation::evaluate(store, &trigger, ctx)
+        .iter()
+        .any(|(_, actions)| can_delete(actions))
+}
+
 /// A rule that can delete the capture keeps the editor closed too: the
 /// delete is refused while an editor has the capture open, so a saved
 /// "export, then delete" rule would otherwise never delete. A delete with no
@@ -683,6 +729,11 @@ struct FileFingerprint {
     modified: Option<std::time::SystemTime>,
     #[cfg(unix)]
     inode: (u64, u64),
+    /// Volume serial and NTFS file index. A copy keeps its source's modified
+    /// time on Windows, so length and time alone cannot tell a same-size file
+    /// put in its place from the one written.
+    #[cfg(windows)]
+    file_id: (u32, u64),
 }
 
 fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
@@ -694,7 +745,28 @@ fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
         modified: metadata.modified().ok(),
         #[cfg(unix)]
         inode: (metadata.dev(), metadata.ino()),
+        #[cfg(windows)]
+        file_id: windows_file_id(path)?,
     })
+}
+
+/// std opens with read, write and delete sharing, and the handle closes on
+/// return, so this never holds up a later delete of the file.
+#[cfg(windows)]
+fn windows_file_id(path: &Path) -> std::io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let file = std::fs::File::open(path)?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
 }
 
 impl GpuiAutomationHost {

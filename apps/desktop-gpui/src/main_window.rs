@@ -1098,7 +1098,22 @@ impl MainWindow {
             if phase == Phase::Idle && previous_phase != Phase::Idle {
                 this.end_capture_mode(cx);
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
-                if let Some(notice) = session.read(cx).storage_notice.clone() {
+                let notice = {
+                    let session = session.read(cx);
+                    session
+                        .storage_notice
+                        .clone()
+                        .map(|notice| (tr::main::storage::title(), notice))
+                        .or_else(|| {
+                            session.capture_source_lost.then(|| {
+                                (
+                                    tr::dialog::capture::source_lost_title(),
+                                    tr::dialog::capture::source_lost().into(),
+                                )
+                            })
+                        })
+                };
+                if let Some((title, notice)) = notice {
                     let main = cx.global::<app_windows::AppWindows>().main;
                     cx.spawn(async move |_, cx| {
                         let receiver = cx.update(|cx| {
@@ -1107,7 +1122,7 @@ impl MainWindow {
                             main.update(cx, |_, window, cx| {
                                 window.prompt(
                                     gpui::PromptLevel::Warning,
-                                    tr::main::storage::title(),
+                                    title,
                                     Some(&notice),
                                     &[gpui::PromptButton::cancel(tr::common::ok())],
                                     cx,

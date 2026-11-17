@@ -51,9 +51,10 @@ pub enum HotkeyAction {
     ScreenshotWindow,
     ScreenshotArea,
     AddRecordingMarker,
+    ToggleDrawing,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
+const ACTION_KEYS: [(&str, HotkeyAction); 15] = [
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -80,6 +81,7 @@ const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
         store::RECORDING_MARKER_HOTKEY,
         HotkeyAction::AddRecordingMarker,
     ),
+    (store::DRAW_HOTKEY, HotkeyAction::ToggleDrawing),
 ];
 
 impl HotkeyAction {
@@ -100,11 +102,19 @@ impl HotkeyAction {
             .unwrap_or_default()
     }
 
-    /// Registered only while a Studio recording runs, so its combo is never
-    /// taken from other apps the rest of the time.
+    /// The marker shortcut registers only while a Studio recording runs, and
+    /// the drawing one only while a recording that can be drawn on runs, so
+    /// their combos are never taken from other apps the rest of the time.
     fn recording_scoped(self) -> bool {
-        self == Self::AddRecordingMarker
+        matches!(self, Self::AddRecordingMarker | Self::ToggleDrawing)
     }
+}
+
+/// Which recording-scoped shortcuts the live recording can use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordingScopes {
+    pub markers: bool,
+    pub drawing: bool,
 }
 
 struct Hotkeys {
@@ -119,9 +129,9 @@ struct Hotkeys {
     /// Set while the Shortcuts page records a new combo: a registered combo
     /// would otherwise fire its action instead of reaching the page.
     paused: bool,
-    /// A Studio recording is running, so [`HotkeyAction::recording_scoped`]
-    /// bindings are registered too.
-    recording_scope: bool,
+    /// The [`HotkeyAction::recording_scoped`] bindings the live recording
+    /// has registered.
+    recording_scopes: RecordingScopes,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
 }
@@ -163,11 +173,12 @@ pub fn init(cx: &mut App) {
         bindings: Vec::new(),
         unavailable: Vec::new(),
         paused: false,
-        recording_scope: false,
+        recording_scopes: RecordingScopes::default(),
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
     store::seed_recording_marker_hotkey();
+    store::seed_draw_hotkey();
     register_from_store(cx);
 
     // The press instant is taken on the OS callback, before the hop to the
@@ -202,22 +213,19 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-/// Registers the recording-scoped bindings while a Studio recording runs and
-/// releases them when it ends. Leaves every other registration alone, so a
-/// press of another shortcut at that moment still lands.
-pub fn set_recording_scope(active: bool, cx: &mut App) {
-    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().recording_scope == active {
+/// Registers the recording-scoped bindings the live recording can use and
+/// releases the rest. Leaves every other registration alone, so a press of
+/// another shortcut at that moment still lands.
+pub fn set_recording_scopes(scopes: RecordingScopes, cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().recording_scopes == scopes {
         return;
     }
-    cx.global_mut::<Hotkeys>().recording_scope = active;
+    cx.global_mut::<Hotkeys>().recording_scopes = scopes;
     if cx.global::<Hotkeys>().paused {
         return;
     }
-    if active {
-        register_scoped_from_store(cx);
-    } else {
-        unregister_scoped(cx);
-    }
+    unregister_scoped(cx);
+    register_scoped_from_store(cx);
     crate::tray::refresh_menu(cx);
 }
 
@@ -878,14 +886,18 @@ fn unregistered_scoped_actions(
         .collect()
 }
 
-fn registers_now(action: HotkeyAction, recording_scope: bool) -> bool {
-    !action.recording_scoped() || recording_scope
+fn registers_now(action: HotkeyAction, scopes: RecordingScopes) -> bool {
+    match action {
+        HotkeyAction::AddRecordingMarker => scopes.markers,
+        HotkeyAction::ToggleDrawing => scopes.drawing,
+        _ => true,
+    }
 }
 
 fn register_from_store(cx: &mut App) {
     let stored = store::hotkeys_raw();
     let hotkeys = cx.global_mut::<Hotkeys>();
-    let scope = hotkeys.recording_scope;
+    let scope = hotkeys.recording_scopes;
     for (key, value) in &stored {
         let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
@@ -903,11 +915,14 @@ fn register_from_store(cx: &mut App) {
 fn register_scoped_from_store(cx: &mut App) {
     let stored = store::hotkeys_raw();
     let hotkeys = cx.global_mut::<Hotkeys>();
+    let scopes = hotkeys.recording_scopes;
     for (key, value) in &stored {
         let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
         };
-        if action.recording_scoped() && !hotkeys.bindings.iter().any(|(_, bound)| *bound == action)
+        if action.recording_scoped()
+            && registers_now(action, scopes)
+            && !hotkeys.bindings.iter().any(|(_, bound)| *bound == action)
         {
             register_binding(hotkeys, action, hotkey);
         }
@@ -917,10 +932,11 @@ fn register_scoped_from_store(cx: &mut App) {
 
 fn unregister_scoped(cx: &mut App) {
     let hotkeys = cx.global_mut::<Hotkeys>();
+    let scopes = hotkeys.recording_scopes;
     let (scoped, kept): (Vec<_>, Vec<_>) = hotkeys
         .bindings
         .drain(..)
-        .partition(|(_, action)| action.recording_scoped());
+        .partition(|(_, action)| action.recording_scoped() && !registers_now(*action, scopes));
     hotkeys.bindings = kept;
     for (hotkey, _) in scoped {
         #[cfg(target_os = "linux")]
@@ -991,6 +1007,7 @@ fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) 
             RecordingSession::global(cx)
                 .update(cx, |session, cx| session.add_marker(pressed_at, cx));
         }
+        HotkeyAction::ToggleDrawing => crate::live_draw::toggle(cx),
         HotkeyAction::StartStudioRecording => start_from_hotkey(Mode::Studio, cx),
         HotkeyAction::StartInstantRecording => start_from_hotkey(Mode::Instant, cx),
         HotkeyAction::StopRecording => {
@@ -1238,7 +1255,7 @@ mod tests {
             bindings: Vec::new(),
             unavailable: Vec::new(),
             paused: false,
-            recording_scope: false,
+            recording_scopes: super::RecordingScopes::default(),
             #[cfg(target_os = "linux")]
             capture_stop: None,
         };
@@ -1261,15 +1278,41 @@ mod tests {
     }
 
     /// The marker shortcut only takes its combo while a Studio recording
-    /// runs; every other shortcut stays registered the whole time.
+    /// runs and the drawing one while a drawable recording runs; every other
+    /// shortcut stays registered the whole time.
     #[test]
-    fn only_the_marker_shortcut_waits_for_a_recording() {
-        use super::{ACTION_KEYS, HotkeyAction, registers_now};
+    fn only_the_marker_and_drawing_shortcuts_wait_for_a_recording() {
+        use super::{ACTION_KEYS, HotkeyAction, RecordingScopes, registers_now};
 
+        let both = RecordingScopes {
+            markers: true,
+            drawing: true,
+        };
+        let markers = RecordingScopes {
+            markers: true,
+            drawing: false,
+        };
+        let drawing = RecordingScopes {
+            markers: false,
+            drawing: true,
+        };
         for (_, action) in ACTION_KEYS {
-            assert!(registers_now(action, true));
+            assert!(registers_now(action, both));
             assert_eq!(
-                registers_now(action, false),
+                registers_now(action, RecordingScopes::default()),
+                !matches!(
+                    action,
+                    HotkeyAction::AddRecordingMarker | HotkeyAction::ToggleDrawing
+                ),
+                "{action:?}"
+            );
+            assert_eq!(
+                registers_now(action, markers),
+                action != HotkeyAction::ToggleDrawing,
+                "{action:?}"
+            );
+            assert_eq!(
+                registers_now(action, drawing),
                 action != HotkeyAction::AddRecordingMarker,
                 "{action:?}"
             );

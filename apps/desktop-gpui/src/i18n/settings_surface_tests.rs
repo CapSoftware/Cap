@@ -40,6 +40,7 @@ const FORMATTED: &[&str] = &[
     "settings.cli.path_missing",
     "settings.transcription.count",
     "settings.feedback.diagnostic.confirm_body",
+    "settings.feedback.diagnostic.duration_option",
     "settings.changelog.version",
     "settings.integrations.managed_by",
     "settings.integrations.s3.guide_intro",
@@ -242,7 +243,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),
-        (tr::settings::options::post_studio::show_cap(), "Show Cap"),
+        (
+            tr::settings::options::post_studio::show_overlay(),
+            "Show in overlay",
+        ),
         (
             tr::settings::options::post_studio::do_nothing(),
             "Do nothing",
@@ -363,12 +367,12 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Edit right away",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap(),
-            "Show Cap",
+            tr::settings::shortcuts::outcome::studio_show_overlay(),
+            "Show overlay",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap_hint(),
-            "Back to the recorder",
+            tr::settings::shortcuts::outcome::studio_show_overlay_hint(),
+            "Copy, share or export",
         ),
         (
             tr::settings::shortcuts::outcome::studio_do_nothing(),
@@ -488,6 +492,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
         (tr::settings::shortcuts::label::add_marker(), "Add marker"),
+        (
+            tr::settings::shortcuts::label::toggle_drawing(),
+            "Draw on screen",
+        ),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
@@ -666,6 +674,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::feedback::diagnostic::mode_description(),
             "Which pipeline to test. Both runs the studio leg and then the instant one.",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_label(),
+            "Test duration",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_description(),
+            "Longer runs are more sensitive to slow drift.",
         ),
         (
             tr::settings::feedback::diagnostic::mic_label(),
@@ -1574,6 +1590,13 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
             crate::diagnostics::DEFAULT_DURATION_SECS
         )
     );
+
+    for seconds in crate::diagnostics::DURATION_CHOICES_SECS {
+        assert_eq!(
+            tr::settings::feedback::diagnostic::duration_option(*seconds),
+            format!("{seconds} seconds")
+        );
+    }
 
     let date = "8/17/2026".to_string();
     assert_eq!(

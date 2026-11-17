@@ -2319,7 +2319,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 								}}
 							/>
 						)}
-					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
+					<SliderPrimitive.Range className="player-brand-range absolute h-full bg-white will-change-[width]" />
 					{seekState.isHovering && effectiveDuration > 0 && (
 						<div
 							data-slot="media-player-seek-hover-range"
@@ -2332,7 +2332,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					)}
 					{chapterSeparators}
 				</SliderPrimitive.Track>
-				<SliderPrimitive.Thumb className="relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
+				<SliderPrimitive.Thumb className="player-brand-thumb relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
 			</SliderPrimitive.Root>
 			{!withoutTooltip &&
 				!context.withoutTooltip &&

@@ -40,14 +40,19 @@ use crate::{
 
 /// Matches the Tauri `InProgressRecording` window and
 /// `fake_window.rs` position math.
-pub const CONTROLS_WIDTH: f32 = 320.;
+/// One button wider where the bar carries the draw button.
+pub const CONTROLS_WIDTH: f32 = if crate::live_draw::SUPPORTED {
+    384.
+} else {
+    352.
+};
 pub const CONTROLS_HEIGHT: f32 = 150.;
 /// The bar alone, with its padding. A transparent window takes every click
 /// inside its frame, so without an issue to show the window is only this
 /// tall and the app under the empty space above the bar stays clickable.
 pub const CONTROLS_BAR_HEIGHT: f32 = 64.;
 const CONTROLS_FIT_TO_ISSUE: bool = cfg!(any(target_os = "macos", windows));
-const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
+pub(crate) const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
 #[cfg(any(target_os = "macos", test))]
@@ -150,7 +155,10 @@ fn platform_display_for_capture(
     found
 }
 
-fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
+pub(crate) fn gpui_display_id(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<gpui::DisplayId> {
     #[cfg(target_os = "windows")]
     {
         target
@@ -306,6 +314,10 @@ pub struct AppWindows {
     /// Where the camera bubble sat before a window picker parked it inside the
     /// highlighted window -- see [`CameraPark`].
     pub camera_park: CameraPark,
+    /// The recording bar's "Show camera preview" turned the bubble off. It
+    /// is hidden, not closed, so a Studio capture keeps excluding the same
+    /// window when it comes back.
+    camera_preview_hidden: bool,
     #[cfg(target_os = "linux")]
     clean_capture: Option<CleanCaptureUi>,
     #[cfg(target_os = "linux")]
@@ -498,7 +510,7 @@ impl CameraPark {
 
 impl Global for AppWindows {}
 
-fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
+pub(crate) fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
     let Some(native) = native else {
         return;
     };
@@ -575,6 +587,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main_closed_by_user: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
+        camera_preview_hidden: false,
         #[cfg(target_os = "linux")]
         clean_capture: None,
         #[cfg(target_os = "linux")]
@@ -589,6 +602,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
             cx.update(|cx| {
+                if crate::live_draw::escape(cx) {
+                    return;
+                }
                 if TargetSelect::global(cx).read(cx).mode.is_some() && !cancel_area_drags(cx) {
                     dismiss_target_overlays(cx);
                 }
@@ -602,6 +618,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
                 crate::tray::refresh_previous(cx);
+                crate::recordings_overlay::thumbnails_written(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -618,10 +635,19 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
-        let markers = session.read(cx).markers_available();
-        crate::hotkeys::set_recording_scope(markers, cx);
+        let scopes = crate::hotkeys::RecordingScopes {
+            markers: session.read(cx).markers_available(),
+            drawing: crate::live_draw::availability(session.read(cx)).is_ok(),
+        };
+        crate::hotkeys::set_recording_scopes(scopes, cx);
+        if !recording {
+            crate::live_draw::end(cx);
+        }
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
+        }
+        if phase != Phase::Idle && last_phase == Phase::Idle {
+            crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Recording, cx);
         }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             #[cfg(target_os = "linux")]
@@ -630,9 +656,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             }
             close_controls(&session, cx);
             close_target_overlays(cx);
+            // The clean-capture lease keeps the bubble closed until it is
+            // released, so the hidden preview reopens only after it.
             #[cfg(target_os = "linux")]
             if !restore_clean_capture_ui(cx) {
                 return;
+            }
+            if cx.global::<AppWindows>().camera_preview_hidden {
+                set_camera_preview_shown(true, cx);
             }
             let (finished_studio, studio_behaviour, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
@@ -680,8 +711,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // to the editor, main window staying hidden --
                 // `editor_closed` brings it back once the last editor goes
                 // away. `doNothing` leaves it in the library with Cap out of
-                // the way. Every other path (instant, failures, `showOverlay`
-                // until an overlay exists) reshows the main window as before.
+                // the way, and `showOverlay` puts the recording in the
+                // floating overlay with Cap kept out of the way the same.
+                // Every other path (instant, failures) reshows the main window
+                // as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
                 // the completion and Cap stays out of the way. A recording
@@ -721,6 +754,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
+                    (Some(project_dir), crate::store::PostStudioBehaviour::ShowOverlay) => {
+                        crate::recordings_overlay::show_studio_recording(project_dir, cx);
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
                     (None, _) if keep_hidden_after_instant => {
                         tracing::info!("main window kept hidden after the Instant recording");
                         park_idle_camera_preview(cx);
@@ -750,6 +788,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // net effect too, where `restart_recording` clears it and the
             // immediately-following `start_recording` puts it straight back.)
             restore_content_protection(cx);
+            crate::recordings_overlay::show_after(
+                crate::recordings_overlay::Capture::Recording,
+                cx,
+            );
         }
         last_phase = phase;
     })
@@ -3095,6 +3137,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
+        camera_preview_hidden: _,
         #[cfg(target_os = "linux")]
             clean_capture: _,
         #[cfg(target_os = "linux")]
@@ -4410,6 +4453,7 @@ pub fn open_camera_window(cx: &mut App) {
 }
 
 pub fn close_camera_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().camera_preview_hidden = false;
     if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
         #[cfg(not(target_os = "macos"))]
         if let Some(previous) = handle
@@ -6076,6 +6120,9 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 if flags.contains(&"link") {
                     export.destination = crate::editor_export::ExportDestination::Link;
                 }
+                if flags.contains(&"tracks") {
+                    export.use_tracks(None);
+                }
             }
             cx.notify();
         });
@@ -6090,7 +6137,12 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
         .await;
     let _ = handle.update(cx, |view, window, cx| {
         view.open_export(window, cx);
-        if let Some(export) = view.export.as_mut() {
+        let tracks = std::env::var("CAP_GPUI_AUTO_EXPORT_TRACKS").ok();
+        if let Some(export) = view.export.as_mut()
+            && let Some(tracks) = tracks.as_deref()
+        {
+            export.use_tracks(Some(tracks));
+        } else if let Some(export) = view.export.as_mut() {
             export.destination = crate::editor_export::ExportDestination::File;
             export.format = if path.extension().is_some_and(|extension| extension == "gif") {
                 crate::editor_export::ExportFormatKind::Gif
@@ -7251,6 +7303,63 @@ pub fn arm_screenshot_picker(kind: TargetType, cx: &mut App) {
     .ok();
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn camera_window_id(cx: &mut App) -> Option<scap_targets::WindowId> {
+    camera_window_number(cx).and_then(|number| number.to_string().parse().ok())
+}
+
+pub(crate) fn camera_preview_shown(cx: &App) -> bool {
+    let windows = cx.global::<AppWindows>();
+    windows.camera.is_some() && !windows.camera_preview_hidden
+}
+
+/// The bar's "Show camera preview". Hides and shows the bubble in place;
+/// Linux has no native hide for it, so there it closes and reopens.
+pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        if shown {
+            open_camera_window(cx);
+            // A bubble that could not open yet (a clean capture still holds
+            // it) stays hidden, so the next reopen tries again.
+            if cx.global::<AppWindows>().camera.is_some() {
+                cx.global_mut::<AppWindows>().camera_preview_hidden = false;
+            }
+        }
+        return;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let _ = handle;
+        if !shown {
+            close_camera_window(cx);
+            // Closing clears the flag; keep the choice so the end of the
+            // recording reopens the preview, as the other platforms do.
+            cx.global_mut::<AppWindows>().camera_preview_hidden = true;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if cx.global::<AppWindows>().camera_preview_hidden != shown {
+            return;
+        }
+        cx.global_mut::<AppWindows>().camera_preview_hidden = !shown;
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        if let Some(native) = native {
+            cx.spawn(async move |_| {
+                if shown {
+                    platform::order_front_native(&native);
+                } else {
+                    platform::hide_native(&native);
+                }
+            })
+            .detach();
+        }
+    }
+}
+
 fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
@@ -7310,15 +7419,12 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     }
 }
 
-/// Grow the bar's window upward to make room for an issue card above the
-/// bar, or shrink it back to the bar alone, leaving the bar where it is.
-/// `setFrame` re-enters gpui, so call this from a task.
-pub(crate) fn fit_controls_to_issue(native: &platform::NativeWindow, issue: bool, scale: f32) {
-    let height = f64::from(if issue {
-        CONTROLS_HEIGHT
-    } else {
-        CONTROLS_BAR_HEIGHT
-    });
+/// Grow the bar's window upward to `height` to make room for what sits above
+/// the bar (an issue, the drawing tools, the settings panel), or shrink it
+/// back, leaving the bar where it is. `setFrame` re-enters gpui, so call this
+/// from a task.
+pub(crate) fn fit_controls(native: &platform::NativeWindow, height: f32, scale: f32) {
+    let height = f64::from(height);
     let (x, y, width, current) = platform::window_frame(native);
     if width <= 0. {
         return;
@@ -7435,8 +7541,10 @@ fn open_controls(
 /// an overlay still on screen would be in the shot. Returns whether anything
 /// was up -- the caller's cue to wait the same 150ms the Tauri command waits.
 pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
+    let overlay_was_visible =
+        crate::recordings_overlay::hide_for(crate::recordings_overlay::Capture::Screenshot, cx);
     if cx.global::<AppWindows>().overlays.is_empty() {
-        return false;
+        return overlay_was_visible;
     }
     // The screenshot branch of `onRecordingStart` nulls the saved camera bounds
     // just like the recording branch does, so a parked bubble stays parked.
@@ -7468,10 +7576,11 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
         .iter()
         .map(|(_, handle)| *handle)
         .collect();
-    if overlays.is_empty() {
+    let recordings = crate::recordings_overlay::empty_for_screenshot(cx);
+    if overlays.is_empty() && recordings.is_none() {
         return None;
     }
-    let mut shown = Vec::new();
+    let mut shown: Vec<_> = recordings.into_iter().collect();
     for handle in overlays {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let scheduled = handle.update(cx, |view, window, cx| {
@@ -7517,9 +7626,16 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
-/// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, editor_choice: Option<bool>, cx: &mut App) {
+/// window if the picker had hidden it, since nothing else will. A capture an
+/// automation rule can delete gets no recordings overlay card.
+pub fn screenshot_finished(
+    captured: Option<PathBuf>,
+    editor_choice: Option<bool>,
+    rule_deletes: bool,
+    cx: &mut App,
+) {
     let Some(png) = captured else {
+        crate::recordings_overlay::screenshot_captured(None, cx);
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
             show_main_window(cx);
@@ -7527,6 +7643,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, editor_choice: Option<bool
         return;
     };
 
+    crate::recordings_overlay::screenshot_captured((!rule_deletes).then_some(png.as_path()), cx);
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
         settings
@@ -8230,9 +8347,48 @@ mod tests {
             main_closed_by_user: false,
             editor_hidden_for_picker: None,
             camera_park: CameraPark::default(),
+            camera_preview_hidden: false,
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    /// Linux hides the bar's camera preview by closing its window. The choice
+    /// must survive the close, or the end of the recording never reopens it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_linux_camera_preview_is_reopened_after_recording(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            windows.camera = Some(WindowHandle::new((u64::MAX - 1).into()));
+            cx.set_global(windows);
+            assert!(camera_preview_shown(cx));
+            set_camera_preview_shown(false, cx);
+            assert!(!camera_preview_shown(cx));
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
+    }
+
+    /// A clean capture keeps the bubble closed until its lease is released.
+    /// Asking to show the preview while the lease holds must keep it hidden,
+    /// so the reopen after the lease is released still brings it back.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_camera_preview_stays_hidden_while_a_clean_capture_holds_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            let mut lease = pending_clean_capture(RecordingMode::Studio, false);
+            lease.gate.started = true;
+            windows.clean_capture = Some(lease);
+            windows.camera_preview_hidden = true;
+            cx.set_global(windows);
+            set_camera_preview_shown(true, cx);
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
     }
 
     #[cfg(target_os = "linux")]

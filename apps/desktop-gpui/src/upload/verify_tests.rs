@@ -209,6 +209,7 @@ struct MockState {
     confirmations: Vec<Value>,
     deletes: u32,
     created: Vec<String>,
+    created_orgs: Vec<Option<String>>,
     deleted: Vec<String>,
     problems: Vec<String>,
 }
@@ -442,6 +443,11 @@ impl MockCap {
 
     pub(super) fn created(&self) -> Vec<String> {
         self.lock().created.clone()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn created_orgs(&self) -> Vec<Option<String>> {
+        self.lock().created_orgs.clone()
     }
 
     pub(super) fn deleted(&self) -> Vec<String> {
@@ -816,6 +822,7 @@ impl Server {
                     format!("verifyvideo{:04}", state.next_id)
                 });
                 state.created.push(id.clone());
+                state.created_orgs.push(query.get("orgId").cloned());
                 reply(200, json!({ "id": id }))
             }
             ("POST", "/api/upload/multipart/initiate") => {
