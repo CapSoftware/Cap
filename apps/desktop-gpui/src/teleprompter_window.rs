@@ -1034,6 +1034,9 @@ impl TeleprompterWindow {
             ui::Popover::glass(&theme, px(192.))
                 .bottom(px(48.))
                 .right(px(8.))
+                // It sits over the script: a click on a row must not also
+                // reach the field below and start a selection there.
+                .occlude()
                 .child(self.render_setting_toggle(
                     "cue-markers",
                     "icons/chevron-right.svg",
