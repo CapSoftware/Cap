@@ -12,7 +12,10 @@ import {
 	selectPage,
 	toggleSelection,
 } from "@/lib/cap-selection";
-import type { SelectAllView } from "@/lib/select-all-view";
+import {
+	MAX_SELECT_ALL_ITEMS,
+	type SelectAllView,
+} from "@/lib/select-all-view";
 
 export type CapSelection = ReturnType<typeof useCapSelection>;
 
@@ -29,6 +32,7 @@ export function useCapSelection({
 }) {
 	const [selected, setSelectedState] = useState<Video.VideoId[]>([]);
 	const [matchingCount, setMatchingCount] = useState<number | null>(null);
+	const [matchingTruncated, setMatchingTruncated] = useState(false);
 	const [isSelectingAll, setIsSelectingAll] = useState(false);
 	const anchorRef = useRef<Video.VideoId | null>(null);
 
@@ -92,9 +96,10 @@ export function useCapSelection({
 		if (!view) return;
 		setIsSelectingAll(true);
 		try {
-			const ids = await listCapIdsInView(view);
+			const { ids, truncated } = await listCapIdsInView(view);
 			setSelectedState(ids);
 			setMatchingCount(ids.length);
+			setMatchingTruncated(truncated);
 		} catch {
 			toast.error("Couldn't select every Cap. Please try again.");
 		} finally {
@@ -151,6 +156,8 @@ export function useCapSelection({
 		pageState,
 		canSelectAllMatching,
 		isAllMatching,
+		matchingTruncated: isAllMatching && matchingTruncated,
+		selectAllLimit: MAX_SELECT_ALL_ITEMS,
 		isSelectingAll,
 		selectAllMatching,
 		totalCount,

@@ -28,6 +28,8 @@ interface SelectedCapsBarProps {
 		CapSelection,
 		| "canSelectAllMatching"
 		| "isAllMatching"
+		| "matchingTruncated"
+		| "selectAllLimit"
 		| "isSelectingAll"
 		| "selectAllMatching"
 		| "totalCount"
@@ -101,11 +103,15 @@ export const SelectedCapsBar = ({
 								>
 									{selection.isSelectingAll
 										? "Selecting..."
-										: `Select all ${selection.totalCount?.toLocaleString("en-US")}`}
+										: (selection.totalCount ?? 0) > selection.selectAllLimit
+											? `Select the first ${selection.selectAllLimit.toLocaleString("en-US")}`
+											: `Select all ${selection.totalCount?.toLocaleString("en-US")}`}
 								</button>
 							) : selection?.isAllMatching ? (
 								<p className="text-xs text-gray-10">
-									Every Cap here is selected
+									{selection.matchingTruncated
+										? `The first ${selection.selectAllLimit.toLocaleString("en-US")} are selected`
+										: "Every Cap here is selected"}
 								</p>
 							) : (
 								moveLocation &&

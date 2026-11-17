@@ -18,18 +18,23 @@ import {
 	type SelectAllView,
 } from "@/lib/select-all-view";
 
+const capped = (ids: Video.VideoId[]) => ({
+	ids: ids.slice(0, MAX_SELECT_ALL_ITEMS),
+	truncated: ids.length > MAX_SELECT_ALL_ITEMS,
+});
+
 // Returns the ids behind "Select all N" for the exact list the page shows, so a
 // bulk action can run past the current page. The same filters as the page
 // queries apply, and shared lists require the same rights that let the page
 // show selection at all.
 export async function listCapIdsInView(
 	view: SelectAllView,
-): Promise<Video.VideoId[]> {
+): Promise<{ ids: Video.VideoId[]; truncated: boolean }> {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 
 	if (view.type === "personal" || view.type === "archived") {
-		if (!user.activeOrganizationId) return [];
+		if (!user.activeOrganizationId) return { ids: [], truncated: false };
 		const rows = await db()
 			.select({ id: videos.id })
 			.from(videos)
@@ -44,8 +49,8 @@ export async function listCapIdsInView(
 						: isNotNull(videos.archivedAt),
 				),
 			)
-			.limit(MAX_SELECT_ALL_ITEMS);
-		return rows.map((row) => row.id);
+			.limit(MAX_SELECT_ALL_ITEMS + 1);
+		return capped(rows.map((row) => row.id));
 	}
 
 	if (view.type === "space") {
@@ -63,8 +68,8 @@ export async function listCapIdsInView(
 					isNull(organizations.tombstoneAt),
 				),
 			)
-			.limit(MAX_SELECT_ALL_ITEMS);
-		return rows.map((row) => row.id);
+			.limit(MAX_SELECT_ALL_ITEMS + 1);
+		return capped(rows.map((row) => row.id));
 	}
 
 	const access = await getOrganizationAccess(
@@ -83,6 +88,6 @@ export async function listCapIdsInView(
 				isNull(sharedVideos.folderId),
 			),
 		)
-		.limit(MAX_SELECT_ALL_ITEMS);
-	return rows.map((row) => row.id);
+		.limit(MAX_SELECT_ALL_ITEMS + 1);
+	return capped(rows.map((row) => row.id));
 }
