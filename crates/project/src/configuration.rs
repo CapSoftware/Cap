@@ -3258,16 +3258,15 @@ impl ProjectStyleCache {
     }
 }
 
-/// Rounding a new project gets when its background first gains padding.
-/// Squircle corners at 5.5% of the shorter screen side match a 16 px fully
-/// smoothed corner on a 1080p screen to within 2 px² per corner.
+/// Rounding a new project gets when its background first gains padding: a
+/// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
 pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
-    /// and motion: even padding, a soft shadow fitted to a 0.3 opacity drop
-    /// shadow with a 160 px blur, and the new-project zoom spring. At zero padding both padding modes lay out
+    /// and motion: even padding, a lighter and softer card shadow, and the
+    /// new-project zoom spring. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
