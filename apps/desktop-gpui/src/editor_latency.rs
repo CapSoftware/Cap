@@ -131,7 +131,7 @@ pub(crate) fn presentations(marks: &[Mark]) -> (Vec<Presentation>, usize) {
 }
 
 /// What one input produced: the frame it asked for and, when that frame
-/// reached the screen, the stage times from the input onwards.
+/// reached the screen before anything newer did, the presentation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InputOutcome {
     pub target: Option<u32>,
@@ -146,7 +146,9 @@ pub(crate) struct InputOutcome {
 /// drag publishes the edit, then moves the preview time), and that demand with
 /// the first presentation of the same frame rendered after the input. A
 /// presentation from an earlier render of the same number (an edit that kept
-/// the frame) does not count.
+/// the frame) does not count, and neither does one painted after the screen
+/// already showed a newer input's frame: a drag that swings back to the same
+/// frame a second later is a new request, not a late answer to the old one.
 pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<InputOutcome> {
     let mut outcomes: Vec<InputOutcome> = Vec::new();
     for mark in marks {
@@ -170,17 +172,35 @@ pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<Inpu
             continue;
         };
         let at = outcomes[index].at;
-        let presentation = shown.iter().find(|presentation| {
-            presentation.frame == target
-                && presentation.painted > at
-                && presentation.rendered.is_some_and(|rendered| rendered >= at)
-        });
-        outcomes[index].shown = presentation.copied();
+        let later = &outcomes[index + 1..];
+        let answers_newer = |presentation: &Presentation| {
+            presentation.frame != target
+                && later.iter().any(|newer| {
+                    newer.target == Some(presentation.frame)
+                        && presentation
+                            .rendered
+                            .is_some_and(|rendered| rendered >= newer.at)
+                })
+        };
+        let mut presentation = None;
+        for candidate in shown.iter().filter(|candidate| candidate.painted > at) {
+            if answers_newer(candidate) {
+                break;
+            }
+            if candidate.frame == target
+                && candidate.rendered.is_some_and(|rendered| rendered >= at)
+            {
+                presentation = Some(*candidate);
+                break;
+            }
+        }
         let deadline = presentation.map(|presentation| presentation.painted);
-        outcomes[index].superseded = outcomes[index + 1..].iter().any(|later| {
-            later.target.is_some_and(|frame| frame != target)
-                && deadline.is_none_or(|deadline| later.at < deadline)
+        let superseded = later.iter().any(|newer| {
+            newer.target.is_some_and(|frame| frame != target)
+                && deadline.is_none_or(|deadline| newer.at < deadline)
         });
+        outcomes[index].shown = presentation;
+        outcomes[index].superseded = superseded;
     }
     outcomes
 }
@@ -295,6 +315,36 @@ mod tests {
         assert_eq!(
             outcomes[0].shown.map(|shown| millis(base, shown.painted)),
             Some(12.0)
+        );
+    }
+
+    #[test]
+    fn a_frame_revisited_after_newer_ones_is_not_a_late_answer() {
+        let base = Instant::now();
+        let marks = [
+            mark(Stage::Input, 0, 0, at(base, 0)),
+            mark(Stage::Demand, 4, 0, at(base, 0)),
+            mark(Stage::Input, 0, 0, at(base, 8)),
+            mark(Stage::Demand, 5, 0, at(base, 8)),
+            mark(Stage::Rendered, 5, 0, at(base, 12)),
+            mark(Stage::Arrived, 5, 1, at(base, 13)),
+            mark(Stage::Painted, 5, 1, at(base, 16)),
+            mark(Stage::Input, 0, 0, at(base, 1000)),
+            mark(Stage::Demand, 4, 0, at(base, 1000)),
+            mark(Stage::Rendered, 4, 0, at(base, 1004)),
+            mark(Stage::Arrived, 4, 2, at(base, 1005)),
+            mark(Stage::Painted, 4, 2, at(base, 1016)),
+        ];
+        let (shown, _) = presentations(&marks);
+        let outcomes = input_outcomes(&marks, &shown);
+        assert!(outcomes[0].shown.is_none());
+        assert!(outcomes[0].superseded);
+        assert_eq!(outcomes[1].shown.map(|shown| shown.frame), Some(5));
+        assert_eq!(
+            outcomes[2]
+                .shown
+                .map(|shown| millis(outcomes[2].at, shown.painted)),
+            Some(16.0)
         );
     }
 
