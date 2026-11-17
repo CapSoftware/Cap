@@ -70,7 +70,7 @@ fn first_packet_color_space(
 ) -> Option<ffmpeg::util::color::Space> {
     const MAX_PACKETS: usize = 64;
 
-    let mut packet = input
+    let packet = input
         .packets()
         .take(MAX_PACKETS)
         .find_map(|(stream, packet)| (stream.index() == stream_index).then_some(packet))?;
