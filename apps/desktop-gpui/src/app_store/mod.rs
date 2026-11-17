@@ -581,6 +581,7 @@ async fn load_assets(cx: &mut AsyncApp, cached_only: bool) {
         gpui_tokio::Tokio::spawn(cx, async move {
             let client = auth::api_client().ok()?;
             let mut loaded = Vec::new();
+            let mut dropped = Vec::new();
             for (asset, size) in wanted {
                 if asset.bytes > MAX_ASSET_BYTES {
                     continue;
@@ -588,7 +589,16 @@ async fn load_assets(cx: &mut AsyncApp, cached_only: bool) {
                 let Some(path) = asset_path(&asset) else {
                     continue;
                 };
-                if !path.is_file() {
+                // A cached file is trusted only while it still matches its
+                // hash: a torn write or an edited file is fetched again.
+                let cached =
+                    std::fs::read(&path).is_ok_and(|bytes| sha256_hex(&bytes) == asset.sha256);
+                if !cached {
+                    if path.exists() {
+                        tracing::warn!(sha256 = %asset.sha256, "Cached App Store asset no longer matches its hash");
+                        let _ = std::fs::remove_file(&path);
+                        dropped.push(asset.sha256.clone());
+                    }
                     if cached_only {
                         continue;
                     }
@@ -611,14 +621,17 @@ async fn load_assets(cx: &mut AsyncApp, cached_only: bool) {
                     .map(crate::library::rgba_to_render_image);
                 loaded.push((asset.sha256.clone(), path, thumbnail));
             }
-            Some(loaded)
+            Some((loaded, dropped))
         })
     });
-    let Ok(Some(loaded)) = task.await else {
+    let Ok(Some((loaded, dropped))) = task.await else {
         return;
     };
     cx.update(|cx| {
         cx.update_global::<AppStore, _>(|store, _| {
+            for sha256 in dropped {
+                store.assets.remove(&sha256);
+            }
             for (sha256, path, thumbnail) in loaded {
                 store.assets.insert(sha256.clone(), path);
                 if let Some(thumbnail) = thumbnail {
