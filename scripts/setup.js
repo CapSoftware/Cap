@@ -443,16 +443,15 @@ function onnxRuntimePackage(version, rid) {
 			await fs.rm(extractDir, { recursive: true, force: true });
 			if (process.platform === "win32")
 				await expandArchive(archivePath, extractDir);
-			else {
-				await fs.mkdir(extractDir, { recursive: true });
-				await execFile("bsdtar", [
-					"-xf",
+			else
+				await execFile("unzip", [
+					"-q",
+					"-o",
 					archivePath,
-					"-C",
+					`runtimes/${rid}/native/*`,
+					"-d",
 					extractDir,
-					`runtimes/${rid}/native`,
 				]);
-			}
 			return {
 				nativeDir: path.join(extractDir, "runtimes", rid, "native"),
 				cleanup: () => fs.rm(extractDir, { recursive: true, force: true }),
