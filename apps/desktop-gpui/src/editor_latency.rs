@@ -1,6 +1,7 @@
-//! `CAP_GPUI_LATENCY_PROBE=1`: timestamps every preview frame through the
-//! editor's pipeline, from the frame demand to the canvas paint that hands it
-//! to the compositor. Off, each mark is one `OnceLock` read.
+//! Timestamps every preview frame through the editor's pipeline, from the
+//! frame demand to the canvas paint that hands it to the compositor. Only
+//! `CAP_GPUI_AUTO_LATENCY_BENCH=1` turns it on, and that bench drains the marks
+//! after every scenario. Off, each mark is one `OnceLock` read.
 //!
 //! Stages, in pipeline order:
 //! * `Input` -- the harness's synthetic pointer or edit, just before it runs.
@@ -38,12 +39,11 @@ fn probe() -> Option<&'static Probe> {
     static PROBE: OnceLock<Option<Probe>> = OnceLock::new();
     PROBE
         .get_or_init(|| {
-            let enabled = |name: &str| std::env::var(name).is_ok_and(|value| value == "1");
-            (enabled("CAP_GPUI_LATENCY_PROBE") || enabled("CAP_GPUI_AUTO_LATENCY_BENCH")).then(
-                || Probe {
+            std::env::var("CAP_GPUI_AUTO_LATENCY_BENCH")
+                .is_ok_and(|value| value == "1")
+                .then(|| Probe {
                     marks: Mutex::new(Vec::with_capacity(1 << 16)),
-                },
-            )
+                })
         })
         .as_ref()
 }
@@ -80,7 +80,6 @@ pub(crate) fn take() -> Vec<Mark> {
     })
 }
 
-/// One distinct frame that reached the screen.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Presentation {
     pub frame: u32,
@@ -209,7 +208,6 @@ pub(crate) fn millis(from: Instant, to: Instant) -> f64 {
     to.saturating_duration_since(from).as_secs_f64() * 1000.0
 }
 
-/// `p50/p95/p99/max` over a sample set, in the samples' own unit.
 pub(crate) fn percentiles(samples: &mut [f64]) -> Option<[f64; 4]> {
     if samples.is_empty() {
         return None;
