@@ -803,6 +803,32 @@ impl RecordingSegmentDecoders {
         .await
     }
 
+    /// The raw frames the rendered export would composite for `segment_time`,
+    /// with the same offline waits, retries and initial-frame recovery.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn decode_for_export(
+        &self,
+        segment_time: f64,
+        needs_camera: bool,
+        needs_display: bool,
+        offsets: ClipOffsets,
+        frame_number: u32,
+        is_initial_frame: bool,
+        fps: u32,
+    ) -> Result<Option<DecodedSegmentFrames>, RenderingError> {
+        decode_segment_frames_with_retry(
+            self,
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            frame_number,
+            is_initial_frame,
+            fps,
+        )
+        .await
+    }
+
     async fn fetch_frames(
         &self,
         segment_time: f32,

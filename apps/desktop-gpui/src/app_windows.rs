@@ -6120,6 +6120,9 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 if flags.contains(&"link") {
                     export.destination = crate::editor_export::ExportDestination::Link;
                 }
+                if flags.contains(&"tracks") {
+                    export.use_tracks(None);
+                }
             }
             cx.notify();
         });
@@ -6134,7 +6137,12 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
         .await;
     let _ = handle.update(cx, |view, window, cx| {
         view.open_export(window, cx);
-        if let Some(export) = view.export.as_mut() {
+        let tracks = std::env::var("CAP_GPUI_AUTO_EXPORT_TRACKS").ok();
+        if let Some(export) = view.export.as_mut()
+            && let Some(tracks) = tracks.as_deref()
+        {
+            export.use_tracks(Some(tracks));
+        } else if let Some(export) = view.export.as_mut() {
             export.destination = crate::editor_export::ExportDestination::File;
             export.format = if path.extension().is_some_and(|extension| extension == "gif") {
                 crate::editor_export::ExportFormatKind::Gif

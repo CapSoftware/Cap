@@ -2558,6 +2558,7 @@ format = "फ़ॉर्मैट"
 frame_rate = "फ़्रेम रेट"
 quality = "क्वालिटी"
 resolution = "रेज़ोल्यूशन"
+tracks = "ट्रैक"
 
 [editor.export.stats]
 calculating = "गणना हो रही है…"
@@ -2569,6 +2570,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "साइज़ सटीक किया जा रहा है…"
 refining_time = "समय सटीक किया जा रहा है…"
 unavailable = "उपलब्ध नहीं"
+
+[editor.export.tracks]
+aligned = "ट्रैक आपके कट और स्पीड के हिसाब से चलते हैं, इसलिए किसी भी वीडियो एडिटर में एक साथ मेल खाते हैं। वीडियो बिना बैकग्राउंड या इफ़ेक्ट के साफ़ निकलता है।"
+audio_detail = "WAV · 48 kHz"
+camera = "कैमरा"
+choose_one = "एक्सपोर्ट करने के लिए कम से कम एक ट्रैक चुनें।"
+cta = "ट्रैक एक्सपोर्ट करें"
+exported = "ट्रैक एक्सपोर्ट हो गए"
+exporting = "ट्रैक एक्सपोर्ट हो रहे हैं"
+file_count = { one = "{count} फ़ाइल", other = "{count} फ़ाइलें" }
+file_only = "ट्रैक एक फ़ोल्डर में अलग-अलग फ़ाइलों के रूप में सेव होते हैं।"
+files = "फ़ाइलें"
+format = "ट्रैक"
+microphone = "माइक्रोफ़ोन"
+open_folder = "फ़ोल्डर खोलें"
+screen = "स्क्रीन"
+studio_only = "अलग-अलग ट्रैक सिर्फ़ Studio मोड में रिकॉर्ड होते हैं।"
+system_audio = "सिस्टम ऑडियो"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "टर्बो एक्सपोर्ट"
