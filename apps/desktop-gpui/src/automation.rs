@@ -729,6 +729,11 @@ struct FileFingerprint {
     modified: Option<std::time::SystemTime>,
     #[cfg(unix)]
     inode: (u64, u64),
+    /// Volume serial and NTFS file index. A copy keeps its source's modified
+    /// time on Windows, so length and time alone cannot tell a same-size file
+    /// put in its place from the one written.
+    #[cfg(windows)]
+    file_id: (u32, u64),
 }
 
 fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
@@ -740,7 +745,28 @@ fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
         modified: metadata.modified().ok(),
         #[cfg(unix)]
         inode: (metadata.dev(), metadata.ino()),
+        #[cfg(windows)]
+        file_id: windows_file_id(path)?,
     })
+}
+
+/// std opens with read, write and delete sharing, and the handle closes on
+/// return, so this never holds up a later delete of the file.
+#[cfg(windows)]
+fn windows_file_id(path: &Path) -> std::io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let file = std::fs::File::open(path)?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
 }
 
 impl GpuiAutomationHost {
