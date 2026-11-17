@@ -7,8 +7,11 @@ param(
 	[int]$Threads,
 	[string]$Exit,
 	[int]$N,
-	[string]$Wer = "nower"
+	[string]$Wer = "wer"
 )
+$dumps = "$env:RUNNER_TEMP\loopdumps"
+New-Item -ItemType Directory -Force $dumps | Out-Null
+Get-ChildItem $dumps -Filter *.dmp | Remove-Item -Force
 $codes = @{}
 $sw = [Diagnostics.Stopwatch]::StartNew()
 for ($i = 0; $i -lt $N; $i++) {
@@ -17,7 +20,9 @@ for ($i = 0; $i -lt $N; $i++) {
 	$psi.Arguments = "`"$Dir`" $Dll $Kind $Threads $Exit $Wer"
 	$psi.UseShellExecute = $false
 	$psi.RedirectStandardOutput = $true
+	$psi.RedirectStandardError = $true
 	$p = [Diagnostics.Process]::Start($psi)
+	$errTask = $p.StandardError.ReadToEndAsync()
 	$null = $p.StandardOutput.ReadToEnd()
 	if ($p.WaitForExit(15000)) {
 		$c = "0x{0:x8}" -f $p.ExitCode
@@ -25,11 +30,18 @@ for ($i = 0; $i -lt $N; $i++) {
 		$p.Kill()
 		$c = "hang"
 	}
+	if ($errTask.Result -match "terminate it in an unusual way|abnormal program termination") { $c = "$c+abort" }
 	if ($codes.ContainsKey($c)) { $codes[$c]++ } else { $codes[$c] = 1 }
 }
+Start-Sleep 2
+New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\keep" | Out-Null
+Get-ChildItem $dumps -Filter *.dmp | Select-Object -First 1 | Copy-Item -Destination "$env:RUNNER_TEMP\keep"
+$dumpCount = @(Get-ChildItem $dumps -Filter *.dmp).Count
+if ($dumpCount -gt 0) { $summary0 = " WER dumps=$dumpCount" } else { $summary0 = " WER dumps=0" }
 $ok = if ($codes.ContainsKey("0x00000000")) { $codes["0x00000000"] } else { 0 }
-$bad = $N - $ok
+$bad = [Math]::Max($N - $ok, $dumpCount)
 $summary = ($codes.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join " "
+$summary += $summary0
 $line = "| $env:RUNNER_LABEL | $Build | $Dll | $Kind x$Threads | $Exit | $N | $bad | {0:N2}% | $summary | {1:N0} s |" -f (100.0 * $bad / $N), $sw.Elapsed.TotalSeconds
 Write-Host $line
 Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $line
