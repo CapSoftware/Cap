@@ -1697,6 +1697,46 @@ mod tests {
         );
     }
 
+    /// The fallback only lengthens a lone frame: with more frames, a long
+    /// gap after the first (a static screen right after Resume) keeps every
+    /// timestamp where it was.
+    #[test]
+    fn remux_of_durationless_frames_keeps_their_timestamps() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_frames(&directory.path().join("source"), 3);
+        let source = directory.path().join("source.mp4");
+        concatenate_m4s_segments_with_init(&init, &segments, &source).unwrap();
+        let (source_time_base, source_packets) = video_packet_contents(&source);
+        let frame = i64::from(source_time_base.denominator())
+            / (30 * i64::from(source_time_base.numerator()));
+        let stamps = [0, 24 * frame, 25 * frame];
+        assert!(source_packets.iter().all(|packet| packet.pts == packet.dts));
+
+        let output = directory.path().join("output.mp4");
+        {
+            let mut ictx = ffmpeg::format::input(&source).unwrap();
+            let mut octx = ffmpeg::format::output(&output).unwrap();
+            let mut remuxer = super::StreamRemuxer::new(&ictx, &mut octx).unwrap();
+            for (index, (stream, mut packet)) in ictx.packets().enumerate() {
+                packet.set_pts(Some(stamps[index]));
+                packet.set_dts(Some(stamps[index]));
+                packet.set_duration(0);
+                remuxer
+                    .write_packet(packet, stream.time_base(), &mut octx)
+                    .unwrap();
+            }
+            octx.write_trailer().unwrap();
+        }
+        let (time_base, packets) = video_packet_contents(&output);
+        assert_eq!(time_base, source_time_base);
+        assert_eq!(
+            packets.iter().map(|packet| packet.pts).collect::<Vec<_>>(),
+            stamps.map(Some)
+        );
+        assert_eq!(packets[0].duration, 24 * frame);
+        assert_eq!(decoded_video_frame_count(&output), 3);
+    }
+
     #[test]
     fn validated_m4s_concat_preserves_packets_timestamps_and_all_frames() {
         let directory = tempfile::tempdir().unwrap();
