@@ -98,17 +98,20 @@ export function UpNextOverlay({
 		setAutoplay(readAutoplay());
 	}, []);
 
-	useEffect(
-		() =>
-			onPlayerMediaEvent(videoRef, ["ended", "play", "seeking"], (_, event) => {
+	useEffect(() => {
+		if (videoRef.current?.ended) setEnded(true);
+		return onPlayerMediaEvent(
+			videoRef,
+			["ended", "play", "seeking"],
+			(_, event) => {
 				if (event.type === "ended") {
 					setEnded(true);
 					setCancelled(false);
 					setRemaining(UP_NEXT_COUNTDOWN_SECONDS);
 				} else setEnded(false);
-			}),
-		[videoRef],
-	);
+			},
+		);
+	}, [videoRef]);
 
 	// The player goes fullscreen on its own root, which this card is not part
 	// of, so the countdown waits until the viewer can see it.
