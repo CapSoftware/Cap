@@ -213,7 +213,7 @@ export async function updateShareableLinkBrandColor({
 }) {
 	const playerColor = color === null ? null : normalizeHexColor(color);
 	if (color !== null && !playerColor) {
-		throw new Error("Enter a hex colour like #1F6FEB");
+		throw new Error("Enter a hex color like #1F6FEB");
 	}
 
 	const organization = await getManageableProOrganization(organizationId);

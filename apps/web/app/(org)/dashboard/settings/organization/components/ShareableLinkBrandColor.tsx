@@ -64,13 +64,13 @@ export const ShareableLinkBrandColor = () => {
 		},
 		onSuccess: (result) => {
 			toast.success(
-				result.color ? "Brand colour saved" : "Share pages use Cap blue again",
+				result.color ? "Brand color saved" : "Share pages use Cap blue again",
 			);
 			router.refresh();
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error ? error.message : "Couldn't save brand colour",
+				error instanceof Error ? error.message : "Couldn't save brand color",
 			);
 		},
 	});
@@ -93,14 +93,14 @@ export const ShareableLinkBrandColor = () => {
 	return (
 		<>
 			<SettingsRow
-				title="Brand colour"
+				title="Brand color"
 				meta={<ProChip />}
-				description="Colours the play button, progress bar and focus rings on your share pages and embeds."
+				description="Colors the play button, progress bar and focus rings on your share pages and embeds."
 			>
 				<div className="flex flex-col gap-5 mt-4 md:flex-row md:items-start">
 					<div className="flex flex-col flex-1 gap-4 min-w-0">
 						<fieldset className="flex flex-wrap gap-2 items-center">
-							<legend className="sr-only">Brand colour</legend>
+							<legend className="sr-only">Brand color</legend>
 							<Swatch
 								label="Cap blue"
 								color={CAP_PLAY_BLUE}
@@ -111,7 +111,7 @@ export const ShareableLinkBrandColor = () => {
 							{palette.map((color) => (
 								<Swatch
 									key={color}
-									label={`Brand colour ${color}`}
+									label={`Brand color ${color}`}
 									color={color}
 									selected={draft === color}
 									disabled={save.isPending}
@@ -127,7 +127,7 @@ export const ShareableLinkBrandColor = () => {
 								)}
 								style={customSelected ? { background: draft } : undefined}
 							>
-								<span className="sr-only">Custom colour</span>
+								<span className="sr-only">Custom color</span>
 								<input
 									type="color"
 									value={draft ?? CAP_PLAY_BLUE}
@@ -199,11 +199,11 @@ export const ShareableLinkBrandColor = () => {
 							className="min-h-[2.5rem] text-[13px] leading-5 text-gray-10"
 						>
 							{!hexValid
-								? "Use a six digit hex colour, like #1F6FEB."
+								? "Use a six digit hex color, like #1F6FEB."
 								: brand && !brand.accent
-									? "This colour is too dark to see on video, so the progress bar and focus rings stay white. The play button uses it."
+									? "This color is too dark to see on video, so the progress bar and focus rings stay white. The play button uses it."
 									: brand
-										? `The play icon is ${brand.foreground === "#FFFFFF" ? "white" : "dark"} on this colour so it stays readable.`
+										? `The play icon is ${brand.foreground === "#FFFFFF" ? "white" : "dark"} on this color so it stays readable.`
 										: "Share pages and embeds use Cap blue."}
 						</p>
 
@@ -268,7 +268,7 @@ function Swatch({
 		>
 			<input
 				type="radio"
-				name="brand-colour"
+				name="brand-color"
 				aria-label={label}
 				checked={selected}
 				disabled={disabled}
