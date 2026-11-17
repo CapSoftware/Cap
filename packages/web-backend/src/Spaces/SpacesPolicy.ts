@@ -16,14 +16,13 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 					repo.membership(user.id, spaceId).pipe(Effect.map(Option.isSome)),
 				);
 
+			// spaces.createdById survives the creator's removal from the
+			// organization, so creator access also needs current membership.
 			const isOwner = (spaceId: Space.SpaceIdOrOrganisationId) =>
-				Policy.policy(
-					Effect.fn(function* (user) {
-						const space = yield* repo.getById(spaceId);
-						if (Option.isNone(space)) return false;
-
-						return space.value.createdById === user.id;
-					}),
+				Policy.policy((user) =>
+					repo
+						.creatorWithOrganizationAccess(user.id, spaceId)
+						.pipe(Effect.map(Option.isSome)),
 				);
 
 			const isMember = (spaceId: Space.SpaceIdOrOrganisationId) =>
