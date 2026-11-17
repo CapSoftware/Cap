@@ -6,11 +6,14 @@ import {
 	normalizeCallToActionUrl,
 	normalizeHexColor,
 	parseShareCallToAction,
+	parseWorkspaceCallToAction,
 	readableTextColor,
+	resolveShareCallToAction,
 	type ShareCallToAction,
 	shouldShowCornerCard,
 	toStoredCallToAction,
 	validateCallToAction,
+	withoutWorkspaceCallToAction,
 } from "@/lib/share-call-to-action";
 
 describe("normalizeCallToActionUrl", () => {
@@ -279,5 +282,128 @@ describe("shouldShowCornerCard", () => {
 				cta: { ...cta, showWhilePlaying: false },
 			}),
 		).toBe(false);
+	});
+});
+
+describe("workspace call to action", () => {
+	const stored = {
+		label: "Talk to sales",
+		url: "https://example.com/sales",
+		color: "#12a150",
+		enabledAt: "2026-10-01T12:00:00.000Z",
+	};
+	const organizationSettings = (extra: Record<string, unknown> = {}) => ({
+		defaultCallToAction: { ...stored, ...extra },
+	});
+
+	it("parses a stored default and normalizes it like a video's", () => {
+		expect(parseWorkspaceCallToAction(organizationSettings())).toEqual({
+			callToAction: {
+				label: "Talk to sales",
+				url: "https://example.com/sales",
+				headline: null,
+				color: "#12A150",
+				showWhilePlaying: true,
+			},
+			enabledAt: stored.enabledAt,
+			includeExisting: false,
+		});
+	});
+
+	it.each([
+		null,
+		{},
+		{ defaultCallToAction: null },
+		{ defaultCallToAction: { ...stored, url: "javascript:alert(1)" } },
+		{ defaultCallToAction: { ...stored, enabledAt: undefined } },
+		{ defaultCallToAction: { ...stored, enabledAt: "not a date" } },
+	])("ignores a missing or unusable default: %j", (settings) => {
+		expect(parseWorkspaceCallToAction(settings)).toBeNull();
+	});
+
+	const resolve = (
+		videoSettings: unknown,
+		videoCreatedAt: Date | string | null,
+		extra: Record<string, unknown> = {},
+	) =>
+		resolveShareCallToAction({
+			videoSettings,
+			organizationSettings: organizationSettings(extra),
+			videoCreatedAt,
+		});
+
+	it("applies to videos made at or after the moment it was set", () => {
+		expect(resolve({}, new Date(stored.enabledAt))).toMatchObject({
+			callToAction: { label: "Talk to sales" },
+			source: "workspace",
+		});
+		expect(resolve(null, "2026-11-01T00:00:00.000Z").source).toBe("workspace");
+	});
+
+	it("leaves older videos alone unless it covers existing videos", () => {
+		expect(resolve({}, "2026-10-01T11:59:59.000Z")).toEqual({
+			callToAction: null,
+			source: null,
+			workspaceCallToAction: null,
+		});
+		expect(resolve({}, null).callToAction).toBeNull();
+		expect(
+			resolve({}, "2020-01-01T00:00:00.000Z", { includeExisting: true }).source,
+		).toBe("workspace");
+	});
+
+	it("lets a video's own call to action win", () => {
+		const result = resolve(
+			{ callToAction: { label: "Mine", url: "https://example.com/" } },
+			"2026-11-01T00:00:00.000Z",
+		);
+		expect(result.source).toBe("video");
+		expect(result.callToAction?.label).toBe("Mine");
+		expect(result.workspaceCallToAction?.label).toBe("Talk to sales");
+	});
+
+	it("respects a video that turned it off", () => {
+		expect(
+			resolve({ callToAction: false }, "2026-11-01T00:00:00.000Z"),
+		).toMatchObject({ callToAction: null, source: "off" });
+	});
+
+	it("falls back to the default when a video's own call to action is broken", () => {
+		expect(
+			resolve(
+				{ callToAction: { label: "Bad", url: "javascript:alert(1)" } },
+				"2026-11-01T00:00:00.000Z",
+			).source,
+		).toBe("workspace");
+	});
+
+	it("keeps today's behaviour when there is no default", () => {
+		expect(
+			resolveShareCallToAction({
+				videoSettings: {
+					callToAction: { label: "Mine", url: "https://example.com/" },
+				},
+				organizationSettings: { disableComments: true },
+				videoCreatedAt: new Date(),
+			}),
+		).toMatchObject({ source: "video", workspaceCallToAction: null });
+		expect(
+			resolveShareCallToAction({
+				videoSettings: { callToAction: false },
+				organizationSettings: null,
+				videoCreatedAt: new Date(),
+			}).callToAction,
+		).toBeNull();
+	});
+
+	it("strips the default from settings sent to viewers", () => {
+		const settings = { disableComments: true, ...organizationSettings() };
+		expect(withoutWorkspaceCallToAction(settings)).toEqual({
+			disableComments: true,
+		});
+		expect(settings.defaultCallToAction).toBeDefined();
+		const plain = { disableComments: true };
+		expect(withoutWorkspaceCallToAction(plain)).toBe(plain);
+		expect(withoutWorkspaceCallToAction(null)).toBeNull();
 	});
 });
