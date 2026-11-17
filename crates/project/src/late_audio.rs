@@ -5,6 +5,12 @@ use crate::{CLIP_ALIGNMENT_VERSION, ProjectConfiguration, StudioRecordingMeta};
 /// recorder's and the decoder's media durations differing by a frame.
 const PRISTINE_START_TOLERANCE_SECS: f64 = 1e-6;
 const PRISTINE_END_TOLERANCE_SECS: f64 = 0.05;
+/// How far past its own span an edit may still change a clip's frames: a
+/// zoom springs back after it ends, keyboard keys fade out after theirs, an
+/// instant zoom snaps just around its edges. A scene's fade-in, which starts
+/// `transition_in` before it, is added on top. Erring wide only keeps a clip
+/// on its old footage, which is always safe.
+const EDIT_REACH_SECS: f64 = 3.0;
 
 /// Moves a project saved before late audio stopped setting a segment's start
 /// (`LATE_AUDIO_START_SECS`) onto the current segment clock. Only segments
@@ -148,7 +154,8 @@ pub fn late_audio_trim_limits(meta: &StudioRecordingMeta, durations: &[f64]) -> 
 /// Whether recording clip `index` is on the timeline exactly as recorded:
 /// one timeline clip from its start to its end at normal speed, no transition
 /// into or out of it, no fullscreen text hold anywhere (it moves output time),
-/// and no item on any edited-time track over it. Only then can its footage
+/// and no item on any edited-time track over it or within
+/// [`EDIT_REACH_SECS`] of it. Only then can its footage
 /// move under the timeline without moving anything the user placed.
 fn is_untouched_clip(
     project: &ProjectConfiguration,
@@ -181,12 +188,19 @@ fn is_untouched_clip(
         return false;
     };
     let clip_end = clip_start + segment.duration();
-    let over = |start: f64, end: f64| start < clip_end && end > clip_start;
+    let over = |start: f64, end: f64| {
+        start < clip_end + EDIT_REACH_SECS && end > clip_start - EDIT_REACH_SECS
+    };
     let mut spans = timeline
         .zoom_segments
         .iter()
         .map(|s| (s.start, s.end))
-        .chain(timeline.scene_segments.iter().map(|s| (s.start, s.end)))
+        .chain(
+            timeline
+                .scene_segments
+                .iter()
+                .map(|s| (s.start - s.transition_in.max(0.0), s.end)),
+        )
         .chain(timeline.mask_segments.iter().map(|s| (s.start, s.end)))
         .chain(timeline.text_segments.iter().map(|s| (s.start, s.end)))
         .chain(timeline.keyboard_segments.iter().map(|s| (s.start, s.end)))
@@ -801,7 +815,8 @@ mod tests {
             migrated_late_clip_start(|p| {
                 p.timeline.as_mut().unwrap().zoom_segments =
                     serde_json::from_value(serde_json::json!([
-                        { "start": 1.0, "end": 9.99, "amount": 2.0, "mode": "auto" }
+                        { "start": 1.0, "end": 6.9, "amount": 2.0, "mode": "auto" },
+                        { "start": 23.1, "end": 25.0, "amount": 2.0, "mode": "auto" }
                     ]))
                     .unwrap();
             }),
@@ -851,6 +866,20 @@ mod tests {
                 p.timeline.as_mut().unwrap().text_segments =
                     serde_json::from_value(serde_json::json!([{ "start": 12.0, "end": 13.0 }]))
                         .unwrap();
+            }),
+            ("zoom springing back into it", |p| {
+                p.timeline.as_mut().unwrap().zoom_segments =
+                    serde_json::from_value(serde_json::json!([
+                        { "start": 5.0, "end": 9.0, "amount": 2.0, "mode": "auto" }
+                    ]))
+                    .unwrap();
+            }),
+            ("scene fading in over its end", |p| {
+                p.timeline.as_mut().unwrap().scene_segments =
+                    serde_json::from_value(serde_json::json!([
+                        { "start": 24.0, "end": 26.0, "mode": "cameraOnly", "transitionIn": 1.5 }
+                    ]))
+                    .unwrap();
             }),
             ("fullscreen text elsewhere", |p| {
                 p.timeline.as_mut().unwrap().text_segments =
