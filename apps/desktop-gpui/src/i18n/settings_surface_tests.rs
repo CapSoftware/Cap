@@ -242,7 +242,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),
-        (tr::settings::options::post_studio::show_cap(), "Show Cap"),
+        (
+            tr::settings::options::post_studio::show_overlay(),
+            "Show in overlay",
+        ),
         (
             tr::settings::options::post_studio::do_nothing(),
             "Do nothing",
@@ -363,12 +366,12 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Edit right away",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap(),
-            "Show Cap",
+            tr::settings::shortcuts::outcome::studio_show_overlay(),
+            "Show overlay",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap_hint(),
-            "Back to the recorder",
+            tr::settings::shortcuts::outcome::studio_show_overlay_hint(),
+            "Copy, share or export",
         ),
         (
             tr::settings::shortcuts::outcome::studio_do_nothing(),

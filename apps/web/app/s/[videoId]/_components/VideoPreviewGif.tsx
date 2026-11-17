@@ -66,3 +66,29 @@ function PreviewGifImage({
 		/>
 	);
 }
+
+export function VideoPoster({
+	src,
+	visible,
+}: {
+	src: string;
+	visible: boolean;
+}) {
+	return (
+		<Image
+			src={src}
+			alt=""
+			aria-hidden="true"
+			unoptimized
+			fill
+			sizes="(max-width: 768px) 100vw, 75vw"
+			loading="eager"
+			fetchPriority="high"
+			draggable={false}
+			className={clsx(
+				"object-contain absolute inset-0 z-[5] w-full h-full bg-black pointer-events-none transition-opacity duration-200",
+				visible ? "opacity-100" : "opacity-0",
+			)}
+		/>
+	);
+}

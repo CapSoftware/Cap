@@ -1,11 +1,16 @@
 name: Windows recording encoder
 
 # The segmented recording encoder's tests on Windows, the only platform where
-# a hardware encoder that fails mid-recording is replaced with libx264.
+# a hardware encoder that fails mid-recording is replaced with libx264, and the
+# Media Foundation self-test that runs in a child process because Intel's
+# transform faults on odd frame sizes.
 on:
   pull_request:
     paths:
       - "crates/enc-ffmpeg/**"
+      - "crates/enc-mediafoundation/**"
+      - "crates/media-info/**"
+      - "crates/export/tests/windows_odd_size_export.rs"
       - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
       - "Cargo.lock"
       - ".github/workflows/windows-recording-encoder.yml"
@@ -13,6 +18,9 @@ on:
     branches: [main]
     paths:
       - "crates/enc-ffmpeg/**"
+      - "crates/enc-mediafoundation/**"
+      - "crates/media-info/**"
+      - "crates/export/tests/windows_odd_size_export.rs"
       - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
       - "Cargo.lock"
       - ".github/workflows/windows-recording-encoder.yml"
@@ -55,3 +63,24 @@ jobs:
 
       - name: Segmented encoder tests
         run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture
+
+      - name: Encoder selection and isolated self-test tests
+        run: cargo test --locked -p cap-media-info --lib intel_h264_mft && cargo test --locked -p cap-enc-ffmpeg --lib self_test -- --nocapture
+
+      # The fault runs wherever the self-test runs: in a child it fails only
+      # the child, in this process it would end the test with 0xc0000005.
+      - name: Media Foundation self-test fault falls back (access violation)
+        env:
+          CAP_H264_SELF_TEST_FAULT: access_violation
+        run: cargo test --locked -p cap-enc-ffmpeg --lib video::h264::self_test_tests::media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
+
+      - name: Media Foundation self-test fault falls back (fast fail 0xc0000409)
+        env:
+          CAP_H264_SELF_TEST_FAULT: abort
+        run: cargo test --locked -p cap-enc-ffmpeg --lib video::h264::self_test_tests::media_foundation_self_test_fault_falls_back_to_libx264_at_odd_sizes -- --exact --nocapture
+
+      - name: Odd size export with a faulting Media Foundation self-test
+        env:
+          CAP_DEBUG_H264_ENCODER_ORDER: h264_mf,libx264
+          CAP_H264_SELF_TEST_FAULT: access_violation
+        run: cargo test --locked -p cap-export --test windows_odd_size_export -- --nocapture --test-threads=1

@@ -186,7 +186,7 @@ import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
-import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
@@ -5452,7 +5452,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								await tx
 									.update(Db.organizations)
 									.set({
-										settings: organizationSettingsKeepingLinkOverride(next),
+										settings: organizationSettingsKeepingRowOwnedKeys(next),
 										updatedAt: now,
 									})
 									.where(eq(Db.organizations.id, path.organizationId));

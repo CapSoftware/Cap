@@ -411,6 +411,29 @@ pub fn ensure_even(value: u32) -> u32 {
     if adjusted == 0 { 2 } else { adjusted }
 }
 
+/// Intel's Media Foundation H264 encoder (`mfx_mft_h264ve_64.dll`) is
+/// documented to take widths in multiples of 16 and faults with an access
+/// violation instead of failing when a recording's odd capture width reaches
+/// it (#4016, #3928). Its frames are also bounded by H.264 level 5.2 (36864
+/// macroblocks) and Intel's 4096 pixel encode limit. Heights such as 1080 are
+/// padded inside the encoder and stay allowed.
+pub fn intel_h264_mft_accepts_frame_size(width: u32, height: u32) -> bool {
+    const MAX_DIMENSION: u32 = 4096;
+    const MAX_MACROBLOCKS: u32 = 36_864;
+    width > 0
+        && height > 0
+        && width.is_multiple_of(16)
+        && width <= MAX_DIMENSION
+        && height <= MAX_DIMENSION
+        && (width / 16) * height.div_ceil(16) <= MAX_MACROBLOCKS
+}
+
+/// Whether a Media Foundation encoder transform's friendly name is Intel's,
+/// e.g. "Intel® Quick Sync Video H.264 Encoder MFT".
+pub fn is_intel_h264_mft(friendly_name: &str) -> bool {
+    friendly_name.to_ascii_lowercase().contains("intel")
+}
+
 pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
     match sample_format {
         SampleFormat::U8 => Some(Sample::U8(Type::Packed)),
@@ -426,6 +449,60 @@ pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intel_h264_mft_frame_sizes() {
+        for (width, height) in [
+            (1280, 720),
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+            (1440, 900),
+            (1920, 1200),
+            (1072, 1920),
+            (16, 16),
+            (4096, 2304),
+            (2304, 4096),
+            (1920, 812),
+            (1920, 2),
+        ] {
+            assert!(
+                intel_h264_mft_accepts_frame_size(width, height),
+                "{width}x{height}"
+            );
+        }
+        for (width, height) in [
+            (1438, 812),
+            (1436, 810),
+            (1366, 768),
+            (1080, 1920),
+            (1914, 1080),
+            (1922, 1080),
+            (2, 2),
+            (0, 1080),
+            (1920, 0),
+            (5120, 2880),
+            (4112, 2160),
+            (1920, 4112),
+            (4096, 4096),
+        ] {
+            assert!(
+                !intel_h264_mft_accepts_frame_size(width, height),
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn intel_h264_mft_names() {
+        assert!(is_intel_h264_mft(
+            "Intel® Quick Sync Video H.264 Encoder MFT"
+        ));
+        assert!(is_intel_h264_mft("INTEL HEVC Encoder"));
+        assert!(!is_intel_h264_mft("NVIDIA H.264 Encoder MFT"));
+        assert!(!is_intel_h264_mft("AMDh264Encoder"));
+        assert!(!is_intel_h264_mft("H264 Encoder MFT"));
+    }
 
     mod audio_info {
         use super::*;
