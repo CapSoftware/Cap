@@ -13,6 +13,7 @@ import { useState } from "react";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { MoveLocation } from "@/lib/move-items";
+import { useLibraryDrag } from "./DragHint";
 import { MoveItemsDialog } from "./MoveItemsDialog";
 import type { CapSelection } from "./useCapSelection";
 
@@ -63,6 +64,7 @@ export const SelectedCapsBar = ({
 }: SelectedCapsBarProps) => {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [moveOpen, setMoveOpen] = useState(false);
+	const dragging = useLibraryDrag() !== null;
 
 	const handleConfirmDelete = () => {
 		deleteSelectedCaps?.();
@@ -76,7 +78,13 @@ export const SelectedCapsBar = ({
 					<motion.div
 						className="flex flex-wrap fixed inset-x-3 bottom-[152px] z-50 gap-x-3 gap-y-2 justify-between items-center p-3 mx-auto max-w-2xl rounded-xl border shadow-lg sm:inset-x-0 sm:bottom-12 sm:max-lg:max-w-[min(42rem,calc(100vw-200px))] border-gray-2 bg-gray-1"
 						initial={{ opacity: 0, y: 10, scale: 0.9 }}
-						animate={{ opacity: 1, y: 0, scale: 1 }}
+						animate={
+							dragging
+								? { opacity: 0, y: 10, scale: 0.98 }
+								: { opacity: 1, y: 0, scale: 1 }
+						}
+						aria-hidden={dragging || undefined}
+						style={{ pointerEvents: dragging ? "none" : undefined }}
 						exit={{
 							opacity: 0,
 							y: 10,
