@@ -761,7 +761,9 @@ impl RecordingSubscription {
             return;
         }
         if let Some(pending) = state.pending.take() {
-            if pending.id == id && !pending.failed.load(Ordering::Acquire) {
+            if pending.id == id
+                && (!pending.failed.load(Ordering::Acquire) || state.current_device_lost())
+            {
                 state.current = Some(pending);
             } else {
                 state.pending = Some(pending);
@@ -5191,6 +5193,27 @@ mod recording_subscription_tests {
         assert!(subscription.accepts_frame(9));
         assert!(!subscription.device_lost());
         assert!(subscription.retire().is_none());
+
+        let subscription =
+            RecordingSubscription::new(3, tokio_util::sync::CancellationToken::new());
+        subscription.state.lock().unwrap().current = Some(lost);
+        let broken = Arc::new(StreamHealth::new(10));
+        subscription.begin_reconnect(broken.clone());
+        record_stream_error(&broken, &StreamError::DeviceNotAvailable);
+        subscription.commit_reconnect(10);
+        assert!(subscription.error().is_none() && subscription.device_lost());
+        let failing = Arc::new(StreamHealth::new(11));
+        subscription.begin_reconnect(failing.clone());
+        record_stream_error(
+            &failing,
+            &StreamError::BackendSpecific {
+                err: cpal::BackendSpecificError {
+                    description: "backend".into(),
+                },
+            },
+        );
+        subscription.commit_reconnect(11);
+        assert!(subscription.error().is_some());
     }
 
     #[test]
