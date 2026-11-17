@@ -186,15 +186,18 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 			expect(byId.get(theirs)?.archivedAt).toBeNull();
 
-			expect((await listCapIdsInView({ type: "personal" })).sort()).toEqual(
+			expect((await listCapIdsInView({ type: "personal" })).ids.sort()).toEqual(
 				[kept].sort(),
 			);
-			expect(await listCapIdsInView({ type: "archived" })).toEqual([mine]);
+			expect(await listCapIdsInView({ type: "archived" })).toEqual({
+				ids: [mine],
+				truncated: false,
+			});
 
 			expect(
 				await setVideosArchived({ videoIds: [mine], archived: false }),
 			).toEqual({ updated: 1 });
-			expect((await listCapIdsInView({ type: "personal" })).sort()).toEqual(
+			expect((await listCapIdsInView({ type: "personal" })).ids.sort()).toEqual(
 				[mine, kept].sort(),
 			);
 		});
@@ -303,9 +306,34 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 			expect(await order("custom")).toEqual([v5, v1, v2, v4, v3]);
 
+			await Promise.all([
+				reorderSpaceVideos({
+					spaceId,
+					videoIds: [v3],
+					placement: { type: "start" },
+				}),
+				reorderSpaceVideos({
+					spaceId,
+					videoIds: [v4],
+					placement: { type: "start" },
+				}),
+			]);
+			const positions = await database()
+				.select({ position: Db.spaceVideos.position })
+				.from(Db.spaceVideos)
+				.where(eq(Db.spaceVideos.spaceId, spaceId as never));
+			expect(
+				positions
+					.map((row) => row.position)
+					.sort((a, b) => Number(a) - Number(b)),
+			).toEqual([0, 1, 2, 3, 4]);
+			expect((await order("custom")).slice(0, 2).sort()).toEqual(
+				[v3, v4].sort(),
+			);
+
 			await setSpaceVideoOrder(spaceId, "oldest");
 			expect(
-				(await listCapIdsInView({ type: "space", spaceId })).sort(),
+				(await listCapIdsInView({ type: "space", spaceId })).ids.sort(),
 			).toEqual([v1, v2, v3, v4, v5].sort());
 		}, 120_000);
 
