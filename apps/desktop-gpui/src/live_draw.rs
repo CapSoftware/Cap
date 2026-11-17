@@ -197,19 +197,39 @@ fn append_point(points: &mut Vec<Pt>, at: Pt) {
     }
 }
 
-/// Runs of at most [`CHUNK`] points that overlap by one, so the painted line
-/// stays continuous.
-fn chunks(points: &[Pt]) -> impl Iterator<Item = &[Pt]> {
-    let mut start = 0;
-    std::iter::from_fn(move || {
-        if start >= points.len() {
-            return None;
-        }
-        let end = (start + CHUNK).min(points.len());
-        let run = &points[start..end];
-        start = if end == points.len() { end } else { end - 1 };
-        Some(run)
-    })
+/// Seals every full run of [`CHUNK`] points from `*from` on. Each run ends
+/// on a seam added halfway along its last segment, where the next run
+/// starts. Both ends there are butt caps square to the same direction, so a
+/// translucent highlighter is painted once across the seam, with no gap.
+fn seal_runs(points: &mut Vec<Pt>, from: &mut usize, width: f32, sealed: &mut Vec<Path<Pixels>>) {
+    while points.len() - *from >= CHUNK {
+        let seam = *from + CHUNK - 1;
+        let (before, after) = (points[seam - 1], points[seam]);
+        points.insert(
+            seam,
+            Pt::new((before.x + after.x) / 2., (before.y + after.y) / 2.),
+        );
+        sealed.extend(line_path(
+            &points[*from..=seam],
+            width,
+            start_cap(*from),
+            LineCap::Butt,
+        ));
+        *from = seam;
+    }
+}
+
+/// The run after the sealed ones, round at the stroke's end.
+fn last_run(points: &[Pt], from: usize, width: f32) -> Option<Path<Pixels>> {
+    line_path(&points[from..], width, start_cap(from), LineCap::Round)
+}
+
+fn start_cap(from: usize) -> LineCap {
+    if from == 0 {
+        LineCap::Round
+    } else {
+        LineCap::Butt
+    }
 }
 
 /// A finished stroke, tessellated once when it is committed.
@@ -248,11 +268,12 @@ impl Draft {
     }
 
     fn seal(&mut self) {
-        while self.points.len() - self.sealed_from >= CHUNK {
-            let run = &self.points[self.sealed_from..self.sealed_from + CHUNK];
-            self.sealed.extend(line_path(run, self.tool.width()));
-            self.sealed_from += CHUNK - 1;
-        }
+        seal_runs(
+            &mut self.points,
+            &mut self.sealed_from,
+            self.tool.width(),
+            &mut self.sealed,
+        );
     }
 
     /// The freehand run after the sealed ones, ending at the pointer.
@@ -261,7 +282,12 @@ impl Draft {
         if run.last() != Some(&self.current) {
             run.push(self.current);
         }
-        line_path(&run, self.tool.width())
+        line_path(
+            &run,
+            self.tool.width(),
+            start_cap(self.sealed_from),
+            LineCap::Round,
+        )
     }
 
     fn uses_sealed(&self) -> bool {
@@ -435,10 +461,15 @@ fn to_point(at: Pt) -> gpui::Point<gpui::Pixels> {
 }
 
 fn stroke_builder(width: f32) -> PathBuilder {
+    stroke_builder_capped(width, LineCap::Round, LineCap::Round)
+}
+
+fn stroke_builder_capped(width: f32, start: LineCap, end: LineCap) -> PathBuilder {
     PathBuilder::stroke(px(width)).with_style(PathStyle::Stroke(
         StrokeOptions::default()
             .with_line_width(width)
-            .with_line_cap(LineCap::Round)
+            .with_start_cap(start)
+            .with_end_cap(end)
             .with_line_join(LineJoin::Round)
             .with_tolerance(STROKE_TOLERANCE),
     ))
@@ -495,10 +526,10 @@ pub fn simplify(points: &[Pt], tolerance: f32) -> Vec<Pt> {
 }
 
 /// One run of a line. A single point is a dot.
-fn line_path(points: &[Pt], width: f32) -> Option<Path<Pixels>> {
+fn line_path(points: &[Pt], width: f32, start: LineCap, end: LineCap) -> Option<Path<Pixels>> {
     let points = simplify(points, SIMPLIFY_TOLERANCE);
     let first = *points.first()?;
-    let mut builder = stroke_builder(width);
+    let mut builder = stroke_builder_capped(width, start, end);
     builder.move_to(to_point(first));
     if points.len() == 1 {
         builder.line_to(to_point(Pt::new(first.x + 0.01, first.y)));
@@ -512,9 +543,13 @@ fn line_path(points: &[Pt], width: f32) -> Option<Path<Pixels>> {
 fn build_paths(shape: &Shape, tool: Tool) -> Vec<Path<Pixels>> {
     let width = tool.width();
     match shape {
-        Shape::Line(points) => chunks(points)
-            .filter_map(|run| line_path(run, width))
-            .collect(),
+        Shape::Line(points) => {
+            let mut points = points.clone();
+            let (mut from, mut paths) = (0, Vec::new());
+            seal_runs(&mut points, &mut from, width, &mut paths);
+            paths.extend(last_run(&points, from, width));
+            paths
+        }
         Shape::Arrow { from, to } => {
             let angle = f64::from((to.y - from.y).atan2(to.x - from.x));
             let head = crate::screenshot_annotations::arrow_head_points(
@@ -1087,34 +1122,63 @@ mod tests {
         assert_eq!(opacity_after(HOLD + FADE), None);
     }
 
+    fn painted_area(paths: &[Path<Pixels>]) -> f32 {
+        paths
+            .iter()
+            .flat_map(|path| path.vertices.chunks(3))
+            .map(|triangle| {
+                let [a, b, c] = [0, 1, 2].map(|i| triangle[i].xy_position);
+                let (ab, ac) = (b - a, c - a);
+                (f32::from(ab.x) * f32::from(ac.y) - f32::from(ab.y) * f32::from(ac.x)).abs() / 2.
+            })
+            .sum()
+    }
+
     #[test]
-    fn long_strokes_paint_in_overlapping_runs() {
-        let points: Vec<Pt> = (0..600).map(|i| Pt::new(i as f32, 0.)).collect();
-        let runs: Vec<&[Pt]> = chunks(&points).collect();
-        assert_eq!(runs.len(), 3);
-        assert!(runs.iter().all(|run| run.len() <= CHUNK));
-        assert_eq!(runs[0].last(), runs[1].first());
-        assert_eq!(runs[1].last(), runs[2].first());
-        assert_eq!(runs[2].last(), points.last());
-        assert_eq!(chunks(&points[..1]).count(), 1);
-        assert_eq!(chunks(&[]).count(), 0);
+    fn long_strokes_meet_on_seams_without_painting_twice() {
+        let width = Tool::Highlighter.width();
+        let points: Vec<Pt> = (0..600).map(|i| Pt::new(i as f32 * 2., 0.)).collect();
+        let paths = build_paths(&Shape::Line(points.clone()), Tool::Highlighter);
+        assert_eq!(paths.len(), 3);
+        let whole = 1198. * width + std::f32::consts::PI * (width / 2.).powi(2);
+        let painted = painted_area(&paths);
+        assert!(
+            (painted - whole).abs() < whole * 0.002,
+            "painted {painted}, one stroke {whole}"
+        );
+
+        let mut seamed = points.clone();
+        let (mut from, mut sealed) = (0, Vec::new());
+        seal_runs(&mut seamed, &mut from, width, &mut sealed);
+        assert_eq!(sealed.len(), 2);
+        assert_eq!(seamed.len(), points.len() + 2);
+        for seam in [CHUNK - 1, 2 * CHUNK - 2] {
+            let (before, at, after) = (seamed[seam - 1], seamed[seam], seamed[seam + 1]);
+            assert!(close(
+                at,
+                Pt::new((before.x + after.x) / 2., (before.y + after.y) / 2.)
+            ));
+        }
+        assert_eq!(from, 2 * CHUNK - 2);
+        assert_eq!(build_paths(&Shape::Line(vec![Pt::new(5., 5.)]), Tool::Pen).len(), 1);
     }
 
     #[test]
     fn a_long_freehand_draft_seals_the_runs_a_full_repaint_would_draw() {
-        let mut draft = Draft::new(Tool::Pen, COLORS[0], Pt::new(0., 0.), false);
+        let mut draft = Draft::new(Tool::Highlighter, COLORS[0], Pt::new(0., 0.), false);
+        let mut points = vec![Pt::new(0., 0.)];
         for i in 1..600 {
             let at = Pt::new(i as f32 * 2., (i % 7) as f32);
             draft.current = at;
             append_point(&mut draft.points, at);
+            append_point(&mut points, at);
             draft.seal();
         }
-        let runs: Vec<&[Pt]> = chunks(&draft.points).collect();
-        let count = runs.len();
-        assert_eq!(count, 3);
-        assert_eq!(draft.sealed.len(), count - 1);
-        assert_eq!(&draft.points[draft.sealed_from..], runs[count - 1]);
-        assert_eq!(draft.into_paths().map(|paths| paths.len()), Some(count));
+        assert_eq!(draft.sealed.len(), 2);
+        let whole = build_paths(&Shape::Line(points), Tool::Highlighter);
+        let drawn = draft.into_paths().expect("a stroke");
+        assert_eq!(drawn.len(), whole.len());
+        assert!((painted_area(&drawn) - painted_area(&whole)).abs() < 1.);
     }
 
     #[test]
