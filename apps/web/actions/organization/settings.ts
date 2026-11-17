@@ -12,7 +12,7 @@ import {
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -119,7 +119,7 @@ export async function updateOrganizationSettings(
 
 	await db()
 		.update(organizations)
-		.set({ settings: organizationSettingsKeepingLinkOverride(nextSettings) })
+		.set({ settings: organizationSettingsKeepingRowOwnedKeys(nextSettings) })
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");
