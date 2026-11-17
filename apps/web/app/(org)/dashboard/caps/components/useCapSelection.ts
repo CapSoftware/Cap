@@ -35,6 +35,10 @@ export function useCapSelection({
 	const [matchingTruncated, setMatchingTruncated] = useState(false);
 	const [isSelectingAll, setIsSelectingAll] = useState(false);
 	const anchorRef = useRef<Video.VideoId | null>(null);
+	const selectedRef = useRef(selected);
+	useEffect(() => {
+		selectedRef.current = selected;
+	}, [selected]);
 
 	const setSelected = useCallback(
 		(
@@ -95,8 +99,10 @@ export function useCapSelection({
 	const selectAllMatching = useCallback(async () => {
 		if (!view) return;
 		setIsSelectingAll(true);
+		const requestedFrom = selectedRef.current;
 		try {
 			const { ids, truncated } = await listCapIdsInView(view);
+			if (selectedRef.current !== requestedFrom) return;
 			setSelectedState(ids);
 			setMatchingCount(ids.length);
 			setMatchingTruncated(truncated);
