@@ -3,41 +3,42 @@
 import { type RefObject, useEffect } from "react";
 
 const CONTINUE_STORAGE_KEY = "cap:up-next-continue";
-const VIDEO_POLL_MS = 200;
-const VIDEO_POLL_LIMIT = 150;
+
 export function markUpNextContinue(videoId: string) {
 	try {
 		window.sessionStorage.setItem(CONTINUE_STORAGE_KEY, videoId);
 	} catch {}
 }
 
-// The player mounts after the page (and not at all while a video is still
-// processing), so the element is looked up on a short, bounded poll.
-export function whenVideoMounted(
+// Media events don't bubble, but they do pass through capturing listeners on
+// window. Listening there and matching the ref on each event works for a
+// player that mounts late (a video still processing) or is swapped for a new
+// element, without polling for it.
+export function onPlayerMediaEvent(
 	videoRef: RefObject<HTMLVideoElement | null>,
-	onMounted: (video: HTMLVideoElement) => () => void,
+	types: readonly string[],
+	handler: (video: HTMLVideoElement, event: Event) => void,
 ) {
-	let cleanup: (() => void) | null = null;
-	let tries = 0;
-	const check = () => {
+	const listener = (event: Event) => {
 		const video = videoRef.current;
-		if (video) {
-			window.clearInterval(timer);
-			cleanup = onMounted(video);
-		} else if (++tries >= VIDEO_POLL_LIMIT) window.clearInterval(timer);
+		if (video && event.target === video) handler(video, event);
 	};
-	const timer = window.setInterval(check, VIDEO_POLL_MS);
-	check();
+	for (const type of types) window.addEventListener(type, listener, true);
 	return () => {
-		window.clearInterval(timer);
-		cleanup?.();
+		for (const type of types) window.removeEventListener(type, listener, true);
 	};
 }
 
+const canStart = (video: HTMLVideoElement) =>
+	!video.ended &&
+	video.paused &&
+	video.currentTime < 1 &&
+	video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+
 // Arriving from an Up next card keeps playing: the viewer already started the
 // previous video in this tab, so the browser allows playback with sound. The
-// ref is re-read on every tick because a soft navigation can keep the previous
-// (ended) element mounted until the new player replaces it.
+// request is cleared only once handled, so a remount (or a development double
+// effect) leaves it for the next mount.
 export function useContinueFromUpNext(
 	videoRef: RefObject<HTMLVideoElement | null>,
 	videoId: string,
@@ -48,32 +49,17 @@ export function useContinueFromUpNext(
 			pending = window.sessionStorage.getItem(CONTINUE_STORAGE_KEY) === videoId;
 		} catch {}
 		if (!pending) return;
-		// Cleared only once handled, so a remount (or a development double
-		// effect) that cancels this poll leaves the request for the next one.
-		const clear = () => {
+		let stop = () => {};
+		const start = (video: HTMLVideoElement) => {
+			if (!canStart(video)) return;
+			stop();
 			try {
 				window.sessionStorage.removeItem(CONTINUE_STORAGE_KEY);
 			} catch {}
+			void video.play().catch(() => {});
 		};
-		let tries = 0;
-		const timer = window.setInterval(() => {
-			const video = videoRef.current;
-			tries++;
-			if (
-				video &&
-				!video.ended &&
-				video.paused &&
-				video.currentTime < 1 &&
-				video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
-			) {
-				window.clearInterval(timer);
-				clear();
-				void video.play().catch(() => {});
-			} else if (tries >= VIDEO_POLL_LIMIT) {
-				window.clearInterval(timer);
-				clear();
-			}
-		}, VIDEO_POLL_MS);
-		return () => window.clearInterval(timer);
+		stop = onPlayerMediaEvent(videoRef, ["canplay", "loadeddata"], start);
+		if (videoRef.current) start(videoRef.current);
+		return () => stop();
 	}, [videoRef, videoId]);
 }

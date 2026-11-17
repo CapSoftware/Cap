@@ -11,7 +11,7 @@ import {
 	useState,
 } from "react";
 import type { SpaceUpNext } from "@/lib/space-up-next";
-import { markUpNextContinue, whenVideoMounted } from "./up-next-playback";
+import { markUpNextContinue, onPlayerMediaEvent } from "./up-next-playback";
 
 export const UP_NEXT_COUNTDOWN_SECONDS = 8;
 const AUTOPLAY_STORAGE_KEY = "cap:space-autoplay";
@@ -58,6 +58,7 @@ export function UpNextOverlay({
 	const [autoplay, setAutoplay] = useState(true);
 	const [cancelled, setCancelled] = useState(false);
 	const [remaining, setRemaining] = useState(UP_NEXT_COUNTDOWN_SECONDS);
+	const [fullscreen, setFullscreen] = useState(false);
 	const navigatedRef = useRef(false);
 	const href = upNextHref(upNext);
 
@@ -65,24 +66,26 @@ export function UpNextOverlay({
 		setAutoplay(readAutoplay());
 	}, []);
 
+	useEffect(
+		() =>
+			onPlayerMediaEvent(videoRef, ["ended", "play", "seeking"], (_, event) => {
+				if (event.type === "ended") {
+					setEnded(true);
+					setCancelled(false);
+					setRemaining(UP_NEXT_COUNTDOWN_SECONDS);
+				} else setEnded(false);
+			}),
+		[videoRef],
+	);
+
+	// The player goes fullscreen on its own root, which this card is not part
+	// of, so the countdown waits until the viewer can see it.
 	useEffect(() => {
-		const onEnded = () => {
-			setEnded(true);
-			setCancelled(false);
-			setRemaining(UP_NEXT_COUNTDOWN_SECONDS);
-		};
-		const onResume = () => setEnded(false);
-		return whenVideoMounted(videoRef, (video) => {
-			video.addEventListener("ended", onEnded);
-			video.addEventListener("play", onResume);
-			video.addEventListener("seeking", onResume);
-			return () => {
-				video.removeEventListener("ended", onEnded);
-				video.removeEventListener("play", onResume);
-				video.removeEventListener("seeking", onResume);
-			};
-		});
-	}, [videoRef]);
+		const update = () => setFullscreen(document.fullscreenElement !== null);
+		update();
+		document.addEventListener("fullscreenchange", update);
+		return () => document.removeEventListener("fullscreenchange", update);
+	}, []);
 
 	const playNext = useCallback(() => {
 		if (navigatedRef.current) return;
@@ -95,7 +98,8 @@ export function UpNextOverlay({
 		router.prefetch(href);
 	}, [href, router]);
 
-	const counting = ended && autoplay && !cancelled && !holdAutoplay;
+	const counting =
+		ended && autoplay && !cancelled && !holdAutoplay && !fullscreen;
 
 	useEffect(() => {
 		if (!counting) return;
