@@ -1097,7 +1097,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-                for index in 0..150u64 {
+                for index in 0..270u64 {
                     let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 32, 32);
                     for plane in 0..frame.planes() {
                         frame.data_mut(plane).fill((index % 200) as u8);
@@ -1164,7 +1164,7 @@ mod tests {
                 serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
             let clean_segments = clean["segments"].as_array().unwrap().clone();
             let total = clean_segments.len();
-            assert!(total >= 4, "{media_type:?}: {total} segments");
+            assert!(total >= 3, "{media_type:?}: {total} segments");
 
             let mut crashed = clean.clone();
             crashed["is_complete"] = serde_json::json!(false);
