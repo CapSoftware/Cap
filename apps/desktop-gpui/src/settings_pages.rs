@@ -1004,9 +1004,9 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     (
         store::PostStudioBehaviour::ShowOverlay,
         OutcomeOption {
-            icon: "icons/app-window.svg",
-            label: tr::settings::shortcuts::outcome::studio_show_cap,
-            hint: tr::settings::shortcuts::outcome::studio_show_cap_hint,
+            icon: "icons/layers.svg",
+            label: tr::settings::shortcuts::outcome::studio_show_overlay,
+            hint: tr::settings::shortcuts::outcome::studio_show_overlay_hint,
         },
     ),
     (
@@ -4230,11 +4230,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let expiry = license.expiry_date.map(|ms| {
-            chrono::DateTime::from_timestamp_millis(ms as i64)
-                .map(|date| date.format("%-m/%-d/%Y").to_string())
-                .unwrap_or_else(|| ms.to_string())
-        });
+        let expiry = license_expiry_label(license.expiry_date);
 
         div()
             .flex()
@@ -6145,6 +6141,26 @@ fn action_applies_to_trigger(kind: ActionType, trigger: Trigger) -> bool {
     required.iter().any(|field| provided.contains(field))
 }
 
+fn action_note(kind: ActionType, previous: Option<&Action>) -> Option<(&'static str, bool)> {
+    match kind {
+        ActionType::RecognizeTextToClipboard => {
+            Some((tr::settings::automations::action_unsupported(), true))
+        }
+        ActionType::Notify => Some((tr::settings::automations::notify_needs_setting(), false)),
+        ActionType::DeleteLocalFiles => Some(match previous {
+            Some(Action::Export {
+                destination: ExportDestination::CustomPath { .. },
+                ..
+            })
+            | Some(Action::SaveToLocation { .. }) => {
+                (tr::settings::automations::delete_guarded(), false)
+            }
+            _ => (tr::settings::automations::delete_needs_copy(), true),
+        }),
+        _ => None,
+    }
+}
+
 /// `DANGEROUS_ACTIONS`.
 fn action_is_dangerous(kind: ActionType) -> bool {
     matches!(kind, ActionType::RunCommand | ActionType::Webhook)
@@ -7221,6 +7237,15 @@ impl SettingsWindow {
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
         let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
+        let compatibility_message = if rule
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::RecognizeTextToClipboard))
+        {
+            tr::settings::automations::compatibility_unsupported()
+        } else {
+            tr::settings::automations::compatibility_checked()
+        };
         if let Some(editor) = &self.pages.rule_editor {
             for (field, input) in &editor.fields {
                 if let Some(placeholder) = translated_placeholder(*field, rule) {
@@ -7445,7 +7470,7 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::compatibility_checked()),
+                        .child(compatibility_message),
                 )
             })
             .child(footer)
@@ -7674,6 +7699,14 @@ impl SettingsWindow {
             ));
 
         let params = self.render_action_params(rule, index, action, cx);
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| self.rule_at(rule)?.actions.get(previous));
+        let note = if !applies {
+            Some((tr::settings::automations::action_no_effect(), true))
+        } else {
+            action_note(kind, previous)
+        };
 
         div()
             .flex()
@@ -7686,12 +7719,19 @@ impl SettingsWindow {
             .bg(theme.settings_card_bg())
             .child(header)
             .children(params)
-            .when(!applies, |this| {
+            .when_some(note, |this, (note, warning)| {
                 this.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::action_no_effect()),
+                        .line_height(px(16.))
+                        .map(|line| {
+                            if warning {
+                                line.text_color(Hsla::from(theme.amber_11))
+                            } else {
+                                line.text_color(theme.settings_muted())
+                            }
+                        })
+                        .child(note),
                 )
             })
             .into_any_element()
@@ -8247,9 +8287,56 @@ async fn http_json(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The license server stores lifetime keys with its "never renews" date,
+/// `new Date("2038-01-19 03:14:07")` (the 32-bit `time_t` limit) parsed in the
+/// server's own time zone, and returns it as `expiryDate`. Within a day of that
+/// instant is a lifetime key, which has no expiry to show.
+const LIFETIME_LICENSE_EXPIRY_MS: i64 = 2_147_483_647_000;
+const LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
+    let ms = expiry_ms?;
+    if ((ms as i64) - LIFETIME_LICENSE_EXPIRY_MS).abs() <= LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS {
+        return None;
+    }
+    Some(
+        chrono::DateTime::from_timestamp_millis(ms as i64)
+            .map(|date| date.format("%-m/%-d/%Y").to_string())
+            .unwrap_or_else(|| ms.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_license_has_no_expiry_label() {
+        assert_eq!(license_expiry_label(Some(2_147_483_647_000.)), None);
+        let hour = 60. * 60. * 1000.;
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. + 8. * hour)),
+            None
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 14. * hour)),
+            None
+        );
+    }
+
+    #[test]
+    fn yearly_license_keeps_its_expiry_label() {
+        assert_eq!(license_expiry_label(None), None);
+        assert_eq!(
+            license_expiry_label(Some(1_826_323_200_000.)).as_deref(),
+            Some("11/16/2027")
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 3. * 24. * 60. * 60. * 1000.))
+                .as_deref(),
+            Some("1/16/2038")
+        );
+    }
 
     fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
         Hotkey {

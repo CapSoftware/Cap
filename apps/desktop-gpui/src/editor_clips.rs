@@ -1874,6 +1874,7 @@ struct PreparedMp4Import {
     meta: RecordingMeta,
     fallback_timeline: Option<TimelineConfiguration>,
     segment: MultipleSegment,
+    name: Option<String>,
     duration: f64,
     cancelled: Arc<AtomicBool>,
     directory: PendingImportDirectory,
@@ -1974,6 +1975,7 @@ impl PreparedMp4Import {
                 keyboard: None,
                 display_notch: None,
             },
+            name: imported_clip_name(source),
             duration,
             cancelled,
             directory,
@@ -2014,7 +2016,7 @@ impl PreparedMp4Import {
             timescale: 1.0,
             start: 0.0,
             end: self.duration,
-            name: None,
+            name: self.name.clone(),
             speed_audio_mode: None,
             hide_cursor: None,
             voice_eq: None,
@@ -2113,6 +2115,12 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
 
 /// `toast.error(\`Failed to import clip: ...\`)` (`:520`), as the blocking
 /// dialog this app uses where the webview has toasts.
+fn imported_clip_name(source: &Path) -> Option<String> {
+    let stem = source.file_stem()?.to_string_lossy();
+    let name = stem.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn show_import_error(message: &str) {
     let title = tr::editor::clips::import_error_title();
     let description = tr::editor::clips::import_error(message);
@@ -3239,7 +3247,7 @@ fn source_timeline_segments_for_import(
             },
             start,
             end,
-            name: None,
+            name: segment.name,
             speed_audio_mode: segment.speed_audio_mode,
             hide_cursor: segment.hide_cursor,
             voice_eq: segment.voice_eq,
@@ -3472,7 +3480,7 @@ pub(crate) fn append_cap_project_to_editor(
                 timescale: source_segment.timescale,
                 start: source_segment.start,
                 end: source_segment.end,
-                name: None,
+                name: source_segment.name,
                 speed_audio_mode: source_segment.speed_audio_mode,
                 hide_cursor: source_segment.hide_cursor,
                 voice_eq: source_segment.voice_eq,
@@ -3806,6 +3814,7 @@ mod tests {
             let timeline = result.timeline.as_ref().unwrap();
             assert_eq!(timeline.segments.len(), 2);
             assert_eq!(timeline.segments[1].recording_clip, 1);
+            assert_eq!(timeline.segments[1].name.as_deref(), Some("source"));
             assert!(timeline.segments[1].end > 0.0);
             let mut without_append = result;
             let _ = without_append.timeline.as_mut().unwrap().segments.pop();
@@ -4636,6 +4645,58 @@ mod tests {
         };
         assert_eq!(inner.segments.len(), 2);
         assert!(meta.path(&inner.segments[1].display.path).is_file());
+    }
+
+    #[test]
+    fn imported_mp4_clips_are_named_after_the_file() {
+        for (file, expected) in [
+            ("/videos/Product demo.mp4", Some("Product demo")),
+            ("/videos/  take 2 .final.mp4", Some("take 2 .final")),
+            ("/videos/   .mp4", None),
+            ("/videos/片段.mp4", Some("片段")),
+        ] {
+            assert_eq!(
+                imported_clip_name(Path::new(file)).as_deref(),
+                expected,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn imported_cap_projects_keep_their_clip_names() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("source.cap");
+        let source_segment = source.join("content/segments/segment-0");
+        std::fs::create_dir_all(&source_segment).unwrap();
+        std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+        std::fs::copy(
+            target.project.join("recording-meta.json"),
+            source.join("recording-meta.json"),
+        )
+        .unwrap();
+        let mut source_config = target.config.clone();
+        let mut named = segment(0, 0.0, 0.25);
+        named.name = Some("Intro".to_string());
+        source_config.timeline = Some(timeline(vec![named, segment(0, 0.25, 0.5)]));
+        source_config.write(&source).unwrap();
+
+        assert_eq!(
+            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            1
+        );
+        let config = ProjectConfiguration::load(&target.project).unwrap();
+        let names: Vec<_> = config
+            .timeline
+            .unwrap()
+            .segments
+            .into_iter()
+            .map(|segment| (segment.recording_clip, segment.name))
+            .collect();
+        assert_eq!(
+            names,
+            [(0, None), (1, Some("Intro".to_string())), (1, None)]
+        );
     }
 
     #[test]

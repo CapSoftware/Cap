@@ -262,7 +262,7 @@ function BreakdownCard({
 	return (
 		<section
 			className={clsx(
-				"flex flex-col w-full rounded-2xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-4",
+				"flex flex-col w-full rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-3",
 				tabs.length > 1 && "min-h-[460px]",
 				className,
 			)}

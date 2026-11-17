@@ -369,7 +369,7 @@ screen_region = { text = "Screen region", max_px = 180, size = 12 }
 [settings.options.post_studio]
 do_nothing = "Do nothing"
 open_editor = "Open editor"
-show_cap = "Show Cap"
+show_overlay = "Show in overlay"
 
 [settings.options.post_screenshot]
 copy = "Copy to clipboard"
@@ -453,8 +453,8 @@ screenshot_open_editor_hint = "Annotate first"
 studio_do_nothing = "Do nothing"
 studio_open_editor = "Open editor"
 studio_open_editor_hint = "Edit right away"
-studio_show_cap = "Show Cap"
-studio_show_cap_hint = "Back to the recorder"
+studio_show_overlay = "Show overlay"
+studio_show_overlay_hint = "Copy, share or export"
 
 [settings.shortcuts.label]
 add_marker = "Add marker"
@@ -742,17 +742,22 @@ working_for = { text = "Google Drive connection is working for {email}", context
 
 [settings.automations]
 action_no_effect = "This action has no effect for the selected trigger."
+action_unsupported = "Cap doesn't run this action yet, so it is skipped."
 add_action = "Add action"
 add_condition = "Add condition"
 auto_name_empty = { text = "{trigger} automation", context = "{trigger} is a settings.automations.trigger.*.noun." }
 browse = "Browse"
 check_compatibility = "Check compatibility"
-compatibility_checked = "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run."
+compatibility_checked = "Compatibility checked: every action in this automation runs in Cap. No actions were run."
+compatibility_unsupported = "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run."
 condition_never_matches = "This condition never matches for the selected trigger."
 copy_link = "Copy link to clipboard"
-dangerous = "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust."
+dangerous = "This automation runs commands or sends network requests with your permissions. Only use values you trust."
 delete = "Delete"
-description = "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet."
+delete_guarded = "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept."
+delete_needs_copy = "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step."
+notify_needs_setting = "Shows only while System notifications is on in General settings."
+description = "Rules are shared with the Cap CLI. Cap runs enabled rules automatically."
 empty_description = "Pick a template below to get started in one click, or build your own from scratch."
 empty_title = "No automations yet"
 enabled = "Enabled"
@@ -1149,6 +1154,35 @@ no_matching_windows = "No matching windows"
 no_windows = "No windows found"
 window = { text = "Window", max_px = 100, size = 12 }
 
+[recordings_overlay]
+close = "Close"
+copy = "Copy to clipboard"
+copy_link = "Copy shareable link"
+create_link = "Create shareable link"
+edit = "Edit"
+export = "Export"
+open = "Open"
+retry = "Retry"
+
+[recordings_overlay.progress]
+choose_image = "Choose where to save the image"
+choose_video = "Choose where to export the video"
+copied = "Copied to clipboard"
+copy_failed = "Couldn't copy"
+copying = "Copying to clipboard"
+creating_link = "Creating shareable link"
+failed_hint = "Something went wrong. Try again."
+link_copied = "Shareable link copied"
+preparing = "Preparing"
+rendering_video = "Rendering video"
+save_failed = "Couldn't save"
+saved_image = "Image saved"
+saved_video = "Video saved"
+saving_image = "Saving image"
+saving_video = "Saving video"
+share_failed = "Couldn't create the link"
+share_failed_hint = "Check your connection and try again."
+
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."
 low_storage = "Low storage. Cap will stop soon to save your recording."
@@ -1407,6 +1441,8 @@ devices_changed_before_start = "Selected devices changed before recording starte
 shortcut_conflict = "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
 shortcut_description = { text = "Start or stop this Cap recording", context = "Shown by the Linux desktop when it asks the user to approve a global shortcut." }
 shortcut_hint = { text = "Press and release {shortcut} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.", context = "{shortcut} is a key combination such as Ctrl+Shift+F9." }
+source_lost = "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved."
+source_lost_title = "Recording stopped"
 tray_stop_hint = "Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control."
 window_unavailable = "The selected window is no longer available. Select it again."
 
@@ -2636,6 +2672,7 @@ model_downloaded = "{model} model downloaded"
 model_label = "Model"
 model_updated = "Recommended model updated"
 model_updated_description = "We recommend the new version. It is more accurate and catches short recordings the old one missed."
+new_caption = "New caption"
 position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
@@ -2911,13 +2948,20 @@ video = { text = "Video", context = "Timeline gutter label of the recording's vi
 zoom = "Zoom"
 
 [editor.transcript]
+add_caption = "Add caption at playhead"
+captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
+captions_saved = "Captions saved"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
 delete_matches_tooltip = "Cut every match from the video"
+download_captions = "Download captions"
+download_srt = { text = "SubRip (.srt)", context = "Menu item that saves captions as an SRT subtitle file. SubRip is a format name; keep it." }
+download_vtt = { text = "WebVTT (.vtt)", context = "Menu item that saves captions as a WebVTT subtitle file. WebVTT is a format name; keep it." }
+edit_hint = "Enter to save, Esc to cancel, Tab for the next word"
 empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
 empty_title = "No transcript yet"
-hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
+hint = "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video."
 next_match = "Next match"
 no_audio = "This recording has no audio to transcribe."
 no_speech = "No speech found in this recording"
@@ -2970,6 +3014,7 @@ audio_segment_changed = "This audio segment changed. Select it and choose a repl
 crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
+no_room_for_caption = "No room for another caption here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"
@@ -3206,6 +3251,13 @@ pending = "Quit canceled because recording shutdown is still pending. Cap will s
 quit_anyway = "Quit Anyway"
 still_open = "Cap is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
+
+[dialog.startup]
+failed = { text = "{error}\n\nDetails were saved in {folder}.", context = "{error} is a technical reason, usually in English. {folder} is a folder path." }
+failed_title = "Cap couldn't start"
+quit_and_reopen = { text = "Quit and Reopen", context = "Button: quit the copy of Cap that is not responding and start a new one." }
+unresponsive = "Cap is already running but isn't responding. Quit that copy and open Cap again?"
+unresponsive_title = "Cap isn't responding"
 
 [dialog.update]
 already_getting = { text = "Cap is already getting version {version} ready.", context = "{version} is a version number such as 0.6.2." }

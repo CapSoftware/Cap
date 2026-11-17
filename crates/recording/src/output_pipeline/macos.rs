@@ -1,8 +1,8 @@
 use crate::{
     output_pipeline::{
         AudioFrame, AudioMuxer, BlockingThreadFinish, DiskSpaceMonitor, DiskSpacePollResult,
-        HealthSender, Muxer, PipelineHealthEvent, SharedHealthSender, TaskPool, VideoFrame,
-        VideoMuxer, emit_health, wait_for_blocking_thread_finish,
+        HealthSender, Muxer, NoVideoFramesCaptured, PipelineHealthEvent, SharedHealthSender,
+        TaskPool, VideoFrame, VideoMuxer, emit_health, wait_for_blocking_thread_finish,
     },
     sources::screen_capture,
 };
@@ -810,7 +810,17 @@ impl Muxer for AVFoundationMp4Muxer {
             match state.encoder.lock() {
                 Ok(mut encoder) => {
                     if let Err(e) = encoder.finish(Some(timestamp)) {
-                        if video_thread_timed_out && video_frames > 0 {
+                        if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy,
+                                audio_frames,
+                                "MP4 encoder wrote no video frames; the output is empty"
+                            );
+                            if finish_error.is_none() {
+                                finish_error = Some(anyhow::Error::new(NoVideoFramesCaptured));
+                            }
+                        } else if video_thread_timed_out && video_frames > 0 {
                             warn!(
                                 video_frames,
                                 "Best-effort encoder finalize failed after thread timeout, \
@@ -1416,7 +1426,12 @@ impl Muxer for AVFoundationCameraMuxer {
                 match state.encoder.lock() {
                     Ok(mut encoder) => {
                         if let Err(e) = encoder.finish(Some(timestamp)) {
-                            let err = anyhow!("Failed to finish camera MP4 encoder: {e}");
+                            let err = if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                                anyhow::Error::new(NoVideoFramesCaptured)
+                                    .context("Camera MP4 encoder wrote no video frames")
+                            } else {
+                                anyhow!("Failed to finish camera MP4 encoder: {e}")
+                            };
                             warn!("{err:#}");
                             if finish_error.is_none() {
                                 finish_error = Some(err);
@@ -1543,6 +1558,47 @@ impl AudioMuxer for AVFoundationCameraMuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writers behind a resumed Studio segment that got no screen frame
+    /// before Pause, and a segment whose camera got no frame. They report an
+    /// empty output the recorder can leave out, not a failed one.
+    #[tokio::test]
+    async fn finishing_without_a_frame_reports_no_video_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 1280, 720, 30);
+        let mut tasks = TaskPool::default();
+
+        let mut screen = <AVFoundationMp4Muxer as Muxer>::setup(
+            AVFoundationMp4MuxerConfig::default(),
+            directory.path().join("display.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(false)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = screen.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(error.is::<NoVideoFramesCaptured>(), "screen: {error:#}");
+
+        let mut camera = <AVFoundationCameraMuxer as Muxer>::setup(
+            AVFoundationCameraMuxerConfig::default(),
+            directory.path().join("camera.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(true)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = camera.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.is::<NoVideoFramesCaptured>()),
+            "camera: {error:#}"
+        );
+    }
 
     mod mp4_muxer_buffer_size {
         use super::*;

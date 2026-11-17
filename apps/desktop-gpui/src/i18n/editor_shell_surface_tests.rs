@@ -20,6 +20,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.transcript.captions_save_failed",
     "editor.transcript.fillers.remove_all",
     "editor.transcript.pauses.summary",
     "editor.transcript.restore_hint",
@@ -573,6 +574,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Smallest download",
         ),
         (tr::editor::tabs::captions::model_label(), "Model"),
+        (tr::editor::tabs::captions::new_caption(), "New caption"),
         (
             tr::editor::tabs::captions::model_updated(),
             "Recommended model updated",
@@ -1069,12 +1071,23 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (
+            tr::editor::transcript::add_caption(),
+            "Add caption at playhead",
+        ),
+        (tr::editor::transcript::captions_saved(), "Captions saved"),
         (tr::editor::transcript::cleanup(), "Clean up"),
         (
             tr::editor::transcript::cleanup_tooltip(),
             "Remove filler words and shorten pauses",
         ),
         (tr::editor::transcript::delete_matches(), "Delete all"),
+        (
+            tr::editor::transcript::download_captions(),
+            "Download captions",
+        ),
+        (tr::editor::transcript::download_srt(), "SubRip (.srt)"),
+        (tr::editor::transcript::download_vtt(), "WebVTT (.vtt)"),
         (
             tr::editor::transcript::delete_matches_tooltip(),
             "Cut every match from the video",
@@ -1122,8 +1135,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::transcript::fillers::title(), "Filler words"),
         (
+            tr::editor::transcript::edit_hint(),
+            "Enter to save, Esc to cancel, Tab for the next word",
+        ),
+        (
             tr::editor::transcript::hint(),
-            "Click a word to jump to it. Select words and press Delete to cut them from the video.",
+            "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video.",
         ),
         (tr::editor::transcript::next_match(), "Next match"),
         (
@@ -1179,6 +1196,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::no_room_for_3d_shot(),
             "No room for another 3D shot",
+        ),
+        (
+            tr::editor::window::no_room_for_caption(),
+            "No room for another caption here",
         ),
         (
             tr::editor::window::open::damaged(),
@@ -1708,6 +1729,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::window::presets::delete_confirm(&name),
         format!("Are you sure you want to delete \"{}\"?", name)
+    );
+    assert_eq!(
+        tr::editor::transcript::captions_save_failed(&error),
+        format!("Could not save the captions: {error}")
     );
     assert_eq!(
         tr::editor::window::save_failed(path.display(), &error),
