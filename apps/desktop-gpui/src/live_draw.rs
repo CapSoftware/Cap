@@ -82,6 +82,14 @@ const MIN_SHAPE: f32 = 2.;
 const HOLD: Duration = Duration::from_secs(3);
 const FADE: Duration = Duration::from_millis(600);
 const MAX_STROKES: usize = 200;
+/// How far, in points, a tessellated curve may stray from the true one. gpui
+/// copies every vertex of every visible stroke each frame, and lyon's default
+/// (0.1) puts several times more vertices into each round cap and join.
+const STROKE_TOLERANCE: f32 = 0.25;
+/// Points closer than this to the line through their neighbours are dropped
+/// before a run is tessellated: invisible at these widths, and most of a
+/// freehand stroke's points.
+const SIMPLIFY_TOLERANCE: f32 = 0.35;
 /// gpui tessellates a path into 16-bit indices, so long freehand strokes are
 /// painted in runs of this many points.
 const CHUNK: usize = 256;
@@ -431,7 +439,8 @@ fn stroke_builder(width: f32) -> PathBuilder {
         StrokeOptions::default()
             .with_line_width(width)
             .with_line_cap(LineCap::Round)
-            .with_line_join(LineJoin::Round),
+            .with_line_join(LineJoin::Round)
+            .with_tolerance(STROKE_TOLERANCE),
     ))
 }
 
@@ -441,8 +450,47 @@ fn ink_color(tool: Tool, color: u32, opacity: f32) -> Hsla {
     color
 }
 
+/// Ramer-Douglas-Peucker: the points needed to keep the line within
+/// `tolerance` of the original. The ends always stay.
+pub fn simplify(points: &[Pt], tolerance: f32) -> Vec<Pt> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut spans = vec![(0, points.len() - 1)];
+    while let Some((start, end)) = spans.pop() {
+        let (a, b) = (points[start], points[end]);
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let length = dx.hypot(dy);
+        let mut farthest = (0., start);
+        for (index, p) in points.iter().enumerate().take(end).skip(start + 1) {
+            let distance = if length == 0. {
+                a.distance(*p)
+            } else {
+                ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / length
+            };
+            if distance > farthest.0 {
+                farthest = (distance, index);
+            }
+        }
+        if farthest.0 > tolerance {
+            keep[farthest.1] = true;
+            spans.push((start, farthest.1));
+            spans.push((farthest.1, end));
+        }
+    }
+    points
+        .iter()
+        .zip(keep)
+        .filter_map(|(p, kept)| kept.then_some(*p))
+        .collect()
+}
+
 /// One run of a line. A single point is a dot.
 fn line_path(points: &[Pt], width: f32) -> Option<Path<Pixels>> {
+    let points = simplify(points, SIMPLIFY_TOLERANCE);
     let first = *points.first()?;
     let mut builder = stroke_builder(width);
     builder.move_to(to_point(first));
@@ -1073,6 +1121,33 @@ mod tests {
         assert_eq!(arrow.into_paths().map(|paths| paths.len()), Some(2));
         let tap = Draft::new(Tool::Rectangle, COLORS[0], Pt::new(5., 5.), false);
         assert!(tap.into_paths().is_none());
+    }
+
+    #[test]
+    fn simplifying_keeps_corners_and_drops_points_on_a_line() {
+        let line: Vec<Pt> = (0..=100).map(|i| Pt::new(i as f32, 0.)).collect();
+        assert_eq!(simplify(&line, 0.35), vec![Pt::new(0., 0.), Pt::new(100., 0.)]);
+        let corner = [Pt::new(0., 0.), Pt::new(5., 0.1), Pt::new(10., 0.), Pt::new(10., 10.)];
+        assert_eq!(
+            simplify(&corner, 0.35),
+            vec![Pt::new(0., 0.), Pt::new(10., 0.), Pt::new(10., 10.)]
+        );
+        let wave: Vec<Pt> = (0..400)
+            .map(|i| Pt::new(i as f32, (i as f32 / 12.).sin() * 30.))
+            .collect();
+        let kept = simplify(&wave, 0.35);
+        assert!(kept.len() < wave.len() / 3, "{} of {}", kept.len(), wave.len());
+        for p in &wave {
+            let near = kept.windows(2).any(|pair| {
+                let (a, b) = (pair[0], pair[1]);
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)).clamp(0., 1.);
+                Pt::new(a.x + dx * t, a.y + dy * t).distance(*p) <= 0.36
+            });
+            assert!(near, "{p:?} strayed");
+        }
+        assert_eq!(simplify(&[Pt::new(1., 1.)], 0.35), vec![Pt::new(1., 1.)]);
+        assert!(simplify(&[], 0.35).is_empty());
     }
 
     #[test]
