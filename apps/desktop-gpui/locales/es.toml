@@ -2344,6 +2344,10 @@ importing = "Importando..."
 prompt = "Usa el fondo de tu escritorio"
 reimport = "Volver a importar"
 
+[editor.sidebar.enhance]
+strength = "Intensidad"
+title = "Mejorar la calidad"
+
 [editor.sidebar.gradient]
 angle = "Ángulo"
 from = "Desde"

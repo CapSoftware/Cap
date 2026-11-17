@@ -662,6 +662,8 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
+    write_new_import_project_config(&project_path);
+
     // Written before Complete rather than fire-and-forget as the Tauri spawn
     // does, so the refresh that Complete triggers already finds the file.
     let thumbnail = crate::library::bundle_thumbnail_path(&project_path);
@@ -783,6 +785,21 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
 
     sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "image import complete");
+}
+
+/// A new import starts from the defaults the editor would load for it, with
+/// the settings only new projects get.
+fn write_new_import_project_config(project_path: &std::path::Path) {
+    if project_path.join("project-config.json").exists() {
+        return;
+    }
+    let config = ProjectConfiguration {
+        screen_enhancement: cap_project::ScreenEnhancement::for_new_projects(),
+        ..ProjectConfiguration::default()
+    };
+    if let Err(error) = config.write(project_path) {
+        tracing::warn!(path = %project_path.display(), "could not write the imported project config: {error}");
+    }
 }
 
 // ---------------------------------------------------------------------------

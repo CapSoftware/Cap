@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders,
+    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders, RenderQuality,
     RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
     ZoomTransformTimeline,
 };
@@ -298,7 +298,8 @@ async fn render_preview_frame(
         total_duration,
         &zoom_timeline,
         &cursor_timeline,
-    );
+    )
+    .with_quality(RenderQuality::Export);
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
     let mut layers = layers_cache
@@ -374,7 +375,8 @@ async fn render_preview_frame(
             outgoing_cursor_timeline
                 .as_ref()
                 .unwrap_or(&cursor_timeline),
-        );
+        )
+        .with_quality(RenderQuality::Export);
 
         frame_renderer
             .render_transition_immediate(

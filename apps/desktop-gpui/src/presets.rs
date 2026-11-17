@@ -132,7 +132,7 @@ impl PresetsStore {
 /// with no user preset -- `ProjectConfiguration::default()` plus the
 /// presentation defaults the recorder applies (`recording.rs`
 /// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
-/// rounding and the default screen-movement spring.
+/// rounding, the default screen-movement spring and screen enhancement.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
     let mut config = ProjectConfiguration::default();
     if config.background.padding <= f64::EPSILON {
@@ -142,6 +142,7 @@ pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfigur
         config.background.rounding = 7.5;
     }
     config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
+    config.screen_enhancement = cap_project::ScreenEnhancement::for_new_projects();
     current.with_preset(config)
 }
 

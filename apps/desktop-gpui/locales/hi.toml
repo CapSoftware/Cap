@@ -2344,6 +2344,10 @@ importing = "इम्पोर्ट हो रहा है..."
 prompt = "अपने डेस्कटॉप का वॉलपेपर इस्तेमाल करें"
 reimport = "फिर से इम्पोर्ट करें"
 
+[editor.sidebar.enhance]
+strength = "तीव्रता"
+title = "क्वालिटी बेहतर करें"
+
 [editor.sidebar.gradient]
 angle = "कोण"
 from = "से"

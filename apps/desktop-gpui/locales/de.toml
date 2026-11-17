@@ -2344,6 +2344,10 @@ importing = "Wird importiert..."
 prompt = "Das Hintergrundbild Ihres Desktops verwenden"
 reimport = "Neu importieren"
 
+[editor.sidebar.enhance]
+strength = "Stärke"
+title = "Qualität verbessern"
+
 [editor.sidebar.gradient]
 angle = "Winkel"
 from = "Von"

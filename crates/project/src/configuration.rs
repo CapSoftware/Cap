@@ -1029,6 +1029,48 @@ impl Default for ScreenMovementSpring {
     }
 }
 
+/// Export and paused-preview enhancement of the screen recording: debanding
+/// and an edge-aware upscale of magnified content. The serde default is off so
+/// projects saved before this setting existed render exactly as they did.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScreenEnhancement {
+    pub enabled: bool,
+    pub strength: f32,
+}
+
+impl ScreenEnhancement {
+    pub const DEFAULT_STRENGTH: f32 = 0.5;
+
+    pub const fn for_new_projects() -> Self {
+        Self {
+            enabled: true,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn effective_strength(&self) -> f32 {
+        if self.enabled && self.strength.is_finite() {
+            self.strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Default for ScreenEnhancement {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+}
+
 impl CursorAnimationStyle {
     pub fn preset(self) -> Option<CursorSmoothingPreset> {
         match self {
@@ -3069,6 +3111,8 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    #[serde(default, skip_serializing_if = "ScreenEnhancement::is_default")]
+    pub screen_enhancement: ScreenEnhancement,
     /// Per-layer cinematic color grades. Field-level default keeps old
     /// project files (and old saved presets) deserializing to the identity
     /// grade.
@@ -3143,6 +3187,7 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            screen_enhancement: Default::default(),
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,

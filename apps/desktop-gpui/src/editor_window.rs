@@ -1185,6 +1185,13 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             if let Some(handle) = handle {
                 handle.stop();
             }
+            if !seeking {
+                let instance = instance.clone();
+                let resolution = want.resolution;
+                tokio::spawn(async move {
+                    rerender_paused_frame_enhanced(&instance, resolution).await;
+                });
+            }
         }
 
         if seeking {
@@ -13668,6 +13675,34 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
     crate::editor_panels::set_motion(left, &start_pose, &mid_pose, (easing.2, easing.3));
     timeline.camera3d_segments.insert(index + 1, right);
     true
+}
+
+/// Playback frames are drawn without screen enhancement, so pausing redraws
+/// the frame under the playhead once the engine has stopped. Projects with
+/// enhancement off keep the last playback frame, as before.
+async fn rerender_paused_frame_enhanced(instance: &EditorInstance, resolution: XY<u32>) {
+    let enhanced = instance
+        .project_config
+        .1
+        .borrow()
+        .screen_enhancement
+        .effective_strength()
+        > 0.0;
+    if !enhanced {
+        return;
+    }
+    let mut active = instance.playback_watch();
+    let stopped = tokio::time::timeout(
+        Duration::from_millis(500),
+        active.wait_for(|playing| !*playing),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok());
+    if !stopped {
+        return;
+    }
+    let frame = instance.state.lock().await.playhead_position;
+    request_frame(instance, frame, resolution);
 }
 
 /// The instruction that actually produces a picture. `seek_to` and

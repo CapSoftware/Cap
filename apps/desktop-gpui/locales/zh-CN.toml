@@ -2344,6 +2344,10 @@ importing = "正在导入..."
 prompt = "使用桌面上的壁纸"
 reimport = "重新导入"
 
+[editor.sidebar.enhance]
+strength = "强度"
+title = "增强画质"
+
 [editor.sidebar.gradient]
 angle = "角度"
 from = "起始"

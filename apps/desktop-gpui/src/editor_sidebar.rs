@@ -646,6 +646,7 @@ pub enum BgSlider {
     GradientAngle,
     GradientNoise,
     GradientGrain,
+    EnhanceStrength,
 }
 
 impl BgSlider {
@@ -670,7 +671,8 @@ impl BgSlider {
             | Self::ShadowBlur
             | Self::GradientAngle
             | Self::GradientNoise
-            | Self::GradientGrain => false,
+            | Self::GradientGrain
+            | Self::EnhanceStrength => false,
         }
     }
 
@@ -694,6 +696,7 @@ impl BgSlider {
             Self::GradientAngle => (0., 360., 1.),
             Self::GradientNoise => (0., 100., 1.),
             Self::GradientGrain => (1., 100., 1.),
+            Self::EnhanceStrength => (0.05, 1., 0.01),
         }
     }
 }
@@ -809,6 +812,7 @@ pub struct SidebarState {
     pub border_open: CollapsibleState,
     pub notch_open: CollapsibleState,
     pub shadow_open: CollapsibleState,
+    pub enhance_open: CollapsibleState,
 
     /// The live slider drag and its undo bracket.
     pub slider_drag: ui::SliderDrag<SliderKey>,
@@ -924,6 +928,7 @@ impl SidebarState {
                 config.background.notch.as_ref().is_some_and(|n| n.enabled),
             ),
             shadow_open: CollapsibleState::new(false),
+            enhance_open: CollapsibleState::new(config.screen_enhancement.enabled),
             slider_drag: ui::SliderDrag::new(),
             tracks: std::cell::RefCell::new(HashMap::new()),
             pads: std::cell::RefCell::new(HashMap::new()),
@@ -1426,6 +1431,7 @@ impl EditorWindow {
                 }
                 _ => DEFAULT_NOISE_SCALE,
             },
+            BgSlider::EnhanceStrength => project.screen_enhancement.strength,
         }
     }
 
@@ -1536,6 +1542,9 @@ impl EditorWindow {
                             BgSlider::GradientNoise => *noise_intensity = Some(value),
                             _ => *noise_scale = Some(value),
                         }
+                    }
+                    BgSlider::EnhanceStrength => {
+                        project.screen_enhancement.strength = value;
                     }
                 }
                 true
@@ -2843,6 +2852,13 @@ impl EditorWindow {
             .child(self.render_notch_field(cx))
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_shadow_field(cx))
+            .children(self.sidebar.style_target.is_none().then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(dashed_divider(Hsla::from(theme.editor.line)))
+                    .child(self.render_enhance_field(cx))
+            }))
             // `<ColorCorrectionSection target="screen" />` (`:2962`).
             .children(
                 self.sidebar
@@ -3672,6 +3688,48 @@ impl EditorWindow {
                         tr::editor::sidebar::border::opacity(),
                         SliderKey::Bg(BgSlider::BorderOpacity),
                         "%",
+                        cx,
+                    ))
+                    .into_any_element(),
+            ))
+    }
+
+    fn render_enhance_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let enabled = self.project.screen_enhancement.enabled;
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                ui::Field::inline(&theme, tr::editor::sidebar::enhance::title()).value(
+                    ui::Toggle::plain(&theme, "enhance-enabled", enabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let next = !enabled;
+                            this.sidebar.enhance_open.set_open(next);
+                            this.animate_collapsibles(window, cx);
+                            this.edit_background(
+                                "enhance-enabled",
+                                |project| {
+                                    project.screen_enhancement.enabled = next;
+                                    true
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .child(collapsible(
+                &self.sidebar.enhance_open,
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(self.slider_field(
+                        tr::editor::sidebar::enhance::strength(),
+                        SliderKey::Bg(BgSlider::EnhanceStrength),
+                        "x100%",
                         cx,
                     ))
                     .into_any_element(),

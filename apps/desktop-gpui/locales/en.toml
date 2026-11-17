@@ -2346,6 +2346,10 @@ importing = "Importing..."
 prompt = "Use the wallpaper from your desktop"
 reimport = "Re-import"
 
+[editor.sidebar.enhance]
+strength = "Strength"
+title = "Enhance Quality"
+
 [editor.sidebar.gradient]
 angle = "Angle"
 from = "From"
