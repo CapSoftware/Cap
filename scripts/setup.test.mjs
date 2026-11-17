@@ -66,10 +66,11 @@ test(
 			mkdirSync(path.dirname(path.join(directory, entry)), { recursive: true });
 			writeFileSync(path.join(directory, entry), contents);
 			if (url.endsWith(".nupkg"))
-				await execFile("zip", ["-qr", archive, "."], {
-					cwd: directory,
-					signal: t.signal,
-				});
+				await execFile(
+					"bsdtar",
+					["--format", "zip", "-cf", archive, "-C", directory, "runtimes"],
+					{ signal: t.signal },
+				);
 			else
 				await execFile("tar", ["-cJf", archive, "-C", directory, "."], {
 					signal: t.signal,
