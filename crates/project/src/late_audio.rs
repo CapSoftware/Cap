@@ -1677,6 +1677,16 @@ mod tests {
         );
     }
 
+    // A typed caption ending exactly where the late clip starts holds nothing
+    // of it, so it stays where it was rather than taking that clip's shift.
+    #[test]
+    fn a_typed_caption_ending_on_a_late_clips_start_stays_put() {
+        assert_eq!(
+            migrate_untouched(1, vec![typed("typed", 8.0, 10.0)]),
+            vec![("typed".to_string(), 8.0, 10.0)]
+        );
+    }
+
     // A caption with words whose end lies in another clip than its last
     // word: only its words draw, each with its own clip, in either order.
     #[test]
