@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (recomendado)"
 label = "Velocidad de fotogramas máxima"
 
+[settings.general.recording.keep_drawings]
+description = "Los dibujos se quedan hasta que los borras. Si está desactivado, cada uno se desvanece unos segundos después de dibujarlo."
+label = "Mantener los dibujos en pantalla"
+
 [settings.general.recording.marker_sound]
 description = "Reproduce un sonido corto cuando añades un marcador durante una grabación Studio. Tu micrófono o el audio del sistema pueden captarlo."
 label = "Reproducir un sonido con los marcadores"
@@ -470,6 +474,7 @@ screenshot_window = "Capturar una ventana"
 start_instant = "Iniciar grabación Instant"
 start_studio = "Iniciar grabación Studio"
 stop = "Detener la grabación"
+toggle_drawing = "Dibujar en pantalla"
 
 [settings.shortcuts.effect]
 add_marker = "marcar este momento en una grabación Studio"
@@ -503,6 +508,7 @@ screenshot_window_save = "capturar la ventana bajo tu puntero y guardar la captu
 stop = "detener la grabación actual"
 studio = "grabar la pantalla o ventana seleccionada en modo Studio"
 studio_open_editor = "grabar la pantalla o ventana seleccionada en modo Studio y abrir el editor al detenerla"
+toggle_drawing = "empezar o dejar de dibujar en pantalla mientras grabas"
 
 [settings.shortcuts.sentence]
 add_marker = "Marcar este momento en una grabación Studio."
@@ -536,6 +542,7 @@ screenshot_window_save = "Capturar la ventana bajo tu puntero y guardar la captu
 stop = "Detener la grabación actual."
 studio = "Grabar la pantalla o ventana seleccionada en modo Studio."
 studio_open_editor = "Grabar la pantalla o ventana seleccionada en modo Studio y abrir el editor al detenerla."
+toggle_drawing = "Empezar o dejar de dibujar en pantalla mientras grabas."
 
 [settings.cli]
 command = "Comando"
@@ -1209,8 +1216,23 @@ resuming = "Continúa…"
 saving = "Guardar…"
 starting = "Iniciando"
 
+[controls.disconnected]
+camera = "Cámara desconectada. La grabación continúa sin la cámara superpuesta."
+microphone = "Micrófono desconectado. Se grabará silencio hasta que se vuelva a conectar."
+
 [controls.marker]
 add = "Añadir marcador"
+
+[controls.draw]
+arrow = "Flecha, ⇧ ajusta a 45°"
+clear = "Borrar todo"
+highlighter = "Resaltador, ⇧ para una línea recta"
+pen = "Lápiz, ⇧ para una línea recta"
+rectangle = "Rectángulo, ⇧ para un cuadrado"
+start = "Dibujar en pantalla"
+stop = "Dejar de dibujar"
+undo = "Deshacer"
+window_unavailable = "Dibujar funciona en grabaciones de pantalla y de área"
 
 [controls.settings]
 locked = "No se puede cambiar en esta grabación"
@@ -1234,6 +1256,8 @@ mirror_title = "Espejo no disponible"
 [camera.issue]
 access_message = "Haz clic para permitir que Cap use tu cámara en Ajustes del Sistema."
 access_title = "Se necesita acceso a la cámara"
+disconnected_message = "La cámara seleccionada dejó de enviar video."
+disconnected_title = "Cámara desconectada"
 generic = "No se pudo iniciar la cámara seleccionada. Elige otra cámara o vuelve a conectar esta."
 invalid_format = "Esta cámara no indicó ningún formato de captura utilizable."
 not_found = "Esta cámara ya no está disponible. Comprueba que esté conectada y permitida en los permisos del sistema."
@@ -2540,6 +2564,7 @@ format = "Formato"
 frame_rate = "Velocidad de fotogramas"
 quality = "Calidad"
 resolution = "Resolución"
+tracks = "Pistas"
 
 [editor.export.stats]
 calculating = "Calculando…"
@@ -2551,6 +2576,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "Ajustando tamaño…"
 refining_time = "Ajustando tiempo…"
 unavailable = "No disponible"
+
+[editor.export.tracks]
+aligned = "Las pistas siguen tus cortes y tu velocidad, así que encajan en cualquier editor de vídeo. El vídeo sale limpio, sin fondo ni efectos."
+audio_detail = "WAV · 48 kHz"
+camera = "Cámara"
+choose_one = "Elige al menos una pista para exportar."
+cta = "Exportar pistas"
+exported = "Pistas exportadas"
+exporting = "Exportando pistas"
+file_count = { one = "{count} archivo", other = "{count} archivos" }
+file_only = "Las pistas se guardan como archivos separados en una carpeta."
+files = "Archivos"
+format = "Pistas"
+microphone = "Micrófono"
+open_folder = "Abrir carpeta"
+screen = "Pantalla"
+studio_only = "Las pistas separadas solo se graban en el modo Studio."
+system_audio = "Audio del sistema"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportación turbo"
