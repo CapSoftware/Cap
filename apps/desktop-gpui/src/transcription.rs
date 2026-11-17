@@ -2667,6 +2667,19 @@ pub fn write_caption_edit_to_source(
                 });
         }
         _ => {
+            // Moved across clips so its end maps onto an earlier source clock
+            // (out of a held tail, or onto a clip placed before this one), it
+            // would be saved reversed; it ends where its start's piece does.
+            let end = match (start, end) {
+                (Some((start, start_piece)), Some((end, end_piece)))
+                    if clip_of(start_piece) != clip_of(end_piece) && end <= start =>
+                {
+                    build_source_to_edited_mappings(timeline, recording_durations)
+                        .get(start_piece)
+                        .map(|mapping| (mapping.source_end, start_piece))
+                }
+                _ => end,
+            };
             if let Some((start, _)) = start {
                 source.start = start as f32;
             }
@@ -3863,6 +3876,62 @@ mod tests {
                   "words": [{ "text": "spoken", "start": 13.0, "end": 14.0 }] }
             ])
         );
+    }
+
+    // capy-ai's case: recordings trimmed to 4..14 (a held tail from 10 s),
+    // 0..10 and 0..10. A caption dragged to 9.5..10.5 starts in the first
+    // clip's held tail (source 13.5) and ends on the second clip's clock
+    // (source 10.5). Untied, or tied to a clip neither end is on, it is not
+    // saved reversed: it ends where the held tail does, tied to its clip.
+    #[test]
+    fn a_caption_dragged_out_of_a_held_tail_is_not_saved_reversed() {
+        for (tie, start, end) in [(None, 8.0, 9.0), (Some(2), 25.0, 26.0)] {
+            let mut moved = caption("caption-moved", start, end, &[]);
+            moved.recording_clip = tie;
+            moved.text = "typed".into();
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                        { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                        { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                    ],
+                    "zoomSegments": []
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![moved],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0, 10.0];
+            let track = |project: &mut ProjectConfiguration| {
+                cap_project::synchronize_captions(project, &durations);
+                project
+                    .timeline
+                    .as_ref()
+                    .unwrap()
+                    .caption_segments
+                    .iter()
+                    .map(|segment| (segment.start, segment.end))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(track(&mut project).len(), 1, "{tie:?}");
+            let item = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+            (item.start, item.end) = (9.5, 10.5);
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            let saved: Vec<_> = project
+                .captions
+                .as_ref()
+                .unwrap()
+                .segments
+                .iter()
+                .map(|segment| (segment.start, segment.end, segment.recording_clip))
+                .collect();
+            assert_eq!(saved, [(13.5, 14.0, Some(0))], "{tie:?}");
+            assert_eq!(track(&mut project), [(9.5, 10.0)], "{tie:?}");
+        }
     }
 
     #[test]
