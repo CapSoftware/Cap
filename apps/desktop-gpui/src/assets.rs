@@ -213,6 +213,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
     "pencil.svg",
+    "eraser.svg",
     "arrow-up-right.svg",
     "more-horizontal.svg",
     "save.svg",
@@ -319,6 +320,7 @@ mod tests {
         // from, so the table has to scan here too.
         include_str!("library.rs"),
         include_str!("controls_window.rs"),
+        include_str!("live_draw.rs"),
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),
         include_str!("settings_window.rs"),
