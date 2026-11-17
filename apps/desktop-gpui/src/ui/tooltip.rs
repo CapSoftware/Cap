@@ -16,8 +16,8 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, FontWeight, Hsla, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window, div, px,
+    App, AppContext, Context, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Render,
+    SharedString, Styled, Window, div, px,
 };
 
 use crate::{
@@ -47,6 +47,7 @@ pub struct Tooltip {
     keys: Vec<SharedString>,
     style: TooltipStyle,
     theme: Theme,
+    max_width: Option<Pixels>,
 }
 
 impl Tooltip {
@@ -56,6 +57,7 @@ impl Tooltip {
             keys: Vec::new(),
             style: TooltipStyle::Dark,
             theme: *theme,
+            max_width: None,
         }
     }
 
@@ -84,6 +86,13 @@ impl Tooltip {
     }
 
     /// Build the view `.tooltip(..)` wants.
+    /// Wraps the label onto more lines past this width, for messages longer
+    /// than the window they are shown in.
+    pub fn max_width(mut self, width: Pixels) -> Self {
+        self.max_width = Some(width);
+        self
+    }
+
     pub fn view(self, cx: &mut App) -> gpui::AnyView {
         cx.new(|_| self).into()
     }
@@ -114,7 +123,10 @@ impl Render for Tooltip {
             .text_color(text)
             .font_weight(FontWeight::MEDIUM)
             .shadow_lg()
-            .child(self.label.clone())
+            .child(match self.max_width {
+                Some(width) => div().max_w(width).child(self.label.clone()),
+                None => div().child(self.label.clone()),
+            })
             .children(
                 keys.into_iter()
                     .map(|key| KbdChip::tooltip(&theme, key.as_ref())),

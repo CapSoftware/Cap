@@ -5031,7 +5031,13 @@ impl MainWindow {
                         )))
                         .min_w_0()
                         .truncate()
-                        .tooltip(move |_, cx| ui::Tooltip::new(&theme, full.clone()).view(cx))
+                        .tooltip(move |_, cx| {
+                            // The main window is narrow, so a long message
+                            // wraps instead of running past its edge.
+                            ui::Tooltip::new(&theme, full.clone())
+                                .max_width(px(240.))
+                                .view(cx)
+                        })
                         .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                         .child(message.clone()),
                 );
