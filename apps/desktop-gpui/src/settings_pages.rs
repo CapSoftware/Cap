@@ -4259,11 +4259,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let expiry = license.expiry_date.map(|ms| {
-            chrono::DateTime::from_timestamp_millis(ms as i64)
-                .map(|date| date.format("%-m/%-d/%Y").to_string())
-                .unwrap_or_else(|| ms.to_string())
-        });
+        let expiry = license_expiry_label(license.expiry_date);
 
         div()
             .flex()
@@ -8320,9 +8316,56 @@ async fn http_json(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The license server stores lifetime keys with its "never renews" date,
+/// `new Date("2038-01-19 03:14:07")` (the 32-bit `time_t` limit) parsed in the
+/// server's own time zone, and returns it as `expiryDate`. Within a day of that
+/// instant is a lifetime key, which has no expiry to show.
+const LIFETIME_LICENSE_EXPIRY_MS: i64 = 2_147_483_647_000;
+const LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
+    let ms = expiry_ms?;
+    if ((ms as i64) - LIFETIME_LICENSE_EXPIRY_MS).abs() <= LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS {
+        return None;
+    }
+    Some(
+        chrono::DateTime::from_timestamp_millis(ms as i64)
+            .map(|date| date.format("%-m/%-d/%Y").to_string())
+            .unwrap_or_else(|| ms.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_license_has_no_expiry_label() {
+        assert_eq!(license_expiry_label(Some(2_147_483_647_000.)), None);
+        let hour = 60. * 60. * 1000.;
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. + 8. * hour)),
+            None
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 14. * hour)),
+            None
+        );
+    }
+
+    #[test]
+    fn yearly_license_keeps_its_expiry_label() {
+        assert_eq!(license_expiry_label(None), None);
+        assert_eq!(
+            license_expiry_label(Some(1_826_323_200_000.)).as_deref(),
+            Some("11/16/2027")
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 3. * 24. * 60. * 60. * 1000.))
+                .as_deref(),
+            Some("1/16/2038")
+        );
+    }
 
     fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
         Hotkey {

@@ -188,6 +188,7 @@ interface ShareProps {
 	data: VideoData;
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
+	posterUrl?: string | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -324,6 +325,7 @@ export const Share = ({
 	data,
 	initialPlaybackUrl,
 	serverPlaybackUrl = null,
+	posterUrl = null,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -969,6 +971,7 @@ export const Share = ({
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
 														serverPlaybackUrl={serverPlaybackUrl}
+														posterUrl={posterUrl}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
