@@ -224,15 +224,13 @@ jobs:
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
       # sources that deliver at a different rate than configured.
-      - name: Hardware encoder tests (macOS)
+      - name: VideoToolbox FFmpeg encoder tests (macOS)
         if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
         shell: bash
-        run: |
-          cargo test --locked -p cap-enc-ffmpeg
-          cargo test --locked -p cap-enc-avfoundation
+        run: cargo test --locked -p cap-enc-ffmpeg
 
       - name: AVFoundation encoder tests (macOS)
-        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',units,')
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
         shell: bash
         run: |
           cargo test --locked -p cap-enc-avfoundation
