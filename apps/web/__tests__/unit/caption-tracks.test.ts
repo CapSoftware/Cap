@@ -53,6 +53,8 @@ class FakeTrackElement extends FakeEventTarget {
 }
 
 class FakeVideo extends FakeEventTarget {
+	webkitDisplayingFullscreen = false;
+
 	constructor(
 		readonly textTracks: FakeTextTrackList,
 		private trackElements: FakeTrackElement[],
@@ -108,5 +110,63 @@ describe("bindCaptionTrackCueText", () => {
 		expect(cueTexts.at(-1)).toBe("Loaded caption");
 
 		cleanup();
+	});
+
+	it("lets the browser show captions in the video's own full screen", () => {
+		const textTracks = new FakeTextTrackList();
+		const captionTrack = new FakeTextTrack(
+			"captions",
+			createCueList("Full screen caption"),
+		);
+		textTracks.addSilently(captionTrack);
+		const video = createVideo(textTracks, []);
+		const fakeVideo = video as unknown as FakeVideo;
+		const cueTexts: string[] = [];
+
+		const cleanup = bindCaptionTrackCueText(video, (text) => {
+			cueTexts.push(text);
+		});
+
+		expect(captionTrack.mode).toBe("hidden");
+		expect(cueTexts.at(-1)).toBe("Full screen caption");
+
+		fakeVideo.webkitDisplayingFullscreen = true;
+		fakeVideo.dispatch("webkitbeginfullscreen");
+
+		expect(captionTrack.mode).toBe("showing");
+		expect(cueTexts.at(-1)).toBe("");
+
+		fakeVideo.webkitDisplayingFullscreen = false;
+		fakeVideo.dispatch("webkitendfullscreen");
+
+		expect(captionTrack.mode).toBe("hidden");
+		expect(cueTexts.at(-1)).toBe("Full screen caption");
+
+		cleanup();
+	});
+
+	it("keeps captions the viewer turns off in native full screen off", () => {
+		const textTracks = new FakeTextTrackList();
+		const captionTrack = new FakeTextTrack(
+			"captions",
+			createCueList("Full screen caption"),
+		);
+		textTracks.addSilently(captionTrack);
+		const video = createVideo(textTracks, []);
+		const fakeVideo = video as unknown as FakeVideo;
+
+		const cleanup = bindCaptionTrackCueText(video, () => undefined);
+
+		fakeVideo.webkitDisplayingFullscreen = true;
+		fakeVideo.dispatch("webkitbeginfullscreen");
+		captionTrack.mode = "disabled";
+		textTracks.dispatch("change");
+
+		expect(captionTrack.mode).toBe("disabled");
+
+		cleanup();
+		fakeVideo.dispatch("webkitendfullscreen");
+
+		expect(captionTrack.mode).toBe("disabled");
 	});
 });

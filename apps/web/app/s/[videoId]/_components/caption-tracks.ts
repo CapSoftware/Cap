@@ -2,6 +2,27 @@ import { getActiveCaptionText } from "./caption-cues";
 
 const loadedTrackReadyState = 2;
 
+const nativeViewEvents = [
+	"enterpictureinpicture",
+	"leavepictureinpicture",
+	"webkitbeginfullscreen",
+	"webkitendfullscreen",
+] as const;
+
+type NativeViewVideo = HTMLVideoElement & {
+	webkitDisplayingFullscreen?: boolean;
+};
+
+// Picture in picture and the video's own full screen on iPhone cannot show
+// the cue text the page draws, so there the browser shows the track instead.
+function isNativeView(video: HTMLVideoElement): boolean {
+	return (
+		(video as NativeViewVideo).webkitDisplayingFullscreen === true ||
+		(typeof document !== "undefined" &&
+			document.pictureInPictureElement === video)
+	);
+}
+
 function isCaptionTextTrack(
 	track: TextTrack | null | undefined,
 ): track is TextTrack {
@@ -28,7 +49,9 @@ export function bindCaptionTrackCueText(
 	const trackLoadHandlers = new Map<HTMLTrackElement, () => void>();
 
 	const updateCueText = (): void => {
-		onCueTextChange(getActiveCaptionText(currentTrack?.activeCues));
+		onCueTextChange(
+			isNativeView(video) ? "" : getActiveCaptionText(currentTrack?.activeCues),
+		);
 	};
 
 	const syncTracks = (): void => {
@@ -47,7 +70,9 @@ export function bindCaptionTrackCueText(
 			if (!isCaptionTextTrack(track)) continue;
 
 			if (!currentTrack) currentTrack = track;
-			if (track.mode !== "hidden") track.mode = "hidden";
+			if (track.mode !== "hidden" && !isNativeView(video)) {
+				track.mode = "hidden";
+			}
 
 			if (!cueTracks.has(track)) {
 				track.addEventListener("cuechange", updateCueText);
@@ -80,6 +105,14 @@ export function bindCaptionTrackCueText(
 		syncTracks();
 	};
 
+	const handleNativeViewChange = (): void => {
+		syncTracks();
+		if (currentTrack) {
+			currentTrack.mode = isNativeView(video) ? "showing" : "hidden";
+		}
+		updateCueText();
+	};
+
 	let mutationObserver: MutationObserver | null = null;
 
 	if (typeof MutationObserver !== "undefined") {
@@ -88,6 +121,9 @@ export function bindCaptionTrackCueText(
 	}
 
 	video.addEventListener("loadedmetadata", handleTrackUpdate);
+	for (const name of nativeViewEvents) {
+		video.addEventListener(name, handleNativeViewChange);
+	}
 	video.textTracks.addEventListener("change", handleTrackUpdate);
 	video.textTracks.addEventListener("addtrack", handleTrackUpdate);
 	video.textTracks.addEventListener("removetrack", handleTrackUpdate);
@@ -97,6 +133,9 @@ export function bindCaptionTrackCueText(
 	return () => {
 		mutationObserver?.disconnect();
 		video.removeEventListener("loadedmetadata", handleTrackUpdate);
+		for (const name of nativeViewEvents) {
+			video.removeEventListener(name, handleNativeViewChange);
+		}
 		video.textTracks.removeEventListener("change", handleTrackUpdate);
 		video.textTracks.removeEventListener("addtrack", handleTrackUpdate);
 		video.textTracks.removeEventListener("removetrack", handleTrackUpdate);
