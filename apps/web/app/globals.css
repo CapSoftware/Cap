@@ -1217,6 +1217,9 @@ footer a {
 	background-color: var(--player-brand-accent);
 }
 
-[data-player-brand-accent] [data-slot="media-player"] {
+/* The control bar scopes its own `.dark`, which resets `--ring`, so it needs
+   the brand ring set again. Light bars (the timeline deck) keep Cap's ring. */
+[data-player-brand-accent] [data-slot="media-player"],
+[data-player-brand-accent] [data-slot="media-player-controls"].dark {
 	--ring: var(--player-brand-ring);
 }
