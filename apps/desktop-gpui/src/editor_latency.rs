@@ -150,18 +150,11 @@ pub(crate) struct InputOutcome {
 pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<InputOutcome> {
     let mut outcomes: Vec<InputOutcome> = Vec::new();
     let mut in_flight = Vec::new();
-    let mut last_demand: Option<(Instant, u32)> = None;
-    let mut last_rendered = None;
+    let mut pending: Option<u32> = None;
     for mark in marks {
         match mark.stage {
             Stage::Input => {
-                in_flight.push(
-                    last_demand
-                        .filter(|(demand, _)| {
-                            last_rendered.is_none_or(|rendered| *demand > rendered)
-                        })
-                        .map(|(_, frame)| frame),
-                );
+                in_flight.push(pending);
                 outcomes.push(InputOutcome {
                     target: None,
                     shown: None,
@@ -170,20 +163,25 @@ pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<Inpu
                 });
             }
             Stage::Demand => {
-                last_demand = Some((mark.at, mark.frame));
+                pending = Some(mark.frame);
                 if let Some(outcome) = outcomes.last_mut() {
                     outcome.target = Some(mark.frame);
                 }
             }
-            Stage::Rendered => last_rendered = Some(mark.at),
+            Stage::Rendered => {
+                if pending == Some(mark.frame) {
+                    pending = None;
+                }
+            }
             Stage::Arrived | Stage::Painted => {}
         }
     }
-    // Paused preview renders run one at a time and `Rendered` marks their
-    // end, not their start. With a request still in flight when the input
-    // landed, the next render to finish may have begun before it and carry the
-    // old project; when it is that request's frame, only a render finishing
-    // after it includes the input. Any other render started after the input.
+    // Paused preview renders run one at a time, each from the newest request,
+    // and `Rendered` marks their end, not their start. A request whose frame
+    // has not been rendered since is still owed a render that may have begun
+    // before the input and carry the old project; when the next render to
+    // finish is that frame, only a render finishing after it includes the
+    // input. Any other render started after the input.
     let fresh_after: Vec<(Instant, bool)> = outcomes
         .iter()
         .zip(&in_flight)
@@ -407,6 +405,30 @@ mod tests {
         assert_eq!(
             outcomes[1].shown.map(|shown| millis(base, shown.painted)),
             Some(33.0)
+        );
+    }
+
+    #[test]
+    fn a_request_queued_behind_a_render_is_in_flight_at_the_next_input() {
+        let base = Instant::now();
+        let marks = [
+            mark(Stage::Demand, 2, 0, at(base, 0)),
+            mark(Stage::Demand, 3, 0, at(base, 1)),
+            mark(Stage::Rendered, 2, 0, at(base, 5)),
+            mark(Stage::Input, 0, 0, at(base, 6)),
+            mark(Stage::Demand, 3, 0, at(base, 6)),
+            mark(Stage::Rendered, 3, 0, at(base, 10)),
+            mark(Stage::Arrived, 3, 1, at(base, 11)),
+            mark(Stage::Painted, 3, 1, at(base, 12)),
+            mark(Stage::Rendered, 3, 0, at(base, 15)),
+            mark(Stage::Arrived, 3, 2, at(base, 16)),
+            mark(Stage::Painted, 3, 2, at(base, 28)),
+        ];
+        let (shown, _) = presentations(&marks);
+        let outcomes = input_outcomes(&marks, &shown);
+        assert_eq!(
+            outcomes[0].shown.map(|shown| millis(base, shown.painted)),
+            Some(28.0)
         );
     }
 
