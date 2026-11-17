@@ -1471,6 +1471,7 @@ fn even_padding() {
     for (name, aspect) in [("auto", None), ("wide", Some(AspectRatio::Wide))] {
         let mut config = project.config();
         config.camera.hide = true;
+        let fixed_aspect = aspect.is_some();
         config.aspect_ratio = aspect;
         config.background.padding = 10.0;
         config.background.padding_mode = PaddingMode::Even;
@@ -1527,15 +1528,14 @@ fn even_padding() {
                 f64::from(size.1) - region.y1,
             ];
             let shorter = margins[1].min(margins[3]);
-            let uneven = match aspect {
+            let uneven = if !fixed_aspect {
                 // Same margin on every side, give or take the output's
                 // even-dimension rounding.
-                None => margins.iter().any(|m| (m - shorter).abs() > 3.0),
+                margins.iter().any(|m| (m - shorter).abs() > 3.0)
+            } else {
                 // The frame's height binds: equal top and bottom, the rest
                 // centred across.
-                Some(_) => {
-                    (margins[1] - margins[3]).abs() > 2.0 || (margins[0] - margins[2]).abs() > 2.0
-                }
+                (margins[1] - margins[3]).abs() > 2.0 || (margins[0] - margins[2]).abs() > 2.0
             };
             let misplaced =
                 (margins[0] - expected.x).abs() > 2.0 || (margins[1] - expected.y).abs() > 2.0;
