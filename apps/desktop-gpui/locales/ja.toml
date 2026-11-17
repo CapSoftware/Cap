@@ -2540,6 +2540,7 @@ format = "形式"
 frame_rate = "フレームレート"
 quality = "品質"
 resolution = "解像度"
+tracks = "トラック"
 
 [editor.export.stats]
 calculating = "計算中…"
@@ -2551,6 +2552,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "サイズを精査中…"
 refining_time = "時間を精査中…"
 unavailable = "利用不可"
+
+[editor.export.tracks]
+aligned = "各トラックはカットや速度の変更に沿うため、どの動画編集ソフトでも揃います。映像は背景やエフェクトなしで書き出されます。"
+audio_detail = "WAV · 48 kHz"
+camera = "カメラ"
+choose_one = "書き出すトラックを1つ以上選んでください。"
+cta = "トラックを書き出す"
+exported = "トラックを書き出しました"
+exporting = "トラックを書き出し中"
+file_count = { other = "{count}ファイル" }
+file_only = "トラックはフォルダ内に個別のファイルとして保存されます。"
+files = "ファイル"
+format = "トラック"
+microphone = "マイク"
+open_folder = "フォルダを開く"
+screen = "画面"
+studio_only = "個別のトラックはStudioモードでのみ録画されます。"
+system_audio = "システム音声"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "ターボ書き出し"
