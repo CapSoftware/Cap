@@ -7,10 +7,7 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import {
-	createLinuxBundleConfig,
-	GPUI_RPM_DEPENDS,
-} from "./linux-bundle-config.mjs";
+import { createLinuxBundleConfig } from "./linux-bundle-config.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -156,10 +153,7 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
-			);
+			await expandArchive(ffmpegZipPath, targetDir);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
@@ -237,6 +231,8 @@ async function main() {
 			"\\",
 			"/",
 		)}"\n`;
+
+		await setupWindowsVcRuntime(vcInstallDir.trim());
 
 		const cmakePath = path.join(
 			vcInstallDir.trim(),
@@ -324,7 +320,7 @@ async function main() {
 			console.log(
 				`Staged ${bundledLibraries.length} shared libraries for Linux bundling`,
 			);
-			await writeLinuxTauriConfig(bundledLibraries);
+			await writeLinuxBundleConfig(bundledLibraries);
 
 			cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
 				path.relative(__root, onnxRuntimePath),
@@ -415,12 +411,18 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// 1.24.2 through 1.26 keep memory from every inference whose input changes: a
+// 30 minute Parakeet transcription peaked at 2.6 GB on 1.24.2 and 1.9 GB on
+// 1.30.1. Microsoft publishes no x86_64 macOS build after 1.23.2, so Intel Macs
+// stay on that release.
+const ONNX_RUNTIME_VERSION = "1.30.1";
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
 			? {
-					version: "1.24.2",
-					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+					version: ONNX_RUNTIME_VERSION,
+					name: `onnxruntime-osx-arm64-${ONNX_RUNTIME_VERSION}.tgz`,
 				}
 			: {
 					version: "1.23.2",
@@ -432,6 +434,9 @@ async function setupMacOSOnnxRuntime() {
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
 	const markerPath = path.join(outputDir, "asset.txt");
+	// Microsoft's dylib keeps ~12 MB of local symbols nothing in Cap reads; the
+	// marker changes with the preparation so a cached unstripped copy is redone.
+	const preparedMarker = `${asset.name}:stripped`;
 	const marker = await fs
 		.readFile(markerPath, "utf-8")
 		.then((value) => value.trim())
@@ -444,7 +449,7 @@ async function setupMacOSOnnxRuntime() {
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
-	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+	if (!(await fileExists(outputPath)) || marker !== preparedMarker) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
 		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
 		await fs.mkdir(outputDir, { recursive: true });
@@ -452,8 +457,11 @@ async function setupMacOSOnnxRuntime() {
 			path.join(extractDir, "lib", "libonnxruntime.dylib"),
 			outputPath,
 		);
+		// Local symbols only: the exported C API (OrtGetApiBase) that ort loads
+		// through is unchanged.
+		await execFile("strip", ["-x", outputPath]);
 		await signMacOSDylib(outputPath);
-		await fs.writeFile(markerPath, asset.name);
+		await fs.writeFile(markerPath, preparedMarker);
 		console.log("Prepared ONNX Runtime dylib");
 	} else {
 		console.log("Using cached ONNX Runtime dylib");
@@ -466,12 +474,12 @@ async function setupMacOSOnnxRuntime() {
 async function setupWindowsOnnxRuntime() {
 	const assets = {
 		x86_64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-x64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-x64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 		aarch64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-arm64-1.24.2.zip",
+			version: ONNX_RUNTIME_VERSION,
+			name: `onnxruntime-win-arm64-${ONNX_RUNTIME_VERSION}.zip`,
 		},
 	};
 	const asset = assets[arch];
@@ -498,10 +506,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, targetDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -537,7 +542,7 @@ async function setupWindowsOnnxRuntime() {
 }
 
 async function setupLinuxOnnxRuntime() {
-	const version = "1.24.3";
+	const version = ONNX_RUNTIME_VERSION;
 	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
 	if (!platformArch)
 		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
@@ -578,6 +583,58 @@ async function setupLinuxOnnxRuntime() {
 	} else console.log("Using cached ONNX Runtime shared library");
 
 	return outputPath;
+}
+
+const WINDOWS_VC_RUNTIME_DLLS = [
+	"msvcp140.dll",
+	"msvcp140_1.dll",
+	"vcruntime140.dll",
+	"vcruntime140_1.dll",
+];
+
+// Cap.exe, cap-cli.exe, cap-muxer.exe, onnxruntime.dll and dxcompiler.dll all
+// import the Visual C++ runtime, which a clean Windows 11 does not have. The
+// installer ships the runtime next to them (app-local deployment) from the
+// same Visual Studio that linked them, so it is never older than the build.
+async function setupWindowsVcRuntime(vcInstallDir) {
+	const redistArch = { x86_64: "x64", aarch64: "arm64" }[arch];
+	if (!redistArch)
+		throw new Error(
+			`Unsupported Windows architecture for the VC runtime: ${arch}`,
+		);
+	const version = (
+		await fs.readFile(
+			path.join(
+				vcInstallDir,
+				"VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt",
+			),
+			"utf-8",
+		)
+	).trim();
+	const archDir = path.join(
+		vcInstallDir,
+		"VC/Redist/MSVC",
+		version,
+		redistArch,
+	);
+	const crtDir = (await fs.readdir(archDir))
+		.filter((name) => /^Microsoft\.VC\d+\.CRT$/.test(name))
+		.sort()
+		.pop();
+	if (!crtDir)
+		throw new Error(
+			`No Visual C++ runtime redistributable found in ${archDir}`,
+		);
+
+	const outputDir = path.join(targetDir, "native-deps", "vcruntime");
+	await fs.rm(outputDir, { recursive: true, force: true });
+	await fs.mkdir(outputDir, { recursive: true });
+	for (const name of WINDOWS_VC_RUNTIME_DLLS)
+		await fs.copyFile(
+			path.join(archDir, crtDir, name),
+			path.join(outputDir, name),
+		);
+	console.log(`Prepared the Visual C++ runtime ${version} for ${redistArch}`);
 }
 
 async function setupWindowsDxc() {
@@ -621,10 +678,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -700,11 +754,50 @@ async function signMacOSDylib(filePath) {
 	);
 }
 
+async function expandArchive(archivePath, destination) {
+	// Under a pwsh parent, PSModulePath points Windows PowerShell at
+	// PowerShell 7's Archive module, which fails on .NET Framework without a
+	// non-zero exit, leaving nothing extracted.
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(
+			([key]) => key.toLowerCase() !== "psmodulepath",
+		),
+	);
+	await exec(
+		`$ErrorActionPreference = 'Stop'; Expand-Archive -Path "${archivePath}" -DestinationPath "${destination}" -Force`,
+		{ shell: "powershell.exe", env },
+	);
+}
+
 async function downloadBytes(url) {
-	const response = await fetch(url);
-	if (!response.ok)
-		throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
-	return response.arrayBuffer();
+	for (let attempt = 0; ; attempt++) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok)
+				throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+			return await response.arrayBuffer();
+		} catch (error) {
+			const cause = error instanceof Error ? error.cause : undefined;
+			const retryable =
+				cause instanceof Error &&
+				"code" in cause &&
+				[
+					"UND_ERR_CONNECT_TIMEOUT",
+					"UND_ERR_HEADERS_TIMEOUT",
+					"UND_ERR_SOCKET",
+					"ECONNRESET",
+					"ECONNREFUSED",
+					"ETIMEDOUT",
+					"EAI_AGAIN",
+					"ENOTFOUND",
+				].includes(String(cause.code));
+			if (attempt === 2 || !retryable) throw error;
+			console.warn(
+				`Download connection failed; retrying (${attempt + 2}/3): ${url}`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+		}
+	}
 }
 
 async function fileExists(path) {
@@ -714,7 +807,7 @@ async function fileExists(path) {
 		.catch(() => false);
 }
 
-async function writeLinuxTauriConfig(sonameLibs) {
+async function writeLinuxBundleConfig(sonameLibs) {
 	const pluginName = "libasound_module_pcm_pulse.so";
 	const pluginDirectories = [
 		`/usr/lib/${arch}-linux-gnu/alsa-lib`,
@@ -741,23 +834,6 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await fs.mkdir(appimageLibDir, { recursive: true });
 	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
 
-	const tauriDirectory = path.join(__root, "apps", "desktop", "src-tauri");
-	const tauriConfig = JSON.parse(
-		await fs.readFile(path.join(tauriDirectory, "tauri.conf.json"), "utf8"),
-	);
-	await writeFileIfChanged(
-		path.join(tauriDirectory, "tauri.linux.conf.json"),
-		`${JSON.stringify(
-			createLinuxBundleConfig(
-				sonameLibs,
-				tauriConfig.bundle.linux.deb.files,
-				tauriConfig.bundle.linux.deb.depends,
-			),
-			null,
-			"\t",
-		)}\n`,
-	);
-
 	const gpuiDirectory = path.join(__root, "apps", "desktop-gpui");
 	const gpuiConfig = JSON.parse(
 		await fs.readFile(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
@@ -765,22 +841,13 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await writeFileIfChanged(
 		path.join(gpuiDirectory, "tauri.linux.conf.json"),
 		`${JSON.stringify(
-			createLinuxBundleConfig(
-				sonameLibs,
-				{},
-				gpuiConfig.bundle.linux.deb.depends,
-				{
-					root: "../..",
-					rpmDependencies: GPUI_RPM_DEPENDS,
-					mediaFramework: false,
-				},
-			),
+			createLinuxBundleConfig(sonameLibs, gpuiConfig.bundle.linux.deb.depends),
 			null,
 			"\t",
 		)}\n`,
 	);
 	console.log(
-		`Generated Linux Tauri package configs with ${sonameLibs.length} shared libraries`,
+		`Generated the Linux package config with ${sonameLibs.length} shared libraries`,
 	);
 }
 
@@ -846,7 +913,7 @@ async function ensureMsvcVersion() {
 				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
 				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
 				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
-				`After updating, run: cargo clean -p cap-desktop && bun run dev:windows\n`,
+				`After updating, run: cargo clean --manifest-path apps/desktop-gpui/Cargo.toml -p cap-desktop-gpui && bun run dev:desktop\n`,
 		);
 	}
 

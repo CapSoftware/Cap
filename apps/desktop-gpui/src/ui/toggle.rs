@@ -24,6 +24,10 @@ pub enum ToggleSize {
     Md,
     /// `w-14 h-7 p-0.75`, `size-6` thumb.
     Lg,
+    /// The system's mini switch, measured from macOS's own in a grouped
+    /// settings form (`scripts/glass-reference/gallery.swift`): a 36 x 16
+    /// track and a 22 x 14 capsule knob.
+    Mini,
 }
 
 impl ToggleSize {
@@ -32,14 +36,16 @@ impl ToggleSize {
             ToggleSize::Sm => (px(34.), px(20.), px(2.)),
             ToggleSize::Md => (px(44.), px(24.), px(2.)),
             ToggleSize::Lg => (px(56.), px(28.), px(3.)),
+            ToggleSize::Mini => (px(36.), px(16.), px(1.)),
         }
     }
 
-    fn thumb(self) -> Pixels {
+    fn thumb(self) -> (Pixels, Pixels) {
         match self {
-            ToggleSize::Sm => px(16.),
-            ToggleSize::Md => px(20.),
-            ToggleSize::Lg => px(24.),
+            ToggleSize::Sm => (px(16.), px(16.)),
+            ToggleSize::Md => (px(20.), px(20.)),
+            ToggleSize::Lg => (px(24.), px(24.)),
+            ToggleSize::Mini => (px(22.), px(14.)),
         }
     }
 }
@@ -82,7 +88,7 @@ impl Toggle {
     /// bevel the same rule adds has no gpui equivalent (README deviation).
     pub fn settings(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
-            size: ToggleSize::Sm,
+            size: ToggleSize::Mini,
             // The material's control fill is near-white in light mode, so an
             // off toggle read as a blank pill on the white settings cards.
             off_fill: if theme.is_dark() {
@@ -173,7 +179,21 @@ impl RenderOnce for Toggle {
             .when(checked, |this| this.justify_end())
             .when(!disabled, |this| this.cursor_pointer())
             .bg(if checked { on_fill } else { off_fill })
-            .child(div().size(size.thumb()).rounded_full().bg(thumb))
+            .child({
+                let (thumb_width, thumb_height) = size.thumb();
+                div()
+                    .w(thumb_width)
+                    .h(thumb_height)
+                    .rounded_full()
+                    .bg(thumb)
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 0., 0.18),
+                        offset: gpui::point(px(0.), px(0.5)),
+                        blur_radius: px(1.5),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

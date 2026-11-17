@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -280,6 +281,14 @@ async function processVideoOnMediaServer(
 		throw new FatalError("Video does not exist");
 	}
 
+	const rejection = await getMediaProcessingRejection({
+		ownerId: video.ownerId,
+		rawFileKey,
+	});
+	if (rejection) {
+		throw new FatalError(rejection);
+	}
+
 	const videoDomain = decodeStorageVideo(video);
 
 	const [bucket] =
@@ -410,6 +419,7 @@ async function queueProcessedVideoTranscription(
 ): Promise<void> {
 	"use step";
 
+	if (!serverEnv().ASSEMBLY_API_KEY) return;
 	try {
 		const [owner] = await db()
 			.select({

@@ -207,6 +207,8 @@ mod tests {
             total_pause_duration: Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: None,
+            #[cfg(not(target_os = "linux"))]
+            terminal_capture_stopped: false,
             #[cfg(target_os = "linux")]
             lifetime,
         });

@@ -434,13 +434,17 @@ async function pauseExhaustedRecording(
 		.where(eq(videoUploads.videoId, videoId));
 }
 
+// A caller that names its attempts by number gets its own live attempt back on a retry instead of being
+// locked out by its lease, and its next claim gets the next number's id.
 export async function claimProcessingAttempt({
 	videoId,
 	generation,
+	attemptIdFor,
 	now = new Date(),
 }: {
 	videoId: Video.VideoId;
 	generation: string;
+	attemptIdFor?: (attemptCount: number) => string;
 	now?: Date;
 }): Promise<DesktopRecordingAttempt | null> {
 	return db().transaction(async (tx) => {
@@ -456,6 +460,20 @@ export async function claimProcessingAttempt({
 			.for("update");
 		if (!row) return null;
 		const job = parseDesktopRecordingJob(row);
+		const ownAttemptId =
+			attemptIdFor !== undefined &&
+			job.attemptId === attemptIdFor(job.attemptCount)
+				? job.attemptId
+				: null;
+		if (
+			ownAttemptId !== null &&
+			job.leaseExpiresAt &&
+			job.leaseExpiresAt > now &&
+			(job.state === "committing" ||
+				job.state === "queued" ||
+				job.state === "processing")
+		)
+			return { ...job, attemptId: ownAttemptId };
 		if (!isDesktopRecordingJobRecoverable(job, now)) return null;
 		if (job.attemptCount >= MAX_AUTOMATIC_ATTEMPTS) {
 			await pauseExhaustedRecording(
@@ -469,7 +487,7 @@ export async function claimProcessingAttempt({
 		const attempt: DesktopRecordingAttempt = {
 			...job,
 			state: job.source ? "processing" : "committing",
-			attemptId: randomUUID(),
+			attemptId: attemptIdFor?.(job.attemptCount + 1) ?? randomUUID(),
 			attemptCount: job.attemptCount + 1,
 			leaseExpiresAt: new Date(now.getTime() + DESKTOP_RECORDING_LEASE_MS),
 			remoteJobId: null,

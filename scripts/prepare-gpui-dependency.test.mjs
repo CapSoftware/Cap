@@ -152,6 +152,12 @@ test("dependency verification handles overlapping patches without changing the c
 	patch("zed-wayland-activation.patch");
 	writeFileSync(path.join(upstream, "closed.rs"), "quiet closed windows\n");
 	patch("zed-closed-window-events.patch");
+	writeFileSync(path.join(upstream, "glass.rs"), "glass panes\n");
+	patch("zed-glass.patch");
+	writeFileSync(path.join(upstream, "perf.rs"), "faster frames\n");
+	patch("zed-perf.patch");
+	writeFileSync(path.join(upstream, "recovery.rs"), "one instance\n");
+	patch("zed-device-lost.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,

@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
@@ -96,6 +97,11 @@ export function AnalyticsDashboard() {
 
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
+				return;
+			}
+
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
 				return;
 			}
 
@@ -263,9 +269,9 @@ export function AnalyticsDashboard() {
 								</div>
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full bg-gray-2 bg-opacity-75 backdrop-blur-md">
 									<div className="flex flex-col items-center">
-										<h1 className="text-3xl font-medium text-gray-12">
+										<h2 className="text-3xl font-medium text-gray-12">
 											Upgrade to unlock Cap Analytics
-										</h1>
+										</h2>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
 										You can cancel anytime.

@@ -4,13 +4,9 @@
 	"globalEnv": ["*"],
 	"tasks": {
 		"build": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
-		},
-		"@cap/desktop#build": {
-			"dependsOn": ["^build"],
-			"outputs": [".output/**"]
 		},
 		"@cap/chrome-extension#build": {
 			"inputs": [
@@ -32,12 +28,12 @@
 			"outputs": ["dist/**"]
 		},
 		"build:web:docker": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
 		"build:web": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},

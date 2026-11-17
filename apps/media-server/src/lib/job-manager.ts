@@ -1,9 +1,15 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
 	getContainerCpuLimit,
 	getContainerCpuUsageMicros,
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
+import type { HlsLadderResult } from "./hls-ladder-encode";
+import {
+	INPUT_POLICY_VIOLATION,
+	isInputPolicyViolationMessage,
+} from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
@@ -25,7 +31,8 @@ export type RecordingErrorCode =
 	| "source-changed"
 	| "output-invalid"
 	| "processing-unavailable"
-	| "processing-budget-exhausted";
+	| "processing-budget-exhausted"
+	| typeof INPUT_POLICY_VIOLATION;
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -78,6 +85,7 @@ export interface JobProgress {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -102,6 +110,10 @@ export interface VideoMetadata {
 	sampleRate: number | null;
 	bitrate: number;
 	fileSize: number;
+	// How long the file's timestamps run, when the probe measured them. An
+	// encode is held to the longer of this and duration, and is not held at
+	// all when it is unknown.
+	timestampSpan?: number | null;
 }
 
 export interface Job {
@@ -139,6 +151,7 @@ export interface Job {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -147,6 +160,10 @@ export interface Job {
 	webhookUrl?: string;
 	webhookSecret?: string;
 	abortController?: AbortController;
+	// A ladder for a Cap Infra video at the 1440p or 2160p tier, which keeps the
+	// GPU encoder busy on its own.
+	infraHeavyLadder?: boolean;
+	infraMp4?: boolean;
 }
 
 const jobs = new Map<string, Job>();
@@ -168,6 +185,9 @@ const WEBHOOK_TIMEOUT_MS = 5000;
 const RECORDING_HEARTBEAT_MS = 60_000;
 const MAX_RECORDING_WORKER_LEASE_MS = 5 * 60_000;
 const UNACKNOWLEDGED_TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
+// Finished jobs stay answerable until the sweeper removes them, so the count
+// is capped. A retained job is a few kilobytes; the oldest go first.
+export const MAX_RETAINED_TERMINAL_JOBS = 5_000;
 
 const configuredMaxProcesses =
 	Number.parseInt(
@@ -340,6 +360,91 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+// Cap Infra jobs share the workers with Cap's own recordings. They may not take
+// the last free slots, and only one Infra ladder at 1440p or 2160p runs on a
+// worker at a time: one already fills the GPU encoder, and a second one slows
+// both of them and every recording that lands beside them.
+const INFRA_RESERVED_SLOTS = Math.max(
+	0,
+	Number.parseInt(process.env.MEDIA_SERVER_INFRA_RESERVED_SLOTS ?? "1", 10) ||
+		0,
+);
+const MAX_INFRA_HEAVY_LADDERS = Math.max(
+	1,
+	Number.parseInt(
+		process.env.MEDIA_SERVER_MAX_INFRA_HEAVY_LADDERS ?? "1",
+		10,
+	) || 1,
+);
+
+export function getActiveInfraHeavyLadderCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.infraHeavyLadder && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function getActiveInfraMp4Count(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.infraMp4 && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function infraCapacityAllows(input: {
+	effectiveMax: number;
+	active: number;
+	activeHeavyLadders: number;
+	heavyLadder: boolean;
+	reservedSlots?: number;
+	maxHeavyLadders?: number;
+	slice?: boolean;
+	activeInfraMp4s?: number;
+}): boolean {
+	if (input.slice && (input.activeInfraMp4s ?? 0) > 0) return false;
+	const reservedSlots = input.reservedSlots ?? INFRA_RESERVED_SLOTS;
+	const maxHeavyLadders = input.maxHeavyLadders ?? MAX_INFRA_HEAVY_LADDERS;
+	const reserved = Math.min(reservedSlots, Math.max(0, input.effectiveMax - 1));
+	if (input.active >= input.effectiveMax - reserved) return false;
+	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
+}
+
+// The slices of one long Infra video arrive several at a time, so a slice
+// leaves at least half of the worker's slots free instead of only the
+// reserved ones, and stays off a worker that is making an Infra MP4: the MP4
+// is sent before the slices and must finish as fast as it would beside a
+// whole-video ladder, which runs on a worker of its own. A slice turned away
+// is sent again by its caller and reaches another worker through the load
+// balancer.
+export function infraSliceReservedSlots(
+	effectiveMax: number,
+	reservedSlots = INFRA_RESERVED_SLOTS,
+): number {
+	return Math.max(reservedSlots, Math.ceil(effectiveMax / 2));
+}
+
+export function canAcceptNewInfraVideoProcess(
+	heavyLadder: boolean,
+	slice = false,
+): boolean {
+	const { effectiveMax } = getSystemResources();
+	return infraCapacityAllows({
+		effectiveMax,
+		active: getActiveVideoProcessCount(),
+		activeHeavyLadders: getActiveInfraHeavyLadderCount(),
+		heavyLadder,
+		...(slice
+			? {
+					reservedSlots: infraSliceReservedSlots(effectiveMax),
+					slice,
+					activeInfraMp4s: getActiveInfraMp4Count(),
+				}
+			: {}),
+	});
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
@@ -353,8 +458,21 @@ export function canAcceptNewVideoProcess(
 	);
 }
 
+function evictExcessTerminalJobs(): void {
+	let excess = -MAX_RETAINED_TERMINAL_JOBS;
+	for (const job of jobs.values()) {
+		if (!isActivePhase(job.phase)) excess++;
+	}
+	for (const [jobId, job] of jobs) {
+		if (excess <= 0) return;
+		if (isActivePhase(job.phase)) continue;
+		deleteJob(jobId);
+		excess--;
+	}
+}
+
 export function generateJobId(): string {
-	return `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+	return `job_${Date.now()}_${randomUUID()}`;
 }
 
 export function createJob(
@@ -378,6 +496,7 @@ export function createJob(
 	};
 	jobs.set(jobId, job);
 	jobTotals.created++;
+	evictExcessTerminalJobs();
 	return job;
 }
 
@@ -408,6 +527,7 @@ export function updateJob(
 			| "recordingVerification"
 			| "outputUrl"
 			| "deferredSourceKey"
+			| "ladder"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -430,6 +550,21 @@ export function updateJob(
 		if (job.phase === "complete") jobTotals.completed++;
 		else if (job.phase === "error") jobTotals.errored++;
 		else jobTotals.cancelled++;
+		if (
+			job.phase === "error" &&
+			!job.errorCode &&
+			isInputPolicyViolationMessage(job.error)
+		) {
+			job.errorCode = INPUT_POLICY_VIOLATION;
+			console.warn(
+				JSON.stringify({
+					event: "input_policy_violation",
+					jobId: job.jobId,
+					videoId: job.videoId,
+					userId: job.userId,
+				}),
+			);
+		}
 	}
 	if (!isActivePhase(job.phase) && job.webhookInFlight)
 		job.webhookPending = true;
@@ -693,6 +828,7 @@ export function getJobProgress(job: Job): JobProgress {
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
+		ladder: job.ladder,
 	};
 }
 
@@ -889,10 +1025,18 @@ export function sendWebhook(
 			acknowledgement = await deliverWebhook(job, getJobProgress(job));
 		}
 		return acknowledgement;
-	})().finally(() => {
-		job.webhookInFlight = false;
-		job.webhookPromise = undefined;
-	});
+	})()
+		.catch((error: unknown) => {
+			console.error(
+				`[job-manager] Webhook delivery failed for job ${job.jobId}:`,
+				error,
+			);
+			return undefined;
+		})
+		.finally(() => {
+			job.webhookInFlight = false;
+			job.webhookPromise = undefined;
+		});
 	return job.webhookPromise;
 }
 

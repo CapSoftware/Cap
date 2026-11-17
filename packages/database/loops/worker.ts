@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { STRIPE_AVAILABLE } from "@cap/utils";
 import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import mysql, { type RowDataPacket } from "mysql2/promise";
 import { provisionStripeCustomer } from "../auth/stripe-customer";
 import { db } from "../index";
 import { users } from "../schema";
@@ -13,6 +13,15 @@ import {
 } from "./client";
 import { activationSignalsAfter, inFreeExperiment } from "./experiment";
 import {
+	claimJobs,
+	completeUnchangedJob,
+	completeUnchangedJobs,
+	deferJob,
+	type Job,
+	releaseJobs,
+	renewLease,
+} from "./jobs";
+import {
 	activationFollowUps,
 	enrollmentWindow,
 	type LifecycleContact,
@@ -22,18 +31,14 @@ import {
 	retryDelay,
 } from "./lifecycle";
 import { type CustomerCopy, classifyProfile, normalizeEmail } from "./profile";
-import { type LoopsProfileSource, readLoopsProfile } from "./sources";
+import {
+	type LoopsProfileSource,
+	readLoopsProfile,
+	readLoopsProfiles,
+} from "./sources";
 import { profileFingerprint } from "./sync-policy";
 
-type Job = RowDataPacket & {
-	userId: string;
-	revision: number;
-	failures: number;
-	syncedEmail: string | null;
-	lastSyncedAt: string | null;
-	profileHash: string | null;
-	teammateJoinedAt: string | null;
-};
+const claimBatchSize = 50;
 
 export async function syncLoopsContact(
 	api: LoopsClient,
@@ -104,62 +109,86 @@ async function holdRemovedIdentity(
 	});
 }
 
-export async function claimJob(
-	database: Connection,
-	token: string,
-	allowedUserIds: string[] | null,
+function identityChanged(
+	job: Job,
+	source: LoopsProfileSource | null,
+): job is Job & { syncedEmail: string } {
+	return Boolean(
+		job.syncedEmail &&
+			(!source ||
+				normalizeEmail(source.input.source.email) !== job.syncedEmail),
+	);
+}
+
+function needsStripeCustomer(source: LoopsProfileSource) {
+	return (
+		source.signedUp &&
+		!source.input.sso &&
+		!source.stripeCustomerId &&
+		STRIPE_AVAILABLE()
+	);
+}
+
+function syncFingerprint(
+	job: Job,
+	source: LoopsProfileSource,
+	config: LoopsRuntimeConfig,
+	customerCopy: CustomerCopy,
 ) {
-	await database.beginTransaction();
+	const localProfile = classifyProfile(source.input, customerCopy);
+	const jobConfig = {
+		...config,
+		teammateJoinedAt: job.teammateJoinedAt,
+	};
+	const hash = createHash("sha256")
+		.update(
+			JSON.stringify({
+				profile: profileFingerprint(localProfile),
+				signedUp: source.signedUp,
+				pendingInvite: source.pendingInvite,
+				enrollment: enrollmentWindow(localProfile.capSignupAt, jobConfig),
+				listId: config.listId,
+				teammateJoinedAt: job.teammateJoinedAt,
+				...(inFreeExperiment(localProfile.capSignupAt, activationSignalsAfter)
+					? {
+							freeExperiment: activationFollowUps(source.input),
+							freeExperimentEnrollmentEnabled:
+								config.freeExperimentEnrollmentEnabled &&
+								inFreeExperiment(
+									localProfile.capSignupAt,
+									config.freeExperimentAfter,
+								),
+						}
+					: {}),
+			}),
+		)
+		.digest("hex");
+	return { localProfile, jobConfig, hash };
+}
+
+function unchangedUntil(
+	job: Job,
+	source: LoopsProfileSource | null,
+	config: LoopsRuntimeConfig,
+	customerCopy: CustomerCopy,
+	now: Date,
+) {
 	try {
-		const [jobs] = await database.query<Job[]>(
-			`SELECT * FROM loops_sync_jobs WHERE nextAttemptAt<=UTC_TIMESTAMP() AND (leaseUntil IS NULL OR leaseUntil<UTC_TIMESTAMP()) ${allowedUserIds ? "AND userId IN (?)" : ""} ORDER BY nextAttemptAt LIMIT 1 FOR UPDATE SKIP LOCKED`,
-			allowedUserIds ? [allowedUserIds] : [],
+		if (!source || identityChanged(job, source) || needsStripeCustomer(source))
+			return null;
+		const { localProfile, hash } = syncFingerprint(
+			job,
+			source,
+			config,
+			customerCopy,
 		);
-		const job = jobs[0];
-		if (job)
-			await database.execute(
-				"UPDATE loops_sync_jobs SET leaseToken=?,leaseUntil=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 MINUTE) WHERE userId=?",
-				[token, job.userId],
-			);
-		await database.commit();
-		return job;
-	} catch (error) {
-		await database.rollback();
-		throw error;
+		return job.profileHash === hash
+			? nextProfileCheck(localProfile, now)
+			: null;
+	} catch {
+		// The per-job path hits the same error and defers only this job.
+		return null;
 	}
-}
-
-export async function deferJob(
-	database: Connection,
-	job: Pick<Job, "userId" | "revision">,
-	token: string,
-	reason: string,
-	nextAttemptAt: Date,
-) {
-	await database.execute(
-		"UPDATE loops_sync_jobs SET failures=CASE WHEN revision=? THEN failures+1 ELSE 0 END,lastError=CASE WHEN revision=? THEN ? ELSE NULL END,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-		[
-			job.revision,
-			job.revision,
-			reason,
-			job.revision,
-			nextAttemptAt,
-			job.userId,
-			token,
-		],
-	);
-}
-
-export async function completeUnchangedJob(
-	database: Connection,
-	job: Pick<Job, "userId" | "revision">,
-	token: string,
-	nextAttemptAt: Date,
-) {
-	await database.execute(
-		"UPDATE loops_sync_jobs SET failures=0,lastError=NULL,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-		[job.revision, nextAttemptAt, job.userId, token],
-	);
 }
 
 export function loopsRuntimeConfig(env: NodeJS.ProcessEnv): LoopsRuntimeConfig {
@@ -235,28 +264,15 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 				allowedUserIds = owned.map((user) => user.id);
 				if (!allowedUserIds.length) return { enabled: true, processed, failed };
 			}
-			const deadline = Date.now() + 40_000;
-			while (processed + failed < 500 && Date.now() < deadline) {
-				const token = randomUUID();
-				const job = await claimJob(cap, token, allowedUserIds);
-				if (!job) break;
+			const syncJob = async (job: Job, token: string) => {
 				try {
 					let source = await readLoopsProfile(cap, license, job.userId);
-					if (
-						job.syncedEmail &&
-						(!source ||
-							normalizeEmail(source.input.source.email) !== job.syncedEmail)
-					) {
+					if (identityChanged(job, source)) {
 						await holdRemovedIdentity(api, job.syncedEmail, job.userId);
 						throw new Error("identity_change_held");
 					}
 					if (!source) throw new Error("user_removed");
-					if (
-						source.signedUp &&
-						!source.input.sso &&
-						!source.stripeCustomerId &&
-						STRIPE_AVAILABLE()
-					) {
+					if (needsStripeCustomer(source)) {
 						const [user] = await db()
 							.select()
 							.from(users)
@@ -267,40 +283,12 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						source = await readLoopsProfile(cap, license, job.userId);
 						if (!source) throw new Error("user_removed");
 					}
-					const localProfile = classifyProfile(source.input, customerCopy);
-					const jobConfig = {
-						...config,
-						teammateJoinedAt: job.teammateJoinedAt,
-					};
-					const hash = createHash("sha256")
-						.update(
-							JSON.stringify({
-								profile: profileFingerprint(localProfile),
-								signedUp: source.signedUp,
-								pendingInvite: source.pendingInvite,
-								enrollment: enrollmentWindow(
-									localProfile.capSignupAt,
-									jobConfig,
-								),
-								listId: config.listId,
-								teammateJoinedAt: job.teammateJoinedAt,
-								...(inFreeExperiment(
-									localProfile.capSignupAt,
-									activationSignalsAfter,
-								)
-									? {
-											freeExperiment: activationFollowUps(source.input),
-											freeExperimentEnrollmentEnabled:
-												config.freeExperimentEnrollmentEnabled &&
-												inFreeExperiment(
-													localProfile.capSignupAt,
-													config.freeExperimentAfter,
-												),
-										}
-									: {}),
-							}),
-						)
-						.digest("hex");
+					const { localProfile, jobConfig, hash } = syncFingerprint(
+						job,
+						source,
+						config,
+						customerCopy,
+					);
 					if (job.profileHash === hash) {
 						await completeUnchangedJob(
 							cap,
@@ -308,8 +296,7 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 							token,
 							nextProfileCheck(localProfile, new Date()),
 						);
-						processed++;
-						continue;
+						return "unchanged";
 					}
 					const update = await syncLoopsContact(
 						api,
@@ -328,7 +315,7 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						"UPDATE loops_sync_jobs SET syncedEmail=?,profileHash=?,lastSyncedAt=UTC_TIMESTAMP(),failures=0,lastError=NULL,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
 						[update.email, hash, job.revision, next, job.userId, token],
 					);
-					processed++;
+					return "synced";
 				} catch (error) {
 					const reason =
 						error instanceof LoopsRequestError
@@ -344,14 +331,69 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						new Date(Date.now() + retryDelay(job.failures)),
 					);
 					console.error("Loops sync deferred", { userId: job.userId, reason });
-					failed++;
-					if (
-						error instanceof LoopsRequestError &&
+					return error instanceof LoopsRequestError &&
 						[401, 403, 429].includes(error.status)
-					)
-						break;
+						? "stop"
+						: "failed";
 				}
-				await new Promise((resolve) => setTimeout(resolve, 750));
+			};
+			const deadline = Date.now() + 40_000;
+			let stopped = false;
+			while (!stopped && processed + failed < 500 && Date.now() < deadline) {
+				const token = randomUUID();
+				const jobs = await claimJobs(
+					cap,
+					token,
+					allowedUserIds,
+					Math.min(claimBatchSize, 500 - processed - failed),
+				);
+				if (!jobs.length) break;
+				const leased = new Map(jobs.map((job) => [job.userId, job]));
+				try {
+					const sources = await readLoopsProfiles(
+						cap,
+						license,
+						jobs.map((job) => job.userId),
+					).catch((error) => {
+						console.error("Loops batch profile read failed", { error });
+						return null;
+					});
+					const now = new Date();
+					const unchanged = sources
+						? jobs.flatMap((job) => {
+								const nextAttemptAt = unchangedUntil(
+									job,
+									sources.get(job.userId) ?? null,
+									config,
+									customerCopy,
+									now,
+								);
+								return nextAttemptAt ? [{ job, nextAttemptAt }] : [];
+							})
+						: [];
+					await completeUnchangedJobs(cap, token, unchanged);
+					for (const { job } of unchanged) leased.delete(job.userId);
+					processed += unchanged.length;
+					for (const job of leased.values()) {
+						if (Date.now() >= deadline) break;
+						leased.delete(job.userId);
+						if (!(await renewLease(cap, job, token))) continue;
+						const outcome = await syncJob(job, token);
+						if (outcome === "unchanged" || outcome === "synced") processed++;
+						else failed++;
+						if (outcome === "stop") {
+							stopped = true;
+							break;
+						}
+						if (outcome !== "unchanged")
+							await new Promise((resolve) => setTimeout(resolve, 750));
+					}
+				} finally {
+					if (leased.size)
+						await releaseJobs(cap, token, [...leased.keys()]).catch((error) =>
+							console.error("Loops lease release failed", { error }),
+						);
+				}
 			}
 			return { enabled: true, processed, failed };
 		} finally {

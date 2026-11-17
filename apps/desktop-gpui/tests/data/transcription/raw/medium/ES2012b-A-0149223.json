@@ -1,0 +1,37 @@
+[
+	[
+		{ "text": "Actually", "start": 0.0, "end": 0.52 },
+		{ "text": "achieving", "start": 0.55, "end": 1.12 },
+		{ "text": "that", "start": 1.12, "end": 1.38 },
+		{ "text": "in", "start": 1.38, "end": 1.5 },
+		{ "text": "terms", "start": 1.5, "end": 1.74 },
+		{ "text": "of", "start": 1.86, "end": 2.0 },
+		{ "text": "whether", "start": 2.0, "end": 2.13 },
+		{ "text": "the,", "start": 2.14, "end": 2.24 },
+		{ "text": "you", "start": 2.24, "end": 2.3 },
+		{ "text": "know,", "start": 2.3, "end": 2.44 },
+		{ "text": "the", "start": 2.44, "end": 2.64 },
+		{ "text": "power", "start": 2.64, "end": 2.78 },
+		{ "text": "requirements", "start": 2.78, "end": 3.48 },
+		{ "text": "of", "start": 3.48, "end": 3.59 },
+		{ "text": "the,", "start": 3.66, "end": 3.79 }
+	],
+	[
+		{ "text": "such", "start": 3.8, "end": 4.57 },
+		{ "text": "a", "start": 4.57, "end": 4.87 },
+		{ "text": "source,", "start": 5.56, "end": 6.62 },
+		{ "text": "you", "start": 6.62, "end": 6.79 },
+		{ "text": "know,", "start": 6.99, "end": 7.2 },
+		{ "text": "compromise", "start": 7.2, "end": 7.85 },
+		{ "text": "the,", "start": 7.85, "end": 8.12 },
+		{ "text": "our,", "start": 8.12, "end": 8.8 },
+		{ "text": "our", "start": 8.8, "end": 9.03 },
+		{ "text": "need", "start": 9.4, "end": 9.69 },
+		{ "text": "for,", "start": 9.69, "end": 10.12 },
+		{ "text": "you", "start": 10.12, "end": 10.37 },
+		{ "text": "know,", "start": 10.55, "end": 11.48 },
+		{ "text": "it", "start": 11.48, "end": 11.64 },
+		{ "text": "being", "start": 11.65, "end": 12.08 }
+	],
+	[{ "text": "permanently", "start": 12.08, "end": 14.55 }]
+]

@@ -89,6 +89,13 @@ vi.mock(
 	}),
 );
 vi.mock(
+	"@/app/(org)/dashboard/settings/organization/components/SignedBaaCard",
+	() => ({
+		SignedBaaCard: () =>
+			createElement("section", { "aria-label": "Signed BAA settings" }),
+	}),
+);
+vi.mock(
 	"@/app/(org)/dashboard/settings/organization/components/SsoCard",
 	() => ({
 		SsoCard: ({
@@ -746,6 +753,7 @@ describe("organization security page SSO failure isolation", () => {
 			expect(markup).toContain('href="mailto:hello@cap.so"');
 			expect(markup).toContain('aria-label="Compliance settings"');
 			expect(markup).not.toContain('aria-label="SSO settings"');
+			expect(markup).toContain('aria-label="Signed BAA settings"');
 			expect(markup).not.toContain(error.message);
 		},
 	);
@@ -775,6 +783,7 @@ describe("organization security page SSO failure isolation", () => {
 		);
 		expect(markup).toContain('aria-label="Compliance settings"');
 		expect(markup).toContain('aria-label="SSO settings"');
+		expect(markup).toContain('aria-label="Signed BAA settings"');
 		expect(markup).toContain(`data-organization-id="${ORGANIZATION_ID}"`);
 		expect(markup).toContain('data-checkout-session-id="cs_verified"');
 	});

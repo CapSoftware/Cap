@@ -1,5 +1,5 @@
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c543c6b..9b3e51d 100644
+index 6ac834a..4299e15 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -75,6 +75,24 @@ use crate::util::{
@@ -27,7 +27,25 @@ index c543c6b..9b3e51d 100644
  /// Default window size used when no explicit size is provided.
  pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
  
-@@ -1624,7 +1642,7 @@ impl Window {
+@@ -213,7 +231,7 @@ fn update_window_or_defer(
+         return;
+     };
+     if !error.is::<std::cell::BorrowMutError>() {
+-        Result::<(), _>::Err(error).log_err();
++        Result::<(), _>::Err(error).log_unless_closed();
+         return;
+     }
+     let executor = cx.foreground_executor().clone();
+@@ -222,7 +240,7 @@ fn update_window_or_defer(
+         .spawn(async move {
+             handle
+                 .update(&mut cx, |_, window, cx| update(window, cx))
+-                .log_err();
++                .log_unless_closed();
+         })
+         .detach();
+ }
+@@ -1671,7 +1689,7 @@ impl Window {
                          // `complete_frame`) or the compositor won't send another callback.
                          handle
                              .update(&mut cx, |_, window, _| window.complete_frame())
@@ -36,7 +54,7 @@ index c543c6b..9b3e51d 100644
                          frame_pacer.frame_finished(true, true, now);
                          return;
                      }
-@@ -1642,7 +1660,7 @@ impl Window {
+@@ -1689,7 +1707,7 @@ impl Window {
                                  callback(window, cx);
                              }
                          })
@@ -45,7 +63,7 @@ index c543c6b..9b3e51d 100644
                  }
  
                  // Keep presenting if input was recently arriving at a high rate (>= 60fps).
-@@ -1666,20 +1684,20 @@ impl Window {
+@@ -1713,20 +1731,20 @@ impl Window {
                                  window.present();
                                  arena_clear_needed.clear();
                              })
@@ -69,43 +87,7 @@ index c543c6b..9b3e51d 100644
  
                  let pending = invalidator.is_dirty() || !pending_frame_callbacks.borrow().is_empty();
                  frame_pacer.frame_finished(busy, pending, now);
-@@ -1690,7 +1708,7 @@ impl Window {
-             move |_, _| {
-                 handle
-                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
--                    .log_err();
-+                    .log_unless_closed();
-             }
-         }));
-         platform_window.on_moved(Box::new({
-@@ -1698,7 +1716,7 @@ impl Window {
-             move || {
-                 handle
-                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
--                    .log_err();
-+                    .log_unless_closed();
-             }
-         }));
-         platform_window.on_appearance_changed(Box::new({
-@@ -1706,7 +1724,7 @@ impl Window {
-             move || {
-                 handle
-                     .update(&mut cx, |_, window, cx| window.appearance_changed(cx))
--                    .log_err();
-+                    .log_unless_closed();
-             }
-         }));
-         platform_window.on_button_layout_changed(Box::new({
-@@ -1714,7 +1732,7 @@ impl Window {
-             move || {
-                 handle
-                     .update(&mut cx, |_, window, cx| window.button_layout_changed(cx))
--                    .log_err();
-+                    .log_unless_closed();
-             }
-         }));
-         platform_window.on_active_status_change(Box::new({
-@@ -1735,7 +1753,7 @@ impl Window {
+@@ -1782,7 +1800,7 @@ impl Window {
  
                          SystemWindowTabController::update_last_active(cx, window.handle.id);
                      })
@@ -114,7 +96,7 @@ index c543c6b..9b3e51d 100644
              }
          }));
          platform_window.on_hover_status_change(Box::new({
-@@ -1746,7 +1764,7 @@ impl Window {
+@@ -1793,7 +1811,7 @@ impl Window {
                          window.hovered.set(active);
                          window.refresh();
                      })
@@ -123,7 +105,7 @@ index c543c6b..9b3e51d 100644
              }
          }));
          platform_window.on_input({
-@@ -1754,7 +1772,7 @@ impl Window {
+@@ -1801,7 +1819,7 @@ impl Window {
              Box::new(move |event| {
                  handle
                      .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
@@ -132,7 +114,7 @@ index c543c6b..9b3e51d 100644
                      .unwrap_or(DispatchEventResult::default())
              })
          });
-@@ -1770,7 +1788,7 @@ impl Window {
+@@ -1817,7 +1835,7 @@ impl Window {
                          }
                          None
                      })
@@ -141,7 +123,7 @@ index c543c6b..9b3e51d 100644
                      .unwrap_or(None)
              })
          });
-@@ -1781,7 +1799,7 @@ impl Window {
+@@ -1828,7 +1846,7 @@ impl Window {
                      .update(&mut cx, |_, _window, cx| {
                          SystemWindowTabController::move_tab_to_new_window(cx, handle.window_id());
                      })
@@ -150,7 +132,7 @@ index c543c6b..9b3e51d 100644
              })
          });
          platform_window.on_merge_all_windows({
-@@ -1791,7 +1809,7 @@ impl Window {
+@@ -1838,7 +1856,7 @@ impl Window {
                      .update(&mut cx, |_, _window, cx| {
                          SystemWindowTabController::merge_all_windows(cx, handle.window_id());
                      })
@@ -159,7 +141,7 @@ index c543c6b..9b3e51d 100644
              })
          });
          platform_window.on_select_next_tab({
-@@ -1801,7 +1819,7 @@ impl Window {
+@@ -1848,7 +1866,7 @@ impl Window {
                      .update(&mut cx, |_, _window, cx| {
                          SystemWindowTabController::select_next_tab(cx, handle.window_id());
                      })
@@ -168,7 +150,7 @@ index c543c6b..9b3e51d 100644
              })
          });
          platform_window.on_select_previous_tab({
-@@ -1811,7 +1829,7 @@ impl Window {
+@@ -1858,7 +1876,7 @@ impl Window {
                      .update(&mut cx, |_, _window, cx| {
                          SystemWindowTabController::select_previous_tab(cx, handle.window_id())
                      })
@@ -177,7 +159,7 @@ index c543c6b..9b3e51d 100644
              })
          });
          platform_window.on_toggle_tab_bar({
-@@ -1822,7 +1840,7 @@ impl Window {
+@@ -1869,7 +1887,7 @@ impl Window {
                          let tab_bar_visible = window.platform_window.tab_bar_visible();
                          SystemWindowTabController::set_visible(cx, tab_bar_visible);
                      })

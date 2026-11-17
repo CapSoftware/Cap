@@ -279,12 +279,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		},
 	],
 
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "Cap OBS alternative demo showing instant recording and sharing",
-		},
-	},
+	video: {},
 
 	cta: {
 		title: "Switch to the Simpler OBS Alternative",

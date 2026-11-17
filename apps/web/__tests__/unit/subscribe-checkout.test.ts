@@ -1,17 +1,24 @@
 import { isValidStripePlanPriceId, STRIPE_PLAN_IDS } from "@cap/utils";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
+	listSubscriptions: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
 	getCurrentUser: vi.fn(),
 	dbUpdate: vi.fn(),
+	env: { WEB_URL: "https://cap.so" } as Record<string, string | undefined>,
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } as Record<
+		string,
+		string | undefined
+	>,
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
-	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+	buildEnv: checkoutMocks.buildEnv,
+	serverEnv: () => checkoutMocks.env,
 }));
 
 vi.mock("@cap/database/auth/session", () => ({
@@ -54,12 +61,18 @@ vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: checkoutMocks.track,
 }));
 
+vi.mock("@/lib/checkout/stripe", () => ({
+	checkoutStripe: () => ({
+		subscriptions: { list: checkoutMocks.listSubscriptions },
+	}),
+}));
+
 const makeSubscribeRequest = (body: Record<string, unknown>) =>
-	new Request("https://cap.so/api/settings/billing/subscribe", {
+	new NextRequest("https://cap.so/api/settings/billing/subscribe", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("Stripe plan allowlist", () => {
 	it("rejects IDs that are not a Pro plan price in either environment", () => {
@@ -115,6 +128,7 @@ describe("Stripe plan allowlist", () => {
 describe("POST /api/settings/billing/subscribe", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		checkoutMocks.env = { WEB_URL: "https://cap.so" };
 		checkoutMocks.getCurrentUser.mockResolvedValue({
 			id: "user_123",
 			email: "user@example.test",
@@ -124,6 +138,56 @@ describe("POST /api/settings/billing/subscribe", () => {
 			id: "cs_test",
 			url: "https://pay.cap.so/session",
 		});
+		checkoutMocks.listSubscriptions.mockResolvedValue({ data: [] });
+	});
+
+	it.each(["active", "trialing", "past_due"])(
+		"does not open a hosted checkout when Stripe shows a %s Pro subscription the account has not recorded",
+		async (status) => {
+			checkoutMocks.listSubscriptions.mockResolvedValue({
+				data: [
+					{ id: "sub_old", status: "canceled", metadata: {} },
+					{ id: "sub_live", status, metadata: {} },
+				],
+			});
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 1,
+				}),
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error: true,
+				subscription: true,
+			});
+			expect(checkoutMocks.listSubscriptions).toHaveBeenCalledWith({
+				customer: "cus_123",
+				limit: 100,
+			});
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("opens a hosted checkout when the customer's only live subscription is the BAA add-on", async () => {
+		checkoutMocks.listSubscriptions.mockResolvedValue({
+			data: [
+				{ id: "sub_old", status: "canceled", metadata: {} },
+				{ id: "sub_baa", status: "active", metadata: { type: "signed_baa" } },
+			],
+		});
+
+		const response = await subscribe(
+			makeSubscribeRequest({
+				priceId: STRIPE_PLAN_IDS.development.monthly,
+				quantity: 1,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects arbitrary price IDs with 400", async () => {
@@ -190,5 +254,94 @@ describe("POST /api/settings/billing/subscribe", () => {
 				],
 			}),
 		);
+	});
+
+	describe("with the in-app checkout configured", () => {
+		beforeEach(() => {
+			checkoutMocks.env = {
+				WEB_URL: "https://cap.so",
+				STRIPE_SECRET_KEY: "sk_test_x",
+				STRIPE_PUBLISHABLE_KEY: "pk_test_x",
+			};
+			checkoutMocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		});
+
+		it("keeps hosted checkout on deployments that are not Cap Cloud", async () => {
+			checkoutMocks.buildEnv.NEXT_PUBLIC_IS_CAP = "false";
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.yearly,
+					quantity: 3,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				url: "https://pay.cap.so/session",
+			});
+			expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
+		});
+
+		it("sends the buyer to /checkout without creating a hosted session", async () => {
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.yearly,
+					quantity: 3,
+					isOnBoarding: true,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				url: "/checkout?plan=yearly&seats=3&onboarding=1",
+			});
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		});
+
+		it("sends existing Pro subscribers to /checkout to add seats", async () => {
+			const { userIsPro } = await import("@cap/utils");
+			vi.mocked(userIsPro).mockReturnValueOnce(true);
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 5,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				url: "/checkout?plan=monthly&seats=5",
+			});
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		});
+
+		it("still rejects invalid input before routing to /checkout", async () => {
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 0,
+				}),
+			);
+
+			expect(response.status).toBe(400);
+		});
+
+		it("falls back to hosted Stripe Checkout when asked", async () => {
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 1,
+					hosted: true,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				url: "https://pay.cap.so/session",
+			});
+			expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
+		});
 	});
 });

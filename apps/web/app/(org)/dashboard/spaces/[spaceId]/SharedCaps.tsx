@@ -11,14 +11,16 @@ import type {
 	User,
 	Video,
 } from "@cap/web-domain";
-import {
-	faFolderPlus,
-	faGear,
-	faInfoCircle,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import {
+	type SeededThumbnails,
+	SeededThumbnailsProvider,
+} from "@/components/VideoThumbnail";
+import { parsePageParam } from "@/lib/page-param";
 import {
 	canManageOrganizationMembers,
 	canManageSpace,
@@ -30,10 +32,12 @@ import { CollectionShareControl } from "../../_components/CollectionShareControl
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
+import { DragHint } from "../../caps/components/DragHint";
 import type { FolderDataType } from "../../caps/components/Folder";
 import { FoldersSection } from "../../caps/components/FoldersSection";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
+import { useCapsMoved } from "../../caps/components/useCapsMoved";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
@@ -99,6 +103,7 @@ export const SharedCaps = ({
 	folders,
 	analyticsEnabled,
 	organizationData,
+	thumbnails,
 }: {
 	data: SharedVideoData;
 	count: number;
@@ -115,16 +120,16 @@ export const SharedCaps = ({
 		name: string;
 		ownerId: User.UserId;
 	};
+	thumbnails?: SeededThumbnails;
 }) => {
 	const params = useSearchParams();
 	const pathname = usePathname();
 	const router = useRouter();
-	const page = Number(params.get("page")) || 1;
+	const page = parsePageParam(params.get("page"));
 	const { activeOrganization } = useDashboardContext();
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / limit);
-	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
 	const [isSpaceSettingsOpen, setIsSpaceSettingsOpen] = useState(false);
@@ -168,6 +173,9 @@ export const SharedCaps = ({
 		organizationData?.name ??
 		activeOrganization?.organization.name ??
 		"All organization";
+	useCapsMoved((ids) =>
+		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+	);
 	const handleCapSelection = (capId: Video.VideoId) => {
 		setSelectedCaps((current) =>
 			current.includes(capId)
@@ -225,7 +233,7 @@ export const SharedCaps = ({
 		/>
 	) : null;
 
-	if (data.length === 0 && folders?.length === 0) {
+	if (count === 0 && folders?.length === 0) {
 		return (
 			<div className="flex relative flex-col w-full h-full">
 				{spaceSettingsDialog}
@@ -236,16 +244,20 @@ export const SharedCaps = ({
 						onOpenChange={setOpenNewFolderDialog}
 					/>
 				)}
-				<div className="flex flex-wrap gap-3">
+				<div className="flex flex-wrap gap-2 items-center">
 					{spaceData && spaceMembers && (
 						<>
 							{canManageCurrentSpace && (
 								<Button
-									variant="gray"
+									variant="secondary"
 									size="sm"
+									className="gap-2 px-4 h-9"
 									onClick={() => setIsSpaceSettingsOpen(true)}
 								>
-									<FontAwesomeIcon className="size-3" icon={faGear} />
+									<FontAwesomeIcon
+										className="size-3 text-gray-10"
+										icon={faGear}
+									/>
 									Space settings
 								</Button>
 							)}
@@ -281,10 +293,13 @@ export const SharedCaps = ({
 						<Button
 							onClick={() => setOpenNewFolderDialog(true)}
 							size="sm"
-							variant="dark"
-							className="flex gap-2 items-center w-fit"
+							variant="secondary"
+							className="flex gap-2 items-center px-4 h-9 w-fit"
 						>
-							<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+							<FontAwesomeIcon
+								className="size-3.5 text-gray-10"
+								icon={faFolderPlus}
+							/>
 							New folder
 						</Button>
 					)}
@@ -327,19 +342,7 @@ export const SharedCaps = ({
 	return (
 		<div className="flex relative flex-col w-full h-full">
 			{spaceSettingsDialog}
-			{isDraggingCap && (
-				<div className="fixed inset-0 z-50 pointer-events-none">
-					<div className="flex justify-center items-center w-full h-full">
-						<div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
-							<FontAwesomeIcon
-								className="size-3.5 text-white opacity-50"
-								icon={faInfoCircle}
-							/>
-							<p className="text-white">Drag to a folder to move</p>
-						</div>
-					</div>
-				</div>
-			)}
+			<DragHint caps="Drop on a folder to move" />
 			{canManageCurrentSharedCollection && (
 				<NewFolderDialog
 					open={openNewFolderDialog}
@@ -347,16 +350,20 @@ export const SharedCaps = ({
 					onOpenChange={setOpenNewFolderDialog}
 				/>
 			)}
-			<div className="flex flex-wrap gap-3 mb-10">
+			<div className="flex flex-wrap gap-2 items-center mb-10">
 				{spaceData && spaceMembers && (
 					<>
 						{canManageCurrentSpace && (
 							<Button
-								variant="gray"
+								variant="secondary"
 								size="sm"
+								className="gap-2 px-4 h-9"
 								onClick={() => setIsSpaceSettingsOpen(true)}
 							>
-								<FontAwesomeIcon className="size-3" icon={faGear} />
+								<FontAwesomeIcon
+									className="size-3 text-gray-10"
+									icon={faGear}
+								/>
 								Space settings
 							</Button>
 						)}
@@ -411,10 +418,13 @@ export const SharedCaps = ({
 					<Button
 						onClick={() => setOpenNewFolderDialog(true)}
 						size="sm"
-						variant="dark"
-						className="flex gap-2 items-center w-fit"
+						variant="secondary"
+						className="flex gap-2 items-center px-4 h-9 w-fit"
 					>
-						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+						<FontAwesomeIcon
+							className="size-3.5 text-gray-10"
+							icon={faFolderPlus}
+						/>
 						New folder
 					</Button>
 				)}
@@ -431,54 +441,58 @@ export const SharedCaps = ({
 
 			{data.length > 0 && (
 				<>
-					<h1 className="mb-4 text-2xl font-medium text-gray-12">
+					<h2 className="mb-5 text-lg font-semibold tracking-tight text-gray-12">
 						Videos and screenshots
-					</h1>
-					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-						{data.map((cap) => {
-							return (
-								<SharedCapCard
-									key={cap.id}
-									cap={cap}
-									hideSharedStatus
-									isLoadingAnalytics={analyticsQuery.isLoading}
-									analytics={analytics[cap.id] || 0}
-									organizationName={activeOrganization?.organization.name || ""}
-									spaceName={spaceData?.name || ""}
-									userId={currentUserId}
-									canMove={canManageCurrentSharedCollection}
-									moveLocation={moveLocation}
-									moveRootLabel={moveRootLabel}
-									isSelected={
-										canManageCurrentSharedCollection &&
-										selectedCaps.includes(cap.id)
-									}
-									anyCapSelected={
-										canManageCurrentSharedCollection && selectedCaps.length > 0
-									}
-									onSelectToggle={
-										canManageCurrentSharedCollection
-											? () => handleCapSelection(cap.id)
-											: undefined
-									}
-									onDragStart={() => setIsDraggingCap(true)}
-									onDragEnd={() => setIsDraggingCap(false)}
-								/>
-							);
-						})}
-					</div>
-					{(data.length > limit || data.length === limit || page !== 1) && (
-						<div className="mt-4">
-							<CapPagination
-								currentPage={page}
-								totalPages={totalPages}
-								hrefForPage={(targetPage) =>
-									targetPage <= 1 ? pathname : `${pathname}?page=${targetPage}`
-								}
-							/>
+					</h2>
+					<SeededThumbnailsProvider value={thumbnails}>
+						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+							{data.map((cap) => {
+								return (
+									<SharedCapCard
+										key={cap.id}
+										cap={cap}
+										hideSharedStatus
+										isLoadingAnalytics={analyticsQuery.isLoading}
+										analytics={analytics[cap.id] || 0}
+										organizationName={
+											activeOrganization?.organization.name || ""
+										}
+										spaceName={spaceData?.name || ""}
+										userId={currentUserId}
+										canMove={canManageCurrentSharedCollection}
+										moveLocation={moveLocation}
+										moveRootLabel={moveRootLabel}
+										isSelected={
+											canManageCurrentSharedCollection &&
+											selectedCaps.includes(cap.id)
+										}
+										anyCapSelected={
+											canManageCurrentSharedCollection &&
+											selectedCaps.length > 0
+										}
+										onSelectToggle={
+											canManageCurrentSharedCollection
+												? () => handleCapSelection(cap.id)
+												: undefined
+										}
+										selectedIds={selectedCaps}
+									/>
+								);
+							})}
 						</div>
-					)}
+					</SeededThumbnailsProvider>
 				</>
+			)}
+			{(data.length > limit || data.length === limit || page !== 1) && (
+				<div className="mt-4">
+					<CapPagination
+						currentPage={page}
+						totalPages={totalPages}
+						hrefForPage={(targetPage) =>
+							targetPage <= 1 ? pathname : `${pathname}?page=${targetPage}`
+						}
+					/>
+				</div>
 			)}
 			{canManageCurrentSharedCollection && (
 				<SelectedCapsBar

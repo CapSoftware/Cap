@@ -6,10 +6,12 @@ import Link from "next/link";
 import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
+import { PhoneDownload } from "@/components/download/PhoneDownload";
 import {
 	CAP_CHROME_EXTENSION_URL,
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
+import { getDownloadStartedUrl } from "@/lib/download";
 import { LAST_TAURI_VERSION } from "@/utils/native-release";
 import {
 	getDownloadButtonText,
@@ -129,7 +131,8 @@ export const DownloadPage = ({
 }: {
 	nativeReleaseLive?: boolean;
 }) => {
-	const { platform, isIntel } = useDetectPlatform();
+	const { platform, isIntel, isIOS } = useDetectPlatform();
+	const isPhone = isIOS || platform === "android";
 	const [copiedCliCommand, setCopiedCliCommand] = useState(false);
 	const boil = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const loading = platform === null;
@@ -190,37 +193,43 @@ export const DownloadPage = ({
 				)}
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
-						<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
-							<Button
-								variant="blue"
-								size="lg"
-								href={primaryDownloadUrl}
-								onClick={() =>
-									trackDownloadClick("primary", primaryDownloadUrl)
-								}
-								className="flex justify-center items-center w-full font-medium text-white sm:w-auto"
-							>
-								{!loading && getPlatformIcon(platform)}
-								{getDownloadButtonText(platform, loading, isIntel)}
-							</Button>
-							<span className="text-sm font-medium text-gray-500">or</span>
-							<ChromeExtensionButton
-								variant="white"
-								size="lg"
-								onClick={() =>
-									trackDownloadClick(
-										"chrome_extension_primary",
-										CAP_CHROME_EXTENSION_URL,
-										"chrome_extension",
-									)
-								}
-								className={`${CHROME_EXTENSION_BUTTON_CLASS} w-full font-medium sm:w-auto`}
-							/>
-						</div>
+						{isPhone ? (
+							<PhoneDownload sourcePage="download_page" />
+						) : (
+							<>
+								<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
+									<Button
+										variant="blue"
+										size="lg"
+										href={getDownloadStartedUrl(primaryDownloadUrl)}
+										onClick={() =>
+											trackDownloadClick("primary", primaryDownloadUrl)
+										}
+										className="flex justify-center items-center w-full font-medium text-white sm:w-auto"
+									>
+										{!loading && getPlatformIcon(platform)}
+										{getDownloadButtonText(platform, loading, isIntel)}
+									</Button>
+									<span className="text-sm font-medium text-gray-500">or</span>
+									<ChromeExtensionButton
+										variant="white"
+										size="lg"
+										onClick={() =>
+											trackDownloadClick(
+												"chrome_extension_primary",
+												CAP_CHROME_EXTENSION_URL,
+												"chrome_extension",
+											)
+										}
+										className={`${CHROME_EXTENSION_BUTTON_CLASS} w-full font-medium sm:w-auto`}
+									/>
+								</div>
 
-						<div className="text-sm text-gray-10">
-							{getVersionText(platform)}
-						</div>
+								<div className="text-sm text-gray-10">
+									{getVersionText(platform)}
+								</div>
+							</>
+						)}
 
 						{nativeReleaseLive && (
 							<p className="text-xs text-gray-10">
@@ -240,26 +249,6 @@ export const DownloadPage = ({
 								</Link>{" "}
 								is still available.
 							</p>
-						)}
-
-						{/* Windows SmartScreen video and instructions */}
-						{platform === "windows" && (
-							<div className="mt-4 max-w-md">
-								<video
-									src="/windows-smartscreen.mp4"
-									autoPlay
-									loop
-									muted
-									playsInline
-									className="mx-auto w-full rounded-md shadow-md"
-									style={{ maxWidth: "300px" }}
-								/>
-								<p className="mt-2 text-sm text-gray-8">
-									Whilst Cap for Windows is in early beta, after downloading and
-									running the app, follow the steps above to whitelist Cap on
-									your PC.
-								</p>
-							</div>
 						)}
 					</div>
 				</div>
@@ -312,7 +301,7 @@ export const DownloadPage = ({
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								Windows (Beta)
+								Windows
 							</a>
 						)}
 						{platform !== "linux" && (

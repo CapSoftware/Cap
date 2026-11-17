@@ -1,0 +1,17 @@
+[
+	[
+		{ "text": "The", "start": 0.34, "end": 0.45 },
+		{ "text": "new", "start": 0.45, "end": 0.5 },
+		{ "text": "editor", "start": 1.0, "end": 1.81 },
+		{ "text": "has", "start": 1.81, "end": 1.95 },
+		{ "text": "purged", "start": 2.47, "end": 2.82 },
+		{ "text": "a", "start": 3.3, "end": 3.3 },
+		{ "text": "lot", "start": 3.36, "end": 3.51 },
+		{ "text": "of", "start": 3.75, "end": 3.79 },
+		{ "text": "it.", "start": 3.79, "end": 4.23 },
+		{ "text": "You'll", "start": 4.33, "end": 4.66 },
+		{ "text": "know", "start": 4.66, "end": 4.91 },
+		{ "text": "my", "start": 4.91, "end": 5.03 },
+		{ "text": "promise.", "start": 5.03, "end": 5.56 }
+	]
+]

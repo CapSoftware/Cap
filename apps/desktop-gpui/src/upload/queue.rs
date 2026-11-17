@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::tr;
 use cap_project::{InstantRecordingMeta, RecordingMetaInner};
 use cap_recording::upload_resume::{UploadLock, UploadLockError, collect_segment_events};
 use cap_recording::upload_verification::{UploadVerification, VerifiedUploadReceipt};
@@ -89,14 +90,14 @@ impl UploadState {
 
     pub fn label(&self) -> &'static str {
         match self.phase {
-            UploadPhase::Recording => "Upload prepared",
-            UploadPhase::Pending | UploadPhase::Uploading => "Uploading",
-            UploadPhase::Processing => "Processing upload",
-            UploadPhase::Retrying => "Upload will retry",
-            UploadPhase::NeedsAuthentication => "Sign in to retry upload",
-            UploadPhase::Failed => "Upload needs attention",
-            UploadPhase::Cancelled => "Upload paused",
-            UploadPhase::Verified => "Uploaded",
+            UploadPhase::Recording => tr::upload::status::prepared(),
+            UploadPhase::Pending | UploadPhase::Uploading => tr::upload::status::uploading(),
+            UploadPhase::Processing => tr::upload::status::processing(),
+            UploadPhase::Retrying => tr::upload::status::retrying(),
+            UploadPhase::NeedsAuthentication => tr::upload::status::sign_in(),
+            UploadPhase::Failed => tr::upload::status::failed(),
+            UploadPhase::Cancelled => tr::upload::status::paused(),
+            UploadPhase::Verified => tr::upload::status::uploaded(),
         }
     }
 
@@ -435,11 +436,7 @@ impl UploadBackend for LiveBackend {
                 let recorded_length = recorded_length_json(&manifest).map(|bytes| {
                     publish_recorded_length(upload.video.id.clone(), bytes, upload.cancel.clone())
                 });
-                let finish = async {
-                    upload.finish_screenshot(project).await?;
-                    upload.authorize_manifest(manifest)?;
-                    upload.finish_segments().await
-                };
+                let finish = upload.finish_with_screenshot(project, manifest);
                 match recorded_length {
                     Some(recorded_length) => alongside(finish, recorded_length).await?,
                     None => finish.await?,
@@ -858,11 +855,18 @@ impl<B: UploadBackend> Manager<B> {
             Some(&upload.cancel),
         )
         .map_err(|error| error.to_string())?;
+        let automations = crate::automation::upload_completed(
+            project,
+            None,
+            crate::automation::instant_share(project, &state.video_id),
+        );
         let cleanup_cleared = self.backend.forget_start_cleanup(&state.video_id);
         if !state.preserve_local && self.backend.delete_after_upload() {
             check_segment_cancelled(&upload.cancel)?;
             if !cleanup_cleared {
                 tracing::warn!(path = %project.display(), "Verified upload kept locally because its cleanup entry could not be cleared");
+            } else if automations.is_some() || crate::automation::instant_rules_running(project) {
+                tokio::spawn(remove_after_automations(project.to_path_buf(), automations));
             } else if let Err(error) = std::fs::remove_dir_all(project) {
                 tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
             }
@@ -1222,17 +1226,74 @@ pub(crate) async fn retry(project: PathBuf) -> Result<(), String> {
     manager().resume(canonical, state, ownership).await
 }
 
+/// The upload-after-delete cleanup for a recording whose upload-completed
+/// rules are still running: the rules read the folder (a command given
+/// `CAP_PROJECT_PATH`, an export), so it goes only once they finish, and
+/// stays if one of them opened it in an editor.
+/// Waits for both events' rules: the upload-completed run handed over here
+/// and the Instant recording's finished rules, which run on their own.
+async fn remove_after_automations(
+    project: PathBuf,
+    automations: Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Some(automations) = automations
+        && let Err(error) = automations.await
+    {
+        tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because its automations did not finish");
+        return;
+    }
+    crate::automation::instant_rules_finished(&project).await;
+    let removed = tokio::task::spawn_blocking({
+        let project = project.clone();
+        move || {
+            let _deleting = crate::library::ProjectBeingDeleted::begin(&project)
+                .map_err(std::io::Error::other)?;
+            std::fs::remove_dir_all(project)
+        }
+    })
+    .await;
+    match removed {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(Err(error)) => {
+            tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
+        }
+        Err(error) => {
+            tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
+        }
+    }
+}
+
 pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
     if !project.exists() {
         return Ok(());
     }
+    delete_recording_without_automations(project.clone()).await?;
+    crate::automation::recording_deleted(project);
+    Ok(())
+}
+
+/// The delete an automation's own Delete local files action runs: the same
+/// guards, without firing the recording-deleted rules (0.6.0 did not either).
+pub(crate) async fn delete_recording_without_automations(project: PathBuf) -> Result<(), String> {
+    if !project.exists() {
+        return Ok(());
+    }
+    crate::library::ensure_not_recording_in_progress(&project)?;
+    let _deleting = crate::library::ProjectBeingDeleted::begin(&project)?;
     let canonical = project.canonicalize().map_err(|error| error.to_string())?;
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
-    if let Some(mut state) = read_state(&canonical)? {
-        manager().forget_pending_rechecks(&state.video_id);
-        state.phase = UploadPhase::Cancelled;
-        write_state(&canonical, &state)?;
+    match read_state(&canonical) {
+        Ok(Some(mut state)) => {
+            manager().forget_pending_rechecks(&state.video_id);
+            state.phase = UploadPhase::Cancelled;
+            write_state(&canonical, &state)?;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(path = %canonical.display(), %error, "Deleting local recording with unreadable upload state");
+        }
     }
     tokio::task::spawn_blocking(move || crate::library::delete_recording_directory(&project))
         .await
@@ -1241,6 +1302,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod verify_resume_tests;
+
+#[cfg(test)]
+mod stop_tail_bench;
 
 #[cfg(test)]
 mod tests {
@@ -1984,6 +2048,154 @@ mod tests {
     }
 
     #[test]
+    fn deleting_the_recording_in_progress_leaves_its_upload_and_files_alone() {
+        let fixture = Fixture::new();
+        let store = fixture.0.join("store");
+        std::fs::write(
+            &store,
+            serde_json::to_vec(&json!({
+                "general_settings": { "recordingsPath": fixture.0 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let worker_store = store.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+            })
+            .build()
+            .unwrap();
+        let before = read_state(&fixture.project()).unwrap().unwrap();
+
+        let recording = crate::library::RecordingInProgress::begin(&fixture.project());
+        assert_eq!(
+            runtime.block_on(delete_recording(fixture.project())),
+            Err(tr::dialog::delete_recording::recording_active().to_string())
+        );
+        fixture.assert_retained();
+        assert_eq!(
+            read_state(&fixture.project()).unwrap().unwrap().phase,
+            before.phase,
+            "the upload is not cancelled"
+        );
+
+        drop(recording);
+        runtime
+            .block_on(delete_recording(fixture.project()))
+            .unwrap();
+        assert!(!fixture.project().exists());
+    }
+
+    #[test]
+    fn deleting_a_recording_open_in_the_editor_leaves_its_upload_and_files_alone() {
+        let fixture = Fixture::new();
+        let store = fixture.0.join("store");
+        std::fs::write(
+            &store,
+            serde_json::to_vec(&json!({
+                "general_settings": { "recordingsPath": fixture.0 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let worker_store = store.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+            })
+            .build()
+            .unwrap();
+        let before = read_state(&fixture.project()).unwrap().unwrap();
+
+        let editor =
+            crate::library::ProjectOpenInEditor::begin(&fixture.project().canonicalize().unwrap())
+                .unwrap();
+        assert_eq!(
+            runtime.block_on(delete_recording(fixture.project())),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        fixture.assert_retained();
+        assert_eq!(
+            read_state(&fixture.project()).unwrap().unwrap().phase,
+            before.phase,
+            "the upload is not cancelled"
+        );
+
+        drop(editor);
+        runtime
+            .block_on(delete_recording(fixture.project()))
+            .unwrap();
+        assert!(!fixture.project().exists());
+    }
+
+    #[test]
+    fn damaged_upload_state_does_not_prevent_local_deletion() {
+        for damage in ["truncated", "unsupported", "oversized"] {
+            let fixture = Fixture::new();
+            let path = fixture.project().join(STATE_FILE);
+            match damage {
+                "truncated" => std::fs::write(&path, b"{\"version\":").unwrap(),
+                "unsupported" => {
+                    let mut state = fixture.state();
+                    state.version = 2;
+                    write_state(&fixture.project(), &state).unwrap();
+                }
+                "oversized" => {
+                    std::fs::write(&path, vec![b' '; MAX_STATE_BYTES as usize + 1]).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(read_state(&fixture.project()).is_err());
+            let store = fixture.0.join("store");
+            std::fs::write(
+                &store,
+                serde_json::to_vec(&json!({
+                    "general_settings": { "recordingsPath": fixture.0.join("library") }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let worker_store = store.clone();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .on_thread_start(move || {
+                    crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+                })
+                .build()
+                .unwrap();
+            let ownership = UploadLock::acquire(&fixture.project()).unwrap();
+            assert_eq!(
+                runtime
+                    .block_on(delete_recording(fixture.project()))
+                    .unwrap_err(),
+                UploadLockError::Busy.to_string()
+            );
+            assert!(fixture.project().join("content/output.mp4").is_file());
+            drop(ownership);
+            assert_eq!(
+                runtime.block_on(delete_recording(fixture.project())),
+                Err("Path is not inside a recordings directory".to_string())
+            );
+            fixture.assert_retained();
+            std::fs::write(
+                &store,
+                serde_json::to_vec(&json!({
+                    "general_settings": { "recordingsPath": fixture.0 }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            runtime
+                .block_on(delete_recording(fixture.project()))
+                .unwrap();
+            assert!(!fixture.project().exists(), "{damage}");
+        }
+    }
+
+    #[test]
     fn legacy_unknown_audio_is_held_and_retry_budget_is_bounded() {
         let fixture = Fixture::new();
         let meta = RecordingMeta::load_for_project(&fixture.project()).unwrap();
@@ -2598,5 +2810,29 @@ mod tests {
         std::fs::create_dir_all(&fixture.0).unwrap();
         scan_library(&mut skipped, &fixture.0, &parses);
         assert!(skipped.stamps.is_empty());
+    }
+
+    /// Delete after upload keeps the folder until the Instant recording's own
+    /// rules finish too, not only the upload-completed run handed over.
+    #[tokio::test]
+    async fn delete_after_upload_waits_for_the_instant_recording_rules() {
+        let root = tempfile::tempdir().unwrap();
+        for upload_rules in [true, false] {
+            let project = root.path().join(format!("instant-{upload_rules}.cap"));
+            std::fs::create_dir_all(project.join("content")).unwrap();
+            std::fs::write(project.join("content/output.mp4"), b"saved-output").unwrap();
+            let hold = crate::automation::InstantRulesHold::take(&project);
+            let automations = upload_rules.then(|| tokio::spawn(async {}));
+            let cleanup = tokio::spawn(remove_after_automations(project.clone(), automations));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(!cleanup.is_finished());
+            assert!(project.join("content/output.mp4").is_file());
+            drop(hold);
+            tokio::time::timeout(std::time::Duration::from_secs(5), cleanup)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!project.exists());
+        }
     }
 }

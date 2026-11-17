@@ -1,6 +1,6 @@
 /**
  * The two pointers Cap Desktop actually ships, traced 1:1 from
- * `packages/ui-solid/icons/cursor-macos.svg` and `cursor-windows.svg`.
+ * `apps/desktop-gpui/assets/onboarding/cursor-macos.svg` and `cursor-windows.svg`.
  *
  * The only change is the shadow: the source files carry it as an SVG filter
  * with a hard-coded id, which would collide wherever two cursors render on

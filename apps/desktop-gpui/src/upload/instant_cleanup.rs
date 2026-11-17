@@ -353,11 +353,8 @@ fn abandon_at(
 
 /// Records a pre-created Instant video before capture starts, so a crash,
 /// panic or aborted discard during startup still gets its server copy
-/// deleted on the next sweep. Linux keeps its own startup cleanup contract.
+/// deleted on the next sweep.
 pub(crate) fn begin(video_id: &str, project_dir: &Path) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     let Some(owner_id) = current_owner_id() else {
         return;
     };
@@ -372,16 +369,10 @@ pub(crate) fn begin(video_id: &str, project_dir: &Path) {
 }
 
 pub(crate) fn started(video_id: &str) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     remove_at(&journal_path(), video_id);
 }
 
 pub(crate) fn resolved(video_id: &str) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     remove_at(&journal_path(), video_id);
 }
 
@@ -390,16 +381,10 @@ pub(crate) fn resolved(video_id: &str) {
 /// removed and delete the uploaded video. False when the entry is still there,
 /// so the caller keeps the local copy.
 pub(crate) fn forget_verified(video_id: &str) -> bool {
-    if cfg!(target_os = "linux") {
-        return true;
-    }
     forget_at(&journal_path(), video_id)
 }
 
 pub(crate) fn abandon(video_id: &str, reason: CleanupReason, cause: Option<StartFailureCause>) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     let identity = current_owner_id().map(|owner| (auth::server_url(), owner));
     abandon_at(&journal_path(), video_id, reason, cause, identity, now());
 }
@@ -431,6 +416,12 @@ fn meta_claims(meta: &RecordingMeta, video_id: &str) -> bool {
         .as_ref()
         .is_some_and(|share| share.id == video_id)
         || upload_meta_video_id(meta) == Some(video_id)
+}
+
+/// Whether a recording folder holds media a crash or a cancelled start must
+/// not delete.
+pub(crate) fn project_holds_media(project: &Path) -> bool {
+    has_recorded_media(&project.join("content"), MEDIA_SCAN_DEPTH)
 }
 
 /// True when the folder holds recorded media, or when part of it cannot be
@@ -732,6 +723,18 @@ async fn sweep(path: &Path, session: &str, now: i64, backend: &impl SweepBackend
     summary
 }
 
+/// Whether the sweep keeps an entry's server video while its folder holds
+/// media. A crashed start's folder may have recorded before the crash; on
+/// Linux a cancelled start that wrote media keeps it too
+/// (`ActiveRecording::discard_cancelled_start`), so its video must stay.
+fn guards_media(reason: CleanupReason) -> bool {
+    match reason {
+        CleanupReason::Interrupted => true,
+        CleanupReason::StartCancelled => cfg!(target_os = "linux"),
+        CleanupReason::StartFailed => false,
+    }
+}
+
 struct LiveSweep;
 
 impl SweepBackend for LiveSweep {
@@ -741,13 +744,13 @@ impl SweepBackend for LiveSweep {
 
     async fn protected(&self, entry: &Entry) -> bool {
         let video_id = entry.video_id.clone();
-        let interrupted = entry.effective_reason() == CleanupReason::Interrupted;
+        let guards_media = guards_media(entry.effective_reason());
         let start_project = entry.project_dir.clone();
         tokio::task::spawn_blocking(move || {
             locally_protected(
                 &crate::library::known_recordings_dirs(),
                 &video_id,
-                interrupted,
+                guards_media,
                 start_project.as_deref(),
             )
         })
@@ -809,9 +812,6 @@ async fn run() {
 }
 
 pub(crate) fn init(cx: &mut gpui::App) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     session_id();
     launched_at();
     gpui_tokio::Tokio::spawn(cx, run()).detach();
@@ -1353,6 +1353,29 @@ mod tests {
             None,
         ));
         assert!(!locally_protected(&[recordings], "video", false, None));
+    }
+
+    #[test]
+    fn a_cancelled_start_guards_media_where_it_keeps_it() {
+        assert!(guards_media(CleanupReason::Interrupted));
+        assert!(!guards_media(CleanupReason::StartFailed));
+        assert_eq!(
+            guards_media(CleanupReason::StartCancelled),
+            cfg!(target_os = "linux")
+        );
+        let fixture = Fixture::new();
+        let recordings = fixture.recordings();
+        let project = write_project(&recordings, "cancelled.cap", "video", in_progress());
+        std::fs::write(project.join("content/display/segment_001.m4s"), b"media").unwrap();
+        assert_eq!(
+            locally_protected(
+                &[recordings],
+                "video",
+                guards_media(CleanupReason::StartCancelled),
+                Some(&project),
+            ),
+            cfg!(target_os = "linux")
+        );
     }
 
     #[cfg(unix)]

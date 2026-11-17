@@ -116,7 +116,7 @@ fn open(request: Request, cx: &mut App) {
                 title: Some(title.into()),
                 ..Default::default()
             }),
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             focus: true,
             show: true,
             is_resizable: false,

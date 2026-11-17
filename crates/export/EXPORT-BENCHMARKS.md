@@ -115,5 +115,5 @@ Use these actual-vs-estimated ratios to tune the estimation algorithm:
 
 - Test videos are generated synthetically using FFmpeg `testsrc` for deterministic results
 - Source video is 1920x1080 at 30fps; exports at different resolutions test upscaling/downscaling
-- Size estimation uses the same algorithm as `apps/desktop/src-tauri/src/export.rs`
+- Size estimation uses the same algorithm as the desktop export page (`crates/export/src/estimates.rs`)
 - Calibration data in each run shows actual-vs-estimated ratios for tuning the estimation algorithm

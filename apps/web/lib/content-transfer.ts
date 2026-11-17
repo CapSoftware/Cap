@@ -303,6 +303,21 @@ export function getContentTransferStorageBlockReason({
 	return null;
 }
 
+export function moveContentTransferSourceKeys<T extends object>(
+	source: T,
+	sourcePrefix: string,
+	destinationPrefix: string,
+): T {
+	return Object.fromEntries(
+		Object.entries(source).map(([field, value]) => [
+			field,
+			typeof value === "string" && value.startsWith(sourcePrefix)
+				? `${destinationPrefix}${value.slice(sourcePrefix.length)}`
+				: value,
+		]),
+	) as T;
+}
+
 export function isContentTransferProgress(
 	value: unknown,
 ): value is ContentTransferProgress {

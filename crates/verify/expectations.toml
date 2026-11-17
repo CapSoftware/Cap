@@ -130,20 +130,6 @@ reason = "During a cross-fade both clips read the same AVAssetReader decoder at 
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
-case = "editing/mapping/duration-covered"
-class = "coverage"
-bound = { count = [1, 4], failed-per-mille = [95, 98] }
-reason = "NEW: a fullscreen text segment (a hold) left past the end of the clips (place a text card near the end, then trim or delete clips; clip edits do not ripple text segments) still adds its length to TimelineConfiguration::duration(), but get_frame_mapping returns None from the content end on, so the hold and the time before it have no source frame. Deterministic seeds: 97 of 1000 fast-tier and 1925 of 20000 full-tier sequences fail, the ones that leave a hold past the end (failed-per-mille 97.0 and 96.3). Minimal repro: Hold at 0.92 of a 7 s clip, then trim the clip end"
-link = ""
-
-[[xfail]]
-case = "editing/export/hold-past-end"
-class = "frame-count"
-bound = { count = 1, missing = 30 }
-reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fullscreen text at 5.4 s and the clip trimmed to 3.2 s give a 4.2 s timeline, but the export stops at the first unmapped frame: 96 frames instead of 126, and the text card is never rendered"
-link = ""
-
-[[xfail]]
 case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
 class = "stale"
 platforms = ["macos"]

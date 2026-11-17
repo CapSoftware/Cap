@@ -248,7 +248,7 @@ fn note(failures: &mut Vec<Failure>, class: FailureClass, request: usize, detail
 }
 
 fn frame_identity(frame: &crate::DecodedFrame) -> Option<u32> {
-    let data = frame.data();
+    let data = frame.y_plane().unwrap_or_else(|| frame.data());
     scripted::frame_id(&data[..data.len().min(16)])
 }
 

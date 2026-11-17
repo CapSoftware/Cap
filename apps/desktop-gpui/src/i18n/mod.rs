@@ -12,10 +12,6 @@ pub const SETTING_KEY: &str = "uiLanguage";
 /// `CAP_GPUI_LOCALE=ja` (or `pseudo` in a debug build).
 pub const LOCALE_ENV: &str = "CAP_GPUI_LOCALE";
 const SYSTEM_SETTING: &str = "system";
-/// Shows the language picker in a release build. Release builds hide it until
-/// the main surfaces are translated; `uiLanguage` and [`LOCALE_ENV`] work
-/// either way.
-pub const PICKER_ENV: &str = "CAP_GPUI_LANGUAGE_PICKER";
 
 static CURRENT: AtomicU8 = AtomicU8::new(Locale::En as u8);
 
@@ -25,6 +21,16 @@ fn index() -> usize {
 
 pub fn current() -> Locale {
     Locale::ALL[index()]
+}
+
+/// A number for a translated sentence, with the decimal comma French,
+/// Spanish and German write (`1,5 GB`).
+pub fn decimal(value: impl std::fmt::Display) -> String {
+    let text = value.to_string();
+    match current() {
+        Locale::Fr | Locale::Es | Locale::De => text.replace('.', ","),
+        _ => text,
+    }
 }
 
 /// What the language picker stores: follow the system, or one catalog.
@@ -57,14 +63,6 @@ impl Preference {
     }
 }
 
-/// Read once: the General page asks on every render.
-pub fn picker_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        cfg!(debug_assertions) || std::env::var(PICKER_ENV).is_ok_and(|value| value == "1")
-    })
-}
-
 /// Before the first lookup: `main` calls this ahead of the theme, menus and
 /// tray.
 pub fn init(setting: Option<&str>) {
@@ -79,20 +77,13 @@ pub fn resolve(preference: Preference) -> Locale {
     {
         return locale;
     }
-    resolve_preference(preference, picker_enabled(), system)
+    resolve_preference(preference, system)
 }
 
-/// Without the picker a release build stays English on a non-English system,
-/// so nobody gets a half-translated app they can't switch back from.
-fn resolve_preference(
-    preference: Preference,
-    picker_enabled: bool,
-    system: impl FnOnce() -> Locale,
-) -> Locale {
+fn resolve_preference(preference: Preference, system: impl FnOnce() -> Locale) -> Locale {
     match preference {
         Preference::Fixed(locale) => locale,
-        Preference::System if picker_enabled => system(),
-        Preference::System => Locale::En,
+        Preference::System => system(),
     }
 }
 
@@ -158,6 +149,16 @@ pub fn apply(preference: Preference, cx: &mut App) {
     cx.refresh_windows();
 }
 
+pub mod messages;
+
+#[cfg(test)]
+mod dialogs_surface_tests;
+#[cfg(test)]
+mod editor_panels_surface_tests;
+#[cfg(test)]
+mod editor_shell_surface_tests;
+#[cfg(test)]
+mod settings_surface_tests;
 #[cfg(test)]
 mod surface_tests;
 #[cfg(test)]

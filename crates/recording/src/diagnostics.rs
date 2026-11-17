@@ -668,7 +668,8 @@ pub fn collect_matrix_hints(configured_max_fps: Option<u32>, fragmented: bool) -
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
-    /// Which desktop shell produced the report: `tauri` or `gpui`.
+    /// Which desktop shell produced the report: `gpui`, or `tauri` from 0.6.0
+    /// and earlier.
     pub flavor: String,
     pub version: String,
 }

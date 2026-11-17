@@ -9,9 +9,11 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
+import { useInAppCheckout } from "@/components/pages/checkout/useInAppCheckout";
 import { BTN_PRIMARY, MODE_THEME } from "@/components/pages/HomeTwo/theme";
 import { homepageCopy } from "@/data/homepage-copy";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { Segmented, Stepper } from "./controls";
 import { PlanCard, type PlanToggle } from "./PlanCard";
 
@@ -24,6 +26,7 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const { symbol } = useCurrency();
 	const [users, setUsers] = useState(1);
 	const [annual, setAnnual] = useState(false);
+	const inAppCheckout = useInAppCheckout();
 
 	const perUser = annual ? copy.pricing.annual : copy.pricing.monthly;
 	const total = annual
@@ -38,6 +41,10 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 				body: JSON.stringify({ priceId, quantity: users }),
 			});
 			const data = await response.json();
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
+			}
 			if (data.url) {
 				window.location.href = data.url;
 			} else {
@@ -62,6 +69,14 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 				quantity: users,
 			});
 
+			if (inAppCheckout) {
+				inAppCheckout.open({
+					plan: annual ? "yearly" : "monthly",
+					seats: users,
+				});
+				return;
+			}
+
 			const response = await fetch("/api/settings/billing/subscribe", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -76,6 +91,10 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
 			}
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
+			}
 			if (data.url) {
 				window.location.href = data.url;
 			}
@@ -85,7 +104,10 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 		},
 	});
 
-	const loading = planCheckout.isPending || guestCheckout.isPending;
+	const loading =
+		planCheckout.isPending ||
+		guestCheckout.isPending ||
+		Boolean(inAppCheckout?.pending);
 
 	return (
 		<PlanCard
@@ -145,6 +167,9 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 				<button
 					type="button"
 					onClick={() => planCheckout.mutate()}
+					onPointerEnter={inAppCheckout?.warm}
+					onTouchStart={inAppCheckout?.warm}
+					onFocus={inAppCheckout?.warm}
 					disabled={loading}
 					className={classNames(
 						BTN_PRIMARY,

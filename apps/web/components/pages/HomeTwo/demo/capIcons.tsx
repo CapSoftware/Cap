@@ -1,6 +1,6 @@
 /**
  * Exact SVG copies of the icons the Cap desktop app renders, lifted from
- * packages/ui-solid/icons/*.svg and the icon sets the app imports
+ * apps/desktop-gpui/assets/icons/*.svg and the icon sets the app draws from
  * (lucide, mdi, ph, material-symbols). Fill colours that ship as white/black
  * in the source files are swapped to currentColor so CSS drives them, which
  * is also what the app itself does via its `invert` utility.

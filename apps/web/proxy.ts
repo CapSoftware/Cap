@@ -1,11 +1,26 @@
 import { statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { db } from "@cap/database";
+import {
+	DUB_CLICK_ID_COOKIE,
+	dubCookieDomain,
+	parseDubClickId,
+} from "@cap/database/referrals";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
+import {
+	agentMarkdownResponse,
+	DOCS_MARKDOWN_ROUTE,
+	docsMarkdownSlug,
+	INFRA_MARKDOWN_ROUTE,
+	isInfraMarkdownRequest,
+} from "@/lib/agent-markdown";
+import { restrictEmbedFraming } from "@/lib/developer-embed-origins";
+import { embedPlaybackId } from "@/lib/infra-embed-ancestors";
+import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
@@ -44,6 +59,7 @@ const FRAME_PROTECTED_PATHS = [
 	"/admin",
 	"/signup",
 	"/verify-otp",
+	"/checkout",
 ];
 
 const isFrameProtectedPath = (path: string) =>
@@ -61,13 +77,92 @@ const setFrameHeaders = (response: NextResponse) => {
 	return response;
 };
 
+const REFERRAL_CLICK_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
+
+// Partner links (go.cap.so) redirect here with ?dub_id=<click>. The Dub script
+// stores it too, but ad blockers and no-JS visits skip the script, and without
+// the cookie the sign-up and purchase are never credited to the partner.
+const rememberReferralClick = (
+	request: NextRequest,
+	response: NextResponse,
+) => {
+	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true" || request.method !== "GET") {
+		return response;
+	}
+	const url = request.nextUrl;
+	const clickId = parseDubClickId(url.searchParams.get(DUB_CLICK_ID_COOKIE));
+	if (!clickId) return response;
+
+	response.cookies.set(DUB_CLICK_ID_COOKIE, clickId, {
+		domain: dubCookieDomain(url.hostname),
+		path: "/",
+		sameSite: "lax",
+		secure: url.protocol === "https:",
+		maxAge: REFERRAL_CLICK_MAX_AGE_SECONDS,
+	});
+	return response;
+};
+
+const DUB_PROXY_PREFIX = "/_proxy/dub/";
+
+// Developer video pages are embedded on other sites, so they never set a
+// cookie, not even the referral click.
+const DEVELOPER_VIDEO_PREFIX = "/dev/";
+
+const dubProxyTarget = (path: string) => {
+	if (path === `${DUB_PROXY_PREFIX}script.js`) {
+		return "https://www.dubcdn.com/analytics/script.js";
+	}
+	const track = /^\/_proxy\/dub\/track\/([a-z-]{1,32})$/.exec(path);
+	return track ? `https://api.dub.co/track/${track[1]}` : null;
+};
+
+// Serves the Dub script and its click tracking from cap.so so ad blockers
+// don't drop them. Visitor cookies (including the Cap session) are stripped:
+// Dub needs none of them.
+const proxyDub = (request: NextRequest) => {
+	const target =
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+			? dubProxyTarget(request.nextUrl.pathname)
+			: null;
+	if (!target) return new NextResponse(null, { status: 404 });
+
+	const headers = new Headers(request.headers);
+	headers.delete("cookie");
+	headers.delete("authorization");
+	return NextResponse.rewrite(new URL(target), { request: { headers } });
+};
+
+// Server components cannot read the address they render for, and the Infra
+// console needs it to send a signed-out visitor back to the page they asked
+// for. The value is always set here, so one sent by a client is replaced.
+const serve = (request: NextRequest) => {
+	const { pathname, search } = request.nextUrl;
+	if (!isInfraPathname(pathname)) return NextResponse.next();
+	const headers = new Headers(request.headers);
+	headers.set(INFRA_PATH_HEADER, `${pathname}${search}`);
+	return NextResponse.next({ request: { headers } });
+};
+
 export async function proxy(request: NextRequest) {
 	const path = new URL(request.url).pathname;
 
-	if (path.startsWith("/login")) return setFrameHeaders(NextResponse.next());
+	if (path.startsWith(DUB_PROXY_PREFIX)) return proxyDub(request);
 
-	const response = await route(request);
-	return isFrameProtectedPath(path) ? setFrameHeaders(response) : response;
+	if (path.startsWith("/login")) {
+		return rememberReferralClick(request, setFrameHeaders(NextResponse.next()));
+	}
+
+	const routed = await route(request);
+	const embedId = embedPlaybackId(path);
+	const response = embedId
+		? await restrictEmbedFraming(embedId, routed)
+		: routed;
+	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
+	return rememberReferralClick(
+		request,
+		isFrameProtectedPath(path) ? setFrameHeaders(response) : response,
+	);
 }
 
 async function route(request: NextRequest) {
@@ -114,17 +209,42 @@ async function route(request: NextRequest) {
 				path.startsWith("/terms") ||
 				path.startsWith("/verify-otp") ||
 				path.startsWith("/embed/") ||
+				path.startsWith(DEVELOPER_VIDEO_PREFIX) ||
 				path.startsWith("/.well-known/workflow/") ||
-				path.startsWith("/.well-known/oauth-")
+				path.startsWith("/.well-known/oauth-") ||
+				path.startsWith("/.well-known/mcp") ||
+				path === "/.well-known/api-catalog" ||
+				path === "/openapi.json"
 			) &&
 			process.env.NODE_ENV !== "development"
 		)
 			return NextResponse.redirect(new URL("/login", url.origin));
-		else return NextResponse.next();
+		else return serve(request);
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
-		return NextResponse.next();
+		const docsSlug =
+			request.method === "GET" || request.method === "HEAD"
+				? docsMarkdownSlug(path, request.headers.get("accept"))
+				: null;
+		if (docsSlug) {
+			return NextResponse.rewrite(
+				new URL(`${DOCS_MARKDOWN_ROUTE}/${docsSlug}`, url.origin),
+			);
+		}
+		if (
+			(request.method === "GET" || request.method === "HEAD") &&
+			isInfraMarkdownRequest(path, request.headers.get("accept"))
+		) {
+			return NextResponse.rewrite(new URL(INFRA_MARKDOWN_ROUTE, url.origin));
+		}
+
+		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
+		if (!markdown) return serve(request);
+		return new NextResponse(markdown.body, {
+			status: markdown.status,
+			headers: markdown.headers,
+		});
 	}
 
 	const webUrl = new URL(serverEnv().WEB_URL).hostname;

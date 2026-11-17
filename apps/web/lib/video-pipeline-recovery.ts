@@ -21,7 +21,10 @@ import {
 	sql,
 } from "drizzle-orm";
 import { start } from "workflow/api";
-import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import {
+	AI_ENTITLED_SUBSCRIPTION_STATUSES,
+	isAiGenerationEnabledForUser,
+} from "@/lib/ai-generation-entitlement";
 import { startAiGeneration } from "@/lib/generate-ai";
 import {
 	getLoomImportRunState,
@@ -406,7 +409,6 @@ export async function recoverStalledVideoPipeline({
 		.orderBy(asc(videos.updatedAt))
 		.limit(transcriptionLimit);
 
-	const aiScanLimit = buildEnv.NEXT_PUBLIC_IS_CAP ? aiLimit * 4 : aiLimit;
 	const aiCandidates = (
 		await db()
 			.select({
@@ -428,8 +430,13 @@ export async function recoverStalledVideoPipeline({
 					gte(videos.createdAt, recentBefore),
 					lte(videos.updatedAt, staleBefore),
 					or(
-						isNull(
-							sql`JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')`,
+						// Transcribe-on-view videos (Loom imports) only start AI from a
+						// view; recovery resumes AI a view started but never starts it.
+						and(
+							isNull(
+								sql`JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')`,
+							),
+							sql`JSON_EXTRACT(${videos.metadata}, '$.transcribeOnView') IS NULL`,
 						),
 						inArray(
 							sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus'))`,
@@ -437,13 +444,22 @@ export async function recoverStalledVideoPipeline({
 						),
 					),
 					sql`(${videos.metadata} IS NULL OR JSON_EXTRACT(${videos.metadata}, '$.summary') IS NULL OR JSON_EXTRACT(${videos.metadata}, '$.chapters') IS NULL)`,
+					// Filtering entitlement after LIMIT let older ineligible videos
+					// fill every batch, so eligible ones were never reached.
+					buildEnv.NEXT_PUBLIC_IS_CAP
+						? or(
+								sql`COALESCE(${users.thirdPartyStripeSubscriptionId}, '') <> ''`,
+								inArray(
+									users.stripeSubscriptionStatus,
+									AI_ENTITLED_SUBSCRIPTION_STATUSES,
+								),
+							)
+						: undefined,
 				),
 			)
 			.orderBy(asc(videos.updatedAt))
-			.limit(aiScanLimit)
-	)
-		.filter(isAiGenerationEnabledForUser)
-		.slice(0, aiLimit) as AiCandidate[];
+			.limit(aiLimit)
+	).filter(isAiGenerationEnabledForUser) as AiCandidate[];
 
 	const [media, transcription, ai] = await Promise.all([
 		recoverConcurrently(

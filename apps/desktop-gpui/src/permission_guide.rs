@@ -22,6 +22,7 @@ use gpui::{
 };
 
 use crate::doodle;
+use crate::i18n::tr;
 use crate::onboarding_doodles as art;
 use crate::permissions::OSPermission;
 use crate::platform;
@@ -113,7 +114,7 @@ pub fn start(permission: OSPermission, cx: &mut App) {
     let opened = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
-            app_id: Some(crate::app_windows::APP_ID.into()),
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(0.), px(0.)),
                 size: size(px(PANEL_W), px(PANEL_H)),
@@ -325,9 +326,9 @@ impl Render for PermissionGuide {
         let palette = paper.palette();
         // The arrow bobs forever; a hidden panel must not keep drawing.
         let still = self.hidden;
-        let pane = match self.permission {
-            OSPermission::Accessibility => "Accessibility",
-            _ => "Screen & System Audio Recording",
+        let body = match self.permission {
+            OSPermission::Accessibility => tr::permission::guide::accessibility_body(),
+            _ => tr::permission::guide::screen_body(),
         };
         div()
             .size_full()
@@ -362,16 +363,14 @@ impl Render for PermissionGuide {
                                     }
                                 }),
                             )
-                            .child(
-                                div().absolute().inset_0().child(doodle::doodle(
-                                    &art::DRAG_FRAME,
-                                    palette,
-                                    self.shown_at,
-                                    still,
-                                    80.,
-                                    80.,
-                                )),
-                            )
+                            .child(div().absolute().inset_0().child(doodle::doodle(
+                                &art::DRAG_FRAME,
+                                palette,
+                                self.shown_at,
+                                still,
+                                80.,
+                                80.,
+                            )))
                             .child(
                                 div()
                                     .absolute()
@@ -395,7 +394,7 @@ impl Render for PermissionGuide {
                                     .line_height(px(19.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(paper.ink)
-                                    .child("Drag Cap into the list"),
+                                    .child(tr::permission::guide::title()),
                             )
                             .child(
                                 div()
@@ -403,9 +402,7 @@ impl Render for PermissionGuide {
                                     .line_height(px(17.))
                                     .font_weight(FontWeight::NORMAL)
                                     .text_color(paper.soft)
-                                    .child(format!(
-                                        "Drop it on the {pane} list above, then make sure its switch is on."
-                                    )),
+                                    .child(body),
                             ),
                     )
                     .child(div().flex_none().child(doodle::doodle(

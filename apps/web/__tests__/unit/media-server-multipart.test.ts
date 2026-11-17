@@ -247,15 +247,20 @@ describe("media-server multipart fencing", () => {
 			location: "https://storage.test/output",
 			objectIdentity: '"output-etag"',
 		});
-		expect(mocks.complete).toHaveBeenCalledWith(outputKey, "multipart-upload", {
-			MultipartUpload: {
-				Parts: [
-					{ PartNumber: 1, ETag: '"part-1"' },
-					{ PartNumber: 2, ETag: '"part-2"' },
-				],
+		expect(mocks.complete).toHaveBeenCalledWith(
+			outputKey,
+			"multipart-upload",
+			{
+				MultipartUpload: {
+					Parts: [
+						{ PartNumber: 1, ETag: '"part-1"' },
+						{ PartNumber: 2, ETag: '"part-2"' },
+					],
+				},
+				IfNoneMatch: "*",
 			},
-			IfNoneMatch: "*",
-		});
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		);
 	});
 
 	it.each([[1, 3], [1, 1], [2], []])(
@@ -297,14 +302,19 @@ describe("media-server multipart fencing", () => {
 		expect((await request("sign-part", body)).status).toBe(200);
 		expect((await request("complete", body)).status).toBe(200);
 		expect(mocks.getState).not.toHaveBeenCalled();
-		expect(mocks.complete).toHaveBeenCalledWith(body.key, body.uploadId, {
-			MultipartUpload: {
-				Parts: [
-					{ PartNumber: 1, ETag: '"part-1"' },
-					{ PartNumber: 2, ETag: '"part-2"' },
-				],
+		expect(mocks.complete).toHaveBeenCalledWith(
+			body.key,
+			body.uploadId,
+			{
+				MultipartUpload: {
+					Parts: [
+						{ PartNumber: 1, ETag: '"part-1"' },
+						{ PartNumber: 2, ETag: '"part-2"' },
+					],
+				},
 			},
-		});
+			{ retryWithoutUnsupportedIfNoneMatch: false },
+		);
 	});
 
 	it.each([
@@ -410,6 +420,7 @@ describe("media-server multipart fencing", () => {
 				body.key,
 				body.uploadId,
 				expect.objectContaining({ IfNoneMatch: "*" }),
+				{ retryWithoutUnsupportedIfNoneMatch: false },
 			);
 		},
 	);

@@ -23,6 +23,7 @@ use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
+    PreviewSpeed, PreviewSpeedHandle,
     audio_output::{AudioOutput, PlaySpec},
     editor,
     editor_instance::{SegmentMedia, cursor_timeline_settings},
@@ -64,6 +65,7 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            segment.active_voice_eq(),
             offsets.mic,
             offsets.system_audio,
         )
@@ -236,6 +238,7 @@ pub struct Playback {
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
     pub telemetry: Option<PlaybackTelemetry>,
+    pub preview_speed: PreviewSpeedHandle,
 }
 
 #[derive(Clone, Copy)]
@@ -750,6 +753,10 @@ impl Playback {
 
         let mut prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
+        let prefetch_speed = self.preview_speed.clone();
+        let preparing_owns_clock = Arc::new(AtomicBool::new(adopted.is_some()));
+        let prefetch_preparing_owns_clock = Arc::clone(&preparing_owns_clock);
+        let mut prefetch_previous_speed = PreviewSpeed::NORMAL;
         let prefetch_segment_medias = self.segment_medias.clone();
         let (prefetch_duration, has_timeline) = self
             .project
@@ -854,11 +861,23 @@ impl Playback {
                 }
 
                 let current_playback_frame = *playback_position_rx.borrow_and_update();
+                let speed = if prefetch_preparing_owns_clock.load(Ordering::Acquire) {
+                    PreviewSpeed::NORMAL
+                } else {
+                    prefetch_speed.get()
+                };
+                if speed != prefetch_previous_speed {
+                    if speed < prefetch_previous_speed {
+                        next_prefetch_frame = next_prefetch_frame.min(current_playback_frame);
+                    }
+                    prefetch_previous_speed = speed;
+                }
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
                     as u32;
-                let max_prefetch_frame = current_playback_frame + max_prefetch_ahead;
+                let max_prefetch_frame = current_playback_frame
+                    + (f64::from(max_prefetch_ahead) * speed.as_f64().max(1.0)).ceil() as u32;
 
                 let initial_parallel_decode_tasks = INITIAL_PARALLEL_DECODE_TASKS;
                 let parallel_decode_tasks = PARALLEL_DECODE_TASKS;
@@ -888,7 +907,7 @@ impl Playback {
                         .map(|guard| guard.contains(&frame_num))
                         .unwrap_or(false);
                     if already_in_flight {
-                        next_prefetch_frame += 1;
+                        next_prefetch_frame = speed.next_frame(next_prefetch_frame);
                         continue;
                     }
 
@@ -931,7 +950,7 @@ impl Playback {
                         })));
                     }
 
-                    next_prefetch_frame += 1;
+                    next_prefetch_frame = speed.next_frame(next_prefetch_frame);
                 }
 
                 tokio::select! {
@@ -1171,6 +1190,11 @@ impl Playback {
 
             let playback_start_frame = frame_number;
             let mut cached_project = Arc::new(self.project.borrow().clone());
+            let mut speed = if adopted.is_some() {
+                PreviewSpeed::NORMAL
+            } else {
+                self.preview_speed.get()
+            };
 
             let build_cursor_timelines =
                 |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
@@ -1352,7 +1376,7 @@ impl Playback {
 
                         total_frames_rendered += 1;
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-                        frame_number = frame_number.saturating_add(1);
+                        frame_number = speed.next_frame(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                     }
                 }
@@ -1415,6 +1439,7 @@ impl Playback {
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx.clone(),
+                    preview_speed: self.preview_speed.clone(),
                 })
             };
             let mut has_audio = audio_generation.is_some();
@@ -1467,6 +1492,7 @@ impl Playback {
                         break;
                     }
                     drop(adopted.take());
+                    preparing_owns_clock.store(false, Ordering::Release);
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
                     Arc::make_mut(&mut cached_project).audio = project.audio.clone();
@@ -1477,6 +1503,7 @@ impl Playback {
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
                         playhead_rx: audio_playhead_rx.clone(),
+                        preview_speed: self.preview_speed.clone(),
                     });
                     let started = runtime.block_on(async {
                         tokio::select! {
@@ -1560,6 +1587,7 @@ impl Playback {
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
+                                preview_speed: self.preview_speed.clone(),
                             },
                             generation,
                         );
@@ -1573,8 +1601,27 @@ impl Playback {
                     }
                 }
 
+                let requested_speed = if adopted.is_some() {
+                    PreviewSpeed::NORMAL
+                } else {
+                    self.preview_speed.get()
+                };
+                if requested_speed != speed {
+                    start += speed.wall_time(
+                        frame_duration,
+                        frame_number.saturating_sub(clock_anchor_frame),
+                    );
+                    clock_anchor_frame = frame_number;
+                    speed = requested_speed;
+                    tracing::debug!(
+                        speed = speed.as_f64(),
+                        frame_number,
+                        "preview speed changed"
+                    );
+                }
+
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
-                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+                let next_deadline = start + frame_duration.mul_f64(frame_offset / speed.as_f64());
 
                 if adopted.is_none() {
                     precision_sleep_sync(next_deadline);
@@ -1590,7 +1637,8 @@ impl Playback {
                     Instant::now().saturating_duration_since(next_deadline)
                 };
                 if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
-                    let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
+                    let frames_behind =
+                        (overshoot.as_secs_f64() * fps_f64 * speed.as_f64()).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
                     frame_number += skip;
@@ -1751,7 +1799,7 @@ impl Playback {
                                 } else {
                                     prefetch_buffer.push_back(prefetched);
                                     let skipped_from = frame_number;
-                                    frame_number = frame_number.saturating_add(1);
+                                    frame_number = speed.next_frame(frame_number);
                                     total_frames_skipped += 1;
                                     starvation_skips += 1;
                                     boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1768,7 +1816,7 @@ impl Playback {
                             }
                             None => {
                                 let skipped_from = frame_number;
-                                frame_number = frame_number.saturating_add(1);
+                                frame_number = speed.next_frame(frame_number);
                                 total_frames_skipped += 1;
                                 starvation_skips += 1;
                                 boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1873,7 +1921,7 @@ impl Playback {
                                 continue;
                             }
                             let skipped_from = frame_number;
-                            frame_number = frame_number.saturating_add(1);
+                            frame_number = speed.next_frame(frame_number);
                             total_frames_skipped += 1;
                             starvation_skips += 1;
                             boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
@@ -1905,7 +1953,7 @@ impl Playback {
                         if adopted.is_some() {
                             break;
                         }
-                        frame_number = frame_number.saturating_add(1);
+                        frame_number = speed.next_frame(frame_number);
                         continue;
                     };
 
@@ -2055,7 +2103,7 @@ impl Playback {
                     continue;
                 }
 
-                frame_number = frame_number.saturating_add(1);
+                frame_number = speed.next_frame(frame_number);
                 let _ = playback_position_tx.send(frame_number);
                 if has_audio
                     && audio_playhead_tx
@@ -2065,13 +2113,13 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame =
-                    clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame = clock_anchor_frame
+                    + speed.frames_elapsed(start.elapsed(), fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
 
-                    if frames_behind <= 2 {
+                    if f64::from(frames_behind) <= 2.0 * speed.as_f64().max(1.0) {
                         continue;
                     }
 
@@ -2328,6 +2376,19 @@ mod tests {
         next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
         next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
         assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(cap_project::VoiceEq {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        let mut voice_eq = cap_project::VoiceEq::default();
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&project, &next));
+        let equalized = next.clone();
+        voice_eq.high_mid.gain_db += 1.0;
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&equalized, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = None;
         next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
         assert!(clip_audio_changed(&project, &next));
         next.timeline.as_mut().unwrap().segments[0].volume = None;

@@ -1,12 +1,14 @@
-import { InternalError, Policy, Video } from "@cap/web-domain";
-import { Effect, Exit, Schema, Unify } from "effect";
+import { CurrentUser, InternalError, Policy, Video } from "@cap/web-domain";
+import { Effect, Exit, type Option, Schema } from "effect";
 
 import { provideOptionalAuth } from "../Auth.ts";
 import { Videos } from "./index.ts";
+import { VideoDownloadGate } from "./VideoDownloadGate.ts";
 
 export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 	Effect.gen(function* () {
 		const videos = yield* Videos;
+		const downloadGate = yield* VideoDownloadGate;
 
 		return {
 			VideoDelete: (videoId) =>
@@ -60,7 +62,16 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					),
 
 			VideoGetDownloadInfo: (videoId) =>
-				videos.getDownloadInfo(videoId).pipe(
+				Effect.gen(function* () {
+					const viewer = yield* Effect.serviceOption(CurrentUser);
+					const access = yield* downloadGate.access(videoId, viewer);
+					if (access === "denied") {
+						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					}
+					return yield* videos.getDownloadInfo(videoId, {
+						publishedOnly: access === "viewer",
+					});
+				}).pipe(
 					provideOptionalAuth,
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),
@@ -74,27 +85,23 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 				),
 
 			VideosGetThumbnails: (videoIds) =>
-				Effect.all(
-					videoIds.map((id) =>
-						videos.getThumbnailURL(id).pipe(
-							Effect.catchTag("DatabaseError", () =>
-								Effect.fail(new InternalError({ type: "database" })),
-							),
-							Effect.catchTag("StorageError", () =>
-								Effect.fail(new InternalError({ type: "unknown" })),
-							),
-							Effect.matchEffect({
-								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
-								onFailure: (e) =>
-									Schema.is(InternalError)(e)
-										? Effect.fail(e)
-										: Effect.succeed(Exit.fail(e)),
-							}),
-							Effect.map((v) => Unify.unify(v)),
-						),
+				videos.getThumbnailURLs(videoIds).pipe(
+					Effect.map(
+						(results) =>
+							results.map((result) =>
+								Exit.mapError(result, (error) => {
+									if (Schema.is(Policy.PolicyDeniedError)(error)) return error;
+									if (Schema.is(Video.VerifyVideoPasswordError)(error))
+										return error;
+									return error as
+										| Policy.PolicyDeniedError
+										| Video.VerifyVideoPasswordError;
+								}),
+							) as readonly Exit.Exit<
+								Option.Option<string>,
+								Policy.PolicyDeniedError | Video.VerifyVideoPasswordError
+							>[],
 					),
-					{ concurrency: 10 },
-				).pipe(
 					provideOptionalAuth,
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),

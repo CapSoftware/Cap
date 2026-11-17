@@ -33,7 +33,14 @@ from English, and `cargo test -p cap-i18n-build` fails while any key is missing.
 | hi | आप | Devanagari with common English loanwords in Devanagari (रिकॉर्डिंग, स्क्रीनशॉट); product names stay in Latin script. |
 
 Menu bar items follow the wording macOS itself uses in each language, so they
-sit naturally next to the items AppKit adds.
+sit naturally next to the items AppKit adds. That is why the Japanese Window
+menu says ウインドウ while the rest of the app says ウィンドウ, and Chinese menus
+say 拷贝 while the app says 复制.
+
+Within a catalog, one term per concept: the same English word gets the same
+translation in the editor, the screenshot editor, settings and automations.
+French uses the straight apostrophe `'`. German puts no space before `…` or
+`...`.
 
 Keep the English punctuation style of each string: `...` stays three dots and
 `…` stays one character, because both appear in the source. Duration units
@@ -43,6 +50,15 @@ Instant-Modus, Instantモード).
 
 Error messages that end in `{error}` show a technical message from the
 recording engine, which stays in English.
+
+Recording and upload errors that Cap writes in English (they are also logged,
+matched and saved) live under `message.*` and are translated where they are
+shown, by `i18n::messages::localize`. A new error sentence the user can see
+goes into its table and the catalog together; the tests fail if the English
+in the code and in the table drift apart.
+
+Numbers inside a sentence go through `i18n::decimal`, which writes the decimal
+comma French, Spanish and German use (`1,5 GB`).
 
 ## Terms
 
@@ -78,7 +94,22 @@ recording engine, which stays in English.
 | clip | 片段 | クリップ | clip | clip | Clip | क्लिप |
 | segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट |
 | recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ |
+| shot (3D camera) | 镜头 | ショット | plan | toma | Einstellung | शॉट |
 | Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल |
+| caption (subtitle) | 字幕 | 字幕 | sous-titre | subtítulo | Untertitel | कैप्शन |
+| track (timeline) | 轨道 | トラック | piste | pista | Spur | ट्रैक |
+| preset | 预设 | プリセット | préréglage | preajuste | Vorlage | प्रीसेट |
+| video | 视频 | 動画 | vidéo | vídeo | Video | वीडियो |
+| audio | 音频 | 音声 | audio | audio | Audio | ऑडियो |
+| copy (to the clipboard) | 复制 | コピー | copier | copiar | kopieren | कॉपी करें |
+| transcription | 转写 | 文字起こし | transcription | transcripción | Transkription | ट्रांसक्रिप्शन |
+| click | 点击 | クリック | cliquer | hacer clic | klicken | क्लिक करें |
+| plan (paid tier) | 套餐 | プラン | offre | plan | Tarif | प्लान |
+| aspect ratio | 宽高比 | アスペクト比 | format d'image | relación de aspecto | Seitenverhältnis | आस्पेक्ट रेशियो |
+| shadow | 阴影 | 影 | ombre | sombra | Schatten | छाया |
+| frames per second | FPS | FPS | i/s | FPS | FPS | FPS |
+| key (on the keyboard, licence key) | 键 / 密钥 | キー | touche / clé | tecla / clave | Taste / Schlüssel | कुंजी |
+| restart / resume | 重新开始 / 继续 | やり直す / 再開 | recommencer / reprendre | reiniciar / reanudar | neu starten / fortsetzen | रीस्टार्ट करें / फिर से शुरू करें |
 
 ## Fitting the UI
 

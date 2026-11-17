@@ -51,8 +51,55 @@ pub struct IncrementalCaptureOutputs {
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
-    #[cfg(target_os = "linux")]
     pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition};
+
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    let display_position = display.raw_handle().logical_position();
+    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+        LogicalPosition::new(
+            window_bounds.position().x() - display_position.x(),
+            window_bounds.position().y() - display_position.y(),
+        ),
+        window_bounds.size(),
+    )))
+}
+
+#[cfg(windows)]
+fn windows_window_crop(
+    window: &scap_targets::WindowId,
+    display: &scap_targets::Display,
+) -> Option<CursorCropBounds> {
+    let window_bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .physical_bounds()?;
+    let display_bounds = display.raw_handle().physical_bounds()?;
+    Some(window_crop_on_display(window_bounds, display_bounds))
+}
+
+#[cfg(windows)]
+fn window_crop_on_display(
+    window_bounds: scap_targets::bounds::PhysicalBounds,
+    display_bounds: scap_targets::bounds::PhysicalBounds,
+) -> CursorCropBounds {
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition};
+
+    CursorCropBounds::new_windows(PhysicalBounds::new(
+        PhysicalPosition::new(
+            window_bounds.position().x() - display_bounds.position().x(),
+            window_bounds.position().y() - display_bounds.position().y(),
+        ),
+        window_bounds.size(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -108,6 +155,32 @@ fn normalized_window_cursor(x: i16, y: i16, width: u16, height: u16) -> Option<(
     })
 }
 
+#[cfg(all(test, windows))]
+mod windows_window_cursor_tests {
+    use super::window_crop_on_display;
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn the_cursor_crop_follows_the_window_when_it_moves() {
+        let display = bounds(-1920.0, 0.0, 1920.0, 1080.0);
+        let started = window_crop_on_display(bounds(-1720.0, 200.0, 800.0, 600.0), display);
+        let moved = window_crop_on_display(bounds(-1320.0, 350.0, 800.0, 600.0), display);
+
+        assert_ne!(started, moved);
+        assert_eq!(
+            moved,
+            cap_cursor_capture::CursorCropBounds::new_windows(bounds(600.0, 350.0, 800.0, 600.0))
+        );
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod window_cursor_tests {
     use super::normalized_window_cursor;
@@ -148,6 +221,11 @@ impl CursorActor {
 }
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+/// How often the cursor image is checked while the pointer is still. Apps
+/// change the cursor under a resting pointer (a link under it, a loading
+/// state, a text field gaining focus); without a check the recording keeps
+/// the old shape until the pointer next moves.
+const STATIONARY_SHAPE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 #[cfg(target_os = "linux")]
 fn prefers_wayland_portal_cursor() -> bool {
@@ -634,6 +712,8 @@ pub fn spawn_cursor_recorder(
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut last_window_crop: Option<CursorCropBounds> = None;
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
         // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
@@ -673,6 +753,7 @@ pub fn spawn_cursor_recorder(
         let mut last_cursor_id: Option<String> = None;
         let mut last_cursor_image = None;
         let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
+        let mut last_shape_check = Instant::now();
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -714,16 +795,50 @@ pub fn spawn_cursor_recorder(
             {
                 last_window_position = window_position;
             }
+            // A window recording follows the window, so the cursor has to be
+            // placed against where the window is now, not where it started.
+            #[cfg(windows)]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| windows_window_crop(window, &display));
+            #[cfg(target_os = "macos")]
+            let window_crop = target
+                .window
+                .as_ref()
+                .and_then(|window| macos_window_crop(window, &display));
+            #[cfg(any(windows, target_os = "macos"))]
+            let position_changed =
+                position_changed || (window_crop.is_some() && window_crop != last_window_crop);
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                if window_crop.is_some() {
+                    last_window_crop = window_crop;
+                }
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
-            // The cursor image only labels this tick's move and click events,
-            // and reading it builds a full TIFF of every representation
-            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
-            // record neither.
+            // Reading the cursor image builds a full TIFF of every
+            // representation (~0.5 ms, ~580 KB on a Retina Mac), so a still
+            // pointer only compares the cheap fingerprint, and only every
+            // STATIONARY_SHAPE_CHECK_INTERVAL. The TIFF is built only for a
+            // shape that has not been registered yet.
             let buttons_changed = buttons_changed(
                 &last_mouse_state.button_pressed,
                 &mouse_state.button_pressed,
             );
-            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
+            let previous_cursor_id = last_cursor_id.clone();
+            let sample_image = should_sample_cursor_image(
+                position_changed,
+                buttons_changed,
+                previous_cursor_id.is_some(),
+                last_shape_check.elapsed() >= STATIONARY_SHAPE_CHECK_INTERVAL,
+            );
+            if sample_image {
+                last_shape_check = Instant::now();
+            }
+            let cursor_id = if !sample_image {
                 last_cursor_id.clone()
             } else {
                 // While the pointer moves the shape rarely changes, so compare
@@ -759,7 +874,10 @@ pub fn spawn_cursor_recorder(
                 continue;
             };
 
-            if position_changed {
+            // Playback takes the drawn shape from move events only, so a shape
+            // change under a still pointer is written as a move to the same
+            // position.
+            if records_cursor_move(position_changed, previous_cursor_id.as_deref(), &cursor_id) {
                 let cropped_norm_pos = position
                     .relative_to_display(display)
                     .and_then(|p| p.normalize())
@@ -826,6 +944,13 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
+        if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
+            && let Some(confirmation) =
+                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+        {
+            response.moves.push(confirmation);
+        }
+
         let delta = has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &response));
         match writer {
             Some(writer) => {
@@ -852,6 +977,44 @@ pub fn spawn_cursor_recorder(
     }
 }
 
+/// Whether this tick reads the cursor image: always when it records a move or
+/// a click, or before any shape is known, and otherwise at the stationary
+/// check interval.
+fn should_sample_cursor_image(
+    position_changed: bool,
+    buttons_changed: bool,
+    has_cursor_id: bool,
+    stationary_check_due: bool,
+) -> bool {
+    position_changed || buttons_changed || !has_cursor_id || stationary_check_due
+}
+
+/// Whether this tick writes a move event: when the pointer moved, or when it
+/// stayed put and its shape changed from the last known one.
+fn records_cursor_move(
+    position_changed: bool,
+    previous_cursor_id: Option<&str>,
+    cursor_id: &str,
+) -> bool {
+    position_changed || previous_cursor_id.is_some_and(|previous| previous != cursor_id)
+}
+
+/// A closing move at the stop time when the recording ends on a shape change
+/// under a still pointer. The stationary check kept seeing that shape until
+/// the stop, but on its own the event is zero milliseconds long, and loading
+/// replaces short-lived final shapes with the pointer.
+fn still_shape_confirmation(moves: &[CursorMoveEvent], stop_ms: f64) -> Option<CursorMoveEvent> {
+    let [.., previous, last] = moves else {
+        return None;
+    };
+    let shape_only =
+        previous.x == last.x && previous.y == last.y && previous.cursor_id != last.cursor_id;
+    (shape_only && stop_ms > last.time_ms).then(|| CursorMoveEvent {
+        time_ms: stop_ms,
+        ..last.clone()
+    })
+}
+
 /// Whether any button present in both samples changed state: the same pairs
 /// the click events below are generated from.
 fn buttons_changed(previous: &[bool], current: &[bool]) -> bool {
@@ -866,21 +1029,28 @@ fn cursor_id_for_image(
     response: &mut CursorActorResponse,
     cursors_dir: &Path,
     writer: Option<&CursorFileWriter>,
-    last_cursor_image: &mut Option<(Vec<u8>, String)>,
+    last_cursor_image: &mut Option<(Vec<u8>, [u64; 2], String)>,
 ) -> String {
     use sha2::{Digest, Sha256};
 
     // Hashing a large macOS cursor TIFF costs milliseconds, and the image
     // rarely changes between ticks.
-    if let Some((image, cursor_id)) = last_cursor_image
+    let hotspot = [data.hotspot.x.to_bits(), data.hotspot.y.to_bits()];
+    if let Some((image, cached_hotspot, cursor_id)) = last_cursor_image
         && *image == data.image
+        && *cached_hotspot == hotspot
     {
         return cursor_id.clone();
     }
 
     let hash_bytes = Sha256::digest(&data.image);
+    let cursor_hash = Sha256::new()
+        .chain_update(hash_bytes)
+        .chain_update(hotspot[0].to_le_bytes())
+        .chain_update(hotspot[1].to_le_bytes())
+        .finalize();
     let id = u64::from_le_bytes(
-        hash_bytes[..8]
+        cursor_hash[..8]
             .try_into()
             .expect("sha256 produces at least 8 bytes"),
     );
@@ -924,7 +1094,7 @@ fn cursor_id_for_image(
     *last_cursor_image = response
         .cursors
         .contains_key(&id)
-        .then(|| (data.image, cursor_id.clone()));
+        .then(|| (data.image, hotspot, cursor_id.clone()));
     cursor_id
 }
 
@@ -1667,6 +1837,82 @@ fn get_cursor_data() -> Option<CursorData> {
 }
 
 #[cfg(test)]
+mod stationary_shape_tests {
+    use super::{records_cursor_move, should_sample_cursor_image, still_shape_confirmation};
+    use cap_project::{CursorEvents, CursorMoveEvent, SHORT_CURSOR_SHAPE_DEBOUNCE_MS};
+
+    fn cursor_move(time_ms: f64, x: f64, cursor_id: &str) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: cursor_id.into(),
+            time_ms,
+            x,
+            y: 0.5,
+        }
+    }
+
+    #[test]
+    fn a_final_still_shape_change_lasts_until_the_stop() {
+        let mut moves = vec![
+            cursor_move(0.0, 0.2, "arrow"),
+            cursor_move(500.0, 0.4, "arrow"),
+            cursor_move(3000.0, 0.4, "ibeam"),
+        ];
+        let confirmation = still_shape_confirmation(&moves, 10_000.0).unwrap();
+        assert_eq!(confirmation.time_ms, 10_000.0);
+        assert_eq!(confirmation.cursor_id, "ibeam");
+        assert_eq!((confirmation.x, confirmation.y), (0.4, 0.5));
+        moves.push(confirmation);
+
+        let mut events = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+        events.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        assert_eq!(events.moves[2].cursor_id, "ibeam");
+        assert_eq!(events.moves[3].cursor_id, "ibeam");
+    }
+
+    #[test]
+    fn recordings_that_end_moving_get_no_closing_move() {
+        let moving = [
+            cursor_move(0.0, 0.2, "arrow"),
+            cursor_move(500.0, 0.4, "ibeam"),
+        ];
+        assert!(still_shape_confirmation(&moving, 10_000.0).is_none());
+        let unchanged = [
+            cursor_move(0.0, 0.4, "arrow"),
+            cursor_move(500.0, 0.4, "arrow"),
+        ];
+        assert!(still_shape_confirmation(&unchanged, 10_000.0).is_none());
+        let shape_only = [
+            cursor_move(0.0, 0.4, "arrow"),
+            cursor_move(500.0, 0.4, "ibeam"),
+        ];
+        assert!(still_shape_confirmation(&shape_only, 500.0).is_none());
+        assert!(still_shape_confirmation(&shape_only[..1], 10_000.0).is_none());
+    }
+
+    #[test]
+    fn a_still_pointer_checks_its_shape_only_when_the_check_is_due() {
+        assert!(!should_sample_cursor_image(false, false, true, false));
+        assert!(should_sample_cursor_image(false, false, true, true));
+        assert!(should_sample_cursor_image(true, false, true, false));
+        assert!(should_sample_cursor_image(false, true, true, false));
+        assert!(should_sample_cursor_image(false, false, false, false));
+    }
+
+    #[test]
+    fn a_shape_change_under_a_still_pointer_is_recorded_as_a_move() {
+        assert!(records_cursor_move(false, Some("1"), "2"));
+        assert!(!records_cursor_move(false, Some("1"), "1"));
+        assert!(!records_cursor_move(false, None, "1"));
+        assert!(records_cursor_move(true, Some("1"), "1"));
+        assert!(records_cursor_move(true, None, "1"));
+    }
+}
+
+#[cfg(test)]
 mod key_change_tests {
     use super::*;
     use device_query::Keycode;
@@ -2214,6 +2460,48 @@ mod cursor_image_tests {
         assert_eq!(response.cursors.len(), 2);
         assert!(dir.path().join("cursor_0.png").exists());
         assert!(dir.path().join("cursor_1.png").exists());
+    }
+
+    #[test]
+    fn identical_images_with_different_hotspots_keep_distinct_cursor_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let image = png([255, 0, 0, 255]);
+        let origin = XY::new(0.0, 0.0);
+        let horizontal = XY::new(0.5, 0.0);
+        let vertical = XY::new(0.0, 0.5);
+
+        for reset_cache in [false, true] {
+            for (hotspot, expected) in [
+                (origin, "0"),
+                (horizontal, "1"),
+                (vertical, "2"),
+                (origin, "0"),
+            ] {
+                if reset_cache {
+                    last = None;
+                }
+                let mut data = cursor_data(image.clone());
+                data.hotspot = hotspot;
+                let id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+                assert_eq!(id, expected);
+                let recorded = response
+                    .cursors
+                    .values()
+                    .find(|cursor| cursor.id.to_string() == id)
+                    .unwrap();
+                assert_eq!(recorded.hotspot, hotspot);
+            }
+        }
+        assert_eq!(response.cursors.len(), 3);
+        assert_eq!(response.next_cursor_id, 3);
+        for cursor in response.cursors.values() {
+            assert_eq!(
+                std::fs::read(dir.path().join(&cursor.file_name)).unwrap(),
+                image
+            );
+        }
     }
 
     #[test]

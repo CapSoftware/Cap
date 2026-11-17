@@ -3,8 +3,7 @@
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
-import { faPlay } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlay } from "@fortawesome/free-solid-svg-icons/faPlay";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AlertTriangleIcon, InfoIcon } from "lucide-react";
@@ -14,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
 import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
@@ -30,6 +30,7 @@ import {
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import { replayMissedMediaEvents } from "./replay-missed-media-events";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -37,7 +38,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
 } from "./upload-progress";
-import { VideoPreviewGif } from "./VideoPreviewGif";
+import { VideoPoster, VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -97,6 +98,9 @@ interface CaptionOption {
 interface Props {
 	videoSrc: string;
 	initialPlaybackUrl?: Promise<string | null>;
+	// The same signed MP4 URL, resolved on the server so the <video> is in the
+	// HTML and loads before hydration. Only set for Cap's own CDN.
+	serverPlaybackUrl?: string | null;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -106,6 +110,7 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
+	muted?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
 	blockPlaybackDuringProcessing?: boolean;
@@ -143,11 +148,13 @@ interface Props {
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
 	callToAction?: ShareCallToAction | null;
+	posterUrl?: string | null;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
 	initialPlaybackUrl,
+	serverPlaybackUrl = null,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -157,6 +164,7 @@ export function CapVideoPlayer({
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
+	muted = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
 	blockPlaybackDuringProcessing = false,
@@ -182,6 +190,7 @@ export function CapVideoPlayer({
 	showFloatingVolumeControl = false,
 	onUploadComplete,
 	callToAction = null,
+	posterUrl = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -204,8 +213,10 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	// A server-rendered source has already used the initial URL, so a refetch
+	// after a media error goes straight to the playlist route and raw fallback.
 	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
-		undefined,
+		serverPlaybackUrl ? initialPlaybackUrl : undefined,
 	);
 	const hasRetriedInitialPlaybackSource = useRef(false);
 	const initialPlaybackSourceRetryPending = useRef(false);
@@ -279,6 +290,16 @@ export function CapVideoPlayer({
 						preferredSource,
 					});
 				},
+		initialData:
+			serverPlaybackUrl && preferredSource === "mp4"
+				? {
+						url: serverPlaybackUrl,
+						type: "mp4",
+						supportsCrossOrigin: enableCrossOrigin,
+						fromInitialUrl: true,
+						fromServer: true,
+					}
+				: undefined,
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -480,8 +501,10 @@ export function CapVideoPlayer({
 
 		const handleError = () => {
 			if (initialPlaybackSourceRetryPending.current) return;
+			// A server-rendered source never ran the client probe, so its failure
+			// takes the path a failed probe would: playlist route, then raw.
 			if (
-				!rawFallbackSrc &&
+				(!rawFallbackSrc || resolvedSrc.data?.fromServer) &&
 				resolvedSrc.data?.fromInitialUrl &&
 				!hasRetriedInitialPlaybackSource.current
 			) {
@@ -496,6 +519,28 @@ export function CapVideoPlayer({
 				setVideoLoaded(false);
 				setHasError(false);
 				setShowPlayButton(false);
+				// Only a server-rendered source reaches here with a raw fallback. The
+				// playlist route can sign the same URL again within a second, so a
+				// retry that changes nothing moves on to the raw upload.
+				const stopRetrying = () => {
+					playbackToRestore.current = null;
+					setIsRefreshingInitialPlaybackSource(false);
+					if (
+						shouldFallbackToRawPlaybackSource(
+							"mp4",
+							rawFallbackSrc,
+							hasTriedRawFallback,
+						)
+					) {
+						setHasTriedRawFallback(true);
+						setPreferredSource("raw");
+						setVideoLoaded(false);
+						setHasError(false);
+						setShowPlayButton(false);
+						return;
+					}
+					setHasError(true);
+				};
 				void resolvedSrc
 					.refetch()
 					.then((result) => {
@@ -503,16 +548,10 @@ export function CapVideoPlayer({
 							!result.data ||
 							result.data.url === playbackToRestore.current?.sourceUrl
 						) {
-							playbackToRestore.current = null;
-							setIsRefreshingInitialPlaybackSource(false);
-							setHasError(true);
+							stopRetrying();
 						}
 					})
-					.catch(() => {
-						playbackToRestore.current = null;
-						setIsRefreshingInitialPlaybackSource(false);
-						setHasError(true);
-					})
+					.catch(stopRetrying)
 					.finally(() => {
 						initialPlaybackSourceRetryPending.current = false;
 					});
@@ -620,12 +659,20 @@ export function CapVideoPlayer({
 		isRefreshingInitialPlaybackSource,
 		rawFallbackSrc,
 		resolvedSrc.data?.fromInitialUrl,
+		resolvedSrc.data?.fromServer,
 		resolvedSrc.data?.type,
 		resolvedSrc.data?.url,
 		resolvedSrc.refetch,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
+
+	const isServerRenderedSource = Boolean(resolvedSrc.data?.fromServer);
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video || !isServerRenderedSource) return;
+		return replayMissedMediaEvents(video);
+	}, [isServerRenderedSource, videoRef]);
 
 	// The seek tooltip asks for a thumbnail on every render while the pointer is
 	// over the bar (per animation frame). The capture snapshots the *displayed*
@@ -838,24 +885,35 @@ export function CapVideoPlayer({
 					</TooltipContent>
 				</Tooltip>
 			)}
-			<VideoPreviewGif
-				videoId={videoId}
-				preload={
-					!disablePreviewGif &&
-					!hasActiveUpload &&
-					!hasPlayedOnce &&
-					!showUploadFailureOverlay &&
-					!showPlaybackResolutionError
-				}
-				visible={
-					!disablePreviewGif &&
-					videoLoaded &&
-					!hasPlayedOnce &&
-					!showUploadFailureOverlay &&
-					!showPlaybackResolutionError &&
-					Boolean(resolvedSrc.data)
-				}
-			/>
+			{posterUrl ? (
+				<VideoPoster
+					src={posterUrl}
+					visible={
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError
+					}
+				/>
+			) : (
+				<VideoPreviewGif
+					videoId={videoId}
+					preload={
+						!disablePreviewGif &&
+						!hasActiveUpload &&
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError
+					}
+					visible={
+						!disablePreviewGif &&
+						videoLoaded &&
+						!hasPlayedOnce &&
+						!showUploadFailureOverlay &&
+						!showPlaybackResolutionError &&
+						Boolean(resolvedSrc.data)
+					}
+				/>
+			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
@@ -872,6 +930,7 @@ export function CapVideoPlayer({
 					}
 					playsInline
 					autoPlay={autoplay}
+					muted={muted || undefined}
 				>
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
@@ -971,7 +1030,7 @@ export function CapVideoPlayer({
 							exit={{ opacity: 0, y: 10 }}
 							transition={{ duration: 0.2 }}
 							onClick={() => videoRef.current?.play()}
-							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+							className="player-brand-play flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
 						>
 							<FontAwesomeIcon
 								icon={faPlay}

@@ -104,12 +104,6 @@ pub fn ensure_unique_filename_with_attempts(
         return Err("Filename cannot contain path separators".to_string());
     }
 
-    let initial_path = parent_dir.join(base_filename);
-
-    if !initial_path.exists() {
-        return Ok(base_filename.to_string());
-    }
-
     let path = std::path::Path::new(base_filename);
     let (name_without_ext, extension) = if let Some(ext) = path.extension() {
         let name_without_ext = path
@@ -122,15 +116,29 @@ pub fn ensure_unique_filename_with_attempts(
         (base_filename, String::new())
     };
 
+    let filename_with_suffix = |suffix: &str| -> Result<String, String> {
+        const MAX_FILENAME_BYTES: usize = 255;
+        let max_stem_bytes = MAX_FILENAME_BYTES
+            .checked_sub(extension.len())
+            .and_then(|remaining| remaining.checked_sub(suffix.len()))
+            .ok_or("Filename extension and suffix exceed 255 bytes")?;
+        let mut end = name_without_ext.len().min(max_stem_bytes);
+        while !name_without_ext.is_char_boundary(end) {
+            end -= 1;
+        }
+        Ok(format!("{}{suffix}{extension}", &name_without_ext[..end]))
+    };
+
+    let initial_filename = filename_with_suffix("")?;
+    if !parent_dir.join(&initial_filename).exists() {
+        return Ok(initial_filename);
+    }
+
     let max_attempts = attempts.get();
     let mut counter = 1;
 
     loop {
-        let numbered_filename = if extension.is_empty() {
-            format!("{name_without_ext} ({counter})")
-        } else {
-            format!("{name_without_ext} ({counter}){extension}")
-        };
+        let numbered_filename = filename_with_suffix(&format!(" ({counter})"))?;
 
         let test_path = parent_dir.join(&numbered_filename);
 
@@ -378,6 +386,50 @@ mod tests {
         let result = ensure_unique_filename("archive.tar.gz", temp_dir.path()).unwrap();
         // Only the last extension is considered
         assert_eq!(result, "archive.tar (1).gz");
+    }
+
+    #[test]
+    fn unique_filename_keeps_long_bundle_names_writable() {
+        for title in [
+            "a".repeat(251),
+            "a".repeat(255),
+            "é".repeat(125),
+            "é".repeat(127),
+            "📷".repeat(63),
+        ] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let base_filename = format!("{title}.cap");
+            for counter in 0..=12 {
+                let filename = ensure_unique_filename(&base_filename, temp_dir.path()).unwrap();
+                assert!(filename.len() <= 255, "{} bytes", filename.len());
+                assert!(filename.ends_with(".cap"));
+                if counter > 0 {
+                    assert!(filename.ends_with(&format!(" ({counter}).cap")));
+                }
+                let bundle = temp_dir.path().join(filename);
+                fs::create_dir(&bundle).unwrap();
+                fs::write(bundle.join("original.png"), b"screenshot").unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn unique_filename_keeps_extensionless_conflicts_writable() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let base_filename = "a".repeat(255);
+        fs::create_dir(temp_dir.path().join(&base_filename)).unwrap();
+
+        let filename = ensure_unique_filename(&base_filename, temp_dir.path()).unwrap();
+        assert!(filename.len() <= 255);
+        assert!(filename.ends_with(" (1)"));
+        fs::create_dir(temp_dir.path().join(filename)).unwrap();
+    }
+
+    #[test]
+    fn unique_filename_rejects_an_extension_that_cannot_fit() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let filename = format!("image.{}", "a".repeat(255));
+        assert!(ensure_unique_filename(&filename, temp_dir.path()).is_err());
     }
 
     #[test]

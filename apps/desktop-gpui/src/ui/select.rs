@@ -37,15 +37,16 @@ pub struct Select {
     /// `gap-1.5` on the settings row, `gap-2` on the editor's trigger.
     gap: Pixels,
     stretch: bool,
+    chip: Option<Hsla>,
     disabled: bool,
     on_click: Option<crate::ui::button::ClickHandler>,
     on_open: Option<OpenHandler>,
 }
 
 impl Select {
-    /// `SelectSettingItem`'s button: `flex flex-row gap-1.5 text-xs items-center
-    /// px-2.5 py-1.5 rounded-lg border bg-gray-3 text-gray-12 border-gray-4`,
-    /// radius 8 under the settings material.
+    /// A settings row's pop-up, as macOS draws one in a grouped form
+    /// (`scripts/glass-reference/gallery.swift`): the value as plain text and
+    /// a 20 pt round chip holding an up-down chevron, with no border or fill.
     pub fn settings(
         theme: &Theme,
         id: impl Into<ElementId>,
@@ -54,20 +55,24 @@ impl Select {
         Self {
             id: id.into(),
             label: label.into(),
-            padding_x: px(10.),
-            padding_y: px(6.),
-            height: None,
-            radius: px(8.),
-            text_size: px(12.),
-            // No `font-*` class on the button, so it keeps `body`'s Medium.
-            weight: FontWeight::MEDIUM,
-            bg: Some(theme.settings_fill()),
-            border: Some(theme.settings_border()),
+            padding_x: px(2.),
+            padding_y: px(0.),
+            height: Some(px(22.)),
+            radius: px(11.),
+            text_size: px(13.),
+            weight: FontWeight::NORMAL,
+            bg: None,
+            border: None,
             text: theme.settings_text(),
-            chevron: theme.settings_muted(),
-            chevron_size: px(14.),
-            gap: px(6.),
+            chevron: theme.settings_text(),
+            chevron_size: px(11.),
+            gap: px(7.),
             stretch: false,
+            chip: Some(if theme.is_dark() {
+                gpui::hsla(0., 0., 1., 0.12)
+            } else {
+                gpui::hsla(0., 0., 0., 0.07)
+            }),
             disabled: false,
             on_click: None,
             on_open: None,
@@ -92,6 +97,7 @@ impl Select {
             chevron: Hsla::from(theme.editor.text_3),
             chevron_size: px(12.),
             gap: px(8.),
+            chip: None,
             ..Self::settings(theme, id, label)
         }
     }
@@ -143,6 +149,7 @@ impl RenderOnce for Select {
             chevron_size,
             gap,
             stretch,
+            chip,
             disabled,
             on_click,
             on_open,
@@ -178,13 +185,31 @@ impl RenderOnce for Select {
                     this.child(label)
                 }
             })
-            .child(
-                svg()
-                    .path("icons/chevron-down.svg")
-                    .size(chevron_size)
-                    .flex_shrink_0()
-                    .text_color(chevron),
-            )
+            .map(|this| match chip {
+                Some(fill) => this.child(
+                    div()
+                        .size(px(20.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(fill)
+                        .child(
+                            svg()
+                                .path("icons/chevrons-up-down.svg")
+                                .size(chevron_size)
+                                .text_color(chevron),
+                        ),
+                ),
+                None => this.child(
+                    svg()
+                        .path("icons/chevron-down.svg")
+                        .size(chevron_size)
+                        .flex_shrink_0()
+                        .text_color(chevron),
+                ),
+            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

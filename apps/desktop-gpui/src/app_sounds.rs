@@ -3,7 +3,6 @@ use std::io::Cursor;
 use anyhow::Context as _;
 use rodio::{Decoder, OutputStream, Sink};
 
-#[path = "../../desktop/src-tauri/src/recording_start_sound.rs"]
 mod recording_start_sound;
 
 pub use recording_start_sound::StartCue;
@@ -21,18 +20,30 @@ pub enum AppSound {
     StartRecording,
     StopRecording,
     Notification,
+    RecordingMarker,
 }
 
 impl AppSound {
     fn bytes(self) -> &'static [u8] {
         match self {
             Self::StartRecording => {
-                include_bytes!("../../desktop/src-tauri/sounds/start-recording.ogg")
+                include_bytes!("../assets/sounds/start-recording.ogg")
             }
             Self::StopRecording => {
-                include_bytes!("../../desktop/src-tauri/sounds/stop-recording.ogg")
+                include_bytes!("../assets/sounds/stop-recording.ogg")
             }
-            Self::Notification => include_bytes!("../../desktop/src-tauri/sounds/action.ogg"),
+            Self::Notification | Self::RecordingMarker => {
+                include_bytes!("../assets/sounds/action.ogg")
+            }
+        }
+    }
+
+    /// The marker cue is the notification sound, quieter: it plays mid-take,
+    /// often several times in a row.
+    fn volume(self) -> f32 {
+        match self {
+            Self::RecordingMarker => 0.45,
+            Self::StartRecording | Self::StopRecording | Self::Notification => 1.0,
         }
     }
 
@@ -53,6 +64,7 @@ impl AppSound {
         let (_stream, handle) = OutputStream::try_default().context("opening audio output")?;
         let source = Decoder::new(Cursor::new(self.bytes())).context("decoding app sound")?;
         let sink = Sink::try_new(&handle).context("creating app sound sink")?;
+        sink.set_volume(self.volume());
         sink.append(source);
         sink.sleep_until_end();
         tracing::debug!(?self, "App sound played");
@@ -71,10 +83,11 @@ mod tests {
     use super::*;
     use rodio::Source as _;
 
-    const SOUNDS: [AppSound; 3] = [
+    const SOUNDS: [AppSound; 4] = [
         AppSound::StartRecording,
         AppSound::StopRecording,
         AppSound::Notification,
+        AppSound::RecordingMarker,
     ];
 
     #[test]

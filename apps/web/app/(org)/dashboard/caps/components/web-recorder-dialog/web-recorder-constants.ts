@@ -1,5 +1,6 @@
 import type { DetectedDisplayRecordingMode } from "@cap/recorder-core/recorder-constants";
 import { Video } from "@cap/web-domain";
+import type { Variants } from "framer-motion";
 import type { RecordingMode } from "./RecordingModeSelector";
 
 export * from "@cap/recorder-core/recorder-constants";
@@ -24,7 +25,7 @@ const _detectedDisplayRecordingModeStaysInSync: MutuallyAssignable<
 > = true;
 void _detectedDisplayRecordingModeStaysInSync;
 
-export const dialogVariants = {
+export const dialogVariants: Variants = {
 	hidden: {
 		opacity: 0,
 		scale: 0.9,

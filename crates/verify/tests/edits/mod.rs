@@ -19,7 +19,8 @@
 //!     pauses for their output-time window (overlapping or touching windows
 //!     merge), showing the frame at the hold start; the timeline grows by the
 //!     held time. A hold starting at the clips' end (a closing title) shows
-//!     the last clip's final frame; a hold past it shows nothing.
+//!     the last clip's final frame; a hold starting past it is never reached
+//!     and is left out, so the timeline does not grow by it.
 
 #![allow(dead_code)]
 
@@ -302,6 +303,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
                 speed_audio_mode: None,
                 volume: None,
                 hide_cursor: None,
+                voice_eq: None,
             })
             .collect(),
         transitions: Vec::new(),
@@ -309,6 +311,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
         scene_segments: Vec::new(),
         style_segments: Vec::new(),
         image_segments: Vec::new(),
+        shape_segments: Vec::new(),
         mask_segments: Vec::new(),
         text_segments: Vec::new(),
         caption_segments: Vec::new(),
@@ -495,7 +498,20 @@ impl TimeModel {
                 _ => holds.push(w),
             }
         }
-        Self { segments, holds }
+        let mut model = Self {
+            segments,
+            holds: Vec::new(),
+        };
+        let clips_end = model.base_duration();
+        let mut held = 0.0;
+        for (a, b) in holds {
+            if a - held > clips_end + 1e-9 {
+                break;
+            }
+            held += b - a;
+            model.holds.push((a, b));
+        }
+        model
     }
 
     /// Output duration without holds.

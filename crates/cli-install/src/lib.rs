@@ -1,6 +1,6 @@
 //! Shared logic for installing the `cap` CLI shim onto the user's `PATH`.
 //!
-//! Used by both the desktop app (via Tauri commands) and the CLI itself
+//! Used by both the desktop app (Settings > Command Line) and the CLI itself
 //! (`cap desktop status|install-cli|uninstall-cli`) so the two surfaces never
 //! diverge. The shim points at the `cap-cli` binary that sits next to the
 //! current executable, which is the bundled CLI for both callers.

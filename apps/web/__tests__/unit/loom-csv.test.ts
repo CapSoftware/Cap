@@ -33,6 +33,66 @@ describe("concierge Loom CSV", () => {
 	});
 });
 
+describe("Loom CSV delimiters", () => {
+	it("reads semicolon separated files", () => {
+		expect(
+			parseLoomCsvRecords(
+				"\uFEFFloom_video_url;user_email\r\n" +
+					"https://www.loom.com/share/0123456789abcdef;owner@example.com\r\n",
+			),
+		).toEqual([
+			["loom_video_url", "user_email"],
+			["https://www.loom.com/share/0123456789abcdef", "owner@example.com"],
+		]);
+	});
+
+	it("keeps quoted commas inside semicolon separated cells", () => {
+		const rows = parseConciergeLoomCsv(
+			"loom_video_url;user_email;space_name\n" +
+				"https://www.loom.com/share/0123456789abcdef;owner@example.com;" +
+				JSON.stringify("Sales, Europe") +
+				"\n",
+		);
+		expect(rows[0]?.spaceName).toBe("Sales, Europe");
+		expect(rows[0]?.userEmail).toBe("owner@example.com");
+	});
+
+	it("keeps comma files that have semicolons in their values", () => {
+		expect(
+			parseLoomCsvRecords(
+				"url," +
+					JSON.stringify("Folder; Archive") +
+					",title\n" +
+					"https://www.loom.com/share/0123456789abcdef,a;b;c,Demo; take 2\n",
+			),
+		).toEqual([
+			["url", "Folder; Archive", "title"],
+			["https://www.loom.com/share/0123456789abcdef", "a;b;c", "Demo; take 2"],
+		]);
+	});
+
+	it("finds the delimiter after leading blank lines", () => {
+		const rows = parseConciergeLoomCsv(
+			"\r\n;;\n  \nloom_video_url;user_email\n" +
+				"https://www.loom.com/share/0123456789abcdef;owner@example.com\n",
+		);
+		expect(rows).toEqual([
+			{
+				rowNumber: 2,
+				loomUrl: "https://www.loom.com/share/0123456789abcdef",
+				userEmail: "owner@example.com",
+				spaceName: undefined,
+			},
+		]);
+	});
+
+	it("treats a single column file as comma separated", () => {
+		expect(
+			parseLoomCsvRecords("url\nhttps://www.loom.com/share/a;b\n"),
+		).toEqual([["url"], ["https://www.loom.com/share/a;b"]]);
+	});
+});
+
 describe("Loom CSV results cells", () => {
 	it("keeps plain values unchanged", () => {
 		expect(formatLoomCsvCell("owner@example.com")).toBe("owner@example.com");

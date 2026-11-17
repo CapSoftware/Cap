@@ -10,6 +10,7 @@
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
 
 use crate::auth;
+use crate::i18n::tr;
 use crate::main_window::TargetType;
 use crate::platform;
 
@@ -115,7 +116,7 @@ impl SignIn {
             match &outcome {
                 SignInOutcome::SignedIn => platform::activate_app(),
                 SignInOutcome::Failed(error) if !matches!(origin, SignInOrigin::Overlay(_)) => {
-                    platform::alert_dialog("Sign in failed", error)
+                    platform::alert_dialog(tr::auth::sign_in_failed(), error)
                 }
                 _ => {}
             }

@@ -29,6 +29,7 @@ use std::{
 
 use serde_json::{Value, json};
 
+use crate::i18n::tr;
 use crate::{permissions, store};
 
 /// The rolling log file's prefix. Deliberately *not* the Tauri app's
@@ -49,6 +50,8 @@ const KEEP_REPORTS: usize = 5;
 /// enough for the drift term to mean something without making the flashing
 /// window feel endless.
 pub const DEFAULT_DURATION_SECS: u64 = 20;
+
+pub const DURATION_CHOICES_SECS: &[u64] = &[DEFAULT_DURATION_SECS, 40, 60];
 
 /// `CAP_GPUI_SELFTEST_BIN`: an explicit path to the `cap` binary, which wins
 /// over every probe below. The verification harness sets it; nothing else does.
@@ -93,6 +96,15 @@ pub fn logs_dir() -> PathBuf {
 
 pub fn log_tail() -> cap_utils::log_upload::LogBundle {
     cap_utils::log_upload::collect(&logs_dir(), LOG_FILE_PREFIX)
+}
+
+/// What "Upload Logs" sends from Settings > Feedback and the tray alike: the
+/// log tail and a device snapshot. Blocking, so read it off the main thread.
+pub fn log_upload_payload() -> (cap_utils::log_upload::LogBundle, Option<String>) {
+    (
+        log_tail(),
+        serde_json::to_string(&collect_log_diagnostics()).ok(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +273,7 @@ impl SyncMode {
         match self {
             Self::Studio => "Studio",
             Self::Instant => "Instant",
-            Self::Both => "Both",
+            Self::Both => tr::diagnostics::mode_both(),
         }
     }
 }
@@ -325,7 +337,7 @@ impl RunGuard {
         DIAGNOSTIC_RUNNING
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| Self)
-            .map_err(|_| ALREADY_RUNNING.to_string())
+            .map_err(|_| tr::diagnostics::already_running().to_string())
     }
 }
 
@@ -334,8 +346,6 @@ impl Drop for RunGuard {
         DIAGNOSTIC_RUNNING.store(false, Ordering::Release);
     }
 }
-
-pub const ALREADY_RUNNING: &str = "A diagnostic is already running.";
 
 /// Kills the self-test if it is dropped before the run's own kill/wait
 /// sequence. `std::process::Child` does not kill on drop, and an orphaned
@@ -409,24 +419,51 @@ pub const CANCEL_STAGE: &str = "cancelling";
 /// The user-facing words for a stage. The CLI's stage names are stable API but
 /// they are not sentences.
 pub fn stage_label(stage: &str, mode: Option<&str>) -> String {
-    let leg = match mode {
-        Some("studio") => " studio",
-        Some("instant") => " instant",
-        _ => "",
+    let leg = |both: fn() -> &'static str,
+               studio: fn() -> &'static str,
+               instant: fn() -> &'static str| match mode {
+        Some("studio") => studio(),
+        Some("instant") => instant(),
+        _ => both(),
     };
     match stage {
-        "collecting" => format!("Preparing the{leg} test..."),
-        "recording" => format!("Recording the{leg} test..."),
-        "pattern-run" => format!("Playing the test pattern{leg}..."),
-        "remuxing" => format!("Finalizing the{leg} recording..."),
-        "analyzing" => format!("Analyzing the{leg} recording..."),
-        "exporting" => format!("Exporting the{leg} recording..."),
-        "done" => "Wrapping up the sync test...".to_string(),
-        START_STAGE => "Starting the diagnostic...".to_string(),
-        COLLECT_STAGE => "Collecting system information...".to_string(),
-        CANCEL_STAGE => "Cancelling...".to_string(),
-        other => format!("{other}..."),
+        "collecting" => leg(
+            tr::diagnostics::stage::preparing,
+            tr::diagnostics::stage::preparing_studio,
+            tr::diagnostics::stage::preparing_instant,
+        ),
+        "recording" => leg(
+            tr::diagnostics::stage::recording,
+            tr::diagnostics::stage::recording_studio,
+            tr::diagnostics::stage::recording_instant,
+        ),
+        "pattern-run" => leg(
+            tr::diagnostics::stage::pattern,
+            tr::diagnostics::stage::pattern_studio,
+            tr::diagnostics::stage::pattern_instant,
+        ),
+        "remuxing" => leg(
+            tr::diagnostics::stage::finalizing,
+            tr::diagnostics::stage::finalizing_studio,
+            tr::diagnostics::stage::finalizing_instant,
+        ),
+        "analyzing" => leg(
+            tr::diagnostics::stage::analyzing,
+            tr::diagnostics::stage::analyzing_studio,
+            tr::diagnostics::stage::analyzing_instant,
+        ),
+        "exporting" => leg(
+            tr::diagnostics::stage::exporting,
+            tr::diagnostics::stage::exporting_studio,
+            tr::diagnostics::stage::exporting_instant,
+        ),
+        "done" => tr::diagnostics::stage::done(),
+        START_STAGE => tr::diagnostics::stage::starting(),
+        COLLECT_STAGE => tr::diagnostics::stage::collecting(),
+        CANCEL_STAGE => tr::diagnostics::stage::cancelling(),
+        other => return format!("{other}..."),
     }
+    .to_string()
 }
 
 fn trim_to_tail(text: &mut String, max_bytes: usize) {
@@ -475,14 +512,14 @@ pub fn run_sync_test(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("Failed to start {}: {error}", binary.display()))?,
+            .map_err(|error| tr::diagnostics::error::start_failed(binary.display(), error))?,
     );
 
     let stdout = child
         .0
         .stdout
         .take()
-        .ok_or_else(|| "The self-test produced no output stream".to_string())?;
+        .ok_or_else(|| tr::diagnostics::error::no_output().to_string())?;
     let stderr = child.0.stderr.take();
 
     let stderr_tail = Arc::new(Mutex::new(String::new()));
@@ -553,8 +590,8 @@ pub fn run_sync_test(
         .map(|tail| tail.trim().to_string())
         .unwrap_or_default();
     let status = match status {
-        Ok(status) => format!("The self-test exited with {status}"),
-        Err(error) => format!("The self-test could not be waited on: {error}"),
+        Ok(status) => tr::diagnostics::error::exited(status),
+        Err(error) => tr::diagnostics::error::wait_failed(error),
     };
     Err(
         [Some(status), error_line, (!tail.is_empty()).then_some(tail)]
@@ -642,6 +679,7 @@ fn settings_snapshot() -> Value {
         "instanceId": instance_id,
         "enableTelemetry": settings.enable_telemetry,
         "editorPreviewQuality": settings.editor_preview_quality.as_json(),
+        "editorPreviewSpeed": settings.editor_preview_speed.as_f64(),
         "captureKeyboardEvents": settings.capture_keyboard_events,
     })
 }
@@ -824,8 +862,7 @@ fn write_report_into(dir: &Path, report: &Value) -> Result<PathBuf, String> {
 }
 
 fn write_report_at(dir: &Path, report: &Value, stamp: u64) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
+    std::fs::create_dir_all(dir).map_err(tr::diagnostics::error::create_folder)?;
     // A run with no sidecar finishes in well under a second, so two of them
     // would otherwise write the same name and the second would overwrite the
     // first. The prefix and suffix stay exactly as the pruning filter expects.
@@ -834,10 +871,9 @@ fn write_report_at(dir: &Path, report: &Value, stamp: u64) -> Result<PathBuf, St
         "cap-diagnostic-{stamp}-{}-{sequence}.json",
         std::process::id()
     ));
-    let json = serde_json::to_string_pretty(report)
-        .map_err(|error| format!("Failed to serialize the report: {error}"))?;
+    let json = serde_json::to_string_pretty(report).map_err(tr::diagnostics::error::serialize)?;
     std::fs::write(&path, json)
-        .map_err(|error| format!("Failed to write {}: {error}", path.display()))?;
+        .map_err(|error| tr::diagnostics::error::write_failed(path.display(), error))?;
     prune_reports(dir, KEEP_REPORTS);
     Ok(path)
 }
@@ -910,9 +946,9 @@ pub async fn upload_report(
     let response = request
         .send()
         .await
-        .map_err(|error| format!("Failed to upload logs: {error}"))?;
+        .map_err(tr::diagnostics::error::upload_logs)?;
     if !response.status().is_success() {
-        return Err(format!("Upload failed with status: {}", response.status()));
+        return Err(tr::diagnostics::error::upload_status(response.status()));
     }
     Ok(())
 }
@@ -1022,6 +1058,24 @@ mod tests {
         );
     }
 
+    /// The CLI clamps the sync test's pattern to 14..=120 s
+    /// (`selftest/mod.rs`) and the playback leg to 18..=120 s, so every
+    /// offered duration has to reach the CLI unchanged.
+    #[test]
+    fn every_offered_duration_reaches_the_cli_unclamped() {
+        assert_eq!(DURATION_CHOICES_SECS.first(), Some(&DEFAULT_DURATION_SECS));
+        for seconds in DURATION_CHOICES_SECS {
+            assert!((18..=120).contains(seconds), "{seconds}");
+            let args = sync_test_args(&SyncTestOptions {
+                mode: SyncMode::Both,
+                microphone: false,
+                duration_secs: *seconds,
+            });
+            let at = args.iter().position(|arg| arg == "--duration").unwrap();
+            assert_eq!(args[at + 1], seconds.to_string());
+        }
+    }
+
     /// The app never surfaces the recorded project, so every run asks the CLI
     /// to discard it; without this a non-pass verdict leaves a full screen
     /// recording in temp that nothing here ever cleans up.
@@ -1044,7 +1098,10 @@ mod tests {
     #[test]
     fn the_run_guard_admits_one_diagnostic_at_a_time() {
         let first = RunGuard::acquire().expect("the first run takes the guard");
-        assert_eq!(RunGuard::acquire().err().as_deref(), Some(ALREADY_RUNNING));
+        assert_eq!(
+            RunGuard::acquire().err().as_deref(),
+            Some(tr::diagnostics::already_running())
+        );
         drop(first);
         // Released on drop, including the drop of an abandoned run future.
         let second = RunGuard::acquire().expect("the guard is free once released");

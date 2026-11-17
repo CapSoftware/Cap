@@ -9,9 +9,9 @@ import { AuthorByline } from "@/components/blog/AuthorByline";
 import { BlogTemplate } from "@/components/blog/BlogTemplate";
 import { getPostComponents } from "@/components/blog/post-components";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
-import { ogImageUrl } from "@/lib/og/url";
 import { parseAuthors } from "@/utils/authors";
 import { getBlogPosts } from "@/utils/blog";
+import { blogPostMetadata } from "@/utils/blog-post-metadata";
 import {
 	getInteractiveBlogContent,
 	isInteractiveBlogPost,
@@ -29,65 +29,7 @@ export async function generateMetadata(
 	props: PostProps,
 ): Promise<Metadata | undefined> {
 	const params = await props.params;
-	const post = getBlogPosts().find((post) => post.slug === params.slug);
-	if (!post) {
-		return;
-	}
-
-	const {
-		title,
-		publishedAt: publishedTime,
-		description,
-		image,
-		video,
-	} = post.metadata as {
-		title: string;
-		publishedAt: string;
-		description: string;
-		image?: string;
-		video?: string;
-	};
-	// Posts with real cover art keep it; everything else gets the branded
-	// dynamic OG image.
-	const ogImage =
-		image && image !== "/og.png"
-			? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`
-			: ogImageUrl({ title, tag: "Blog" });
-
-	return {
-		title,
-		description,
-		openGraph: {
-			title,
-			description,
-			type: "article",
-			publishedTime,
-			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
-			images: [
-				{
-					url: ogImage,
-				},
-			],
-			// Discord, iMessage and Telegram play a silent looping MP4
-			// from og:video; X and LinkedIn ignore it and use the image.
-			...(video && {
-				videos: [
-					{
-						url: `${buildEnv.NEXT_PUBLIC_WEB_URL}${video}`,
-						type: "video/mp4",
-						width: 1200,
-						height: 630,
-					},
-				],
-			}),
-		},
-		twitter: {
-			card: "summary_large_image",
-			title,
-			description,
-			images: [ogImage],
-		},
-	};
+	return blogPostMetadata(params.slug);
 }
 
 export default async function PostPage(props: PostProps) {

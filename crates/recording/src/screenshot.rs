@@ -1,7 +1,7 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
 #[cfg(target_os = "linux")]
 use crate::sources::screen_capture::{
-    X11Grabber, X11InputConfig, prefers_wayland_portal, x11_capture_rect,
+    X11Grabber, X11InputConfig, prefers_wayland_portal, x11_screenshot_rect,
 };
 #[cfg(target_os = "macos")]
 use anyhow::Context;
@@ -2153,7 +2153,7 @@ fn linux_capture_geometry(
             let size = display
                 .physical_size()
                 .ok_or_else(|| anyhow!("Display size unavailable"))?;
-            let (x, y, width, height) = x11_capture_rect(
+            let (x, y, width, height) = x11_screenshot_rect(
                 position.x(),
                 position.y(),
                 size.width(),
@@ -2193,7 +2193,7 @@ fn linux_capture_geometry(
                 bounds.size().width(),
                 bounds.size().height(),
             );
-            let (x, y, width, height) = x11_capture_rect(
+            let (x, y, width, height) = x11_screenshot_rect(
                 position.x(),
                 position.y(),
                 size.width(),
@@ -2204,6 +2204,48 @@ fn linux_capture_geometry(
         }
         ScreenCaptureTarget::CameraOnly => {
             Err(anyhow!("Camera-only not supported for screenshots"))
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod x11_screenshot_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    #[tokio::test]
+    #[ignore = "requires a dedicated 321x241 Xvfb display"]
+    async fn x11_screenshots_preserve_odd_dimensions() {
+        let display = scap_targets::Display::primary();
+        let targets = [
+            (
+                ScreenCaptureTarget::Display { id: display.id() },
+                (321, 241),
+            ),
+            (
+                ScreenCaptureTarget::Area {
+                    screen: display.id(),
+                    bounds: LogicalBounds::new(
+                        LogicalPosition::new(11.0, 13.0),
+                        LogicalSize::new(101.0, 99.0),
+                    ),
+                },
+                (101, 99),
+            ),
+            (
+                ScreenCaptureTarget::Area {
+                    screen: display.id(),
+                    bounds: LogicalBounds::new(
+                        LogicalPosition::new(320.0, 240.0),
+                        LogicalSize::new(1.0, 1.0),
+                    ),
+                },
+                (1, 1),
+            ),
+        ];
+        for (target, expected) in targets {
+            let image = capture_screenshot_x11(&target).await.unwrap();
+            assert_eq!(image.dimensions(), expected);
         }
     }
 }
