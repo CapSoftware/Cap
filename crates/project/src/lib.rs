@@ -7,6 +7,7 @@ mod configuration;
 pub mod cursor;
 pub mod disfluency;
 pub mod keyboard;
+mod late_audio;
 mod meta;
 mod shapes;
 
@@ -23,6 +24,7 @@ pub use caption_words::{
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
+pub use late_audio::migrate_late_audio_alignment;
 pub use meta::*;
 pub use shapes::*;
 

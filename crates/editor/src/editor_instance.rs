@@ -524,19 +524,27 @@ impl EditorInstance {
             }
         }
 
+        // Before any offsets are filled in below: those are already on the
+        // current segment clock.
+        let migrated = cap_project::migrate_late_audio_alignment(&mut project, meta, || {
+            match &preloaded_recordings {
+                Some(recordings) => recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect(),
+                None => display_durations(&recording_meta, meta),
+            }
+        });
+
         if project.clips.is_empty() {
             project.clips = initial_clip_configuration(&recording_meta.project_path, meta);
 
             if let Err(e) = project.write(&recording_meta.project_path) {
                 warn!("Failed to save auto-generated clip offsets: {}", e);
             }
-        } else if repair_late_audio_clip_offsets(
-            &recording_meta.project_path,
-            meta,
-            &mut project.clips,
-        ) && let Err(e) = project.write(&recording_meta.project_path)
-        {
-            warn!("Failed to save repaired late audio clip offsets: {}", e);
+        } else if migrated && let Err(e) = project.write(&recording_meta.project_path) {
+            warn!("Failed to save late audio alignment: {}", e);
         }
 
         // Segment setup (decoder init + kicking off audio decodes) is
@@ -1991,48 +1999,20 @@ pub fn initial_clip_configuration(
     }
 }
 
-/// Recomputes the automatic clip offsets of segments with a late audio track
-/// (`MultipleSegment::has_late_audio`). Projects saved before late audio
-/// stopped setting a segment's start stored offsets measured from that late
-/// start, which would now play the audio early. Offsets the user set by hand
-/// are kept. Returns whether any clip changed.
-pub fn repair_late_audio_clip_offsets(
-    project_path: &std::path::Path,
-    meta: &StudioRecordingMeta,
-    clips: &mut [cap_project::ClipConfiguration],
-) -> bool {
-    let StudioRecordingMeta::MultipleSegments { inner } = meta else {
-        return false;
-    };
-    let mut calibration_store = None;
-    let mut changed = false;
-    for (index, segment) in inner.segments.iter().enumerate() {
-        if !segment.has_late_audio() {
-            continue;
+/// Each clip's display duration, the source clock captions are timed on.
+fn display_durations(recording_meta: &RecordingMeta, meta: &StudioRecordingMeta) -> Vec<f64> {
+    match meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            vec![display_video_duration(&recording_meta.path(&segment.display.path)).unwrap_or(0.0)]
         }
-        let Some(clip) = clips
-            .iter_mut()
-            .find(|clip| clip.index as usize == index && clip.offsets_auto_calculated)
-        else {
-            continue;
-        };
-        let store = calibration_store.get_or_insert_with(|| load_calibration_store(project_path));
-        let calibration_offset =
-            get_calibration_offset(segment.camera_device_id(), segment.mic_device_id(), store);
-        let offsets = segment.calculate_audio_offsets_with_calibration(calibration_offset);
-        let bits = |o: &cap_project::ClipOffsets| {
-            [
-                o.camera.to_bits(),
-                o.mic.to_bits(),
-                o.system_audio.to_bits(),
-            ]
-        };
-        if bits(&clip.offsets) != bits(&offsets) {
-            clip.offsets = offsets;
-            changed = true;
-        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| {
+                display_video_duration(&recording_meta.path(&segment.display.path)).unwrap_or(0.0)
+            })
+            .collect(),
     }
-    changed
 }
 
 fn load_calibration_store(project_path: &std::path::Path) -> cap_audio::CalibrationStore {

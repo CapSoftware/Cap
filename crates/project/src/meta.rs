@@ -867,6 +867,16 @@ impl MultipleSegment {
             .any(|start| is_late_audio_start(start, video_start))
     }
 
+    /// The segment start before late audio was left out: the latest start of
+    /// every track. Projects saved then are timed against it.
+    pub(crate) fn legacy_latest_start_time(&self) -> Option<f64> {
+        let mut value = self.video_start_time()?;
+        for audio in self.aligned_audio() {
+            value = value.max(audio.start_time?);
+        }
+        Some(value)
+    }
+
     fn video_start_time(&self) -> Option<f64> {
         let display_start = self.display.start_time?;
         match &self.camera {
