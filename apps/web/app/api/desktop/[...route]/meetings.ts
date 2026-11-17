@@ -17,6 +17,7 @@ import {
 } from "@/lib/assemblyai";
 import { isNoSpokenAudioError } from "@/lib/live-transcribe-core";
 import {
+	gatewayAvailable,
 	getMeetingsAiConfig,
 	type MeetingModelSelection,
 	type MeetingsAiConfig,
@@ -65,8 +66,9 @@ import {
 import { isCapSpeechService } from "@/lib/meetings/speech";
 import {
 	claimTrialMeeting,
-	hasTrialMeeting,
+	completeTrialMeeting,
 	releaseTrialMeeting,
+	spendTrialAsk,
 	trialRemaining,
 } from "@/lib/meetings/trial";
 import {
@@ -84,8 +86,12 @@ const TRANSCRIBE_POLL_MS = 1_000;
 const NOTES_DEADLINE_MS = 270_000;
 const ASK_DEADLINE_MS = 120_000;
 const NOTES_CHUNK_CONCURRENCY = 4;
+// The provider chain used off Vercel may have a much smaller context window
+// than the gateway default, so long transcripts are condensed first there.
+const FALLBACK_NOTES_SINGLE_PASS_CHARS = 60_000;
+const TRIAL_BUSY_RETRY_SECONDS = 30;
 
-type Feature = "transcription" | "notes";
+type Feature = "transcription" | "notes" | "ask";
 
 type MeetingUser = {
 	id: string;
@@ -99,6 +105,8 @@ function isEntitled(user: MeetingUser, feature: Feature): boolean {
 }
 
 function isConfigured(feature: Feature, config: MeetingsAiConfig): boolean {
+	if (feature === "ask")
+		return config.askEnabled && meetingsAiConfigured("ask");
 	if (feature === "transcription") {
 		const env = serverEnv();
 		return (
@@ -319,16 +327,21 @@ async function transcribeClip(
 ): Promise<TranscribeResult> {
 	const client = createAssemblyAIClient();
 	const options = getAssemblyAITranscriptionOptions(query.language);
-	const audio = await client.files.upload(
-		Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength),
+	const audio = await untilAborted(
+		client.files.upload(
+			Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength),
+		),
+		signal,
 	);
-	signal.throwIfAborted();
 
-	let transcript = await (query.keywords.length > 0
-		? client.transcripts
-				.submit({ audio, ...options, keyterms_prompt: query.keywords })
-				.catch(() => client.transcripts.submit({ audio, ...options }))
-		: client.transcripts.submit({ audio, ...options }));
+	let transcript = await untilAborted(
+		query.keywords.length > 0
+			? client.transcripts
+					.submit({ audio, ...options, keyterms_prompt: query.keywords })
+					.catch(() => client.transcripts.submit({ audio, ...options }))
+			: client.transcripts.submit({ audio, ...options }),
+		signal,
+	);
 
 	const transcriptId = transcript.id;
 	after(() =>
@@ -340,7 +353,10 @@ async function transcribeClip(
 
 	while (transcript.status !== "completed" && transcript.status !== "error") {
 		await delay(TRANSCRIBE_POLL_MS, undefined, { signal });
-		transcript = await client.transcripts.get(transcriptId);
+		transcript = await untilAborted(
+			client.transcripts.get(transcriptId),
+			signal,
+		);
 	}
 
 	if (transcript.status === "error") {
@@ -362,6 +378,26 @@ async function transcribeClip(
 			confidence: word.confidence,
 		})),
 	};
+}
+
+// The speech SDK takes no abort signal, so a stalled call is abandoned at the
+// deadline or when the desktop app disconnects instead of holding the request.
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+	signal.throwIfAborted();
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		work.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
 }
 
 async function readJsonBody<T>(
@@ -547,8 +583,11 @@ async function generateNotes(
 ): Promise<number> {
 	const boundary = createPromptBoundary();
 	const titleRequested = input.title.trim() === "";
+	const singlePassChars = gatewayAvailable()
+		? config.notesSinglePassChars
+		: Math.min(config.notesSinglePassChars, FALLBACK_NOTES_SINGLE_PASS_CHARS);
 	const source: NotesSource =
-		input.transcript.length > config.notesSinglePassChars
+		input.transcript.length > singlePassChars
 			? {
 					kind: "sections",
 					sections: await condenseTranscript(input, config, boundary, signal),
@@ -658,16 +697,15 @@ function streamGeneration(
 
 const upgradeRequired = () => errorResponse(402, { error: "upgrade_required" });
 
-// Signed-in people without Cap Pro get their first few meetings written up
-// free. Only Pro gating changes; configuration and rate limits still apply.
-async function admitNotes(
+async function admitGeneration(
 	user: MeetingUser,
 	config: MeetingsAiConfig,
+	feature: "notes" | "ask",
 ): Promise<{ response: Response; outcome: string } | "pro" | "trial"> {
-	const denied = admit(user, "notes", config);
+	const denied = admit(user, feature, config);
 	if (!denied) return "pro";
 	if (denied.outcome !== "upgrade_required") return denied;
-	if (!isConfigured("notes", config))
+	if (!isConfigured(feature, config))
 		return {
 			response: errorResponse(503, { error: "not_configured" }),
 			outcome: "not_configured",
@@ -680,17 +718,10 @@ app.post("/notes", async (c) => {
 	const log = requestLogger(user.id, "notes");
 
 	const config = await getMeetingsAiConfig();
-	const access = await admitNotes(user, config);
+	const access = await admitGeneration(user, config, "notes");
 	if (typeof access === "object") {
 		log({ outcome: access.outcome, status: access.response.status });
 		return access.response;
-	}
-	if (
-		access === "trial" &&
-		(await trialRemaining(user.id, config.trialMeetings)) === 0
-	) {
-		log({ outcome: "upgrade_required", status: 402 });
-		return upgradeRequired();
 	}
 
 	const budget = await consumeMeetingRequestBudget(
@@ -712,22 +743,25 @@ app.post("/notes", async (c) => {
 	}
 
 	const input = body.data;
-	let claimed: string | null = null;
+	const trialMeeting = access === "trial" ? input.meetingId : undefined;
 	if (access === "trial") {
-		if (!input.meetingId) {
+		if (!trialMeeting) {
 			log({ outcome: "upgrade_required", status: 402 });
 			return upgradeRequired();
 		}
 		const claim = await claimTrialMeeting(
 			user.id,
-			input.meetingId,
+			trialMeeting,
 			config.trialMeetings,
 		);
-		if (claim === "exhausted") {
+		if (claim === "busy") {
+			log({ outcome: "trial_busy", status: 429 });
+			return rateLimited(TRIAL_BUSY_RETRY_SECONDS);
+		}
+		if (claim === "exhausted" || claim === "runs_exhausted") {
 			log({ outcome: "upgrade_required", status: 402 });
 			return upgradeRequired();
 		}
-		if (claim === "claimed") claimed = input.meetingId;
 	}
 	return streamGeneration(
 		c.req.raw,
@@ -736,10 +770,14 @@ app.post("/notes", async (c) => {
 		NOTES_DEADLINE_MS,
 		async (send, signal) => {
 			try {
-				return await generateNotes(input, config, send, signal);
+				const chars = await generateNotes(input, config, send, signal);
+				if (trialMeeting) await completeTrialMeeting(user.id, trialMeeting);
+				return chars;
 			} catch (error) {
-				if (claimed)
-					await releaseTrialMeeting(user.id, claimed).catch(() => undefined);
+				if (trialMeeting)
+					await releaseTrialMeeting(user.id, trialMeeting).catch(
+						() => undefined,
+					);
 				throw error;
 			}
 		},
@@ -751,11 +789,7 @@ app.post("/ask", async (c) => {
 	const log = requestLogger(user.id, "ask");
 
 	const config = await getMeetingsAiConfig();
-	if (!config.askEnabled) {
-		log({ outcome: "not_configured", status: 503 });
-		return errorResponse(503, { error: "not_configured" });
-	}
-	const access = await admitNotes(user, config);
+	const access = await admitGeneration(user, config, "ask");
 	if (typeof access === "object") {
 		log({ outcome: access.outcome, status: access.response.status });
 		return access.response;
@@ -782,7 +816,7 @@ app.post("/ask", async (c) => {
 	const input = body.data;
 	if (
 		access === "trial" &&
-		!(input.meetingId && (await hasTrialMeeting(user.id, input.meetingId)))
+		!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
 	) {
 		log({ outcome: "upgrade_required", status: 402 });
 		return upgradeRequired();

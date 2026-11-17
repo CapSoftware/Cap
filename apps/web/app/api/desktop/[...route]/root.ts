@@ -586,8 +586,6 @@ app.post(
 	async (c) => {
 		const body = c.req.valid("json");
 		const { platform } = body;
-		// Desktop meeting notes leave the plan to the server, so the default can
-		// change without an app release; it matches the pricing page (monthly).
 		const priceId =
 			body.priceId ??
 			planPriceId(

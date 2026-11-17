@@ -23,33 +23,73 @@ const mocks = vi.hoisted(() => ({
 	generateText: vi.fn(),
 	after: [] as Array<() => unknown>,
 	trial: new Map<string, string[]>(),
+	trialState: new Map<
+		string,
+		{ completed: boolean; runs: number; asks: number }
+	>(),
 }));
 
+// Mirrors lib/meetings/trial.ts (covered against MySQL in
+// __tests__/integration/meetings-trial-database.test.ts). Meetings put in
+// mocks.trial directly count as written once.
 vi.mock("@/lib/meetings/trial", () => {
 	const limit = 3;
 	const claimed = (userId: string) => mocks.trial.get(userId) ?? [];
+	const state = (userId: string, meetingId: string) => {
+		const key = `${userId}|${meetingId}`;
+		const existing = mocks.trialState.get(key) ?? {
+			completed: true,
+			runs: 1,
+			asks: 0,
+		};
+		mocks.trialState.set(key, existing);
+		return existing;
+	};
 	return {
 		MEETING_NOTES_TRIAL_MEETINGS: limit,
 		trialRemaining: async (userId: string, max = limit) =>
 			Math.max(0, max - claimed(userId).length),
-		hasTrialMeeting: async (userId: string, meetingId: string) =>
-			claimed(userId).includes(meetingId),
 		claimTrialMeeting: async (
 			userId: string,
 			meetingId: string,
 			max = limit,
 		) => {
 			const list = claimed(userId);
-			if (list.includes(meetingId)) return "already_claimed";
+			if (list.includes(meetingId)) {
+				const row = state(userId, meetingId);
+				if (!row.completed) return "busy";
+				if (row.runs >= 3) return "runs_exhausted";
+				row.runs += 1;
+				return "already_claimed";
+			}
 			if (list.length >= max) return "exhausted";
 			mocks.trial.set(userId, [...list, meetingId]);
+			mocks.trialState.set(`${userId}|${meetingId}`, {
+				completed: false,
+				runs: 1,
+				asks: 0,
+			});
 			return "claimed";
 		},
+		completeTrialMeeting: async (userId: string, meetingId: string) => {
+			if (claimed(userId).includes(meetingId))
+				state(userId, meetingId).completed = true;
+		},
 		releaseTrialMeeting: async (userId: string, meetingId: string) => {
+			if (!claimed(userId).includes(meetingId)) return;
+			if (state(userId, meetingId).completed) return;
+			mocks.trialState.delete(`${userId}|${meetingId}`);
 			mocks.trial.set(
 				userId,
 				claimed(userId).filter((id) => id !== meetingId),
 			);
+		},
+		spendTrialAsk: async (userId: string, meetingId: string) => {
+			if (!claimed(userId).includes(meetingId)) return false;
+			const row = state(userId, meetingId);
+			if (!row.completed || row.asks >= 20) return false;
+			row.asks += 1;
+			return true;
 		},
 	};
 });
@@ -253,6 +293,7 @@ beforeEach(() => {
 	mocks.aiConfigured = true;
 	mocks.after = [];
 	mocks.trial.clear();
+	mocks.trialState.clear();
 	for (const fn of [
 		mocks.upload,
 		mocks.submit,
@@ -553,6 +594,28 @@ describe("POST /transcribe", () => {
 		});
 	});
 
+	it("lets go of a stalled speech call when the app disconnects", async () => {
+		signIn();
+		mocks.upload.mockReturnValue(new Promise(() => {}));
+		const controller = new AbortController();
+		const pending = app.request(
+			"https://cap.so/api/desktop/meetings/transcribe",
+			{
+				method: "POST",
+				body: wav(16_000),
+				headers: {
+					authorization: `Bearer ${API_KEY}`,
+					"content-type": "audio/wav",
+				},
+				signal: controller.signal,
+			},
+		);
+		setTimeout(() => controller.abort(), 20);
+		const response = await pending;
+		expect(response.status).toBe(502);
+		expect(mocks.submit).not.toHaveBeenCalled();
+	});
+
 	it("returns 502 when the provider fails", async () => {
 		signIn();
 		mocks.submit.mockResolvedValue({
@@ -573,11 +636,15 @@ const validNotes = {
 };
 
 describe("POST /notes gates", () => {
-	it("refuses a free user with no free meetings left before reading the body", async () => {
+	it("refuses a new meeting once the free meetings are used", async () => {
 		const user = signIn("canceled");
 		mocks.trial.set(user.id, ["a", "b", "c"]);
-		const response = await postJson("/notes", "{not json");
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "d",
+		});
 		expect(response.status).toBe(402);
+		expect(mocks.streamText).not.toHaveBeenCalled();
 	});
 
 	it("returns not_configured when no AI provider is set", async () => {
@@ -760,6 +827,59 @@ describe("free meetings for signed-in users", () => {
 		expect(mocks.trial.get(user.id)).toEqual(["same"]);
 	});
 
+	it("still rewrites a free meeting after all of them are used", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["a", "b", "c"]);
+		streamNotes();
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "b",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		expect(mocks.trial.get(user.id)).toEqual(["a", "b", "c"]);
+	});
+
+	it("asks a second request to wait while the meeting is first written", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.trialState.set(`${user.id}|m1`, {
+			completed: false,
+			runs: 1,
+			asks: 0,
+		});
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "m1",
+		});
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("30");
+		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
+	it("stops rewriting and asking about a free meeting after its allowance", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.trialState.set(`${user.id}|m1`, {
+			completed: true,
+			runs: 3,
+			asks: 20,
+		});
+		expect(
+			(await postJson("/notes", { ...validNotes, meetingId: "m1" })).status,
+		).toBe(402);
+		expect(
+			(
+				await postJson("/ask", {
+					question: "When?",
+					transcript: "t",
+					meetingId: "m1",
+				})
+			).status,
+		).toBe(402);
+		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
 	it("needs a meeting id to count against", async () => {
 		signIn(null);
 		expect((await postJson("/notes", validNotes)).status).toBe(402);
@@ -934,6 +1054,20 @@ describe("remote control", () => {
 		expect(mocks.trial.get(user.id)).toBeUndefined();
 		signIn();
 		expect((await postJson("/notes", validNotes)).status).toBe(503);
+	});
+
+	it("keeps Ask on when only notes are switched off", async () => {
+		signIn();
+		mocks.env.MEETINGS_AI_CONFIG = JSON.stringify({ notesEnabled: false });
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream(deltas("Friday")),
+		});
+		const response = await postJson("/ask", {
+			question: "When?",
+			transcript: "t",
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("Friday");
 	});
 
 	it("switches Ask off on its own", async () => {
