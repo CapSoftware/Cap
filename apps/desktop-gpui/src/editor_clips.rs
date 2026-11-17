@@ -2122,16 +2122,30 @@ fn imported_clip_name(source: &Path) -> Option<String> {
 }
 
 fn show_import_error(message: &str) {
-    let title = tr::editor::clips::import_error_title();
-    let description = tr::editor::clips::import_error(message);
+    show_clip_error(
+        tr::editor::clips::import_error_title().to_string(),
+        tr::editor::clips::import_error(message).to_string(),
+    );
+}
+
+/// `toast.error(\`Failed to add clip: ...\`)` (`Editor.tsx:332-333`), same
+/// stand-in.
+fn show_append_error(message: &str) {
+    show_clip_error(
+        tr::editor::clips::append_error_title().to_string(),
+        tr::editor::clips::append_error(message).to_string(),
+    );
+}
+
+fn show_clip_error(title: String, description: String) {
     // rfd shows Linux message dialogs through zenity and shows nothing
-    // without it, so a folder that is not a recording would import nothing
-    // and say nothing.
+    // without it, so a failed import or append would change nothing and say
+    // nothing.
     #[cfg(target_os = "linux")]
     if !crate::linux_dialog::zenity_available()
         && crate::linux_dialog::show(&crate::linux_dialog::Request {
-            title: title.to_string(),
-            message: description.to_string(),
+            title: title.clone(),
+            message: description.clone(),
             accept: tr::common::ok().to_string(),
             cancel: None,
         })
@@ -2142,17 +2156,6 @@ fn show_import_error(message: &str) {
     let _ = rfd::MessageDialog::new()
         .set_title(title)
         .set_description(description)
-        .set_level(rfd::MessageLevel::Error)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-/// `toast.error(\`Failed to add clip: ...\`)` (`Editor.tsx:332-333`), same
-/// stand-in.
-fn show_append_error(message: &str) {
-    let _ = rfd::MessageDialog::new()
-        .set_title(tr::editor::clips::append_error_title())
-        .set_description(tr::editor::clips::append_error(message))
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
