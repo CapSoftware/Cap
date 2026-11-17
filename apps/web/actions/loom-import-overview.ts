@@ -15,7 +15,9 @@ import {
 	addLoomImportCounts,
 	emptyLoomImportCounts,
 	type LoomImportCounts,
+	type LoomImportFailureReason,
 	type LoomImportState,
+	loomImportFailureReason,
 	loomImportState,
 } from "@/lib/loom-import-status";
 
@@ -32,7 +34,9 @@ export type LoomImportAttentionRow = {
 	videoId: string;
 	name: string;
 	ownerName: string | null;
+	ownedByViewer: boolean;
 	state: LoomImportState;
+	failureReason: LoomImportFailureReason | null;
 	updatedAt: Date | null;
 };
 
@@ -93,8 +97,12 @@ export async function getLoomImportOverview(
 			.select({
 				videoId: videos.id,
 				name: videos.name,
+				ownerId: videos.ownerId,
 				ownerName: users.name,
 				phase: videoUploads.phase,
+				processingError: videoUploads.processingError,
+				hasRawUpload:
+					sql<number>`${videoUploads.rawFileKey} IS NOT NULL`.mapWith(Number),
 				updatedAt: videoUploads.updatedAt,
 			})
 			.from(importedVideos)
@@ -154,12 +162,23 @@ export async function getLoomImportOverview(
 	return {
 		totals,
 		members,
-		attention: attentionRows.map((row) => ({
-			videoId: row.videoId,
-			name: row.name,
-			ownerName: row.ownerName,
-			state: loomImportState(row.phase),
-			updatedAt: row.updatedAt,
-		})),
+		attention: attentionRows.map((row) => {
+			const state = loomImportState(row.phase);
+			return {
+				videoId: row.videoId,
+				name: row.name,
+				ownerName: row.ownerName,
+				ownedByViewer: row.ownerId === user.id,
+				state,
+				failureReason:
+					state === "failed"
+						? loomImportFailureReason({
+								processingError: row.processingError,
+								hasRawUpload: row.hasRawUpload === 1,
+							})
+						: null,
+				updatedAt: row.updatedAt,
+			};
+		}),
 	};
 }

@@ -7,9 +7,11 @@ import {
 import {
 	addLoomImportCounts,
 	emptyLoomImportCounts,
+	loomImportFailureReason,
 	loomImportState,
 } from "@/lib/loom-import-status";
 import { chunkIds } from "@/lib/video-archive";
+import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "@/lib/workflow-recovery";
 
 describe("resolveDashboardPageSize", () => {
 	it("uses the saved preference, then falls back to 15", () => {
@@ -77,6 +79,54 @@ describe("loomImportState", () => {
 			failed: 1,
 			total: 6,
 		});
+	});
+});
+
+describe("loomImportFailureReason", () => {
+	it("says Cap will retry only for failures the recovery job restarts", () => {
+		expect(
+			loomImportFailureReason({
+				processingError:
+					"import-loom-video: Server is busy; Loom import recovery start failed: x",
+				hasRawUpload: true,
+			}),
+		).toBe("retrying");
+		expect(
+			loomImportFailureReason({
+				processingError: `import-loom-video: ${WORKFLOW_UPGRADE_ERROR_FRAGMENT}`,
+				hasRawUpload: true,
+			}),
+		).toBe("retrying");
+		expect(
+			loomImportFailureReason({
+				processingError: "import-loom-video: SERVER BUSY server_busy",
+				hasRawUpload: false,
+			}),
+		).toBe("stopped");
+		expect(
+			loomImportFailureReason({
+				processingError: "Server is busy",
+				hasRawUpload: true,
+			}),
+		).toBe("stopped");
+	});
+
+	it("names a missing Loom source and never echoes raw errors", () => {
+		expect(
+			loomImportFailureReason({
+				processingError: "source-missing: no media",
+				hasRawUpload: false,
+			}),
+		).toBe("source");
+		expect(
+			loomImportFailureReason({
+				processingError: "MEDIA_SERVER_URL is not configured",
+				hasRawUpload: true,
+			}),
+		).toBe("stopped");
+		expect(
+			loomImportFailureReason({ processingError: null, hasRawUpload: true }),
+		).toBe("stopped");
 	});
 });
 

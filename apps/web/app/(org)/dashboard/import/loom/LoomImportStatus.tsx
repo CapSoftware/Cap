@@ -4,10 +4,14 @@ import { faArrowsRotate } from "@fortawesome/free-solid-svg-icons/faArrowsRotate
 import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { useId, useState } from "react";
+import Link from "next/link";
+import { type ReactNode, useId, useState } from "react";
 import { getLoomImportOverview } from "@/actions/loom-import-overview";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
-import type { LoomImportState } from "@/lib/loom-import-status";
+import type {
+	LoomImportFailureReason,
+	LoomImportState,
+} from "@/lib/loom-import-status";
 
 const STATE_LABELS: Record<LoomImportState, string> = {
 	queued: "Queued",
@@ -21,6 +25,12 @@ const STATE_TONES: Record<LoomImportState, string> = {
 	importing: "bg-blue-3 text-blue-11",
 	done: "bg-gray-3 text-gray-11",
 	failed: "bg-red-transparent-20 text-red-400",
+};
+
+const FAILURE_REASONS: Record<LoomImportFailureReason, string> = {
+	retrying: "Cap was busy and will try again on its own",
+	source: "Loom's copy was missing or incomplete",
+	stopped: "Stopped before it finished",
 };
 
 const ACTIVE_REFRESH_MS = 15_000;
@@ -89,6 +99,53 @@ export function LoomImportStatus({
 	});
 
 	const data = query.data;
+	const header = (
+		<div className="flex gap-4 justify-between items-start px-6 py-5">
+			<div className="flex gap-3 items-start">
+				<div className="flex justify-center items-center rounded-full size-8 bg-gray-3 shrink-0">
+					<FontAwesomeIcon icon={faUsers} className="size-3.5 text-gray-11" />
+				</div>
+				<div className="flex flex-col gap-1">
+					<h2 id={titleId} className="text-sm font-medium text-gray-12">
+						Imports across your team
+					</h2>
+					<p className="text-xs text-gray-10">
+						Every Loom video imported into this organization, by owner.
+					</p>
+				</div>
+			</div>
+			<button
+				type="button"
+				onClick={() => void query.refetch()}
+				disabled={query.isFetching}
+				aria-label="Refresh import status"
+				className="flex justify-center items-center rounded-lg transition-colors size-8 text-gray-10 hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-60"
+			>
+				<FontAwesomeIcon
+					icon={faArrowsRotate}
+					className={clsx("size-3.5", query.isFetching && "animate-spin")}
+				/>
+			</button>
+		</div>
+	);
+	const shell = (children: ReactNode) => (
+		<section
+			aria-labelledby={titleId}
+			aria-busy={query.isPending || undefined}
+			className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3"
+		>
+			{header}
+			{children}
+		</section>
+	);
+
+	if (query.isPending) {
+		return shell(
+			<p className="px-6 pt-1 pb-5 text-sm text-gray-10">
+				Loading your team's imports...
+			</p>,
+		);
+	}
 	if (query.isError) {
 		return (
 			<section className="flex justify-between items-center px-6 py-5 rounded-xl border bg-gray-1 border-gray-3">
@@ -105,42 +162,17 @@ export function LoomImportStatus({
 			</section>
 		);
 	}
-	if (!data || data.totals.total === 0) return null;
+	if (!data || data.totals.total === 0) {
+		return shell(
+			<p className="px-6 pt-1 pb-5 text-sm text-gray-10">
+				No Loom imports yet. Anything your team imports shows up here.
+			</p>,
+		);
+	}
 
-	return (
-		<section
-			aria-labelledby={titleId}
-			className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3"
-		>
-			<div className="flex gap-4 justify-between items-start px-6 py-5 border-b border-gray-3">
-				<div className="flex gap-3 items-start">
-					<div className="flex justify-center items-center rounded-full size-8 bg-gray-3 shrink-0">
-						<FontAwesomeIcon icon={faUsers} className="size-3.5 text-gray-11" />
-					</div>
-					<div className="flex flex-col gap-1">
-						<h2 id={titleId} className="text-sm font-medium text-gray-12">
-							Imports across your team
-						</h2>
-						<p className="text-xs text-gray-10">
-							Every Loom video imported into this organization, by owner.
-						</p>
-					</div>
-				</div>
-				<button
-					type="button"
-					onClick={() => void query.refetch()}
-					disabled={query.isFetching}
-					aria-label="Refresh import status"
-					className="flex justify-center items-center rounded-lg transition-colors size-8 text-gray-10 hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-60"
-				>
-					<FontAwesomeIcon
-						icon={faArrowsRotate}
-						className={clsx("size-3.5", query.isFetching && "animate-spin")}
-					/>
-				</button>
-			</div>
-
-			<dl className="grid grid-cols-2 gap-px border-b sm:grid-cols-4 bg-gray-3 border-gray-3">
+	return shell(
+		<>
+			<dl className="grid grid-cols-2 gap-px border-y sm:grid-cols-4 bg-gray-3 border-gray-3">
 				{(["done", "importing", "queued", "failed"] as const).map((state) => (
 					<div key={state} className="flex flex-col gap-1 px-6 py-4 bg-gray-1">
 						<dt className="text-xs text-gray-10">{STATE_LABELS[state]}</dt>
@@ -232,13 +264,31 @@ export function LoomImportStatus({
 									<span className="text-sm truncate text-gray-12">
 										{row.name}
 									</span>
-									{row.ownerName && (
-										<span className="text-xs truncate text-gray-10">
-											{row.ownerName}
-										</span>
-									)}
+									<span className="text-xs truncate text-gray-10">
+										{[
+											row.ownedByViewer ? "You" : row.ownerName,
+											row.failureReason
+												? FAILURE_REASONS[row.failureReason]
+												: null,
+										]
+											.filter(Boolean)
+											.join(" · ")}
+									</span>
 								</span>
-								<StatePill state={row.state} />
+								<span className="flex gap-2 items-center shrink-0">
+									{row.state === "failed" &&
+										row.ownedByViewer &&
+										row.failureReason !== "retrying" && (
+											<Link
+												href={`/s/${row.videoId}`}
+												aria-label={`Open ${row.name}`}
+												className="px-2.5 h-6 text-xs font-medium leading-6 rounded-full border transition-colors border-gray-4 text-gray-12 hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9"
+											>
+												Open
+											</Link>
+										)}
+									<StatePill state={row.state} />
+								</span>
 							</li>
 						))}
 					</ul>
@@ -255,6 +305,6 @@ export function LoomImportStatus({
 					)}
 				</div>
 			)}
-		</section>
+		</>,
 	);
 }

@@ -1,3 +1,5 @@
+import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "./workflow-recovery";
+
 export type LoomImportState = "queued" | "importing" | "done" | "failed";
 
 export const LOOM_IMPORT_STATES: readonly LoomImportState[] = [
@@ -45,4 +47,35 @@ export function addLoomImportCounts(
 		into.total += value;
 	}
 	return into;
+}
+
+export type LoomImportFailureReason = "retrying" | "source" | "stopped";
+
+const AUTO_RETRIED_ERROR =
+	/server is busy|server_busy|processvideoonmediaserver.*exceeded max retries/;
+
+// Mirrors recoverableProcessingError() in video-processing-recovery: those
+// failures are restarted by the recovery job once the raw upload exists, so
+// the row says so instead of asking anyone to act. Raw error text stays on the
+// server; admins only see one of these reasons.
+export function loomImportFailureReason({
+	processingError,
+	hasRawUpload,
+}: {
+	processingError: string | null | undefined;
+	hasRawUpload: boolean;
+}): LoomImportFailureReason {
+	if (!processingError) return "stopped";
+	if (/^source-(?:incomplete|invalid|missing):/i.test(processingError))
+		return "source";
+	// MySQL LIKE is case-insensitive under the default collation.
+	const error = processingError.toLowerCase();
+	if (
+		hasRawUpload &&
+		error.includes("import-loom-video") &&
+		(AUTO_RETRIED_ERROR.test(error) ||
+			error.includes(WORKFLOW_UPGRADE_ERROR_FRAGMENT.toLowerCase()))
+	)
+		return "retrying";
+	return "stopped";
 }
