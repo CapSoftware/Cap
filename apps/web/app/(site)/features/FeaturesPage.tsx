@@ -1,38 +1,36 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import {
-	faBolt,
-	faCamera,
-	faChartLine,
-	faCheckCircle,
-	faClock,
-	faCloud,
-	faCode,
-	faCog,
-	faComments,
-	faDesktop,
-	faDownload,
-	faEdit,
-	faExpand,
-	faGlobe,
-	faInfinity,
-	faKeyboard,
-	faLock,
-	faMagic,
-	faMobileAlt,
-	faPalette,
-	faRocket,
-	faServer,
-	faShareNodes,
-	faShieldAlt,
-	faUsers,
-	faVideo,
-	faVolumeUp,
-	faWandMagicSparkles,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBolt } from "@fortawesome/free-solid-svg-icons/faBolt";
+import { faCamera } from "@fortawesome/free-solid-svg-icons/faCamera";
+import { faChartLine } from "@fortawesome/free-solid-svg-icons/faChartLine";
+import { faCheckCircle } from "@fortawesome/free-solid-svg-icons/faCheckCircle";
+import { faClock } from "@fortawesome/free-solid-svg-icons/faClock";
+import { faCloud } from "@fortawesome/free-solid-svg-icons/faCloud";
+import { faCode } from "@fortawesome/free-solid-svg-icons/faCode";
+import { faCog } from "@fortawesome/free-solid-svg-icons/faCog";
+import { faComments } from "@fortawesome/free-solid-svg-icons/faComments";
+import { faDesktop } from "@fortawesome/free-solid-svg-icons/faDesktop";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
+import { faExpand } from "@fortawesome/free-solid-svg-icons/faExpand";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faInfinity } from "@fortawesome/free-solid-svg-icons/faInfinity";
+import { faKeyboard } from "@fortawesome/free-solid-svg-icons/faKeyboard";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faMagic } from "@fortawesome/free-solid-svg-icons/faMagic";
+import { faMobileAlt } from "@fortawesome/free-solid-svg-icons/faMobileAlt";
+import { faPalette } from "@fortawesome/free-solid-svg-icons/faPalette";
+import { faRocket } from "@fortawesome/free-solid-svg-icons/faRocket";
+import { faServer } from "@fortawesome/free-solid-svg-icons/faServer";
+import { faShareNodes } from "@fortawesome/free-solid-svg-icons/faShareNodes";
+import { faShieldAlt } from "@fortawesome/free-solid-svg-icons/faShieldAlt";
+import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
+import { faVolumeUp } from "@fortawesome/free-solid-svg-icons/faVolumeUp";
+import { faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons/faWandMagicSparkles";
 import Link from "next/link";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface Feature {
 	icon: any;

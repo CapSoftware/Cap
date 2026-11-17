@@ -302,6 +302,7 @@ struct Mp4EncoderState {
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
     audio_handle: Option<JoinHandle<anyhow::Result<()>>>,
     video_frame_count: Arc<AtomicU64>,
+    video_busy_frame_count: Arc<AtomicU64>,
     audio_frame_count: Arc<AtomicU64>,
     audio_channel_depth: Option<Arc<AtomicUsize>>,
     instant_mode: bool,
@@ -407,8 +408,10 @@ impl Muxer for AVFoundationMp4Muxer {
         };
 
         let video_frame_count = Arc::new(AtomicU64::new(0));
+        let video_busy_frame_count = Arc::new(AtomicU64::new(0));
         let audio_frame_count = Arc::new(AtomicU64::new(0));
         let video_count_thread = video_frame_count.clone();
+        let video_busy_thread = video_busy_frame_count.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
@@ -473,6 +476,10 @@ impl Muxer for AVFoundationMp4Muxer {
                                         retry_count += 1;
                                         if retry_count >= MAX_RETRIES {
                                             encoder_busy_count += 1;
+                                            video_busy_thread.store(
+                                                encoder_busy_count,
+                                                std::sync::atomic::Ordering::Relaxed,
+                                            );
                                             if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
                                                 debug!(
                                                     encoder_busy_count,
@@ -680,6 +687,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 encoder_handle: Some(encoder_handle),
                 audio_handle,
                 video_frame_count,
+                video_busy_frame_count,
                 audio_frame_count,
                 audio_channel_depth,
                 instant_mode: is_instant,
@@ -774,11 +782,15 @@ impl Muxer for AVFoundationMp4Muxer {
             let video_frames = state
                 .video_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
+            let video_frames_dropped_busy = state
+                .video_busy_frame_count
+                .load(std::sync::atomic::Ordering::Relaxed);
             let audio_frames = state
                 .audio_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
             info!(
                 video_frames,
+                video_frames_dropped_busy,
                 audio_frames,
                 video_thread_timed_out,
                 audio_thread_timed_out,
@@ -806,7 +818,13 @@ impl Muxer for AVFoundationMp4Muxer {
                             );
                         } else {
                             let err = anyhow!("Failed to finish MP4 encoder: {e}");
-                            warn!("{err:#}");
+                            // Uploaded logs keep warnings but not the info line
+                            // above, and these counts tell a capture that
+                            // delivered nothing from an encoder that took nothing.
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy, audio_frames, "{err:#}"
+                            );
                             if finish_error.is_none() {
                                 finish_error = Some(err);
                             }

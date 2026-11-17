@@ -17,7 +17,11 @@ mod segments;
 mod telemetry;
 mod thumbnail;
 
-pub use audio::{AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches};
+#[cfg(feature = "test-hooks")]
+pub use audio::set_progressive_audio_allocation_limit;
+pub use audio::{
+    AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches, voice_eq_filters,
+};
 #[cfg(feature = "test-hooks")]
 pub use audio_output::OfflineAudioSink;
 pub use audio_output::{

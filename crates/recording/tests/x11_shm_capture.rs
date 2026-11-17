@@ -6,7 +6,9 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use cap_recording::screen_capture::{X11_SHM_PUBLISH_SLOTS, X11Grabber, X11InputConfig};
+use cap_recording::screen_capture::{
+    X11_SHM_PUBLISH_SLOTS, X11Grabber, X11InputConfig, x11_capture_rect, x11_screenshot_rect,
+};
 use x11rb::{
     connection::Connection,
     protocol::xproto::{
@@ -169,6 +171,53 @@ fn expected_bgr(x: u32, y: u32, width: u32, height: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+#[test]
+fn screenshot_rect_preserves_odd_display_and_area_edges() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(321, 241, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    draw_pattern(&conn, root, 321, 241);
+
+    for (crop, expected) in [
+        (None, (0, 0, 321, 241)),
+        (Some((11.0, 13.0, 101.0, 99.0)), (11, 13, 101, 99)),
+        (Some((220.0, 142.0, 200.0, 200.0)), (220, 142, 101, 99)),
+        (Some((320.0, 240.0, 1.0, 1.0)), (320, 240, 1, 1)),
+    ] {
+        let rect = x11_screenshot_rect(0.0, 0.0, 321.0, 241.0, crop).unwrap();
+        assert_eq!(rect, expected);
+        let (x, y, width, height) = rect;
+        for shm in [true, false] {
+            let mut grabber = grabber(&config(&server.display(), x, y, width, height), shm);
+            let frame = grabber.grab().unwrap();
+            assert_eq!((frame.width(), frame.height()), (width, height));
+            assert_eq!(
+                bgr_rows(&frame),
+                expected_bgr(x as u32, y as u32, width, height)
+            );
+        }
+    }
+}
+
+#[test]
+fn screenshot_rect_keeps_secondary_display_offsets_without_changing_video_bounds() {
+    let crop = Some((10.25, 20.5, 800.25, 600.25));
+    assert_eq!(
+        x11_screenshot_rect(-1920.0, 0.0, 1920.0, 1080.0, crop).unwrap(),
+        (-1910, 20, 801, 601)
+    );
+    assert_eq!(
+        x11_capture_rect(-1920.0, 0.0, 1920.0, 1080.0, crop).unwrap(),
+        (-1910, 20, 800, 600)
+    );
+    assert_eq!(
+        x11_capture_rect(0.0, 0.0, 321.0, 241.0, Some((320.0, 240.0, 1.0, 1.0))).unwrap(),
+        (319, 239, 2, 2)
+    );
 }
 
 fn page_aligned(ptr: *const u8) -> bool {

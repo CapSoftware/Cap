@@ -8,7 +8,7 @@ vi.mock("@cap/ui", () => ({
 	Button: ({ children, ...props }: React.ComponentProps<"button">) =>
 		React.createElement("button", { type: "button", ...props }, children),
 }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({

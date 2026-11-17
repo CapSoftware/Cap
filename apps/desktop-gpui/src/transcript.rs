@@ -1,5 +1,5 @@
-//! Text-based editing: the transcript panel beside the player, where deleting
-//! words cuts them out of the video.
+//! Text-based editing: the Transcript tab of the editor's side panel, where
+//! deleting words cuts them out of the video.
 //!
 //! The source of truth never changes shape. Caption words stay in source time
 //! in `project.captions`, the clip list in `project.timeline` says what plays,
@@ -15,8 +15,9 @@ pub(crate) mod model;
 #[cfg(test)]
 mod tests;
 mod view;
+pub(crate) mod word_edit;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -24,19 +25,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cap_project::disfluency::DisfluencyKind;
-use gpui::{FocusHandle, ListAlignment, ListState, TextLayout, px};
+use gpui::{FocusHandle, ListAlignment, ListOffset, ListState, Pixels, Point, TextLayout, px};
 
 use self::energy::EnergyEnvelope;
 use self::model::{TranscriptDoc, TranscriptEdl};
 
 pub(crate) const STORE_SECTION: &str = "editorTranscript";
-const SPLIT_KEY: &str = "playerShare";
 const PAUSE_LONGER_KEY: &str = "pauseLongerThan";
 const PAUSE_KEEP_KEY: &str = "pauseKeep";
-
-pub(crate) const MIN_PLAYER_SHARE: f32 = 0.3;
-pub(crate) const MAX_PLAYER_SHARE: f32 = 0.75;
-const DEFAULT_PLAYER_SHARE: f32 = 0.55;
 
 pub(crate) const DEFAULT_PAUSE_LONGER_THAN: f64 = 1.0;
 pub(crate) const DEFAULT_PAUSE_KEEP: f64 = 0.5;
@@ -64,6 +60,21 @@ impl WordSelection {
     pub fn range(self) -> Range<usize> {
         self.anchor.min(self.focus)..self.anchor.max(self.focus) + 1
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WordEditor {
+    pub word: usize,
+    pub text: String,
+    pub start: f64,
+}
+
+/// Where the edited word sits inside its paragraph's text, measured when the
+/// paragraph paints so the field lands exactly over it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WordAnchor {
+    pub origin: Point<Pixels>,
+    pub width: Pixels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,8 +168,9 @@ pub(crate) fn category_index(kind: DisfluencyKind) -> usize {
 }
 
 pub(crate) struct TranscriptState {
+    /// Whether the side panel is on its Transcript tab. Switch with
+    /// `EditorWindow::set_panel_tab`, which keeps it exclusive with Clips.
     pub open: bool,
-    pub player_share: f32,
     pub doc: Option<Arc<TranscriptDoc>>,
     pub edl: Option<Arc<TranscriptEdl>>,
     /// Set by every project change; the models are only re-derived while the
@@ -169,6 +181,12 @@ pub(crate) struct TranscriptState {
     pub selection: Option<WordSelection>,
     pub caret: Option<usize>,
     pub drag: Option<WordDrag>,
+    pub editing: Option<WordEditor>,
+    pub edit_input: Option<gpui::Entity<crate::ui::TextInputState>>,
+    pub edit_anchor: Rc<Cell<Option<WordAnchor>>>,
+    /// The press that started this click restored a cut, so its double click
+    /// must not also open the word for editing.
+    pub restored_on_press: bool,
     pub active: Option<usize>,
     pub hovered_cut: Option<usize>,
     pub user_scrolled: Option<Instant>,
@@ -176,7 +194,6 @@ pub(crate) struct TranscriptState {
     pub cleanup: CleanupState,
     pub focus: FocusHandle,
     pub layouts: Rc<RefCell<HashMap<usize, TextLayout>>>,
-    pub resize: Option<(f32, f32)>,
     pub energy: Option<Arc<EnergyEnvelope>>,
     pub energy_loading: bool,
     pub energy_offsets: Vec<(f64, f64)>,
@@ -185,16 +202,8 @@ pub(crate) struct TranscriptState {
 
 impl TranscriptState {
     pub fn new(focus: FocusHandle) -> Self {
-        let player_share = crate::store::store_section(STORE_SECTION)
-            .get(SPLIT_KEY)
-            .and_then(serde_json::Value::as_f64)
-            .filter(|value| value.is_finite())
-            .map_or(DEFAULT_PLAYER_SHARE, |value| {
-                (value as f32).clamp(MIN_PLAYER_SHARE, MAX_PLAYER_SHARE)
-            });
         Self {
             open: false,
-            player_share,
             doc: None,
             edl: None,
             dirty: true,
@@ -203,6 +212,10 @@ impl TranscriptState {
             selection: None,
             caret: None,
             drag: None,
+            editing: None,
+            edit_input: None,
+            edit_anchor: Rc::new(Cell::new(None)),
+            restored_on_press: false,
             active: None,
             hovered_cut: None,
             user_scrolled: None,
@@ -210,20 +223,11 @@ impl TranscriptState {
             cleanup: CleanupState::new(),
             focus,
             layouts: Rc::new(RefCell::new(HashMap::new())),
-            resize: None,
             energy: None,
             energy_loading: false,
             energy_offsets: Vec::new(),
             voiced_for: 0,
         }
-    }
-
-    pub fn persist_split(&self) {
-        crate::store::set_store_setting(
-            STORE_SECTION,
-            SPLIT_KEY,
-            serde_json::json!(self.player_share),
-        );
     }
 
     pub fn refresh(
@@ -238,6 +242,7 @@ impl TranscriptState {
         let Some(captions) = project.captions.as_ref().filter(|_| has_words(project)) else {
             let changed = self.doc.is_some();
             self.doc = None;
+            self.editing = None;
             self.edl = None;
             self.list.reset(0);
             self.selection = None;
@@ -253,7 +258,23 @@ impl TranscriptState {
             .is_none_or(|doc| doc.signature != signature)
         {
             let doc = TranscriptDoc::build(captions);
+            if let Some(editing) = self.editing.as_mut() {
+                match word_edit::locate(&doc.words, editing.word, &editing.text, editing.start) {
+                    Some(word) => {
+                        editing.word = word;
+                        editing.start = doc.words[word].start;
+                    }
+                    None => self.editing = None,
+                }
+            }
+            let scroll = self.doc.is_some().then(|| self.list.logical_scroll_top());
             self.list.reset(doc.paragraphs.len());
+            if let Some(scroll) = scroll.filter(|_| !doc.paragraphs.is_empty()) {
+                self.list.scroll_to(ListOffset {
+                    item_ix: scroll.item_ix.min(doc.paragraphs.len() - 1),
+                    offset_in_item: scroll.offset_in_item,
+                });
+            }
             self.layouts.borrow_mut().clear();
             self.selection = None;
             self.caret = None;
@@ -294,6 +315,83 @@ impl TranscriptState {
             search.current = search.current.min(search.matches.len().saturating_sub(1));
         }
         changed
+    }
+}
+
+/// Lands one caption refinement in the project and in each undo entry: the
+/// refined word times go in, then the word cuts made before they were known
+/// move with their words.
+pub(crate) struct RefinementLanding<'a> {
+    refined: &'a crate::transcription::RefinedCaptions,
+    recording_durations: &'a [f64],
+    removed_takes: &'a [cap_project::TimelineSegment],
+    energy: Option<&'a EnergyEnvelope>,
+    docs: HashMap<u64, Rc<TranscriptDoc>>,
+}
+
+impl<'a> RefinementLanding<'a> {
+    pub fn new(
+        refined: &'a crate::transcription::RefinedCaptions,
+        recording_durations: &'a [f64],
+        removed_takes: &'a [cap_project::TimelineSegment],
+        energy: Option<&'a EnergyEnvelope>,
+    ) -> Self {
+        Self {
+            refined,
+            recording_durations,
+            removed_takes,
+            energy,
+            docs: HashMap::new(),
+        }
+    }
+
+    fn doc(&mut self, captions: &cap_project::CaptionsData) -> Rc<TranscriptDoc> {
+        let energy = self.energy;
+        self.docs
+            .entry(model::captions_signature(Some(captions)))
+            .or_insert_with(|| {
+                let mut doc = TranscriptDoc::build(captions);
+                doc.refine_voiced(energy);
+                Rc::new(doc)
+            })
+            .clone()
+    }
+
+    /// `None` when the refinement changed nothing in `project`, otherwise how
+    /// many word cuts moved.
+    pub fn land(&mut self, project: &mut cap_project::ProjectConfiguration) -> Option<usize> {
+        let before = project
+            .captions
+            .as_ref()
+            .filter(|captions| captions.source_timed)
+            .map(|captions| self.doc(captions));
+        if !crate::transcription::apply_refined_captions(
+            project,
+            self.refined,
+            self.recording_durations,
+        ) {
+            return None;
+        }
+        let after = project.captions.as_ref().map(|captions| self.doc(captions));
+        let (Some(before), Some(after), Some(timeline)) =
+            (before, after, project.timeline.as_mut())
+        else {
+            return Some(0);
+        };
+        let caption_track = std::mem::take(&mut timeline.caption_segments);
+        let moved = cuts::follow_refined_words(
+            timeline,
+            self.recording_durations,
+            self.removed_takes,
+            &before,
+            &after,
+            self.energy,
+        );
+        timeline.caption_segments = caption_track;
+        if moved > 0 {
+            cap_project::synchronize_captions(project, self.recording_durations);
+        }
+        Some(moved)
     }
 }
 

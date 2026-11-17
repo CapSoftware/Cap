@@ -3,15 +3,18 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
-import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { makeCurrentUser, Storage, VideosPolicy } from "@cap/web-backend";
+import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	resolveVideoDownloadAccess,
+	type VideoDownloadVariant,
+} from "@/lib/video-download-access";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
-export type VideoDownloadVariant = "current" | "original";
+export type { VideoDownloadVariant };
 export type VideoDownloadInfo =
 	| {
 			success: true;
@@ -75,7 +78,7 @@ export async function getVideoDownloadInfo(
 	variant: VideoDownloadVariant = "current",
 ): Promise<VideoDownloadInfo> {
 	const user = await getCurrentUser();
-	if (!user || !videoId) {
+	if (!videoId) {
 		throw new Error("Missing required data for downloading video");
 	}
 
@@ -84,16 +87,28 @@ export async function getVideoDownloadInfo(
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) throw new Error("Video not found");
+	if (!video) {
+		throw new Error(
+			user ? "Video not found" : "Missing required data for downloading video",
+		);
+	}
 
-	const allowed = await canUserDownloadVideo({
-		userId: user.id,
-		ownerId: video.ownerId,
-		videoId,
-	});
+	const viewer = Option.fromNullable(user).pipe(Option.map(makeCurrentUser));
+	const access = await resolveVideoDownloadAccess({ viewer, video, variant });
 
-	if (!allowed) {
-		throw new Error("You don't have permission to download this video");
+	if (access === "rate_limited") {
+		return {
+			success: false,
+			error: "Too many downloads. Please wait a moment and try again.",
+		};
+	}
+
+	if (access === "denied") {
+		throw new Error(
+			user
+				? "You don't have permission to download this video"
+				: "Missing required data for downloading video",
+		);
 	}
 
 	if (variant === "current") {
@@ -118,6 +133,22 @@ export async function getVideoDownloadInfo(
 						: "Video is still processing. Try again once it has finished.",
 			};
 		}
+	}
+
+	// Viewers who are not members only get the published MP4, the same rule the
+	// dashboard download applies. Older HLS caps have no published MP4, and their
+	// result.mp4 is not what the share page plays.
+	if (
+		access === "viewer" &&
+		!(
+			Video.Video.getSource(decodeStorageVideo(video)) instanceof
+			Video.Mp4Source
+		)
+	) {
+		return {
+			success: false,
+			error: "Video file is not available for download yet.",
+		};
 	}
 
 	let downloadKey = `${video.ownerId}/${videoId}/result.mp4`;
@@ -160,8 +191,14 @@ export async function getVideoDownloadInfo(
 				Effect.catchAll(() => Effect.succeed(false)),
 			);
 			if (!exists) return null;
-			return yield* bucket.getSignedObjectUrl(downloadKey);
-		}).pipe(provideOptionalAuth, runPromise);
+			return yield* bucket.getSignedDownloadUrl(downloadKey, filename);
+		}).pipe(
+			(effect) =>
+				Option.isSome(viewer)
+					? Effect.provideService(effect, CurrentUser, viewer.value)
+					: effect,
+			runPromise,
+		);
 
 		if (!downloadUrl) {
 			return {

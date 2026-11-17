@@ -10,8 +10,7 @@ import {
 	Input,
 } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
-import { faPeopleCarryBox } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPeopleCarryBox } from "@fortawesome/free-solid-svg-icons/faPeopleCarryBox";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { toast } from "sonner";
@@ -21,6 +20,7 @@ import {
 	getLoomMigrationDashboard,
 	requestLoomMigration,
 } from "@/actions/loom-concierge";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { LoomMigrationView } from "@/lib/loom-concierge";
 import { unwrapLoomMigrationResult } from "@/lib/loom-migration-state";
 

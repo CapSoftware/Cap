@@ -104,9 +104,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let detail = handle.update(cx, |view, window, cx| -> String {
             match name {
                 "open" => {
-                    if !view.transcript.open {
-                        view.toggle_transcript(window, cx);
-                    }
+                    view.set_panel_tab(crate::editor_side_panel::PanelTab::Transcript, window, cx);
                     format!(
                         "{} words, {} paragraphs",
                         view.transcript

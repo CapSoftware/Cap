@@ -49,6 +49,7 @@ async function renderEmbed(
 	videoSpeed: number | undefined,
 	orgSpeed: number | undefined,
 	minimal = false,
+	overrides: Record<string, unknown> = {},
 ) {
 	const video = {
 		id: "video",
@@ -60,6 +61,7 @@ async function renderEmbed(
 		orgSettings:
 			orgSpeed === undefined ? null : { defaultPlaybackSpeed: orgSpeed },
 		transcriptionStatus: "COMPLETE",
+		...overrides,
 	};
 	mocks.select.mockImplementation((selection: Record<string, unknown>) => {
 		const rows =
@@ -91,6 +93,7 @@ async function renderEmbed(
 		defaultPlaybackSpeed?: number;
 		minimal: boolean;
 		callToAction: { label: string; url: string } | null;
+		data: Record<string, unknown>;
 	}>;
 }
 
@@ -114,6 +117,38 @@ describe("embed default playback speed", () => {
 		} else {
 			expect(embed.props.callToAction).toBeNull();
 		}
+	});
+
+	it("serves the workspace default on a newer video without exposing it", async () => {
+		const embed = await renderEmbed(undefined, undefined, false, {
+			settings: {},
+			createdAt: new Date("2026-10-02T00:00:00.000Z"),
+			orgSettings: {
+				disableComments: true,
+				defaultCallToAction: {
+					label: "Talk to sales",
+					url: "https://example.com/sales",
+					enabledAt: "2026-10-01T00:00:00.000Z",
+				},
+			},
+		});
+		expect(embed.props.callToAction).toMatchObject({ label: "Talk to sales" });
+		expect(embed.props.data).not.toHaveProperty("orgSettings");
+	});
+
+	it("keeps the workspace default off older videos", async () => {
+		const embed = await renderEmbed(undefined, undefined, false, {
+			settings: {},
+			createdAt: new Date("2026-09-01T00:00:00.000Z"),
+			orgSettings: {
+				defaultCallToAction: {
+					label: "Talk to sales",
+					url: "https://example.com/sales",
+					enabledAt: "2026-10-01T00:00:00.000Z",
+				},
+			},
+		});
+		expect(embed.props.callToAction).toBeNull();
 	});
 
 	it.each([

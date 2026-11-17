@@ -178,6 +178,7 @@ const repoLayers = (failMemberships: boolean) => {
 					),
 				hasViewerGrant: (id: Video.VideoId, email: string) =>
 					Effect.succeed(fixtures[id]?.grants?.includes(email) ?? false),
+				isLinkOpenToAnyone: () => Effect.succeed(false),
 				prepareDelete: vi.fn(),
 				delete: vi.fn(),
 				create: vi.fn(),

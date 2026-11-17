@@ -721,6 +721,13 @@ pub(crate) fn send_with_stall_budget_flume_for<T>(
     }
 }
 
+/// An encoder or writer thread that did not finish in time and may still be
+/// running.
+#[cfg(any(test, target_os = "macos", windows))]
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct BlockingThreadStillRunning(String);
+
 #[cfg(any(test, target_os = "macos", windows))]
 pub(crate) fn wait_for_blocking_thread_finish(
     handle: std::thread::JoinHandle<anyhow::Result<()>>,
@@ -739,10 +746,9 @@ pub(crate) fn wait_for_blocking_thread_finish(
 
         if start.elapsed() > timeout {
             drop(spawn_blocking_thread_timeout_cleanup(handle, label));
-            return BlockingThreadFinish::TimedOut(anyhow!(
-                "{label} did not finish within {:?}",
-                timeout
-            ));
+            return BlockingThreadFinish::TimedOut(anyhow::Error::new(BlockingThreadStillRunning(
+                format!("{label} did not finish within {timeout:?}"),
+            )));
         }
 
         std::thread::sleep(Duration::from_millis(50));
@@ -2290,6 +2296,19 @@ pub enum AudioAnchor {
     PipelineEpoch,
 }
 
+/// macOS and Windows confirm a failed pipeline's Stop from its own joined
+/// tasks. Linux confirms through its lifecycle scopes instead.
+const STOP_CONFIRMED_BY_JOINED_TASKS: bool = cfg!(any(test, target_os = "macos", windows));
+
+/// A pipeline that already ended keeps nothing capturing once every one of
+/// its tasks has exited and its sources stopped. Stop can then confirm
+/// capture ended and report the failure as unusable media.
+#[derive(Default)]
+struct CaptureExit {
+    source_stop_failed: AtomicBool,
+    joined: AtomicBool,
+}
+
 pub struct SetupCtx {
     tasks: TaskPool,
     health_tx: HealthSender,
@@ -2297,6 +2316,7 @@ pub struct SetupCtx {
     stop_token: CancellationToken,
     stop_signal: PipelineStopSignal,
     digital_silence_ms: Arc<AtomicU64>,
+    capture_exit: Arc<CaptureExit>,
 }
 
 impl SetupCtx {
@@ -2313,6 +2333,7 @@ impl SetupCtx {
             stop_token,
             stop_signal,
             digital_silence_ms: Arc::new(AtomicU64::new(0)),
+            capture_exit: Arc::default(),
         }
     }
 
@@ -3035,6 +3056,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
 
         let audio_gap_summary = Arc::new(OnceLock::new());
         let digital_silence_ms = setup_ctx.digital_silence_ms();
+        let capture_exit = setup_ctx.capture_exit.clone();
 
         finish_build(
             setup_ctx,
@@ -3078,6 +3100,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
             digital_silence_ms,
+            capture_exit,
         })
     }
 }
@@ -3136,6 +3159,7 @@ impl OutputPipelineBuilder<NoVideo> {
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
         let audio_gap_summary = Arc::new(OnceLock::new());
         let digital_silence_ms = setup_ctx.digital_silence_ms();
+        let capture_exit = setup_ctx.capture_exit.clone();
 
         finish_build(
             setup_ctx,
@@ -3172,6 +3196,7 @@ impl OutputPipelineBuilder<NoVideo> {
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
             digital_silence_ms,
+            capture_exit,
         })
     }
 }
@@ -3250,10 +3275,16 @@ async fn finish_build(
         );
     }
 
+    #[cfg(debug_assertions)]
+    if has_video {
+        inject_debug_pipeline_failure(&mut setup_ctx, stop_token.clone());
+    }
+
     let scope = PipelineBuildScope::current();
     let completion = scope.as_ref().map(PipelineBuildScope::task_completion);
     let drain_owned_tasks = scope.is_some();
     let task_scope = scope.clone();
+    let capture_exit = setup_ctx.capture_exit.clone();
     tokio::spawn(async move {
         let _completion = completion;
         async move {
@@ -3268,7 +3299,20 @@ async fn finish_build(
             );
 
             let mut first_error = None;
-            while let Some((result, name)) = futures.next().await {
+            let mut unowned_drain_deadline = None;
+            loop {
+                let next = match unowned_drain_deadline {
+                    Some(deadline) => {
+                        match tokio::time::timeout_at(deadline, futures.next()).await {
+                            Ok(next) => next,
+                            Err(_) => break,
+                        }
+                    }
+                    None => futures.next().await,
+                };
+                let Some((result, name)) = next else {
+                    return (first_error.map_or(Ok(()), Err), true);
+                };
                 let error = match result {
                     Err(_) => Some(anyhow::anyhow!("Task {name} failed unexpectedly")),
                     Ok(Err(error)) => Some(task_failure(name, &error)),
@@ -3281,18 +3325,22 @@ async fn finish_build(
                     {
                         scope.fail_required(format!("Required pipeline task failed: {error:#}"));
                     }
-                    if !drain_owned_tasks {
-                        return Err(error);
+                    if !drain_owned_tasks && !STOP_CONFIRMED_BY_JOINED_TASKS {
+                        return (Err(error), false);
                     }
                     if first_error.is_none() {
+                        if !drain_owned_tasks {
+                            unowned_drain_deadline =
+                                Some(tokio::time::Instant::now() + UNOWNED_TASK_DRAIN_TIMEOUT);
+                        }
                         first_error = Some(error);
                     }
                 }
             }
 
-            first_error.map_or(Ok(()), Err)
+            (first_error.map_or(Ok(()), Err), false)
         }
-        .then(async move |res| {
+        .then(async move |(res, tasks_exited)| {
             let muxer = muxer.lock_owned().await;
             let muxer_res = match &scope {
                 Some(scope) if scope.requires_joined_stop() => {
@@ -3309,6 +3357,12 @@ async fn finish_build(
                 }
             }
 
+            capture_exit.joined.store(
+                tasks_exited
+                    && !capture_exit.source_stop_failed.load(Ordering::Acquire)
+                    && !muxer_work_may_run(&muxer_res),
+                Ordering::Release,
+            );
             let _ = done_tx.send(resolve_pipeline_completion(res, muxer_res, &stop_signal));
         })
         .await
@@ -3317,6 +3371,51 @@ async fn finish_build(
     info!("Built pipeline for output {}", path.display());
 
     Ok(())
+}
+
+/// After a task fails, a pipeline without a build scope waits this long for
+/// its other tasks: past the video source's own 5s stop deadline.
+const UNOWNED_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// A muxer whose subprocess was not reaped, or whose encoder or writer thread
+/// did not finish, may still be working, so its pipeline has not fully exited.
+fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool {
+    let error = match muxer_result {
+        Err(error) | Ok(Err(error)) => error,
+        Ok(Ok(())) => return false,
+    };
+    error.chain().any(|cause| {
+        #[cfg(any(test, target_os = "macos", windows))]
+        if cause.is::<BlockingThreadStillRunning>() {
+            return true;
+        }
+        cap_enc_ffmpeg::StorageStalled::is_in(cause)
+            || cause
+                .downcast_ref::<super::oop_muxer::MuxerSubprocessFinishError>()
+                .is_some_and(|error| !error.child_reaped())
+    })
+}
+
+/// Debug builds only: `CAP_RECORDING_FAIL_PIPELINE_AFTER_MS=<ms>` fails every
+/// video pipeline that runs that long, the way a failed encoder or capture
+/// task would. The real-app tests use it to drive Stop after a failure.
+#[cfg(debug_assertions)]
+fn inject_debug_pipeline_failure(setup_ctx: &mut SetupCtx, stop_token: CancellationToken) {
+    let Some(after) = std::env::var("CAP_RECORDING_FAIL_PIPELINE_AFTER_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(Duration::from_millis)
+    else {
+        return;
+    };
+    setup_ctx
+        .tasks()
+        .spawn("debug-injected-failure", async move {
+            tokio::select! {
+                _ = stop_token.cancelled() => Ok(()),
+                _ = tokio::time::sleep(after) => Err(anyhow!("Injected pipeline failure")),
+            }
+        });
 }
 
 async fn finish_muxer_owned(
@@ -3474,6 +3573,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         } else {
             (None, None)
         };
+    let capture_exit = setup_ctx.capture_exit.clone();
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
         let scope = PipelineBuildScope::current();
@@ -3529,15 +3629,26 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             anyhow!("Windows video source shutdown is unconfirmed after 5s")
                         })
                         .and_then(|result| result);
+                    if stopped.is_err() {
+                        capture_exit
+                            .source_stop_failed
+                            .store(true, Ordering::Release);
+                    }
                     started?;
                     return stopped;
                 }
                 #[cfg(not(windows))]
                 match tokio::time::timeout(Duration::from_secs(5), video_source.stop()).await {
                     Ok(Err(error)) => {
+                        capture_exit
+                            .source_stop_failed
+                            .store(true, Ordering::Release);
                         error!("Video source stop failed: {error:#}");
                     }
                     Err(_) => {
+                        capture_exit
+                            .source_stop_failed
+                            .store(true, Ordering::Release);
                         error!("Video source stop timed out after 5s, proceeding with shutdown");
                     }
                     Ok(Ok(())) => {}
@@ -3984,6 +4095,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 async fn stop_audio_sources_together(
     sources: &mut [ErasedAudioSource],
     required_scope: Option<&PipelineBuildScope>,
+    capture_exit: &CaptureExit,
 ) {
     let results = futures::future::join_all(
         sources
@@ -3993,6 +4105,11 @@ async fn stop_audio_sources_together(
     .await;
     for (source, result) in sources.iter_mut().zip(results) {
         let cleanup_scope = source.cleanup_scope.take();
+        if result.is_err() {
+            capture_exit
+                .source_stop_failed
+                .store(true, Ordering::Release);
+        }
         if let Err(error) = result
             && let Some(scope) = cleanup_scope.as_ref().or(required_scope)
         {
@@ -4023,10 +4140,16 @@ fn clip_to_capture_time(
 async fn stop_audio_sources(
     sources: &mut [ErasedAudioSource],
     required_scope: Option<&PipelineBuildScope>,
+    capture_exit: &CaptureExit,
 ) {
     for source in sources {
         let result = (source.stop_fn)(source.inner.as_mut()).await;
         let cleanup_scope = source.cleanup_scope.take();
+        if result.is_err() {
+            capture_exit
+                .source_stop_failed
+                .store(true, Ordering::Release);
+        }
         if let Err(error) = result
             && let Some(scope) = cleanup_scope.as_ref().or(required_scope)
         {
@@ -4063,6 +4186,7 @@ impl PreparedAudioSources {
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
         let master_clock = setup_ctx.master_clock().clone();
+        let capture_exit = setup_ctx.capture_exit.clone();
         let required_scope =
             PipelineBuildScope::current().filter(PipelineBuildScope::requires_joined_stop);
         let allow_audio_degradation = has_video && required_scope.is_none();
@@ -4172,11 +4296,15 @@ impl PreparedAudioSources {
                         stop_audio_sources_together(
                             &mut self.erased_audio_sources,
                             required_scope.as_ref(),
+                            &capture_exit,
                         ),
                     )
                     .await
                     .is_err()
                     {
+                        capture_exit
+                            .source_stop_failed
+                            .store(true, Ordering::Release);
                         warn!("Mixed audio sources did not stop within the stop deadline");
                         // Dropping a source with its cleanup scope would run
                         // the stop that just hung again, as scope cleanup.
@@ -4285,7 +4413,8 @@ impl PreparedAudioSources {
                 if let Some(scope) = &required_scope
                     && !mixed_sources_stopped
                 {
-                    stop_audio_sources(&mut self.erased_audio_sources, Some(scope)).await;
+                    stop_audio_sources(&mut self.erased_audio_sources, Some(scope), &capture_exit)
+                        .await;
                 }
 
                 if let Some(target_elapsed) = cancellation_target_elapsed
@@ -4410,7 +4539,7 @@ impl PreparedAudioSources {
                 }
 
                 if required_scope.is_none() && !mixed_sources_stopped {
-                    stop_audio_sources(&mut self.erased_audio_sources, None).await;
+                    stop_audio_sources(&mut self.erased_audio_sources, None, &capture_exit).await;
                 }
 
                 if !has_video {
@@ -4981,6 +5110,7 @@ pub struct OutputPipeline {
     health_rx: Option<HealthReceiver>,
     audio_gap_summary: Arc<OnceLock<AudioGapSummary>>,
     digital_silence_ms: Arc<AtomicU64>,
+    capture_exit: Arc<CaptureExit>,
 }
 
 pub struct FinishedOutputPipeline {
@@ -4998,6 +5128,9 @@ pub struct FinishedOutputPipeline {
 pub(crate) struct OutputPipelineStopOutcome {
     pub(crate) finished: FinishedOutputPipeline,
     pub(crate) media_error: Option<anyhow::Error>,
+    /// `media_error` is the pipeline's own failure: it ended with an error,
+    /// then every task exited and its sources stopped.
+    pub(crate) pipeline_failed: bool,
 }
 
 #[derive(Clone, Default)]
@@ -5072,10 +5205,15 @@ impl OutputPipeline {
     pub(crate) async fn stop_with_outcome(mut self) -> anyhow::Result<OutputPipelineStopOutcome> {
         drop(self.stop_token.take());
 
+        let mut pipeline_failed = false;
         let media_error = if self.joined_stop {
             match self.done_fut.clone().await {
                 Err(error) if error.is_caused_by::<PipelineStoppedByUser>() => None,
                 Err(error) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {
+                    Some(anyhow::Error::new(error))
+                }
+                Err(error) if self.capture_exited() => {
+                    pipeline_failed = true;
                     Some(anyhow::Error::new(error))
                 }
                 Err(error) => return Err(error.into()),
@@ -5086,6 +5224,10 @@ impl OutputPipeline {
             match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
                 Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => None,
                 Ok(Err(error)) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {
+                    Some(anyhow::Error::new(error))
+                }
+                Ok(Err(error)) if self.capture_exited() => {
+                    pipeline_failed = true;
                     Some(anyhow::Error::new(error))
                 }
                 Ok(Err(error)) => return Err(error.into()),
@@ -5132,7 +5274,14 @@ impl OutputPipeline {
                 },
             },
             media_error,
+            pipeline_failed,
         })
+    }
+
+    /// The pipeline ended with an error, but every task exited and its
+    /// sources stopped, so nothing of it is still capturing.
+    fn capture_exited(&self) -> bool {
+        STOP_CONFIRMED_BY_JOINED_TASKS && self.capture_exit.joined.load(Ordering::Acquire)
     }
 
     pub fn pause(&self) {
@@ -11664,6 +11813,13 @@ mod build_scope_tests {
         VideoStartPending,
         #[cfg(windows)]
         VideoStop,
+        MuxSend,
+        MuxSendAndVideoStop,
+        MuxSendAndAudioStop,
+        MuxerFinish,
+        MuxerFinishThreadRunning,
+        MuxerFinishWriterStalled,
+        MuxerFinishSegmentWriterStalled,
         None,
     }
 
@@ -11675,6 +11831,7 @@ mod build_scope_tests {
         stopped: Arc<AtomicUsize>,
         finished: Arc<AtomicUsize>,
         setup_pending: Arc<tokio::sync::Notify>,
+        send_failing_frame: Arc<tokio::sync::Notify>,
     }
 
     impl Probe {
@@ -11686,7 +11843,17 @@ mod build_scope_tests {
                 stopped: Arc::new(AtomicUsize::new(0)),
                 finished: Arc::new(AtomicUsize::new(0)),
                 setup_pending: Arc::new(tokio::sync::Notify::new()),
+                send_failing_frame: Arc::new(tokio::sync::Notify::new()),
             }
+        }
+
+        fn fails_mux_send(&self) -> bool {
+            matches!(
+                self.stage,
+                FailureStage::MuxSend
+                    | FailureStage::MuxSendAndVideoStop
+                    | FailureStage::MuxSendAndAudioStop
+            )
         }
 
         fn task(&self, tasks: &mut TaskPool) {
@@ -11746,6 +11913,15 @@ mod build_scope_tests {
                 if self.probe.stage == FailureStage::VideoStartPending {
                     self.probe.setup_pending.notified().await;
                 }
+                if self.probe.fails_mux_send()
+                    && let Some(mut sender) = self.sender.clone()
+                {
+                    let send = self.probe.send_failing_frame.clone();
+                    tokio::spawn(async move {
+                        send.notified().await;
+                        let _ = sender.send(Frame(Timestamp::Instant(Instant::now()))).await;
+                    });
+                }
                 Ok(())
             }
             .boxed()
@@ -11757,6 +11933,9 @@ mod build_scope_tests {
                 drop(self.sender.take());
                 #[cfg(windows)]
                 if self.probe.stage == FailureStage::VideoStop {
+                    anyhow::bail!("video stop fault");
+                }
+                if self.probe.stage == FailureStage::MuxSendAndVideoStop {
                     anyhow::bail!("video stop fault");
                 }
                 Ok(())
@@ -11808,6 +11987,9 @@ mod build_scope_tests {
         async fn stop(&mut self) -> anyhow::Result<()> {
             self.probe.stopped.fetch_add(1, Ordering::AcqRel);
             drop(self.sender.take());
+            if self.probe.stage == FailureStage::MuxSendAndAudioStop {
+                anyhow::bail!("audio stop fault");
+            }
             Ok(())
         }
     }
@@ -11838,6 +12020,23 @@ mod build_scope_tests {
 
         fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
             self.0.finished.fetch_add(1, Ordering::AcqRel);
+            if self.0.stage == FailureStage::MuxerFinish {
+                anyhow::bail!("Failed to finish MP4 encoder: NotWriting");
+            }
+            if self.0.stage == FailureStage::MuxerFinishThreadRunning {
+                return Ok(Err(anyhow::Error::new(BlockingThreadStillRunning(
+                    "encoder thread did not finish within 5s".into(),
+                ))));
+            }
+            if self.0.stage == FailureStage::MuxerFinishWriterStalled {
+                return Err(cap_enc_ffmpeg::ogg::FinishError::StorageStalled(
+                    cap_enc_ffmpeg::StorageStalled,
+                )
+                .into());
+            }
+            if self.0.stage == FailureStage::MuxerFinishSegmentWriterStalled {
+                return Err(std::io::Error::from(cap_enc_ffmpeg::StorageStalled).into());
+            }
             Ok(Ok(()))
         }
     }
@@ -11845,8 +12044,167 @@ mod build_scope_tests {
     impl VideoMuxer for Encoder {
         type VideoFrame = Frame;
         fn send_video_frame(&mut self, _: Frame, _: Duration) -> anyhow::Result<()> {
+            if self.0.fails_mux_send() {
+                anyhow::bail!("mux send fault");
+            }
             Ok(())
         }
+    }
+
+    /// A failed task already ended the pipeline: every task exited and the
+    /// video source stopped. Stop must say capture stopped and hand back the
+    /// failure as unusable media, with or without a build scope.
+    #[tokio::test]
+    async fn stop_after_a_task_failure_confirms_capture_stopped() {
+        for scoped in [true, false] {
+            let scope = PipelineBuildScope::new();
+            let probe = Probe::new(FailureStage::MuxSend, &scope);
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("failed.mp4");
+            let build = OutputPipeline::builder(path.clone())
+                .with_video::<Video>(probe.clone())
+                .build::<Encoder>(probe.clone());
+            let pipeline = if scoped {
+                finish_pipeline_startup(&scope, build).await
+            } else {
+                build.await
+            }
+            .unwrap();
+            probe.cancel.cancel();
+            probe.send_failing_frame.notify_one();
+            let failure = tokio::time::timeout(Duration::from_secs(5), pipeline.done_fut())
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert!(failure.to_string().contains("Task mux-video failed"));
+
+            let outcome =
+                tokio::time::timeout(Duration::from_secs(5), pipeline.stop_with_outcome())
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|error| {
+                        panic!("scoped {scoped}: capture had stopped, but Stop failed: {error:#}")
+                    });
+            let media_error = outcome.media_error.expect("the failure must stay visible");
+            assert!(format!("{media_error:#}").contains("mux send fault"));
+            assert_eq!(outcome.finished.path, path);
+            assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
+            assert_eq!(probe.finished.load(Ordering::Acquire), 1);
+            assert_eq!(probe.alive.load(Ordering::Acquire), 0);
+        }
+    }
+
+    /// A video source that could not confirm its stop may still be capturing,
+    /// so Stop stays unconfirmed even though the pipeline already failed.
+    #[tokio::test]
+    async fn stop_after_a_task_failure_stays_unconfirmed_when_the_source_stop_fails() {
+        for (scoped, stage) in [true, false].into_iter().flat_map(|scoped| {
+            [
+                FailureStage::MuxSendAndVideoStop,
+                FailureStage::MuxSendAndAudioStop,
+            ]
+            .map(|stage| (scoped, stage))
+        }) {
+            let scope = PipelineBuildScope::new();
+            let probe = Probe::new(stage, &scope);
+            let directory = tempfile::tempdir().unwrap();
+            let builder = OutputPipeline::builder(directory.path().join("failed.mp4"))
+                .with_video::<Video>(probe.clone());
+            let build = if stage == FailureStage::MuxSendAndAudioStop {
+                builder
+                    .with_audio_source::<Audio>(probe.clone())
+                    .build::<Encoder>(probe.clone())
+                    .boxed()
+            } else {
+                builder.build::<Encoder>(probe.clone()).boxed()
+            };
+            let pipeline = if scoped {
+                finish_pipeline_startup(&scope, build).await
+            } else {
+                build.await
+            }
+            .unwrap();
+            probe.cancel.cancel();
+            probe.send_failing_frame.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), pipeline.done_fut())
+                .await
+                .unwrap()
+                .unwrap_err();
+            let result = tokio::time::timeout(Duration::from_secs(5), pipeline.stop_with_outcome())
+                .await
+                .unwrap();
+            assert!(
+                result.is_err(),
+                "scoped {scoped}: Stop claimed capture stopped"
+            );
+            assert!(probe.stopped.load(Ordering::Acquire) >= 1);
+        }
+    }
+
+    /// An encoder that fails to finish during Stop (AVFoundation's
+    /// `NotWriting`) leaves nothing capturing either.
+    #[tokio::test]
+    async fn encoder_finish_failure_at_stop_confirms_capture_stopped() {
+        let scope = PipelineBuildScope::new();
+        let probe = Probe::new(FailureStage::MuxerFinish, &scope);
+        let directory = tempfile::tempdir().unwrap();
+        let pipeline = finish_pipeline_startup(
+            &scope,
+            OutputPipeline::builder(directory.path().join("display.mp4"))
+                .with_video::<Video>(probe.clone())
+                .build::<Encoder>(probe.clone()),
+        )
+        .await
+        .unwrap();
+        probe.cancel.cancel();
+        let outcome = tokio::time::timeout(Duration::from_secs(5), pipeline.stop_with_outcome())
+            .await
+            .unwrap()
+            .unwrap_or_else(|error| panic!("capture had stopped, but Stop failed: {error:#}"));
+        assert!(
+            format!("{:#}", outcome.media_error.unwrap()).contains("NotWriting"),
+            "the encoder failure must stay visible"
+        );
+        assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
+    }
+
+    /// An encoder thread or output writer that did not finish may still be
+    /// writing, so that stop stays unconfirmed.
+    #[tokio::test]
+    async fn encoder_or_writer_still_running_at_stop_stays_unconfirmed() {
+        for stage in [
+            FailureStage::MuxerFinishThreadRunning,
+            FailureStage::MuxerFinishWriterStalled,
+            FailureStage::MuxerFinishSegmentWriterStalled,
+        ] {
+            encoder_still_running_case(stage).await;
+        }
+    }
+
+    async fn encoder_still_running_case(stage: FailureStage) {
+        let scope = PipelineBuildScope::new();
+        let probe = Probe::new(stage, &scope);
+        let directory = tempfile::tempdir().unwrap();
+        let pipeline = finish_pipeline_startup(
+            &scope,
+            OutputPipeline::builder(directory.path().join("display.mp4"))
+                .with_video::<Video>(probe.clone())
+                .build::<Encoder>(probe.clone()),
+        )
+        .await
+        .unwrap();
+        probe.cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(5), pipeline.stop_with_outcome())
+            .await
+            .unwrap();
+        let Err(error) = result else {
+            panic!("Stop claimed capture stopped while the encoder or writer ran");
+        };
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("did not finish") || error.contains("storage stalled"),
+            "{error}"
+        );
     }
 
     impl AudioMuxer for Encoder {

@@ -1201,6 +1201,14 @@ impl SettingsWindow {
             if !confirmed {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
 
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
@@ -1210,6 +1218,7 @@ impl SettingsWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             tracing::info!(path = %path.display(), "deleted a recording");
@@ -1324,7 +1333,8 @@ impl SettingsWindow {
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = crate::app_windows::screenshot_editor_key(&path);
+        cx.spawn_in(window, async move |_this, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -1347,8 +1357,7 @@ impl SettingsWindow {
                 tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| this.refresh_screenshots(window, cx))
-                .ok();
+            crate::app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }
@@ -3168,7 +3177,8 @@ impl SettingsWindow {
             "recording-delete",
             "icons/trash.svg",
             tr::settings::recordings::delete(),
-            false,
+            // The recording being captured or finalized owns its folder.
+            library::is_recording_in_progress(&path),
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
         ))
@@ -3777,10 +3787,7 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     // "After a Studio recording" lives on the Shortcuts page,
-                    // next to the shortcuts it shapes. There is no
-                    // post-capture overlay in this app, so a stored
-                    // `showOverlay` means "reshow the main window"
-                    // (`app_windows.rs`) and is labelled "Show Cap".
+                    // next to the shortcuts it shapes.
                     self.setting_row(
                         tr::settings::general::recording::post_deletion::label(),
                         Some(tr::settings::general::recording::post_deletion::description()),

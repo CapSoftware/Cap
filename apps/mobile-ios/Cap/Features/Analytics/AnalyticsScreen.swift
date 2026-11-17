@@ -185,10 +185,16 @@ private struct AnalyticsContent: View {
     let data: AnalyticsData
     let range: AnalyticsRange
     let showsCaps: Bool
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var wide: Bool {
+        horizontalSizeClass == .regular && verticalSizeClass == .regular
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: showsCaps ? 2 : 3)
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: wide ? (showsCaps ? 4 : 3) : (showsCaps ? 2 : 3))
             LazyVGrid(columns: columns, spacing: 12) {
                 MetricTile(title: "Views", value: data.counts.views, systemImage: "eye.fill", tint: .blue)
                 MetricTile(title: "Comments", value: data.counts.comments, systemImage: "bubble.left.fill", tint: .green)
@@ -200,19 +206,34 @@ private struct AnalyticsContent: View {
 
             TrendCard(points: data.chart, range: range)
 
-            BreakdownCard(
-                title: "Locations",
-                tabs: [("Countries", data.breakdowns.countries, true), ("Cities", data.breakdowns.cities, false)]
-            )
-            BreakdownCard(
-                title: "Technology",
-                tabs: [("Browsers", data.breakdowns.browsers, false), ("OS", data.breakdowns.operatingSystems, false), ("Devices", data.breakdowns.devices, false)]
-            )
+            if wide {
+                HStack(alignment: .top, spacing: 12) {
+                    locations
+                    technology
+                }
+            } else {
+                locations
+                technology
+            }
 
             if showsCaps, !data.breakdowns.topCaps.isEmpty {
                 TopCapsCard(caps: data.breakdowns.topCaps)
             }
         }
+    }
+
+    private var locations: some View {
+        BreakdownCard(
+            title: "Locations",
+            tabs: [("Countries", data.breakdowns.countries, true), ("Cities", data.breakdowns.cities, false)]
+        )
+    }
+
+    private var technology: some View {
+        BreakdownCard(
+            title: "Technology",
+            tabs: [("Browsers", data.breakdowns.browsers, false), ("OS", data.breakdowns.operatingSystems, false), ("Devices", data.breakdowns.devices, false)]
+        )
     }
 }
 

@@ -216,6 +216,7 @@ struct LoomImportSheet: View {
         defer { isImporting = false }
         do {
             let result = try await session.api.importLoom(url: url.absoluteString)
+            Usage.track("loom_import_started")
             session.invalidateLibraries()
             if let key = session.currentLibraryKey {
                 Task { await session.library(for: key).refresh() }
