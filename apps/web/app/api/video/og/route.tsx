@@ -16,8 +16,6 @@ export async function GET(req: NextRequest) {
 		return renderVideoOgStatus("not-found");
 	}
 
-	// `v` only versions the URL so a new custom thumbnail misses every cache;
-	// anything else collapses to the canonical URL.
 	const version = params.get("v");
 	const canonical = new URLSearchParams({ videoId });
 	if (version && THUMBNAIL_VERSION_PATTERN.test(version)) {
@@ -32,5 +30,8 @@ export async function GET(req: NextRequest) {
 		});
 	}
 
-	return generateVideoOgImage(Video.VideoId.make(videoId));
+	return generateVideoOgImage(
+		Video.VideoId.make(videoId),
+		canonical.get("v"),
+	);
 }

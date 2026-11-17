@@ -160,6 +160,48 @@ describe("/api/video/og", () => {
 		expect(mocks.lookups).toEqual(["abc123"]);
 	});
 
+	it("renders only the version a video actually has", async () => {
+		const base = {
+			ownerId: "owner",
+			name: "Quarterly update",
+			public: true,
+			password: null,
+			duration: 42,
+		};
+		mocks.videos.set("abc123", {
+			...base,
+			id: "abc123",
+			metadata: { customThumbnail: { file: "custom-lz9k2a.jpg" } },
+		});
+		mocks.videos.set("plain1", { ...base, id: "plain1", metadata: null });
+		mocks.videos.set("locked1", {
+			...base,
+			id: "locked1",
+			public: false,
+			metadata: { customThumbnail: { file: "custom-lz9k2a.jpg" } },
+		});
+		const GET = await loadRoute();
+
+		const current = await fetchOg(GET, "?videoId=abc123&v=lz9k2a");
+		expect(current.status).toBe(200);
+		expect(current.headers["content-type"]).toBe("image/png");
+
+		for (const [query, location] of [
+			["?videoId=abc123&v=old1", "/api/video/og?videoId=abc123&v=lz9k2a"],
+			["?videoId=plain1&v=lz9k2a", "/api/video/og?videoId=plain1"],
+		] as const) {
+			const renders = mocks.renders;
+			const response = await fetchOg(GET, query);
+			expect(response.status).toBe(307);
+			expect(response.headers.location).toBe(location);
+			expect(mocks.renders).toBe(renders);
+		}
+
+		const locked = await fetchOg(GET, "?videoId=locked1&v=old1");
+		expect(locked.status).toBe(200);
+		expect(locked.headers.location).toBeUndefined();
+	});
+
 	it("renders the preview URL the app generates for a public video", async () => {
 		mocks.videos.set("abc123", {
 			id: "abc123",
