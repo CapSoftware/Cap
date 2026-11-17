@@ -3901,9 +3901,9 @@ impl ProjectUniforms {
         Self::round_base_dimension(value - 1e-6)
     }
 
-    /// Even-padding display offset. Auto aspect follows the proportional
-    /// path's shape (offset per axis, content fills the rest) so output
-    /// rounding is absorbed the same way.
+    /// Even-padding display offset. The screen keeps its exact aspect and
+    /// is centred, so the output's even-dimension rounding lands in the
+    /// margins (at most a pixel per side) instead of stretching the screen.
     fn even_display_offset(
         output_size: XY<f64>,
         crop: &Crop,
@@ -3913,8 +3913,11 @@ impl ProjectUniforms {
         output_scale: f64,
     ) -> XY<f64> {
         let Some(_) = aspect else {
-            let margin = f64::from(crop.size.x.min(crop.size.y)) * ratio * output_scale;
-            return XY::new(margin, margin);
+            let crop_size = XY::new(f64::from(crop.size.x), f64::from(crop.size.y));
+            let scale = output_scale
+                .min(output_size.x / crop_size.x.max(1.0))
+                .min(output_size.y / crop_size.y.max(1.0));
+            return (output_size - crop_size * scale) / 2.0;
         };
         let margin = output_size.x.min(output_size.y) * Self::even_canvas_inset(ratio);
         let available = XY::new(
