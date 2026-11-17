@@ -35,11 +35,9 @@
 //! Known deviations (also in the README): no 150ms opacity/translate
 //! transitions on the toolbar and resize brackets (no animation pass in this
 //! port), no `backdrop-blur-xs` behind the issue overlay (no per-element
-//! backdrop blur hook in this gpui rev), no "Camera disconnected" overlay on
-//! recording input loss (the Tauri `recordingEvent` InputLost seam has no
-//! counterpart in this app yet), no `cursor-move` on the drag surface (gpui
-//! has no 4-way move cursor; the resize handles do get their diagonal resize
-//! cursors), and chrome state persists to `gpui-state.json` rather than
+//! backdrop blur hook in this gpui rev), no `cursor-move` on the drag surface
+//! (gpui has no 4-way move cursor; the resize handles do get their diagonal
+//! resize cursors), and chrome state persists to `gpui-state.json` rather than
 //! `localStorage`.
 
 use std::sync::{
@@ -1093,8 +1091,12 @@ struct CameraPreviewView {
     camera_error: Option<String>,
     effect_issue: Option<EffectIssue>,
     awaiting_access: bool,
+    /// The recording's camera was unplugged (`InputLost` in the Tauri
+    /// bubble, `camera.tsx:162-172`); cleared when it is back.
+    camera_disconnected: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,
+    _session_subscription: Option<Subscription>,
 }
 
 impl CameraPreviewView {
@@ -1147,6 +1149,19 @@ impl CameraPreviewView {
                 cx.notify();
             }
         });
+        let session = crate::session::RecordingSession::try_global(cx);
+        let camera_disconnected = session
+            .as_ref()
+            .is_some_and(|session| session.read(cx).disconnected_inputs().camera);
+        let session_subscription = session.map(|session| {
+            cx.observe(&session, |this: &mut Self, session, cx| {
+                let disconnected = session.read(cx).disconnected_inputs().camera;
+                if this.camera_disconnected != disconnected {
+                    this.camera_disconnected = disconnected;
+                    cx.notify();
+                }
+            })
+        });
         let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let awaiting = awaiting_camera_access(cx);
             if this.awaiting_access != awaiting {
@@ -1194,8 +1209,10 @@ impl CameraPreviewView {
             camera_error,
             effect_issue: None,
             awaiting_access,
+            camera_disconnected,
             _feeds_subscription: feeds_subscription,
             _access_subscription: access_subscription,
+            _session_subscription: session_subscription,
         }
     }
 
@@ -1285,8 +1302,10 @@ impl Render for CameraPreviewView {
 
         let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
         let awaiting_access = self.awaiting_access && !showing_frame && self.camera_error.is_none();
-        let has_issue =
-            self.camera_error.is_some() || self.effect_issue.is_some() || awaiting_access;
+        let has_issue = self.camera_disconnected
+            || self.camera_error.is_some()
+            || self.effect_issue.is_some()
+            || awaiting_access;
 
         let loading = if !showing_frame {
             self.loading_fade_started = None;
@@ -1424,9 +1443,14 @@ impl Render for CameraPreviewView {
             .as_deref()
             .is_some_and(|error| error.contains("access is unavailable"));
         if let Some((title, message)) = self
-            .camera_error
-            .as_deref()
-            .map(camera_issue)
+            .camera_disconnected
+            .then(|| {
+                (
+                    tr::camera::issue::disconnected_title(),
+                    tr::camera::issue::disconnected_message(),
+                )
+            })
+            .or(self.camera_error.as_deref().map(camera_issue))
             .or(self.effect_issue.map(EffectIssue::text))
             .or(awaiting_access.then(|| {
                 (

@@ -206,6 +206,10 @@ fps_30 = "30 i/s"
 fps_60 = "60 i/s (recommandé)"
 label = "Fréquence d'images maximale"
 
+[settings.general.recording.keep_drawings]
+description = "Les dessins restent jusqu'à ce que vous les effaciez. Sinon, chacun s'estompe quelques secondes après avoir été tracé."
+label = "Garder les dessins à l'écran"
+
 [settings.general.recording.marker_sound]
 description = "Émet un son bref lorsque vous ajoutez un repère pendant un enregistrement Studio. Votre micro ou le son du système peuvent l'enregistrer."
 label = "Émettre un son pour les repères"
@@ -470,6 +474,7 @@ screenshot_window = "Capturer une fenêtre"
 start_instant = "Démarrer un enregistrement Instant"
 start_studio = "Démarrer un enregistrement Studio"
 stop = "Arrêter l'enregistrement"
+toggle_drawing = "Dessiner à l'écran"
 
 [settings.shortcuts.effect]
 add_marker = "marquer ce moment dans un enregistrement Studio"
@@ -503,6 +508,7 @@ screenshot_window_save = "capturer la fenêtre sous votre pointeur et enregistre
 stop = "arrêter l'enregistrement en cours"
 studio = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio"
 studio_open_editor = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt"
+toggle_drawing = "commencer ou arrêter de dessiner à l'écran pendant l'enregistrement"
 
 [settings.shortcuts.sentence]
 add_marker = "Marquer ce moment dans un enregistrement Studio."
@@ -536,6 +542,7 @@ screenshot_window_save = "Capturer la fenêtre sous votre pointeur et enregistre
 stop = "Arrêter l'enregistrement en cours."
 studio = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio."
 studio_open_editor = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt."
+toggle_drawing = "Commencer ou arrêter de dessiner à l'écran pendant l'enregistrement."
 
 [settings.cli]
 command = "Commande"
@@ -604,6 +611,9 @@ uploading = "Envoi..."
 confirm_body = "Cap va occuper votre écran avec un motif clignotant et émettre des bips forts pendant environ {seconds} secondes par chaîne de traitement. Retirez votre casque, laissez le volume audible et ne touchez pas à l'ordinateur jusqu'à la fin."
 confirm_title = "Lancer le diagnostic ?"
 description = "Enregistre une courte mire clignotante et sonore, mesure le décalage entre l'image et le son, et relève vos écrans, caméras, micros, espace disque et paramètres d'enregistrement. Rien n'est envoyé tant que vous ne le décidez pas."
+duration_description = "Un test plus long détecte mieux les dérives lentes."
+duration_label = "Durée du test"
+duration_option = "{seconds} secondes"
 mic_description = "Enregistre aussi votre micro et vérifie qu'il capte les bips à temps. Nécessite des haut-parleurs que le micro peut réellement entendre."
 mic_label = "Tester le micro"
 mode_description = "La chaîne de traitement à tester. « Les deux » exécute d'abord la partie Studio, puis la partie Instant."
@@ -644,6 +654,8 @@ activating = "Activation..."
 active_title = "Licence de bureau"
 checking = "Vérification…"
 deactivate = "Désactiver la licence"
+deactivate_failed = "Impossible de désactiver votre licence. Vérifiez votre connexion et réessayez."
+deactivating = "Désactivation..."
 description = "Votre offre Cap et votre licence de bureau, au même endroit."
 desktop_description = "Votre licence de bureau couvre l'enregistrement et le montage à usage commercial. Cap Pro ajoute le partage dans le cloud et les fonctionnalités collaboratives."
 desktop_name = "Licence de bureau"
@@ -1209,8 +1221,31 @@ resuming = "Reprise…"
 saving = "Arrêt…"
 starting = "Début"
 
+[controls.disconnected]
+camera = "Caméra déconnectée. L'enregistrement continue sans l'incrustation de la caméra."
+microphone = "Micro déconnecté. Du silence sera enregistré jusqu'à sa reconnexion."
+
 [controls.marker]
 add = "Ajouter un repère"
+
+[controls.draw]
+arrow = "Flèche, ⇧ aligne à 45°"
+clear = "Tout effacer"
+highlighter = "Surligneur, ⇧ pour une ligne droite"
+pen = "Stylo, ⇧ pour une ligne droite"
+rectangle = "Rectangle, ⇧ pour un carré"
+start = "Dessiner à l'écran"
+stop = "Arrêter de dessiner"
+undo = "Annuler"
+window_unavailable = "Le dessin fonctionne dans les enregistrements d'écran et de zone"
+
+[controls.settings]
+locked = "Non modifiable dans cet enregistrement"
+not_in_recording = "Absent de cet enregistrement"
+open = "Réglages d'enregistrement"
+show_camera_preview = "Afficher l'aperçu de la caméra"
+switch_failed = "Impossible de passer à {device}. L'enregistrement continue."
+switching = "Changement…"
 
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
@@ -1226,6 +1261,8 @@ mirror_title = "Miroir indisponible"
 [camera.issue]
 access_message = "Cliquez pour autoriser Cap à utiliser votre caméra dans Réglages Système."
 access_title = "Accès à la caméra requis"
+disconnected_message = "La caméra sélectionnée n'envoie plus de vidéo."
+disconnected_title = "Caméra déconnectée"
 generic = "La caméra sélectionnée n'a pas pu démarrer. Choisissez une autre caméra ou reconnectez celle-ci."
 invalid_format = "Cette caméra n'a signalé aucun format de capture utilisable."
 not_found = "Cette caméra n'est plus disponible. Vérifiez qu'elle est connectée et autorisée dans les autorisations du système."
@@ -2532,6 +2569,7 @@ format = "Format"
 frame_rate = "Fréquence d'images"
 quality = "Qualité"
 resolution = "Résolution"
+tracks = "Pistes"
 
 [editor.export.stats]
 calculating = "Calcul…"
@@ -2543,6 +2581,25 @@ output_value = "{width}×{height} · {fps} i/s"
 refining_size = "Affinage de la taille…"
 refining_time = "Affinage de la durée…"
 unavailable = "Indisponible"
+
+[editor.export.tracks]
+aligned = "Les pistes suivent vos coupes et votre vitesse, et s'alignent dans n'importe quel logiciel de montage. La vidéo sort propre, sans arrière-plan ni effets."
+audio_detail = "WAV · 48 kHz"
+camera = "Caméra"
+choose_one = "Choisissez au moins une piste à exporter."
+cta = "Exporter les pistes"
+exported = "Pistes exportées"
+exporting = "Exportation des pistes"
+file_count = { one = "{count} fichier", other = "{count} fichiers" }
+file_only = "Les pistes sont enregistrées dans un dossier, en fichiers séparés."
+files = "Fichiers"
+format = "Pistes"
+microphone = "Micro"
+open_folder = "Ouvrir le dossier"
+screen = "Écran"
+studio_only = "Les pistes séparées ne sont enregistrées qu'en mode Studio."
+system_audio = "Audio système"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportation turbo"
