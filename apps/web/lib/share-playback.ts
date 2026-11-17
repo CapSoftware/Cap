@@ -6,7 +6,7 @@ import { runPromise } from "@/lib/server";
 
 type SharePlaybackVideo = Omit<
 	typeof videos.$inferSelect,
-	"folderId" | "password" | "settings" | "ownerId"
+	"folderId" | "password" | "settings" | "ownerId" | "archivedAt"
 > & { owner: { id: User.UserId } };
 
 export type SharePlaybackSource = {
