@@ -121,12 +121,12 @@ async fn pause_at(handle: Handle, cx: &mut AsyncApp, fraction: f64) {
         if view.playing {
             view.stop_for_measurement(cx);
         }
+        view.bench_zoom_to(view.total_duration(), cx);
         view.seek_fraction(fraction, window, cx);
     });
     wait(cx, SETTLE).await;
 }
 
-/// Runs `step` at `hz` for `duration`, marking an input before each call.
 async fn paced_inputs(
     handle: Handle,
     cx: &mut AsyncApp,
@@ -179,7 +179,7 @@ async fn playback(handle: Handle, cx: &mut AsyncApp) {
         .filter(|presentation| presentation.painted >= pressed + PLAYBACK_WARMUP)
         .filter(|presentation| presentation.painted <= pressed + PLAYBACK)
         .collect();
-    let window_secs = (PLAYBACK - PLAYBACK_WARMUP).as_secs_f64();
+    let window_secs = PLAYBACK.saturating_sub(PLAYBACK_WARMUP).as_secs_f64();
     let skipped: u32 = steady
         .windows(2)
         .map(|pair| {

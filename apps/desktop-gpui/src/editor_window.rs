@@ -3990,8 +3990,6 @@ impl EditorWindow {
         self.stats.as_ref().map(|stats| stats.snapshot())
     }
 
-    /// The window x a press needs to grab zoom segment `index`'s end handle,
-    /// with its lane, when that edge is inside the visible track content.
     pub(crate) fn bench_zoom_end_handle(
         &self,
         index: usize,
