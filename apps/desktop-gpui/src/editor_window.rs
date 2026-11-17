@@ -2655,14 +2655,16 @@ impl EditorWindow {
 
     /// A double-click on a zoom or scene handle runs that edge to its
     /// neighbour, and one inside an audio fade resets it. The segment the
-    /// first click selected stays selected, as it did in 0.6.0.
+    /// first click selected stays selected, as it did in 0.6.0. `pointer_time`
+    /// is the time under the pointer without the snap to zero near the
+    /// timeline's start, the same mapping the hit test used.
     #[allow(clippy::too_many_arguments)]
     fn double_click_segment(
         &mut self,
         kind: TrackKind,
         lane: u32,
         hit: edits::Hit,
-        press_time: f64,
+        pointer_time: f64,
         secs_per_pixel: f64,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2707,7 +2709,7 @@ impl EditorWindow {
                             segment.end,
                             segment.fade_in,
                             segment.fade_out,
-                            press_time,
+                            pointer_time,
                             FADE_RESET_MIN_PX * secs_per_pixel,
                         )
                     })
@@ -5035,7 +5037,15 @@ impl EditorWindow {
         }
 
         if event.click_count == 2
-            && self.double_click_segment(kind, lane, hit, press_time, secs_per_pixel, window, cx)
+            && self.double_click_segment(
+                kind,
+                lane,
+                hit,
+                position + x * secs_per_pixel,
+                secs_per_pixel,
+                window,
+                cx,
+            )
         {
             return;
         }
