@@ -223,16 +223,28 @@ jobs:
         run: |
           cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
             --target x86_64-pc-windows-msvc --bin cap-gpui
-          # The app reads bundled wallpapers and music from its source tree
-          # (CARGO_MANIFEST_DIR); the hosted job maps this path to its checkout.
-          echo "$GITHUB_WORKSPACE" > apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/build-workspace.txt
+
+      # A debug build reads files from the source trees it was compiled in, by
+      # absolute path: gpui_windows compiles its HLSL shaders at startup from
+      # its CARGO_MANIFEST_DIR in ../zed-cap, and the app reads bundled
+      # wallpapers and music from apps/desktop-gpui. The hosted job puts them
+      # back at those paths.
+      - name: Stage the app
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/gpui-windows-shaders"
+          cp apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/cap-gpui.exe "$stage/"
+          zed="$(cd ../zed-cap && pwd -W)"
+          cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+          printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+          printf '%s' "$zed" > "$stage/build-zed.txt"
+          ls -la "$stage" "$stage/gpui-windows-shaders"
 
       - uses: actions/upload-artifact@v4
         with:
           name: picker-smoke-windows-app
-          path: |
-            apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/cap-gpui.exe
-            apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/build-workspace.txt
+          path: ${{ runner.temp }}/stage
           retention-days: 1
 
   smoke-windows:
@@ -247,17 +259,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: picker-smoke-windows-app
-          path: apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug
+          path: ${{ runner.temp }}/app
 
-      - name: Map the build's workspace path to this checkout
+      - name: Put the build's source files back at its paths
         shell: pwsh
         run: |
-          $built = (Get-Content apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/build-workspace.txt -Raw).Trim()
-          if ($built -ne $env:GITHUB_WORKSPACE) {
-            New-Item -ItemType Directory -Force (Split-Path $built) | Out-Null
-            cmd /c mklink /J "$built" "$env:GITHUB_WORKSPACE"
+          $app = "$env:RUNNER_TEMP\app"
+          $debug = "$env:GITHUB_WORKSPACE\apps\desktop-gpui\target\x86_64-pc-windows-msvc\debug"
+          New-Item -ItemType Directory -Force $debug | Out-Null
+          Copy-Item "$app\cap-gpui.exe" $debug
+          $workspace = (Get-Content "$app\build-workspace.txt" -Raw).Trim()
+          if ($workspace -ne $env:GITHUB_WORKSPACE) {
+            New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+            cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
             if ($LASTEXITCODE -ne 0) { throw "mklink failed" }
           }
+          $shaders = Join-Path (Get-Content "$app\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+          New-Item -ItemType Directory -Force $shaders | Out-Null
+          Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders
+          Get-ChildItem $shaders
 
       # FFmpeg and ONNX Runtime DLLs into target/debug, which the probes put
       # on PATH.
