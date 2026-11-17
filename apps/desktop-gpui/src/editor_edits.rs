@@ -2339,6 +2339,11 @@ pub fn clip_trim_start(
         .unwrap_or(f64::INFINITY);
     let available = clip_available_timeline_duration(timeline, index, recording_duration);
     let max_duration = max_segment.min(available);
+    // A clip whose end already runs past its media (a late-audio clip moved
+    // by `cap_project::migrate_late_audio_alignment`) holds its last frame
+    // there; that tail is not recorded material, so the start may still open
+    // back to the clip's beginning.
+    let recorded_end = segment.end.min(max_segment);
 
     // `prevSegmentIsSameClip ? prevSegment.end : 0` -- a clip split in two may
     // not be trimmed back over its own left-hand half. That floor only means
@@ -2362,7 +2367,7 @@ pub fn clip_trim_start(
     Some(
         new_start
             .max(previous_floor)
-            .max(segment.end - max_duration)
+            .max(recorded_end - max_duration)
             .min(ceiling),
     )
 }
@@ -2392,7 +2397,9 @@ pub fn clip_trim_end(
         .get(index + 1)
         .filter(|next| next.recording_clip == segment.recording_clip)
         .filter(|next| next.start >= segment.end)
-        .map_or(max_segment, |next| next.start);
+        // A saved end past the media (see `clip_trim_start`) stays reachable,
+        // so a small drag does not snap the held tail away.
+        .map_or(max_segment.max(segment.end), |next| next.start);
 
     // Mirror of the start handle's growth guard for sub-minimum clips.
     let floor = (segment.start + min_recorded).min(segment.end);
@@ -3769,6 +3776,38 @@ mod tests {
         }];
         let timeline = fast.timeline.as_ref().unwrap();
         assert_eq!(clip_min_recorded_duration(timeline, 1, 0.001), 2.4);
+    }
+
+    // A late-audio clip moved onto the new segment clock by
+    // `migrate_late_audio_alignment` keeps its edited footage by running 4 s
+    // past its 10 s media, holding the last frame. Its handles keep that tail
+    // and can still open the clip back to the footage before its start.
+    #[test]
+    fn clip_trim_keeps_a_migrated_held_tail() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "start": 4.0, "end": 14.0, "timescale": 1.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        let (displays, recording, spp) = ([10.0], 10.0, 0.001);
+        assert_eq!(
+            clip_trim_end(&timeline, 0, 13.9, spp, &displays, recording),
+            Some(13.9)
+        );
+        assert_eq!(
+            clip_trim_end(&timeline, 0, 20.0, spp, &displays, recording),
+            Some(14.0)
+        );
+        assert_eq!(
+            clip_trim_start(&timeline, 0, 0.0, spp, &displays, recording),
+            Some(0.0)
+        );
+        assert_eq!(
+            clip_trim_start(&timeline, 0, 2.5, spp, &displays, recording),
+            Some(2.5)
+        );
     }
 
     #[test]
