@@ -2417,3 +2417,15 @@ export const developerWebhookEndpointsRelations = relations(
 		}),
 	}),
 );
+
+export const meetingNotesTrialUses = mysqlTable(
+	"meeting_notes_trial_uses",
+	{
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		meetingId: varchar("meetingId", { length: 64 }).notNull(),
+		createdAt: datetime("createdAt", { mode: "date" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [primaryKey({ columns: [table.userId, table.meetingId] })],
+);
