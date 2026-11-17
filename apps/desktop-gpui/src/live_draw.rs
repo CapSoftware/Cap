@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
     App, AppContext as _, Context, Entity, Global, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, PathStyle, Render,
-    Styled as _, Task, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas, div,
-    point, px, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, PathStyle, Pixels,
+    Render, Styled as _, Task, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas,
+    div, point, px, size,
 };
 use lyon_tessellation::{LineCap, LineJoin, StrokeOptions};
 
@@ -204,20 +204,88 @@ fn chunks(points: &[Pt]) -> impl Iterator<Item = &[Pt]> {
     })
 }
 
+/// A finished stroke, tessellated once when it is committed.
 struct Stroke {
     tool: Tool,
     color: u32,
-    shape: Shape,
+    paths: Vec<Path<Pixels>>,
     done: Instant,
     fades: bool,
 }
 
+/// The stroke under the pointer. A freehand stroke seals each full run of
+/// [`CHUNK`] points into a path as it grows, so a frame only tessellates
+/// the run still being drawn.
 struct Draft {
     tool: Tool,
     color: u32,
     points: Vec<Pt>,
     current: Pt,
     straight: bool,
+    sealed: Vec<Path<Pixels>>,
+    sealed_from: usize,
+}
+
+impl Draft {
+    fn new(tool: Tool, color: u32, at: Pt, straight: bool) -> Self {
+        Self {
+            tool,
+            color,
+            points: vec![at],
+            current: at,
+            straight,
+            sealed: Vec::new(),
+            sealed_from: 0,
+        }
+    }
+
+    fn seal(&mut self) {
+        while self.points.len() - self.sealed_from >= CHUNK {
+            let run = &self.points[self.sealed_from..self.sealed_from + CHUNK];
+            self.sealed.extend(line_path(run, self.tool.width()));
+            self.sealed_from += CHUNK - 1;
+        }
+    }
+
+    /// The freehand run after the sealed ones, ending at the pointer.
+    fn tail(&self) -> Option<Path<Pixels>> {
+        let mut run = self.points[self.sealed_from..].to_vec();
+        if run.last() != Some(&self.current) {
+            run.push(self.current);
+        }
+        line_path(&run, self.tool.width())
+    }
+
+    fn uses_sealed(&self) -> bool {
+        self.tool.freehand() && !self.straight
+    }
+
+    fn into_paths(self) -> Option<Vec<Path<Pixels>>> {
+        if self.uses_sealed() {
+            let tail = self.tail();
+            let mut paths = self.sealed;
+            paths.extend(tail);
+            return Some(paths);
+        }
+        let shape = shape(self.tool, &self.points, self.current, self.straight)?;
+        Some(build_paths(&shape, self.tool))
+    }
+
+    fn paint(&self, window: &mut Window) {
+        let color = ink_color(self.tool, self.color, 1.);
+        if self.uses_sealed() {
+            for path in &self.sealed {
+                window.paint_path(path.clone(), color);
+            }
+            if let Some(path) = self.tail() {
+                window.paint_path(path, color);
+            }
+        } else if let Some(shape) = shape(self.tool, &self.points, self.current, self.straight) {
+            for path in build_paths(&shape, self.tool) {
+                window.paint_path(path, color);
+            }
+        }
+    }
 }
 
 pub struct Ink {
@@ -242,13 +310,7 @@ impl Ink {
     }
 
     fn begin(&mut self, tool: Tool, color: u32, at: Pt, straight: bool, cx: &mut Context<Self>) {
-        self.draft = Some(Draft {
-            tool,
-            color,
-            points: vec![at],
-            current: at,
-            straight,
-        });
+        self.draft = Some(Draft::new(tool, color, at, straight));
         cx.notify();
     }
 
@@ -263,6 +325,7 @@ impl Ink {
         draft.straight = straight;
         if draft.tool.freehand() {
             append_point(&mut draft.points, at);
+            draft.seal();
         }
         cx.notify();
     }
@@ -271,14 +334,15 @@ impl Ink {
         let Some(draft) = self.draft.take() else {
             return;
         };
-        if let Some(shape) = shape(draft.tool, &draft.points, draft.current, draft.straight) {
+        let (tool, color) = (draft.tool, draft.color);
+        if let Some(paths) = draft.into_paths().filter(|paths| !paths.is_empty()) {
             if self.strokes.len() >= MAX_STROKES {
                 self.strokes.remove(0);
             }
             self.strokes.push(Stroke {
-                tool: draft.tool,
-                color: draft.color,
-                shape,
+                tool,
+                color,
+                paths,
                 done: Instant::now(),
                 fades: !crate::store::keep_drawings(),
             });
@@ -371,26 +435,32 @@ fn stroke_builder(width: f32) -> PathBuilder {
     ))
 }
 
-fn paint_shape(shape: &Shape, tool: Tool, color: u32, opacity: f32, window: &mut Window) {
+fn ink_color(tool: Tool, color: u32, opacity: f32) -> Hsla {
     let mut color: Hsla = gpui::rgb(color).into();
     color.a = tool.opacity() * opacity;
+    color
+}
+
+/// One run of a line. A single point is a dot.
+fn line_path(points: &[Pt], width: f32) -> Option<Path<Pixels>> {
+    let first = *points.first()?;
+    let mut builder = stroke_builder(width);
+    builder.move_to(to_point(first));
+    if points.len() == 1 {
+        builder.line_to(to_point(Pt::new(first.x + 0.01, first.y)));
+    }
+    for &at in &points[1..] {
+        builder.line_to(to_point(at));
+    }
+    builder.build().ok()
+}
+
+fn build_paths(shape: &Shape, tool: Tool) -> Vec<Path<Pixels>> {
     let width = tool.width();
     match shape {
-        Shape::Line(points) => {
-            for run in chunks(points) {
-                let mut builder = stroke_builder(width);
-                builder.move_to(to_point(run[0]));
-                if run.len() == 1 {
-                    builder.line_to(to_point(Pt::new(run[0].x + 0.01, run[0].y)));
-                }
-                for &at in &run[1..] {
-                    builder.line_to(to_point(at));
-                }
-                if let Ok(path) = builder.build() {
-                    window.paint_path(path, color);
-                }
-            }
-        }
+        Shape::Line(points) => chunks(points)
+            .filter_map(|run| line_path(run, width))
+            .collect(),
         Shape::Arrow { from, to } => {
             let angle = f64::from((to.y - from.y).atan2(to.x - from.x));
             let head = crate::screenshot_annotations::arrow_head_points(
@@ -403,17 +473,15 @@ fn paint_shape(shape: &Shape, tool: Tool, color: u32, opacity: f32, window: &mut
             let mut shaft = stroke_builder(width);
             shaft.move_to(to_point(*from));
             shaft.line_to(corner(head.base));
-            if let Ok(path) = shaft.build() {
-                window.paint_path(path, color);
-            }
             let mut tip = PathBuilder::fill();
             tip.move_to(corner(head.points[0]));
             tip.line_to(corner(head.points[1]));
             tip.line_to(corner(head.points[2]));
             tip.close();
-            if let Ok(path) = tip.build() {
-                window.paint_path(path, color);
-            }
+            [shaft.build().ok(), tip.build().ok()]
+                .into_iter()
+                .flatten()
+                .collect()
         }
         Shape::Rect { from, to } => {
             let mut builder = stroke_builder(width);
@@ -422,9 +490,7 @@ fn paint_shape(shape: &Shape, tool: Tool, color: u32, opacity: f32, window: &mut
             builder.line_to(to_point(*to));
             builder.line_to(to_point(Pt::new(from.x, to.y)));
             builder.close();
-            if let Ok(path) = builder.build() {
-                window.paint_path(path, color);
-            }
+            builder.build().ok().into_iter().collect()
         }
     }
 }
@@ -444,12 +510,13 @@ fn paint_ink(ink: &Ink, window: &mut Window) {
         } else {
             1.
         };
-        paint_shape(&stroke.shape, stroke.tool, stroke.color, opacity, window);
+        let color = ink_color(stroke.tool, stroke.color, opacity);
+        for path in &stroke.paths {
+            window.paint_path(path.clone(), color);
+        }
     }
-    if let Some(draft) = &ink.draft
-        && let Some(shape) = shape(draft.tool, &draft.points, draft.current, draft.straight)
-    {
-        paint_shape(&shape, draft.tool, draft.color, 1., window);
+    if let Some(draft) = &ink.draft {
+        draft.paint(window);
     }
     if animating {
         window.request_animation_frame();
@@ -982,6 +1049,34 @@ mod tests {
         assert_eq!(runs[2].last(), points.last());
         assert_eq!(chunks(&points[..1]).count(), 1);
         assert_eq!(chunks(&[]).count(), 0);
+    }
+
+    #[test]
+    fn a_long_freehand_draft_seals_the_runs_a_full_repaint_would_draw() {
+        let mut draft = Draft::new(Tool::Pen, COLORS[0], Pt::new(0., 0.), false);
+        for i in 1..600 {
+            let at = Pt::new(i as f32 * 2., (i % 7) as f32);
+            draft.current = at;
+            append_point(&mut draft.points, at);
+            draft.seal();
+        }
+        let runs: Vec<&[Pt]> = chunks(&draft.points).collect();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(draft.sealed.len(), runs.len() - 1);
+        assert_eq!(&draft.points[draft.sealed_from..], runs[runs.len() - 1]);
+        assert_eq!(draft.into_paths().map(|paths| paths.len()), Some(runs.len()));
+    }
+
+    #[test]
+    fn straight_drafts_and_shapes_are_built_whole() {
+        let mut draft = Draft::new(Tool::Pen, COLORS[0], Pt::new(0., 0.), true);
+        draft.current = Pt::new(40., 40.);
+        assert_eq!(draft.into_paths().map(|paths| paths.len()), Some(1));
+        let mut arrow = Draft::new(Tool::Arrow, COLORS[0], Pt::new(0., 0.), false);
+        arrow.current = Pt::new(80., 10.);
+        assert_eq!(arrow.into_paths().map(|paths| paths.len()), Some(2));
+        let tap = Draft::new(Tool::Rectangle, COLORS[0], Pt::new(5., 5.), false);
+        assert!(tap.into_paths().is_none());
     }
 
     #[test]
