@@ -1,0 +1,106 @@
+name: scratch avfilter exit crash
+
+on:
+  push:
+    branches: [scratch/avfilter-exit-crash]
+  workflow_dispatch:
+    inputs:
+      n:
+        description: runs per combination
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-8vcpu-windows-2025, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    env:
+      RUNNER_LABEL: ${{ matrix.runner }}
+      N: ${{ inputs.n || '300' }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/scratch-avfilter-exit
+
+      - name: Download FFmpeg builds
+        run: |
+          $root = "$env:RUNNER_TEMP\ff"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          foreach ($v in @("7.1", "7.1.1")) {
+            $name = "ffmpeg-$v-full_build-shared"
+            Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$v/$name.zip" -OutFile "$root\$v.zip"
+            Expand-Archive "$root\$v.zip" -DestinationPath $root
+            Rename-Item "$root\$name" "$root\$v"
+          }
+          Get-FileHash "$root\7.1\bin\avfilter-10.dll", "$root\7.1.1\bin\avfilter-10.dll" | Format-Table -AutoSize
+
+      - name: Build repro
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $src = "$env:GITHUB_WORKSPACE\scripts\scratch-avfilter-exit\exitcrash.c"
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cl /nologo /O2 /Fe:$env:RUNNER_TEMP\exitcrash.exe $src"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$env:RUNNER_TEMP\exitcrash.exe" "$env:RUNNER_TEMP\ff\7.1\bin" none 0 return nower info
+          "exit $LASTEXITCODE"
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version | Format-List
+          (Get-Item C:\Windows\System32\msvcrt.dll).VersionInfo.FileVersion
+
+      - name: Count crashes
+        run: |
+          "| runner | build | worker threads | exit | runs | crashed | rate | exit codes | time |" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "|---|---|---|---|---|---|---|---|---|" | Add-Content $env:GITHUB_STEP_SUMMARY
+          $exe = "$env:RUNNER_TEMP\exitcrash.exe"
+          $loop = "$env:GITHUB_WORKSPACE\scripts\scratch-avfilter-exit\loop.ps1"
+          $n = [int]$env:N
+          $a = "$env:RUNNER_TEMP\ff\7.1\bin"
+          $b = "$env:RUNNER_TEMP\ff\7.1.1\bin"
+          & $loop $exe $a "7.1" none 0 return $n
+          & $loop $exe $a "7.1" msvcrt 8 return $n
+          & $loop $exe $a "7.1" ucrt 8 return $n
+          & $loop $exe $a "7.1" msvcrt 8 join $n
+          & $loop $exe $a "7.1" msvcrt 8 terminate $n
+          & $loop $exe $b "7.1.1" none 0 return $n
+          & $loop $exe $b "7.1.1" msvcrt 8 return $n
+
+      - name: Crash dumps
+        if: always()
+        run: |
+          $dir = "$env:RUNNER_TEMP\dumps"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\exitcrash.exe"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpFolder -Value $dir -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpCount -Value 3 -PropertyType DWord -Force | Out-Null
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting" -Name DontShowUI -Value 1 -Type DWord
+          Start-Service WerSvc
+          $exe = "$env:RUNNER_TEMP\exitcrash.exe"
+          for ($i = 0; $i -lt 60 -and @(Get-ChildItem $dir -Filter *.dmp).Count -lt 3; $i++) {
+            $p = Start-Process -FilePath $exe -ArgumentList "$env:RUNNER_TEMP\ff\7.1\bin", msvcrt, 8, return, wer -NoNewWindow -Wait -PassThru
+          }
+          Start-Sleep 3
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (-not (Test-Path $cdb)) { "no cdb"; exit 0 }
+          $sym = "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols"
+          foreach ($d in Get-ChildItem $dir -Filter *.dmp) {
+            "=== $($d.Name)"
+            & $cdb -z $d.FullName -y $sym -c ".ecxr; r; kn 25; !gle; dq msvcrt!_crtheap L1; ? poi(@`$peb+0x30); ~; q" 2>&1 | Select-String -NotMatch "^\*|Symbol search|Executable search|Loading|^\s*$|Copyright|Microsoft \(R\)" | Select-Object -First 70
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/results.md
+            ${{ runner.temp }}/dumps/*.dmp
+          if-no-files-found: ignore
