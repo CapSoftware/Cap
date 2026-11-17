@@ -97,6 +97,10 @@ export interface VideoMetadata {
 	 */
 	sourceName?: string;
 	/**
+	 * Desktop app version that created the video, read from its request headers
+	 */
+	desktopClient?: { version: string; gpui: boolean };
+	/**
 	 * AI generated title for the video
 	 */
 	aiTitle?: string;
