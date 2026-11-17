@@ -55,6 +55,7 @@ mod import;
 mod installer;
 mod jpeg_thumbnail;
 mod library;
+mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
