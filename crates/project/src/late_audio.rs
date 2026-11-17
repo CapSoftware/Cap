@@ -433,15 +433,17 @@ mod tests {
 
     #[test]
     fn normal_recordings_only_get_the_version() {
-        let mut project = legacy_project();
-        let clips = serde_json::to_string(&project.clips).unwrap();
+        // An edited normal project: nothing but the version may change.
+        let mut project = edited_project();
+        let before = serde_json::to_value(&project).unwrap();
         assert!(!migrate_late_audio_alignment(
             &mut project,
             &meta(0.06),
             || unreachable!()
         ));
-        assert_eq!(serde_json::to_string(&project.clips).unwrap(), clips);
         assert_eq!(project.clip_alignment_version, CLIP_ALIGNMENT_VERSION);
+        project.clip_alignment_version = 0;
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
     }
 
     #[test]
