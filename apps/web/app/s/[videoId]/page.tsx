@@ -61,7 +61,10 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import {
+	resolveShareCallToAction,
+	withoutWorkspaceCallToAction,
+} from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import {
 	canStartPlaybackInHtml,
@@ -1004,6 +1007,15 @@ async function AuthorizedContent({
 		aiGenerationStatus,
 	};
 
+	const resolvedCallToAction = ownerIsPro
+		? resolveShareCallToAction({
+				videoSettings: video.videoSettings,
+				organizationSettings: video.orgSettings,
+				videoCreatedAt: video.createdAt,
+			})
+		: null;
+	const viewerIsOwner = user?.id === video.owner.id;
+
 	const videoWithOrganizationInfo = {
 		...video,
 		hasActiveUpload,
@@ -1021,7 +1033,7 @@ async function AuthorizedContent({
 		sharedOrganizations: sharedOrganizations,
 		password: null,
 		folderId: user?.id === video.owner.id ? video.folderId : null,
-		orgSettings: video.orgSettings || null,
+		orgSettings: withoutWorkspaceCallToAction(video.orgSettings),
 		organizationName: video.organizationName,
 		organizationIconUrl: resolvedImages.organization,
 		shareableLinkIconUrl: resolvedImages.shareableLink,
@@ -1029,8 +1041,12 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
-		callToAction: ownerIsPro
-			? parseShareCallToAction(video.videoSettings)
+		callToAction: resolvedCallToAction?.callToAction ?? null,
+		callToActionSource: viewerIsOwner
+			? (resolvedCallToAction?.source ?? null)
+			: null,
+		workspaceCallToAction: viewerIsOwner
+			? (resolvedCallToAction?.workspaceCallToAction ?? null)
 			: null,
 	};
 	const isEditProcessing =
