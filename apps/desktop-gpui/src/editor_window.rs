@@ -15216,6 +15216,60 @@ mod tests {
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
     }
 
+    // A migrated 10 s recording cut into 4..12 and 12..14 (a held tail from
+    // 10 s) with a 1 s crossfade, so both pieces of the same recording
+    // overlap at 7..8. A caption tied to it at 12.2..13.8 shows at 7.2..8.8
+    // through the second piece, and splitting it at 7.9, inside the overlap,
+    // cuts it at 12.9 rather than at the first piece's 11.9.
+    #[test]
+    fn a_tied_caption_inside_a_crossfade_of_its_own_clip_splits() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 4.0, "end": 12.0, "timescale": 1.0 },
+                    { "recordingSegment": 0, "start": 12.0, "end": 14.0, "timescale": 1.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "caption-tail", "start": 12.2, "end": 13.8,
+                    "text": "Held tail", "recordingSegment": 0
+                }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let track = project.timeline.as_ref().unwrap().caption_segments[0].clone();
+        assert!((track.start - 7.2).abs() < 1e-4 && (track.end - 8.8).abs() < 1e-4);
+
+        assert!(split_caption_segment(
+            &mut project,
+            0,
+            7.9 - track.start,
+            &[10.0]
+        ));
+        let halves: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| {
+                let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+                (
+                    near(segment.start),
+                    near(segment.end),
+                    segment.recording_clip,
+                )
+            })
+            .collect();
+        assert_eq!(halves, [(12.2, 12.9, Some(0)), (12.9, 13.8, Some(0))]);
+    }
+
     #[test]
     fn both_halves_of_a_split_hand_added_caption_survive_a_new_transcript() {
         let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({

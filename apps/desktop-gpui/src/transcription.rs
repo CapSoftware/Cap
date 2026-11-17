@@ -2477,8 +2477,10 @@ pub fn map_edited_time_to_source(
         (clip + 1 < recording_durations.len())
             .then(|| recording_durations[..=clip].iter().sum::<f64>())
     };
-    let mut in_range = None;
-    let mut fallback = None;
+    // Best first: a piece of the tied clip overlapping `source_range`, any
+    // piece of the tied clip (a clip can be cut into pieces that overlap in
+    // a crossfade), any piece overlapping `source_range`, then any piece.
+    let mut best: Option<(u8, (f64, u32))> = None;
     for (mapping, segment) in build_source_to_edited_mappings(timeline, recording_durations)
         .into_iter()
         .zip(&timeline.segments)
@@ -2490,24 +2492,28 @@ pub fn map_edited_time_to_source(
                 mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale,
                 segment.recording_clip,
             );
-            if recording_clip == Some(segment.recording_clip) {
-                return Some(hit);
-            }
-            if in_range.is_none()
-                && let Some((range_start, range_end)) = source_range
-                && range_start
-                    < media_end(segment.recording_clip)
-                        .map_or(mapping.source_end, |end| mapping.source_end.min(end))
-                && range_end > mapping.source_start
-            {
-                in_range = Some(hit);
-            }
-            if fallback.is_none() {
-                fallback = Some(hit);
+            let tied = recording_clip == Some(segment.recording_clip);
+            // A tied caption lives in its clip's held tail; any other reaches
+            // a clip only up to its media end.
+            let reach_end = match media_end(segment.recording_clip) {
+                Some(end) if !tied => mapping.source_end.min(end),
+                _ => mapping.source_end,
+            };
+            let overlaps = source_range.is_some_and(|(range_start, range_end)| {
+                range_start < reach_end && range_end > mapping.source_start
+            });
+            let rank = match (tied, overlaps) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            };
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, hit));
             }
         }
     }
-    in_range.or(fallback)
+    best.map(|(_, hit)| hit)
 }
 
 /// `syncCaptionWordsWithText` (`captions.ts:593-632`): keep word timings when
