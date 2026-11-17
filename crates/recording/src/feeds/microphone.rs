@@ -3673,7 +3673,7 @@ mod tests {
     #[test]
     fn repeated_stream_errors_are_coalesced_while_a_notification_is_pending() {
         let (sender, receiver) = flume::unbounded();
-        let mut report = microphone_stream_error_handler(sender, || {});
+        let mut report = microphone_stream_error_handler(sender, |_| {});
         for _ in 0..1024 {
             report(StreamError::DeviceNotAvailable);
         }
@@ -3683,7 +3683,7 @@ mod tests {
     #[test]
     fn stream_error_consumers_can_receive_a_later_recovery_attempt() {
         let (sender, receiver) = flume::bounded(1);
-        let mut report = microphone_stream_error_handler(sender, || {});
+        let mut report = microphone_stream_error_handler(sender, |_| {});
         report(StreamError::DeviceNotAvailable);
         assert!(receiver.try_recv().is_ok());
         report(StreamError::DeviceNotAvailable);
@@ -3693,7 +3693,7 @@ mod tests {
     #[test]
     fn stream_error_callback_never_waits_for_a_receiver() {
         let (sender, receiver) = flume::bounded(0);
-        let mut report = microphone_stream_error_handler(sender, || {});
+        let mut report = microphone_stream_error_handler(sender, |_| {});
         report(StreamError::DeviceNotAvailable);
         assert!(receiver.is_empty());
         drop(receiver);
@@ -4036,7 +4036,7 @@ mod tests {
         let (sender, _receiver) = flume::bounded(1);
         let calls = Arc::new(AtomicU64::new(0));
         let observed = calls.clone();
-        let mut handler = microphone_stream_error_handler(sender, move || {
+        let mut handler = microphone_stream_error_handler(sender, move |_| {
             observed.fetch_add(1, Ordering::Relaxed);
         });
         for _ in 0..1024 {
@@ -4511,7 +4511,7 @@ mod required_recording_health_tests {
         let stream = Arc::new(StreamHealth::new(7));
         let health = RecordingSourceHealth::new(3, stream.clone());
         let (tx, _rx) = flume::bounded(1);
-        let mut callback = microphone_stream_error_handler(tx, move || {
+        let mut callback = microphone_stream_error_handler(tx, move |_| {
             stream.failed.store(true, Ordering::Release);
         });
         callback(StreamError::DeviceNotAvailable);
@@ -4595,7 +4595,7 @@ mod required_recording_health_tests {
         let stream = Arc::new(StreamHealth::new(7));
         let health = RecordingSourceHealth::new(3, stream.clone());
         let (tx, _rx) = flume::bounded(1);
-        let mut callback = microphone_stream_error_handler(tx, move || {
+        let mut callback = microphone_stream_error_handler(tx, move |_| {
             stream.failed.store(true, Ordering::Release);
         });
         callback(StreamError::DeviceNotAvailable);
