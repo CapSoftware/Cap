@@ -1455,9 +1455,9 @@ mod tests {
     }
 
     #[test]
-    fn new_project_zoom_lands_like_the_clamped_reference_spring() {
-        // Reference: 90% at 317 ms, no overshoot. The old default takes
-        // about 383 ms.
+    fn new_project_zoom_is_quicker_without_overshoot() {
+        // New projects reach 90% of a zoom by about 317 ms with no
+        // overshoot; saved projects keep the old spring, about 383 ms.
         let segments = [manual_segment(0.5, 6.0, 2.0, 0.5, 0.5)];
         let fresh = precomputed(&segments, ScreenMovementSpring::NEW_PROJECT, 6.0);
         let (t90, peak) = rise(&fresh, 0.5, 2.0, 0.9);
