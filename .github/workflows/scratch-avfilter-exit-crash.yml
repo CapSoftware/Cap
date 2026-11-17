@@ -4,25 +4,21 @@ on:
   push:
     branches: [scratch/avfilter-exit-crash]
   workflow_dispatch:
-    inputs:
-      n:
-        description: runs per combination
-        default: "300"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  loop:
+  product:
     strategy:
       fail-fast: false
       matrix:
         runner: [blacksmith-8vcpu-windows-2025, windows-2022]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       RUNNER_LABEL: ${{ matrix.runner }}
-      N: ${{ inputs.n || '300' }}
     defaults:
       run:
         shell: pwsh
@@ -33,7 +29,7 @@ jobs:
 
       - name: Keep crash dumps
         run: |
-          foreach ($exe in @("exitcrash.exe", "Cap.exe", "cap-cli.exe", "cap-muxer.exe")) {
+          foreach ($exe in @("cap-gpui.exe", "cap-cli.exe")) {
             $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
             New-Item -Path $key -Force | Out-Null
             New-ItemProperty -Path $key -Name DumpFolder -Value "$env:RUNNER_TEMP\loopdumps" -PropertyType ExpandString -Force | Out-Null
@@ -43,61 +39,39 @@ jobs:
           Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting" -Name DontShowUI -Value 1 -Type DWord
           Start-Service WerSvc
 
-      - name: Download FFmpeg builds
-        run: |
-          $root = "$env:RUNNER_TEMP\ff"
-          New-Item -ItemType Directory -Force $root | Out-Null
-          foreach ($v in @("7.1", "7.1.1")) {
-            $name = "ffmpeg-$v-full_build-shared"
-            Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$v/$name.zip" -OutFile "$root\$v.zip"
-            Expand-Archive "$root\$v.zip" -DestinationPath $root
-            Rename-Item "$root\$name" "$root\$v"
-          }
-
-      - name: Build repro
-        run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
-          $src = "$env:GITHUB_WORKSPACE\scripts\scratch-avfilter-exit\exitcrash.c"
-          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cl /nologo /O2 /Fe:$env:RUNNER_TEMP\exitcrash.exe $src"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "$env:RUNNER_TEMP\exitcrash.exe" "$env:RUNNER_TEMP\ff\7.1\bin" avfilter-10.dll none 0 return nower info
-
-      - name: Count crashes (minimal repro)
-        run: |
-          "| runner | build | dll | worker threads | exit | runs | crashed | rate | exit codes | time |" | Add-Content $env:GITHUB_STEP_SUMMARY
-          "|---|---|---|---|---|---|---|---|---|---|" | Add-Content $env:GITHUB_STEP_SUMMARY
-          $exe = "$env:RUNNER_TEMP\exitcrash.exe"
-          $loop = "$env:GITHUB_WORKSPACE\scripts\scratch-avfilter-exit\loop.ps1"
-          $n = [int]$env:N
-          $a = "$env:RUNNER_TEMP\ff\7.1\bin"
-          $b = "$env:RUNNER_TEMP\ff\7.1.1\bin"
-          & $loop $exe $a avfilter-10.dll "7.1" none 0 return $n
-          & $loop $exe $a avfilter-10.dll "7.1" msvcrt 8 return $n
-          & $loop $exe $a avfilter-10.dll "7.1" msvcrtbig 8 return $n
-          & $loop $exe $a avfilter-10.dll "7.1" ucrtbig 8 return $n
-          & $loop $exe $a avformat-61.dll "7.1" msvcrtbig 8 return $n
-          & $loop $exe $a avfilter-10.dll "7.1" msvcrtbig 8 join $n
-          & $loop $exe $a avfilter-10.dll "7.1" msvcrtbig 8 terminate $n
-          & $loop $exe $b avfilter-10.dll "7.1.1" msvcrtbig 8 return $n
-
-      - name: Shipped Windows build
+      - name: Binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           Invoke-WebRequest "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64" -OutFile "$env:RUNNER_TEMP\cap-setup.exe"
           & 7z x -y "-o$env:RUNNER_TEMP\cap" "$env:RUNNER_TEMP\cap-setup.exe" | Out-Null
-          Get-FileHash "$env:RUNNER_TEMP\cap\avfilter-10.dll" | Format-List
-          (Get-Item "$env:RUNNER_TEMP\cap\Cap.exe").VersionInfo.ProductVersion
+          gh api repos/${{ github.repository }}/actions/artifacts/14358936506/zip > "$env:RUNNER_TEMP\gpui.zip"
+          & 7z x -y "-o$env:RUNNER_TEMP\cap" "$env:RUNNER_TEMP\gpui.zip" cap-gpui.exe | Out-Null
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.zip" -OutFile "$env:RUNNER_TEMP\ff.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ff.zip" -DestinationPath "$env:RUNNER_TEMP\ff"
+          Get-FileHash "$env:RUNNER_TEMP\cap\avfilter-10.dll", "$env:RUNNER_TEMP\ff\ffmpeg-7.1-full_build-shared\bin\avfilter-10.dll" | Format-Table -AutoSize
+          $proj = "$env:RUNNER_TEMP\project.cap"
+          New-Item -ItemType Directory -Force $proj | Out-Null
+          & "$env:RUNNER_TEMP\ff\ffmpeg-7.1-full_build-shared\bin\ffmpeg.exe" -v error -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=2" -f lavfi -i "sine=frequency=440:duration=2" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest "$proj\display.mp4"
+          '{"pretty_name":"Exit crash probe","display":{"path":"display.mp4","fps":30}}' | Set-Content -Encoding ascii "$proj\recording-meta.json"
+          & "$env:RUNNER_TEMP\cap\cap-cli.exe" export $proj -o "$env:RUNNER_TEMP\probe.mp4" --force-ffmpeg-decoder
+          "probe export exit $LASTEXITCODE"
+          Get-Item "$env:RUNNER_TEMP\probe.mp4" -ErrorAction SilentlyContinue | Format-List Length
 
-      - name: Count crashes (shipped binaries)
+      - name: Count crashes (product processes)
         run: |
-          "" | Add-Content $env:GITHUB_STEP_SUMMARY
           "| runner | process | runs | exit code (and self-test verdict) counts | time |" | Add-Content $env:GITHUB_STEP_SUMMARY
           "|---|---|---|---|---|" | Add-Content $env:GITHUB_STEP_SUMMARY
           $loop = "$env:GITHUB_WORKSPACE\scripts\scratch-avfilter-exit\productloop.ps1"
           $cap = "$env:RUNNER_TEMP\cap"
-          $req = '{"codec":"h264_mf","options":[],"pixel_format":"nv12","width":1280,"height":720,"time_base":[1,30],"frame_rate":[30,1],"output_width":1280,"output_height":720,"bpp":0.1,"crf":null}'
-          & $loop "$cap\Cap.exe" "" 200 "Cap.exe h264_mf self-test child" $req
-          & $loop "$cap\cap-cli.exe" "--version" 200 "cap-cli.exe --version"
-          & $loop "$cap\cap-muxer.exe" "" 200 "cap-muxer.exe (stdin closed)"
+          $mf = '{"codec":"h264_mf","options":[],"pixel_format":"nv12","width":1920,"height":1080,"time_base":[1,30],"frame_rate":[30,1],"output_width":1920,"output_height":1080,"bpp":0.1,"crf":null}'
+          $x264 = '{"codec":"libx264","options":[],"pixel_format":"nv12","width":1920,"height":1080,"time_base":[1,30],"frame_rate":[30,1],"output_width":1920,"output_height":1080,"bpp":0.1,"crf":null}'
+          & $loop "$cap\cap-gpui.exe" "" 300 "cap-gpui.exe (main build) h264_mf self-test child" $mf
+          & $loop "$cap\cap-gpui.exe" "" 300 "cap-gpui.exe (main build) libx264 self-test child (not a product path)" $x264
+          $proj = "$env:RUNNER_TEMP\project.cap"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\out" | Out-Null
+          & $loop "$cap\cap-cli.exe" "export `"$proj`" -o `"$env:RUNNER_TEMP\out\o{i}.mp4`" --force-ffmpeg-decoder" 150 "cap-cli.exe 0.6.3 export --force-ffmpeg-decoder (2 s 720p)"
+          & $loop "$cap\cap-cli.exe" "export `"$proj`" -o `"$env:RUNNER_TEMP\out\p{i}.mp4`"" 150 "cap-cli.exe 0.6.3 export (2 s 720p)"
 
       - name: Dump stacks
         if: always()
@@ -107,12 +81,12 @@ jobs:
           $sym = "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols"
           foreach ($d in Get-ChildItem "$env:RUNNER_TEMP\keep" -Filter *.dmp -ErrorAction SilentlyContinue) {
             "=== $($d.Name)"
-            & $cdb -z $d.FullName -y $sym -c ".ecxr; r rax,rip; kn 22; !gle; q" 2>&1 | Select-String "^\s*[0-9a-f]{2} [0-9a-f]{8}|code [0-9a-f]{8}|LastStatusValue|LastErrorValue|rax=|Attempt" | Select-Object -First 40
+            & $cdb -z $d.FullName -y $sym -c ".ecxr; r rax,rip; kn 22; !gle; q" 2>&1 | Select-String "^\s*[0-9a-f]{2} [0-9a-f]{8}|code [0-9a-f]{8}|LastStatusValue|rax=" | Select-Object -First 30
           }
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: results-${{ matrix.runner }}
+          name: product-results-${{ matrix.runner }}
           path: ${{ runner.temp }}/results.md
           if-no-files-found: ignore

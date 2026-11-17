@@ -13,7 +13,7 @@ $sw = [Diagnostics.Stopwatch]::StartNew()
 for ($i = 0; $i -lt $N; $i++) {
 	$psi = New-Object Diagnostics.ProcessStartInfo
 	$psi.FileName = $Exe
-	$psi.Arguments = $Arguments
+	$psi.Arguments = $Arguments.Replace("{i}", "$i")
 	$psi.UseShellExecute = $false
 	$psi.RedirectStandardOutput = $true
 	$psi.RedirectStandardError = $true
@@ -23,7 +23,7 @@ for ($i = 0; $i -lt $N; $i++) {
 	$p.StandardInput.Close()
 	$errTask = $p.StandardError.ReadToEndAsync()
 	$out = $p.StandardOutput.ReadToEnd()
-	if ($p.WaitForExit(60000)) { $c = "0x{0:x8}" -f $p.ExitCode } else { $p.Kill(); $c = "hang" }
+	if ($p.WaitForExit(180000)) { $c = "0x{0:x8}" -f $p.ExitCode } else { $p.Kill(); $c = "hang" }
 	$verdict = ""
 	$m = [regex]::Matches($out, "cap-h264-self-test:(\S+)")
 	if ($m.Count -gt 0) { $verdict = " verdict=" + $m[$m.Count - 1].Groups[1].Value }
