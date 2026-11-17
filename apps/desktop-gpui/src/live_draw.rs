@@ -450,6 +450,18 @@ fn ink_color(tool: Tool, color: u32, opacity: f32) -> Hsla {
     color
 }
 
+/// Measured to the segment, not the infinite line through it: a stroke that
+/// doubles back along itself would otherwise lose everything past its end.
+fn distance_to_segment(p: Pt, a: Pt, b: Pt) -> f32 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let length_squared = dx * dx + dy * dy;
+    if length_squared == 0. {
+        return a.distance(p);
+    }
+    let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / length_squared).clamp(0., 1.);
+    Pt::new(a.x + dx * t, a.y + dy * t).distance(p)
+}
+
 /// Ramer-Douglas-Peucker: the points needed to keep the line within
 /// `tolerance` of the original. The ends always stay.
 pub fn simplify(points: &[Pt], tolerance: f32) -> Vec<Pt> {
@@ -462,15 +474,9 @@ pub fn simplify(points: &[Pt], tolerance: f32) -> Vec<Pt> {
     let mut spans = vec![(0, points.len() - 1)];
     while let Some((start, end)) = spans.pop() {
         let (a, b) = (points[start], points[end]);
-        let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let length = dx.hypot(dy);
         let mut farthest = (0., start);
         for (index, p) in points.iter().enumerate().take(end).skip(start + 1) {
-            let distance = if length == 0. {
-                a.distance(*p)
-            } else {
-                ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / length
-            };
+            let distance = distance_to_segment(*p, a, b);
             if distance > farthest.0 {
                 farthest = (distance, index);
             }
@@ -1159,6 +1165,28 @@ mod tests {
             });
             assert!(near, "{p:?} strayed");
         }
+        let backtrack = [
+            Pt::new(0., 0.),
+            Pt::new(50., 0.),
+            Pt::new(100., 0.),
+            Pt::new(75., 0.),
+            Pt::new(50., 0.),
+        ];
+        assert_eq!(
+            simplify(&backtrack, 0.35),
+            vec![Pt::new(0., 0.), Pt::new(100., 0.), Pt::new(50., 0.)]
+        );
+        let there_and_back = [
+            Pt::new(0., 0.),
+            Pt::new(40., 0.),
+            Pt::new(80., 0.),
+            Pt::new(40., 0.),
+            Pt::new(0., 0.),
+        ];
+        assert_eq!(
+            simplify(&there_and_back, 0.35),
+            vec![Pt::new(0., 0.), Pt::new(80., 0.), Pt::new(0., 0.)]
+        );
         assert_eq!(simplify(&[Pt::new(1., 1.)], 0.35), vec![Pt::new(1., 1.)]);
         assert!(simplify(&[], 0.35).is_empty());
     }
