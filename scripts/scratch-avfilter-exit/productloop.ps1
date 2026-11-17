@@ -30,6 +30,7 @@ for ($i = 0; $i -lt $N; $i++) {
 	$key = "$c$verdict"
 	if ($errTask.Result -match "terminate it in an unusual way|abnormal program termination") { $key = "$key+abort" }
 	if ($i -eq 0) { Write-Host "first run: $key stdout: $($out.Trim() | Select-Object -First 1) stderr: $($errTask.Result.Trim())" }
+	Write-Host "run $i $key $([int]$sw.Elapsed.TotalSeconds) s"
 	if ($codes.ContainsKey($key)) { $codes[$key]++ } else { $codes[$key] = 1 }
 }
 Start-Sleep 2
