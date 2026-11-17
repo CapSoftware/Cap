@@ -1160,7 +1160,10 @@ mod tests {
             ));
         }
         assert_eq!(from, 2 * CHUNK - 2);
-        assert_eq!(build_paths(&Shape::Line(vec![Pt::new(5., 5.)]), Tool::Pen).len(), 1);
+        assert_eq!(
+            build_paths(&Shape::Line(vec![Pt::new(5., 5.)]), Tool::Pen).len(),
+            1
+        );
     }
 
     #[test]
