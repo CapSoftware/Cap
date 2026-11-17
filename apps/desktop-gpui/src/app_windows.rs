@@ -7279,6 +7279,7 @@ pub(crate) fn camera_preview_shown(cx: &App) -> bool {
 pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
     let Some(handle) = cx.global::<AppWindows>().camera else {
         if shown {
+            cx.global_mut::<AppWindows>().camera_preview_hidden = false;
             open_camera_window(cx);
         }
         return;
@@ -7288,6 +7289,9 @@ pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
         let _ = handle;
         if !shown {
             close_camera_window(cx);
+            // Closing clears the flag; keep the choice so the end of the
+            // recording reopens the preview, as the other platforms do.
+            cx.global_mut::<AppWindows>().camera_preview_hidden = true;
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -8298,6 +8302,23 @@ mod tests {
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    /// Linux hides the bar's camera preview by closing its window. The choice
+    /// must survive the close, or the end of the recording never reopens it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_linux_camera_preview_is_reopened_after_recording(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            windows.camera = Some(WindowHandle::new((u64::MAX - 1).into()));
+            cx.set_global(windows);
+            assert!(camera_preview_shown(cx));
+            set_camera_preview_shown(false, cx);
+            assert!(!camera_preview_shown(cx));
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
     }
 
     #[cfg(target_os = "linux")]
