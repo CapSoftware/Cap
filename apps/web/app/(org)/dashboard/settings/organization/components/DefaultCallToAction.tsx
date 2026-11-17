@@ -4,12 +4,12 @@ import { MousePointer2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { playerColorFromOrganizationMetadata } from "@/lib/player-brand";
 import {
 	callToActionDestinationLabel,
 	parseWorkspaceCallToAction,
 	readableTextColor,
 } from "@/lib/share-call-to-action";
-import { playerColorFromOrganizationMetadata } from "@/lib/player-brand";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	ProChip,
