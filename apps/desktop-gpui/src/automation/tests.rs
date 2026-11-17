@@ -897,6 +897,15 @@ async fn delete_is_refused_when_the_saved_copy_is_not_the_one_this_run_wrote() {
     let copy = replaced.last_output().unwrap();
     let other = root.path().join("other.png");
     std::fs::write(&other, b"png bytes").unwrap();
+    // Same length and modified time as the copy, so only file identity
+    // (inode, or the NTFS file index on Windows) can tell them apart.
+    let copy_modified = std::fs::metadata(&copy).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&other)
+        .unwrap()
+        .set_modified(copy_modified)
+        .unwrap();
     std::fs::rename(&other, &copy).unwrap();
     let error = check(&replaced).unwrap_err();
     assert!(
