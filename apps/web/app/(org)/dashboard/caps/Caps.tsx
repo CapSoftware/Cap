@@ -7,6 +7,7 @@ import type { ImageUpload, Video } from "@cap/web-domain";
 import { faBoxArchive } from "@fortawesome/free-solid-svg-icons/faBoxArchive";
 import clsx from "clsx";
 import { Effect, Exit } from "effect";
+import { AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -20,6 +21,10 @@ import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { parsePageParam } from "@/lib/page-param";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import {
+	ArchiveDoodle,
+	libraryDoodleHost,
+} from "../_components/library-doodles";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
@@ -27,6 +32,7 @@ import {
 	UploadPlaceholderCard,
 } from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
+import { CapGridItem } from "./components/CapGridItem";
 import {
 	CapListHeader,
 	listControlClass,
@@ -38,7 +44,7 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
 import { QuickActions } from "./components/QuickActions";
-import { useArchiveCaps } from "./components/useArchiveCaps";
+import { useArchiveCaps, useLeavingCaps } from "./components/useArchiveCaps";
 import { useCapSelection } from "./components/useCapSelection";
 import { useCapsMoved } from "./components/useCapsMoved";
 import { useUploadingStatus } from "./UploadingContext";
@@ -108,13 +114,15 @@ export const Caps = ({
 	const moveLocation = { type: "personal" } as const;
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
-	const visibleVideos = useMemo(
+	const listedVideos = useMemo(
 		() =>
 			!isArchivedView && isUploading && uploadingCapId
 				? data.filter((video) => video.id !== uploadingCapId)
 				: data,
 		[data, isArchivedView, isUploading, uploadingCapId],
 	);
+	const leavingCaps = useLeavingCaps(listedVideos);
+	const visibleVideos = leavingCaps.present;
 	const pageIds = useMemo(
 		() => visibleVideos.map((video) => video.id),
 		[visibleVideos],
@@ -141,7 +149,12 @@ export const Caps = ({
 	const archiveCaps = useArchiveCaps({
 		onDone: (ids) =>
 			setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+		onLeave: leavingCaps.leave,
+		onReturn: leavingCaps.restore,
 	});
+	const shownCount = count - leavingCaps.leavingCount;
+	const shownArchivedCount =
+		archivedCount + (isArchivedView ? 0 : leavingCaps.leavingCount);
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -275,14 +288,14 @@ export const Caps = ({
 
 	if (
 		!isArchivedView &&
-		count === 0 &&
+		shownCount === 0 &&
 		folders.length === 0 &&
-		archivedCount === 0
+		shownArchivedCount === 0
 	)
 		return <EmptyCapState />;
 
 	const archivedLink =
-		!isArchivedView && archivedCount > 0 ? (
+		!isArchivedView && shownArchivedCount > 0 ? (
 			<Link
 				href="/dashboard/caps/archived"
 				className={clsx(listControlClass, "gap-2 px-3")}
@@ -290,7 +303,7 @@ export const Caps = ({
 				<FontAwesomeIcon icon={faBoxArchive} className="size-3 text-gray-10" />
 				<span>Archived</span>
 				<span className="tabular-nums text-gray-10">
-					{archivedCount.toLocaleString("en-US")}
+					{shownArchivedCount.toLocaleString("en-US")}
 				</span>
 			</Link>
 		) : null;
@@ -321,12 +334,28 @@ export const Caps = ({
 				</>
 			)}
 			{isArchivedView && visibleVideos.length === 0 && (
-				<div className="flex flex-col gap-1 items-center px-6 py-16 text-center rounded-2xl border border-dashed border-gray-5 bg-gray-1">
-					<p className="text-base font-medium text-gray-12">Nothing archived</p>
-					<p className="max-w-sm text-sm text-gray-10 text-pretty">
-						Archive a Cap from its menu to tidy up My Caps without deleting
-						anything.
-					</p>
+				<div
+					className={clsx(
+						libraryDoodleHost,
+						"flex flex-col gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed animate-in fade-in border-gray-5 bg-gray-1",
+					)}
+				>
+					<ArchiveDoodle />
+					<div className="flex flex-col gap-1 items-center">
+						<p className="text-base font-medium text-gray-12">
+							Nothing archived
+						</p>
+						<p className="max-w-sm text-sm text-gray-10 text-pretty">
+							Archive a Cap from its menu to tidy up My Caps without deleting
+							anything.
+						</p>
+					</div>
+					<Link
+						href="/dashboard/caps"
+						className={clsx(listControlClass, "px-3 mt-1")}
+					>
+						Back to My Caps
+					</Link>
 				</div>
 			)}
 			{visibleVideos.length === 0 && archivedLink && (
@@ -336,7 +365,7 @@ export const Caps = ({
 				<>
 					<CapListHeader
 						title={isArchivedView ? "Archived" : "Videos and screenshots"}
-						count={count}
+						count={shownCount}
 						selectionState={selection.pageState}
 						onToggleSelectAll={selection.togglePage}
 						actions={
@@ -348,45 +377,58 @@ export const Caps = ({
 					/>
 
 					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+						<div className="grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 							{!isArchivedView && isUploading && (
 								<UploadPlaceholderCard key={"upload-placeholder"} />
 							)}
-							{visibleVideos.map((video) => {
-								const videoAnalytics = analytics[video.id];
-								return (
-									<CapCard
-										key={video.id}
-										cap={video}
-										analytics={videoAnalytics ?? 0}
-										onDelete={() => {
-											if (selectedCaps.length > 0) {
-												deleteCaps(selectedCaps);
-											} else {
-												deleteCap(video.id);
-											}
-										}}
-										userId={user?.id}
-										isLoadingAnalytics={isLoadingAnalytics}
-										isSelected={selectedCaps.includes(video.id)}
-										anyCapSelected={anyCapSelected}
-										onSelectToggle={(options) =>
-											selection.toggle(video.id, options)
-										}
-										selectedIds={selectedCaps}
-										canMove={!isArchivedView}
-										moveLocation={moveLocation}
-										moveRootLabel="My Caps"
-										isArchived={isArchivedView}
-										onArchiveToggle={() =>
-											void archiveCaps.mutate({
-												ids: [video.id],
-												archived: !isArchivedView,
-											})
-										}
-									/>
-								);
-							})}
+							<AnimatePresence
+								initial={false}
+								mode="popLayout"
+								custom={leavingCaps.leaving}
+							>
+								{visibleVideos.map((video) => {
+									const videoAnalytics = analytics[video.id];
+									return (
+										<CapGridItem
+											key={video.id}
+											id={video.id}
+											layoutDependency={visibleVideos}
+											returning={leavingCaps.returning.has(video.id)}
+										>
+											<CapCard
+												key={video.id}
+												cap={video}
+												analytics={videoAnalytics ?? 0}
+												onDelete={() => {
+													if (selectedCaps.length > 0) {
+														deleteCaps(selectedCaps);
+													} else {
+														deleteCap(video.id);
+													}
+												}}
+												userId={user?.id}
+												isLoadingAnalytics={isLoadingAnalytics}
+												isSelected={selectedCaps.includes(video.id)}
+												anyCapSelected={anyCapSelected}
+												onSelectToggle={(options) =>
+													selection.toggle(video.id, options)
+												}
+												selectedIds={selectedCaps}
+												canMove={!isArchivedView}
+												moveLocation={moveLocation}
+												moveRootLabel="My Caps"
+												isArchived={isArchivedView}
+												onArchiveToggle={() =>
+													void archiveCaps.mutate({
+														ids: [video.id],
+														archived: !isArchivedView,
+													})
+												}
+											/>
+										</CapGridItem>
+									);
+								})}
+							</AnimatePresence>
 						</div>
 					</SeededThumbnailsProvider>
 				</>
