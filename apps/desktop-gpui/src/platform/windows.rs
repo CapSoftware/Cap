@@ -217,6 +217,10 @@ pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> b
     }
 }
 
+pub fn set_draw_cursor() {}
+
+pub fn reset_cursor() {}
+
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
 pub fn remove_popup_window_chrome(_native: &NativeWindow) {}

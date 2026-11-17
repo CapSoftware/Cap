@@ -208,6 +208,10 @@ fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
 fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
 label = "Max capture framerate"
 
+[settings.general.recording.keep_drawings]
+description = "Drawings stay until you clear them. When off, each one fades a few seconds after you draw it."
+label = "Keep drawings on screen"
+
 [settings.general.recording.marker_sound]
 description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
 label = "Play a sound for markers"
@@ -472,6 +476,7 @@ screenshot_window = "Screenshot a window"
 start_instant = "Start Instant recording"
 start_studio = "Start Studio recording"
 stop = "Stop recording"
+toggle_drawing = "Draw on screen"
 
 [settings.shortcuts.effect]
 add_marker = "mark this moment in a Studio recording"
@@ -505,6 +510,7 @@ screenshot_window_save = "capture the window under your pointer and save it to y
 stop = "stop the current recording"
 studio = "record your selected screen or window in Studio mode"
 studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
+toggle_drawing = "start or stop drawing on screen while recording"
 
 [settings.shortcuts.sentence]
 add_marker = "Mark this moment in a Studio recording."
@@ -538,6 +544,7 @@ screenshot_window_save = "Capture the window under your pointer and save it to y
 stop = "Stop the current recording."
 studio = "Record your selected screen or window in Studio mode."
 studio_open_editor = "Record your selected screen or window in Studio mode, then open the editor when you stop."
+toggle_drawing = "Start or stop drawing on screen while recording."
 
 [settings.cli]
 command = "Command"
@@ -1213,6 +1220,17 @@ starting = { text = "Starting", max_px = 73, size = 14 }
 
 [controls.marker]
 add = "Add marker"
+
+[controls.draw]
+arrow = "Arrow, ⇧ snaps to 45°"
+clear = "Clear all"
+highlighter = "Highlighter, ⇧ for a straight line"
+pen = "Pen, ⇧ for a straight line"
+rectangle = "Rectangle, ⇧ for a square"
+start = "Draw on screen"
+stop = "Stop drawing"
+undo = "Undo"
+window_unavailable = "Drawing works in display and area recordings"
 
 [controls.settings]
 locked = "Can't change in this recording"
