@@ -944,7 +944,12 @@ export const ShareHeader = ({
 						<CallToActionDialog
 							open={isCtaDialogOpen}
 							onOpenChange={setIsCtaDialogOpen}
-							videoId={data.id}
+							target={{
+								kind: "video",
+								videoId: data.id,
+								source: data.callToActionSource ?? null,
+								workspaceCallToAction: data.workspaceCallToAction ?? null,
+							}}
 							callToAction={data.callToAction ?? null}
 							onSaved={refresh}
 							onUpgradeRequest={() => setUpgradeModalOpen(true)}
@@ -1311,9 +1316,18 @@ export const ShareHeader = ({
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																Pro
 															</span>
+														) : data.callToActionSource === "workspace" ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Default
+															</span>
 														) : data.callToAction ? (
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																On
+															</span>
+														) : data.callToActionSource === "off" &&
+															data.workspaceCallToAction ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Off
 															</span>
 														) : null}
 													</DropdownMenuItem>

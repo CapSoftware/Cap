@@ -152,6 +152,11 @@ export interface VideoCallToAction {
 	showWhilePlaying?: boolean;
 }
 
+export interface OrganizationDefaultCallToAction extends VideoCallToAction {
+	enabledAt: string;
+	includeExisting?: boolean;
+}
+
 export type VideoEditRange = {
 	start: number;
 	end: number;

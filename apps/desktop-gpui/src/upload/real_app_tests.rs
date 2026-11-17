@@ -421,11 +421,12 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
         sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
-        // Show Cap rather than the editor, so the end of the recording
-        // reshows the main window, and no startup screen to take its place.
-        sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        // The Instant "Show Cap" outcome, so the end of the recording reshows
+        // the main window, and no startup screen to take its place.
+        sandbox.set_general("disableAutoOpenLinks", json!(true));
+        sandbox.set_general("showMainWindowAfterInstantRecording", json!(true));
         sandbox.set_general("hasCompletedStartup", json!(true));
-        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "instant:3")]);
         wait_for_app(
             &sandbox,
             &app,
@@ -462,6 +463,141 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
             "{behaviour}: {log}"
         );
     }
+}
+
+/// "Show in overlay" (`showOverlay`, as 0.6.0 stored it) puts the finished
+/// Studio recording in the floating overlay and leaves the main window,
+/// hidden at start, out of the way.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_studio_overlay_keeps_the_main_window_hidden() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("mainWindowRecordingStartBehaviour", json!("close"));
+    sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+    sandbox.set_general("hasCompletedStartup", json!(true));
+    let app = sandbox.launch("overlay", &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the recordings overlay",
+        Duration::from_secs(120),
+        || {
+            let log = sandbox.log("overlay");
+            log.contains("recordings overlay shown")
+                && log.contains("auto-record main window after the recording")
+        },
+    )
+    .await;
+    kill(app);
+    let log = without_ansi(&sandbox.log("overlay"));
+    let after = log
+        .lines()
+        .find(|line| line.contains("auto-record main window after the recording"))
+        .unwrap_or_else(|| panic!("no state after the recording: {log}"));
+    assert!(after.contains("visible=false"), "{log}");
+    assert!(log.contains("recordings overlay shown cards=1"), "{log}");
+    assert_eq!(sandbox.projects().len(), 1, "{log}");
+}
+
+/// Every overlay action on a real Studio recording, driven in order by
+/// `CAP_GPUI_AUTO_RECORDINGS_OVERLAY`: Copy renders and puts the file on the
+/// clipboard; Share fails once on a server error, then Retry uploads to the
+/// organization picked in the export dialog and copies the link; Export
+/// renders to the chosen file; Edit opens the editor.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_overlay_actions_copy_share_retry_export_and_edit() {
+    let mock = MockCap::start(vec![rule(Route::Api("video/create"), Fault::Status(500))]).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+    sandbox.set_general("hasCompletedStartup", json!(true));
+    let store_path = sandbox.root.path().join("store");
+    let mut store: Value = serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+    store["auth"]["organizations"] = json!([
+        { "id": "org-first", "name": "First" },
+        { "id": "org-picked", "name": "Picked" },
+    ]);
+    std::fs::write(&store_path, serde_json::to_vec(&store).unwrap()).unwrap();
+    std::fs::write(
+        sandbox.root.path().join("gpui-state.json"),
+        serde_json::to_vec(&json!({ "export": {
+            "format": "Mp4", "fps": 30, "export_to": "link", "resolution": "1080p",
+            "compression": "Web", "optimize_filesize": false, "cursor_only": false,
+            "custom_bpp": null, "force_ffmpeg_decoder": false, "advanced_open": false,
+            "organization_id": "org-picked", "turbo": false, "gif_quality": null,
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let exported = sandbox.root.path().join("exported.mp4");
+    let exported_text = exported.to_string_lossy().to_string();
+    let app = sandbox.launch(
+        "actions",
+        &[
+            ("CAP_GPUI_AUTO_RECORD", "studio:3"),
+            (
+                "CAP_GPUI_AUTO_RECORDINGS_OVERLAY",
+                "copy,share,share,export,edit",
+            ),
+            ("CAP_GPUI_AUTO_EXPORT", exported_text.as_str()),
+        ],
+    );
+    wait_for_app(
+        &sandbox,
+        &app,
+        "every overlay action",
+        Duration::from_secs(300),
+        || {
+            let log = without_ansi(&sandbox.log("actions"));
+            log.contains("kind=Save ok=true") && log.contains("editor window opened")
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let clipboard = Command::new("pbpaste").output().unwrap();
+    kill(app);
+    let log = without_ansi(&sandbox.log("actions"));
+    let finished: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("recordings overlay action finished"))
+        .collect();
+    assert_eq!(finished.len(), 4, "{log}");
+    assert!(finished[0].contains("kind=Copy ok=true"), "{log}");
+    assert!(finished[1].contains("kind=Share ok=false"), "{log}");
+    assert!(finished[2].contains("kind=Share ok=true"), "{log}");
+    assert!(finished[3].contains("kind=Save ok=true"), "{log}");
+
+    let project = sandbox.projects().pop().expect("the recording");
+    let copied = project.join("output").join("result.mp4");
+    assert!(
+        log.contains(&format!(
+            "recordings overlay copies the render path={}",
+            copied.display()
+        )),
+        "{log}"
+    );
+    assert_eq!(&std::fs::read(&copied).unwrap()[4..8], b"ftyp");
+    assert_eq!(&std::fs::read(&exported).unwrap()[4..8], b"ftyp");
+
+    assert_eq!(mock.count("GET", "video/create"), 2);
+    assert_eq!(mock.created_orgs(), vec![Some("org-picked".to_string())]);
+    let link = meta(&project).unwrap()["sharing"]["link"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        link.ends_with(&format!("/s/{}", mock.created()[0])),
+        "{link}"
+    );
+    assert_eq!(String::from_utf8_lossy(&clipboard.stdout).trim(), link);
+
+    let edit = log
+        .find("recordings overlay auto action step=edit")
+        .expect("the edit step ran");
+    assert!(log[edit..].contains("editor window opened"), "{log}");
 }
 
 /// The After an Instant recording outcome decides whether the main window,
@@ -826,31 +962,38 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
     assert_eq!(mock.created().len(), 1);
 }
 
-/// The display sleeping mid-recording makes ScreenCaptureKit report that it
-/// has nothing to capture. That ends the screen track with its media on disk
-/// instead of failing it and leaving Stop and Quit waiting on a capture that
-/// can never confirm cleanup. Instant ends there; Studio keeps its other
-/// tracks until Stop, which the auto-record driver presses at 30 s. Sleeping
-/// the display disturbs whoever is at the machine, so this runs only with
-/// `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+/// Records in both modes, takes the capture source away with `lose`, and
+/// checks that ScreenCaptureKit's "nothing to capture" ends the screen track
+/// with its media on disk instead of failing it and leaving Stop and Quit
+/// waiting on a capture that can never confirm cleanup. The app then stops
+/// and saves the recording itself, well before the auto-record driver would
+/// press Stop.
 #[cfg(target_os = "macos")]
-#[ignore]
-#[tokio::test(flavor = "multi_thread")]
-async fn real_app_display_sleep_ends_the_recording_with_its_media() {
-    if std::env::var_os("CAP_GPUI_REAL_APP_DISPLAY_SLEEP").is_none() {
-        eprintln!("set CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1 to sleep the display");
-        return;
-    }
+async fn losing_the_capture_source_stops_and_saves(
+    case: &str,
+    settings: &[(&str, Value)],
+    env: impl Fn(&str) -> Vec<(String, String)>,
+    lose: impl Fn(&str),
+) {
     for mode in ["instant", "studio"] {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
-        let name = format!("display-sleep-{mode}");
+        for (key, value) in settings {
+            sandbox.set_general(key, value.clone());
+        }
+        let name = format!("{case}-{mode}");
         let auto = if mode == "studio" {
             "studio:30"
         } else {
             "instant:90"
         };
-        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", auto)]);
+        let mut vars = env(mode);
+        vars.push(("CAP_GPUI_AUTO_RECORD".into(), auto.into()));
+        let vars = vars
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let app = sandbox.launch(&name, &vars);
         wait_for_app(
             &sandbox,
             &app,
@@ -860,15 +1003,7 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         )
         .await;
         tokio::time::sleep(Duration::from_secs(6)).await;
-        assert!(
-            Command::new("pmset")
-                .arg("displaysleepnow")
-                .status()
-                .unwrap()
-                .success()
-        );
-        tokio::time::sleep(Duration::from_secs(8)).await;
-        let _ = Command::new("caffeinate").args(["-u", "-t", "2"]).status();
+        lose(mode);
         let ended = |log: &str| {
             log.contains("Capture cleanup is unconfirmed")
                 || log.contains("recording failed to stop cleanly")
@@ -888,14 +1023,20 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         let log = without_ansi(&sandbox.log(&name));
         assert!(
             log.contains("Screen capture source disappeared"),
-            "{mode}: the display sleep never reached the capture source:\n{log}"
+            "{case} {mode}: losing the source never reached the capture source:\n{log}"
         );
         assert!(
             !log.contains("Capture cleanup is unconfirmed"),
-            "{mode}: Stop was left waiting on a dead capture:\n{log}"
+            "{case} {mode}: Stop was left waiting on a dead capture:\n{log}"
+        );
+        assert!(
+            log.contains("capture source went away; stopping and saving the recording")
+                && log.contains("recording finished")
+                && !log.contains("recording pipeline failed"),
+            "{case} {mode}: the recording was not stopped and saved when its source went away:\n{log}"
         );
         let projects = sandbox.projects();
-        assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
+        assert_eq!(projects.len(), 1, "{case} {mode}: {projects:?}");
         let project = &projects[0];
         // Raw fragments alone are what the failure left behind, so only
         // sealed output counts: finished Instant segments, and Studio segments
@@ -903,7 +1044,7 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         if mode == "instant" {
             assert!(
                 finished_segments(project) > 0,
-                "instant: no finished display segments in {}",
+                "{case} instant: no finished display segments in {}",
                 project.display()
             );
         } else {
@@ -912,12 +1053,100 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
                 .unwrap_or(0);
             assert!(
                 saved > 0,
-                "studio: no saved segments in {}: {:?}",
+                "{case} studio: no saved segments in {}: {:?}",
                 project.display(),
                 meta(project)
             );
         }
     }
+}
+
+/// The display sleeping mid-recording. Sleeping the display disturbs whoever
+/// is at the machine, so this runs only with `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_display_sleep_ends_the_recording_with_its_media() {
+    if std::env::var_os("CAP_GPUI_REAL_APP_DISPLAY_SLEEP").is_none() {
+        eprintln!("set CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1 to sleep the display");
+        return;
+    }
+    losing_the_capture_source_stops_and_saves(
+        "display-sleep",
+        &[],
+        |_| Vec::new(),
+        |_| {
+            assert!(
+                Command::new("pmset")
+                    .arg("displaysleepnow")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::thread::sleep(Duration::from_secs(8));
+            let _ = Command::new("caffeinate").args(["-u", "-t", "2"]).status();
+        },
+    )
+    .await;
+}
+
+/// The recorded window goes away. Only a focused-window capture loses its
+/// source; a screen-region capture of a window keeps recording that region of
+/// the screen. The document opens in a TextEdit instance of its own, and only
+/// that instance is ended: scripting a close would need Automation consent,
+/// which a fresh Mac asks for with a prompt nobody answers, and quitting
+/// TextEdit would close every other document too.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_recorded_window_closing_ends_the_recording_with_its_media() {
+    fn text_edit_pids() -> Vec<String> {
+        let out = Command::new("pgrep")
+            .args(["-x", "TextEdit"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    }
+    let documents = tempfile::tempdir().unwrap();
+    let opened = std::sync::Mutex::new(Vec::<String>::new());
+    losing_the_capture_source_stops_and_saves(
+        "window-closed",
+        &[("windowCaptureStyle", json!("focusedWindow"))],
+        |mode| {
+            let title = format!("cap-capture-target-{mode}-{}", std::process::id());
+            let document = documents.path().join(&title);
+            std::fs::write(&document, "The window Cap records").unwrap();
+            let before = text_edit_pids();
+            assert!(
+                Command::new("open")
+                    .args(["-n", "-a", "TextEdit"])
+                    .arg(&document)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::thread::sleep(Duration::from_secs(3));
+            let ours: Vec<String> = text_edit_pids()
+                .into_iter()
+                .filter(|pid| !before.contains(pid))
+                .collect();
+            assert_eq!(ours.len(), 1, "{mode}: no TextEdit instance of our own");
+            *opened.lock().unwrap() = ours;
+            vec![
+                ("CAP_GPUI_AUTO_OVERLAY".into(), "window".into()),
+                ("CAP_GPUI_AUTO_WINDOW".into(), title),
+            ]
+        },
+        |_| {
+            for pid in opened.lock().unwrap().drain(..) {
+                let _ = Command::new("kill").arg(&pid).status();
+            }
+        },
+    )
+    .await;
 }
 
 /// A recording whose pipeline fails mid-capture (in the field an encoder or
