@@ -334,22 +334,28 @@ async function transcribeClip(
 		signal,
 	);
 
-	let transcript = await untilAborted(
+	const submitted =
 		query.keywords.length > 0
 			? client.transcripts
 					.submit({ audio, ...options, keyterms_prompt: query.keywords })
 					.catch(() => client.transcripts.submit({ audio, ...options }))
-			: client.transcripts.submit({ audio, ...options }),
-		signal,
-	);
+			: client.transcripts.submit({ audio, ...options });
+	// Registered before waiting, so the provider copy is deleted even when this
+	// request gives up on the submission and it completes afterwards.
+	after(async () => {
+		const done = await Promise.race([
+			submitted.catch(() => null),
+			delay(TRANSCRIBE_DEADLINE_MS, null),
+		]);
+		if (done)
+			await client.transcripts.delete(done.id).then(
+				() => undefined,
+				() => undefined,
+			);
+	});
+	let transcript = await untilAborted(submitted, signal);
 
 	const transcriptId = transcript.id;
-	after(() =>
-		client.transcripts.delete(transcriptId).then(
-			() => undefined,
-			() => undefined,
-		),
-	);
 
 	while (transcript.status !== "completed" && transcript.status !== "error") {
 		await delay(TRANSCRIBE_POLL_MS, undefined, { signal });
@@ -580,6 +586,7 @@ async function generateNotes(
 	config: MeetingsAiConfig,
 	send: SseSend,
 	signal: AbortSignal,
+	beforeDone: () => Promise<void> = async () => undefined,
 ): Promise<number> {
 	const boundary = createPromptBoundary();
 	const titleRequested = input.title.trim() === "";
@@ -630,6 +637,7 @@ async function generateNotes(
 		const title = deriveTitleFromNotes(notes);
 		if (title) send("title", { title });
 	}
+	await beforeDone();
 	send("done", { chars: notes.length });
 	return notes.length;
 }
@@ -769,15 +777,25 @@ app.post("/notes", async (c) => {
 		body.inputBytes,
 		NOTES_DEADLINE_MS,
 		async (send, signal) => {
-			try {
-				const chars = await generateNotes(input, config, send, signal);
+			let delivered = false;
+			const tracked: SseSend = (event, data) => {
+				if (event === "title" || event === "delta") delivered = true;
+				send(event, data);
+			};
+			const markWritten = async () => {
 				if (trialMeeting) await completeTrialMeeting(user.id, trialMeeting);
-				return chars;
+			};
+			try {
+				return await generateNotes(input, config, tracked, signal, markWritten);
 			} catch (error) {
+				// Notes that reached the app count as the free meeting, even if the
+				// stream then failed or was dropped; only a run that showed nothing
+				// gives it back.
 				if (trialMeeting)
-					await releaseTrialMeeting(user.id, trialMeeting).catch(
-						() => undefined,
-					);
+					await (delivered
+						? markWritten()
+						: releaseTrialMeeting(user.id, trialMeeting)
+					).catch(() => undefined);
 				throw error;
 			}
 		},

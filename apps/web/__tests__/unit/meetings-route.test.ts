@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 	streamText: vi.fn(),
 	generateText: vi.fn(),
 	after: [] as Array<() => unknown>,
+	completeFails: false,
 	trial: new Map<string, string[]>(),
 	trialState: new Map<
 		string,
@@ -72,6 +73,7 @@ vi.mock("@/lib/meetings/trial", () => {
 			return "claimed";
 		},
 		completeTrialMeeting: async (userId: string, meetingId: string) => {
+			if (mocks.completeFails) throw new Error("database down");
 			if (claimed(userId).includes(meetingId))
 				state(userId, meetingId).completed = true;
 		},
@@ -294,6 +296,7 @@ beforeEach(() => {
 	mocks.after = [];
 	mocks.trial.clear();
 	mocks.trialState.clear();
+	mocks.completeFails = false;
 	for (const fn of [
 		mocks.upload,
 		mocks.submit,
@@ -616,6 +619,33 @@ describe("POST /transcribe", () => {
 		expect(mocks.submit).not.toHaveBeenCalled();
 	});
 
+	it("still deletes a provider copy submitted after the app disconnected", async () => {
+		signIn();
+		mocks.submit.mockReturnValue(
+			new Promise((resolve) =>
+				setTimeout(() => resolve({ id: "tr_late", status: "queued" }), 60),
+			),
+		);
+		const controller = new AbortController();
+		const pending = app.request(
+			"https://cap.so/api/desktop/meetings/transcribe",
+			{
+				method: "POST",
+				body: wav(16_000),
+				headers: {
+					authorization: `Bearer ${API_KEY}`,
+					"content-type": "audio/wav",
+				},
+				signal: controller.signal,
+			},
+		);
+		setTimeout(() => controller.abort(), 20);
+		expect((await pending).status).toBe(502);
+		expect(mocks.after).toHaveLength(1);
+		await mocks.after[0]?.();
+		expect(mocks.remove).toHaveBeenCalledWith("tr_late");
+	});
+
 	it("returns 502 when the provider fails", async () => {
 		signIn();
 		mocks.submit.mockResolvedValue({
@@ -878,6 +908,35 @@ describe("free meetings for signed-in users", () => {
 			).status,
 		).toBe(402);
 		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
+	it("counts a free meeting whose notes reached the app before the stream failed", async () => {
+		const user = signIn(null);
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream([
+				{ type: "text-delta", id: "t", text: "# Notes\nAll of it." },
+				{ type: "error", error: new Error("connection dropped") },
+			]),
+		});
+		const events = await readEvents(
+			await postJson("/notes", { ...validNotes, meetingId: "m1" }),
+		);
+		expect(events.map((event) => event.event)).toContain("delta");
+		expect(events.at(-1)?.event).toBe("error");
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+		expect(mocks.trialState.get(`${user.id}|m1`)?.completed).toBe(true);
+	});
+
+	it("only reports done once the free meeting is saved", async () => {
+		const user = signIn(null);
+		mocks.completeFails = true;
+		streamNotes();
+		const events = await readEvents(
+			await postJson("/notes", { ...validNotes, meetingId: "m1" }),
+		);
+		expect(events.map((event) => event.event)).not.toContain("done");
+		expect(events.at(-1)?.event).toBe("error");
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
 	});
 
 	it("needs a meeting id to count against", async () => {
