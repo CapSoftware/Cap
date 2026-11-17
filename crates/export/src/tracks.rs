@@ -322,6 +322,12 @@ fn staging_path(dir: &Path, kind: TrackKind, token: &str) -> PathBuf {
 /// already there are set aside first and put back if any move fails, so a
 /// failed export never leaves a mix of old and new tracks.
 fn publish(files: &[(PathBuf, PathBuf)], token: &str) -> Result<(), String> {
+    if let Some((_, folder)) = files.iter().find(|(_, destination)| destination.is_dir()) {
+        return Err(format!(
+            "{} is a folder, so the track cannot be saved there",
+            folder.display()
+        ));
+    }
     let mut published: Vec<(&Path, Option<PathBuf>)> = Vec::with_capacity(files.len());
     for (staged, destination) in files {
         let name = destination
@@ -1389,6 +1395,11 @@ mod tests {
             (path("camera.new"), path("Camera.mp4")),
             (path("mic.new"), path("Microphone.wav")),
         ];
+        std::fs::create_dir(path("Microphone.wav")).unwrap();
+        assert!(publish(&files, "t").unwrap_err().contains("is a folder"));
+        assert_eq!(std::fs::read(path("Screen.mp4")).unwrap(), b"old screen");
+        std::fs::remove_dir(path("Microphone.wav")).unwrap();
+
         publish(&files, "t").unwrap();
         assert_eq!(std::fs::read(path("Screen.mp4")).unwrap(), b"new screen");
         assert_eq!(std::fs::read(path("Camera.mp4")).unwrap(), b"new camera");
