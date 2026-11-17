@@ -577,6 +577,9 @@ pub struct CanvasResize {
     pub camera_y: CameraYPosition,
     pub max_width: f64,
     pub padding_scale: f64,
+    /// Set when the display pads evenly, which the proportional
+    /// `max_width` / `padding_scale` model cannot express.
+    pub even: Option<EvenResize>,
 }
 
 pub struct CanvasDrag {
@@ -800,7 +803,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Captions => true,
-            | CanvasSelection::Shape(_) => true,
+            CanvasSelection::Shape(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -868,6 +871,8 @@ impl EditorWindow {
             .into_owned();
         let (max_width, padding_scale) =
             display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
+        let even = (effective.background.padding_mode == cap_project::PaddingMode::Even)
+            .then(|| EvenResize::new(rect, &layout, effective.aspect_ratio.is_some()));
         self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
@@ -886,6 +891,7 @@ impl EditorWindow {
                 camera_y: effective.camera.position.y.clone(),
                 max_width,
                 padding_scale,
+                even,
             }),
         });
         cx.notify();
@@ -942,6 +948,7 @@ impl EditorWindow {
                 resize.camera_y.clone(),
                 resize.max_width,
                 resize.padding_scale,
+                resize.even,
             )
         });
         let size = (
@@ -958,6 +965,7 @@ impl EditorWindow {
             camera_y,
             max_width,
             padding_scale,
+            even,
         )) = resize
         {
             match element {
@@ -972,6 +980,7 @@ impl EditorWindow {
                         DisplayResize {
                             max_width,
                             padding_scale,
+                            even,
                         },
                     );
                     self.snap_guides = guides;
@@ -2047,9 +2056,78 @@ fn display_resize_scales(rect: NormRect, layout: &FrameLayout, has_aspect: bool)
     (max_width, (2. * k * 0.4) / 100.)
 }
 
+/// What the even-padding inversion needs from the layout at drag start.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EvenResize {
+    output: (f64, f64),
+    /// Display aspect in output pixels.
+    content_aspect: f64,
+    fixed_aspect: bool,
+}
+
+impl EvenResize {
+    fn new(rect: NormRect, layout: &FrameLayout, fixed_aspect: bool) -> Self {
+        let output = (
+            f64::from(layout.output_size[0]).max(1.),
+            f64::from(layout.output_size[1]).max(1.),
+        );
+        Self {
+            output,
+            content_aspect: ((rect.w * output.0) / (rect.h * output.1).max(1e-6)).max(1e-6),
+            fixed_aspect,
+        }
+    }
+
+    /// Padding (0..100) that makes the display `width` of the frame wide.
+    fn padding_for_width(self, width: f64) -> f64 {
+        let (output_w, output_h) = self.output;
+        let aspect = self.content_aspect;
+        let ratio = if self.fixed_aspect {
+            // The canvas stays put: the display fits a box inset by a share
+            // of the canvas's shorter side, so solve for that inset.
+            let from_width = (output_w - width * output_w) / 2.;
+            let from_height = (output_h - width * output_w / aspect) / 2.;
+            let inset = (from_width.min(from_height) / output_w.min(output_h)).clamp(0., 0.4999);
+            inset / (1. - 2. * inset)
+        } else {
+            // The canvas grows around the display by `ratio` times its
+            // shorter side on every edge.
+            let shorter_over_width = aspect.recip().min(1.);
+            (1. / width.max(1e-6) - 1.) / (2. * shorter_over_width)
+        };
+        clamp(ratio * 100., 0., 100.)
+    }
+
+    /// Display size as fractions of the frame at `padding`.
+    fn size_at(self, padding: f64) -> (f64, f64) {
+        let ratio = padding / 100.;
+        let aspect = self.content_aspect;
+        if self.fixed_aspect {
+            let (output_w, output_h) = self.output;
+            let inset = output_w.min(output_h) * ratio / (1. + 2. * ratio);
+            let available = (
+                (output_w - 2. * inset).max(1.),
+                (output_h - 2. * inset).max(1.),
+            );
+            let (width, height) = if aspect <= available.0 / available.1 {
+                (available.1 * aspect, available.1)
+            } else {
+                (available.0, available.0 / aspect)
+            };
+            (width / output_w, height / output_h)
+        } else {
+            (
+                1. / (1. + 2. * ratio * aspect.recip().min(1.)),
+                1. / (1. + 2. * ratio * aspect.min(1.)),
+            )
+        }
+    }
+}
+
 struct DisplayResize {
     max_width: f64,
     padding_scale: f64,
+    even: Option<EvenResize>,
 }
 
 fn display_resize_rect(
@@ -2064,10 +2142,25 @@ fn display_resize_rect(
     let DisplayResize {
         max_width,
         padding_scale,
+        even,
     } = resize;
     let anchor = (start.x + start.w / 2., start.y + start.h / 2.);
     let (scale, guides) = resolve_scale(start, canvas, delta, direction, anchor, targets, shift);
     let target_width = (start.w * scale).max(1e-6);
+    if let Some(even) = even {
+        let padding = even.padding_for_width(target_width);
+        let (w, h) = even.size_at(padding);
+        return (
+            NormRect {
+                x: clamp(anchor.0 - w / 2., 0., (1. - w).max(0.)),
+                y: clamp(anchor.1 - h / 2., 0., (1. - h).max(0.)),
+                w,
+                h,
+            },
+            padding,
+            guides,
+        );
+    }
     let padding = clamp(
         (max_width / target_width - 1.) / padding_scale.max(1e-9),
         0.,

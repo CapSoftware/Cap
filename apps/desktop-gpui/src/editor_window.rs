@@ -12953,6 +12953,7 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::TextWeight(_)
         | SidebarMenu::Camera3DEasing(_) => true,
         SidebarMenu::BackgroundCornerStyle
+        | SidebarMenu::BackgroundPaddingMode
         | SidebarMenu::CameraBlur
         | SidebarMenu::CameraShape
         | SidebarMenu::CameraCornerStyle
@@ -13963,6 +13964,7 @@ mod tests {
                     camera_y: editor.project.camera.position.y.clone(),
                     max_width: 1000.,
                     padding_scale: 1.,
+                    even: None,
                 }),
             });
             editor.canvas_drag_rect = Some(rect);
@@ -15480,6 +15482,7 @@ mod tests {
 
         for kind in [
             SidebarMenu::BackgroundCornerStyle,
+            SidebarMenu::BackgroundPaddingMode,
             SidebarMenu::CameraBlur,
             SidebarMenu::CameraShape,
             SidebarMenu::CameraCornerStyle,

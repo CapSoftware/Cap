@@ -2359,6 +2359,7 @@ background_blur = "Background Blur"
 custom_position = "Custom screen position (dragged on canvas)"
 motion_blur = "Motion Blur"
 padding = "Padding"
+padding_style = "Padding Style"
 rounded_corners = "Rounded Corners"
 title = "Layout"
 
@@ -2856,6 +2857,10 @@ timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
 uppercase = "Uppercase"
+
+[editor.tabs.padding]
+even = "Even"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Bottom Center"
