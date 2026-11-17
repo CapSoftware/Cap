@@ -87,5 +87,16 @@ sys.exit(fixture["exit"])
         self.assertEqual((output / "perf-budget.md").read_text().count("BROKEN:"), len(PERF.WORKLOADS))
 
 
+class WorkloadGroupTests(unittest.TestCase):
+    def test_every_workload_is_in_exactly_one_group(self):
+        grouped = [name for names in PERF.GROUPS.values() for name in names]
+        self.assertEqual(sorted(grouped), sorted(w[0] for w in PERF.WORKLOADS))
+
+    def test_the_workflow_measures_every_group(self):
+        workflow = (SCRIPT.parents[2] / ".github/workflows/perf-budget.yml").read_text()
+        for group in PERF.GROUPS:
+            self.assertIn(f"- {group}\n", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()
