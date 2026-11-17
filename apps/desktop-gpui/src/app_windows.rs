@@ -642,12 +642,14 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             }
             close_controls(&session, cx);
             close_target_overlays(cx);
-            if cx.global::<AppWindows>().camera_preview_hidden {
-                set_camera_preview_shown(true, cx);
-            }
+            // The clean-capture lease keeps the bubble closed until it is
+            // released, so the hidden preview reopens only after it.
             #[cfg(target_os = "linux")]
             if !restore_clean_capture_ui(cx) {
                 return;
+            }
+            if cx.global::<AppWindows>().camera_preview_hidden {
+                set_camera_preview_shown(true, cx);
             }
             let (finished_studio, studio_behaviour, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
@@ -7279,8 +7281,12 @@ pub(crate) fn camera_preview_shown(cx: &App) -> bool {
 pub(crate) fn set_camera_preview_shown(shown: bool, cx: &mut App) {
     let Some(handle) = cx.global::<AppWindows>().camera else {
         if shown {
-            cx.global_mut::<AppWindows>().camera_preview_hidden = false;
             open_camera_window(cx);
+            // A bubble that could not open yet (a clean capture still holds
+            // it) stays hidden, so the next reopen tries again.
+            if cx.global::<AppWindows>().camera.is_some() {
+                cx.global_mut::<AppWindows>().camera_preview_hidden = false;
+            }
         }
         return;
     };
@@ -8316,6 +8322,27 @@ mod tests {
             assert!(camera_preview_shown(cx));
             set_camera_preview_shown(false, cx);
             assert!(!camera_preview_shown(cx));
+            assert!(cx.global::<AppWindows>().camera.is_none());
+            assert!(cx.global::<AppWindows>().camera_preview_hidden);
+        });
+    }
+
+    /// A clean capture keeps the bubble closed until its lease is released.
+    /// Asking to show the preview while the lease holds must keep it hidden,
+    /// so the reopen after the lease is released still brings it back.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_hidden_camera_preview_stays_hidden_while_a_clean_capture_holds_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            let mut lease = pending_clean_capture(RecordingMode::Studio, false);
+            lease.gate.started = true;
+            windows.clean_capture = Some(lease);
+            windows.camera_preview_hidden = true;
+            cx.set_global(windows);
+            set_camera_preview_shown(true, cx);
             assert!(cx.global::<AppWindows>().camera.is_none());
             assert!(cx.global::<AppWindows>().camera_preview_hidden);
         });
