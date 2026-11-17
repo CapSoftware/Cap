@@ -1431,7 +1431,7 @@ impl EditorWindow {
 
     /// The background tab's own arms -- each one the call site's `onChange`
     /// verbatim, side effects included.
-    pub(crate) fn apply_bg_slider(
+    fn apply_bg_slider(
         &mut self,
         slider: BgSlider,
         value: f32,
@@ -1580,6 +1580,21 @@ impl EditorWindow {
         if (value - self.slider_value(slider)).abs() < f32::EPSILON {
             return;
         }
+        self.apply_slider(slider, value, window, cx);
+    }
+
+    pub(crate) fn bench_slider_press(&mut self, slider: SliderKey) {
+        let history = &mut self.history;
+        self.sidebar.slider_drag.begin(slider, || history.pause());
+    }
+
+    pub(crate) fn bench_slider_move(
+        &mut self,
+        slider: SliderKey,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.apply_slider(slider, value, window, cx);
     }
 

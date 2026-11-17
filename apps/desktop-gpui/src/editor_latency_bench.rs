@@ -17,7 +17,7 @@ use gpui::{AsyncApp, MouseButton, MouseDownEvent, MouseMoveEvent, WindowHandle, 
 use crate::{
     draw_bench,
     editor_latency::{self, Mark, Presentation, Stage},
-    editor_sidebar::BgSlider,
+    editor_sidebar::{BgSlider, SliderKey},
     editor_timeline::{self, TrackKind},
     editor_window::EditorWindow,
 };
@@ -330,14 +330,17 @@ async fn preset(handle: Handle, cx: &mut AsyncApp) {
 async fn slider(handle: Handle, cx: &mut AsyncApp) {
     pause_at(handle, cx, 0.45).await;
     let original = update(handle, cx, |view, _, _| view.project.clone());
+    let padding = SliderKey::Bg(BgSlider::Padding);
+    update(handle, cx, |view, _, _| view.bench_slider_press(padding));
     editor_latency::take();
     paced_inputs(handle, cx, POINTER_HZ, DRAG, |phase, view, window, cx| {
         let value = 2.0 + 38.0 * (phase * std::f32::consts::PI).sin();
-        view.apply_bg_slider(BgSlider::Padding, value, window, cx);
+        view.bench_slider_move(padding, value, window, cx);
     })
     .await;
     wait(cx, SETTLE).await;
     let marks = editor_latency::take();
+    update(handle, cx, |view, _, cx| view.sidebar_mouse_up(cx));
     update(handle, cx, |view, window, cx| {
         view.apply_project_preset(original, window, cx)
     });
