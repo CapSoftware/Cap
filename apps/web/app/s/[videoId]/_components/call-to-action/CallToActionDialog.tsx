@@ -126,7 +126,6 @@ export function CallToActionDialog({
 	callToAction: ShareCallToAction | null;
 	onSaved?: (callToAction: ShareCallToAction | null) => void;
 	onUpgradeRequest: () => void;
-	/** The organization's brand colour, offered first and used for new CTAs. */
 	brandColor?: string | null;
 }) {
 	const isWorkspace = target.kind === "workspace";

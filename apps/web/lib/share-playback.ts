@@ -42,10 +42,6 @@ export const getSharePlaybackSource = (
 		.pipe(runPromise)
 		.catch(() => null);
 
-/**
- * Signs the owner's custom thumbnail, if there is one. Callers only reach for
- * this when the video's metadata names one, so other pages pay nothing.
- */
 export const getCustomThumbnailUrl = (
 	video: SharePlaybackVideo,
 	key: string,

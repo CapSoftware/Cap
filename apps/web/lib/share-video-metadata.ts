@@ -25,10 +25,6 @@ export type ShareVideoMetadataInput = {
 	 */
 	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;
-	/**
-	 * Set when the owner picked a thumbnail. Link previews then show it instead
-	 * of the animated preview, under a URL that changes with every new pick.
-	 */
 	thumbnailVersion?: string | null;
 };
 

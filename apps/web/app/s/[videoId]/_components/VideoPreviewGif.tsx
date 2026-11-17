@@ -67,10 +67,6 @@ function PreviewGifImage({
 	);
 }
 
-/**
- * The owner's custom thumbnail, shown in place of the animated preview until
- * the first play. Rendered from the server-signed URL so it is in the HTML.
- */
 export function VideoPoster({
 	src,
 	visible,

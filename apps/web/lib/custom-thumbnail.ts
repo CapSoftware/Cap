@@ -6,7 +6,6 @@ export const CUSTOM_THUMBNAIL_MAX_DIMENSION = 1920;
  */
 export const CUSTOM_THUMBNAIL_MAX_BYTES = 900 * 1024;
 
-/** What people can pick before it is resized in the browser. */
 export const CUSTOM_THUMBNAIL_MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 
 export const CUSTOM_THUMBNAIL_ACCEPT = "image/png,image/jpeg,image/webp";
@@ -38,9 +37,6 @@ export function isJpegData(data: Uint8Array): boolean {
 	);
 }
 
-/**
- * Fits `width` x `height` inside the thumbnail bounds without upscaling.
- */
 export function fitThumbnailSize(width: number, height: number) {
 	if (!(width > 0) || !(height > 0)) return null;
 	const scale = Math.min(

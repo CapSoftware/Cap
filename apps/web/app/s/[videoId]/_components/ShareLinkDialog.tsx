@@ -106,7 +106,6 @@ export const ShareLinkDialog = ({
 	isPublic: boolean;
 	canManageAccess?: boolean;
 	onManageAccess?: () => void;
-	/** Logo hiding follows the owner's plan, like the share page logo. */
 	ownerIsPro?: boolean;
 }) => {
 	const { webUrl } = usePublicEnv();

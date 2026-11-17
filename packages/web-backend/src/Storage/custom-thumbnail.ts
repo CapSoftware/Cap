@@ -62,10 +62,6 @@ export function getCustomThumbnailKey(video: CustomThumbnailVideo) {
 	});
 }
 
-/**
- * Changes whenever the custom thumbnail does, so URLs that embed it (link
- * preview images) miss every cache the moment the owner picks a new one.
- */
 export function getCustomThumbnailVersion(metadata: unknown) {
 	const custom = getCustomThumbnailMetadata(metadata);
 	return custom ? custom.file.slice("custom-".length, -".jpg".length) : null;

@@ -16,7 +16,6 @@ export const buildEmbedCode = ({
 	videoId: string;
 	/** Seconds to start playback at, if the sharer picked a moment. */
 	startTime?: number | null;
-	/** Toggles from the embed tab. Defaults leave the snippet as it was. */
 	options?: Partial<Omit<EmbedOptions, "startTime">>;
 }): string => {
 	const query = buildEmbedQuery({ ...options, startTime });

@@ -4,7 +4,6 @@ export type EmbedOptions = {
 	showBranding: boolean;
 	autoplay: boolean;
 	muted: boolean;
-	/** Seconds to open at. */
 	startTime: number | null;
 };
 
@@ -39,11 +38,8 @@ const parseStartTime = (value: string | undefined) => {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
-/**
- * Reads the embed URL. Every option defaults to how embeds have always
- * looked, so only an explicit `false` hides something and only an explicit
- * `true` turns autoplay or muting on.
- */
+// Only an explicit `false` hides something and only an explicit `true` turns
+// autoplay or muting on, so embeds without params keep how they always looked.
 export function parseEmbedOptions(params: SearchParamsInput): EmbedOptions {
 	return {
 		showTitle: !isOff(readParam(params, "title")),
@@ -55,10 +51,6 @@ export function parseEmbedOptions(params: SearchParamsInput): EmbedOptions {
 	};
 }
 
-/**
- * The query string for an embed URL, in a fixed order, omitting every option
- * left at its default. Defaults produce an empty string.
- */
 export function buildEmbedQuery(options: Partial<EmbedOptions>): string {
 	const params = new URLSearchParams();
 	const startTime = options.startTime;

@@ -30,8 +30,5 @@ export async function GET(req: NextRequest) {
 		});
 	}
 
-	return generateVideoOgImage(
-		Video.VideoId.make(videoId),
-		canonical.get("v"),
-	);
+	return generateVideoOgImage(Video.VideoId.make(videoId), canonical.get("v"));
 }

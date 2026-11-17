@@ -15,7 +15,6 @@ export type PlayerBrand = {
 	color: string;
 	foreground: typeof PLAYER_BRAND_INK | typeof PLAYER_BRAND_WHITE;
 	hover: string;
-	/** Null when the colour is too dark to read on the player's dark controls. */
 	accent: string | null;
 };
 
@@ -134,10 +133,6 @@ export function playerColorFromOrganizationMetadata(
 	return normalizeHexColor(metadata.branding.playerColor);
 }
 
-/**
- * Brand colour is a Pro feature, gated on the video owner's plan the same way
- * the share page logo is.
- */
 export function getPlayerBrand({
 	ownerIsPro,
 	organizationMetadata,
