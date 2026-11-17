@@ -24,11 +24,18 @@ const SOURCE_LADDER = [
 	{ videoType: "raw-preview", seek: "0" },
 ];
 
-const grabFrame = (
+const OG_FRAME_FILTER = "scale=1120:-2";
+const OG_FRAME_QUALITY = "4";
+
+export const grabFrame = (
 	ffmpeg: string,
 	url: string,
 	seek: string,
 	timeoutMs: number,
+	{
+		filter = OG_FRAME_FILTER,
+		quality = OG_FRAME_QUALITY,
+	}: { filter?: string; quality?: string } = {},
 ) =>
 	new Promise<Buffer>((resolve, reject) => {
 		const proc = spawn(
@@ -45,9 +52,9 @@ const grabFrame = (
 				"-frames:v",
 				"1",
 				"-vf",
-				"scale=1120:-2",
+				filter,
 				"-q:v",
-				"4",
+				quality,
 				"-f",
 				"image2pipe",
 				"-vcodec",
