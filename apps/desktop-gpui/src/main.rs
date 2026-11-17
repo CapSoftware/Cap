@@ -785,19 +785,21 @@ fn main() {
             }
         }
 
-        // `CAP_GPUI_AUTO_HOTKEY=<store key>`: run a hotkey action's dispatch
-        // arm (e.g. `screenshotDisplay`) as if the OS shortcut fired.
-        if let Ok(action) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
-            && !action.is_empty()
+        // `CAP_GPUI_AUTO_HOTKEY=<store key>[,<store key>...]`: run hotkey
+        // actions' dispatch arms (e.g. `screenshotDisplay`) as if the OS
+        // shortcuts fired, two seconds apart.
+        if let Ok(actions) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
+            && !actions.is_empty()
         {
-            let action = action.clone();
             cx.spawn(async move |cx| {
-                // Give enumeration and the first paint the same beat the
-                // other harness hooks give them.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                cx.update(|cx| hotkeys::dispatch_for_harness(&action, cx));
+                for action in actions.split(',').map(str::trim) {
+                    // Give enumeration and the first paint the same beat the
+                    // other harness hooks give them.
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    cx.update(|cx| hotkeys::dispatch_for_harness(action, cx));
+                }
             })
             .detach();
         }

@@ -107,6 +107,14 @@ pub enum Mode {
     Screenshot,
 }
 
+fn recording_mode_for(mode: Mode) -> Option<recording::RecordingMode> {
+    match mode {
+        Mode::Instant => Some(recording::RecordingMode::Instant),
+        Mode::Studio => Some(recording::RecordingMode::Studio),
+        Mode::Screenshot => None,
+    }
+}
+
 fn effective_recording_mode(
     preferred: Mode,
     capture: Option<Mode>,
@@ -943,6 +951,9 @@ impl RecordingStartPermit {
 /// re-open for `kind` once the account is signed in.
 struct SignInPrompt {
     kind: TargetType,
+    /// The mode a Start shortcut asked for, so signing in carries on in it
+    /// without changing the selected mode.
+    mode: Option<Mode>,
     error: Option<String>,
 }
 
@@ -1250,11 +1261,11 @@ impl MainWindow {
             };
             match outcome {
                 SignInOutcome::SignedIn => {
-                    let kind = prompt.kind;
+                    let (kind, mode) = (prompt.kind, prompt.mode);
                     this.sign_in_prompt = None;
                     let session = this.session.read(cx);
                     if session.phase == Phase::Idle && session.editor_recording_target().is_none() {
-                        this.arm_overlay(kind, cx);
+                        this.arm_overlay_in(kind, mode, cx);
                     }
                 }
                 SignInOutcome::Failed(error) if matches!(origin, SignInOrigin::Overlay(_)) => {
@@ -2154,11 +2165,7 @@ impl MainWindow {
     /// The recording mode the Mode pill maps to, `None` for Screenshot (that
     /// path does not go through the recording actors at all).
     fn recording_mode(&self, cx: &gpui::App) -> Option<recording::RecordingMode> {
-        match self.effective_mode(cx) {
-            Mode::Instant => Some(recording::RecordingMode::Instant),
-            Mode::Studio => Some(recording::RecordingMode::Studio),
-            Mode::Screenshot => None,
-        }
+        recording_mode_for(self.effective_mode(cx))
     }
 
     /// Dev-only end-to-end driver (`CAP_GPUI_AUTO_RECORD=studio:5`): synthetic
@@ -2498,6 +2505,28 @@ impl MainWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_recording_as(target, excluded_windows, None, cx);
+    }
+
+    /// A Start shortcut's recording: `mode` for this recording only, with the
+    /// selected mode left as it is.
+    pub fn start_recording_in_mode(
+        &mut self,
+        target: ScreenCaptureTarget,
+        mode: Mode,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_recording_as(target, Vec::new(), Some(mode), cx);
+    }
+
+    fn start_recording_as(
+        &mut self,
+        target: ScreenCaptureTarget,
+        excluded_windows: Vec<scap_targets::WindowId>,
+        requested: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
         if self.session.read(cx).phase != Phase::Idle || self.checking_storage {
             return;
         }
@@ -2510,7 +2539,7 @@ impl MainWindow {
         let mode = if editor_flow {
             recording::RecordingMode::Studio
         } else {
-            match self.recording_mode(cx) {
+            match requested.map_or_else(|| self.recording_mode(cx), recording_mode_for) {
                 Some(mode) => mode,
                 None => return,
             }
@@ -2522,7 +2551,7 @@ impl MainWindow {
                 ScreenCaptureTarget::Area { .. } => TargetType::Area,
                 ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
             };
-            self.show_sign_in_prompt(kind, cx);
+            self.show_sign_in_prompt_for(kind, requested, cx);
             cx.defer(app_windows::show_main_window);
             return;
         }
@@ -3299,8 +3328,21 @@ impl MainWindow {
     }
 
     pub fn show_sign_in_prompt(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.show_sign_in_prompt_for(kind, None, cx);
+    }
+
+    fn show_sign_in_prompt_for(
+        &mut self,
+        kind: TargetType,
+        mode: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
         self.clear_mode_hover();
-        self.sign_in_prompt = Some(SignInPrompt { kind, error: None });
+        self.sign_in_prompt = Some(SignInPrompt {
+            kind,
+            mode,
+            error: None,
+        });
         cx.notify();
     }
 
