@@ -75,6 +75,18 @@ pub fn asset_path(asset: &CatalogAsset) -> Option<PathBuf> {
     })
 }
 
+// The catalog's ETag, kept next to the cached copy with the server it came
+// from, so a refresh that finds nothing new costs a 304 instead of the catalog.
+fn catalog_etag_path() -> PathBuf {
+    root_dir().join("catalog.etag")
+}
+
+fn read_catalog_etag(server: &str) -> Option<String> {
+    let text = std::fs::read_to_string(catalog_etag_path()).ok()?;
+    let (stored, etag) = text.split_once('\n')?;
+    (stored == server && !etag.is_empty()).then(|| etag.to_string())
+}
+
 fn installations_cache_path() -> PathBuf {
     root_dir().join("installations.json")
 }
@@ -405,8 +417,9 @@ pub fn refresh(cx: &mut App) {
         store.generation
     });
     let local = read_local_installs();
+    let have_catalog = cx.global::<AppStore>().catalog.is_some();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, sync(local)));
+        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, sync(local, have_catalog)));
         let result = task.await.unwrap_or(SyncResult {
             catalog: None,
             installations: None,
@@ -445,10 +458,10 @@ pub fn refresh(cx: &mut App) {
     .detach();
 }
 
-async fn sync(local: BTreeSet<String>) -> SyncResult {
+async fn sync(local: BTreeSet<String>, have_catalog: bool) -> SyncResult {
     let server = auth::server_url();
     let mut failed = false;
-    let catalog = match fetch_catalog(&server).await {
+    let catalog = match fetch_catalog(&server, have_catalog).await {
         Ok(catalog) => catalog,
         Err(error) => {
             tracing::warn!(%error, "App Store catalog refresh failed");
@@ -487,16 +500,26 @@ async fn sync(local: BTreeSet<String>) -> SyncResult {
     }
 }
 
-async fn fetch_catalog(server: &str) -> Result<Option<Catalog>, String> {
+async fn fetch_catalog(server: &str, have_catalog: bool) -> Result<Option<Catalog>, String> {
     let client = auth::api_client().map_err(|error| error.to_string())?;
     let url = format!("{server}/api/app-store/catalog?apiVersion={SUPPORTED_API_VERSION}");
-    let response = auth::apply_desktop_headers(client.get(url))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut request = auth::apply_desktop_headers(client.get(url));
+    // Only ask for a 304 while a catalog is loaded to keep showing.
+    if have_catalog && let Some(etag) = read_catalog_etag(server) {
+        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(None);
+    }
     if !response.status().is_success() {
         return Err(format!("catalog returned {}", response.status()));
     }
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let bytes = response.bytes().await.map_err(|error| error.to_string())?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
     let catalog = Catalog::parse(&value).ok_or("catalog has an unknown format")?;
@@ -509,6 +532,15 @@ async fn fetch_catalog(server: &str) -> Result<Option<Catalog>, String> {
         .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
         && std::fs::write(&temporary, &bytes).is_ok()
         && std::fs::rename(&temporary, &path).is_ok();
+    let etag_path = catalog_etag_path();
+    match etag.filter(|_| cached) {
+        Some(etag) => {
+            let _ = std::fs::write(&etag_path, format!("{server}\n{etag}"));
+        }
+        None => {
+            let _ = std::fs::remove_file(&etag_path);
+        }
+    }
     if !cached {
         let _ = std::fs::remove_file(&temporary);
         tracing::warn!("Could not cache the App Store catalog");
