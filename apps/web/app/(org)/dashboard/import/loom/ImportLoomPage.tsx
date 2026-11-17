@@ -74,6 +74,7 @@ import {
 } from "@/lib/permissions/roles";
 import { LoomAgentPromptRow } from "./LoomAgentPromptRow";
 import { LoomConciergeRow } from "./LoomConciergeRow";
+import { LoomImportStatus } from "./LoomImportStatus";
 
 type Mode = "single" | "csv";
 
@@ -1240,6 +1241,12 @@ export const ImportLoomPage = ({
 							</div>
 						)}
 					</div>
+				)}
+
+				{canUseCsvImport && activeOrganization?.organization.id && (
+					<LoomImportStatus
+						organizationId={activeOrganization.organization.id}
+					/>
 				)}
 
 				{canUseCsvImport &&
