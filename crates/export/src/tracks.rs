@@ -267,7 +267,10 @@ pub async fn export_tracks(
         .collect::<Vec<_>>();
     publish(&files, &token)?;
     cleanup.0.clear();
-    Ok(files.into_iter().map(|(_, destination)| destination).collect())
+    Ok(files
+        .into_iter()
+        .map(|(_, destination)| destination)
+        .collect())
 }
 
 struct ProgressReporter<'a, F: FnMut(TrackProgress)> {
@@ -596,7 +599,11 @@ impl Nv12Converter {
             target_height: target.height(),
             bt709_source,
         };
-        if self.scaler.as_ref().is_none_or(|(current, _)| *current != key) {
+        if self
+            .scaler
+            .as_ref()
+            .is_none_or(|(current, _)| *current != key)
+        {
             let mut context = scaling::Context::get(
                 key.format,
                 width,
@@ -1428,6 +1435,9 @@ mod tests {
             .unwrap();
         let close = |actual: u8, expected: u8| actual.abs_diff(expected) <= 3;
         let (y, u, v) = (target.data(0)[0], target.data(1)[0], target.data(1)[1]);
-        assert!(close(y, 63) && close(u, 102) && close(v, 240), "{y} {u} {v}");
+        assert!(
+            close(y, 63) && close(u, 102) && close(v, 240),
+            "{y} {u} {v}"
+        );
     }
 }
