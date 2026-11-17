@@ -1126,8 +1126,16 @@ mod tests {
     #[test]
     fn simplifying_keeps_corners_and_drops_points_on_a_line() {
         let line: Vec<Pt> = (0..=100).map(|i| Pt::new(i as f32, 0.)).collect();
-        assert_eq!(simplify(&line, 0.35), vec![Pt::new(0., 0.), Pt::new(100., 0.)]);
-        let corner = [Pt::new(0., 0.), Pt::new(5., 0.1), Pt::new(10., 0.), Pt::new(10., 10.)];
+        assert_eq!(
+            simplify(&line, 0.35),
+            vec![Pt::new(0., 0.), Pt::new(100., 0.)]
+        );
+        let corner = [
+            Pt::new(0., 0.),
+            Pt::new(5., 0.1),
+            Pt::new(10., 0.),
+            Pt::new(10., 10.),
+        ];
         assert_eq!(
             simplify(&corner, 0.35),
             vec![Pt::new(0., 0.), Pt::new(10., 0.), Pt::new(10., 10.)]
@@ -1136,7 +1144,12 @@ mod tests {
             .map(|i| Pt::new(i as f32, (i as f32 / 12.).sin() * 30.))
             .collect();
         let kept = simplify(&wave, 0.35);
-        assert!(kept.len() < wave.len() / 3, "{} of {}", kept.len(), wave.len());
+        assert!(
+            kept.len() < wave.len() / 3,
+            "{} of {}",
+            kept.len(),
+            wave.len()
+        );
         for p in &wave {
             let near = kept.windows(2).any(|pair| {
                 let (a, b) = (pair[0], pair[1]);
