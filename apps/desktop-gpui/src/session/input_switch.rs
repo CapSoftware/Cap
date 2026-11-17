@@ -107,6 +107,11 @@ struct StudioSwitchOutcome {
     /// `Some(true)` when the recording was left paused (a resume failed),
     /// `Some(false)` when it runs again, `None` when the actor never answered.
     paused: Option<bool>,
+    /// The old feed was taken off the recording, so whatever it reads next
+    /// came through the app's feed, even if the switch then failed.
+    detached: bool,
+    /// The requested device is the one the recording reads now.
+    attached: bool,
     /// `Some(true)` when the recording holds the input `Feeds` names,
     /// `Some(false)` when it holds none, `None` when the old input was never
     /// detached.
@@ -306,8 +311,9 @@ impl RecordingSession {
                         }
                         match result {
                             Ok(opened) => {
-                                if let Some(active) = &this.active {
+                                if let Some(active) = this.active.as_mut() {
                                     active.adopt_switched_microphone(opened);
+                                    active.release_owned_microphone();
                                 }
                                 Feeds::global(cx).update(cx, |feeds, cx| {
                                     feeds.adopt_recording_microphone(label.clone(), cx);
@@ -400,8 +406,16 @@ impl RecordingSession {
                 if let Some(attached) = outcome.holds_selection {
                     this.input_switch.settle(requested.kind(), attached);
                 }
-                if outcome.error.is_none() {
+                if outcome.attached {
                     this.remember_input(&requested);
+                }
+                if outcome.detached
+                    && let Some(active) = this.active.as_mut()
+                {
+                    match requested.kind() {
+                        InputKind::Microphone => active.release_owned_microphone(),
+                        InputKind::Camera => active.release_owned_camera(),
+                    }
                 }
                 this.input_switch.error = outcome.error;
                 this.finish_input_switch(generation, cx);
@@ -481,6 +495,8 @@ async fn studio_switch(
                     &request.device_label(),
                 )),
                 paused: Some(false),
+                detached: false,
+                attached: false,
                 holds_selection: None,
             };
         }
@@ -497,15 +513,24 @@ async fn studio_switch(
     .await;
 
     let mut error = None;
+    let mut attached = false;
     let mut holds_selection = None;
-    if let Err(detach_error) = detached {
-        tracing::warn!("detaching the old input failed: {detach_error:#}");
-        error = Some(tr::controls::settings::switch_failed(
-            &request.device_label(),
-        ));
-    } else if current(cx) {
+    let detached = match detached {
+        Ok(()) => true,
+        Err(detach_error) => {
+            tracing::warn!("detaching the old input failed: {detach_error:#}");
+            error = Some(tr::controls::settings::switch_failed(
+                &request.device_label(),
+            ));
+            false
+        }
+    };
+    if detached && current(cx) {
         match attach_selection(this, cx, &handle, &request).await {
-            Ok(()) => holds_selection = Some(true),
+            Ok(()) => {
+                attached = true;
+                holds_selection = Some(true);
+            }
             Err(attach_error) => {
                 tracing::warn!(
                     device = %request.device_label(),
@@ -533,6 +558,8 @@ async fn studio_switch(
         return StudioSwitchOutcome {
             error,
             paused: Some(was_paused),
+            detached,
+            attached,
             holds_selection,
         };
     }
@@ -541,6 +568,8 @@ async fn studio_switch(
         Ok(()) => StudioSwitchOutcome {
             error,
             paused: Some(false),
+            detached,
+            attached,
             holds_selection,
         },
         Err(resume_error) => {
@@ -555,6 +584,8 @@ async fn studio_switch(
                     "{resume_error:#}. Use Stop if recording cannot continue safely."
                 )),
                 paused,
+                detached,
+                attached,
                 holds_selection,
             }
         }
