@@ -1313,11 +1313,16 @@ mod tests {
     #[test]
     fn remap_raw_ns_handles_negative_offsets_exactly() {
         let clock = clock();
-        let offset = Duration::from_millis(250) + Duration::from_nanos(7);
+        let offset = Duration::from_millis(250) + Duration::from_nanos(700);
         let base_system = clock.timestamps().system_time();
         let earlier_system = base_system.checked_sub(offset).unwrap();
+        let expected_ns = base_system
+            .duration_since(earlier_system)
+            .unwrap()
+            .as_nanos() as i64;
 
         let remapped = clock.remap_raw_ns(Timestamp::SystemTime(earlier_system));
-        assert_eq!(remapped, -(offset.as_nanos() as i64));
+        assert_eq!(expected_ns, offset.as_nanos() as i64);
+        assert_eq!(remapped, -expected_ns);
     }
 }
