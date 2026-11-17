@@ -143,42 +143,81 @@ pub(crate) struct InputOutcome {
 
 /// Pairs each `Input` with the last `Demand` before the next input (a trim
 /// drag publishes the edit, then moves the preview time), and that demand with
-/// the first presentation of the same frame rendered after the input. A
-/// presentation from an earlier render of the same number (an edit that kept
-/// the frame) does not count, and neither does one painted after the screen
-/// already showed a newer input's frame: a drag that swings back to the same
-/// frame a second later is a new request, not a late answer to the old one.
+/// the first presentation of the same frame from a render that includes the
+/// input. A presentation painted after the screen already showed a newer
+/// input's frame does not count: a drag that swings back to the same frame a
+/// second later is a new request, not a late answer to the old one.
 pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<InputOutcome> {
     let mut outcomes: Vec<InputOutcome> = Vec::new();
+    let mut in_flight = Vec::new();
+    let mut last_demand: Option<(Instant, u32)> = None;
+    let mut last_rendered = None;
     for mark in marks {
         match mark.stage {
-            Stage::Input => outcomes.push(InputOutcome {
-                target: None,
-                shown: None,
-                superseded: false,
-                at: mark.at,
-            }),
+            Stage::Input => {
+                in_flight.push(
+                    last_demand
+                        .filter(|(demand, _)| {
+                            last_rendered.is_none_or(|rendered| *demand > rendered)
+                        })
+                        .map(|(_, frame)| frame),
+                );
+                outcomes.push(InputOutcome {
+                    target: None,
+                    shown: None,
+                    superseded: false,
+                    at: mark.at,
+                });
+            }
             Stage::Demand => {
+                last_demand = Some((mark.at, mark.frame));
                 if let Some(outcome) = outcomes.last_mut() {
                     outcome.target = Some(mark.frame);
                 }
             }
-            _ => {}
+            Stage::Rendered => last_rendered = Some(mark.at),
+            Stage::Arrived | Stage::Painted => {}
         }
     }
+    // Paused preview renders run one at a time and `Rendered` marks their
+    // end, not their start. With a request still in flight when the input
+    // landed, the next render to finish may have begun before it and carry the
+    // old project; when it is that request's frame, only a render finishing
+    // after it includes the input. Any other render started after the input.
+    let fresh_after: Vec<(Instant, bool)> = outcomes
+        .iter()
+        .zip(&in_flight)
+        .map(|(outcome, in_flight)| {
+            let next = marks
+                .iter()
+                .find(|mark| mark.stage == Stage::Rendered && mark.at > outcome.at);
+            match (in_flight, next) {
+                (Some(frame), Some(next)) if next.frame == *frame => (next.at, true),
+                _ => (outcome.at, false),
+            }
+        })
+        .collect();
+    let includes = |index: usize, presentation: &Presentation| {
+        let (from, strict) = fresh_after[index];
+        let Some(rendered) = presentation.rendered else {
+            return false;
+        };
+        if strict {
+            rendered > from
+        } else {
+            rendered >= from
+        }
+    };
     for index in 0..outcomes.len() {
         let Some(target) = outcomes[index].target else {
             continue;
         };
         let at = outcomes[index].at;
-        let later = &outcomes[index + 1..];
         let answers_newer = |presentation: &Presentation| {
             presentation.frame != target
-                && later.iter().any(|newer| {
-                    newer.target == Some(presentation.frame)
-                        && presentation
-                            .rendered
-                            .is_some_and(|rendered| rendered >= newer.at)
+                && (index + 1..outcomes.len()).any(|newer| {
+                    outcomes[newer].target == Some(presentation.frame)
+                        && includes(newer, presentation)
                 })
         };
         let mut presentation = None;
@@ -186,15 +225,13 @@ pub(crate) fn input_outcomes(marks: &[Mark], shown: &[Presentation]) -> Vec<Inpu
             if answers_newer(candidate) {
                 break;
             }
-            if candidate.frame == target
-                && candidate.rendered.is_some_and(|rendered| rendered >= at)
-            {
+            if candidate.frame == target && includes(index, candidate) {
                 presentation = Some(*candidate);
                 break;
             }
         }
         let deadline = presentation.map(|presentation| presentation.painted);
-        let superseded = later.iter().any(|newer| {
+        let superseded = outcomes[index + 1..].iter().any(|newer| {
             newer.target.is_some_and(|frame| frame != target)
                 && deadline.is_none_or(|deadline| newer.at < deadline)
         });
@@ -343,6 +380,33 @@ mod tests {
                 .shown
                 .map(|shown| millis(outcomes[2].at, shown.painted)),
             Some(16.0)
+        );
+    }
+
+    #[test]
+    fn a_render_in_flight_at_the_input_does_not_answer_it() {
+        let base = Instant::now();
+        let marks = [
+            mark(Stage::Input, 0, 0, at(base, 0)),
+            mark(Stage::Demand, 3, 0, at(base, 0)),
+            mark(Stage::Input, 0, 0, at(base, 4)),
+            mark(Stage::Demand, 3, 0, at(base, 4)),
+            mark(Stage::Rendered, 3, 0, at(base, 9)),
+            mark(Stage::Arrived, 3, 1, at(base, 10)),
+            mark(Stage::Painted, 3, 1, at(base, 16)),
+            mark(Stage::Rendered, 3, 0, at(base, 20)),
+            mark(Stage::Arrived, 3, 2, at(base, 21)),
+            mark(Stage::Painted, 3, 2, at(base, 33)),
+        ];
+        let (shown, _) = presentations(&marks);
+        let outcomes = input_outcomes(&marks, &shown);
+        assert_eq!(
+            outcomes[0].shown.map(|shown| millis(base, shown.painted)),
+            Some(16.0)
+        );
+        assert_eq!(
+            outcomes[1].shown.map(|shown| millis(base, shown.painted)),
+            Some(33.0)
         );
     }
 
