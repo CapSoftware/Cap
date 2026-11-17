@@ -223,6 +223,12 @@ impl RecordingSession {
                         if generation != this.recording_generation {
                             return;
                         }
+                        // Stop parks the bubble, which fails a pending open: the
+                        // recording is over, so neither restore nor remember.
+                        if !this.still_switching(generation) {
+                            this.finish_input_switch(generation, cx);
+                            return;
+                        }
                         let request = InputRequest::Camera(selection.clone());
                         match result {
                             Ok(_) => {
