@@ -6,10 +6,6 @@ import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-// Runs the dashboard library actions (page size, archive, select all, space
-// custom order, Loom import status) against a real migrated MySQL database,
-// including their permission checks.
-
 const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
 	sessionUserId: "",
