@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "22eeec90-991e-424a-8f19-4c6a0fbbe316",
+	"id": "e9ca8642-a24d-4577-90b1-4dfee38f9a2a",
 	"prevId": "45632039-82de-46d3-b9b4-96c0a5a6b756",
 	"tables": {
 		"accounts": {
@@ -3322,6 +3322,43 @@
 					"notNull": true,
 					"autoincrement": false
 				},
+				"slot": {
+					"name": "slot",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"notesRuns": {
+					"name": "notesRuns",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 1
+				},
+				"askRuns": {
+					"name": "askRuns",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"startedAt": {
+					"name": "startedAt",
+					"type": "datetime",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"completedAt": {
+					"name": "completedAt",
+					"type": "datetime",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"createdAt": {
 					"name": "createdAt",
 					"type": "datetime",
@@ -3330,7 +3367,13 @@
 					"autoincrement": false
 				}
 			},
-			"indexes": {},
+			"indexes": {
+				"user_slot_idx": {
+					"name": "user_slot_idx",
+					"columns": ["userId", "slot"],
+					"isUnique": true
+				}
+			},
 			"foreignKeys": {},
 			"compositePrimaryKeys": {
 				"meeting_notes_trial_uses_userId_meetingId_pk": {

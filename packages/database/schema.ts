@@ -2423,9 +2423,17 @@ export const meetingNotesTrialUses = mysqlTable(
 	{
 		userId: nanoId("userId").notNull().$type<User.UserId>(),
 		meetingId: varchar("meetingId", { length: 64 }).notNull(),
+		slot: int("slot").notNull(),
+		notesRuns: int("notesRuns").notNull().default(1),
+		askRuns: int("askRuns").notNull().default(0),
+		startedAt: datetime("startedAt", { mode: "date" }).notNull(),
+		completedAt: datetime("completedAt", { mode: "date" }),
 		createdAt: datetime("createdAt", { mode: "date" })
 			.notNull()
 			.$defaultFn(() => new Date()),
 	},
-	(table) => [primaryKey({ columns: [table.userId, table.meetingId] })],
+	(table) => [
+		primaryKey({ columns: [table.userId, table.meetingId] }),
+		uniqueIndex("user_slot_idx").on(table.userId, table.slot),
+	],
 );
