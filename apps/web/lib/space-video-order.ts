@@ -91,3 +91,45 @@ export function nextInOrder(
 	if (index === -1) return null;
 	return orderedIds[index + 1] ?? null;
 }
+
+// Alt+Left / Alt+Right on a focused card moves it one slot. Keys typed into a
+// field inside the card (title and date editors, where Option+Arrow moves by
+// word on macOS), inside a menu or dialog opened from it, or already handled
+// never reorder.
+export function reorderShortcutDirection(event: {
+	key: string;
+	altKey: boolean;
+	metaKey: boolean;
+	ctrlKey: boolean;
+	shiftKey: boolean;
+	defaultPrevented: boolean;
+	target: EventTarget | null;
+}): "earlier" | "later" | null {
+	if (
+		event.defaultPrevented ||
+		!event.altKey ||
+		event.metaKey ||
+		event.ctrlKey ||
+		event.shiftKey
+	)
+		return null;
+	const direction =
+		event.key === "ArrowLeft"
+			? "earlier"
+			: event.key === "ArrowRight"
+				? "later"
+				: null;
+	if (!direction) return null;
+	const target = event.target;
+	if (typeof Element !== "undefined" && target instanceof Element) {
+		if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return null;
+		if (target instanceof HTMLElement && target.isContentEditable) return null;
+		if (
+			target.closest(
+				'[contenteditable]:not([contenteditable="false"]), [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+			)
+		)
+			return null;
+	}
+	return direction;
+}

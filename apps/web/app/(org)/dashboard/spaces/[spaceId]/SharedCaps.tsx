@@ -43,6 +43,7 @@ import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import {
 	type ReorderPlacement,
 	reorderIds,
+	reorderShortcutDirection,
 	type SpaceVideoOrder,
 } from "@/lib/space-video-order";
 import { CollectionShareControl } from "../../_components/CollectionShareControl";
@@ -299,13 +300,12 @@ export const SharedCaps = ({
 		id: Video.VideoId,
 		index: number,
 	) => {
-		if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey)
-			return;
-		if (event.key === "ArrowLeft") {
+		const direction = reorderShortcutDirection(event);
+		if (direction === "earlier") {
 			if (page === 1 && index === 0) return;
 			event.preventDefault();
 			void reorderTo([id], { type: "earlier" });
-		} else if (event.key === "ArrowRight") {
+		} else if (direction === "later") {
 			if (page >= totalPages && index === orderedData.length - 1) return;
 			event.preventDefault();
 			void reorderTo([id], { type: "later" });
