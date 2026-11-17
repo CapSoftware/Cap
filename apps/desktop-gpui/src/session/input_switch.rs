@@ -414,8 +414,14 @@ impl RecordingSession {
     }
 
     fn still_switching(&self, generation: u64) -> bool {
-        generation == self.recording_generation && matches!(self.phase, Phase::Recording { .. })
+        switch_is_current(self.phase, self.recording_generation, generation)
     }
+}
+
+/// Stop keeps the recording generation, so only the phase tells a switch that
+/// its recording ended while it ran.
+fn switch_is_current(phase: Phase, current: u64, generation: u64) -> bool {
+    generation == current && matches!(phase, Phase::Recording { .. })
 }
 
 /// Points the preview at `selection` and brings the bubble back for a camera.
@@ -639,5 +645,19 @@ mod tests {
         assert_eq!(state.pending, Some(InputKind::Camera));
         assert_eq!(state.finish(), Some(mic("b")));
         assert_eq!(state.finish(), None);
+    }
+
+    /// A camera open that fails because Stop parked the bubble must neither
+    /// restore the old camera nor remember the new one: Stop leaves the
+    /// generation alone, so the phase is what ends the switch.
+    #[test]
+    fn a_switch_outlived_by_its_recording_is_not_current() {
+        for paused in [false, true] {
+            assert!(switch_is_current(Phase::Recording { paused }, 3, 3));
+            assert!(!switch_is_current(Phase::Recording { paused }, 4, 3));
+        }
+        for phase in [Phase::Stopping, Phase::Idle, Phase::Starting] {
+            assert!(!switch_is_current(phase, 3, 3));
+        }
     }
 }
