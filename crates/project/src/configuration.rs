@@ -1043,6 +1043,10 @@ pub struct ScreenMovementSpring {
     pub stiffness: f32,
     pub damping: f32,
     pub mass: f32,
+    /// Starts each zoom-in this far ahead of its segment so the zoom has
+    /// landed when the segment begins. Off unless chosen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_zooms_early: bool,
 }
 
 impl Default for ScreenMovementSpring {
@@ -1051,8 +1055,23 @@ impl Default for ScreenMovementSpring {
             stiffness: 200.0,
             damping: 40.0,
             mass: 2.25,
+            start_zooms_early: false,
         }
     }
+}
+
+impl ScreenMovementSpring {
+    /// How far ahead of its segment an early zoom starts moving.
+    pub const EARLY_START_SECS: f64 = 0.35;
+
+    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
+    /// overshoot and settles within 1% by 500 ms.
+    pub const NEW_PROJECT: Self = Self {
+        stiffness: 205.0,
+        damping: 33.3,
+        mass: 1.5,
+        start_zooms_early: false,
+    };
 }
 
 impl CursorAnimationStyle {
@@ -3246,9 +3265,9 @@ pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
-    /// is what an older project missing a field reads as) only in framing:
-    /// even padding, and a soft shadow fitted to a 0.3 opacity drop shadow
-    /// with a 160 px blur. At zero padding both padding modes lay out
+    /// is what an older project missing a field reads as) only in framing
+    /// and motion: even padding, a soft shadow fitted to a 0.3 opacity drop
+    /// shadow with a 160 px blur, and the new-project zoom spring. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3260,6 +3279,7 @@ impl ProjectConfiguration {
             opacity: 62.4,
             blur: 46.7,
         });
+        config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
         config
     }
 
@@ -3814,7 +3834,37 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("paddingMode");
+        framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
         assert_eq!(framing_reset, default);
+    }
+
+    #[test]
+    fn zoom_spring_keeps_saved_values_and_only_writes_early_start_when_on() {
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"screenMovementSpring":{"stiffness":200.0,"damping":40.0,"mass":2.25}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.screen_movement_spring,
+            ScreenMovementSpring::default()
+        );
+        let written = serde_json::to_value(saved.screen_movement_spring).unwrap();
+        assert!(written.get("startZoomsEarly").is_none());
+
+        let early = ScreenMovementSpring {
+            start_zooms_early: true,
+            ..ScreenMovementSpring::NEW_PROJECT
+        };
+        let written = serde_json::to_value(early).unwrap();
+        assert_eq!(written["startZoomsEarly"], true);
+        assert_eq!(
+            serde_json::from_value::<ScreenMovementSpring>(written).unwrap(),
+            early
+        );
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_movement_spring,
+            ScreenMovementSpring::NEW_PROJECT
+        );
     }
 
     #[test]
