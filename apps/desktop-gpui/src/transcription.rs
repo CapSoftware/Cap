@@ -2478,39 +2478,43 @@ pub fn map_edited_time_to_source(
         source_range,
         recording_clip,
     )
-    .map(|(time, clip, _)| (time, clip))
+    .map(|(time, piece)| (time, timeline.segments[piece].recording_clip))
 }
 
-/// [`map_edited_time_to_source`] plus the source end of the timeline piece
-/// the time was mapped through.
+/// Where recording clip `clip`'s media ends on the shared source clock, when
+/// another clip follows it there (past it the clock is that clip's).
+fn media_end_before_next_clip(clip: u32, recording_durations: &[f64]) -> Option<f64> {
+    let clip = clip as usize;
+    (clip + 1 < recording_durations.len()).then(|| recording_durations[..=clip].iter().sum::<f64>())
+}
+
+/// [`map_edited_time_to_source`], returning the index of the timeline
+/// segment the time was mapped through instead of its recording clip.
 fn map_edited_time_to_piece(
     edited_time: f64,
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
     source_range: Option<(f64, f64)>,
     recording_clip: Option<u32>,
-) -> Option<(f64, u32, f64)> {
+) -> Option<(f64, usize)> {
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
-    let media_end = |clip: u32| {
-        let clip = clip as usize;
-        (clip + 1 < recording_durations.len())
-            .then(|| recording_durations[..=clip].iter().sum::<f64>())
-    };
+    let media_end = |clip: u32| media_end_before_next_clip(clip, recording_durations);
     // Best first: a piece of the tied clip overlapping `source_range`, any
     // piece of the tied clip (a clip can be cut into pieces that overlap in
     // a crossfade), any piece overlapping `source_range`, then any piece.
-    let mut best: Option<(u8, (f64, u32, f64))> = None;
-    for (mapping, segment) in build_source_to_edited_mappings(timeline, recording_durations)
-        .into_iter()
-        .zip(&timeline.segments)
+    let mut best: Option<(u8, (f64, usize))> = None;
+    for (piece, (mapping, segment)) in
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .into_iter()
+            .zip(&timeline.segments)
+            .enumerate()
     {
         let edited_end =
             mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
         if edited_time >= mapping.edited_start && edited_time <= edited_end {
             let hit = (
                 mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale,
-                segment.recording_clip,
-                mapping.source_end,
+                piece,
             );
             let tied = recording_clip == Some(segment.recording_clip);
             // A tied caption lives in its clip's held tail; any other reaches
@@ -2622,26 +2626,62 @@ pub fn write_caption_edit_to_source(
     let tie = source.recording_clip;
     let map =
         |time| map_edited_time_to_piece(time, timeline, recording_durations, source_range, tie);
-    let start_hit = map(track_start);
-    if let Some((start, _, _)) = start_hit {
-        source.start = start as f32;
-    }
-    if let Some((mut end, mut clip, _)) = map(track_end) {
-        // An end dragged into another clip whose source clock runs earlier
-        // (out of a held tail, or onto a clip placed before this one) would
-        // save the caption reversed; it ends where its start's piece does.
-        if let Some((start, start_clip, piece_end)) = start_hit
-            && clip != start_clip
-            && end <= start
+    let (start, end) = (map(track_start), map(track_end));
+    let clip_of = |piece: usize| timeline.segments[piece].recording_clip;
+    let mut cut = None;
+    match (tie, start, end) {
+        // A tied caption reads only its own clip, so it cannot reach into
+        // another one on that clip's clock. Resized across a clip boundary,
+        // its part on its clip stays tied and the part past the boundary
+        // goes on the shared clock, drawn just as an untied caption across
+        // clips is. A transcribed caption draws only its words, all on its
+        // clip, so it just stops at the boundary.
+        (Some(tie), Some((start, start_piece)), Some((end, end_piece)))
+            if clip_of(start_piece) != clip_of(end_piece)
+                && (clip_of(start_piece) == tie || clip_of(end_piece) == tie) =>
         {
-            (end, clip) = (piece_end, start_clip);
+            let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+            let (tied, other) = if clip_of(start_piece) == tie {
+                let other = mappings
+                    .get(start_piece + 1)
+                    .map(|next| (next.source_start, end, clip_of(end_piece)));
+                ((start, mappings[start_piece].source_end), other)
+            } else {
+                let other = end_piece.checked_sub(1).map(|previous| {
+                    let clip = clip_of(previous);
+                    let reach = media_end_before_next_clip(clip, recording_durations)
+                        .map_or(mappings[previous].source_end, |media_end| {
+                            mappings[previous].source_end.min(media_end)
+                        });
+                    (start, reach, clip)
+                });
+                ((mappings[end_piece].source_start, end), other)
+            };
+            (source.start, source.end) = (tied.0 as f32, tied.1 as f32);
+            source.recording_clip = cap_project::held_tail_clip(tie, tied.1, recording_durations);
+            cut = other
+                .filter(|(start, end, _)| source.words.is_empty() && start < end)
+                .map(|(start, end, clip)| {
+                    let at_start = clip_of(start_piece) != tie;
+                    (start, end, clip, at_start)
+                });
         }
-        source.end = end as f32;
-        // Over a clip's held tail (past its media end) the source clock
-        // already belongs to the next clip, so the caption is tied to the
-        // clip its end was mapped through.
-        source.recording_clip =
-            cap_project::held_tail_clip(clip, f64::from(source.end), recording_durations);
+        _ => {
+            if let Some((start, _)) = start {
+                source.start = start as f32;
+            }
+            if let Some((end, piece)) = end {
+                source.end = end as f32;
+                // Over a clip's held tail (past its media end) the source
+                // clock already belongs to the next clip, so the caption is
+                // tied to the clip its end was mapped through.
+                source.recording_clip = cap_project::held_tail_clip(
+                    clip_of(piece),
+                    f64::from(source.end),
+                    recording_durations,
+                );
+            }
+        }
     }
     source.text = track_text;
     if !is_manual_caption(source) {
@@ -2651,6 +2691,43 @@ pub fn write_caption_edit_to_source(
             f64::from(source.start),
             f64::from(source.end),
         );
+    }
+
+    let Some((start, end, clip, at_start)) = cut else {
+        return;
+    };
+    let mut part = source.clone();
+    let mut suffix = 1;
+    while captions
+        .segments
+        .iter()
+        .any(|segment| segment.id == format!("{source_id}-{suffix}"))
+    {
+        suffix += 1;
+    }
+    part.id = format!("{source_id}-{suffix}");
+    (part.start, part.end) = (start as f32, end as f32);
+    part.recording_clip = cap_project::held_tail_clip(clip, end, recording_durations);
+    part.words.clear();
+    if !is_manual_caption(&part) {
+        part.words = sync_caption_words_with_text(&part.text, &[], start, end);
+    }
+    let position = captions
+        .segments
+        .iter()
+        .position(|segment| segment.id == source_id)
+        .map_or(captions.segments.len(), |index| {
+            index + usize::from(!at_start)
+        });
+    let part_id = part.id.clone();
+    captions.segments.insert(position, part);
+    // The new part keeps the caption's style overrides, carried by its id.
+    if let Some(timeline) = project.timeline.as_mut()
+        && let Some(item) = timeline.caption_segments.get(index)
+    {
+        let mut style = item.clone();
+        style.id = part_id;
+        timeline.caption_segments.push(style);
     }
 }
 
@@ -3602,52 +3679,190 @@ mod tests {
         );
     }
 
-    // Greptile's resize case: two 10 s recordings trimmed to 4..14 (a held
-    // tail from 10 s) and 0..10. A caption tied to the first at 12..13 shows
-    // at 8..9; dragging its end to 11, into the second clip whose source clock
-    // reads 11 there, would save it reversed as 12..11. It ends where its
-    // clip does instead, at 10 (source 14), still tied.
+    // Resizes caption track item `index` to `start..end` and returns what the
+    // caption track then draws, as (text, start, end) to 0.001 s.
+    fn resize_caption(
+        project: &mut ProjectConfiguration,
+        index: usize,
+        start: f64,
+        end: f64,
+        durations: &[f64],
+    ) -> Vec<(String, f64, f64)> {
+        let item = &mut project.timeline.as_mut().unwrap().caption_segments[index];
+        (item.start, item.end) = (start, end);
+        write_caption_edit_to_source(project, index, durations);
+        cap_project::synchronize_captions(project, durations);
+        let near = |time: f64| (time * 1000.0).round() / 1000.0;
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), near(segment.start), near(segment.end)))
+            .collect()
+    }
+
+    fn held_tail_project(
+        timeline_json: serde_json::Value,
+        captions: Vec<CaptionSegment>,
+    ) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(timeline(timeline_json)),
+            captions: Some(CaptionsData {
+                segments: captions,
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // Greptile's case: two 10 s recordings trimmed 4..14 (a held tail from
+    // 10 s) and 0..10. A typed caption at output 8..9 is stored at 12..13,
+    // tied to clip 0. Dragging its end to output 11 must keep it on screen
+    // over both clips, as an untied caption dragged across clips is.
     #[test]
-    fn extending_a_held_tail_caption_into_the_next_clip_keeps_it() {
+    fn a_tied_caption_resized_into_the_next_clip_spans_both() {
+        let durations = [10.0, 10.0];
         let mut tied = caption("caption-tail", 12.0, 13.0, &[]);
         tied.recording_clip = Some(0);
         tied.text = "typed".into();
-        let mut project = ProjectConfiguration {
-            timeline: Some(timeline(serde_json::json!({
+        let mut project = held_tail_project(
+            serde_json::json!({
                 "segments": [
                     { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
                     { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
                 ],
                 "zoomSegments": []
-            }))),
-            captions: Some(CaptionsData {
-                segments: vec![tied],
-                source_timed: true,
-                ..Default::default()
             }),
-            ..Default::default()
-        };
-        let durations = [10.0, 10.0];
-        let track = |project: &mut ProjectConfiguration| {
-            cap_project::synchronize_captions(project, &durations);
-            project
-                .timeline
-                .as_ref()
-                .unwrap()
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        project.timeline.as_mut().unwrap().caption_segments[0].fade_duration_override = Some(0.1);
+        let track = resize_caption(&mut project, 0, 8.0, 11.0, &durations);
+        assert_eq!(
+            track,
+            [
+                ("typed".to_string(), 8.0, 10.0),
+                ("typed".to_string(), 10.0, 11.0)
+            ]
+        );
+        let timeline = project.timeline.as_ref().unwrap();
+        assert!(
+            timeline
                 .caption_segments
                 .iter()
-                .map(|segment| (segment.start, segment.end))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(track(&mut project), [(8.0, 9.0)]);
-        project.timeline.as_mut().unwrap().caption_segments[0].end = 11.0;
-        write_caption_edit_to_source(&mut project, 0, &durations);
-        let source = &project.captions.as_ref().unwrap().segments[0];
-        assert_eq!(
-            (source.start, source.end, source.recording_clip),
-            (12.0, 14.0, Some(0))
+                .all(|item| item.fade_duration_override == Some(0.1)),
+            "both parts keep the caption's style"
         );
-        assert_eq!(track(&mut project), [(8.0, 10.0)]);
+        for source in &project.captions.as_ref().unwrap().segments {
+            assert!(source.start < source.end, "{source:?}");
+        }
+    }
+
+    // The reverse: a caption tied to a middle clip's held tail whose start is
+    // dragged back into the clip before it.
+    #[test]
+    fn a_tied_caption_resized_back_into_the_previous_clip_spans_both() {
+        let durations = [10.0, 10.0, 10.0];
+        let mut tied = caption("caption-tail", 22.0, 23.0, &[]);
+        tied.recording_clip = Some(1);
+        tied.text = "typed".into();
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = resize_caption(&mut project, 0, 9.0, 19.0, &durations);
+        assert_eq!(
+            track,
+            [
+                ("typed".to_string(), 9.0, 10.0),
+                ("typed".to_string(), 10.0, 19.0)
+            ]
+        );
+    }
+
+    // A transcribed caption draws only its words, so one tied to a held tail
+    // stays on its clip and words when its end is dragged into the next clip,
+    // as an untied one shows nothing new past its last word.
+    #[test]
+    fn a_tied_transcribed_caption_resized_into_the_next_clip_keeps_its_words() {
+        let durations = [10.0, 10.0];
+        let mut tied = caption("tail", 12.0, 13.0, &[("held", 12.2, 12.8)]);
+        tied.recording_clip = Some(0);
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = resize_caption(&mut project, 0, 8.0, 11.0, &durations);
+        assert_eq!(track, [("held".to_string(), 8.2, 8.8)]);
+        let source = &project.captions.as_ref().unwrap().segments;
+        assert_eq!(source.len(), 1);
+        assert_eq!(source[0].recording_clip, Some(0));
+    }
+
+    // Untied captions resize across clips exactly as before: one source
+    // caption on the shared clock, drawn once per clip it covers. Expected
+    // values are main's output for the same edits.
+    #[test]
+    fn an_untied_caption_resized_across_clips_is_unchanged() {
+        let durations = [10.0, 10.0];
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 8.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![
+                caption("caption-typed", 6.0, 7.0, &[]),
+                caption("spoken", 13.0, 14.0, &[("spoken", 13.0, 14.0)]),
+            ],
+        );
+        project.captions.as_mut().unwrap().segments[0].text = "typed".into();
+        cap_project::synchronize_captions(&mut project, &durations);
+        assert_eq!(
+            resize_caption(&mut project, 0, 4.0, 7.0, &durations),
+            [
+                ("typed".to_string(), 4.0, 6.0),
+                ("typed".to_string(), 6.0, 7.0),
+                ("spoken".to_string(), 9.0, 10.0)
+            ]
+        );
+        assert_eq!(
+            resize_caption(&mut project, 2, 5.0, 10.0, &durations),
+            [
+                ("typed".to_string(), 4.0, 6.0),
+                ("typed".to_string(), 6.0, 7.0),
+                ("spoken".to_string(), 9.0, 10.0)
+            ]
+        );
+        let sources = serde_json::to_value(&project.captions.as_ref().unwrap().segments).unwrap();
+        assert_eq!(
+            sources,
+            serde_json::json!([
+                { "id": "caption-typed", "start": 6.0, "end": 11.0, "text": "typed", "words": [] },
+                { "id": "spoken", "start": 7.0, "end": 14.0, "text": "spoken",
+                  "words": [{ "text": "spoken", "start": 13.0, "end": 14.0 }] }
+            ])
+        );
     }
 
     #[test]
