@@ -2109,11 +2109,18 @@ mod mac {
 
     /// The pen while drawing on screen. The drawing panel never becomes the
     /// key window, so gpui's cursor rects do not apply to it; the cursor is
-    /// set directly on each pointer event instead.
+    /// set directly on pointer events instead. `set` registers the image with
+    /// the window server over a synchronous message each time, which profiled
+    /// as most of the main thread's work while drawing, so it only runs when
+    /// something else has replaced the pen.
     pub fn set_draw_cursor() {
-        use objc2::msg_send;
+        use objc2::{class, msg_send};
         DRAW_CURSOR.with(|cursor| {
-            if let Some(cursor) = cursor.get_or_init(build_draw_cursor) {
+            let Some(cursor) = cursor.get_or_init(build_draw_cursor) else {
+                return;
+            };
+            let current: *mut AnyObject = unsafe { msg_send![class!(NSCursor), currentCursor] };
+            if !std::ptr::eq(current.cast_const(), &**cursor) {
                 let _: () = unsafe { msg_send![&**cursor, set] };
             }
         });
