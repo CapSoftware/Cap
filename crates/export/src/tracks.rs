@@ -21,7 +21,7 @@ use cap_editor::{AudioRenderer, SegmentMedia, audio_segment_from_decoded};
 use cap_enc_ffmpeg::{h264::H264Encoder, mp4::MP4File};
 use cap_media_info::VideoInfo;
 use cap_project::{ProjectConfiguration, RecordingMeta};
-use cap_rendering::{DecodedFrame, PixelFormat, ProjectRecordingsMeta};
+use cap_rendering::{DecodedFrame, PixelFormat, ProjectRecordingsMeta, cpu_yuv::YuvMatrix};
 use ffmpeg::{format::Pixel, frame, software::scaling};
 
 use crate::mp4::{ExportCompression, audio_frame_budget};
@@ -221,9 +221,10 @@ pub async fn export_tracks(
     };
     reporter.report();
 
+    let token = export_token();
     let staged = tracks
         .iter()
-        .map(|kind| (*kind, staging_path(&output_dir, *kind)))
+        .map(|kind| (*kind, staging_path(&output_dir, *kind, &token)))
         .collect::<Vec<_>>();
     let mut cleanup = StagedFiles(staged.iter().map(|(_, path)| path.clone()).collect());
 
@@ -257,22 +258,16 @@ pub async fn export_tracks(
         .await?;
     }
 
-    let mut outputs = Vec::with_capacity(staged.len());
-    for (kind, staged_path) in &staged {
-        let destination = output_dir.join(kind.file_name());
-        replace_file(staged_path, &destination).map_err(|error| {
-            format!(
-                "Could not save {}: {error}",
-                destination
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            )
-        })?;
-        outputs.push(destination);
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TrackExportError::Cancelled);
     }
+    let files = staged
+        .iter()
+        .map(|(kind, path)| (path.clone(), output_dir.join(kind.file_name())))
+        .collect::<Vec<_>>();
+    publish(&files, &token)?;
     cleanup.0.clear();
-    Ok(outputs)
+    Ok(files.into_iter().map(|(_, destination)| destination).collect())
 }
 
 struct ProgressReporter<'a, F: FnMut(TrackProgress)> {
@@ -305,19 +300,64 @@ impl Drop for StagedFiles {
     }
 }
 
-fn staging_path(dir: &Path, kind: TrackKind) -> PathBuf {
-    let extension = if kind.is_video() { "mp4" } else { "wav" };
-    dir.join(format!(".{}.partial.{extension}", kind.slug()))
+/// Names this export's temporary files apart from any other export writing
+/// to the same folder at the same time.
+fn export_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
 }
 
-fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(error) if to.exists() => {
-            std::fs::remove_file(to).map_err(|_| error)?;
-            std::fs::rename(from, to)
+fn staging_path(dir: &Path, kind: TrackKind, token: &str) -> PathBuf {
+    let extension = if kind.is_video() { "mp4" } else { "wav" };
+    dir.join(format!(".{}.{token}.partial.{extension}", kind.slug()))
+}
+
+/// Moves every staged file onto its destination, all or nothing. Files
+/// already there are set aside first and put back if any move fails, so a
+/// failed export never leaves a mix of old and new tracks.
+fn publish(files: &[(PathBuf, PathBuf)], token: &str) -> Result<(), String> {
+    let mut published: Vec<(&Path, Option<PathBuf>)> = Vec::with_capacity(files.len());
+    for (staged, destination) in files {
+        let name = destination
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let backup = if destination.exists() {
+            let backup = destination.with_file_name(format!(".{name}.{token}.previous"));
+            if let Err(error) = std::fs::rename(destination, &backup) {
+                roll_back(&published);
+                return Err(format!("Could not replace {name}: {error}"));
+            }
+            Some(backup)
+        } else {
+            None
+        };
+        if let Err(error) = std::fs::rename(staged, destination) {
+            if let Some(backup) = &backup {
+                let _ = std::fs::rename(backup, destination);
+            }
+            roll_back(&published);
+            return Err(format!("Could not save {name}: {error}"));
         }
-        Err(error) => Err(error),
+        published.push((destination, backup));
+    }
+    for (_, backup) in published {
+        if let Some(backup) = backup {
+            let _ = std::fs::remove_file(backup);
+        }
+    }
+    Ok(())
+}
+
+fn roll_back(published: &[(&Path, Option<PathBuf>)]) {
+    for (destination, backup) in published.iter().rev() {
+        let _ = std::fs::remove_file(destination);
+        if let Some(backup) = backup {
+            let _ = std::fs::rename(backup, destination);
+        }
     }
 }
 
@@ -509,21 +549,38 @@ fn black_nv12(width: u32, height: u32) -> frame::Video {
     frame
 }
 
-#[derive(Default)]
-struct Nv12Converter {
-    scaler: Option<(Pixel, u32, u32, u32, u32, scaling::Context)>,
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScalerKey {
+    format: Pixel,
+    width: u32,
+    height: u32,
+    target_width: u32,
+    target_height: u32,
+    bt709_source: bool,
 }
 
+#[derive(Default)]
+struct Nv12Converter {
+    scaler: Option<(ScalerKey, scaling::Context)>,
+}
+
+const SWS_CS_ITU709: i32 = 1;
+const SWS_CS_ITU601: i32 = 5;
+
 impl Nv12Converter {
-    /// Writes `decoded` into `target` (NV12 at the track's size). Same-size
-    /// NV12, which every decoder produces for recordings, is a plane copy;
-    /// anything else (a camera swapped mid-recording) is scaled to fit.
+    /// Writes `decoded` into `target`, NV12 at the track's size, in BT.709
+    /// because that is how the encoder tags every track. A BT.709 frame of
+    /// the same size is a plane copy; anything else (a BT.601 or untagged
+    /// source, which the renderer also reads as BT.601, or a camera swapped
+    /// mid-recording) goes through swscale with the source's matrix.
     fn fill(&mut self, decoded: &DecodedFrame, target: &mut frame::Video) -> Result<(), String> {
         let (width, height) = (decoded.width(), decoded.height());
         if width == 0 || height == 0 {
             return Err("A decoded frame has no size".into());
         }
+        let bt709_source = decoded.matrix() == YuvMatrix::Bt709;
         if decoded.format() == PixelFormat::Nv12
+            && bt709_source
             && width == target.width()
             && height == target.height()
         {
@@ -531,25 +588,47 @@ impl Nv12Converter {
         }
 
         let source = source_frame(decoded)?;
-        let (target_width, target_height) = (target.width(), target.height());
-        let format = source.format();
-        let reuse = self.scaler.as_ref().is_some_and(|(f, w, h, tw, th, _)| {
-            (*f, *w, *h, *tw, *th) == (format, width, height, target_width, target_height)
-        });
-        if !reuse {
-            let context = scaling::Context::get(
-                format,
+        let key = ScalerKey {
+            format: source.format(),
+            width,
+            height,
+            target_width: target.width(),
+            target_height: target.height(),
+            bt709_source,
+        };
+        if self.scaler.as_ref().is_none_or(|(current, _)| *current != key) {
+            let mut context = scaling::Context::get(
+                key.format,
                 width,
                 height,
                 Pixel::NV12,
-                target_width,
-                target_height,
+                key.target_width,
+                key.target_height,
                 scaling::Flags::BILINEAR,
             )
             .map_err(|error| format!("Could not convert a track frame: {error}"))?;
-            self.scaler = Some((format, width, height, target_width, target_height, context));
+            let source_space = if bt709_source {
+                SWS_CS_ITU709
+            } else {
+                SWS_CS_ITU601
+            };
+            // SAFETY: the context was just created and is exclusively owned;
+            // sws_getCoefficients returns pointers to libswscale's static tables.
+            unsafe {
+                ffmpeg::ffi::sws_setColorspaceDetails(
+                    context.as_mut_ptr(),
+                    ffmpeg::ffi::sws_getCoefficients(source_space),
+                    0,
+                    ffmpeg::ffi::sws_getCoefficients(SWS_CS_ITU709),
+                    0,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                );
+            }
+            self.scaler = Some((key, context));
         }
-        let Some((.., context)) = self.scaler.as_mut() else {
+        let Some((_, context)) = self.scaler.as_mut() else {
             return Err("Could not convert a track frame".into());
         };
         context
@@ -705,6 +784,7 @@ async fn export_video_tracks<F: FnMut(TrackProgress)>(
 
     let mut screen = None;
     let mut camera = None;
+    let mut setup = Ok(());
     for (kind, slot) in [
         (TrackKind::Screen, &mut screen),
         (TrackKind::Camera, &mut camera),
@@ -712,33 +792,83 @@ async fn export_video_tracks<F: FnMut(TrackProgress)>(
         let Some(path) = path_for(kind) else {
             continue;
         };
-        let (width, height) = used_clips(kind).ok_or(TrackExportError::Unavailable(kind))?;
-        *slot = Some(VideoTrackWriter::spawn(path, width, height, fps)?);
+        let spawned = used_clips(kind)
+            .ok_or(TrackExportError::Unavailable(kind))
+            .and_then(|(width, height)| {
+                VideoTrackWriter::spawn(path, width, height, fps).map_err(TrackExportError::from)
+            });
+        match spawned {
+            Ok(writer) => *slot = Some(writer),
+            Err(error) => {
+                setup = Err(error);
+                break;
+            }
+        }
     }
 
-    let result = run_video_pass(
-        prepared,
-        fps,
-        total_frames,
-        cancel,
-        reporter,
-        screen.as_ref(),
-        camera.as_ref(),
-    )
-    .await;
-    match result {
+    let result = match setup {
         Ok(()) => {
-            for writer in [screen, camera].into_iter().flatten() {
-                writer.finish()?;
-            }
-            Ok(())
+            run_video_pass(
+                prepared,
+                fps,
+                total_frames,
+                cancel,
+                reporter,
+                screen.as_ref(),
+                camera.as_ref(),
+            )
+            .await
         }
-        Err(error) => {
-            for writer in [screen, camera].into_iter().flatten() {
-                writer.abandon();
+        Err(error) => Err(error),
+    };
+    // Every started encoder is joined before returning, so none still holds
+    // its partial file open when the caller removes it.
+    let mut finished = Ok(());
+    for writer in [screen, camera].into_iter().flatten() {
+        if result.is_ok() {
+            if let Err(error) = writer.finish()
+                && finished.is_ok()
+            {
+                finished = Err(TrackExportError::from(error));
             }
-            Err(error)
+        } else {
+            writer.abandon();
         }
+    }
+    result.and(finished)
+}
+
+/// Consecutive output frames a track may go without a decoded frame, as the
+/// rendered export allows: few before its first frame, more once running.
+const MAX_INITIAL_MISSES: u32 = 8;
+const MAX_CONSECUTIVE_MISSES: u32 = 200;
+
+#[derive(Default)]
+struct MissTracker {
+    decoded: u64,
+    consecutive: u32,
+}
+
+impl MissTracker {
+    fn record(&mut self, kind: TrackKind, decoded: bool, time: f64) -> Result<(), String> {
+        if decoded {
+            self.decoded += 1;
+            self.consecutive = 0;
+            return Ok(());
+        }
+        self.consecutive += 1;
+        let limit = if self.decoded == 0 {
+            MAX_INITIAL_MISSES
+        } else {
+            MAX_CONSECUTIVE_MISSES
+        };
+        if self.consecutive > limit {
+            return Err(format!(
+                "The {} recording stopped returning frames near {time:.1}s",
+                kind.slug()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -752,6 +882,8 @@ async fn run_video_pass<F: FnMut(TrackProgress)>(
     camera: Option<&VideoTrackWriter>,
 ) -> Result<(), TrackExportError> {
     let mut decoded_any = false;
+    let mut screen_misses = MissTracker::default();
+    let mut camera_misses = MissTracker::default();
     for frame_number in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
             return Err(TrackExportError::Cancelled);
@@ -795,6 +927,13 @@ async fn run_video_pass<F: FnMut(TrackProgress)>(
             None => (None, None),
         };
         decoded_any |= screen_frame.is_some() || camera_frame.is_some();
+        let time = frame_number as f64 / fps as f64;
+        if screen.is_some() {
+            screen_misses.record(TrackKind::Screen, screen_frame.is_some(), time)?;
+        }
+        if wants_camera {
+            camera_misses.record(TrackKind::Camera, camera_frame.is_some(), time)?;
+        }
         if let Some(writer) = screen {
             writer.send(screen_frame.map_or(VideoJob::Repeat, VideoJob::Frame))?;
         }
@@ -802,6 +941,16 @@ async fn run_video_pass<F: FnMut(TrackProgress)>(
             writer.send(camera_frame.map_or(VideoJob::Repeat, VideoJob::Frame))?;
         }
         reporter.advance();
+    }
+    if screen.is_some() && screen_misses.decoded == 0 {
+        return Err(TrackExportError::Failed(
+            "The screen recording could not be decoded".into(),
+        ));
+    }
+    if camera.is_some() && camera_misses.decoded == 0 {
+        return Err(TrackExportError::Failed(
+            "The camera recording could not be decoded".into(),
+        ));
     }
     Ok(())
 }
@@ -895,7 +1044,6 @@ fn run_blocking<T>(work: impl FnOnce() -> T) -> T {
     }
 }
 
-/// 48 kHz stereo 24-bit PCM, which every editing app imports.
 struct WavWriter {
     file: BufWriter<File>,
     frames: u64,
@@ -1190,16 +1338,96 @@ mod tests {
     #[test]
     fn staged_files_are_removed_unless_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let staged = staging_path(dir.path(), TrackKind::Camera);
+        let staged = staging_path(dir.path(), TrackKind::Camera, "a");
         std::fs::write(&staged, b"partial").unwrap();
         drop(StagedFiles(vec![staged.clone()]));
         assert!(!staged.exists());
+        assert_ne!(staged, staging_path(dir.path(), TrackKind::Camera, "b"));
+        assert_ne!(export_token(), "");
+    }
 
-        std::fs::write(&staged, b"done").unwrap();
-        let destination = dir.path().join(TrackKind::Camera.file_name());
-        std::fs::write(&destination, b"older export").unwrap();
-        replace_file(&staged, &destination).unwrap();
-        assert_eq!(std::fs::read(&destination).unwrap(), b"done");
-        assert!(!staged.exists());
+    #[test]
+    fn publishing_replaces_every_track_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        std::fs::write(path("Screen.mp4"), b"old screen").unwrap();
+        std::fs::write(path("Camera.mp4"), b"old camera").unwrap();
+        std::fs::write(path("screen.new"), b"new screen").unwrap();
+        let files = vec![
+            (path("screen.new"), path("Screen.mp4")),
+            (path("camera.missing"), path("Camera.mp4")),
+        ];
+        assert!(publish(&files, "t").is_err());
+        assert_eq!(std::fs::read(path("Screen.mp4")).unwrap(), b"old screen");
+        assert_eq!(std::fs::read(path("Camera.mp4")).unwrap(), b"old camera");
+
+        std::fs::write(path("screen.new"), b"new screen").unwrap();
+        std::fs::write(path("camera.new"), b"new camera").unwrap();
+        std::fs::write(path("mic.new"), b"new mic").unwrap();
+        let files = vec![
+            (path("screen.new"), path("Screen.mp4")),
+            (path("camera.new"), path("Camera.mp4")),
+            (path("mic.new"), path("Microphone.wav")),
+        ];
+        publish(&files, "t").unwrap();
+        assert_eq!(std::fs::read(path("Screen.mp4")).unwrap(), b"new screen");
+        assert_eq!(std::fs::read(path("Camera.mp4")).unwrap(), b"new camera");
+        assert_eq!(std::fs::read(path("Microphone.wav")).unwrap(), b"new mic");
+        let mut left = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left, ["Camera.mp4", "Microphone.wav", "Screen.mp4"]);
+    }
+
+    #[test]
+    fn missing_frames_fail_instead_of_exporting_a_blank_track() {
+        let mut misses = MissTracker::default();
+        for _ in 0..MAX_INITIAL_MISSES {
+            misses.record(TrackKind::Screen, false, 0.0).unwrap();
+        }
+        assert!(misses.record(TrackKind::Screen, false, 0.3).is_err());
+
+        let mut misses = MissTracker::default();
+        misses.record(TrackKind::Camera, true, 0.0).unwrap();
+        for _ in 0..MAX_CONSECUTIVE_MISSES {
+            misses.record(TrackKind::Camera, false, 1.0).unwrap();
+        }
+        misses.record(TrackKind::Camera, true, 2.0).unwrap();
+        for _ in 0..MAX_CONSECUTIVE_MISSES {
+            misses.record(TrackKind::Camera, false, 3.0).unwrap();
+        }
+        let error = misses.record(TrackKind::Camera, false, 9.5).unwrap_err();
+        assert!(error.contains("camera") && error.contains("9.5"), "{error}");
+    }
+
+    fn nv12_frame(y: u8, u: u8, v: u8, matrix: YuvMatrix) -> DecodedFrame {
+        let (width, height) = (16u32, 16u32);
+        let mut data = vec![y; (width * height) as usize];
+        for _ in 0..(width * height / 4) {
+            data.extend_from_slice(&[u, v]);
+        }
+        DecodedFrame::new_nv12(data, width, height, width, width).with_matrix(matrix)
+    }
+
+    #[test]
+    fn tracks_come_out_in_bt709_whatever_the_source_matrix() {
+        ffmpeg::init().unwrap();
+        let mut converter = Nv12Converter::default();
+        let mut target = black_nv12(16, 16);
+
+        converter
+            .fill(&nv12_frame(81, 90, 240, YuvMatrix::Bt709), &mut target)
+            .unwrap();
+        assert_eq!(target.data(0)[0], 81);
+        assert_eq!(&target.data(1)[..2], &[90, 240]);
+
+        converter
+            .fill(&nv12_frame(81, 90, 240, YuvMatrix::Bt601), &mut target)
+            .unwrap();
+        let close = |actual: u8, expected: u8| actual.abs_diff(expected) <= 3;
+        let (y, u, v) = (target.data(0)[0], target.data(1)[0], target.data(1)[1]);
+        assert!(close(y, 63) && close(u, 102) && close(v, 240), "{y} {u} {v}");
     }
 }
