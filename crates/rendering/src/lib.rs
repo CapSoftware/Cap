@@ -1061,10 +1061,11 @@ pub async fn render_video_to_channel(
     let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
         .iter()
         .map(|segment| {
-            Arc::new(PrecomputedCursorTimeline::new(
+            Arc::new(PrecomputedCursorTimeline::new_with_anchors(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
+                project.cursor.interaction_anchors,
             ))
         })
         .collect();
@@ -1634,10 +1635,11 @@ pub async fn render_video_to_channel_nv12(
     let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
         .iter()
         .map(|segment| {
-            Arc::new(PrecomputedCursorTimeline::new(
+            Arc::new(PrecomputedCursorTimeline::new_with_anchors(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
+                project.cursor.interaction_anchors,
             ))
         })
         .collect();
@@ -4419,7 +4421,8 @@ impl ProjectUniforms {
                 || cursor.friction != project.cursor.friction
                 || current_click.tension != base_click.tension
                 || current_click.mass != base_click.mass
-                || current_click.friction != base_click.friction)
+                || current_click.friction != base_click.friction
+                || cursor.interaction_anchors != project.cursor.interaction_anchors)
         {
             Some(precomputed_cursor.cached_variant(
                 cursor_events,
@@ -4429,6 +4432,7 @@ impl ProjectUniforms {
                     friction: cursor.friction,
                 },
                 current_click,
+                cursor.interaction_anchors,
             ))
         } else {
             None
