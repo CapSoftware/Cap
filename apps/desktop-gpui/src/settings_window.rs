@@ -3787,10 +3787,7 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     // "After a Studio recording" lives on the Shortcuts page,
-                    // next to the shortcuts it shapes. There is no
-                    // post-capture overlay in this app, so a stored
-                    // `showOverlay` means "reshow the main window"
-                    // (`app_windows.rs`) and is labelled "Show Cap".
+                    // next to the shortcuts it shapes.
                     self.setting_row(
                         tr::settings::general::recording::post_deletion::label(),
                         Some(tr::settings::general::recording::post_deletion::description()),
