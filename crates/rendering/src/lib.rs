@@ -3864,7 +3864,6 @@ impl ProjectUniforms {
         ((value.ceil() as u32).saturating_add(1) & !1).max(2)
     }
 
-    /// Even-padding canvas size.
     fn even_base_size(crop: &Crop, aspect: Option<f64>, ratio: f64) -> (u32, u32) {
         let crop_size = XY::new(f64::from(crop.size.x), f64::from(crop.size.y));
         let Some(target_aspect) = aspect else {
@@ -3924,7 +3923,7 @@ impl ProjectUniforms {
             (output_size.x - 2.0 * margin).max(1.0),
             (output_size.y - 2.0 * margin).max(1.0),
         );
-        let content = if cropped_aspect <= output_size.x / output_size.y {
+        let content = if cropped_aspect <= available.x / available.y {
             XY::new(available.y * cropped_aspect, available.y)
         } else {
             XY::new(available.x, available.x / cropped_aspect)
@@ -6194,6 +6193,33 @@ mod tests {
             assert!(
                 (size.x / size.y - 1920.0 / 1080.0).abs() < 1e-6,
                 "{aspect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn even_padding_keeps_full_margins_when_the_crop_is_near_the_frame_aspect() {
+        // A crop slightly wider than 16:9 and a portrait screen in 9:16: the
+        // side that binds is the one the inset area runs out of.
+        for ((width, height), aspect) in [
+            ((1900, 1000), AspectRatio::Wide),
+            ((1080, 1920), AspectRatio::Vertical),
+        ] {
+            let options = render_options(width, height);
+            let (output, offset, size) =
+                layout_at_base(&options, &even_project(10.0, Some(aspect.clone())));
+            let margin = f64::from(output.0.min(output.1)) * 0.1 / 1.2;
+            assert!(
+                offset.x.min(offset.y) >= margin - 1e-6,
+                "{aspect:?}: {offset:?} inside {margin}"
+            );
+            assert!(
+                (offset.x.min(offset.y) - margin).abs() < 1.0,
+                "{aspect:?}: {offset:?}"
+            );
+            assert!(
+                (size.x - f64::from(width)).abs() < 1.0 && (size.y - f64::from(height)).abs() < 1.0,
+                "{aspect:?}: kept {size:?}"
             );
         }
     }

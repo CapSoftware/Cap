@@ -871,8 +871,20 @@ impl EditorWindow {
             .into_owned();
         let (max_width, padding_scale) =
             display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
-        let even = (effective.background.padding_mode == cap_project::PaddingMode::Even)
-            .then(|| EvenResize::new(rect, &layout, effective.aspect_ratio.is_some()));
+        // A style segment's padding is laid out inside the base project's
+        // canvas, which keeps its size while the segment's padding changes.
+        let fixed_canvas = self
+            .canvas_style_target(crate::editor_sidebar::StyleGroup::Background)
+            .is_some();
+        let even =
+            (effective.background.padding_mode == cap_project::PaddingMode::Even).then(|| {
+                EvenResize::new(
+                    rect,
+                    &layout,
+                    effective.aspect_ratio.is_some(),
+                    fixed_canvas,
+                )
+            });
         self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
@@ -1292,12 +1304,8 @@ impl EditorWindow {
         self.project_changed_live(cx);
     }
 
-    fn write_canvas_style(
-        &mut self,
-        group: crate::editor_sidebar::StyleGroup,
-        change: impl FnOnce(&mut cap_project::ProjectConfiguration) -> bool,
-        cx: &mut Context<Self>,
-    ) {
+    /// The style segment a canvas edit of `group` writes into, if any.
+    fn canvas_style_target(&self, group: crate::editor_sidebar::StyleGroup) -> Option<usize> {
         use crate::editor_sidebar::StyleGroup;
         let time = self.preview_or_playhead();
         let target = self.project.timeline.as_ref().and_then(|timeline| {
@@ -1321,7 +1329,16 @@ impl EditorWindow {
                 })
                 .map(|(index, _)| index)
         });
-        let changed = match self.selected_style_index().or(target) {
+        self.selected_style_index().or(target)
+    }
+
+    fn write_canvas_style(
+        &mut self,
+        group: crate::editor_sidebar::StyleGroup,
+        change: impl FnOnce(&mut cap_project::ProjectConfiguration) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = match self.canvas_style_target(group) {
             Some(index) => crate::editor_sidebar::apply_style_control_change(
                 &mut self.project,
                 index,
@@ -2056,17 +2073,17 @@ fn display_resize_scales(rect: NormRect, layout: &FrameLayout, has_aspect: bool)
     (max_width, (2. * k * 0.4) / 100.)
 }
 
-/// What the even-padding inversion needs from the layout at drag start.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvenResize {
     output: (f64, f64),
     /// Display aspect in output pixels.
     content_aspect: f64,
     fixed_aspect: bool,
+    fixed_canvas: bool,
 }
 
 impl EvenResize {
-    fn new(rect: NormRect, layout: &FrameLayout, fixed_aspect: bool) -> Self {
+    fn new(rect: NormRect, layout: &FrameLayout, fixed_aspect: bool, fixed_canvas: bool) -> Self {
         let output = (
             f64::from(layout.output_size[0]).max(1.),
             f64::from(layout.output_size[1]).max(1.),
@@ -2075,6 +2092,7 @@ impl EvenResize {
             output,
             content_aspect: ((rect.w * output.0) / (rect.h * output.1).max(1e-6)).max(1e-6),
             fixed_aspect,
+            fixed_canvas,
         }
     }
 
@@ -2089,6 +2107,15 @@ impl EvenResize {
             let from_height = (output_h - width * output_w / aspect) / 2.;
             let inset = (from_width.min(from_height) / output_w.min(output_h)).clamp(0., 0.4999);
             inset / (1. - 2. * inset)
+        } else if self.fixed_canvas {
+            // The padded screen (content height 1) is fitted into the
+            // unchanged canvas; solve each axis's fit for the content height
+            // in pixels and keep the one that binds.
+            let shorter = aspect.min(1.);
+            let height = (width * output_w / aspect).max(1e-6);
+            let from_width = (output_w / height - aspect) / (2. * shorter);
+            let from_height = (output_h / height - 1.) / (2. * shorter);
+            from_width.min(from_height)
         } else {
             // The canvas grows around the display by `ratio` times its
             // shorter side on every edge.
@@ -2115,6 +2142,11 @@ impl EvenResize {
                 (available.0, available.0 / aspect)
             };
             (width / output_w, height / output_h)
+        } else if self.fixed_canvas {
+            let (output_w, output_h) = self.output;
+            let margin = 2. * ratio * aspect.min(1.);
+            let height = (output_w / (aspect + margin)).min(output_h / (1. + margin));
+            (aspect * height / output_w, height / output_h)
         } else {
             (
                 1. / (1. + 2. * ratio * aspect.recip().min(1.)),
@@ -2260,6 +2292,54 @@ mod tests {
             output_size: [width, height],
             caption: None,
         }
+    }
+
+    fn even_resize(
+        output: (f64, f64),
+        aspect: f64,
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+    ) -> EvenResize {
+        EvenResize {
+            output,
+            content_aspect: aspect,
+            fixed_aspect,
+            fixed_canvas,
+        }
+    }
+
+    #[test]
+    fn even_resize_inverts_its_own_layout() {
+        for (output, aspect) in [
+            ((2136., 1296.), 16. / 9.),
+            ((1296., 2136.), 9. / 16.),
+            ((1920., 1080.), 1.6),
+        ] {
+            for (fixed_aspect, fixed_canvas) in [(false, false), (true, false), (false, true)] {
+                let resize = even_resize(output, aspect, fixed_aspect, fixed_canvas);
+                for padding in [0., 2.5, 10., 25., 40.] {
+                    let (width, _) = resize.size_at(padding);
+                    let back = resize.padding_for_width(width);
+                    assert!(
+                        (back - padding).abs() < 1e-6,
+                        "{output:?} {aspect} fixed aspect {fixed_aspect} fixed canvas {fixed_canvas}: {padding} -> {back}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn even_resize_in_a_style_segment_keeps_the_base_canvas() {
+        // Base project unpadded (1920 x 1080 canvas); the segment pads 10
+        // evenly, so its 2136 x 1296 layout is fitted into the base canvas.
+        let resize = even_resize((1920., 1080.), 16. / 9., false, true);
+        let (width, height) = resize.size_at(10.);
+        assert!((width - 1600. / 1920.).abs() < 1e-9 && (height - 900. / 1080.).abs() < 1e-9);
+        assert!((resize.padding_for_width(1600. / 1920.) - 10.).abs() < 1e-9);
+        // The growing canvas would read the same width as more padding.
+        let growing = even_resize((1920., 1080.), 16. / 9., false, false);
+        assert!(growing.padding_for_width(1600. / 1920.) > 15.);
     }
 
     #[test]
