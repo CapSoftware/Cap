@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
     App, AppContext as _, Context, Entity, Global, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, PathStyle, Pixels,
-    Render, Styled as _, Task, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas,
-    div, point, px, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, PathStyle,
+    Pixels, Render, Styled as _, Task, Window, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, canvas, div, point, px, size,
 };
 use lyon_tessellation::{LineCap, LineJoin, StrokeOptions};
 
@@ -761,9 +761,7 @@ pub fn stop(cx: &mut App) {
     let (ink, mode) = (draw.ink.clone(), draw.mode.clone());
     let was_drawing = mode.read(cx).drawing;
     if let Some(input) = input {
-        input
-            .update(cx, |_, window, _| window.remove_window())
-            .ok();
+        input.update(cx, |_, window, _| window.remove_window()).ok();
     }
     ink.update(cx, |ink, cx| ink.commit(cx));
     mode.update(cx, |mode, cx| {
@@ -921,14 +919,7 @@ fn open_panel<V: Render + 'static>(
         if !open {
             return;
         }
-        platform::place_overlay_panel(
-            &native,
-            frame.x,
-            frame.y,
-            frame.width,
-            frame.height,
-            level,
-        );
+        platform::place_overlay_panel(&native, frame.x, frame.y, frame.width, frame.height, level);
         // Opened hidden, the panel's display link never started; without
         // this the canvas keeps its first, empty frame.
         cx.update(|cx| {
@@ -1008,14 +999,18 @@ mod tests {
             Some(Shape::Line(vec![at]))
         );
         assert_eq!(shape(Tool::Arrow, &[at], at, false), None);
-        assert_eq!(shape(Tool::Rectangle, &[at], Pt::new(40., 11.), false), None);
+        assert_eq!(
+            shape(Tool::Rectangle, &[at], Pt::new(40., 11.), false),
+            None
+        );
         assert_eq!(shape(Tool::Pen, &[], at, false), None);
     }
 
     #[test]
     fn arrows_and_rectangles_use_the_constrained_end() {
         let from = Pt::new(0., 0.);
-        let Some(Shape::Rect { to, .. }) = shape(Tool::Rectangle, &[from], Pt::new(30., -10.), true)
+        let Some(Shape::Rect { to, .. }) =
+            shape(Tool::Rectangle, &[from], Pt::new(30., -10.), true)
         else {
             panic!("expected a rectangle");
         };
@@ -1083,7 +1078,12 @@ mod tests {
     #[test]
     fn freehand_skips_points_closer_than_a_step() {
         let mut points = vec![Pt::new(0., 0.)];
-        for at in [Pt::new(0.5, 0.), Pt::new(1., 0.), Pt::new(2., 0.), Pt::new(2.5, 0.)] {
+        for at in [
+            Pt::new(0.5, 0.),
+            Pt::new(1., 0.),
+            Pt::new(2., 0.),
+            Pt::new(2.5, 0.),
+        ] {
             append_point(&mut points, at);
         }
         assert_eq!(points, vec![Pt::new(0., 0.), Pt::new(2., 0.)]);

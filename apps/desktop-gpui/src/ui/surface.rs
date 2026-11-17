@@ -26,9 +26,9 @@ impl Card {
         let last = children.len().saturating_sub(1);
         Card::settings(theme, false).flex().flex_col().children(
             children.into_iter().enumerate().map(|(index, child)| {
-                div()
-                    .child(child)
-                    .when(index != last, |this| this.child(Card::settings_divider(theme)))
+                div().child(child).when(index != last, |this| {
+                    this.child(Card::settings_divider(theme))
+                })
             }),
         )
     }
