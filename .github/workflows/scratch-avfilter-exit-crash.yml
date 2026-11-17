@@ -68,7 +68,7 @@ jobs:
           $x264 = '{"codec":"libx264","options":[],"pixel_format":"nv12","width":1920,"height":1080,"time_base":[1,30],"frame_rate":[30,1],"output_width":1920,"output_height":1080,"bpp":0.1,"crf":null}'
           $proj = "$env:RUNNER_TEMP\project.cap"
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\out" | Out-Null
-          & $loop "$cap\cap-cli.exe" "export `"$proj`" -o `"$env:RUNNER_TEMP\out\o{i}.mp4`" --force-ffmpeg-decoder" 60 "cap-cli.exe 0.6.3 export --force-ffmpeg-decoder (2 s 720p)"
+          & $loop "$cap\cap-cli.exe" "export `"$proj`" -o `"$env:RUNNER_TEMP\out\o{i}.mp4`" --force-ffmpeg-decoder" 30 "cap-cli.exe 0.6.3 export --force-ffmpeg-decoder (2 s 720p)"
 
       - name: Dump stacks
         if: always()
@@ -76,9 +76,9 @@ jobs:
           $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
           if (-not (Test-Path $cdb)) { "no cdb"; exit 0 }
           $sym = "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols"
-          foreach ($d in Get-ChildItem "$env:RUNNER_TEMP\keep" -Filter *.dmp -ErrorAction SilentlyContinue) {
+          foreach ($d in Get-ChildItem "$env:RUNNER_TEMP\keep" -Filter *.dmp -ErrorAction SilentlyContinue | Select-Object -First 3) {
             "=== $($d.Name)"
-            & $cdb -z $d.FullName -y $sym -c ".ecxr; r rax,rip; kn 22; !gle; q" 2>&1 | Select-String "^\s*[0-9a-f]{2} [0-9a-f]{8}|code [0-9a-f]{8}|LastStatusValue|rax=" | Select-Object -First 30
+            & $cdb -z $d.FullName -y $sym -c ".ecxr; r rax,rip; kn 30; !gle; q" 2>&1 | Select-String "^\s*[0-9a-f]{2} [0-9a-f]{8}|code [0-9a-f]{8}|LastStatusValue|rax=" | Select-Object -First 45
           }
 
       - uses: actions/upload-artifact@v4

@@ -28,6 +28,7 @@ for ($i = 0; $i -lt $N; $i++) {
 	$m = [regex]::Matches($out, "cap-h264-self-test:(\S+)")
 	if ($m.Count -gt 0) { $verdict = " verdict=" + $m[$m.Count - 1].Groups[1].Value }
 	$key = "$c$verdict"
+	if ($out -match "Exported video to") { $key = "$key exported" }
 	if ($errTask.Result -match "terminate it in an unusual way|abnormal program termination") { $key = "$key+abort" }
 	if ($i -eq 0) { Write-Host "first run: $key stdout: $($out.Trim() | Select-Object -First 1) stderr: $($errTask.Result.Trim())" }
 	Write-Host "run $i $key $([int]$sw.Elapsed.TotalSeconds) s"
