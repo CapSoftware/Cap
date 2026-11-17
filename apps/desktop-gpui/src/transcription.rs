@@ -2584,6 +2584,43 @@ pub fn sync_caption_words_with_text(
         .collect()
 }
 
+/// Shortest part, in output seconds, a resized caption is cut into.
+const MIN_CAPTION_PART_SECS: f64 = 1e-3;
+
+/// `time` as the nearest `f32` at or after it (`at_or_after`), or at or
+/// before it, so a caption part saved at a boundary never crosses it.
+fn f32_inside(time: f64, at_or_after: bool) -> f32 {
+    let rounded = time as f32;
+    if at_or_after && f64::from(rounded) < time {
+        rounded.next_up()
+    } else if !at_or_after && f64::from(rounded) > time {
+        rounded.next_down()
+    } else {
+        rounded
+    }
+}
+
+/// What is left of `range` once every one of `holes` is taken out of it, in
+/// order.
+fn subtract_ranges(range: (f64, f64), holes: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    let mut left = vec![range];
+    for (hole_start, hole_end) in holes {
+        left = left
+            .into_iter()
+            .flat_map(|(start, end)| {
+                if hole_end <= start || hole_start >= end {
+                    return vec![(start, end)];
+                }
+                [(start, hole_start), (hole_end, end)]
+                    .into_iter()
+                    .filter(|(start, end)| start < end)
+                    .collect()
+            })
+            .collect();
+    }
+    left
+}
+
 /// `updateSelectedCaption`'s source write-through (`CaptionsTab.tsx:257-315`):
 /// after a track segment's start/end/text was edited in output time, route
 /// the timing and content back onto the source-time caption master so the
@@ -2628,62 +2665,134 @@ pub fn write_caption_edit_to_source(
         |time| map_edited_time_to_piece(time, timeline, recording_durations, source_range, tie);
     let (start, end) = (map(track_start), map(track_end));
     let clip_of = |piece: usize| timeline.segments[piece].recording_clip;
+    let piece_source_end = |piece: usize| {
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .get(piece)
+            .map(|mapping| mapping.source_end)
+    };
     // Parts cut off the caption, as (start, end, tie, before the caption).
     let mut cut = Vec::new();
     match (tie, start, end) {
         // A tied caption reads only its own clip, so it cannot reach into
-        // another one on that clip's clock. Resized across a clip boundary,
-        // its part on its clip stays tied and the rest is cut into one part
-        // per timeline piece it crosses. A part reaching past its clip's
-        // media end (a held tail) is tied to that clip; the others go on the
-        // shared clock, drawn just as an untied caption across clips is. A
-        // transcribed caption draws only its words, all on its clip, so it
-        // just stops at the boundary.
+        // another one on that clip's clock. Resized across timeline pieces,
+        // its share of the drag on its clip stays the caption and the rest is
+        // cut into parts, one per piece the drag covers. A part shows through
+        // every piece of its recording holding its footage, so it keeps only
+        // footage no other piece shows, and only output time nothing cut so
+        // far covers: no part shows outside the drag or over another, and
+        // footage a repeated piece shows twice is left uncaptioned. A part
+        // reaching past its clip's media end (a held tail) is tied to that
+        // clip; the others go on the shared clock, which reaches the same
+        // pieces. A transcribed caption draws only its words, all on its
+        // clip, so it just stops at the boundary. Moved onto other clips with
+        // its end on an earlier source clock, it ends as an untied one does,
+        // unless that leaves nothing (its start is where its piece ends).
         (Some(tie), Some((start, start_piece)), Some((end, end_piece)))
-            if start_piece < end_piece
-                && clip_of(start_piece) != clip_of(end_piece)
-                && (clip_of(start_piece) == tie || clip_of(end_piece) == tie) =>
+            if start_piece != end_piece
+                && (clip_of(start_piece) == tie
+                    || clip_of(end_piece) == tie
+                    || start < end
+                    || piece_source_end(start_piece)
+                        .is_some_and(|piece_end| start >= piece_end)) =>
         {
-            let mappings = build_source_to_edited_mappings(timeline, recording_durations);
-            let kept = if clip_of(start_piece) == tie {
-                start_piece
-            } else {
-                end_piece
+            let mappings = &build_source_to_edited_mappings(timeline, recording_durations);
+            let holds = timeline.hold_windows();
+            let effective = |time: f64| time - held_time_before(&holds, time);
+            let (drag_start, drag_end) = (effective(track_start), effective(track_end));
+            let to_source = |piece: usize, time: f64| {
+                let mapping = &mappings[piece];
+                mapping.source_start + (time - mapping.edited_start) * mapping.timescale
             };
+            let to_output = |piece: usize, time: f64| {
+                let mapping = &mappings[piece];
+                mapping.edited_start + (time - mapping.source_start) / mapping.timescale
+            };
+            // A piece's share of the drag, on the shared source clock.
+            let share = |piece: usize| {
+                let mapping = &mappings[piece];
+                let edited_end = to_output(piece, mapping.source_end);
+                let (start, end) = (
+                    mapping.edited_start.max(drag_start),
+                    edited_end.min(drag_end),
+                );
+                (end - start > MIN_CAPTION_PART_SECS)
+                    .then(|| (to_source(piece, start), to_source(piece, end)))
+            };
+            // Where a source range on recording clip `clip` shows.
+            let shown_at = |clip: u32, (start, end): (f64, f64)| {
+                (0..mappings.len())
+                    .filter(move |&piece| clip_of(piece) == clip)
+                    .filter_map(move |piece| {
+                        let mapping = &mappings[piece];
+                        let (start, end) =
+                            (start.max(mapping.source_start), end.min(mapping.source_end));
+                        (start < end).then(|| (to_output(piece, start), to_output(piece, end)))
+                    })
+            };
+            // The caption keeps its share of a piece of its clip, the drag's
+            // ends first; moved wholly onto other clips, the first share.
+            let pieces = || {
+                [start_piece, end_piece]
+                    .into_iter()
+                    .chain(0..mappings.len())
+            };
+            let kept = pieces()
+                .find(|&piece| clip_of(piece) == tie && share(piece).is_some())
+                .or_else(|| pieces().find(|&piece| share(piece).is_some()));
+            let kept_clip = kept.map_or(tie, clip_of);
+            if let Some((start, end)) = kept.and_then(share) {
+                (source.start, source.end) = (f32_inside(start, true), f32_inside(end, false));
+                source.recording_clip =
+                    cap_project::held_tail_clip(kept_clip, end, recording_durations);
+            }
+            // Output time the caption and its parts already show over.
+            let mut covered: Vec<_> =
+                shown_at(kept_clip, (f64::from(source.start), f64::from(source.end))).collect();
             let cuts = source.words.is_empty();
-            for (piece, mapping) in (start_piece..).zip(&mappings[start_piece..=end_piece]) {
-                let part_start = if piece == start_piece {
-                    start
-                } else {
-                    mapping.source_start
-                };
-                let part_end = if piece == end_piece {
-                    end
-                } else {
-                    mapping.source_end
-                };
-                if piece == kept {
-                    (source.start, source.end) = (part_start as f32, part_end as f32);
-                    source.recording_clip =
-                        cap_project::held_tail_clip(tie, part_end, recording_durations);
+            for piece in (0..mappings.len()).filter(|&piece| cuts && Some(piece) != kept) {
+                let Some(share) = share(piece) else {
                     continue;
-                }
-                if !cuts || part_start >= part_end {
-                    continue;
-                }
-                let part_tie =
-                    cap_project::held_tail_clip(clip_of(piece), part_end, recording_durations);
-                let before = piece < kept;
-                // Back-to-back pieces on the shared clock read as one part.
-                match cut.last_mut() {
-                    Some((_, last_end, last_tie, last_before))
-                        if *last_end == part_start
-                            && *last_tie == part_tie
-                            && *last_before == before =>
-                    {
-                        *last_end = part_end;
+                };
+                let clip = clip_of(piece);
+                let repeated = (0..mappings.len())
+                    .filter(|&other| other != piece && clip_of(other) == clip)
+                    .map(|other| (mappings[other].source_start, mappings[other].source_end));
+                let shown = covered
+                    .iter()
+                    .map(|&(start, end)| (to_source(piece, start), to_source(piece, end)));
+                let left = subtract_ranges(share, repeated.chain(shown).collect());
+                for (start, end) in left {
+                    let (part_start, part_end) = (f32_inside(start, true), f32_inside(end, false));
+                    let (start, end) = (f64::from(part_start), f64::from(part_end));
+                    if (end - start) / mappings[piece].timescale <= MIN_CAPTION_PART_SECS {
+                        continue;
                     }
-                    _ => cut.push((part_start, part_end, part_tie, before)),
+                    covered.push((to_output(piece, start), to_output(piece, end)));
+                    // A part on the caption's clip running on from it (a
+                    // clip split in two) stays part of the caption.
+                    if clip == kept_clip && f64::from(source.end) == start {
+                        source.end = part_end;
+                        source.recording_clip =
+                            cap_project::held_tail_clip(clip, end, recording_durations);
+                        continue;
+                    }
+                    if clip == kept_clip && f64::from(source.start) == end {
+                        source.start = part_start;
+                        continue;
+                    }
+                    let part_tie = cap_project::held_tail_clip(clip, end, recording_durations);
+                    let before = kept.is_some_and(|kept| piece < kept);
+                    // Back-to-back pieces on the shared clock read as one part.
+                    match cut.last_mut() {
+                        Some((_, last_end, last_tie, last_before))
+                            if *last_end == start
+                                && *last_tie == part_tie
+                                && *last_before == before =>
+                        {
+                            *last_end = end;
+                        }
+                        _ => cut.push((start, end, part_tie, before)),
+                    }
                 }
             }
         }
@@ -2691,13 +2800,15 @@ pub fn write_caption_edit_to_source(
             // Moved across clips so its end maps onto an earlier source clock
             // (out of a held tail, or onto a clip placed before this one), it
             // would be saved reversed; it ends where its start's piece does.
+            // So does a tied caption moved across pieces of one clip placed
+            // out of order.
             let end = match (start, end) {
                 (Some((start, start_piece)), Some((end, end_piece)))
-                    if clip_of(start_piece) != clip_of(end_piece) && end <= start =>
+                    if (clip_of(start_piece) != clip_of(end_piece)
+                        || (tie.is_some() && start_piece != end_piece))
+                        && end <= start =>
                 {
-                    build_source_to_edited_mappings(timeline, recording_durations)
-                        .get(start_piece)
-                        .map(|mapping| (mapping.source_end, start_piece))
+                    piece_source_end(start_piece).map(|piece_end| (piece_end, start_piece))
                 }
                 _ => end,
             };
@@ -4064,6 +4175,499 @@ mod tests {
             assert_eq!(saved, [(13.5, 14.0, Some(0))], "{tie:?}");
             assert_eq!(track(&mut project), [(9.5, 10.0)], "{tie:?}");
         }
+    }
+
+    // Greptile's case: two 10 s recordings, recording 0 trimmed to 4..14 (a
+    // held tail from 10 s), then recording 1 twice at 0..10. Every moment of
+    // recording 1 shows twice, so no part cut from a typed caption tied to
+    // recording 0 can show over one copy without showing over the other too.
+    // Extended from output 8..9 to 8..22, the caption stops where its clip
+    // ends instead of running on to 30 and over itself.
+    #[test]
+    fn a_tied_caption_resized_over_a_repeated_clip_stays_inside_the_drag() {
+        let durations = [10.0, 10.0];
+        let mut tied = caption("caption-tail", 12.0, 13.0, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = resize_caption(&mut project, 0, 8.0, 22.0, &durations);
+        assert_eq!(track, [("typed".to_string(), 8.0, 10.0)]);
+        let sources: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| (segment.start, segment.end, segment.recording_clip))
+            .collect();
+        assert_eq!(sources, [(12.0, 14.0, Some(0))]);
+    }
+
+    /// splitmix64, as `cap_verify::fixture::Rng`.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn unit(&mut self) -> f64 {
+            (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        fn between(&mut self, low: f64, high: f64) -> f64 {
+            low + (high - low) * self.unit()
+        }
+
+        fn below(&mut self, count: usize) -> usize {
+            (self.next_u64() % count as u64) as usize
+        }
+
+        fn chance(&mut self, probability: f64) -> bool {
+            self.unit() < probability
+        }
+    }
+
+    /// One timeline piece as the property oracle sees it: its recording, its
+    /// range on the shared source clock and where it sits in output time.
+    struct OraclePiece {
+        recording: usize,
+        source_start: f64,
+        source_end: f64,
+        output_start: f64,
+        output_end: f64,
+        timescale: f64,
+    }
+
+    fn oracle_pieces(timeline: &TimelineConfiguration, durations: &[f64]) -> Vec<OraclePiece> {
+        let mut output = 0.0;
+        timeline
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                output -= timeline
+                    .effective_transition(index)
+                    .map_or(0.0, |transition| transition.duration);
+                let recording = segment.recording_clip as usize;
+                let offset: f64 = durations[..recording].iter().sum();
+                let piece = OraclePiece {
+                    recording,
+                    source_start: offset + segment.start,
+                    source_end: offset + segment.end,
+                    output_start: output,
+                    output_end: output + segment.duration(),
+                    timescale: segment.timescale,
+                };
+                output = piece.output_end;
+                piece
+            })
+            .collect()
+    }
+
+    struct ResizeCase {
+        durations: Vec<f64>,
+        project: ProjectConfiguration,
+        id: String,
+        tie: u32,
+        typed: bool,
+        index: usize,
+        start: f64,
+        end: f64,
+    }
+
+    /// A random timeline of one to four recordings (random trims, held tails
+    /// past the media end, repeated and reordered pieces, crossfades, other
+    /// speeds) with a caption tied to one of its pieces, and a random resize
+    /// of one of the places it shows.
+    fn random_resize_case(rng: &mut Rng) -> Option<ResizeCase> {
+        let grid = rng.chance(0.8);
+        let snap = |time: f64| {
+            if grid {
+                (time * 8.0).round() / 8.0
+            } else {
+                time
+            }
+        };
+        let recordings = 1 + rng.below(4);
+        let durations: Vec<f64> = (0..recordings)
+            .map(|_| snap(rng.between(2.0, 12.0)))
+            .collect();
+        let mut segments: Vec<(usize, f64, f64, f64)> = Vec::new();
+        for _ in 0..1 + rng.below(5) {
+            if !segments.is_empty() && rng.chance(0.25) {
+                let copy = segments[rng.below(segments.len())];
+                segments.push(copy);
+                continue;
+            }
+            let recording = rng.below(recordings);
+            let duration = durations[recording];
+            let start = snap(rng.between(0.0, duration - 1.0));
+            let end = if rng.chance(0.4) {
+                snap(duration + rng.between(0.5, 6.0))
+            } else {
+                snap(rng.between(start + 0.5, duration))
+            };
+            if end <= start {
+                return None;
+            }
+            let timescale = if rng.chance(0.15) {
+                [0.5, 2.0][rng.below(2)]
+            } else {
+                1.0
+            };
+            segments.push((recording, start, end, timescale));
+        }
+        if rng.chance(0.5) {
+            segments.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        }
+        let mut transitions = Vec::new();
+        for index in 1..segments.len() {
+            if rng.chance(0.25) {
+                transitions.push(serde_json::json!({
+                    "segmentIndex": index,
+                    "type": "cross-fade",
+                    "duration": snap(rng.between(0.25, 1.5))
+                }));
+            }
+        }
+
+        let (recording, piece_start, piece_end, _) = segments[rng.below(segments.len())];
+        let offset: f64 = durations[..recording].iter().sum();
+        let start = snap(rng.between(piece_start, piece_end - 0.25));
+        let end = snap((start + rng.between(0.2, 2.0)).min(piece_end));
+        if end <= start {
+            return None;
+        }
+        let (start, end) = ((offset + start) as f32, (offset + end) as f32);
+        let typed = rng.chance(0.85);
+        let mut tied = if typed {
+            let mut segment = caption("caption-tied", start, end, &[]);
+            segment.text = "typed".into();
+            segment
+        } else {
+            let inset = (end - start) * 0.1;
+            caption(
+                "spoken",
+                start,
+                end,
+                &[("spoken", start + inset, end - inset)],
+            )
+        };
+        tied.recording_clip = Some(recording as u32);
+        let id = tied.id.clone();
+
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": segments
+                    .iter()
+                    .map(|(recording, start, end, timescale)| serde_json::json!({
+                        "recordingSegment": recording,
+                        "timescale": timescale,
+                        "start": start,
+                        "end": end
+                    }))
+                    .collect::<Vec<_>>(),
+                "transitions": transitions,
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let timeline = project.timeline.as_ref()?;
+        let shown: Vec<usize> = timeline
+            .caption_segments
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| source_caption_id(&item.id) == id && item.end > item.start)
+            .map(|(index, _)| index)
+            .collect();
+        if shown.is_empty() {
+            return None;
+        }
+        let index = shown[rng.below(shown.len())];
+        let item = &timeline.caption_segments[index];
+        let total = timeline.duration();
+        let (start, end) = match rng.below(3) {
+            0 => (item.start, snap(rng.between(item.start + 0.05, total))),
+            1 => (snap(rng.between(0.0, item.end - 0.05)), item.end),
+            _ => {
+                let start = snap(rng.between(0.0, total - 0.1));
+                (start, snap(rng.between(start + 0.05, total)))
+            }
+        };
+        if !(start < end && end <= total) {
+            return None;
+        }
+        Some(ResizeCase {
+            durations,
+            project,
+            id,
+            tie: recording as u32,
+            typed,
+            index,
+            start,
+            end,
+        })
+    }
+
+    /// Resizes the case's caption and checks what it and every part cut from
+    /// it then show:
+    /// 1. nothing outside the drag, except the caption itself shown again
+    ///    where its own footage repeats (as it did before the drag). Only for
+    ///    a typed caption: a transcribed one shows its words, which a resize
+    ///    does not move;
+    /// 2. nothing over itself, except that same repeated footage;
+    /// 3. no lost coverage, for a typed caption, of a dragged-over moment
+    ///    whose footage shows only there (so a part could show it without
+    ///    breaking 1 or 2). Inside the cut-across-clips arm that is every such
+    ///    moment of the drag; elsewhere only those a single untied caption
+    ///    from the drag's start to its end would have shown;
+    /// 4. nothing saved reversed.
+    fn check_tied_resize(case: &ResizeCase) -> Result<(), String> {
+        let durations = &case.durations[..];
+        let (a, b) = (case.start, case.end);
+        let timeline = case.project.timeline.as_ref().unwrap();
+        let source = &case.project.captions.as_ref().unwrap().segments[0];
+        let range = Some((f64::from(source.start), f64::from(source.end)));
+        let map = |time| {
+            map_edited_time_to_piece(time, timeline, durations, range, source.recording_clip)
+        };
+        let (start, end) = (map(a), map(b));
+        let clip = |piece: usize| timeline.segments[piece].recording_clip;
+        let cut_arm = matches!((start, end), (Some((start, start_piece)), Some((end, end_piece)))
+            if start_piece != end_piece
+                && (clip(start_piece) == case.tie || clip(end_piece) == case.tie || start < end));
+        check_resize_invariant(case, start, end, cut_arm)
+            .map_err(|failure| format!("{} {failure}", if cut_arm { "cut" } else { "other" }))
+    }
+
+    fn check_resize_invariant(
+        case: &ResizeCase,
+        start: Option<(f64, usize)>,
+        end: Option<(f64, usize)>,
+        cut_arm: bool,
+    ) -> Result<(), String> {
+        const TOLERANCE: f64 = 2e-3;
+        let durations = &case.durations[..];
+        let (a, b) = (case.start, case.end);
+        let mut project = case.project.clone();
+        let timeline = project.timeline.clone().unwrap();
+        let pieces = oracle_pieces(&timeline, durations);
+        let source = project.captions.as_ref().unwrap().segments[0].clone();
+
+        let item = &mut project.timeline.as_mut().unwrap().caption_segments[case.index];
+        (item.start, item.end) = (a, b);
+        write_caption_edit_to_source(&mut project, case.index, durations);
+        cap_project::synchronize_captions(&mut project, durations);
+
+        let part_prefix = format!("{}-", case.id);
+        let in_family = |id: &str| id == case.id || id.starts_with(&part_prefix);
+        let saved: Vec<&CaptionSegment> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .filter(|segment| in_family(&segment.id))
+            .collect();
+        for segment in &saved {
+            if segment.start >= segment.end || segment.start.is_nan() || segment.end.is_nan() {
+                return Err(format!("4: saved reversed {segment:?}"));
+            }
+        }
+        let caption = saved.iter().find(|segment| segment.id == case.id);
+        // Recordings whose footage the caption itself is on: it shows again
+        // wherever that footage repeats, just as before the drag.
+        let own_recordings: Vec<usize> = match caption {
+            Some(caption) => match caption.recording_clip {
+                Some(tie) => vec![tie as usize],
+                None => (0..durations.len())
+                    .filter(|&recording| {
+                        let offset: f64 = durations[..recording].iter().sum();
+                        f64::from(caption.start) < offset + durations[recording]
+                            && f64::from(caption.end) > offset
+                    })
+                    .collect(),
+            },
+            None => Vec::new(),
+        };
+        let repeat_of_own_footage = |(start, end): (f64, f64)| {
+            pieces.iter().any(|piece| {
+                own_recordings.contains(&piece.recording)
+                    && piece.output_start - TOLERANCE <= start
+                    && end <= piece.output_end + TOLERANCE
+            })
+        };
+
+        let mut shown: Vec<(bool, f64, f64)> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .filter(|item| in_family(source_caption_id(&item.id)))
+            .map(|item| (source_caption_id(&item.id) == case.id, item.start, item.end))
+            .collect();
+        for &(own, start, end) in shown.iter().filter(|_| case.typed) {
+            if (start < a - TOLERANCE || end > b + TOLERANCE)
+                && !(own && repeat_of_own_footage((start, end)))
+            {
+                return Err(format!(
+                    "1: shown at {start:.3}..{end:.3} outside {a:.3}..{b:.3}"
+                ));
+            }
+        }
+        shown.sort_by(|x, y| x.1.total_cmp(&y.1));
+        for (index, &(own, start, end)) in shown.iter().enumerate() {
+            for &(other_own, other_start, other_end) in &shown[index + 1..] {
+                let overlap = end.min(other_end) - start.max(other_start);
+                if overlap > TOLERANCE && !(own && other_own) {
+                    return Err(format!(
+                        "2: {start:.3}..{end:.3} overlaps {other_start:.3}..{other_end:.3}"
+                    ));
+                }
+            }
+        }
+
+        if !case.typed {
+            return Ok(());
+        }
+        let untied_shown: Vec<(f64, f64)> = match (start, end) {
+            (Some((start, _)), Some((end, _))) if start < end => {
+                let mut untied = source.clone();
+                (untied.start, untied.end, untied.recording_clip) =
+                    (start as f32, end as f32, None);
+                cap_project::derive_caption_track_segments(&[untied], &timeline, durations)
+                    .iter()
+                    .map(|item| (item.start, item.end))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        let margin = 0.01;
+        let steps = 400;
+        for step in 0..=steps {
+            let t = a + (b - a) * f64::from(step) / f64::from(steps);
+            let near_edge = |edge: f64| (t - edge).abs() < margin;
+            if near_edge(a)
+                || near_edge(b)
+                || pieces
+                    .iter()
+                    .any(|piece| near_edge(piece.output_start) || near_edge(piece.output_end))
+            {
+                continue;
+            }
+            if shown.iter().any(|&(_, start, end)| start <= t && t <= end) {
+                continue;
+            }
+            if !cut_arm
+                && !untied_shown
+                    .iter()
+                    .any(|&(start, end)| start < t && t < end)
+            {
+                continue;
+            }
+            let showable_only_here = pieces.iter().any(|piece| {
+                if !(piece.output_start < t && t < piece.output_end) {
+                    return false;
+                }
+                let at = piece.source_start + (t - piece.output_start) * piece.timescale;
+                let same_footage = || {
+                    pieces
+                        .iter()
+                        .filter(|other| other.recording == piece.recording)
+                };
+                let near_source_edge = same_footage().any(|other| {
+                    (at - other.source_start).abs() < margin
+                        || (at - other.source_end).abs() < margin
+                });
+                !near_source_edge
+                    && same_footage()
+                        .filter(|other| other.source_start < at && at < other.source_end)
+                        .count()
+                        == 1
+            });
+            if showable_only_here {
+                return Err(format!("3: nothing shown at {t:.3} in {a:.3}..{b:.3}"));
+            }
+        }
+        Ok(())
+    }
+
+    // Seeded random timelines, every resize checked against the invariant
+    // above. The first failures print with the seed that reproduces them.
+    #[test]
+    fn tied_caption_resizes_stay_inside_the_drag() {
+        const CASES: usize = 20_000;
+        let mut rng = Rng(0x4308);
+        let (mut checked, mut failures) = (0, Vec::new());
+        while checked < CASES {
+            let seed = rng.next_u64();
+            let Some(case) = random_resize_case(&mut Rng(seed)) else {
+                continue;
+            };
+            checked += 1;
+            if let Err(failure) = check_tied_resize(&case) {
+                failures.push(format!("seed {seed:#x}: {failure}"));
+            }
+        }
+        let mut kinds = std::collections::BTreeMap::<String, usize>::new();
+        for failure in &failures {
+            let kind = failure.split(": ").nth(1).unwrap_or_default();
+            *kinds.entry(kind.chars().take(7).collect()).or_default() += 1;
+        }
+        println!(
+            "tied resize property: {checked} cases, {} failures {kinds:?}",
+            failures.len()
+        );
+        if let Ok(seed) = std::env::var("CAP_TIED_RESIZE_SEED") {
+            let seed = u64::from_str_radix(seed.trim_start_matches("0x"), 16).unwrap();
+            let case = random_resize_case(&mut Rng(seed)).unwrap();
+            let project = &case.project;
+            println!(
+                "durations {:?}\nsegments {}\ntransitions {}\ncaptions {}\ntrack {}\nresize item {} to {}..{}\n{:?}",
+                case.durations,
+                serde_json::to_string(&project.timeline.as_ref().unwrap().segments).unwrap(),
+                serde_json::to_string(&project.timeline.as_ref().unwrap().transitions).unwrap(),
+                serde_json::to_string(&project.captions.as_ref().unwrap().segments).unwrap(),
+                serde_json::to_string(&project.timeline.as_ref().unwrap().caption_segments)
+                    .unwrap(),
+                case.index,
+                case.start,
+                case.end,
+                check_tied_resize(&case)
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {checked} cases fail:\n{}",
+            failures.len(),
+            kinds
+                .keys()
+                .flat_map(|kind| failures
+                    .iter()
+                    .filter(|f| f.contains(kind.as_str()))
+                    .take(3))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 
     #[test]
