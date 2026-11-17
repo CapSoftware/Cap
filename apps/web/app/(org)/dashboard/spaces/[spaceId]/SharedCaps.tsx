@@ -14,8 +14,15 @@ import type {
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import clsx from "clsx";
+import { motion, useReducedMotion } from "framer-motion";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type DragEvent, useEffect, useMemo, useState } from "react";
+import {
+	type DragEvent,
+	type KeyboardEvent,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { reorderSpaceVideos } from "@/actions/spaces/video-order";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
@@ -221,6 +228,7 @@ export const SharedCaps = ({
 
 	const canReorder =
 		Boolean(spaceData) && canManageCurrentSpace && videoOrder === "custom";
+	const reduceMotion = useReducedMotion();
 	const [dropTarget, setDropTarget] = useState<{
 		id: Video.VideoId;
 		side: "before" | "after";
@@ -237,6 +245,8 @@ export const SharedCaps = ({
 		};
 	}, [canReorder]);
 
+	const [reorderAnnouncement, setReorderAnnouncement] = useState("");
+
 	const reorderTo = async (
 		videoIds: Video.VideoId[],
 		placement: ReorderPlacement,
@@ -244,12 +254,21 @@ export const SharedCaps = ({
 		const previous = orderedData;
 		if (placement.type !== "start" || page === 1) {
 			const byId = new Map(previous.map((video) => [video.id, video]));
+			const nextIds = reorderIds(pageIds, videoIds, placement);
 			setOrderedData(
-				reorderIds(pageIds, videoIds, placement).flatMap((id) => {
+				nextIds.flatMap((id) => {
 					const video = byId.get(id as Video.VideoId);
 					return video ? [video] : [];
 				}),
 			);
+			const [firstId] = videoIds;
+			const moved = firstId ? byId.get(firstId) : undefined;
+			const index = firstId ? nextIds.indexOf(firstId) : -1;
+			if (moved && index >= 0 && videoIds.length === 1) {
+				setReorderAnnouncement(
+					`Moved ${moved.name} to position ${(page - 1) * pageSize + index + 1}`,
+				);
+			}
 		}
 		try {
 			await reorderSpaceVideos({ spaceId, videoIds, placement });
@@ -273,6 +292,24 @@ export const SharedCaps = ({
 		setDropTarget((current) =>
 			current?.id === id && current.side === side ? current : { id, side },
 		);
+	};
+
+	const handleReorderKeyDown = (
+		event: KeyboardEvent<HTMLFieldSetElement>,
+		id: Video.VideoId,
+		index: number,
+	) => {
+		if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey)
+			return;
+		if (event.key === "ArrowLeft") {
+			if (page === 1 && index === 0) return;
+			event.preventDefault();
+			void reorderTo([id], { type: "earlier" });
+		} else if (event.key === "ArrowRight") {
+			if (page >= totalPages && index === orderedData.length - 1) return;
+			event.preventDefault();
+			void reorderTo([id], { type: "later" });
+		}
 	};
 
 	const handleReorderDrop = (
@@ -641,11 +678,17 @@ export const SharedCaps = ({
 								const indicator =
 									dropTarget?.id === cap.id ? dropTarget.side : null;
 								return (
-									<fieldset
+									<motion.fieldset
 										key={cap.id}
+										layout={reduceMotion ? false : "position"}
+										layoutDependency={orderedData}
+										transition={{ type: "spring", stiffness: 520, damping: 42 }}
 										className="relative min-w-0"
 										onDragOver={(event) => handleReorderDragOver(event, cap.id)}
 										onDrop={(event) => handleReorderDrop(event, cap.id)}
+										onKeyDown={(event) =>
+											handleReorderKeyDown(event, cap.id, index)
+										}
 									>
 										{card}
 										<span
@@ -656,11 +699,16 @@ export const SharedCaps = ({
 												indicator ? "opacity-100" : "opacity-0",
 											)}
 										/>
-									</fieldset>
+									</motion.fieldset>
 								);
 							})}
 						</div>
 					</SeededThumbnailsProvider>
+					{canReorder && (
+						<p aria-live="polite" className="sr-only">
+							{reorderAnnouncement}
+						</p>
+					)}
 				</>
 			)}
 			{(data.length >= pageSize || page !== 1) && (

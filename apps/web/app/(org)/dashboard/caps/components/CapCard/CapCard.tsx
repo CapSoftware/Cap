@@ -93,6 +93,11 @@ function getProgressStatusText(
 	}
 }
 
+const altKeyLabel = () =>
+	typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+		? "⌥"
+		: "Alt+";
+
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
 		id: Video.VideoId;
@@ -615,7 +620,10 @@ export const CapCard = ({
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
-									<p className="text-sm text-gray-12">Move earlier</p>
+									<p className="flex-1 text-sm text-gray-12">Move earlier</p>
+									<kbd className="font-sans text-xs text-gray-9">
+										{altKeyLabel()}←
+									</kbd>
 								</DropdownMenuItem>
 							)}
 							{reorder?.onMoveLater && (
@@ -627,7 +635,10 @@ export const CapCard = ({
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faArrowRight} />
-									<p className="text-sm text-gray-12">Move later</p>
+									<p className="flex-1 text-sm text-gray-12">Move later</p>
+									<kbd className="font-sans text-xs text-gray-9">
+										{altKeyLabel()}→
+									</kbd>
 								</DropdownMenuItem>
 							)}
 							{isOwner && (
