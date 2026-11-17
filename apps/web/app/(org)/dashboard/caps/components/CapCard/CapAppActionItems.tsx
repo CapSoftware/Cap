@@ -40,7 +40,8 @@ export function CapAppActionItems({ videoId }: { videoId: Video.VideoId }) {
 	if (!data || data.length === 0) return null;
 
 	const run = (action: CapAction) => {
-		const promise = fetch(actionsPath(videoId), {
+		const toastId = toast.loading(`${action.title}...`);
+		fetch(actionsPath(videoId), {
 			method: "POST",
 			credentials: "same-origin",
 			headers: { "content-type": "application/json" },
@@ -48,20 +49,33 @@ export function CapAppActionItems({ videoId }: { videoId: Video.VideoId }) {
 				installationId: action.installationId,
 				actionId: action.actionId,
 			}),
-		}).then(async (response) => {
-			if (!response.ok) throw new Error(await readError(response));
-			const { result } = (await response.json()) as { result: ActionResult };
-			if (result.type === "open" && result.url.startsWith("https://")) {
-				window.open(result.url, "_blank", "noopener,noreferrer");
-			}
-			return result.message ?? `${action.title}: done`;
-		});
-		toast.promise(promise, {
-			loading: `${action.title}...`,
-			success: (message) => message,
-			error: (error) =>
-				error instanceof Error ? error.message : "Something went wrong",
-		});
+		})
+			.then(async (response) => {
+				if (!response.ok) throw new Error(await readError(response));
+				const { result } = (await response.json()) as {
+					result: ActionResult;
+				};
+				const message = result.message ?? `${action.title}: done`;
+				if (result.type === "open" && result.url.startsWith("https://")) {
+					const url = result.url;
+					const open = () => window.open(url, "_blank", "noopener,noreferrer");
+					// The browser can block a tab opened this long after the
+					// click, so the link also stays one click away in the toast.
+					open();
+					toast.success(message, {
+						id: toastId,
+						action: { label: "Open", onClick: open },
+					});
+					return;
+				}
+				toast.success(message, { id: toastId });
+			})
+			.catch((error: unknown) => {
+				toast.error(
+					error instanceof Error ? error.message : "Something went wrong",
+					{ id: toastId },
+				);
+			});
 	};
 
 	return (
