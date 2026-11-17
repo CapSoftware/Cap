@@ -51,6 +51,7 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { rejectOnFailure } from "@/lib/effect-react-query";
 import {
 	CAP_DRAG_TYPE,
+	MAX_MOVE_ITEMS,
 	type MoveLocation,
 	serializeCapDrag,
 } from "@/lib/move-items";
@@ -251,7 +252,12 @@ export const CapCard = ({
 
 	const isOwner = userId === cap.ownerId;
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
-	const dragEnabled = moveEnabled && (!anyCapSelected || isSelected);
+	// A drag carries at most MAX_MOVE_ITEMS ids; larger selections ("Select
+	// all") go through the Move button, which sends them in batches.
+	const dragEnabled =
+		moveEnabled &&
+		(!anyCapSelected || isSelected) &&
+		(!isSelected || (selectedIds?.length ?? 0) <= MAX_MOVE_ITEMS);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
