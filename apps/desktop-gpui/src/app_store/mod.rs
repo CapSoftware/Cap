@@ -21,6 +21,14 @@ const BACKGROUND_THUMBNAIL: u32 = 256;
 const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
 const CAP_ACTIONS_RETRY: Duration = Duration::from_secs(30);
 
+// The last install or remove that failed for an app, shown on its row until
+// the next attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionError {
+    Install,
+    Remove,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncState {
     #[default]
@@ -47,7 +55,9 @@ pub struct AppStore {
     pub signed_in: bool,
     pub state: SyncState,
     pub pending: BTreeSet<String>,
+    pub action_errors: HashMap<String, ActionError>,
     account: Option<String>,
+    loading_account: Option<String>,
     cap_actions: HashMap<String, Vec<CapAction>>,
     cap_actions_pending: BTreeSet<String>,
     cap_actions_failed: HashMap<String, Instant>,
@@ -341,6 +351,7 @@ pub struct AppStoreSnapshot {
     pub installations: Vec<Installation>,
     pub local_installs: BTreeSet<String>,
     pub pending: BTreeSet<String>,
+    pub action_errors: HashMap<String, ActionError>,
     pub signed_in: bool,
     pub state: SyncState,
     pub thumbnails: HashMap<String, Arc<RenderImage>>,
@@ -370,6 +381,7 @@ impl AppStore {
             installations: self.account_installations().to_vec(),
             local_installs: self.local_installs.clone(),
             pending: self.pending.clone(),
+            action_errors: self.action_errors.clone(),
             signed_in: self.signed_in,
             state: self.state,
             thumbnails: self.thumbnails.clone(),
@@ -411,7 +423,16 @@ pub fn refresh(cx: &mut App) {
     if !cx.has_global::<AppStore>() {
         return;
     }
+    // A sync already running for this account will bring the same answer, so
+    // opening the Apps page right after launch does not send every request
+    // twice. A sign-in or sign-out changes the account and starts a new one.
+    let account = current_account();
+    let store = cx.global::<AppStore>();
+    if store.state == SyncState::Loading && store.loading_account == account {
+        return;
+    }
     let generation = cx.update_global::<AppStore, _>(|store, _| {
+        store.loading_account = account;
         store.state = SyncState::Loading;
         store.generation += 1;
         store.generation
@@ -698,6 +719,7 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
     }
     cx.update_global::<AppStore, _>(|store, _| {
         store.pending.insert(app.id.clone());
+        store.action_errors.remove(&app.id);
     });
     let id = app.id.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -714,12 +736,16 @@ pub fn install(app_id: String, cx: &mut App) -> Option<InstallOutcome> {
             })
         });
         let status = task.await.ok().and_then(Result::ok);
-        if !status.is_some_and(|status| status.is_success() || status.as_u16() == 409) {
+        let installed = status.is_some_and(|status| status.is_success() || status.as_u16() == 409);
+        if !installed {
             tracing::warn!(?status, app = %id, "App Store install failed");
         }
         cx.update(|cx| {
             cx.update_global::<AppStore, _>(|store, _| {
                 store.pending.remove(&id);
+                if !installed {
+                    store.action_errors.insert(id.clone(), ActionError::Install);
+                }
             });
             refresh(cx);
         });
@@ -751,6 +777,7 @@ pub fn uninstall(app_id: String, cx: &mut App) {
     };
     cx.update_global::<AppStore, _>(|store, _| {
         store.pending.insert(app_id.clone());
+        store.action_errors.remove(&app_id);
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
         let path = format!("/api/app-store/installations/{}", installation.id);
@@ -762,12 +789,18 @@ pub fn uninstall(app_id: String, cx: &mut App) {
             })
         });
         let status = task.await.ok().and_then(Result::ok);
-        if !status.is_some_and(|status| status.is_success()) {
+        let removed = status.is_some_and(|status| status.is_success());
+        if !removed {
             tracing::warn!(?status, app = %app_id, "App Store uninstall failed");
         }
         cx.update(|cx| {
             cx.update_global::<AppStore, _>(|store, _| {
                 store.pending.remove(&app_id);
+                if !removed {
+                    store
+                        .action_errors
+                        .insert(app_id.clone(), ActionError::Remove);
+                }
             });
             refresh(cx);
         });

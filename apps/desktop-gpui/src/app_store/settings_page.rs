@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, SharedString, div, img, px};
+use gpui::{AnyElement, Context, Hsla, SharedString, div, img, px};
 
 use super::{AppStoreSnapshot, CatalogApp, SyncState};
 use crate::i18n::tr;
@@ -132,6 +132,7 @@ impl SettingsWindow {
         let theme = self.theme;
         let id = app.id.clone();
         let pending = state.pending.contains(&app.id);
+        let action_error = state.action_errors.get(&app.id).copied();
         let installation = state.installation(&app.id);
         let local = state.local_installs.contains(&app.id);
         let installed = local || installation.is_some();
@@ -272,7 +273,16 @@ impl SettingsWindow {
                                 }
                                 None => SharedString::from(platforms),
                             }),
-                    ),
+                    )
+                    .children(action_error.map(|error| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(Hsla::from(theme.red_11))
+                            .child(match error {
+                                super::ActionError::Install => tr::settings::apps::install_failed(),
+                                super::ActionError::Remove => tr::settings::apps::remove_failed(),
+                            })
+                    })),
             )
             .child(div().flex_shrink_0().child(action))
             .into_any_element()
