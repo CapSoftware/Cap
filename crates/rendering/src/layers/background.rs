@@ -377,6 +377,7 @@ pub enum Inner {
     },
     ColorOrGradient {
         value: ColorOrGradient,
+        output_size: (u32, u32),
         #[allow(unused)]
         buffer: wgpu::Buffer,
         bind_group: wgpu::BindGroup,
@@ -451,10 +452,11 @@ impl BackgroundLayer {
                             None => {
                                 let fallback_background = Background::Color([1.0, 1.0, 1.0, 1.0]);
                                 let buffer = GradientOrColorUniforms::from(fallback_background)
-                                    .to_buffer(device);
+                                    .to_buffer(device, uniforms.output_size);
                                 self.generation += 1;
                                 self.inner = Some(Inner::ColorOrGradient {
                                     value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
+                                    output_size: uniforms.output_size,
                                     bind_group: self.color_pipeline.bind_group(device, &buffer),
                                     buffer,
                                 });
@@ -521,10 +523,12 @@ impl BackgroundLayer {
                     ..
                 }) if &color == current_color => {}
                 _ => {
-                    let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    let buffer = GradientOrColorUniforms::from(background)
+                        .to_buffer(device, uniforms.output_size);
                     self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Color(color),
+                        output_size: uniforms.output_size,
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
                         buffer,
                     });
@@ -533,13 +537,16 @@ impl BackgroundLayer {
             Background::Gradient(gradient) => match &self.inner {
                 Some(Inner::ColorOrGradient {
                     value: ColorOrGradient::Gradient(current_gradient),
+                    output_size,
                     ..
-                }) if &gradient == current_gradient => {}
+                }) if &gradient == current_gradient && *output_size == uniforms.output_size => {}
                 _ => {
-                    let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    let buffer = GradientOrColorUniforms::from(background)
+                        .to_buffer(device, uniforms.output_size);
                     self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Gradient(gradient),
+                        output_size: uniforms.output_size,
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
                         buffer,
                     });
@@ -736,11 +743,12 @@ pub struct GradientOrColorUniforms {
     pub angle: f32,
     pub noise_intensity: f32,
     pub noise_scale: f32,
-    _padding: f32,
+    aspect_ratio: f32,
 }
 
 impl GradientOrColorUniforms {
-    fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
+    fn to_buffer(mut self, device: &wgpu::Device, output_size: (u32, u32)) -> wgpu::Buffer {
+        self.aspect_ratio = output_size.0 as f32 / output_size.1 as f32;
         device.create_buffer_init(
             &(wgpu::util::BufferInitDescriptor {
                 label: Some("GradientOrColorUniforms Buffer"),
@@ -770,7 +778,7 @@ impl From<Background> for GradientOrColorUniforms {
                 angle: 0.0,
                 noise_intensity: 0.0,
                 noise_scale: 0.0,
-                _padding: 0.0,
+                aspect_ratio: 1.0,
             },
             Background::Gradient(Gradient {
                 start,
@@ -789,7 +797,7 @@ impl From<Background> for GradientOrColorUniforms {
                 angle,
                 noise_intensity,
                 noise_scale,
-                _padding: 0.0,
+                aspect_ratio: 1.0,
             },
             Background::Image { .. } | Background::AnimatedGradient(_) => {
                 unreachable!("Textured backgrounds should be handled separately")

@@ -1,13 +1,14 @@
 "use client";
 
-import { useDetectPlatform } from "hooks/useDetectPlatform";
+import { classNames } from "@cap/utils/helpers";
+import { useDownloadCta } from "hooks/useDownloadCta";
 import { ArrowDown, ArrowRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRef } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { PhoneDownload } from "@/components/download/PhoneDownload";
 import { LoomMark } from "@/components/icons/LoomMark";
-import { getDownloadUrl } from "@/utils/platform";
 import { CapRecorderWindow } from "./demo/CapRecorderWindow";
 import { LinkNotification } from "./demo/CapSurfaces";
 import { MenuBar } from "./demo/MacDesktop";
@@ -20,7 +21,6 @@ import {
 	BTN_PRIMARY,
 	BTN_SECONDARY,
 	MODE_THEME,
-	MONO,
 	meshStyle,
 } from "./theme";
 
@@ -104,15 +104,14 @@ const AltIcon = ({
 );
 
 export const Hero = () => {
-	const { platform, isIntel } = useDetectPlatform();
-
-	const displayPlatform = platform ?? "macos";
-	const isWindows = displayPlatform === "windows";
-	const isLinux = displayPlatform === "linux";
-	const platformName = isWindows ? "Windows" : isLinux ? "Linux" : "macOS";
-	const downloadHref = isWindows
-		? "/download"
-		: getDownloadUrl(displayPlatform, isIntel);
+	const cta = useDownloadCta();
+	const isWindows = cta.family === "windows";
+	const isLinux = cta.family === "linux";
+	// Until the device is known the server markup has to serve both, so the
+	// breakpoint picks; once it is known a phone keeps the phone path at any
+	// width and a narrow desktop window keeps the installer.
+	const phoneOnly = cta.detected && cta.isPhone;
+	const desktopOnly = cta.detected && !cta.isPhone;
 
 	return (
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
@@ -124,23 +123,21 @@ export const Hero = () => {
 			/>
 			<div className="relative mx-auto flex max-w-[1020px] flex-col items-center text-center">
 				<Link
-					href="/blog/rebuilding-cap-in-gpui"
+					href="/blog/introducing-cap-infra"
 					onClick={() =>
 						trackEvent("release_notice_clicked", {
 							source_page: "home_hero",
-							release: "v0.6.1",
+							release: "cap-infra",
 						})
 					}
 					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
 				>
-					<span
-						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
-					>
+					<span className="rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111]">
 						New
 					</span>
-					<span className="truncate">Cap's migration to GPUI</span>
+					<span className="truncate">Introducing Cap Infra</span>
 					<span className="hidden text-white/60 transition-colors duration-200 group-hover:text-white sm:inline">
-						Read the deep dive
+						Read the post
 					</span>
 					<ArrowRight className="size-3.5 text-white/70 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-white" />
 				</Link>
@@ -154,22 +151,28 @@ export const Hero = () => {
 					creators, and free to start.
 				</p>
 
-				<div className="ht-rise mt-9 flex flex-col items-stretch gap-3 [--d:0.2s] sm:flex-row sm:items-center">
+				<div
+					className={classNames(
+						"ht-rise mt-9 flex flex-col items-center gap-3 [--d:0.2s]",
+						phoneOnly ? "" : "sm:flex-row",
+					)}
+				>
+					<PhoneDownload
+						sourcePage="home_header"
+						className={classNames(
+							desktopOnly ? "hidden" : "",
+							phoneOnly ? "" : "sm:hidden",
+						)}
+					/>
 					<Link
-						href={downloadHref}
-						// Redirects to the installer on the CDN; prefetching it only
-						// produced a failed cross-origin request on every visit.
-						prefetch={false}
-						onClick={() =>
-							trackEvent("download_cta_clicked", {
-								source_page: "home_header",
-								cta_location: "primary",
-								target_url: downloadHref,
-								detected_platform: platform ?? "unknown",
-								is_intel: Boolean(isIntel),
-							})
-						}
-						className={BTN_PRIMARY}
+						href={cta.href}
+						onClick={() => cta.trackClick("home_header", "primary")}
+						className={classNames(
+							BTN_PRIMARY,
+							"w-full sm:w-auto",
+							phoneOnly ? "hidden" : "",
+							desktopOnly ? "" : "max-sm:hidden",
+						)}
 					>
 						{isWindows ? (
 							<WindowsGlyph className="mr-2.5 size-[18px]" />
@@ -184,18 +187,21 @@ export const Hero = () => {
 						) : (
 							<AppleGlyph className="mr-2.5 size-[19px]" />
 						)}
-						Download free for {platformName}
+						Download free for {cta.platformName}
 					</Link>
 
 					<button
 						type="button"
 						onClick={() => {
+							trackEvent("home_demo_cta_clicked", {
+								source_page: "home_header",
+							});
 							window.dispatchEvent(new Event("ht-demo-start"));
 							document
 								.getElementById("modes")
 								?.scrollIntoView({ behavior: "smooth" });
 						}}
-						className={`${BTN_SECONDARY} group cursor-pointer gap-2.5`}
+						className={`${BTN_SECONDARY} group w-full max-w-[380px] cursor-pointer gap-2.5 sm:w-auto`}
 					>
 						See how Cap works
 						<span className="grid size-6 place-items-center rounded-full bg-[#E7EDF3] text-[rgba(17,17,17,0.65)] transition-colors duration-200 group-hover:bg-[#DCE4EC] group-hover:text-[#111111]">

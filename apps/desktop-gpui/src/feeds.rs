@@ -311,15 +311,9 @@ impl CameraProcessingFactory {
 
 #[cfg(target_os = "linux")]
 impl RecordingCameraWorker {
-    fn publish(
-        &self,
-        image: &Arc<gpui::RenderImage>,
-        dims: (usize, usize),
-        timestamp: cap_timestamp::Timestamp,
-        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
-    ) {
+    fn accept(&self, timestamp: cap_timestamp::Timestamp) -> bool {
         if self.publisher.is_cancelled() {
-            return;
+            return false;
         }
         match validate_recording_camera_frame(
             timestamp,
@@ -327,12 +321,30 @@ impl RecordingCameraWorker {
             self.epoch,
             self.current_epoch.load(Ordering::Acquire),
         ) {
-            Ok(true) => {}
-            Ok(false) => return,
+            Ok(true) => true,
+            Ok(false) => false,
             Err(error) => {
                 self.publisher.fail(error);
-                return;
+                false
             }
+        }
+    }
+
+    fn publish_sample(&self, frame: cap_recording::instant_recording::LinuxProcessedCameraFrame) {
+        if self.accept(frame.timestamp) {
+            self.publisher.publish(frame);
+        }
+    }
+
+    fn publish(
+        &self,
+        image: &Arc<gpui::RenderImage>,
+        dims: (usize, usize),
+        timestamp: cap_timestamp::Timestamp,
+        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
+    ) {
+        if !self.accept(timestamp) {
+            return;
         }
         if image.as_bytes(0).is_none() {
             self.publisher
@@ -341,9 +353,10 @@ impl RecordingCameraWorker {
         }
         self.publisher.publish(
             cap_recording::instant_recording::LinuxProcessedCameraFrame {
-                bgra: cap_recording::instant_recording::LinuxCameraPixels::new(RenderImagePixels(
-                    image.clone(),
-                )),
+                pixels: cap_recording::instant_recording::LinuxCameraPixels::new(
+                    RenderImagePixels(image.clone()),
+                ),
+                format: cap_recording::instant_recording::LinuxCameraSampleFormat::Bgra,
                 dimensions: (dims.0 as u32, dims.1 as u32),
                 stride: dims.0 * 4,
                 timestamp,
@@ -353,6 +366,24 @@ impl RecordingCameraWorker {
             },
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn yuyv_overlay_frame(
+    frame: &cap_recording::FFmpegVideoFrame,
+    blur: u8,
+    generation: u64,
+    processing: cap_recording::instant_recording::LinuxCameraProcessing,
+) -> Option<cap_recording::instant_recording::LinuxProcessedCameraFrame> {
+    if blur != 0 {
+        return None;
+    }
+    cap_recording::instant_recording::LinuxProcessedCameraFrame::from_yuyv422(
+        &frame.inner,
+        frame.timestamp,
+        generation,
+        processing,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -562,12 +593,29 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 .publisher
                 .fail("Requested camera blur is unavailable".to_string());
         }
+        #[cfg(target_os = "linux")]
+        let published_yuyv = recording.as_ref().is_some_and(|recording| {
+            let Some(sample) = yuyv_overlay_frame(
+                &frame,
+                requested_blur,
+                recording.generation,
+                recording.processing,
+            ) else {
+                return false;
+            };
+            recording.publish_sample(sample);
+            true
+        });
+        #[cfg(target_os = "linux")]
+        if published_yuyv && !active.load(Ordering::Acquire) {
+            continue;
+        }
         let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
         let Some((mut image, dims)) =
             camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
         else {
             #[cfg(target_os = "linux")]
-            if let Some(recording) = &recording {
+            if !published_yuyv && let Some(recording) = &recording {
                 recording
                     .publisher
                     .fail("Camera frame conversion failed".to_string());
@@ -657,7 +705,10 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             }
         }
         #[cfg(target_os = "linux")]
-        if effects_ready && let Some(recording) = &recording {
+        if !published_yuyv
+            && effects_ready
+            && let Some(recording) = &recording
+        {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
@@ -2204,6 +2255,62 @@ mod tests {
             &[30, 20, 10, 255, 60, 50, 40, 128]
         );
         assert!(scaler.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn blur_off_yuyv_recording_keeps_the_packed_plane() {
+        use cap_recording::instant_recording::{
+            LinuxCameraBlur, LinuxCameraProcessing, LinuxCameraSampleFormat,
+        };
+        use cap_timestamp::Timestamp;
+
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        let stride = frame.stride(0);
+        let row = 8;
+        frame.data_mut(0).fill(0xAB);
+        for y in 0..2 {
+            frame.data_mut(0)[y * stride..y * stride + row]
+                .copy_from_slice(&[10, 20, 30, 40, 50, 60, 70, 80]);
+        }
+        let timestamp = Timestamp::Instant(std::time::Instant::now());
+        let processing = LinuxCameraProcessing {
+            mirrored: true,
+            blur: LinuxCameraBlur::Off,
+        };
+        let packed = cap_recording::FFmpegVideoFrame {
+            inner: frame,
+            timestamp,
+        };
+        let sample = yuyv_overlay_frame(&packed, 0, 4, processing).expect("yuyv sample");
+        assert_eq!(sample.format, LinuxCameraSampleFormat::Yuyv422);
+        assert_eq!(sample.dimensions, (4, 2));
+        assert_eq!(sample.stride, row);
+        assert_eq!(sample.generation, 4);
+        assert_eq!(sample.processing, processing);
+        assert!(sample.mask.is_none());
+        assert_eq!(
+            &*sample.pixels,
+            &[
+                10, 20, 30, 40, 50, 60, 70, 80, 10, 20, 30, 40, 50, 60, 70, 80
+            ]
+        );
+
+        let mut blurred = packed;
+        assert!(yuyv_overlay_frame(&blurred, 1, 4, processing).is_none());
+        blurred.inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 4, 2);
+        assert!(yuyv_overlay_frame(&blurred, 0, 4, processing).is_none());
+        let heavy = LinuxCameraProcessing {
+            blur: LinuxCameraBlur::Heavy,
+            ..processing
+        };
+        let mut yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        yuyv.data_mut(0).fill(1);
+        let source = cap_recording::FFmpegVideoFrame {
+            inner: yuyv,
+            timestamp,
+        };
+        assert!(yuyv_overlay_frame(&source, 0, 4, heavy).is_none());
     }
 
     #[cfg(target_os = "linux")]

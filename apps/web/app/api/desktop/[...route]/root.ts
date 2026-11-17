@@ -20,12 +20,12 @@ import {
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import {
 	createWithReferralDiscount,
 	referralDiscountForCheckout,
@@ -40,6 +40,7 @@ import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
 	canEditOrganizationBranding,
@@ -604,6 +605,15 @@ app.post(
 			);
 		}
 
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+				key: `checkout:${user.id}`,
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json({ error: true, code: "rate_limited" }, { status: 429 });
+		}
+
 		// Starts now so the Dub lookup overlaps the Stripe customer calls below.
 		const referralDiscountLookup = referralDiscountForCheckout(user);
 
@@ -647,6 +657,11 @@ app.post(
 				.where(eq(users.id, user.id));
 
 			customerId = customer.id;
+		}
+
+		if (customerId && (await hasLiveProSubscription(customerId))) {
+			console.log("[POST] Error: Stripe customer already has Pro");
+			return c.json({ error: true, subscription: true }, { status: 400 });
 		}
 
 		console.log("[POST] Creating checkout session");

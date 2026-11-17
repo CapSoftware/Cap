@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -16,18 +16,24 @@ use gpui::{
 
 use super::cuts::{self, CutReport, RestoreBlocker};
 use super::model::{TranscriptDoc, TranscriptEdl};
+use super::word_edit;
 use super::{
-    CleanupTab, DragUnit, FOLLOW_PAUSE, MAX_PLAYER_SHARE, MIN_PLAYER_SHARE, PAUSE_KEEP_RANGE,
-    PAUSE_LONGER_RANGE, SearchState, WordDrag, WordSelection, category_index,
+    CleanupTab, DragUnit, FOLLOW_PAUSE, PAUSE_KEEP_RANGE, PAUSE_LONGER_RANGE, SearchState,
+    WordAnchor, WordDrag, WordEditor, WordSelection, category_index,
 };
 use crate::editor_window::EditorWindow;
 use crate::i18n::tr;
 use crate::theme::Theme;
 use crate::ui;
 
-const TEXT_SIZE: f32 = 15.;
-const LINE_HEIGHT: f32 = 25.;
-const STAMP_WIDTH: f32 = 46.;
+/// The reading column: 14px on a 22px line reads comfortably at the panel's
+/// standard width, and [`READING_WIDTH`] keeps lines near 75 characters when
+/// the panel is dragged wider.
+const TEXT_SIZE: f32 = 14.;
+const LINE_HEIGHT: f32 = 22.;
+const READING_WIDTH: f32 = 600.;
+const STAMP_WIDTH: f32 = 44.;
+const PARAGRAPH_GAP: f32 = 12.;
 const FOLLOW_MARGIN: f32 = 48.;
 const FOLLOW_ANCHOR: f32 = 0.32;
 const LISTEN_BEFORE: f64 = 1.5;
@@ -163,13 +169,44 @@ struct ParagraphPainter {
     edl: Option<Arc<TranscriptEdl>>,
     selection: Option<Range<usize>>,
     active: Option<usize>,
+    active_paragraph: Option<usize>,
     hovered_cut: Option<Range<usize>>,
     matches: Arc<Vec<Range<usize>>>,
     current_match: Option<Range<usize>>,
     ignored: Arc<HashSet<usize>>,
     palette: Palette,
+    theme: Theme,
     editor: WeakEntity<EditorWindow>,
     layouts: Rc<RefCell<HashMap<usize, TextLayout>>>,
+    editing: Option<(usize, gpui::Entity<ui::TextInputState>)>,
+    edit_anchor: Rc<Cell<Option<WordAnchor>>>,
+}
+
+pub(super) fn word_anchor(layout: &TextLayout, span: Range<usize>) -> Option<WordAnchor> {
+    let bounds = layout.bounds();
+    let mut start = layout.position_for_index(span.start)?;
+    let first = layout.text().get(span.clone())?.chars().next()?;
+    // gpui places an index that sits on a soft wrap at the end of the line
+    // above, so a word that opens a wrapped line starts at the left edge of
+    // the line its first character is on.
+    let after_first = layout.position_for_index(span.start + first.len_utf8())?;
+    if after_first.y > start.y {
+        start = Point {
+            x: bounds.origin.x,
+            y: after_first.y,
+        };
+    }
+    let width = match layout.position_for_index(span.end) {
+        Some(end) if end.y == start.y && end.x > start.x => end.x - start.x,
+        // A word longer than the line wraps itself: the field covers the
+        // rest of the line it starts on.
+        Some(end) if end.y > start.y => (bounds.right() - start.x).max(px(EDIT_MIN_WIDTH)),
+        _ => px(EDIT_MIN_WIDTH),
+    };
+    Some(WordAnchor {
+        origin: start - bounds.origin,
+        width,
+    })
 }
 
 impl ParagraphPainter {
@@ -279,22 +316,39 @@ impl ParagraphPainter {
         let stamp_editor = self.editor.clone();
         let layouts = self.layouts.clone();
         let paint_layout = layout.clone();
+        let playing = self.active_paragraph == Some(index);
+        let editing = self
+            .editing
+            .as_ref()
+            .filter(|(word, _)| paragraph.words.contains(word))
+            .and_then(|(word, input)| Some((paragraph.span(*word)?, input.clone())));
+        let measure_span = editing.as_ref().map(|(span, _)| span.clone());
+        let edit_anchor = self.edit_anchor.clone();
+        let overlay = editing.and_then(|(_, input)| {
+            let anchor = self.edit_anchor.get()?;
+            Some(self.word_field(anchor, input))
+        });
         div()
             .id(("transcript-paragraph", index))
             .w_full()
+            .max_w(px(READING_WIDTH + STAMP_WIDTH))
             .flex()
             .flex_row()
             .items_start()
-            .pb(px(14.))
+            .pb(px(PARAGRAPH_GAP))
             .child(
                 div()
                     .id(("transcript-stamp", index))
                     .flex_none()
                     .w(px(STAMP_WIDTH))
-                    .pt(px(3.))
                     .text_size(px(11.))
-                    .line_height(px(LINE_HEIGHT - 4.))
-                    .text_color(self.palette.text_3)
+                    .line_height(px(LINE_HEIGHT))
+                    .text_color(if playing {
+                        self.palette.accent
+                    } else {
+                        self.palette.text_3
+                    })
+                    .when(playing, |stamp| stamp.font_weight(FontWeight::MEDIUM))
                     .cursor_pointer()
                     .hover(|style| style.text_color(self.palette.text_2))
                     .children(stamp)
@@ -315,7 +369,14 @@ impl ParagraphPainter {
                     .child(text)
                     .child(
                         gpui::canvas(
-                            move |_, _, _| {
+                            move |_, window, _| {
+                                if let Some(span) = measure_span {
+                                    let anchor = word_anchor(&paint_layout, span);
+                                    if anchor != edit_anchor.get() {
+                                        edit_anchor.set(anchor);
+                                        window.refresh();
+                                    }
+                                }
                                 layouts.borrow_mut().insert(index, paint_layout);
                             },
                             |_, _, _, _| {},
@@ -323,6 +384,7 @@ impl ParagraphPainter {
                         .absolute()
                         .size_0(),
                     )
+                    .children(overlay)
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         let byte = byte_at(&down_layout, event.position);
                         editor
@@ -343,6 +405,80 @@ impl ParagraphPainter {
             .into_any_element()
     }
 }
+
+impl ParagraphPainter {
+    fn word_field(
+        &self,
+        anchor: WordAnchor,
+        input: gpui::Entity<ui::TextInputState>,
+    ) -> AnyElement {
+        let theme = &self.theme;
+        let palette = self.palette;
+        let editor = self.editor.clone();
+        div()
+            .id("transcript-word-edit")
+            .absolute()
+            .left(anchor.origin.x - px(EDIT_PAD_X + 1.))
+            .top(anchor.origin.y)
+            .h(px(LINE_HEIGHT))
+            .min_w(anchor.width + px(2. * (EDIT_PAD_X + 1.)))
+            .px(px(EDIT_PAD_X))
+            .flex()
+            .flex_row()
+            .items_center()
+            .rounded(px(5.))
+            .bg(Hsla::from(theme.editor.card))
+            .border_1()
+            .border_color(palette.accent)
+            .shadow(theme.editor.pop_shadow())
+            .capture_any_mouse_down({
+                let editor = editor.clone();
+                move |event, window, cx| {
+                    if event.button != MouseButton::Left || event.click_count < 3 {
+                        return;
+                    }
+                    let selected = editor
+                        .update(cx, |this, cx| {
+                            this.transcript_select_from_field(event.click_count, window, cx)
+                        })
+                        .unwrap_or(false);
+                    if selected {
+                        cx.stop_propagation();
+                    }
+                }
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                let Some(direction) = ui::keyboard_nav::direction(&event.keystroke) else {
+                    return;
+                };
+                if ui::text_input::text_input_is_composing(window, cx) {
+                    return;
+                }
+                cx.stop_propagation();
+                window.prevent_default();
+                let forward = direction == ui::keyboard_nav::Direction::Next;
+                editor
+                    .update(cx, |this, cx| {
+                        this.transcript_step_word_edit(forward, window, cx);
+                    })
+                    .ok();
+            })
+            .child(
+                ui::TextInput::bare(theme, "transcript-word-input", &input)
+                    .fit_content()
+                    .padding_x(px(0.))
+                    .text_size(px(TEXT_SIZE))
+                    .line_height(px(LINE_HEIGHT))
+                    .text_color(palette.text_1)
+                    .selection_color(palette.selection),
+            )
+            .into_any_element()
+    }
+}
+
+const EDIT_PAD_X: f32 = 3.;
+const EDIT_MIN_WIDTH: f32 = 24.;
 
 const ROW_HEIGHT: f32 = 30.;
 const MAX_VISIBLE_ROWS: usize = 8;
@@ -549,44 +685,41 @@ fn byte_at(layout: &TextLayout, position: Point<Pixels>) -> usize {
 }
 
 impl EditorWindow {
-    pub(crate) fn toggle_transcript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.project_ready() {
-            return;
+    /// Leaving the Transcript tab. Only [`EditorWindow::set_panel_tab`]
+    /// calls this.
+    pub(crate) fn close_transcript_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.transcript.open = false;
+        self.transcript.drag = None;
+        self.focus_root(window, cx);
+    }
+
+    /// Arriving on the Transcript tab. Only [`EditorWindow::set_panel_tab`]
+    /// calls this, after closing whichever tab was open.
+    pub(crate) fn open_transcript_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.transcript.open = true;
+        self.transcript.dirty = true;
+        let started = Instant::now();
+        self.transcript_refresh();
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            words = self
+                .transcript
+                .doc
+                .as_ref()
+                .map_or(0, |doc| doc.words.len()),
+            paragraphs = self
+                .transcript
+                .doc
+                .as_ref()
+                .map_or(0, |doc| doc.paragraphs.len()),
+            "transcript opened"
+        );
+        self.transcript_sync_active(false, cx);
+        if let Some(active) = self.transcript.active {
+            self.transcript_reveal(active, true);
         }
-        if self.transcript.open {
-            self.transcript.open = false;
-            self.transcript.drag = None;
-            self.transcript.resize = None;
-            self.focus_root(window, cx);
-        } else {
-            if self.clips.open {
-                self.close_clips(window, cx);
-            }
-            self.transcript.open = true;
-            self.transcript.dirty = true;
-            let started = Instant::now();
-            self.transcript_refresh();
-            tracing::info!(
-                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-                words = self
-                    .transcript
-                    .doc
-                    .as_ref()
-                    .map_or(0, |doc| doc.words.len()),
-                paragraphs = self
-                    .transcript
-                    .doc
-                    .as_ref()
-                    .map_or(0, |doc| doc.paragraphs.len()),
-                "transcript opened"
-            );
-            self.transcript_sync_active(false, cx);
-            if let Some(active) = self.transcript.active {
-                self.transcript_reveal(active, true);
-            }
-            window.focus(&self.transcript.focus, cx);
-            self.transcript_load_energy(cx);
-        }
+        window.focus(&self.transcript.focus, cx);
+        self.transcript_load_energy(cx);
         cx.notify();
     }
 
@@ -716,21 +849,37 @@ impl EditorWindow {
         let Some(word) = doc.paragraphs.get(paragraph).map(|p| p.word_at_byte(byte)) else {
             return;
         };
-        window.focus(&self.transcript.focus, cx);
         cx.stop_propagation();
+        if self.transcript.editing.is_some() {
+            self.transcript_commit_word_edit(window, cx);
+            window.focus(&self.transcript.focus, cx);
+            return;
+        }
+        window.focus(&self.transcript.focus, cx);
         self.set_selection(None, cx);
+        if event.click_count == 1 {
+            self.transcript.restored_on_press = false;
+        }
 
         if !edl.is_kept(word) && !event.modifiers.shift && event.click_count == 1 {
             if let Some(run) = edl.cut_run_of(word) {
                 let words = edl.cut_runs[run].clone();
                 self.transcript_restore(words, window, cx);
+                self.transcript.restored_on_press = true;
+            }
+            return;
+        }
+
+        if event.click_count == 2 && !event.modifiers.shift {
+            if !std::mem::take(&mut self.transcript.restored_on_press) {
+                self.transcript_begin_word_edit(word, window, cx);
             }
             return;
         }
 
         let unit = match event.click_count {
-            2 => DragUnit::Sentence,
-            count if count >= 3 => DragUnit::Paragraph,
+            3 => DragUnit::Sentence,
+            count if count >= 4 => DragUnit::Paragraph,
             _ => DragUnit::Word,
         };
         let origin = unit_bounds(&doc, word, unit);
@@ -1199,6 +1348,196 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
+    fn transcript_word_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<ui::TextInputState> {
+        if let Some(input) = &self.transcript.edit_input {
+            return input.clone();
+        }
+        let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, _, event: &ui::TextInputEvent, window, cx| match event {
+                ui::TextInputEvent::Confirmed => {
+                    this.transcript_commit_word_edit(window, cx);
+                    window.focus(&this.transcript.focus, cx);
+                }
+                ui::TextInputEvent::Cancelled => {
+                    if this.transcript.editing.take().is_some() {
+                        this.invalidate_transcript(cx);
+                    }
+                    window.focus(&this.transcript.focus, cx);
+                }
+                ui::TextInputEvent::Blurred => {
+                    this.transcript_commit_word_edit(window, cx);
+                }
+                ui::TextInputEvent::Changed => {}
+            },
+        );
+        self.push_text_subscription(subscription);
+        self.transcript.edit_input = Some(input.clone());
+        input
+    }
+
+    pub(super) fn transcript_begin_word_edit(
+        &mut self,
+        word: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(doc) = self.transcript.doc.clone() else {
+            return;
+        };
+        let Some(current) = doc.words.get(word) else {
+            return;
+        };
+        let input = self.transcript_word_input(window, cx);
+        let text = current.text.clone();
+        self.transcript.editing = Some(WordEditor {
+            word,
+            text: text.clone(),
+            start: current.start,
+        });
+        let paragraph = doc.paragraph_of(word);
+        let anchor = self
+            .transcript
+            .layouts
+            .borrow()
+            .get(&paragraph)
+            .zip(doc.paragraphs[paragraph].span(word))
+            .and_then(|(layout, span)| word_anchor(layout, span));
+        self.transcript.edit_anchor.set(anchor);
+        input.update(cx, |input, cx| {
+            input.set_text(text, cx);
+            input.clear_history();
+            input.focus_and_select_all(window, cx);
+        });
+        self.transcript.selection = Some(WordSelection::single(word));
+        self.transcript.caret = None;
+        self.transcript.drag = None;
+        self.transcript_reveal(word, false);
+        self.invalidate_transcript(cx);
+    }
+
+    pub(super) fn transcript_commit_word_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let editing = self.transcript.editing.take()?;
+        self.invalidate_transcript(cx);
+        let text = self
+            .transcript
+            .edit_input
+            .as_ref()?
+            .read(cx)
+            .text()
+            .to_string();
+        self.transcript_refresh();
+        let doc = self.transcript.doc.clone()?;
+        let word = word_edit::locate(&doc.words, editing.word, &editing.text, editing.start)?;
+        let mut changed = false;
+        self.edit_timeline_project(
+            |project| {
+                changed = project
+                    .captions
+                    .as_mut()
+                    .is_some_and(|captions| word_edit::replace_word(captions, word, &text));
+                changed
+            },
+            window,
+            cx,
+        );
+        if changed {
+            self.transcript.dirty = true;
+            self.transcript_refresh();
+            tracing::info!(
+                word,
+                words = self
+                    .transcript
+                    .doc
+                    .as_ref()
+                    .map_or(0, |doc| doc.words.len()),
+                "transcript word edited"
+            );
+            let count = self
+                .transcript
+                .doc
+                .as_ref()
+                .map_or(0, |doc| doc.words.len());
+            self.transcript.selection = (word < count).then_some(WordSelection::single(word));
+            self.transcript_sync_active(false, cx);
+        }
+        Some(word)
+    }
+
+    /// The second click of a triple-click opens the field under the pointer,
+    /// so the third lands on it. While nothing has been typed it still means
+    /// sentence (or, with a fourth, paragraph) selection.
+    pub(super) fn transcript_select_from_field(
+        &mut self,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (Some(doc), Some(editing), Some(input)) = (
+            self.transcript.doc.clone(),
+            self.transcript.editing.clone(),
+            self.transcript.edit_input.clone(),
+        ) else {
+            return false;
+        };
+        if input.read(cx).text() != editing.text || editing.word >= doc.words.len() {
+            return false;
+        }
+        self.transcript.editing = None;
+        window.focus(&self.transcript.focus, cx);
+        let unit = if click_count >= 4 {
+            DragUnit::Paragraph
+        } else {
+            DragUnit::Sentence
+        };
+        let origin = unit_bounds(&doc, editing.word, unit);
+        self.transcript.selection = Some(WordSelection {
+            anchor: origin.0,
+            focus: origin.1,
+        });
+        self.transcript.drag = Some(WordDrag { unit, origin });
+        self.invalidate_transcript(cx);
+        true
+    }
+
+    pub(super) fn transcript_step_word_edit(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some((doc, edl)), Some(editing)) =
+            (self.transcript_doc(), self.transcript.editing.clone())
+        else {
+            return;
+        };
+        let target = if forward {
+            (editing.word + 1..doc.words.len()).find(|word| edl.is_kept(*word))
+        } else {
+            (0..editing.word.min(doc.words.len())).rfind(|word| edl.is_kept(*word))
+        }
+        .map(|word| (word, doc.words[word].text.clone(), doc.words[word].start));
+        self.transcript_commit_word_edit(window, cx);
+        let next = target.and_then(|(hint, text, start)| {
+            let doc = self.transcript.doc.clone()?;
+            word_edit::locate(&doc.words, hint, &text, start)
+        });
+        match next {
+            Some(word) => self.transcript_begin_word_edit(word, window, cx),
+            None => window.focus(&self.transcript.focus, cx),
+        }
+    }
+
     pub(super) fn transcript_open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = &self.transcript.search {
             let input = search.input.clone();
@@ -1436,36 +1775,9 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    pub(crate) fn transcript_resize_move(
-        &mut self,
-        x: f32,
-        row_width: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((start_x, start_share)) = self.transcript.resize else {
-            return;
-        };
-        if row_width <= 0.0 {
-            return;
-        }
-        let share =
-            (start_share + (x - start_x) / row_width).clamp(MIN_PLAYER_SHARE, MAX_PLAYER_SHARE);
-        if (share - self.transcript.player_share).abs() > f32::EPSILON {
-            self.transcript.player_share = share;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn transcript_resize_end(&mut self, cx: &mut Context<Self>) {
-        if self.transcript.resize.take().is_some() {
-            self.transcript.persist_split();
-            cx.notify();
-        }
-    }
-
     pub(crate) fn render_transcript(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project_changed = self.transcript.dirty;
@@ -1481,11 +1793,13 @@ impl EditorWindow {
         let body: AnyElement = match (self.transcript.doc.clone(), self.transcript.edl.clone()) {
             (Some(doc), edl) if !doc.is_empty() => {
                 let search = self.transcript.search.as_ref();
+                let active_paragraph = self.transcript.active.map(|word| doc.paragraph_of(word));
                 let painter = ParagraphPainter {
                     doc,
                     edl,
                     selection: self.transcript.selection.map(WordSelection::range),
                     active: self.transcript.active,
+                    active_paragraph,
                     hovered_cut: self.transcript.hovered_cut.and_then(|run| {
                         self.transcript
                             .edl
@@ -1498,8 +1812,16 @@ impl EditorWindow {
                         .and_then(|search| search.matches.get(search.current).cloned()),
                     ignored: Arc::new(self.transcript.cleanup.ignored.clone()),
                     palette,
+                    theme,
                     editor: editor.clone(),
                     layouts: self.transcript.layouts.clone(),
+                    editing: self
+                        .transcript
+                        .editing
+                        .as_ref()
+                        .zip(self.transcript.edit_input.clone())
+                        .map(|(editing, input)| (editing.word, input)),
+                    edit_anchor: self.transcript.edit_anchor.clone(),
                 };
                 let scroll_editor = editor.clone();
                 self.transcript.list.set_scroll_handler(move |_, _, cx| {
@@ -1513,8 +1835,9 @@ impl EditorWindow {
                     .id("transcript-body")
                     .flex_1()
                     .min_h_0()
-                    .px(px(14.))
-                    .pt(px(10.))
+                    .pl(px(12.))
+                    .pr(px(16.))
+                    .pt(px(14.))
                     .text_size(px(TEXT_SIZE))
                     .line_height(px(LINE_HEIGHT))
                     .text_color(palette.text_1)
@@ -1529,21 +1852,13 @@ impl EditorWindow {
             _ => self.render_transcript_empty(cx),
         };
 
-        let focused = self.transcript.focus.is_focused(window);
+        // The panel card, and its focus ring, are the root's
+        // (`crate::editor_side_panel`); this is the Transcript tab's body.
         div()
             .id("transcript-panel")
             .size_full()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(if focused {
-                Hsla::from(theme.editor.line_strong)
-            } else {
-                self.card_line()
-            })
-            .bg(self.panel_bg())
-            .shadow(theme.editor.card_shadow())
             .overflow_hidden()
             .track_focus(&self.transcript.focus)
             .on_key_down(cx.listener(Self::transcript_key_down))
@@ -1590,71 +1905,77 @@ impl EditorWindow {
             .doc
             .as_ref()
             .is_some_and(|doc| !doc.is_empty());
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .flex_none()
-            .h(px(44.))
-            .px(px(12.))
-            .border_b_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_baseline()
-                    .gap(px(8.))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child(tr::editor::transcript::title()),
-                    )
-                    .children(words.filter(|_| has_doc).map(|count| {
-                        div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .truncate()
-                            .child(SharedString::from(tr::editor::transcript::words(count)))
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(2.))
-                    .child(
-                        ui::EditorButton::plain(&theme, "transcript-search")
-                            .left_icon("icons/search.svg")
-                            .tooltip(&theme, tr::editor::transcript::search())
-                            .disabled(!has_doc)
-                            .pressed(self.transcript.search.is_some())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.transcript.search.is_some() {
-                                    this.transcript_close_search(window, cx);
-                                } else {
-                                    this.transcript_open_search(window, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "transcript-cleanup")
-                            .left_icon("icons/scissors.svg")
-                            .label(tr::editor::transcript::cleanup())
-                            .tooltip(&theme, tr::editor::transcript::cleanup_tooltip())
-                            .disabled(!has_doc)
-                            .pressed(self.transcript.cleanup.open)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.transcript.cleanup.open = !this.transcript.cleanup.open;
-                                this.invalidate_transcript(cx);
-                            })),
-                    ),
-            )
+        let has_cues = self
+            .project
+            .timeline
+            .as_ref()
+            .is_some_and(|timeline| !timeline.caption_segments.is_empty());
+        crate::editor_side_panel::panel_header(
+            &theme,
+            tr::editor::transcript::title(),
+            words
+                .filter(|_| has_doc)
+                .map(|count| SharedString::from(tr::editor::transcript::words(count))),
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-add-caption")
+                        .left_icon("icons/plus.svg")
+                        .tooltip(&theme, tr::editor::transcript::add_caption())
+                        .disabled(!self.project_ready())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let playhead = this.playhead_time();
+                            this.add_caption_at(
+                                playhead,
+                                crate::editor_edits::NEW_CAPTION_LENGTH,
+                                false,
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-download")
+                        .left_icon("icons/download.svg")
+                        .tooltip(&theme, tr::editor::transcript::download_captions())
+                        .disabled(!has_cues)
+                        .pressed(self.caption_download_menu_open())
+                        .on_open(cx.listener(
+                            |this, bounds: &gpui::Bounds<gpui::Pixels>, window, cx| {
+                                this.open_caption_download_menu(*bounds, window, cx);
+                            },
+                        )),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-search")
+                        .left_icon("icons/search.svg")
+                        .tooltip(&theme, tr::editor::transcript::search())
+                        .disabled(!has_doc)
+                        .pressed(self.transcript.search.is_some())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.transcript.search.is_some() {
+                                this.transcript_close_search(window, cx);
+                            } else {
+                                this.transcript_open_search(window, cx);
+                            }
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-cleanup")
+                        .left_icon("icons/scissors.svg")
+                        .label(tr::editor::transcript::cleanup())
+                        .tooltip(&theme, tr::editor::transcript::cleanup_tooltip())
+                        .disabled(!has_doc)
+                        .pressed(self.transcript.cleanup.open)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.transcript.cleanup.open = !this.transcript.cleanup.open;
+                            this.invalidate_transcript(cx);
+                        })),
+                ),
+        )
     }
 
     fn render_transcript_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2112,6 +2433,9 @@ impl EditorWindow {
         let doc = self.transcript.doc.as_ref();
         let edl = self.transcript.edl.as_ref();
         let message: SharedString = match (doc, edl) {
+            (Some(doc), Some(_)) if !doc.is_empty() && self.transcript.editing.is_some() => {
+                tr::editor::transcript::edit_hint().into()
+            }
             (Some(doc), Some(edl)) if !doc.is_empty() => {
                 if let Some(run) = self
                     .transcript
@@ -2145,17 +2469,14 @@ impl EditorWindow {
             _ => SharedString::default(),
         };
         div()
-            .flex()
-            .flex_row()
-            .items_center()
             .flex_none()
-            .h(px(32.))
-            .px(px(12.))
-            .border_t_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .text_size(px(12.))
+            .min_h(px(30.))
+            .px(px(16.))
+            .py(px(8.))
+            .text_size(px(11.))
+            .line_height(px(15.))
             .text_color(Hsla::from(theme.editor.text_3))
-            .child(div().truncate().child(message))
+            .child(message)
     }
 
     fn render_transcript_empty(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2172,6 +2493,20 @@ impl EditorWindow {
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
         let generating = snapshot.generating;
+        let outdated = !downloaded && model.name == "best" && snapshot.recommended_outdated;
+        let (title, description) = if outdated {
+            (
+                tr::editor::tabs::captions::model_updated(),
+                tr::editor::tabs::captions::model_updated_description(),
+            )
+        } else if snapshot.no_speech {
+            (tr::editor::transcript::no_speech(), "")
+        } else {
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::empty_description(),
+            )
+        };
 
         let action: AnyElement = if !has_audio {
             div()
@@ -2222,47 +2557,22 @@ impl EditorWindow {
             .into_any_element()
         };
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(10.))
-            .px(px(32.))
-            .child(
-                svg()
-                    .path("icons/scan-text.svg")
-                    .size(px(28.))
-                    .text_color(Hsla::from(theme.editor.text_3)),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_1))
-                    .child(tr::editor::transcript::empty_title()),
-            )
-            .child(
-                div()
-                    .max_w(px(300.))
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .text_center()
-                    .text_color(Hsla::from(theme.editor.text_2))
-                    .child(tr::editor::transcript::empty_description()),
-            )
-            .child(div().pt(px(6.)).child(action))
-            .children(snapshot.generation_error.map(|error| {
-                div()
-                    .max_w(px(300.))
-                    .text_size(px(12.))
-                    .text_center()
-                    .text_color(Hsla::from(theme.red_9))
-                    .child(error)
-            }))
-            .into_any_element()
+        crate::editor_side_panel::panel_empty_state(
+            &theme,
+            "icons/scan-text.svg",
+            title,
+            description,
+        )
+        .child(div().pt(px(6.)).child(action))
+        .children(snapshot.generation_error.map(|error| {
+            div()
+                .max_w(px(280.))
+                .text_size(px(12.))
+                .text_center()
+                .text_color(Hsla::from(theme.red_9))
+                .child(error)
+        }))
+        .into_any_element()
     }
 
     fn transcript_energy_offsets(&self) -> Option<Vec<(f64, f64)>> {

@@ -114,6 +114,7 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
 	isProSubscription: () => true,
 	isSsoSubscription: () => false,
+	isStandaloneScimSubscription: () => false,
 }));
 
 const completed = (
@@ -495,6 +496,55 @@ describe("Stripe webhook: Cap Pro checkout fulfilment", () => {
 				stripeSubscriptionId: "sub_own",
 				stripeSubscriptionStatus: "canceled",
 				inviteQuota: 1,
+			});
+		});
+
+		it("ends Pro by email when the customer's userId names a deleted account", async () => {
+			state.users = [{ ...owner(), stripeSubscriptionStatus: "past_due" }];
+			const canceled = fakeSubscription("sub_own", "cus_own", 5, "canceled");
+			stripeSubscriptions([canceled]);
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_own",
+				email: "owner@example.com",
+				metadata: { userId: "user-gone" },
+			});
+			mockStripe.webhooks.constructEvent.mockReturnValue(
+				subscriptionEvent("customer.subscription.deleted", canceled),
+			);
+
+			expect((await POST(request())).status).toBe(200);
+			expect(state.users[0]).toMatchObject({
+				id: "user-own",
+				stripeSubscriptionId: "sub_own",
+				stripeSubscriptionStatus: "canceled",
+				inviteQuota: 1,
+			});
+			expect(mockStripe.customers.update).toHaveBeenCalledWith("cus_own", {
+				metadata: { userId: "user-own" },
+			});
+		});
+
+		it("moves the account onto the customer's other live subscription when the tracked one is deleted", async () => {
+			const canceled = fakeSubscription("sub_own", "cus_own", 5, "canceled");
+			stripeSubscriptions([
+				canceled,
+				fakeSubscription("sub_second", "cus_own", 2, "past_due"),
+			]);
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_own",
+				email: "owner@example.com",
+				metadata: { userId: "user-own" },
+			});
+			mockStripe.webhooks.constructEvent.mockReturnValue(
+				subscriptionEvent("customer.subscription.deleted", canceled),
+			);
+
+			expect((await POST(request())).status).toBe(200);
+			expect(state.users[0]).toMatchObject({
+				stripeSubscriptionId: "sub_second",
+				stripeSubscriptionStatus: "past_due",
+				stripeCustomerId: "cus_own",
+				inviteQuota: 2,
 			});
 		});
 

@@ -27,16 +27,16 @@
 		"@react-email/render": "1.1.2",
 		"@react-email/tailwind": "^1.0.5",
 		"@workos-inc/node": "^7.34.0",
-		"drizzle-orm": "0.44.6",
+		"drizzle-orm": "0.45.2",
 		"dub": "^0.64.0",
 		"effect": "^3.18.4",
-		"mysql2": "^3.15.2",
+		"mysql2": "^3.24.6",
 		"nanoid": "^5.0.4",
 		"next": "16.4.5",
 		"next-auth": "^4.24.15",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
-		"zod": "^3"
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@cap/ui": "workspace:*",
@@ -46,10 +46,10 @@
 		"@types/react-dom": "19.1.9",
 		"dotenv-cli": "latest",
 		"drizzle-kit": "0.31.0",
-		"nodemailer": "^6.9.8",
+		"nodemailer": "^10.3.1",
 		"react": "^19.1.1",
 		"react-dom": "^19.1.1",
-		"react-router-dom": "^6.18.0",
+		"react-router-dom": "^6.30.6",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3"
 	},
@@ -59,6 +59,8 @@
 	"exports": {
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
+		"./auth/disposable-email": "./auth/disposable-email.ts",
+		"./auth/disposable-signup": "./auth/disposable-signup.ts",
 		"./auth/domain-utils": "./auth/domain-utils.ts",
 		"./auth/request-site": "./auth/request-site.ts",
 		"./auth/session": "./auth/session.ts",
@@ -74,6 +76,7 @@
 		"./emails/config": "./emails/config.ts",
 		"./emails/*": "./emails/*.tsx",
 		"./types": "./types/index.ts",
+		"./developer-video-takedown": "./developer-video-takedown.ts",
 		"./migrate": "./migrate.ts"
 	},
 	"publishConfig": {

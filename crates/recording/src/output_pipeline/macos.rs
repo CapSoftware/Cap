@@ -1,8 +1,8 @@
 use crate::{
     output_pipeline::{
         AudioFrame, AudioMuxer, BlockingThreadFinish, DiskSpaceMonitor, DiskSpacePollResult,
-        HealthSender, Muxer, PipelineHealthEvent, SharedHealthSender, TaskPool, VideoFrame,
-        VideoMuxer, emit_health, wait_for_blocking_thread_finish,
+        HealthSender, Muxer, NoVideoFramesCaptured, PipelineHealthEvent, SharedHealthSender,
+        TaskPool, VideoFrame, VideoMuxer, emit_health, wait_for_blocking_thread_finish,
     },
     sources::screen_capture,
 };
@@ -302,6 +302,7 @@ struct Mp4EncoderState {
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
     audio_handle: Option<JoinHandle<anyhow::Result<()>>>,
     video_frame_count: Arc<AtomicU64>,
+    video_busy_frame_count: Arc<AtomicU64>,
     audio_frame_count: Arc<AtomicU64>,
     audio_channel_depth: Option<Arc<AtomicUsize>>,
     instant_mode: bool,
@@ -407,8 +408,10 @@ impl Muxer for AVFoundationMp4Muxer {
         };
 
         let video_frame_count = Arc::new(AtomicU64::new(0));
+        let video_busy_frame_count = Arc::new(AtomicU64::new(0));
         let audio_frame_count = Arc::new(AtomicU64::new(0));
         let video_count_thread = video_frame_count.clone();
+        let video_busy_thread = video_busy_frame_count.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
@@ -473,6 +476,10 @@ impl Muxer for AVFoundationMp4Muxer {
                                         retry_count += 1;
                                         if retry_count >= MAX_RETRIES {
                                             encoder_busy_count += 1;
+                                            video_busy_thread.store(
+                                                encoder_busy_count,
+                                                std::sync::atomic::Ordering::Relaxed,
+                                            );
                                             if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
                                                 debug!(
                                                     encoder_busy_count,
@@ -680,6 +687,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 encoder_handle: Some(encoder_handle),
                 audio_handle,
                 video_frame_count,
+                video_busy_frame_count,
                 audio_frame_count,
                 audio_channel_depth,
                 instant_mode: is_instant,
@@ -774,11 +782,15 @@ impl Muxer for AVFoundationMp4Muxer {
             let video_frames = state
                 .video_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
+            let video_frames_dropped_busy = state
+                .video_busy_frame_count
+                .load(std::sync::atomic::Ordering::Relaxed);
             let audio_frames = state
                 .audio_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
             info!(
                 video_frames,
+                video_frames_dropped_busy,
                 audio_frames,
                 video_thread_timed_out,
                 audio_thread_timed_out,
@@ -798,7 +810,17 @@ impl Muxer for AVFoundationMp4Muxer {
             match state.encoder.lock() {
                 Ok(mut encoder) => {
                     if let Err(e) = encoder.finish(Some(timestamp)) {
-                        if video_thread_timed_out && video_frames > 0 {
+                        if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy,
+                                audio_frames,
+                                "MP4 encoder wrote no video frames; the output is empty"
+                            );
+                            if finish_error.is_none() {
+                                finish_error = Some(anyhow::Error::new(NoVideoFramesCaptured));
+                            }
+                        } else if video_thread_timed_out && video_frames > 0 {
                             warn!(
                                 video_frames,
                                 "Best-effort encoder finalize failed after thread timeout, \
@@ -806,7 +828,13 @@ impl Muxer for AVFoundationMp4Muxer {
                             );
                         } else {
                             let err = anyhow!("Failed to finish MP4 encoder: {e}");
-                            warn!("{err:#}");
+                            // Uploaded logs keep warnings but not the info line
+                            // above, and these counts tell a capture that
+                            // delivered nothing from an encoder that took nothing.
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy, audio_frames, "{err:#}"
+                            );
                             if finish_error.is_none() {
                                 finish_error = Some(err);
                             }
@@ -1398,7 +1426,12 @@ impl Muxer for AVFoundationCameraMuxer {
                 match state.encoder.lock() {
                     Ok(mut encoder) => {
                         if let Err(e) = encoder.finish(Some(timestamp)) {
-                            let err = anyhow!("Failed to finish camera MP4 encoder: {e}");
+                            let err = if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                                anyhow::Error::new(NoVideoFramesCaptured)
+                                    .context("Camera MP4 encoder wrote no video frames")
+                            } else {
+                                anyhow!("Failed to finish camera MP4 encoder: {e}")
+                            };
                             warn!("{err:#}");
                             if finish_error.is_none() {
                                 finish_error = Some(err);
@@ -1525,6 +1558,47 @@ impl AudioMuxer for AVFoundationCameraMuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writers behind a resumed Studio segment that got no screen frame
+    /// before Pause, and a segment whose camera got no frame. They report an
+    /// empty output the recorder can leave out, not a failed one.
+    #[tokio::test]
+    async fn finishing_without_a_frame_reports_no_video_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 1280, 720, 30);
+        let mut tasks = TaskPool::default();
+
+        let mut screen = <AVFoundationMp4Muxer as Muxer>::setup(
+            AVFoundationMp4MuxerConfig::default(),
+            directory.path().join("display.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(false)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = screen.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(error.is::<NoVideoFramesCaptured>(), "screen: {error:#}");
+
+        let mut camera = <AVFoundationCameraMuxer as Muxer>::setup(
+            AVFoundationCameraMuxerConfig::default(),
+            directory.path().join("camera.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(true)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = camera.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.is::<NoVideoFramesCaptured>()),
+            "camera: {error:#}"
+        );
+    }
 
     mod mp4_muxer_buffer_size {
         use super::*;

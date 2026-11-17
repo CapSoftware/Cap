@@ -378,6 +378,7 @@ impl EditorWindow {
         // they are projected again from recording time, as `project_changed`
         // does for every other transition edit.
         self.synchronize_caption_track(false);
+        self.transcript.dirty = true;
         self.history.record(&self.project);
         self.rebuild_timeline();
         self.publish_project();

@@ -94,7 +94,7 @@ export async function deleteComment({
 					.where(
 						and(
 							eq(notifications.type, "reply"),
-							sql`JSON_EXTRACT(${notifications.data}, '$.comment.parentCommentId') = ${commentId}`,
+							sql`JSON_EXTRACT(${notifications.data}, '$.parentCommentId') = ${commentId}`,
 						),
 					);
 			}

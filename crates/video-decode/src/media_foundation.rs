@@ -585,6 +585,58 @@ fn create_uav(
 
 // Samples whose copy to a staging texture can be in flight while an earlier one is read back.
 const READBACK_DEPTH: usize = 2;
+const MAX_CPU_READBACK_BUFFERS: usize = 8;
+const MAX_CPU_READBACK_BUFFER_BYTES: usize = 128 * 1024 * 1024;
+
+#[derive(Default)]
+struct CpuReadbackPool {
+    free: Vec<Vec<u8>>,
+    pending: Vec<Arc<Vec<u8>>>,
+}
+
+impl CpuReadbackPool {
+    fn acquire(&mut self, size: usize) -> Vec<u8> {
+        self.collect();
+        let mut buffer = self.free.pop().unwrap_or_default();
+        buffer.clear();
+        if buffer.capacity() < size {
+            buffer.reserve(size);
+        }
+        buffer
+    }
+
+    fn recycle(&mut self, buffer: Arc<Vec<u8>>) {
+        self.collect();
+        match Arc::try_unwrap(buffer) {
+            Ok(buffer) if self.can_retain(buffer.capacity()) => self.free.push(buffer),
+            Ok(_) => {}
+            Err(buffer) if self.can_retain(buffer.capacity()) => self.pending.push(buffer),
+            Err(_) => {}
+        }
+    }
+
+    fn collect(&mut self) {
+        for buffer in std::mem::take(&mut self.pending) {
+            match Arc::try_unwrap(buffer) {
+                Ok(buffer) => self.free.push(buffer),
+                Err(buffer) => self.pending.push(buffer),
+            }
+        }
+    }
+
+    fn can_retain(&self, capacity: usize) -> bool {
+        self.free.len() + self.pending.len() < MAX_CPU_READBACK_BUFFERS
+            && self.retained_bytes().saturating_add(capacity) <= MAX_CPU_READBACK_BUFFER_BYTES
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.free
+            .iter()
+            .map(Vec::capacity)
+            .chain(self.pending.iter().map(|buffer| buffer.capacity()))
+            .fold(0, |total, capacity| total.saturating_add(capacity))
+    }
+}
 
 pub struct MediaFoundationDecoder {
     source_reader: IMFSourceReader,
@@ -597,6 +649,7 @@ pub struct MediaFoundationDecoder {
     frame_rate_den: u32,
     readback_free: Vec<ID3D11Texture2D>,
     readback_queue: VecDeque<(i64, ID3D11Texture2D)>,
+    cpu_readback_pool: CpuReadbackPool,
     // How the stream stopped, reported once the queued readbacks are drained.
     readback_end: Option<Result<(), String>>,
     frame_pool: FramePool,
@@ -690,6 +743,7 @@ impl MediaFoundationDecoder {
             frame_rate_den,
             readback_free,
             readback_queue: VecDeque::new(),
+            cpu_readback_pool: CpuReadbackPool::default(),
             readback_end: None,
             frame_pool: FramePool::new(),
             plane_converter,
@@ -759,7 +813,7 @@ impl MediaFoundationDecoder {
         Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
+    unsafe fn map_staging(&mut self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d11_context
@@ -775,9 +829,12 @@ impl MediaFoundationDecoder {
         let uv_size = (y_stride * uv_height) as usize;
         let total_size = y_size + uv_size;
 
-        let mut data = vec![0u8; total_size];
+        let mut data = self.cpu_readback_pool.acquire(total_size);
+        // SAFETY: the mapped NV12 resource contains `total_size` bytes and the pool reserves that
+        // much destination capacity. The copy initializes every byte before setting the length.
         unsafe {
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), total_size);
+            data.set_len(total_size);
             self.d3d11_context.Unmap(staging, 0);
         }
 
@@ -798,6 +855,10 @@ impl MediaFoundationDecoder {
         {
             self.frame_pool.recycle(textures);
         }
+    }
+
+    pub fn recycle_nv12_buffer(&mut self, buffer: Arc<Vec<u8>>) {
+        self.cpu_readback_pool.recycle(buffer);
     }
 
     unsafe fn read_decoder_surface(&mut self) -> Result<Option<DecoderSurface>, String> {
@@ -1180,6 +1241,56 @@ unsafe impl Send for MediaFoundationDecoder {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_readback_pool_reuses_recycled_buffers() {
+        let mut pool = CpuReadbackPool::default();
+        let mut buffer = pool.acquire(16);
+        buffer.resize(16, 7);
+        let pointer = buffer.as_ptr();
+        pool.recycle(Arc::new(buffer));
+
+        let reused = pool.acquire(8);
+        assert_eq!(reused.as_ptr(), pointer);
+        assert!(reused.is_empty());
+    }
+
+    #[test]
+    fn cpu_readback_pool_handles_changed_buffer_sizes() {
+        let mut pool = CpuReadbackPool::default();
+        let mut buffer = pool.acquire(16);
+        buffer.resize(16, 7);
+        pool.recycle(Arc::new(buffer));
+
+        let mut grown = pool.acquire(64);
+        assert!(grown.capacity() >= 64);
+        assert!(grown.is_empty());
+        grown.resize(64, 9);
+        let pointer = grown.as_ptr();
+        pool.recycle(Arc::new(grown));
+
+        let reduced = pool.acquire(8);
+        assert_eq!(reduced.as_ptr(), pointer);
+        assert!(reduced.is_empty());
+    }
+
+    #[test]
+    fn cpu_readback_pool_waits_for_shared_buffers_to_be_released() {
+        let mut pool = CpuReadbackPool::default();
+        let buffer = Arc::new(vec![7; 16]);
+        let pointer = buffer.as_ptr();
+        let renderer_reference = Arc::clone(&buffer);
+        pool.recycle(buffer);
+
+        let separate = pool.acquire(16);
+        assert_ne!(separate.as_ptr(), pointer);
+        drop(separate);
+        drop(renderer_reference);
+
+        let reused = pool.acquire(8);
+        assert_eq!(reused.as_ptr(), pointer);
+        assert!(reused.is_empty());
+    }
 
     #[test]
     #[ignore = "requires a Windows D3D11 device"]

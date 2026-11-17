@@ -1359,7 +1359,7 @@ impl TemporaryExportOutput {
                 path: self.path,
             });
         }
-        self.path.persist_noclobber(output)
+        persist_without_replacing(self.path, output)
     }
 
     pub(crate) fn persist_replace(
@@ -1375,6 +1375,59 @@ impl TemporaryExportOutput {
         }
         self.path.persist(output)
     }
+}
+
+#[cfg(unix)]
+fn persist_without_replacing(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    match path.persist_noclobber(output) {
+        Err(error) if error.error.raw_os_error() == Some(libc::ENOTSUP) => {
+            persist_into_reserved_name(error.path, output)
+        }
+        result => result,
+    }
+}
+
+#[cfg(not(unix))]
+fn persist_without_replacing(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    path.persist_noclobber(output)
+}
+
+/// exFAT on macOS (and some network volumes) rejects both the exclusive
+/// rename and hard links with ENOTSUP, so the destination name is claimed
+/// with O_EXCL and the export renamed over that empty placeholder. An existing
+/// file is never replaced; only a writer that replaces the placeholder in the
+/// moment before the rename can still be overwritten.
+#[cfg(unix)]
+fn persist_into_reserved_name(
+    path: tempfile::TempPath,
+    output: &std::path::Path,
+) -> Result<(), tempfile::PathPersistError> {
+    use std::os::unix::fs::MetadataExt;
+    let reservation = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+    {
+        Ok(file) => file,
+        Err(error) => return Err(tempfile::PathPersistError { error, path }),
+    };
+    let error = match path.persist(output) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    if let (Ok(reserved), Ok(current)) = (reservation.metadata(), std::fs::symlink_metadata(output))
+        && reserved.dev() == current.dev()
+        && reserved.ino() == current.ino()
+    {
+        let _ = std::fs::remove_file(output);
+    }
+    Err(error)
 }
 
 pub(crate) fn temporary_export_output(
@@ -2082,6 +2135,112 @@ mod tests {
             std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(unix)]
+    fn leftover_temporary_outputs(directory: &std::path::Path) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().contains(".cap-export-"))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserved_name_fallback_publishes_without_replacing_or_leaking() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"completed").unwrap();
+        persist_into_reserved_name(temporary.path, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"replacement").unwrap();
+        let error = persist_into_reserved_name(temporary.path, &output).unwrap_err();
+        assert_eq!(error.error.kind(), std::io::ErrorKind::AlreadyExists);
+        drop(error);
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(directory.path()).is_empty());
+
+        let missing = directory.path().join("missing.mp4");
+        let temporary = temporary_export_output(&missing).unwrap();
+        std::fs::remove_file(&temporary).unwrap();
+        drop(persist_into_reserved_name(temporary.path, &missing).unwrap_err());
+        assert!(!missing.exists());
+        assert!(leftover_temporary_outputs(directory.path()).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    struct ExfatVolume {
+        mount: std::path::PathBuf,
+        _image: tempfile::TempDir,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl ExfatVolume {
+        fn attach() -> Option<Self> {
+            use std::process::Command;
+            let image = tempfile::tempdir().ok()?;
+            let disk = image.path().join("volume.dmg");
+            let mount = image.path().join("mount");
+            std::fs::create_dir(&mount).ok()?;
+            let created = Command::new("hdiutil")
+                .args(["create", "-quiet", "-size", "16m", "-fs", "ExFAT"])
+                .args(["-volname", "CAPEXPORT"])
+                .arg(&disk)
+                .status()
+                .ok()?;
+            if !created.success() {
+                return None;
+            }
+            let attached = Command::new("hdiutil")
+                .args(["attach", "-quiet", "-nobrowse", "-mountpoint"])
+                .arg(&mount)
+                .arg(&disk)
+                .status()
+                .ok()?;
+            attached.success().then_some(Self {
+                mount,
+                _image: image,
+            })
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for ExfatVolume {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-quiet", "-force"])
+                .arg(&self.mount)
+                .status();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temporary_output_persists_onto_exfat_without_replacing() {
+        let Some(volume) = ExfatVolume::attach() else {
+            eprintln!("skipping: hdiutil could not attach an exFAT image");
+            return;
+        };
+        let directory = volume.mount.join("exports");
+        std::fs::create_dir(&directory).unwrap();
+        let output = directory.join("export.mp4");
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"completed").unwrap();
+        temporary.persist_noclobber(&output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(&directory).is_empty());
+
+        let temporary = temporary_export_output(&output).unwrap();
+        std::fs::write(&temporary, b"replacement").unwrap();
+        drop(temporary.persist_noclobber(&output).unwrap_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+        assert!(leftover_temporary_outputs(&directory).is_empty());
     }
 
     #[test]

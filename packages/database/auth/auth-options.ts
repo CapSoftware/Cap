@@ -22,6 +22,7 @@ import {
 	trackReferralLead,
 } from "../referrals.ts";
 import { users } from "../schema.ts";
+import { isDisposableEmailSignup } from "./disposable-signup.ts";
 import {
 	isBlockedAccountEmail,
 	isEmailAllowedForSignup,
@@ -431,6 +432,15 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				) {
 					console.warn(`Sign-in blocked for email: ${userEmail}`);
 					return "/login?error=SignupBlocked";
+				}
+
+				if (
+					account?.provider !== "workos" &&
+					account?.provider !== OIDC_PROVIDER_ID &&
+					(await isDisposableEmailSignup(userEmail))
+				) {
+					console.warn(`Sign-up refused for disposable email: ${userEmail}`);
+					return "/login?error=DisposableEmail";
 				}
 
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;

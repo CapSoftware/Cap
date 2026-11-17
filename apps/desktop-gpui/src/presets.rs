@@ -117,6 +117,15 @@ impl PresetsStore {
             entry.config = config;
         }
     }
+
+    pub fn apply_default(&self, project: &ProjectConfiguration) -> Option<ProjectConfiguration> {
+        let entry = self.presets.get(self.default?)?;
+        let applied = apply_preset(&entry.config, project);
+        if applied.is_none() {
+            tracing::warn!(preset = %entry.name, "the default preset no longer deserializes; not applied");
+        }
+        applied
+    }
 }
 
 /// The built-in "Default" preset: what a fresh screen recording looks like

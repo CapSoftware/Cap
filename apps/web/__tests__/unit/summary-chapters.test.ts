@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import React, { act } from "react";
+import React, { act, type ComponentProps, lazy, Suspense } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,7 @@ vi.mock("@cap/ui", () => ({
 	Button: ({ children, ...props }: React.ComponentProps<"button">) =>
 		React.createElement("button", { type: "button", ...props }, children),
 }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
@@ -24,6 +24,19 @@ vi.mock("@/app/s/[videoId]/_components/tabs/SummaryEditor", () => ({
 	SummaryEditor: () => null,
 }));
 
+vi.mock("@/app/Layout/AuthContext", () => ({ useCurrentUser: () => null }));
+vi.mock("@/app/s/[videoId]/_components/tabs/Activity", () => ({
+	Activity: () => null,
+}));
+vi.mock("next/dynamic", () => ({
+	default: (load: () => Promise<React.ComponentType>) => {
+		const Loaded = lazy(async () => ({ default: await load() }));
+		return (props: object) =>
+			React.createElement(Suspense, null, React.createElement(Loaded, props));
+	},
+}));
+
+import { Sidebar } from "@/app/s/[videoId]/_components/Sidebar";
 import SummaryChapters from "@/app/s/[videoId]/_components/SummaryChapters";
 import { Summary } from "@/app/s/[videoId]/_components/tabs/Summary";
 
@@ -120,4 +133,61 @@ describe.each(chapterViews)("%s chapter timestamps", (_name, view) => {
 		}
 		expect(rendered).toEqual(["1:00:00a", "1:30:00b", "10:00:00c"]);
 	});
+});
+
+describe("Summary tab chapter settings", () => {
+	it("shows the empty state when only hidden chapters are available", () => {
+		act(() => {
+			root.render(
+				React.createElement(Summary, {
+					videoId: "video" as ComponentProps<typeof Summary>["videoId"],
+					ownerIsPro: true,
+					areChaptersDisabled: true,
+					initialAiData: {
+						chapters: [{ title: "Hidden chapter", start: 0 }],
+						aiGenerationStatus: "COMPLETE",
+					},
+				}),
+			);
+		});
+		expect(container.textContent).toContain("No summary available");
+		expect(container.textContent).not.toContain("Hidden chapter");
+	});
+
+	it.each([
+		{ videoDisabled: true, orgDisabled: false, visible: false },
+		{ videoDisabled: undefined, orgDisabled: true, visible: false },
+		{ videoDisabled: false, orgDisabled: true, visible: true },
+		{ videoDisabled: undefined, orgDisabled: false, visible: true },
+	])(
+		"respects chapter settings: $videoDisabled, inherited: $orgDisabled",
+		async ({ videoDisabled, orgDisabled, visible }) => {
+			const props: ComponentProps<typeof Sidebar> = {
+				data: {
+					id: "video",
+					owner: { id: "owner", isPro: true },
+					orgSettings: { disableComments: true, disableChapters: orgDisabled },
+				} as ComponentProps<typeof Sidebar>["data"],
+				videoId: "video" as ComponentProps<typeof Sidebar>["videoId"],
+				videoSettings: { disableChapters: videoDisabled },
+				aiData: {
+					summary: "Visible summary",
+					chapters: [{ title: "Chapter to check", start: 12 }],
+					aiGenerationStatus: "COMPLETE",
+				},
+				commentsData: [],
+				optimisticComments: [],
+				handleCommentSuccess: vi.fn(),
+				setOptimisticComments: vi.fn(),
+				setCommentsData: vi.fn(),
+				views: 0,
+			};
+			await act(async () => {
+				root.render(React.createElement(Sidebar, props));
+				await vi.dynamicImportSettled();
+			});
+			expect(container.textContent).toContain("Visible summary");
+			expect(container.textContent?.includes("Chapter to check")).toBe(visible);
+		},
+	);
 });

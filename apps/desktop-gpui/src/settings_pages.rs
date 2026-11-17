@@ -1004,9 +1004,9 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     (
         store::PostStudioBehaviour::ShowOverlay,
         OutcomeOption {
-            icon: "icons/app-window.svg",
-            label: tr::settings::shortcuts::outcome::studio_show_cap,
-            hint: tr::settings::shortcuts::outcome::studio_show_cap_hint,
+            icon: "icons/layers.svg",
+            label: tr::settings::shortcuts::outcome::studio_show_overlay,
+            hint: tr::settings::shortcuts::outcome::studio_show_overlay_hint,
         },
     ),
     (
@@ -1043,6 +1043,44 @@ const INSTANT_OUTCOMES: [(store::PostInstantBehaviour, OutcomeOption); 3] = [
             icon: "icons/link.svg",
             label: tr::settings::shortcuts::outcome::instant_copy_link,
             hint: tr::settings::shortcuts::outcome::instant_copy_link_hint,
+        },
+    ),
+];
+
+const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: tr::settings::shortcuts::outcome::cancel_show_cap,
+            hint: tr::settings::shortcuts::outcome::cancel_show_cap_hint,
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: tr::settings::shortcuts::outcome::cancel_stay_hidden,
+            hint: tr::settings::shortcuts::outcome::cancel_stay_hidden_hint,
+        },
+    ),
+];
+
+const EDITOR_CLOSE_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: tr::settings::shortcuts::outcome::editor_close_show_cap,
+            hint: tr::settings::shortcuts::outcome::editor_close_show_cap_hint,
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: tr::settings::shortcuts::outcome::editor_close_stay_hidden,
+            hint: tr::settings::shortcuts::outcome::editor_close_stay_hidden_hint,
         },
     ),
 ];
@@ -1243,6 +1281,40 @@ fn shortcut_effect(
 fn description_follows_outcome(action: &str) -> bool {
     SCREENSHOT_SHORTCUTS.contains(&action)
         || matches!(action, "startStudioRecording" | "startInstantRecording")
+}
+
+/// gpui on macOS reports ⌘⇧4 as `cmd-$` with Shift cleared, so this restores
+/// the US key and Shift. It only fires while Shift is held because AZERTY has
+/// an unshifted `$` key.
+fn unfold_shifted_symbol(key: &str, shift: bool, shift_held: bool) -> (&str, bool) {
+    if shift || !shift_held {
+        return (key, shift);
+    }
+    let base = match key {
+        "!" => "1",
+        "@" => "2",
+        "#" => "3",
+        "$" => "4",
+        "%" => "5",
+        "^" => "6",
+        "&" => "7",
+        "*" => "8",
+        "(" => "9",
+        ")" => "0",
+        "_" => "-",
+        "+" => "=",
+        "{" => "[",
+        "}" => "]",
+        "|" => "\\",
+        ":" => ";",
+        "\"" => "'",
+        "<" => ",",
+        ">" => ".",
+        "?" => "/",
+        "~" => "`",
+        _ => return (key, shift),
+    };
+    (base, true)
 }
 
 /// The gpui keystroke name for a key, as the W3C `KeyboardEvent.code` string
@@ -1499,7 +1571,9 @@ impl SettingsWindow {
         // `HotkeysStore` deserializes the whole `hotkeys` map strictly
         // (`serde_json::from_value` in `HotkeysStore::get`), so one bad entry
         // would silently drop every binding over there.
-        let Some(code) = hotkey_code_for_key(&keystroke.key)
+        let (key, shift) =
+            unfold_shifted_symbol(&keystroke.key, modifiers.shift, listening.modifiers.shift);
+        let Some(code) = hotkey_code_for_key(key)
             .filter(|code| global_hotkey::hotkey::Code::from_str(code).is_ok())
         else {
             listening.error = Some(UNSUPPORTED_KEY);
@@ -1511,7 +1585,7 @@ impl SettingsWindow {
             meta: modifiers.platform,
             ctrl: modifiers.control,
             alt: modifiers.alt,
-            shift: modifiers.shift,
+            shift,
         };
         if shortcut_needs_modifier(&hotkey) {
             listening.error = Some(NEEDS_MODIFIER);
@@ -1652,6 +1726,54 @@ impl SettingsWindow {
             ),
         );
 
+        let cancel = vec![
+            self.render_outcome_panel(
+                "outcome-cancel",
+                tr::settings::shortcuts::on_cancel::title(),
+                tr::settings::shortcuts::on_cancel::hint(),
+                &CANCEL_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_on_cancel,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = CANCEL_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_on_cancel = *keep_hidden;
+                        this.write_bool("keepMainHiddenOnCancel", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
+        let editor_close = vec![
+            self.render_outcome_panel(
+                "outcome-editor-close",
+                tr::settings::shortcuts::on_editor_close::title(),
+                tr::settings::shortcuts::on_editor_close::hint(),
+                &EDITOR_CLOSE_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_after_editor,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = EDITOR_CLOSE_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_after_editor = *keep_hidden;
+                        this.write_bool("keepMainHiddenAfterEditor", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
@@ -1667,7 +1789,7 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
-        vec![
+        let mut sections = vec![
             self.section(
                 tr::settings::shortcuts::screenshots_title(),
                 Some(tr::settings::shortcuts::screenshots_description()),
@@ -1682,6 +1804,30 @@ impl SettingsWindow {
                 vec![card("shortcuts-recording", recording, cx)],
             )
             .into_any_element(),
+        ];
+        // Linux has no main-window visibility probe, so a cancel there always
+        // counts the window as having been open and the choice would do nothing.
+        if !cfg!(target_os = "linux") {
+            sections.push(
+                self.section(
+                    tr::settings::shortcuts::cancelling_title(),
+                    Some(tr::settings::shortcuts::cancelling_description()),
+                    None,
+                    vec![card("shortcuts-cancel", cancel, cx)],
+                )
+                .into_any_element(),
+            );
+        }
+        sections.push(
+            self.section(
+                tr::settings::shortcuts::closing_editor_title(),
+                Some(tr::settings::shortcuts::closing_editor_description()),
+                None,
+                vec![card("shortcuts-editor-close", editor_close, cx)],
+            )
+            .into_any_element(),
+        );
+        sections.push(
             self.section(
                 tr::settings::shortcuts::while_recording_title(),
                 None,
@@ -1689,7 +1835,8 @@ impl SettingsWindow {
                 vec![card("shortcuts-while-recording", while_recording, cx)],
             )
             .into_any_element(),
-        ]
+        );
+        sections
     }
 
     fn render_outcome_panel(
@@ -4083,11 +4230,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let expiry = license.expiry_date.map(|ms| {
-            chrono::DateTime::from_timestamp_millis(ms as i64)
-                .map(|date| date.format("%-m/%-d/%Y").to_string())
-                .unwrap_or_else(|| ms.to_string())
-        });
+        let expiry = license_expiry_label(license.expiry_date);
 
         div()
             .flex()
@@ -5998,6 +6141,26 @@ fn action_applies_to_trigger(kind: ActionType, trigger: Trigger) -> bool {
     required.iter().any(|field| provided.contains(field))
 }
 
+fn action_note(kind: ActionType, previous: Option<&Action>) -> Option<(&'static str, bool)> {
+    match kind {
+        ActionType::RecognizeTextToClipboard => {
+            Some((tr::settings::automations::action_unsupported(), true))
+        }
+        ActionType::Notify => Some((tr::settings::automations::notify_needs_setting(), false)),
+        ActionType::DeleteLocalFiles => Some(match previous {
+            Some(Action::Export {
+                destination: ExportDestination::CustomPath { .. },
+                ..
+            })
+            | Some(Action::SaveToLocation { .. }) => {
+                (tr::settings::automations::delete_guarded(), false)
+            }
+            _ => (tr::settings::automations::delete_needs_copy(), true),
+        }),
+        _ => None,
+    }
+}
+
 /// `DANGEROUS_ACTIONS`.
 fn action_is_dangerous(kind: ActionType) -> bool {
     matches!(kind, ActionType::RunCommand | ActionType::Webhook)
@@ -7074,6 +7237,15 @@ impl SettingsWindow {
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
         let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
+        let compatibility_message = if rule
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::RecognizeTextToClipboard))
+        {
+            tr::settings::automations::compatibility_unsupported()
+        } else {
+            tr::settings::automations::compatibility_checked()
+        };
         if let Some(editor) = &self.pages.rule_editor {
             for (field, input) in &editor.fields {
                 if let Some(placeholder) = translated_placeholder(*field, rule) {
@@ -7298,7 +7470,7 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::compatibility_checked()),
+                        .child(compatibility_message),
                 )
             })
             .child(footer)
@@ -7527,6 +7699,14 @@ impl SettingsWindow {
             ));
 
         let params = self.render_action_params(rule, index, action, cx);
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| self.rule_at(rule)?.actions.get(previous));
+        let note = if !applies {
+            Some((tr::settings::automations::action_no_effect(), true))
+        } else {
+            action_note(kind, previous)
+        };
 
         div()
             .flex()
@@ -7539,12 +7719,19 @@ impl SettingsWindow {
             .bg(theme.settings_card_bg())
             .child(header)
             .children(params)
-            .when(!applies, |this| {
+            .when_some(note, |this, (note, warning)| {
                 this.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::action_no_effect()),
+                        .line_height(px(16.))
+                        .map(|line| {
+                            if warning {
+                                line.text_color(Hsla::from(theme.amber_11))
+                            } else {
+                                line.text_color(theme.settings_muted())
+                            }
+                        })
+                        .child(note),
                 )
             })
             .into_any_element()
@@ -8100,9 +8287,56 @@ async fn http_json(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The license server stores lifetime keys with its "never renews" date,
+/// `new Date("2038-01-19 03:14:07")` (the 32-bit `time_t` limit) parsed in the
+/// server's own time zone, and returns it as `expiryDate`. Within a day of that
+/// instant is a lifetime key, which has no expiry to show.
+const LIFETIME_LICENSE_EXPIRY_MS: i64 = 2_147_483_647_000;
+const LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
+    let ms = expiry_ms?;
+    if ((ms as i64) - LIFETIME_LICENSE_EXPIRY_MS).abs() <= LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS {
+        return None;
+    }
+    Some(
+        chrono::DateTime::from_timestamp_millis(ms as i64)
+            .map(|date| date.format("%-m/%-d/%Y").to_string())
+            .unwrap_or_else(|| ms.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_license_has_no_expiry_label() {
+        assert_eq!(license_expiry_label(Some(2_147_483_647_000.)), None);
+        let hour = 60. * 60. * 1000.;
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. + 8. * hour)),
+            None
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 14. * hour)),
+            None
+        );
+    }
+
+    #[test]
+    fn yearly_license_keeps_its_expiry_label() {
+        assert_eq!(license_expiry_label(None), None);
+        assert_eq!(
+            license_expiry_label(Some(1_826_323_200_000.)).as_deref(),
+            Some("11/16/2027")
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 3. * 24. * 60. * 60. * 1000.))
+                .as_deref(),
+            Some("1/16/2038")
+        );
+    }
 
     fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
         Hotkey {
@@ -8418,6 +8652,32 @@ mod tests {
         // Unbindable keys are consumed but never stored.
         assert_eq!(hotkey_code_for_key("fn"), None);
         assert_eq!(hotkey_code_for_key("escape"), None);
+    }
+
+    #[test]
+    fn shifted_symbols_record_as_their_key_with_shift() {
+        assert_eq!(unfold_shifted_symbol("$", false, true), ("4", true));
+        assert_eq!(unfold_shifted_symbol("?", false, true), ("/", true));
+        assert_eq!(unfold_shifted_symbol("~", false, true), ("`", true));
+        assert_eq!(unfold_shifted_symbol("a", true, true), ("a", true));
+        assert_eq!(unfold_shifted_symbol("4", false, false), ("4", false));
+        // AZERTY types `$` without Shift, so it stays an unsupported key.
+        assert_eq!(unfold_shifted_symbol("$", false, false), ("$", false));
+
+        for symbol in [
+            "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "{", "}", "|", ":", "\"",
+            "<", ">", "?", "~",
+        ] {
+            let (key, shift) = unfold_shifted_symbol(symbol, false, true);
+            assert!(shift, "{symbol} should restore Shift");
+            let Some(code) = hotkey_code_for_key(key) else {
+                panic!("{symbol} unfolded to {key}, which has no code");
+            };
+            assert!(
+                global_hotkey::hotkey::Code::from_str(&code).is_ok(),
+                "{symbol} produced {code}, which global_hotkey cannot parse"
+            );
+        }
     }
 
     /// Every code the capture can produce parses as a `global_hotkey` `Code`.
