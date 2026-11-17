@@ -772,16 +772,21 @@ pub enum VideoDecoderMessage {
 }
 
 /// The source's Y'CbCr matrix from its colour tag, for decoders that do not
-/// see FFmpeg frames (Media Foundation). BT.601 when the file cannot be read.
+/// see FFmpeg frames (Media Foundation), and whether its chroma is 4:2:0.
+/// BT.601 and unknown chroma when the file cannot be read.
 #[cfg(target_os = "windows")]
-pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
+pub(crate) fn probe_yuv_layout(path: &std::path::Path) -> (YuvMatrix, Option<bool>) {
     ::ffmpeg::format::input(path)
         .ok()
         .and_then(|input| {
             let stream = input.streams().best(::ffmpeg::media::Type::Video)?;
             let context = ::ffmpeg::codec::Context::from_parameters(stream.parameters()).ok()?;
-            Some(YuvMatrix::from_color_space(
-                context.decoder().video().ok()?.color_space(),
+            let video = context.decoder().video().ok()?;
+            Some((
+                YuvMatrix::from_color_space(video.color_space()),
+                cap_video_decode::ffmpeg::chroma_is_420(video.format(), unsafe {
+                    &*stream.parameters().as_ptr()
+                }),
             ))
         })
         .unwrap_or_default()

@@ -122,6 +122,13 @@ impl MFDecoder {
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
     ) -> Result<(), String> {
         std::thread::spawn(move || {
+            let (matrix, chroma_is_420) = super::probe_yuv_layout(&path);
+            // Media Foundation hands back NV12, so a source with fuller chroma
+            // (an import that kept a 4:4:4 stream) goes to the FFmpeg decoder.
+            if chroma_is_420 == Some(false) {
+                let _ = ready_tx.send(Err("Source chroma is not 4:2:0".to_string()));
+                return;
+            }
             let mut decoder = match cap_video_decode::MediaFoundationDecoder::new(&path) {
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -161,7 +168,6 @@ impl MFDecoder {
 
             let video_width = decoder.width();
             let video_height = decoder.height();
-            let matrix = super::probe_yuv_matrix(&path);
 
             let mut health = DecoderHealthMonitor::new();
 

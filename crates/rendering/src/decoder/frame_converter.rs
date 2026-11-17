@@ -113,6 +113,23 @@ impl FrameConverter {
             return copy_rgba_plane_pooled(&self.planes, frame.data(0), stride, width, height);
         }
 
+        // swscale's exact 4:4:4 path took more time than decoding the frame.
+        if frame.format() == format::Pixel::YUV444P
+            && frame.color_range() != ffmpeg::color::Range::JPEG
+        {
+            let (width, height) = (frame.width() as usize, frame.height() as usize);
+            let mut output = self.planes.take(width * height * 4);
+            output.resize(width * height * 4, 0);
+            crate::cpu_yuv::yuv444p_to_rgba_with_matrix(
+                [0, 1, 2].map(|plane| (frame.data(plane), frame.stride(plane))),
+                width,
+                height,
+                &mut output,
+                YuvMatrix::from_color_space(frame.color_space()),
+            );
+            return output;
+        }
+
         let width = frame.width();
         let height = frame.height();
 
@@ -159,9 +176,26 @@ impl FrameConverter {
         });
 
         if needs_new {
-            let mut context =
-                software::converter((width, height), input_format, format::Pixel::RGBA)
-                    .expect("failed to create frame scaler");
+            // FAST_BILINEAR makes swscale skip work on chroma it treats as
+            // subsampled, which blurs and shifts full-resolution chroma
+            // (a 4:4:4 import drops from 53.9 to 35.8 dB against its source).
+            // BILINEAR converts it exactly; other layouts keep the flags they
+            // always had.
+            let flags = if format_has_full_chroma(input_format) {
+                software::scaling::Flags::BILINEAR
+            } else {
+                software::scaling::Flags::FAST_BILINEAR
+            };
+            let mut context = software::scaling::Context::get(
+                input_format,
+                width,
+                height,
+                format::Pixel::RGBA,
+                width,
+                height,
+                flags,
+            )
+            .expect("failed to create frame scaler");
             if matrix == YuvMatrix::Bt709 {
                 use_bt709_source(&mut context);
             }
@@ -181,6 +215,21 @@ impl FrameConverter {
             self.rgba_frame = frame::Video::new(format::Pixel::RGBA, width, height);
         }
     }
+}
+
+fn format_has_full_chroma(input_format: format::Pixel) -> bool {
+    input_format.descriptor().is_some_and(|descriptor| {
+        descriptor.nb_components() >= 3
+            && descriptor.log2_chroma_w() == 0
+            && descriptor.log2_chroma_h() == 0
+            && !is_rgb(input_format)
+    })
+}
+
+fn is_rgb(input_format: format::Pixel) -> bool {
+    input_format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
 }
 
 /// swscale converts YUV with BT.601 unless told otherwise: switch the source
@@ -362,6 +411,40 @@ mod tests {
         let second = copy_rgba_plane_pooled(&pool, &pixels, 8, 2, 1);
         assert_ne!(second.as_ptr(), ptr);
         assert_eq!(first, pixels);
+    }
+
+    #[test]
+    fn full_chroma_frames_keep_every_column_of_chroma() {
+        ffmpeg::init().unwrap();
+        let (width, height) = (64u32, 8u32);
+        let mut source = frame::Video::new(format::Pixel::YUV444P, width, height);
+        let chroma = |x: usize| -> (u8, u8) { if x % 2 == 0 { (60, 200) } else { (200, 60) } };
+        for plane in 0..3 {
+            let stride = source.stride(plane);
+            let data = source.data_mut(plane);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    data[y * stride + x] = match plane {
+                        0 => 120,
+                        1 => chroma(x).0,
+                        _ => chroma(x).1,
+                    };
+                }
+            }
+        }
+        let rgba = FrameConverter::new().convert(&mut source);
+        for x in 0..width as usize {
+            let (cb, cr) = chroma(x);
+            let expected =
+                YuvMatrix::Bt601.ycbcr_to_rgb(120 - 16, i32::from(cb) - 128, i32::from(cr) - 128);
+            let actual = &rgba[x * 4..x * 4 + 3];
+            for channel in 0..3 {
+                assert!(
+                    actual[channel].abs_diff(expected[channel]) <= 2,
+                    "column {x}: {actual:?} vs {expected:?}"
+                );
+            }
+        }
     }
 
     #[test]
