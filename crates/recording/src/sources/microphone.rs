@@ -584,6 +584,9 @@ impl Microphone {
                     let mut next_reconnect_after = MIC_RECONNECT_AFTER;
                     let mut last_timestamp: Option<cap_timestamp::Timestamp> = None;
                     let mut last_frame_duration = SILENCE_CHUNK_DURATION;
+                    // Where the previous microphone's audio ended, until the
+                    // switched-to one delivers its first frame.
+                    let mut switched_from: Option<cap_timestamp::Timestamp> = None;
                     let mut logged_current_source: Option<(u32, u16, SampleFormat)> = None;
 
                     loop {
@@ -681,6 +684,7 @@ impl Microphone {
                                 if silence_mode {
                                     silence_start = Some(Instant::now());
                                 }
+                                switched_from = last_timestamp.map(|ts| ts + last_frame_duration);
                                 info!(
                                     from = %previous_name,
                                     to = %feed_lock.device_name(),
@@ -768,6 +772,38 @@ impl Microphone {
                                     resampler = None;
                                     logged_current_source =
                                         Some((frame.sample_rate, frame.channels, frame.format));
+                                }
+
+                                // The muxer lays audio out by sample count and only fills
+                                // gaps longer than its threshold, so the hand-over between
+                                // two microphones (frames still queued for the old one,
+                                // the new one's first buffer) would otherwise pull every
+                                // later sample earlier. Fill it exactly.
+                                if let Some(from) = switched_from.take() {
+                                    let reference = cap_timestamp::Timestamps::now();
+                                    let gap_secs =
+                                        frame.timestamp.signed_duration_since_secs(reference)
+                                            - from.signed_duration_since_secs(reference);
+                                    if let Some(samples) =
+                                        switch_gap_samples(gap_secs, audio_info.rate())
+                                    {
+                                        info!(
+                                            gap_ms = gap_secs * 1000.0,
+                                            "Filling the microphone switch hand-over with silence"
+                                        );
+                                        let silence = AudioFrame::new(
+                                            create_silence_frame(&audio_info, samples),
+                                            from,
+                                        );
+                                        if let Ok(Ok(())) = tokio::time::timeout(
+                                            send_timeout,
+                                            audio_tx.send(silence),
+                                        )
+                                        .await
+                                        {
+                                            silence_counter.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
                                 }
 
                                 let audio_frame = if let Some(ref mut ctx) = resampler {
@@ -1240,6 +1276,18 @@ async fn microphone_producers_join(
         "Microphone producers did not confirm quiescence"
     );
     Ok(())
+}
+
+/// Silence that bridges a microphone switch: the time between the end of the
+/// previous microphone's audio and the new one's first frame. An overlap or a
+/// timestamp far off (a clock the two devices do not share) adds nothing.
+fn switch_gap_samples(gap_secs: f64, rate: i32) -> Option<usize> {
+    const MAX_SWITCH_GAP_SECS: f64 = 2.0;
+    if !gap_secs.is_finite() || gap_secs <= 0.0 || gap_secs > MAX_SWITCH_GAP_SECS {
+        return None;
+    }
+    let samples = (gap_secs * f64::from(rate)).round() as usize;
+    (samples > 0).then_some(samples)
 }
 
 fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
@@ -2289,6 +2337,126 @@ mod switch_tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    type Placed = Arc<std::sync::Mutex<Vec<(f32, usize)>>>;
+
+    /// Each frame's peak and sample count, in the order the muxer lays them out.
+    struct PlacingMuxer(Placed);
+
+    impl Muxer for PlacingMuxer {
+        type Config = Placed;
+
+        async fn setup(
+            placed: Placed,
+            _: std::path::PathBuf,
+            _: Option<cap_media_info::VideoInfo>,
+            _: Option<AudioInfo>,
+            _: Arc<AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self(placed))
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for PlacingMuxer {
+        fn send_audio_frame(&mut self, frame: AudioFrame, _: Duration) -> anyhow::Result<()> {
+            let samples = frame.inner.samples();
+            let peak = frame
+                .inner
+                .data(0)
+                .chunks_exact(4)
+                .take(samples)
+                .map(|bytes| f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]).abs())
+                .fold(0.0f32, f32::max);
+            self.0.lock().unwrap().push((peak, samples));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn switch_gap_samples_bridge_only_a_real_hand_over() {
+        assert_eq!(switch_gap_samples(0.040, 48_000), Some(1_920));
+        assert_eq!(switch_gap_samples(0.0, 48_000), None);
+        assert_eq!(switch_gap_samples(-0.010, 48_000), None);
+        assert_eq!(switch_gap_samples(5.0, 48_000), None);
+        assert_eq!(switch_gap_samples(f64::NAN, 48_000), None);
+    }
+
+    /// The muxer lays audio out by sample count and only fills gaps above its
+    /// threshold, so an unfilled hand-over between two microphones would pull
+    /// everything recorded after a switch earlier, out of sync with the video.
+    #[tokio::test]
+    async fn audio_after_a_switch_keeps_its_place_on_the_timeline() {
+        let built_in = SyntheticMicrophone::spawn("built-in", 48_000, 1);
+        let headset = SyntheticMicrophone::spawn("headset", 48_000, 1);
+        let (switch, switch_requests) = MicrophoneSwitch::channel();
+        let placed = Placed::default();
+        let temp = tempfile::tempdir().unwrap();
+        let pipeline = OutputPipeline::builder(temp.path().join("audio.ogg"))
+            .with_audio_source::<SwitchableMicrophone>(SwitchableMicrophoneConfig {
+                lock: Arc::new(built_in.lock().await.unwrap()),
+                switch_requests,
+            })
+            .build::<PlacingMuxer>(placed.clone())
+            .await
+            .unwrap();
+
+        let start = Instant::now();
+        push_for(
+            &built_in,
+            0.1,
+            (48_000, 1),
+            start,
+            Duration::ZERO,
+            Duration::from_millis(300),
+        )
+        .await;
+        let settle_deadline = Instant::now() + Duration::from_secs(10);
+        while placed.lock().unwrap().iter().map(|(_, n)| n).sum::<usize>() < 14_400 {
+            assert!(
+                Instant::now() < settle_deadline,
+                "the first microphone never arrived"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        switch
+            .switch(Arc::new(headset.lock().await.unwrap()))
+            .await
+            .unwrap();
+        // The headset's first buffer is stamped 40 ms after the built-in
+        // microphone's audio ended: under the muxer's own gap threshold.
+        push_for(
+            &headset,
+            0.35,
+            (48_000, 1),
+            start,
+            Duration::from_millis(340),
+            Duration::from_millis(300),
+        )
+        .await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !placed.lock().unwrap().iter().any(|(peak, _)| *peak > 0.3) {
+            assert!(
+                Instant::now() < deadline,
+                "the headset never reached the muxer"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        pipeline.stop().await.unwrap();
+
+        let placed = placed.lock().unwrap().clone();
+        let first_headset = placed.iter().position(|(peak, _)| *peak > 0.3).unwrap();
+        let before: usize = placed[..first_headset].iter().map(|(_, n)| n).sum();
+        assert_eq!(
+            before, 16_320,
+            "the headset's first sample belongs at 340 ms (48 kHz), not straight after the built-in microphone's last"
+        );
     }
 
     #[tokio::test]
