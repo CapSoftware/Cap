@@ -983,8 +983,13 @@ impl MP4Encoder {
         &mut self,
         timestamp: Option<Duration>,
     ) -> Result<arc::R<av::AssetWriter>, FinishError> {
-        if !self.session_started || self.is_finishing {
+        if self.is_finishing {
             return Err(FinishError::NotWriting);
+        }
+        // No frame ever reached the writer, so it never started and there is
+        // nothing to finalize: an empty output, not a broken one.
+        if !self.session_started {
+            return Err(FinishError::NoFrames);
         }
 
         let mut finish_timestamp = timestamp;
@@ -4412,6 +4417,55 @@ mod tests {
                 assert!(packets >= 28, "{case}: {packets} of 30 frames written");
             }
         }
+    }
+
+    /// A resumed Studio segment whose screen capture delivered no frame
+    /// before Pause. The writer never started, so finish reports an empty
+    /// output (`NoFrames`) rather than `NotWriting`, the error that failed
+    /// the whole recording. Paused or not, with or without an audio input.
+    #[test]
+    fn finish_without_any_frame_reports_no_frames() {
+        for (paused, audio) in [(false, false), (true, false), (false, true), (true, true)] {
+            let output = test_output_path("finish_without_any_frame");
+            let audio_config = audio.then(wireless_audio_config);
+            let mut encoder =
+                MP4Encoder::init(output.clone(), valid_video_config(), audio_config, None).unwrap();
+            if paused {
+                encoder.pause();
+            }
+            let result = encoder.finish(Some(Duration::from_secs(1)));
+            drop(encoder);
+            let _ = std::fs::remove_file(&output);
+            assert!(
+                matches!(result, Err(FinishError::NoFrames)),
+                "paused {paused}, audio {audio}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn finish_after_a_single_frame_writes_a_playable_file() {
+        let output = test_output_path("finish_after_a_single_frame");
+        let config = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::NV12, 1280, 720, 30);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1280, 720);
+        let frame = create_test_video_frame(&pool, 0, 33_333);
+        assert!(queue_video_frame_with_retry(&mut encoder, frame, Duration::ZERO).unwrap());
+        encoder.finish(Some(Duration::from_micros(33_333))).unwrap();
+        drop(encoder);
+
+        let mut input = ffmpeg::format::input(&output).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        let packets = input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count();
+        let _ = std::fs::remove_file(&output);
+        assert_eq!(packets, 1);
     }
 }
 
