@@ -42,6 +42,25 @@ export const getSharePlaybackSource = (
 		.pipe(runPromise)
 		.catch(() => null);
 
+export const getCustomThumbnailUrl = (
+	video: SharePlaybackVideo,
+	key: string,
+): Promise<string | null> =>
+	Effect.gen(function* () {
+		const loadedVideo = yield* Schema.decodeUnknown(Video.Video)({
+			...video,
+			ownerId: video.owner.id,
+			bucketId: video.bucket,
+			folderId: null,
+			createdAt: video.createdAt.toISOString(),
+			updatedAt: video.updatedAt.toISOString(),
+		});
+		const [bucket] = yield* Storage.getAccessForVideo(loadedVideo);
+		return yield* bucket.getSignedObjectUrl(key);
+	})
+		.pipe(runPromise)
+		.catch(() => null);
+
 export const getSharePlaybackUrl = (video: SharePlaybackVideo) =>
 	getSharePlaybackSource(video).then((source) => source?.url ?? null);
 
