@@ -546,6 +546,52 @@ fn update_store(mutate: impl FnOnce(&mut Map<String, Value>) -> bool) -> bool {
     written
 }
 
+/// A store that reads but does not parse as a JSON object (zero-filled after a
+/// power loss, truncated by a crash) refuses every write, so onboarding could
+/// never save its progress and stayed on "Could not save onboarding progress"
+/// forever. While it does not parse, its onboarding flags, auth and presets are
+/// already invisible to Cap, so its bytes are kept beside it and the progress
+/// is saved to a fresh store. A store that could not be read at all is left
+/// alone.
+fn set_aside_unparseable_store(path: &Path) -> bool {
+    let _guard = STORE_UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return false;
+    }
+    if matches!(
+        serde_json::from_slice::<Value>(&bytes),
+        Ok(Value::Object(_))
+    ) {
+        return false;
+    }
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".unreadable-{stamp}"));
+    let kept = path.with_file_name(name);
+    match std::fs::rename(path, &kept) {
+        Ok(()) => {
+            store_cache().remove(path);
+            tracing::error!(
+                kept = %kept.display(),
+                "the settings store did not parse; kept it aside and started a new one"
+            );
+            true
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not set aside the unparseable settings store");
+            false
+        }
+    }
+}
+
 /// Pretty JSON, two-space indent, no trailing newline -- byte-shape identical
 /// to what tauri-plugin-store writes, so a store the two apps take turns on
 /// does not churn.
@@ -759,7 +805,7 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
-        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_overlay();
         DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
@@ -1350,7 +1396,13 @@ pub fn has_completed_startup() -> bool {
 }
 
 pub fn set_has_completed_startup(value: bool) -> bool {
-    set_store_setting(GENERAL_SETTINGS, "hasCompletedStartup", Value::Bool(value))
+    set_onboarding_progress("hasCompletedStartup", value)
+}
+
+fn set_onboarding_progress(key: &str, value: bool) -> bool {
+    set_store_setting(GENERAL_SETTINGS, key, Value::Bool(value))
+        || (set_aside_unparseable_store(&tauri_store_path())
+            && set_store_setting(GENERAL_SETTINGS, key, Value::Bool(value)))
 }
 
 pub fn has_completed_onboarding() -> bool {
@@ -1361,11 +1413,7 @@ pub fn has_completed_onboarding() -> bool {
 }
 
 pub fn set_has_completed_onboarding(value: bool) -> bool {
-    set_store_setting(
-        GENERAL_SETTINGS,
-        "hasCompletedOnboarding",
-        Value::Bool(value),
-    )
+    set_onboarding_progress("hasCompletedOnboarding", value)
 }
 
 /// `should_show_onboarding` (`lib.rs:463-477`): first-run flags or missing
@@ -2351,7 +2399,11 @@ mod tests {
         std::fs::write(&store.path, "{ not json").unwrap();
         backdate(&store.path, seconds_ago(30));
         assert!(!has_completed_startup());
-        assert!(!set_has_completed_onboarding(true));
+        assert!(!set_store_setting(
+            GENERAL_SETTINGS,
+            "hideDockIcon",
+            Value::Bool(true)
+        ));
         std::fs::remove_file(&store.path).unwrap();
         assert!(!has_completed_startup());
         assert!(store_section(GENERAL_SETTINGS).is_empty());
@@ -3111,6 +3163,67 @@ mod tests {
         }
     }
 
+    /// A zero-filled store (NTFS after a power loss) or one cut off mid-object
+    /// blocked onboarding forever. Onboarding sets the unreadable bytes aside
+    /// and saves its progress; every other writer still refuses.
+    #[test]
+    fn onboarding_progress_sets_aside_an_unparseable_store() {
+        for contents in [
+            "\0\0\0\0\0\0\0\0",
+            "{ this is not json",
+            r#"{"auth":"token""#,
+            "null",
+            "[]",
+        ] {
+            let store = TempStore::new("unparseable-onboarding", Some(contents));
+            assert!(!set_store_setting(
+                GENERAL_SETTINGS,
+                "hideDockIcon",
+                Value::Bool(true)
+            ));
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+            assert!(!has_completed_startup());
+
+            assert!(set_has_completed_startup(true));
+            assert!(set_has_completed_onboarding(true));
+            assert!(has_completed_startup());
+            assert!(has_completed_onboarding());
+            assert_eq!(
+                store.read(),
+                serde_json::json!({
+                    "general_settings": {
+                        "hasCompletedStartup": true,
+                        "hasCompletedOnboarding": true
+                    }
+                })
+            );
+
+            let directory = store.path.parent().unwrap();
+            let prefix = format!(
+                "{}.unreadable-",
+                store.path.file_name().unwrap().to_string_lossy()
+            );
+            let kept = std::fs::read_dir(directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+            assert_eq!(kept.len(), 1, "{kept:?}");
+            assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), contents);
+            std::fs::remove_file(&kept[0]).unwrap();
+        }
+    }
+
+    #[test]
+    fn onboarding_progress_leaves_an_unreadable_store_alone() {
+        let store = TempStore::new("unreadable-onboarding", None);
+        std::fs::create_dir_all(&store.path).unwrap();
+        assert!(!set_has_completed_startup(true));
+        assert!(store.path.is_dir());
+        std::fs::remove_dir(&store.path).unwrap();
+    }
+
     #[test]
     fn onboarding_progress_recovers_an_empty_store() {
         for contents in ["", " \t\r\n"] {
@@ -3639,6 +3752,59 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// 0.6.0 (Tauri) wrote the whole `general_settings` object with
+    /// `"showOverlay"` for its overlay; 0.6.1 to 0.6.3 wrote only this key,
+    /// with the same value, for the option labelled "Show Cap". Both read
+    /// back as the overlay, labelled as the Tauri app labelled it, and the
+    /// value written for it stays one 0.6.0 can read after a downgrade.
+    #[test]
+    fn post_studio_overlay_reads_tauri_and_gpui_stores() {
+        let tauri: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "uploadIndividualFiles": false,
+                "hideDockIcon": false,
+                "autoCreateShareableLink": false,
+                "enableNotifications": true,
+                "disableAutoOpenLinks": false,
+                "hasCompletedStartup": true,
+                "theme": "system",
+                "recordingCountdown": 3,
+                "mainWindowRecordingStartBehaviour": "close",
+                "postStudioRecordingBehaviour": "showOverlay",
+                "postDeletionBehaviour": "doNothing"
+            }"#,
+        )
+        .unwrap();
+        let gpui: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showOverlay" }"#).unwrap();
+        for general in [&tauri, &gpui] {
+            let settings = GeneralSettings::from_sections(general, &Map::new(), &Map::new());
+            assert_eq!(
+                settings.post_studio_recording_behaviour,
+                PostStudioBehaviour::ShowOverlay
+            );
+        }
+        assert_eq!(PostStudioBehaviour::ShowOverlay.as_json(), "showOverlay");
+        assert_eq!(PostStudioBehaviour::ShowOverlay.label(), "Show in overlay");
+        assert_eq!(
+            PostStudioBehaviour::from_json("showOverlay"),
+            Some(PostStudioBehaviour::ShowOverlay)
+        );
+
+        let unknown: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showCap" }"#).unwrap();
+        assert_eq!(
+            GeneralSettings::from_sections(&unknown, &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
+        assert_eq!(
+            GeneralSettings::from_sections(&Map::new(), &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
     }
 
     /// A store written before `showMainWindowAfterInstantRecording` keeps

@@ -371,7 +371,7 @@ screen_region = "屏幕区域"
 [settings.options.post_studio]
 do_nothing = "不执行任何操作"
 open_editor = "打开编辑器"
-show_cap = "显示 Cap"
+show_overlay = "在浮层中显示"
 
 [settings.options.post_screenshot]
 copy = "复制到剪贴板"
@@ -455,8 +455,8 @@ screenshot_open_editor_hint = "先添加标注"
 studio_do_nothing = "不执行任何操作"
 studio_open_editor = "打开编辑器"
 studio_open_editor_hint = "立即编辑"
-studio_show_cap = "显示 Cap"
-studio_show_cap_hint = "回到录制器"
+studio_show_overlay = "显示浮层"
+studio_show_overlay_hint = "复制、分享或导出"
 
 [settings.shortcuts.label]
 add_marker = "添加标记"
@@ -1159,6 +1159,35 @@ no_matching_windows = "没有匹配的窗口"
 no_windows = "未找到窗口"
 window = "窗口"
 
+[recordings_overlay]
+close = "关闭"
+copy = "复制到剪贴板"
+copy_link = "复制分享链接"
+create_link = "创建分享链接"
+edit = "编辑"
+export = "导出"
+open = "打开"
+retry = "重试"
+
+[recordings_overlay.progress]
+choose_image = "选择图片的保存位置"
+choose_video = "选择视频的导出位置"
+copied = "已复制到剪贴板"
+copy_failed = "无法复制"
+copying = "正在复制到剪贴板"
+creating_link = "正在创建分享链接"
+failed_hint = "出了点问题。请重试。"
+link_copied = "已复制分享链接"
+preparing = "正在准备"
+rendering_video = "正在渲染视频"
+save_failed = "无法保存"
+saved_image = "图片已保存"
+saved_video = "视频已保存"
+saving_image = "正在保存图片"
+saving_video = "正在保存视频"
+share_failed = "无法创建链接"
+share_failed_hint = "请检查网络连接后重试。"
+
 [controls]
 disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
 low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
@@ -1428,6 +1457,8 @@ devices_changed_before_start = "录制开始前所选设备已更改。请重新
 shortcut_conflict = "Ctrl+Shift+F9 已分配给另一个 Cap 操作。请在录制前更改该快捷键。"
 shortcut_description = "开始或停止此 Cap 录制"
 shortcut_hint = "按下并松开 {shortcut} 开始录制。再次使用同一快捷键即可停止。此临时快捷键不会更改你的设置。"
+source_lost = "Cap 已停止录制，因为录制的对象已不可用（例如显示器进入睡眠或窗口已关闭）。此前录制的内容已全部保存。"
+source_lost_title = "录制已停止"
 tray_stop_hint = "点击 Cap 的“停止”托盘图标即可开始。再次点击同一图标即可停止。在你使用该控件之前，录制不会开始。"
 window_unavailable = "所选窗口已不可用。请重新选择。"
 
@@ -2933,13 +2964,19 @@ zoom = "缩放"
 
 [editor.transcript]
 add_caption = "在播放头处添加字幕"
+captions_save_failed = "无法保存字幕：{error}"
+captions_saved = "字幕已保存"
 cleanup = "清理"
 cleanup_tooltip = "移除填充词并缩短停顿"
 delete_matches = "全部删除"
 delete_matches_tooltip = "从视频中剪掉所有匹配项"
+download_captions = "下载字幕"
+download_srt = "SubRip（.srt）"
+download_vtt = "WebVTT（.vtt）"
+edit_hint = "按 Enter 保存，按 Esc 取消，按 Tab 编辑下一个单词"
 empty_description = "在这台电脑上转写此录制内容，然后通过编辑文字来编辑视频。"
 empty_title = "还没有转写内容"
-hint = "点击单词即可跳转。选中单词后按删除键，即可从视频中剪掉。"
+hint = "点击单词即可跳转，双击即可修改。选中单词后按删除键，即可从视频中剪掉。"
 next_match = "下一个匹配项"
 no_audio = "此录制内容没有可转写的音频。"
 no_speech = "此录制内容中未发现语音"
@@ -3229,6 +3266,13 @@ pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请�
 quit_anyway = "仍然退出"
 still_open = "Cap 仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
+
+[dialog.startup]
+failed = "{error}\n\n详细信息已保存在 {folder}。"
+failed_title = "Cap 无法启动"
+quit_and_reopen = "退出并重新打开"
+unresponsive = "Cap 已在运行，但没有响应。要退出它并重新打开 Cap 吗？"
+unresponsive_title = "Cap 没有响应"
 
 [dialog.update]
 already_getting = "Cap 已在准备版本 {version}。"
