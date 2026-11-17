@@ -86,9 +86,8 @@ describe("docToMarkdown", () => {
 		if (!agents || !selfHosting) throw new Error("missing docs");
 		expect(docToMarkdown(agents, "https://cap.so")).toContain(CAP_AGENT_PROMPT);
 		const hosting = docToMarkdown(selfHosting, "https://cap.so");
-		expect(hosting).toContain(
-			"> **Security Notice for Production Deployments**",
-		);
+		expect(hosting).toContain("> **Secrets are required**");
+		expect(hosting).toContain("> **Upgrading can stop Cap from starting**");
 		expect(hosting).toContain(
 			"[Watch the video](https://cap.so/embed/k310v2vf41d6ffp)",
 		);
