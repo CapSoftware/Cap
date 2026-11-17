@@ -106,27 +106,29 @@ fn shift_captions(project: &mut ProjectConfiguration, shifts: &[(usize, f64)], d
         clip_start.push(cumulative);
         cumulative += duration;
     }
+    // Each caption belongs to the clip its original start falls in, and moves
+    // at most once, so one clamped to a clip's end never re-enters the next.
     let mut moved = false;
-    for &(index, shift) in shifts {
-        let (Some(&start), Some(&duration)) = (clip_start.get(index), durations.get(index)) else {
+    for segment in &mut captions.segments {
+        let source = f64::from(segment.start);
+        let Some(index) = (0..durations.len())
+            .find(|&i| (clip_start[i]..clip_start[i] + durations[i]).contains(&source))
+        else {
             continue;
         };
-        let end = start + duration;
+        let Some(&(_, shift)) = shifts.iter().find(|(clip, _)| *clip == index) else {
+            continue;
+        };
+        let end = (clip_start[index] + durations[index]) as f32;
         let shift = shift as f32;
-        let clamp = |time: f32| time.min(end as f32);
-        for segment in captions
-            .segments
-            .iter_mut()
-            .filter(|segment| (start..end).contains(&f64::from(segment.start)))
-        {
-            segment.start = clamp(segment.start + shift);
-            segment.end = clamp(segment.end + shift);
-            for word in &mut segment.words {
-                word.start = clamp(word.start + shift);
-                word.end = clamp(word.end + shift);
-            }
-            moved = true;
+        let clamp = |time: f32| (time + shift).min(end);
+        segment.start = clamp(segment.start);
+        segment.end = clamp(segment.end);
+        for word in &mut segment.words {
+            word.start = clamp(word.start);
+            word.end = clamp(word.end);
         }
+        moved = true;
     }
     if moved {
         captions
@@ -318,6 +320,44 @@ mod tests {
         assert!(close(captions.segments[1].words[0].end, 16.0));
         let track = &project.timeline.as_ref().unwrap().caption_segments;
         assert!(track.iter().any(|c| (c.start - 15.0).abs() < 1e-4));
+    }
+
+    // Two consecutive late clips: a caption clamped to the first clip's end
+    // must not be moved again by the second.
+    #[test]
+    fn captions_move_once_across_consecutive_late_clips() {
+        let mut project = legacy_project();
+        let StudioRecordingMeta::MultipleSegments { mut inner } = meta(4.05) else {
+            unreachable!()
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(4.05);
+        let meta = StudioRecordingMeta::MultipleSegments { inner };
+        let caption = |start: f32| CaptionSegment {
+            id: format!("c{start}"),
+            start,
+            end: start + 1.0,
+            text: "hi".into(),
+            words: vec![CaptionWord {
+                text: "hi".into(),
+                start,
+                end: start + 1.0,
+            }],
+        };
+        project.captions = Some(CaptionsData {
+            segments: vec![caption(7.0), caption(12.0)],
+            source_timed: true,
+            ..Default::default()
+        });
+        migrate_late_audio_alignment(&mut project, &meta, || vec![10.0, 10.0]);
+        let starts: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|s| s.start)
+            .collect();
+        assert_eq!(starts, vec![10.0, 16.0]);
     }
 
     #[test]
