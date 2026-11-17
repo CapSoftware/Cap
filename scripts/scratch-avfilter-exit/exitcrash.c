@@ -25,6 +25,30 @@ static DWORD WINAPI hammer_msvcrt(LPVOID arg) {
 	return 0;
 }
 
+static DWORD WINAPI hammer_msvcrt_big(LPVOID arg) {
+	void *slots[16] = {0};
+	unsigned i = (unsigned)(uintptr_t)arg;
+	while (running) {
+		unsigned k = i++ & 15;
+		if (slots[k]) crt_free(slots[k]);
+		slots[k] = crt_malloc(20000 + (i * 7919) % 200000);
+	}
+	for (int k = 0; k < 16; k++) if (slots[k]) crt_free(slots[k]);
+	return 0;
+}
+
+static DWORD WINAPI hammer_ucrt_big(LPVOID arg) {
+	void *slots[16] = {0};
+	unsigned i = (unsigned)(uintptr_t)arg;
+	while (running) {
+		unsigned k = i++ & 15;
+		free(slots[k]);
+		slots[k] = malloc(20000 + (i * 7919) % 200000);
+	}
+	for (int k = 0; k < 16; k++) free(slots[k]);
+	return 0;
+}
+
 static DWORD WINAPI hammer_ucrt(LPVOID arg) {
 	void *slots[64] = {0};
 	unsigned i = (unsigned)(uintptr_t)arg;
@@ -38,38 +62,41 @@ static DWORD WINAPI hammer_ucrt(LPVOID arg) {
 }
 
 int main(int argc, char **argv) {
-	if (argc < 6) {
-		fprintf(stderr, "usage: exitcrash <ffmpeg-bin-dir> <none|msvcrt|ucrt> <threads> <return|terminate|join> <wer|nower> [info]\n");
+	if (argc < 7) {
+		fprintf(stderr, "usage: exitcrash <ffmpeg-bin-dir> <dll> <none|msvcrt|msvcrtbig|ucrt|ucrtbig> <threads> <return|terminate|join> <wer|nower> [info]\n");
 		return 91;
 	}
 	const char *dir = argv[1];
-	const char *kind = argv[2];
-	int threads = atoi(argv[3]);
-	const char *exit_kind = argv[4];
+	const char *dll = argv[2];
+	const char *kind = argv[3];
+	int threads = atoi(argv[4]);
+	const char *exit_kind = argv[5];
 	UINT mode = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
-	if (strcmp(argv[5], "nower") == 0) mode |= SEM_NOGPFAULTERRORBOX;
+	if (strcmp(argv[6], "nower") == 0) mode |= SEM_NOGPFAULTERRORBOX;
 	SetErrorMode(mode);
 
 	SetDllDirectoryA(dir);
 	char path[MAX_PATH];
-	snprintf(path, sizeof path, "%s\\avfilter-10.dll", dir);
-	HMODULE avfilter = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-	if (!avfilter) {
+	snprintf(path, sizeof path, "%s\\%s", dir, dll);
+	HMODULE lib = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+	if (!lib) {
 		fprintf(stderr, "LoadLibrary %s failed %lu\n", path, GetLastError());
 		return 90;
 	}
-	graph_alloc_fn graph_alloc = (graph_alloc_fn)GetProcAddress(avfilter, "avfilter_graph_alloc");
-	graph_free_fn graph_free = (graph_free_fn)GetProcAddress(avfilter, "avfilter_graph_free");
-	void *graph = graph_alloc();
-	graph_free(&graph);
+	graph_alloc_fn graph_alloc = (graph_alloc_fn)GetProcAddress(lib, "avfilter_graph_alloc");
+	graph_free_fn graph_free = (graph_free_fn)GetProcAddress(lib, "avfilter_graph_free");
+	if (graph_alloc && graph_free) {
+		void *graph = graph_alloc();
+		graph_free(&graph);
+	}
 
 	HMODULE msvcrt = GetModuleHandleA("msvcrt.dll");
 	crt_malloc = (malloc_fn)GetProcAddress(msvcrt, "malloc");
 	crt_free = (free_fn)GetProcAddress(msvcrt, "free");
-	if (argc > 6 && strcmp(argv[6], "info") == 0) {
+	if (argc > 7 && strcmp(argv[7], "info") == 0) {
 		heap_handle_fn get_heap = (heap_handle_fn)GetProcAddress(msvcrt, "_get_heap_handle");
 		printf("process heap %p, msvcrt heap %p, ucrt heap %p\n", GetProcessHeap(),
-		       get_heap ? (void *)get_heap() : NULL, (void *)_get_heap_handle());
+		       get_heap ? (void *)get_heap() : NULL, (void *)(uintptr_t)_get_heap_handle());
 	}
 
 	HANDLE handles[64];
@@ -77,6 +104,8 @@ int main(int argc, char **argv) {
 	LPTHREAD_START_ROUTINE fn = NULL;
 	if (strcmp(kind, "msvcrt") == 0) fn = hammer_msvcrt;
 	if (strcmp(kind, "ucrt") == 0) fn = hammer_ucrt;
+	if (strcmp(kind, "msvcrtbig") == 0) fn = hammer_msvcrt_big;
+	if (strcmp(kind, "ucrtbig") == 0) fn = hammer_ucrt_big;
 	if (fn) {
 		for (; started < threads && started < 64; started++)
 			handles[started] = CreateThread(NULL, 0, fn, (LPVOID)(uintptr_t)(started * 7919), 0, NULL);
