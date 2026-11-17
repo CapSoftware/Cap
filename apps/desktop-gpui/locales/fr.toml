@@ -2543,6 +2543,7 @@ format = "Format"
 frame_rate = "Fréquence d'images"
 quality = "Qualité"
 resolution = "Résolution"
+tracks = "Pistes"
 
 [editor.export.stats]
 calculating = "Calcul…"
@@ -2554,6 +2555,25 @@ output_value = "{width}×{height} · {fps} i/s"
 refining_size = "Affinage de la taille…"
 refining_time = "Affinage de la durée…"
 unavailable = "Indisponible"
+
+[editor.export.tracks]
+aligned = "Les pistes suivent vos coupes et votre vitesse, et s'alignent dans n'importe quel logiciel de montage. La vidéo sort propre, sans arrière-plan ni effets."
+audio_detail = "WAV · 48 kHz"
+camera = "Caméra"
+choose_one = "Choisissez au moins une piste à exporter."
+cta = "Exporter les pistes"
+exported = "Pistes exportées"
+exporting = "Exportation des pistes"
+file_count = { one = "{count} fichier", other = "{count} fichiers" }
+file_only = "Les pistes sont enregistrées dans un dossier, en fichiers séparés."
+files = "Fichiers"
+format = "Pistes"
+microphone = "Micro"
+open_folder = "Ouvrir le dossier"
+screen = "Écran"
+studio_only = "Les pistes séparées ne sont enregistrées qu'en mode Studio."
+system_audio = "Audio système"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportation turbo"

@@ -2543,6 +2543,7 @@ format = "Format"
 frame_rate = "Bildrate"
 quality = "Qualität"
 resolution = "Auflösung"
+tracks = "Spuren"
 
 [editor.export.stats]
 calculating = "Wird berechnet…"
@@ -2554,6 +2555,25 @@ output_value = "{width}×{height} · {fps} fps"
 refining_size = "Größe wird präzisiert…"
 refining_time = "Dauer wird präzisiert…"
 unavailable = "Nicht verfügbar"
+
+[editor.export.tracks]
+aligned = "Spuren folgen Ihren Schnitten und Ihrer Geschwindigkeit und passen in jedem Videoeditor zusammen. Video wird ohne Hintergrund und Effekte exportiert."
+audio_detail = "WAV · 48 kHz"
+camera = "Kamera"
+choose_one = "Wählen Sie mindestens eine Spur zum Exportieren."
+cta = "Spuren exportieren"
+exported = "Spuren exportiert"
+exporting = "Spuren werden exportiert"
+file_count = { one = "{count} Datei", other = "{count} Dateien" }
+file_only = "Spuren werden als einzelne Dateien in einem Ordner gespeichert."
+files = "Dateien"
+format = "Spuren"
+microphone = "Mikrofon"
+open_folder = "Ordner öffnen"
+screen = "Bildschirm"
+studio_only = "Separate Spuren werden nur im Studio-Modus aufgenommen."
+system_audio = "Systemaudio"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Turbo-Export"
