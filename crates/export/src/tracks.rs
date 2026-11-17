@@ -414,7 +414,10 @@ async fn prepare(
         studio_meta,
         &recording_durations,
     );
-    cap_project::clamp_timeline_to_sources(&mut project, &recording_durations);
+    cap_project::clamp_timeline_to_sources(
+        &mut project,
+        &cap_project::late_audio_trim_limits(studio_meta, &recording_durations),
+    );
 
     let available = available_tracks(&recordings, &project);
     if let Some(missing) = tracks.iter().find(|kind| !available.contains(kind)) {
