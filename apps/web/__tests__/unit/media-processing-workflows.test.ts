@@ -49,6 +49,7 @@ vi.mock("@cap/env", () => ({
 	}),
 }));
 vi.mock("@cap/web-domain", () => ({
+	SUPPORTED_LANGUAGES: {},
 	Video: {
 		VideoId: { make: (id: string) => id },
 		Video: { decodeSync: (value: unknown) => value },
@@ -788,5 +789,35 @@ describe("media processing workflows", () => {
 			videoUrl: "https://cdn.loom.com/master.m3u8",
 			inputExtension: ".m3u8",
 		});
+	});
+
+	it("queues transcription of a processed upload with only an STT endpoint configured", async () => {
+		const { transcribeVideo } = await import("@/lib/transcribe");
+		vi.mocked(transcribeVideo).mockResolvedValue({
+			success: true,
+			message: "started",
+		});
+		mocks.env = { STT_BASE_URL: "http://whisper:9000/v1" };
+		mocks.rows = [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			[pending],
+			[pending],
+			[],
+			[metadata],
+			[video],
+			[
+				{
+					id: "owner",
+					stripeSubscriptionStatus: null,
+					thirdPartyStripeSubscriptionId: null,
+				},
+			],
+		];
+		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		expect(transcribeVideo).toHaveBeenCalledWith("video", "owner", false);
 	});
 });

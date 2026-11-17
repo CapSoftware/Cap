@@ -1,6 +1,5 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import type { User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
@@ -15,6 +14,7 @@ import {
 	SourceCommitPendingError,
 } from "@/lib/desktop-recording-jobs";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "@/lib/transcribe";
 import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-recording";
 
@@ -29,7 +29,7 @@ async function queueEarlySegmentsTranscription({
 	videoId: Video.VideoId;
 	userId: User.UserId;
 }): Promise<void> {
-	if (!serverEnv().ASSEMBLY_API_KEY) return;
+	if (!isTranscriptionConfigured()) return;
 
 	// An active live transcription is seconds away from promoting itself to
 	// canonical (or queueing this exact fallback itself); starting a full

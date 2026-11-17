@@ -11,6 +11,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -419,7 +420,7 @@ async function queueProcessedVideoTranscription(
 ): Promise<void> {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) return;
+	if (!isTranscriptionConfigured()) return;
 	try {
 		const [owner] = await db()
 			.select({

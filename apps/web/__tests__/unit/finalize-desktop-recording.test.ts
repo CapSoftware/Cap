@@ -363,6 +363,19 @@ describe("durable post-publication transcription enqueue", () => {
 		expect(mocks.claim).not.toHaveBeenCalled();
 	});
 
+	it("queues transcription when only an STT endpoint is configured", async () => {
+		withCurrent({ state: "verified" });
+		mocks.env.mockReturnValue({ STT_BASE_URL: "http://whisper:9000/v1" });
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ success: true });
+		expect(mocks.transcribe).toHaveBeenCalledOnce();
+	});
+
 	it.each(["unconfigured", "deleted"])(
 		"skips %s transcription without retrying forever",
 		async (reason) => {

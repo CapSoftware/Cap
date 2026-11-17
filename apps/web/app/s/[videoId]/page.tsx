@@ -88,6 +88,7 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	areViewerDownloadsEnabled,
@@ -965,10 +966,9 @@ async function AuthorizedContent({
 		organizationSettings: video.orgSettings,
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
-	const env = serverEnv();
 	const transcriptionGenerationAvailable =
 		!video.isScreenshot &&
-		Boolean(env.ASSEMBLY_API_KEY) &&
+		isTranscriptionConfigured() &&
 		!rules.settings.disableTranscript;
 	const aiProviderAvailable = isAiConfigured();
 

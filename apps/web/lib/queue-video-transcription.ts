@@ -1,9 +1,9 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "@/lib/transcribe";
 
 type VideoSourceType = (typeof videos.$inferSelect)["source"]["type"];
@@ -38,7 +38,7 @@ export function shouldQueueTranscriptionAfterMultipartComplete(
 export async function queueVideoTranscription(
 	videoId: Video.VideoId,
 ): Promise<QueueVideoTranscriptionResult> {
-	if (!serverEnv().ASSEMBLY_API_KEY) {
+	if (!isTranscriptionConfigured()) {
 		return { success: true, message: "Transcription is not configured" };
 	}
 

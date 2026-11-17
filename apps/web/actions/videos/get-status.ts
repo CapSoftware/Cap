@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -15,6 +14,7 @@ import {
 } from "@/lib/desktop-segments-finalization";
 import { startAiGeneration } from "@/lib/generate-ai";
 import * as EffectRuntime from "@/lib/server";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "../../lib/transcribe";
 import { isAiGenerationEnabled } from "../../utils/flags";
 
@@ -62,7 +62,7 @@ export async function getVideoStatus(
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-	if (!video.transcriptionStatus && serverEnv().ASSEMBLY_API_KEY) {
+	if (!video.transcriptionStatus && isTranscriptionConfigured()) {
 		const activeUpload = await db()
 			.select({
 				videoId: videoUploads.videoId,

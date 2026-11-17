@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	rows: [] as Record<string, unknown>[],
+	env: {} as Record<string, string>,
 	allowed: true,
 	read: vi.fn(),
 	transcribe: vi.fn(),
@@ -15,15 +16,17 @@ vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
 			from: () => ({
-				where: async () => {
+				where: () => {
 					mocks.read();
-					return mocks.rows;
+					return Object.assign(Promise.resolve(mocks.rows), {
+						limit: async () => [],
+					});
 				},
 			}),
 		}),
 	}),
 }));
-vi.mock("@cap/env", () => ({ serverEnv: () => ({}) }));
+vi.mock("@cap/env", () => ({ serverEnv: () => mocks.env }));
 vi.mock("@cap/web-backend", async () => {
 	const { Effect } = await import("effect");
 	const { Policy } = await import("@cap/web-domain");
@@ -58,7 +61,10 @@ const videoId = Video.VideoId.make("missing-video");
 
 beforeEach(() => {
 	mocks.rows = [];
+	mocks.env = {};
 	mocks.allowed = true;
+	mocks.transcribe.mockReset();
+	mocks.transcribe.mockResolvedValue({ success: true });
 });
 
 describe("video status", () => {
@@ -83,6 +89,27 @@ describe("video status", () => {
 			name: "Recording",
 			transcriptionStatus: "COMPLETE",
 		});
+	});
+
+	it("starts transcription when only an STT endpoint is configured", async () => {
+		mocks.env = { STT_BASE_URL: "http://whisper:9000/v1" };
+		mocks.rows = [
+			{ name: "Recording", ownerId: "owner", transcriptionStatus: null },
+		];
+		await expect(getVideoStatus(videoId)).resolves.toMatchObject({
+			transcriptionStatus: "PROCESSING",
+		});
+		expect(mocks.transcribe).toHaveBeenCalledWith(videoId, "owner");
+	});
+
+	it("does not start transcription when no provider is configured", async () => {
+		mocks.rows = [
+			{ name: "Recording", ownerId: "owner", transcriptionStatus: null },
+		];
+		await expect(getVideoStatus(videoId)).resolves.toMatchObject({
+			transcriptionStatus: null,
+		});
+		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
 	it("does not retry missing videos even when initial data is cached", async () => {
