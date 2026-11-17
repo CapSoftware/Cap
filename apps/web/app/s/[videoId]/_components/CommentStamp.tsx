@@ -1,6 +1,6 @@
 import type { ImageUpload } from "@cap/web-domain";
-import { faComment } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface CommentStampsProps {

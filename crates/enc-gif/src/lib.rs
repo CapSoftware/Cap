@@ -108,20 +108,11 @@ impl GifEncoderWrapper {
             return Err(GifEncodingError::EncoderFinished);
         }
 
-        let collector = self
-            .collector
-            .as_mut()
-            .ok_or(GifEncodingError::EncoderFinished)?;
+        self.validate_frame(frame_data.len(), bytes_per_row)?;
 
         let w = self.width as usize;
         let h = self.height as usize;
         let expected_bytes_per_row = w * 4;
-
-        if bytes_per_row < expected_bytes_per_row
-            || frame_data.len() < bytes_per_row * h.saturating_sub(1) + expected_bytes_per_row
-        {
-            return Err(GifEncodingError::InvalidFrameData);
-        }
 
         let img = if bytes_per_row == expected_bytes_per_row {
             let pixel_count = w * h;
@@ -141,6 +132,66 @@ impl GifEncoderWrapper {
             }
             imgref::Img::new(rgba_pixels, w, h)
         };
+
+        self.submit_frame(img)
+    }
+
+    pub fn add_frame_owned(
+        &mut self,
+        frame_data: Vec<u8>,
+        bytes_per_row: usize,
+    ) -> Result<(), GifEncodingError> {
+        if self.finished {
+            return Err(GifEncodingError::EncoderFinished);
+        }
+
+        self.validate_frame(frame_data.len(), bytes_per_row)?;
+
+        if bytes_per_row % 4 != 0 || frame_data.len() % 4 != 0 || frame_data.capacity() % 4 != 0 {
+            return self.add_frame(&frame_data, bytes_per_row);
+        }
+
+        let w = self.width as usize;
+        let h = self.height as usize;
+
+        let mut frame_data = frame_data;
+        let (ptr, len, capacity) = (
+            frame_data.as_mut_ptr(),
+            frame_data.len(),
+            frame_data.capacity(),
+        );
+        std::mem::forget(frame_data);
+        // SAFETY: RGBA8 is #[repr(C)] with size 4 and alignment 1, the checks
+        // above guarantee the byte length and capacity are multiples of 4, and
+        // validate_frame guarantees the buffer covers every row at this stride.
+        let pixels = unsafe { Vec::from_raw_parts(ptr.cast::<RGBA8>(), len / 4, capacity / 4) };
+
+        self.submit_frame(imgref::Img::new_stride(pixels, w, h, bytes_per_row / 4))
+    }
+
+    fn validate_frame(
+        &self,
+        frame_len: usize,
+        bytes_per_row: usize,
+    ) -> Result<(), GifEncodingError> {
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let expected_bytes_per_row = w * 4;
+
+        if bytes_per_row < expected_bytes_per_row
+            || frame_len < bytes_per_row * h.saturating_sub(1) + expected_bytes_per_row
+        {
+            return Err(GifEncodingError::InvalidFrameData);
+        }
+
+        Ok(())
+    }
+
+    fn submit_frame(&mut self, img: imgref::ImgVec<RGBA8>) -> Result<(), GifEncodingError> {
+        let collector = self
+            .collector
+            .as_mut()
+            .ok_or(GifEncodingError::EncoderFinished)?;
 
         let pts = (self.frame_index as f64) / (self.fps as f64);
 
@@ -417,5 +468,71 @@ mod tests {
         .unwrap();
         assert!(output.first_error.is_none());
         assert_eq!(output.bytes, expected);
+    }
+
+    fn patterned_frame(width: usize, height: usize, bytes_per_row: usize) -> Vec<u8> {
+        let mut frame = vec![0xEE; bytes_per_row * height];
+        let mut hash = 7919u32;
+        for y in 0..height {
+            for x in 0..width {
+                hash ^= hash << 13;
+                hash ^= hash >> 17;
+                hash ^= hash << 5;
+                let value = hash % 64;
+                let start = y * bytes_per_row + x * 4;
+                frame[start] = ((value & 3) * 85) as u8;
+                frame[start + 1] = (((value >> 2) & 3) * 85) as u8;
+                frame[start + 2] = (((value >> 4) & 3) * 85) as u8;
+                frame[start + 3] = 255;
+            }
+        }
+        frame
+    }
+
+    fn encode_via_wrapper(owned: bool, bytes_per_row: usize) -> Vec<u8> {
+        let (width, height) = (100usize, 77usize);
+        let path = std::env::temp_dir().join(format!(
+            "cap-enc-gif-test-{}-{owned}-{bytes_per_row}.gif",
+            std::process::id()
+        ));
+        let mut encoder = GifEncoderWrapper::new(&path, width as u32, height as u32, 30).unwrap();
+        for _ in 0..3 {
+            let frame = patterned_frame(width, height, bytes_per_row);
+            if owned {
+                encoder.add_frame_owned(frame, bytes_per_row).unwrap();
+            } else {
+                encoder.add_frame(&frame, bytes_per_row).unwrap();
+            }
+        }
+        encoder.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn owned_frames_match_slice_frames_for_padded_rows() {
+        let bytes_per_row = (100 * 4usize).next_multiple_of(256);
+        assert_eq!(
+            encode_via_wrapper(true, bytes_per_row),
+            encode_via_wrapper(false, bytes_per_row)
+        );
+    }
+
+    #[test]
+    fn owned_frames_match_slice_frames_for_tight_rows() {
+        assert_eq!(
+            encode_via_wrapper(true, 100 * 4),
+            encode_via_wrapper(false, 100 * 4)
+        );
+    }
+
+    #[test]
+    fn owned_frames_match_slice_frames_for_unaligned_stride() {
+        let bytes_per_row = 100 * 4 + 2;
+        assert_eq!(
+            encode_via_wrapper(true, bytes_per_row),
+            encode_via_wrapper(false, bytes_per_row)
+        );
     }
 }

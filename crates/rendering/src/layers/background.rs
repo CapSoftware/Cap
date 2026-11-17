@@ -303,11 +303,7 @@ impl From<BackgroundSource> for Background {
                 noise_scale: noise_scale.unwrap_or(3.0),
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(clean_path) = path.as_deref().and_then(clean_background_path) {
-                    Background::Image { path: clean_path }
-                } else {
-                    Background::Color([1.0, 1.0, 1.0, 1.0])
-                }
+                Background::image_or_white(path.as_deref().and_then(clean_background_path))
             }
         }
     }
@@ -324,12 +320,51 @@ fn background_source_is_empty(source: &BackgroundSource) -> bool {
 }
 
 impl Background {
+    fn image_or_white(path: Option<String>) -> Self {
+        match path {
+            Some(path) => Background::Image { path },
+            None => Background::Color([1.0, 1.0, 1.0, 1.0]),
+        }
+    }
+
     pub fn from_source(source: BackgroundSource, transparent_when_empty: bool) -> Self {
         if transparent_when_empty && background_source_is_empty(&source) {
             Background::Color([0.0, 0.0, 0.0, 0.0])
         } else {
             Background::from(source)
         }
+    }
+}
+
+/// The last image source path and what it resolved to on disk, so the path
+/// is only cleaned and checked again when the source changes.
+#[derive(Default)]
+struct ResolvedImagePath(Option<(String, Option<String>)>);
+
+impl ResolvedImagePath {
+    fn background(
+        &mut self,
+        source: &BackgroundSource,
+        transparent_when_empty: bool,
+    ) -> Background {
+        let (BackgroundSource::Image { path: Some(path) }
+        | BackgroundSource::Wallpaper { path: Some(path) }) = source
+        else {
+            return Background::from_source(source.clone(), transparent_when_empty);
+        };
+        if path.is_empty() {
+            return Background::from_source(source.clone(), transparent_when_empty);
+        }
+
+        let resolved = match &self.0 {
+            Some((cached, resolved)) if cached == path => resolved.clone(),
+            _ => {
+                let resolved = clean_background_path(path);
+                self.0 = Some((path.clone(), resolved.clone()));
+                resolved
+            }
+        };
+        Background::image_or_white(resolved)
     }
 }
 
@@ -342,6 +377,7 @@ pub enum Inner {
     },
     ColorOrGradient {
         value: ColorOrGradient,
+        output_size: (u32, u32),
         #[allow(unused)]
         buffer: wgpu::Buffer,
         bind_group: wgpu::BindGroup,
@@ -353,6 +389,7 @@ pub struct BackgroundLayer {
     /// Bumped whenever `inner` is replaced, so consumers can cache anything
     /// derived from a static background (e.g. its blurred copy).
     generation: u64,
+    resolved_image_path: ResolvedImagePath,
     image_pipeline: ImageBackgroundPipeline,
     color_pipeline: GradientOrColorPipeline,
 }
@@ -362,9 +399,19 @@ impl BackgroundLayer {
         Self {
             inner: None,
             generation: 0,
+            resolved_image_path: ResolvedImagePath::default(),
             image_pipeline: ImageBackgroundPipeline::new(device),
             color_pipeline: GradientOrColorPipeline::new(device),
         }
+    }
+
+    pub fn background_for(
+        &mut self,
+        source: &BackgroundSource,
+        transparent_when_empty: bool,
+    ) -> Background {
+        self.resolved_image_path
+            .background(source, transparent_when_empty)
     }
 
     pub async fn prepare(
@@ -405,10 +452,11 @@ impl BackgroundLayer {
                             None => {
                                 let fallback_background = Background::Color([1.0, 1.0, 1.0, 1.0]);
                                 let buffer = GradientOrColorUniforms::from(fallback_background)
-                                    .to_buffer(device);
+                                    .to_buffer(device, uniforms.output_size);
                                 self.generation += 1;
                                 self.inner = Some(Inner::ColorOrGradient {
                                     value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
+                                    output_size: uniforms.output_size,
                                     bind_group: self.color_pipeline.bind_group(device, &buffer),
                                     buffer,
                                 });
@@ -475,10 +523,12 @@ impl BackgroundLayer {
                     ..
                 }) if &color == current_color => {}
                 _ => {
-                    let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    let buffer = GradientOrColorUniforms::from(background)
+                        .to_buffer(device, uniforms.output_size);
                     self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Color(color),
+                        output_size: uniforms.output_size,
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
                         buffer,
                     });
@@ -487,13 +537,16 @@ impl BackgroundLayer {
             Background::Gradient(gradient) => match &self.inner {
                 Some(Inner::ColorOrGradient {
                     value: ColorOrGradient::Gradient(current_gradient),
+                    output_size,
                     ..
-                }) if &gradient == current_gradient => {}
+                }) if &gradient == current_gradient && *output_size == uniforms.output_size => {}
                 _ => {
-                    let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    let buffer = GradientOrColorUniforms::from(background)
+                        .to_buffer(device, uniforms.output_size);
                     self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Gradient(gradient),
+                        output_size: uniforms.output_size,
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
                         buffer,
                     });
@@ -690,11 +743,12 @@ pub struct GradientOrColorUniforms {
     pub angle: f32,
     pub noise_intensity: f32,
     pub noise_scale: f32,
-    _padding: f32,
+    aspect_ratio: f32,
 }
 
 impl GradientOrColorUniforms {
-    fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
+    fn to_buffer(mut self, device: &wgpu::Device, output_size: (u32, u32)) -> wgpu::Buffer {
+        self.aspect_ratio = output_size.0 as f32 / output_size.1 as f32;
         device.create_buffer_init(
             &(wgpu::util::BufferInitDescriptor {
                 label: Some("GradientOrColorUniforms Buffer"),
@@ -724,7 +778,7 @@ impl From<Background> for GradientOrColorUniforms {
                 angle: 0.0,
                 noise_intensity: 0.0,
                 noise_scale: 0.0,
-                _padding: 0.0,
+                aspect_ratio: 1.0,
             },
             Background::Gradient(Gradient {
                 start,
@@ -743,7 +797,7 @@ impl From<Background> for GradientOrColorUniforms {
                 angle,
                 noise_intensity,
                 noise_scale,
-                _padding: 0.0,
+                aspect_ratio: 1.0,
             },
             Background::Image { .. } | Background::AnimatedGradient(_) => {
                 unreachable!("Textured backgrounds should be handled separately")
@@ -834,6 +888,49 @@ mod tests {
             }
             _ => panic!("Expected Color variant"),
         }
+    }
+
+    #[test]
+    fn image_path_is_checked_on_disk_only_when_the_source_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        std::fs::write(&first, b"").unwrap();
+        std::fs::write(&second, b"").unwrap();
+        let source = |path: &std::path::Path| BackgroundSource::Wallpaper {
+            path: Some(path.to_string_lossy().into_owned()),
+        };
+        let is_image = |background: Background, path: &std::path::Path| match background {
+            Background::Image { path: resolved } => resolved == path.to_string_lossy(),
+            _ => false,
+        };
+
+        let mut resolved = ResolvedImagePath::default();
+        assert!(is_image(
+            resolved.background(&source(&first), false),
+            &first
+        ));
+
+        std::fs::remove_file(&first).unwrap();
+        for _ in 0..3 {
+            assert!(is_image(
+                resolved.background(&source(&first), false),
+                &first
+            ));
+        }
+
+        assert!(is_image(
+            resolved.background(&source(&second), false),
+            &second
+        ));
+        assert!(matches!(
+            resolved.background(&source(&first), false),
+            Background::Color([1.0, 1.0, 1.0, 1.0])
+        ));
+        assert!(matches!(
+            resolved.background(&BackgroundSource::Wallpaper { path: None }, true),
+            Background::Color([0.0, 0.0, 0.0, 0.0])
+        ));
     }
 
     #[test]

@@ -18,42 +18,45 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 		const getSpaceOrOrg = Effect.fn(function* (
 			spaceOrOrgId: Space.SpaceIdOrOrganisationId,
 		) {
-			const [[space], [org]] = yield* Effect.all([
-				db.use((db) =>
-					db
-						.select({
-							id: Db.spaces.id,
-							name: Db.spaces.name,
-							organizationId: Db.spaces.organizationId,
-							createdById: Db.spaces.createdById,
-							iconUrl: Db.spaces.iconUrl,
-							settings: Db.spaces.settings,
-							public: Db.spaces.public,
-							hasPassword: Dz.sql`${Db.spaces.password} IS NOT NULL`.mapWith(
-								Boolean,
-							),
-						})
-						.from(Db.spaces)
-						.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
-						.limit(1),
-				),
-				db.use((db) =>
-					db
-						.select({
-							id: Db.organizations.id,
-							name: Db.organizations.name,
-							ownerId: Db.organizations.ownerId,
-						})
-						.from(Db.organizations)
-						.where(
-							Dz.eq(
-								Db.organizations.id,
-								spaceOrOrgId as Organisation.OrganisationId,
-							),
-						)
-						.limit(1),
-				),
-			]);
+			const [[space], [org]] = yield* Effect.all(
+				[
+					db.use((db) =>
+						db
+							.select({
+								id: Db.spaces.id,
+								name: Db.spaces.name,
+								organizationId: Db.spaces.organizationId,
+								createdById: Db.spaces.createdById,
+								iconUrl: Db.spaces.iconUrl,
+								settings: Db.spaces.settings,
+								public: Db.spaces.public,
+								hasPassword: Dz.sql`${Db.spaces.password} IS NOT NULL`.mapWith(
+									Boolean,
+								),
+							})
+							.from(Db.spaces)
+							.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
+							.limit(1),
+					),
+					db.use((db) =>
+						db
+							.select({
+								id: Db.organizations.id,
+								name: Db.organizations.name,
+								ownerId: Db.organizations.ownerId,
+							})
+							.from(Db.organizations)
+							.where(
+								Dz.eq(
+									Db.organizations.id,
+									spaceOrOrgId as Organisation.OrganisationId,
+								),
+							)
+							.limit(1),
+					),
+				],
+				{ concurrency: "unbounded" },
+			);
 			if (space)
 				return yield* Effect.succeed({ variant: "space" as const, space }).pipe(
 					Policy.withPolicy(

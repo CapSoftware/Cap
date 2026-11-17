@@ -1,0 +1,11 @@
+[common]
+save = "Enregistrer"
+braces = "Utilisez {{name}} dans les modèles"
+greeting = "Bonjour, {name} !"
+
+[common.meta]
+title = "Titre"
+
+[editor.selection]
+clips = { one = "Un clip", other = "{count} clips" }
+segments = { one = "{count} segment {kind} sélectionné", many = "{count} de segments {kind} sélectionnés", other = "{count} segments {kind} sélectionnés" }

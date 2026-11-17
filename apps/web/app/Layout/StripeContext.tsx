@@ -2,15 +2,20 @@
 
 import { createContext, type PropsWithChildren, use } from "react";
 
-type StripeContext = { plans: { yearly: string; monthly: string } };
+type StripeContext = {
+	plans: { yearly: string; monthly: string };
+	// Publishable key when the in-app Cap Pro checkout is on, otherwise null.
+	checkoutKey: string | null;
+};
 const StripeContext = createContext<StripeContext | undefined>(undefined);
 
 export function StripeContextProvider({
 	children,
 	plans,
+	checkoutKey = null,
 }: PropsWithChildren & Partial<StripeContext>) {
 	return (
-		<StripeContext.Provider value={plans ? { plans } : undefined}>
+		<StripeContext.Provider value={plans ? { plans, checkoutKey } : undefined}>
 			{children}
 		</StripeContext.Provider>
 	);

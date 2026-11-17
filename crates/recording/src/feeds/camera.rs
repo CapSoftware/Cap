@@ -25,7 +25,7 @@ use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
-use crate::output_pipeline::NativeCameraFrame;
+use crate::output_pipeline::{NativeCameraFrame, VideoFrame};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
@@ -69,6 +69,7 @@ pub struct CameraFeed {
 pub struct NativeCameraIngress {
     senders: std::sync::atomic::AtomicUsize,
     mailbox_full: std::sync::atomic::AtomicU64,
+    mjpeg_budget: Arc<MjpegOverlayBudget>,
 }
 
 impl NativeCameraIngress {
@@ -111,6 +112,22 @@ impl<T> FanoutTarget<T> for CountedSender<T> {
         if let Some(dropped) = &self.dropped {
             dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+}
+
+trait FanoutFrame {
+    fn share(&self) -> Self;
+}
+
+impl FanoutFrame for FFmpegVideoFrame {
+    fn share(&self) -> Self {
+        self.duplicate().unwrap_or_else(|| self.clone())
+    }
+}
+
+impl FanoutFrame for NativeCameraFrame {
+    fn share(&self) -> Self {
+        self.clone()
     }
 }
 
@@ -330,6 +347,98 @@ impl CameraFeedLock {
 
     pub fn video_info(&self) -> &VideoInfo {
         &self.video_info
+    }
+
+    /// Pins MJPEG decode at full resolution for the guard's lifetime.
+    /// Studio camera tracks hold this so an instant overlay budget cannot shrink them.
+    pub fn hold_full_resolution(&self) -> MjpegFullResHold {
+        MjpegOverlayBudget::hold_full(&self.native_ingress.mjpeg_budget)
+    }
+
+    /// Allows a scaled MJPEG IDCT that still covers `width`×`height`.
+    /// A studio full-resolution hold overrides this.
+    pub fn hold_instant_overlay(&self, width: u32, height: u32) -> MjpegOverlayHold {
+        MjpegOverlayBudget::hold_overlay(&self.native_ingress.mjpeg_budget, width, height)
+    }
+}
+
+/// Shared with the Linux capture thread. Studio increments `full_res_holds`;
+/// instant mode publishes the overlay rectangle. Full resolution wins.
+/// The mutex keeps an older hold from publishing over, or clearing, a newer one.
+#[derive(Debug, Default)]
+struct MjpegOverlayBudget {
+    state: std::sync::Mutex<MjpegOverlayState>,
+}
+
+#[derive(Debug, Default)]
+struct MjpegOverlayState {
+    full_res_holds: usize,
+    overlay: u64,
+    overlay_generation: u64,
+}
+
+impl MjpegOverlayBudget {
+    fn lock(&self) -> std::sync::MutexGuard<'_, MjpegOverlayState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn overlay_target(&self) -> Option<(u32, u32)> {
+        let state = self.lock();
+        if state.full_res_holds > 0 {
+            return None;
+        }
+        let width = (state.overlay >> 32) as u32;
+        let height = state.overlay as u32;
+        (width > 0 && height > 0).then_some((width, height))
+    }
+
+    fn hold_full(budget: &Arc<Self>) -> MjpegFullResHold {
+        budget.lock().full_res_holds += 1;
+        MjpegFullResHold {
+            budget: Arc::clone(budget),
+        }
+    }
+
+    fn hold_overlay(budget: &Arc<Self>, width: u32, height: u32) -> MjpegOverlayHold {
+        let mut state = budget.lock();
+        state.overlay_generation = state.overlay_generation.wrapping_add(1);
+        let generation = state.overlay_generation;
+        state.overlay = if width == 0 || height == 0 {
+            0
+        } else {
+            (u64::from(width) << 32) | u64::from(height)
+        };
+        drop(state);
+        MjpegOverlayHold {
+            budget: Arc::clone(budget),
+            generation,
+        }
+    }
+}
+
+pub struct MjpegFullResHold {
+    budget: Arc<MjpegOverlayBudget>,
+}
+
+impl Drop for MjpegFullResHold {
+    fn drop(&mut self) {
+        let holds = &mut self.budget.lock().full_res_holds;
+        *holds = holds.saturating_sub(1);
+    }
+}
+
+pub struct MjpegOverlayHold {
+    budget: Arc<MjpegOverlayBudget>,
+    generation: u64,
+}
+
+impl Drop for MjpegOverlayHold {
+    fn drop(&mut self) {
+        let mut state = self.budget.lock();
+        if state.overlay_generation == self.generation {
+            state.overlay = 0;
+        }
     }
 }
 
@@ -1254,7 +1363,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     _native_recipient: Recipient<NewNativeFrame>,
     _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    _native_ingress: Arc<NativeCameraIngress>,
+    native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -1263,6 +1372,7 @@ async fn setup_camera(
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
+    let mjpeg_budget = Arc::clone(&native_ingress.mjpeg_budget);
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
@@ -1271,7 +1381,19 @@ async fn setup_camera(
 
             let timestamp = Timestamp::Instant(std::time::Instant::now());
 
-            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+            // The first frame stays full resolution: VideoInfo is taken from it,
+            // and studio records that size. Scaled IDCT starts on later frames,
+            // and only while an instant overlay budget is set with no studio hold.
+            let overlay = if ready_signal.is_some() {
+                None
+            } else {
+                mjpeg_budget.overlay_target()
+            };
+            let decoded = match overlay {
+                Some((width, height)) => frame.as_ffmpeg_covering(width, height),
+                None => frame.as_ffmpeg(),
+            };
+            let Ok(mut ff_frame) = decoded else {
                 return;
             };
 
@@ -1619,7 +1741,7 @@ impl FanoutDrops<'_> {
     }
 }
 
-fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
+fn send_frame_to_camera_senders<T: FanoutFrame, S: FanoutTarget<T>>(
     senders: &mut Vec<S>,
     frame: T,
     frame_num: u64,
@@ -1639,7 +1761,8 @@ fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
         );
     }
 
-    // The last sender with room takes the frame itself instead of a clone.
+    // The last sender with room takes the frame itself; the others share its
+    // pixel storage.
     let last_ready_sender = senders
         .iter()
         .rposition(|sender| !sender.channel().is_full());
@@ -1665,7 +1788,7 @@ fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
             let Some(frame) = frame.as_ref() else {
                 break;
             };
-            sender.channel().try_send(frame.clone())
+            sender.channel().try_send(frame.share())
         };
 
         match send_result {
@@ -2759,6 +2882,12 @@ mod ingress_tests {
 
     type Output = (flume::Receiver<u32>, Arc<AtomicU64>);
 
+    impl FanoutFrame for u32 {
+        fn share(&self) -> Self {
+            *self
+        }
+    }
+
     struct Fanout {
         senders: Vec<CountedSender<u32>>,
         total: u64,
@@ -2859,6 +2988,58 @@ mod ingress_tests {
             .collect();
         assert_eq!(counts, [(4, 6), (10, 0), (2, 8)]);
         assert_eq!(fanout.total, 14);
+    }
+
+    #[test]
+    fn camera_fanout_delivers_identical_pixels_without_copying() {
+        let mut inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 48);
+        for plane in 0..inner.planes() {
+            for (index, byte) in inner.data_mut(plane).iter_mut().enumerate() {
+                *byte = (index * 7 + plane * 31) as u8;
+            }
+        }
+        inner.set_pts(Some(1234));
+        let expected: Vec<_> = (0..inner.planes())
+            .map(|plane| (inner.stride(plane), inner.data(plane).to_vec()))
+            .collect();
+        let pixels = inner.data(0).as_ptr();
+        let captured_at = std::time::Instant::now();
+        let (mut senders, receivers): (Vec<_>, Vec<_>) = (0..3).map(|_| flume::bounded(1)).unzip();
+        let mut total = 0;
+        let mut log = DropLog::default();
+
+        send_frame_to_camera_senders(
+            &mut senders,
+            FFmpegVideoFrame {
+                inner,
+                timestamp: Timestamp::Instant(captured_at),
+            },
+            0,
+            "Camera",
+            FanoutDrops {
+                total: &mut total,
+                log: &mut log,
+            },
+        );
+
+        let frames: Vec<FFmpegVideoFrame> = receivers
+            .iter()
+            .map(|rx| rx.try_recv().expect("fanned-out frame"))
+            .collect();
+        for frame in &frames {
+            assert_eq!(frame.inner.data(0).as_ptr(), pixels);
+            assert_eq!(frame.inner.format(), ffmpeg::format::Pixel::NV12);
+            assert_eq!((frame.inner.width(), frame.inner.height()), (64, 48));
+            assert_eq!(frame.inner.pts(), Some(1234));
+            assert!(matches!(frame.timestamp, Timestamp::Instant(value) if value == captured_at));
+            for (plane, (stride, bytes)) in expected.iter().enumerate() {
+                assert_eq!(frame.inner.stride(plane), *stride);
+                assert_eq!(frame.inner.data(plane), bytes.as_slice());
+            }
+        }
+        let buffer = unsafe { (*frames[0].inner.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+        assert_eq!(total, 0);
     }
 
     /// Consumers draining concurrently with the fan-out: every frame is
@@ -3040,5 +3221,41 @@ mod ingress_tests {
             eventually("overflow counted", || f.dropped.load(Relaxed) == 3).await;
             assert_eq!(f.rx.len(), capacity);
         }
+    }
+}
+
+#[cfg(test)]
+mod mjpeg_budget_tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn studio_hold_overrides_instant_overlay_until_both_are_released() {
+        let budget = Arc::new(MjpegOverlayBudget::default());
+        assert!(budget.overlay_target().is_none());
+
+        let overlay = MjpegOverlayBudget::hold_overlay(&budget, 324, 324);
+        assert_eq!(budget.overlay_target(), Some((324, 324)));
+
+        let studio = MjpegOverlayBudget::hold_full(&budget);
+        assert!(budget.overlay_target().is_none());
+        drop(studio);
+        assert_eq!(budget.overlay_target(), Some((324, 324)));
+
+        let replacement = MjpegOverlayBudget::hold_overlay(&budget, 200, 180);
+        drop(overlay);
+        assert_eq!(budget.overlay_target(), Some((200, 180)));
+        drop(replacement);
+        assert!(budget.overlay_target().is_none());
+    }
+
+    #[test]
+    fn empty_overlay_does_not_enable_scaled_decode() {
+        let budget = Arc::new(MjpegOverlayBudget::default());
+        let hold = MjpegOverlayBudget::hold_overlay(&budget, 0, 324);
+        assert!(budget.overlay_target().is_none());
+        drop(hold);
+        assert!(budget.overlay_target().is_none());
     }
 }

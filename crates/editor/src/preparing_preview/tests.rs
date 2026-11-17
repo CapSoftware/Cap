@@ -153,6 +153,7 @@ fn rendered_frame_identity_and_latest_sequence_are_both_required() {
         display: [0.0, 0.0, 160.0, 120.0],
         camera: None,
         output_size: [160, 120],
+        caption: None,
     };
     let mut frame = cap_rendering::RenderedFrame {
         data: Arc::new(Vec::new()),

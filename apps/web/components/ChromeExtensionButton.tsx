@@ -1,4 +1,4 @@
-import { Button, type ButtonProps } from "@cap/ui";
+import { Button, type ButtonProps } from "@cap/ui/button";
 import Image from "next/image";
 import { CAP_CHROME_EXTENSION_URL } from "@/lib/chrome-extension";
 

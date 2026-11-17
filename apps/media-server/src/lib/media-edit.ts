@@ -1,6 +1,18 @@
 import { writeFile } from "node:fs/promises";
-import { file, spawn } from "bun";
+import { file } from "bun";
+import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
+import { redactLogText } from "./log-redaction";
+import { spawn } from "./media-spawn";
+import {
+	buildNvencEncodeArgs,
+	logNvencFallback,
+	type NvencOptions,
+	nvencFallbackReason,
+	nvencOptionsFromEnv,
+	recordNvencAttempt,
+} from "./nvenc-encoder";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
@@ -24,6 +36,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_OUTPUT_FPS = 30;
 const MAX_TRANSCODE_RANGES_PER_BATCH = 4;
+const EDIT_CRF = 18;
 
 function roundTime(value: number) {
 	return Math.round(value * 1000) / 1000;
@@ -37,7 +50,7 @@ function getTotalRangeDuration(ranges: EditRange[]) {
 	return ranges.reduce((total, range) => total + getRangeDuration(range), 0);
 }
 
-function getTimeoutMs(ranges: EditRange[]) {
+export function getTimeoutMs(ranges: EditRange[]) {
 	const durationMs = getTotalRangeDuration(ranges) * 20_000;
 	return Math.min(MAX_TIMEOUT_MS, Math.max(DEFAULT_TIMEOUT_MS, durationMs));
 }
@@ -154,6 +167,7 @@ export function buildTranscodeEditArgs(
 	outputPath: string,
 	hasAudio: boolean,
 	fps = DEFAULT_OUTPUT_FPS,
+	nvenc: NvencOptions | null = null,
 ) {
 	if (ranges.length === 0 || ranges.length > MAX_TRANSCODE_RANGES_PER_BATCH) {
 		throw new Error(
@@ -187,12 +201,9 @@ export function buildTranscodeEditArgs(
 		[...filters, concat].join(";"),
 		"-map",
 		"[v]",
-		"-c:v",
-		"libx264",
-		"-preset",
-		"fast",
-		"-crf",
-		"18",
+		...(nvenc
+			? buildNvencEncodeArgs(nvenc, EDIT_CRF)
+			: ["-c:v", "libx264", "-preset", "fast", "-crf", String(EDIT_CRF)]),
 		"-pix_fmt",
 		"yuv420p",
 		"-enc_time_base:v",
@@ -238,24 +249,74 @@ async function drainStream(stream: ReadableStream<Uint8Array> | null) {
 	}
 }
 
-async function readStream(stream: ReadableStream<Uint8Array> | null) {
+export const STDERR_TAIL_BYTES = 64 * 1024;
+
+// FFmpeg writes progress and warnings to stderr for as long as it runs, and a
+// damaged input can make it write a line per packet. Only the end is ever
+// used, so the stream is read to its end and at most the last maxBytes are
+// kept.
+export async function readStreamTail(
+	stream: ReadableStream<Uint8Array> | null,
+	onText?: (text: string) => void,
+	maxBytes: number = STDERR_TAIL_BYTES,
+) {
 	if (!stream) return "";
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
+	let heldBytes = 0;
+	const live = new TextDecoder();
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
+			onText?.(live.decode(value, { stream: true }));
+			chunks.push(
+				value.length > maxBytes ? value.slice(value.length - maxBytes) : value,
+			);
+			heldBytes += Math.min(value.length, maxBytes);
+			while (heldBytes > maxBytes) {
+				const oldest = chunks[0];
+				if (!oldest) break;
+				const excess = heldBytes - maxBytes;
+				if (oldest.length <= excess) {
+					chunks.shift();
+					heldBytes -= oldest.length;
+				} else {
+					chunks[0] = oldest.slice(excess);
+					heldBytes -= excess;
+				}
+			}
 		}
 	} finally {
 		reader.releaseLock();
 	}
 
-	const decoder = new TextDecoder();
-	return chunks
-		.map((chunk) => decoder.decode(chunk, { stream: true }))
-		.join("");
+	const held = new Uint8Array(heldBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		held.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return new TextDecoder().decode(held);
+}
+
+const MAX_PENDING_LINE_LENGTH = 4096;
+
+// Hands complete lines to a listener as text arrives in pieces. A line that
+// never ends is cut off rather than held.
+export function lineReader(onLine: (line: string) => void) {
+	let pending = "";
+	return {
+		push(text: string) {
+			const parts = (pending + text).split(/\r\n|\r|\n/);
+			pending = (parts.pop() ?? "").slice(0, MAX_PENDING_LINE_LENGTH);
+			for (const line of parts) onLine(line);
+		},
+		end() {
+			if (pending) onLine(pending);
+			pending = "";
+		},
+	};
 }
 
 async function withTimeout<T>(
@@ -285,10 +346,11 @@ async function withTimeout<T>(
 	}
 }
 
-async function runFfmpegCommand(
+export async function runFfmpegCommand(
 	args: string[],
 	timeoutMs: number,
 	abortSignal?: AbortSignal,
+	stallWindows?: EncodeStallWindows,
 ) {
 	abortSignal?.throwIfAborted();
 
@@ -308,26 +370,48 @@ async function runFfmpegCommand(
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
 
+	const progressWatch = watchEncodeProgress(args.at(-1) ?? "", stallWindows);
+	let stallError: unknown;
+	progressWatch.stalled.catch((error: unknown) => {
+		stallError = error;
+		void terminateProcess(proc);
+	});
+
 	try {
 		await withTimeout(
 			(async () => {
+				// The first error lines can come long before the exit, with more
+				// output than is kept after them, so they are picked out as
+				// they arrive.
+				const errorLines: string[] = [];
+				const lines = lineReader((line) =>
+					collectFfmpegErrorLine(errorLines, line),
+				);
 				const [stderrText, exitCode] = await Promise.all([
-					readStream(proc.stderr as ReadableStream<Uint8Array>),
+					readStreamTail(proc.stderr as ReadableStream<Uint8Array>, (text) => {
+						progressWatch.observe(text);
+						lines.push(text);
+					}),
 					drainStream(proc.stdout as ReadableStream<Uint8Array>).then(
 						() => proc.exited,
 					),
 				]);
 
+				lines.end();
 				if (exitCode !== 0) {
-					throw new Error(
-						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrText.slice(-2000)}`,
+					throw new FfmpegExitError(
+						`FFmpeg exited with code ${exitCode}. Last stderr: ${redactLogText(stderrText.slice(-2000))}`,
+						errorLines,
 					);
 				}
 			})(),
 			timeoutMs,
 			() => terminateProcess(proc),
 		);
+	} catch (error) {
+		throw stallError ?? error;
 	} finally {
+		progressWatch.stop();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
@@ -398,6 +482,7 @@ async function renderTranscodedEdit(
 	hasAudio: boolean,
 	fps: number | undefined,
 	timeoutMs: number,
+	nvenc: NvencOptions | null,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ) {
@@ -411,7 +496,14 @@ async function renderTranscodedEdit(
 			const batchFile = await createTempFile(".mp4");
 			batchFiles.push(batchFile);
 			await runFfmpegCommand(
-				buildTranscodeEditArgs(inputPath, batch, batchFile.path, hasAudio, fps),
+				buildTranscodeEditArgs(
+					inputPath,
+					batch,
+					batchFile.path,
+					hasAudio,
+					fps,
+					nvenc,
+				),
 				getRemainingTimeoutMs(startedAt, timeoutMs),
 				abortSignal,
 			);
@@ -456,14 +548,36 @@ export async function renderEditedVideo({
 	}
 
 	const timeoutMs = getTimeoutMs(normalizedRanges);
+	const render = (nvenc: NvencOptions | null) =>
+		renderTranscodedEdit(
+			inputPath,
+			normalizedRanges,
+			Boolean(metadata.audioCodec),
+			metadata.fps,
+			timeoutMs,
+			nvenc,
+			onProgress,
+			abortSignal,
+		);
 
-	return await renderTranscodedEdit(
-		inputPath,
-		normalizedRanges,
-		Boolean(metadata.audioCodec),
-		metadata.fps,
-		timeoutMs,
-		onProgress,
-		abortSignal,
-	);
+	const nvenc = nvencOptionsFromEnv();
+	if (nvenc) {
+		try {
+			const outputFile = await render(nvenc);
+			recordNvencAttempt("edit");
+			return outputFile;
+		} catch (error) {
+			const reason = nvencFallbackReason(error, abortSignal?.aborted ?? false);
+			if (reason === null) throw error;
+			recordNvencAttempt("edit", reason);
+			logNvencFallback({
+				job: "edit",
+				sourceCodec: metadata.videoCodec,
+				gpuDecode: false,
+				reason,
+			});
+		}
+	}
+
+	return await render(null);
 }

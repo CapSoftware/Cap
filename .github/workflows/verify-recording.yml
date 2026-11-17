@@ -251,6 +251,15 @@ jobs:
           done
           SwitchAudioSource -s "BlackHole 2ch" -t output
           SwitchAudioSource -s "BlackHole 2ch" -t input
+          # macOS 15 plays alert and interface sounds through the default
+          # output, BlackHole, so ScreenCaptureKit records them as system
+          # audio and Instant's mixed track and every export carry them over
+          # the microphone markers. Hosted runners and macOS 26 capture
+          # silence there; silence these too so every runner records the same.
+          osascript -e 'set volume alert volume 0' || true
+          defaults write -g com.apple.sound.uiaudio.enabled -int 0
+          defaults write -g com.apple.sound.beep.volume -float 0
+          defaults write -g com.apple.sound.beep.feedback -int 0
           echo "outputs:"; SwitchAudioSource -a -t output
           echo "default output: $(SwitchAudioSource -c -t output)"
 

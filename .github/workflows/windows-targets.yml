@@ -44,6 +44,8 @@ jobs:
           $source = "crates/scap-targets/src/platform/win.rs"
           $patchedSource = [System.IO.File]::ReadAllBytes($source)
           try {
+            git cat-file -e "$($env:BASE_SHA)^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) { git fetch --no-tags --depth=1 origin $env:BASE_SHA }
             $baseline = git show "$($env:BASE_SHA):$source"
             if ($LASTEXITCODE -ne 0) { throw "Could not load base Windows implementation" }
             $baseline | Set-Content -Encoding utf8 $source

@@ -24,6 +24,7 @@ const primaryLinks: NavLink[] = [
 	{ href: "/pricing", text: "Pricing" },
 	{ href: "/download", text: "Download" },
 	{ href: "/agents", text: "Agents" },
+	{ href: "/infra", text: "Infra" },
 	{ href: "/migrate-from-loom", text: "Migrate from Loom" },
 	{ href: "/blog", text: "Blog" },
 	{ href: "/changelog", text: "Changelog" },
@@ -206,7 +207,6 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 										onClick={() => setOpen(false)}
 									>
 										<Logo
-											squaredMark
 											viewBoxDimensions="0 0 120 40"
 											style={{ width: 84, height: 36 }}
 										/>

@@ -9,7 +9,13 @@ import {
 } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { MonitorIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	type ReactElement,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
 import {
@@ -56,7 +62,11 @@ const waitForNextFrame = () =>
 		window.requestAnimationFrame(() => resolve());
 	});
 
-export const WebRecorderDialog = () => {
+export const WebRecorderDialog = ({
+	trigger,
+}: {
+	trigger?: ReactElement;
+} = {}) => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -277,10 +287,16 @@ export const WebRecorderDialog = () => {
 		<>
 			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogTrigger asChild>
-					<Button variant="blue" size="sm" className="flex items-center gap-2">
-						<MonitorIcon className="size-3.5" />
-						Record in Browser
-					</Button>
+					{trigger ?? (
+						<Button
+							variant="blue"
+							size="sm"
+							className="flex gap-2 items-center px-4 h-9"
+						>
+							<MonitorIcon className="size-3.5" />
+							Record in browser
+						</Button>
+					)}
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}

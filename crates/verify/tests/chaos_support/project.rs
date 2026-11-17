@@ -4,10 +4,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
@@ -965,18 +962,25 @@ pub fn open(dir: &Path) -> anyhow::Result<Verdict> {
     )))
 }
 
+const PREVIEW_FRAMES: [u32; 6] = [0, 1, 29, 59, 10_000, u32::MAX];
+
+// The scripted sequence below takes about 2.3 s. On a loaded macOS runner the
+// first decode can miss its 2 s deadline (crates/rendering/src/decoder) and
+// leave the sequence without a frame, so a usable project that has delivered
+// nothing yet gets the same preview requests again until a frame lands or
+// this deadline passes. A project that never delivers still fails, only later.
+const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(25);
+const FIRST_FRAME_RETRY: Duration = Duration::from_secs(1);
+
 /// The editor: `EditorInstance` (decoders, renderer, offline audio), preview
 /// frames at hostile positions, playback, seeks, stop and dispose.
 pub async fn editor(dir: &Path, expect_frames: bool) -> anyhow::Result<Verdict> {
-    let rendered = Arc::new(AtomicUsize::new(0));
-    let counter = rendered.clone();
+    let (delivered, frames) = tokio::sync::watch::channel(0usize);
     let (audio, _sink) = cap_editor::AudioOutput::new_offline();
     let instance = match cap_editor::EditorInstance::new_with_audio_output(
         dir.to_path_buf(),
         |_| {},
-        Box::new(move |_, _| {
-            counter.fetch_add(1, Ordering::Relaxed);
-        }),
+        Box::new(move |_, _| delivered.send_modify(|n| *n += 1)),
         None,
         Arc::new(audio),
     )
@@ -986,7 +990,7 @@ pub async fn editor(dir: &Path, expect_frames: bool) -> anyhow::Result<Verdict> 
         Err(e) => return Ok(Verdict::rejected(format!("editor: {e}"))),
     };
     let resolution = XY::new(320, 180);
-    for frame in [0, 1, 29, 59, 10_000, u32::MAX] {
+    for frame in PREVIEW_FRAMES {
         let _ = instance.preview_tx.send(Some((frame, 30, resolution)));
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
@@ -998,13 +1002,44 @@ pub async fn editor(dir: &Path, expect_frames: bool) -> anyhow::Result<Verdict> 
         instance.seek_playback(frame).await;
         tokio::time::sleep(Duration::from_millis(80)).await;
     }
+    if expect_frames && *frames.borrow() == 0 {
+        await_first_frame(&instance, frames.clone(), resolution).await;
+    }
     instance.dispose().await;
-    let n = rendered.load(Ordering::Relaxed);
+    let n = *frames.borrow();
     Ok(if n == 0 && expect_frames {
-        Verdict::Wrong("the editor opened but delivered no frame".into())
+        Verdict::Wrong(format!(
+            "the editor opened but delivered no frame within {} s",
+            FIRST_FRAME_DEADLINE.as_secs()
+        ))
     } else {
         Verdict::Ok(format!("{n} frames delivered"))
     })
+}
+
+async fn await_first_frame(
+    instance: &cap_editor::EditorInstance,
+    mut frames: tokio::sync::watch::Receiver<usize>,
+    resolution: XY<u32>,
+) {
+    let mut playing = instance.playback_watch();
+    let requests = async {
+        for &frame in PREVIEW_FRAMES.iter().cycle() {
+            if playing.wait_for(|active| !*active).await.is_err() {
+                break;
+            }
+            let _ = instance.preview_tx.send(Some((frame, 30, resolution)));
+            tokio::time::sleep(FIRST_FRAME_RETRY).await;
+        }
+        std::future::pending::<()>().await;
+    };
+    let _ = tokio::time::timeout(FIRST_FRAME_DEADLINE, async {
+        tokio::select! {
+            _ = frames.wait_for(|n| *n > 0) => {}
+            () = requests => {}
+        }
+    })
+    .await;
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -1,5 +1,7 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -12,7 +14,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	if (!user) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
@@ -59,9 +61,18 @@ export async function POST(request: NextRequest) {
 						eq(organizationMembers.userId, user.id),
 					),
 				)
-				.limit(1);
+				.limit(1)
+				.for("update");
 
 			if (membership) {
+				await tx
+					.delete(organizationMembers)
+					.where(eq(organizationMembers.id, membership.id));
+
+				if (membership.hasProSeat) {
+					await releaseProSeatSubscription(tx, user.id);
+				}
+
 				const organizationSpaces = await tx
 					.select({ id: spaces.id })
 					.from(spaces)
@@ -79,10 +90,6 @@ export async function POST(request: NextRequest) {
 						);
 				}
 
-				await tx
-					.delete(organizationMembers)
-					.where(eq(organizationMembers.id, membership.id));
-
 				const [remainingMembership] = await tx
 					.select({ organizationId: organizationMembers.organizationId })
 					.from(organizationMembers)
@@ -98,23 +105,6 @@ export async function POST(request: NextRequest) {
 				if (user.defaultOrgId === invite.organizationId) {
 					userUpdate.defaultOrgId = remainingMembership?.organizationId ?? null;
 				}
-				if (membership.hasProSeat) {
-					const [otherProSeat] = await tx
-						.select({ id: organizationMembers.id })
-						.from(organizationMembers)
-						.where(
-							and(
-								eq(organizationMembers.userId, user.id),
-								eq(organizationMembers.hasProSeat, true),
-							),
-						)
-						.limit(1);
-
-					if (!otherProSeat) {
-						userUpdate.thirdPartyStripeSubscriptionId = null;
-					}
-				}
-
 				if (Object.keys(userUpdate).length > 0) {
 					await tx.update(users).set(userUpdate).where(eq(users.id, user.id));
 				}

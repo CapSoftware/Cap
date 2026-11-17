@@ -4,7 +4,9 @@ import {
 	availability,
 	CHECK_INTERVAL_MS,
 	dates,
+	dayStatus,
 	emptyState,
+	firstMonitoredDay,
 	isStale,
 	publicSnapshot,
 	STALE_AFTER_MS,
@@ -13,6 +15,7 @@ import {
 const start = Date.UTC(2026, 9, 13, 12);
 const good = { status: "operational" as const, latencyMs: 120 };
 const bad = { status: "outage" as const, latencyMs: 8_000 };
+const emptyDay = { date: "", operational: 0, degraded: 0, outage: 0 };
 
 describe("monitor state", () => {
 	test("does not invent history or healthy services before the first check", () => {
@@ -134,5 +137,57 @@ describe("monitor state", () => {
 		expect(
 			publicSnapshot(state, start).incidents.map((entry) => entry.id),
 		).toEqual(["ongoing"]);
+	});
+
+	test("shows a day as an outage only when an outage was confirmed", () => {
+		const state = emptyState();
+		applyResult(state, "render", good, start);
+		applyResult(state, "render", bad, start + CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, start + 2 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", bad, start + 3 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, start + 4 * CHECK_INTERVAL_MS);
+		const today = () =>
+			publicSnapshot(state, start + 6 * CHECK_INTERVAL_MS)
+				.services.find((service) => service.id === "render")
+				?.days.at(-1);
+		expect(today()?.outage).toBe(2);
+		expect(state.incidents).toHaveLength(0);
+		expect(dayStatus(today() ?? emptyDay)).toBe("degraded");
+
+		applyResult(state, "render", bad, start + 5 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", bad, start + 6 * CHECK_INTERVAL_MS);
+		expect(state.incidents).toHaveLength(1);
+		expect(dayStatus(today() ?? emptyDay)).toBe("outage");
+	});
+
+	test("confirmed outages keep their colour on every day they span", () => {
+		const state = emptyState();
+		const lateEvening = Date.UTC(2026, 9, 13, 23, 55);
+		applyResult(state, "render", bad, lateEvening);
+		applyResult(state, "render", bad, lateEvening + CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, lateEvening + 2 * CHECK_INTERVAL_MS);
+		applyResult(state, "render", good, lateEvening + 3 * CHECK_INTERVAL_MS);
+		state.incidents = [];
+		const days = state.services.render.days;
+		expect(days.map((day) => day.date)).toEqual(["2026-10-13", "2026-10-14"]);
+		expect(days.map(dayStatus)).toEqual(["outage", "outage"]);
+
+		const slow = { status: "degraded" as const, latencyMs: 4_000 };
+		const other = emptyState();
+		applyResult(other, "render", bad, start);
+		applyResult(other, "render", slow, start + CHECK_INTERVAL_MS);
+		applyResult(other, "render", slow, start + 2 * CHECK_INTERVAL_MS);
+		expect(other.incidents).toHaveLength(1);
+		expect(dayStatus(other.services.render.days[0])).toBe("degraded");
+	});
+
+	test("history starts at the first monitored day across services", () => {
+		const state = emptyState();
+		expect(firstMonitoredDay(publicSnapshot(state, start).services)).toBe(0);
+		applyResult(state, "media", good, start - 3 * 86_400_000);
+		applyResult(state, "website", good, start - 86_400_000);
+		const services = publicSnapshot(state, start).services;
+		expect(firstMonitoredDay(services)).toBe(86);
+		expect(services[0].days[86].date).toBe("2026-10-10");
 	});
 });

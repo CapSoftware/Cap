@@ -10,8 +10,14 @@ import { Comment, Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { revalidatePath } from "next/cache";
+import {
+	COMMENT_RATE_LIMITED_MESSAGE,
+	isCommentRateLimited,
+} from "@/lib/comment-rate-limit";
+import { isReplyParentOnVideo } from "@/lib/comment-reply-parent";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
+import { isVideoFeedbackDisabled } from "@/lib/video-feedback-rules";
 
 export async function newComment(data: {
 	content: string;
@@ -42,6 +48,10 @@ export async function newComment(data: {
 		throw new Error("Content and videoId are required");
 	}
 
+	if (await isCommentRateLimited(user.id)) {
+		throw new Error(COMMENT_RATE_LIMITED_MESSAGE);
+	}
+
 	// Authentication alone isn't authorization: without this, any logged-in user could
 	// comment on someone else's private video by guessing its id.
 	//
@@ -67,6 +77,20 @@ export async function newComment(data: {
 	if (accessExit.value.length === 0) {
 		throw new Error("Video not found");
 	}
+
+	if (
+		await isVideoFeedbackDisabled(
+			videoId,
+			conditionalType === "reaction" ? "disableReactions" : "disableComments",
+		)
+	)
+		throw new Error("Feedback is disabled on this video");
+
+	if (
+		parentCommentId &&
+		!(await isReplyParentOnVideo(parentCommentId, videoId))
+	)
+		throw new Error("Comment not found");
 
 	const id = Comment.CommentId.make(nanoId());
 

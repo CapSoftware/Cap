@@ -179,6 +179,8 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Decoder, width: 
 
 pub struct FFmpegDecoder {
     input: DecoderInput,
+    // Declared before `hw_device` so the codec context, whose get_format
+    // callback writes to the device's fallback flag, is freed first.
     decoder: avcodec::decoder::Video,
     stream_index: usize,
     hw_device: Option<HwDevice>,
@@ -273,7 +275,7 @@ pub fn open_fragmented_input(
                 .file_name()
                 .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
     });
-    fragments.sort();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
     if fragments.is_empty() {
         return Err(format!(
             "no .m4s segments found in fragmented directory: {}",
@@ -459,8 +461,13 @@ impl FFmpegDecoder {
         self.start_time
     }
 
+    /// Whether frames come from the hardware decoder. False once FFmpeg has
+    /// fallen back to software because the hardware setup failed, which is
+    /// only known after the first packet is decoded.
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.hw_device.is_some()
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -477,6 +484,13 @@ pub struct FramesIter<'a> {
 impl FramesIter<'_> {
     pub fn decoder(&self) -> &avcodec::decoder::Video {
         self.decoder
+    }
+
+    /// [`FFmpegDecoder::is_hardware_accelerated`] while frames are read.
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -628,6 +642,43 @@ mod tests {
             assert!(!expected.is_empty());
             assert_eq!(frames(&mut candidate), expected);
         }
+    }
+
+    #[test]
+    fn fragmented_decoder_reads_past_fragment_999_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        encode_segments(&source);
+        let expected = frames(&mut FFmpegDecoder::new(&source, None).unwrap());
+        let mut fragments = std::fs::read_dir(&source)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+            .collect::<Vec<_>>();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
+        let first_index = 1000 - fragments.len() as u64 / 2;
+        let renamed = fragments
+            .iter()
+            .zip(first_index..)
+            .map(|(path, index)| (path, source.join(format!("segment_{index:03}.m4s.renamed"))))
+            .collect::<Vec<_>>();
+        for (from, to) in &renamed {
+            std::fs::rename(from, to).unwrap();
+        }
+        for (_, to) in &renamed {
+            std::fs::rename(to, to.with_extension("")).unwrap();
+        }
+        assert!(source.join("segment_999.m4s").is_file());
+        assert!(source.join("segment_1000.m4s").is_file());
+
+        let actual = frames(&mut FFmpegDecoder::new(&source, None).unwrap());
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[1].0.unwrap() > pair[0].0.unwrap())
+        );
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual, expected);
     }
 
     #[test]

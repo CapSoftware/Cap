@@ -1,5 +1,6 @@
 use cap_recording::{
-    Mp4Muxer, OggMuxer, OutputPipeline, SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
+    Mp4Muxer, OggMuxer, OggMuxerConfig, OutputPipeline, SegmentedVideoMuxer,
+    SegmentedVideoMuxerConfig,
     test_sources::{
         AudioGenerator, AudioTestConfig, OutputFormat, RecordingValidator, SyntheticAudioSource,
         SyntheticAudioSourceConfig, TestConfig, TestPattern, TestPatternVideoSource,
@@ -468,7 +469,7 @@ async fn run_audio_only_ogg_recording(
     let pipeline = OutputPipeline::builder(output_path.to_path_buf())
         .with_timestamps(timestamps)
         .with_audio_source::<SyntheticAudioSource>(audio_source_config)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await?;
 
     tokio::time::sleep(duration + Duration::from_millis(500)).await;

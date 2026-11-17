@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "apps/cli",
-    "apps/desktop/src-tauri",
     "crates/*",
     "crates/workspace-hack",
 ]
@@ -24,7 +23,6 @@ tokio = { version = "1.39.3", features = [
     "rt-multi-thread",
     "time",
 ] }
-tauri = { version = "2.5.0", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
@@ -109,6 +107,13 @@ opt-level = 2
 [profile.dev.package.cap-audio]
 opt-level = 2
 
+# opt-level 0 compiles the AVX2 BT.709 kernel into a spill loop. On the
+# ci-verify profile that is 180 ms for 1080p against 3 ms for swscale, and
+# the Windows real-capture job then keeps about 6 fps. opt-level 1 is under
+# 2 ms, still faster than swscale.
+[profile.dev.package.cap-enc-ffmpeg]
+opt-level = 1
+
 # The verification suite decodes markers from every output pixel it reads;
 # unoptimised it spends minutes in its own loops.
 [profile.dev.package.cap-verify]
@@ -124,6 +129,11 @@ debug = 0
 incremental = false
 
 [profile.ci-verify.package."*"]
+opt-level = 1
+
+# `package."*"` does not cover workspace members, so this crate otherwise
+# stays at opt-level 0. See `[profile.dev.package.cap-enc-ffmpeg]`.
+[profile.ci-verify.package.cap-enc-ffmpeg]
 opt-level = 1
 
 [profile.ci-verify.package.cap-verify]
@@ -151,15 +161,6 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
-tao = { path = "vendor/tao" }
 
 # https://github.com/CapSoftware/reqwest/commit/9b5ecbd5210a9510fde766015cabb724c1e70d2e
 reqwest = { git = "https://github.com/CapSoftware/reqwest", rev = "9b5ecbd5210a9510fde766015cabb724c1e70d2e" }
-
-# tauri-nspanel v2 @ 18ffb9a with ownership fixes: `to_panel()` no longer steals
-# tao's NSWindow retain (every repeat call was an over-release), converting the
-# same window twice is a no-op, the store forgets destroyed windows, and the
-# broken `dealloc` override (NSObject dealloc + jump through a garbage pointer)
-# is gone. See vendor/tauri-nspanel/CAP-CHANGES.md.
-[patch."https://github.com/ahkohd/tauri-nspanel"]
-tauri-nspanel = { path = "vendor/tauri-nspanel" }

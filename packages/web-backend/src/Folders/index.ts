@@ -51,6 +51,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
+			organizationId: Organisation.OrganisationId;
 			parentId: Folder.FolderId | null;
 			spaceId: Space.SpaceIdOrOrganisationId | null;
 		}): Effect.Effect<void, DatabaseError, Database> =>
@@ -59,6 +60,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					db
 						.select({
 							id: Db.folders.id,
+							organizationId: Db.folders.organizationId,
 							parentId: Db.folders.parentId,
 							spaceId: Db.folders.spaceId,
 						})
@@ -70,8 +72,19 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					yield* deleteFolder(child);
 				}
 
-				// Folders can't be both in the root and in a space
-				if (folder.spaceId) {
+				if (folder.spaceId === folder.organizationId) {
+					yield* db.use((db) =>
+						db
+							.update(Db.sharedVideos)
+							.set({ folderId: folder.parentId })
+							.where(
+								Dz.and(
+									Dz.eq(Db.sharedVideos.folderId, folder.id),
+									Dz.eq(Db.sharedVideos.organizationId, folder.organizationId),
+								),
+							),
+					);
+				} else if (folder.spaceId) {
 					const { spaceId } = folder;
 					yield* db.use((db) =>
 						db
@@ -120,7 +133,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				if (Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
 
-					yield* repo
+					const parent = yield* repo
 						.getById(parentId, {
 							organizationId: Organisation.OrganisationId.make(
 								user.activeOrganizationId,
@@ -134,6 +147,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 								),
 							),
 						);
+					if (parent.spaceId !== Option.getOrNull(data.spaceId))
+						return yield* new Folder.NotFoundError();
 				}
 
 				yield* repo.create({
@@ -151,7 +166,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
-			 * relocated to the root of the collection (space or My Caps) they're in
+			 * relocated to its parent folder, or the collection root if it has no parent.
 			 */
 			delete: Effect.fn("Folders.delete")(function* (id: Folder.FolderId) {
 				const [folder] = yield* db
@@ -176,10 +191,14 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					),
 				);
 
+				// A blank name would leave the folder unnamed everywhere it is
+				// listed; keep the current one.
+				const name = data.name?.trim() === "" ? undefined : data.name;
+
 				// Drizzle throws on an all-undefined .set(); a payload with only an
 				// id is a no-op, not an error.
 				if (
-					data.name === undefined &&
+					name === undefined &&
 					data.color === undefined &&
 					data.public === undefined &&
 					data.publicPage === undefined &&
@@ -215,6 +234,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 								),
 							),
 						);
+					if (parentFolder.spaceId !== folder.spaceId)
+						return yield* new Folder.ParentNotFoundError();
 
 					// Check for circular references in the folder hierarchy
 					let currentParentId = parentFolder.parentId;
@@ -238,7 +259,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					db
 						.update(Db.folders)
 						.set({
-							name: data.name,
+							name,
 							color: data.color,
 							public: data.public,
 							// Atomic merge so concurrent patches (and the logo upload

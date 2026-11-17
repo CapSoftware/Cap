@@ -42,40 +42,32 @@ pub fn acquire() {
             activate_macos_instance,
         ) {
             Ok(Some(lock)) => lock,
-            Ok(None) => std::process::exit(0),
+            Ok(None) => crate::startup::exit(0),
             Err(error) => {
-                tracing::error!(%error, "Could not acquire the Cap GPUI instance lock");
-                std::process::exit(1);
+                crate::startup::fail(format!("Could not acquire the Cap instance lock: {error}"))
             }
         };
         if INSTANCE_LOCK.set(lock).is_err() {
-            tracing::error!("The Cap GPUI instance lock was initialized twice");
-            std::process::exit(1);
+            crate::startup::fail("The Cap instance lock was initialized twice.");
         }
         if let Err(error) = publish_macos_pidfile(&path) {
-            tracing::error!(%error, "Could not publish the Cap GPUI instance pidfile");
-            std::process::exit(1);
+            crate::startup::fail(format!(
+                "Could not publish the Cap instance pidfile: {error}"
+            ));
         }
     }
     #[cfg(windows)]
-    acquire_windows_instance(&path);
+    let _launch_lock = acquire_windows_instance(&path);
     #[cfg(target_os = "linux")]
-    if let Ok(raw) = std::fs::read_to_string(&path)
-        && let Ok(pid) = raw.trim().parse::<i32>()
-        && pid > 0
-        && pid != std::process::id() as i32
-        && is_cap_gpui(pid)
-    {
-        match forward_linux_reopen(&path, pid as u32) {
-            Ok(()) => tracing::info!(pid, "Requested the existing Cap GPUI controls"),
-            Err(error) => tracing::warn!(
-                pid,
-                %error,
-                "Could not reopen Cap GPUI; the existing instance remains unchanged"
-            ),
-        }
-        std::process::exit(0);
-    }
+    let _launch_lock = match acquire_linux_instance(
+        &path,
+        |pid| forward_linux_reopen(&path, pid),
+        crate::startup::confirm_quit_unresponsive,
+    ) {
+        Ok(LinuxLaunch::HandedOff | LinuxLaunch::Cancelled) => crate::startup::exit(0),
+        Ok(LinuxLaunch::Start(lock)) => lock,
+        Err(error) => crate::startup::fail(error),
+    };
     #[cfg(not(target_os = "macos"))]
     {
         if let Some(parent) = path.parent() {
@@ -88,15 +80,196 @@ pub fn acquire() {
 
     #[cfg(target_os = "linux")]
     if let Err(error) = start_linux_reopen(&path) {
-        tracing::error!(%error, "could not start Cap GPUI activation");
-        std::process::exit(1);
+        crate::startup::fail(format!("Could not start Cap activation: {error}"));
     }
 
     #[cfg(target_os = "macos")]
     if let Err(error) = start_deep_link_forwarding(&path) {
-        tracing::error!(%error, "could not start Cap GPUI deep-link forwarding");
-        std::process::exit(1);
+        crate::startup::fail(format!("Could not start Cap deep-link forwarding: {error}"));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum LinuxLaunch {
+    HandedOff,
+    Cancelled,
+    /// Held until this launch has published its pidfile and activation
+    /// socket, so the next launch finds them instead of a stale pid.
+    Start(std::fs::File),
+}
+
+/// Launches of one profile take turns through an exclusive lock, so two of
+/// them can never both end the same hung copy and both carry on. Every pass
+/// repeats the hand-off, so a copy that recovered or exited while the prompt
+/// was open is never ended, and only the exact process the user confirmed is.
+/// The pidfd is taken before the prompt, so however long the prompt stays up
+/// a reused pid can never receive the signal. A launch that waits on the lock
+/// while another launch shows the prompt then hands off to whichever copy
+/// that prompt leaves running.
+#[cfg(target_os = "linux")]
+fn acquire_linux_instance(
+    path: &Path,
+    mut forward: impl FnMut(u32) -> std::io::Result<()>,
+    mut confirm: impl FnMut() -> bool,
+) -> Result<LinuxLaunch, String> {
+    let lock = lock_linux_launch(path)
+        .map_err(|error| format!("Could not acquire the Cap instance lock: {error}"))?;
+    let mut confirmed: Option<(u32, LinuxProcess)> = None;
+    let mut ended = None;
+    loop {
+        let Some(pid) = running_linux_instance(path) else {
+            return Ok(LinuxLaunch::Start(lock));
+        };
+        match forward(pid) {
+            Ok(()) => {
+                tracing::info!(pid, "Requested the existing Cap GPUI controls");
+                return Ok(LinuxLaunch::HandedOff);
+            }
+            Err(error) => {
+                tracing::warn!(pid, %error, "The running Cap GPUI did not answer the reopen request")
+            }
+        }
+        let confirmed_pid = confirmed.as_ref().map(|(pid, _)| *pid);
+        match takeover_step(pid, confirmed_pid, ended) {
+            TakeoverStep::Ask => {
+                let process = match LinuxProcess::open(pid as i32) {
+                    Ok(process) => process,
+                    Err(error) if error.raw_os_error() == Some(libc::ESRCH) => continue,
+                    Err(error) => {
+                        return Err(format!(
+                            "Another copy of Cap (process {pid}) is running but isn't responding, and it could not be checked: {error}"
+                        ));
+                    }
+                };
+                if !is_cap_gpui(pid as i32) {
+                    continue;
+                }
+                if !confirm() {
+                    return Ok(LinuxLaunch::Cancelled);
+                }
+                confirmed = Some((pid, process));
+            }
+            TakeoverStep::End => {
+                let Some((_, process)) = confirmed.take() else {
+                    continue;
+                };
+                if !end_linux_instance(&process) {
+                    return Err(format!(
+                        "The copy of Cap that isn't responding (process {pid}) could not be quit."
+                    ));
+                }
+                tracing::info!(pid, "ended the unresponsive Cap GPUI");
+                ended = Some(pid);
+            }
+            TakeoverStep::GiveUp => {
+                return Err(format!(
+                    "The copy of Cap that isn't responding (process {pid}) could not be quit."
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn running_linux_instance(path: &Path) -> Option<u32> {
+    let pid = std::fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    (pid > 0 && pid != std::process::id() as i32 && is_cap_gpui(pid)).then_some(pid as u32)
+}
+
+#[cfg(target_os = "linux")]
+fn lock_linux_launch(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path.with_extension("lock"))?;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxProcess(std::os::fd::OwnedFd);
+
+#[cfg(target_os = "linux")]
+impl LinuxProcess {
+    fn open(pid: i32) -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd;
+
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self(unsafe {
+            std::os::fd::OwnedFd::from_raw_fd(fd as i32)
+        }))
+    }
+
+    fn signal(&self, signal: libc::c_int) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        let sent = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if sent == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    fn exited_within(&self, timeout: std::time::Duration) -> bool {
+        use std::os::fd::AsRawFd;
+
+        let mut poll = libc::pollfd {
+            fd: self.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut poll, 1, timeout.as_millis() as libc::c_int) };
+        ready > 0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn end_linux_instance(process: &LinuxProcess) -> bool {
+    let limit = std::time::Duration::from_secs(3);
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        match process.signal(signal) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return true,
+            Err(_) => return false,
+        }
+        if process.exited_within(limit) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Linux zombies retain their comm name but lose their exe link.
@@ -541,18 +714,14 @@ fn linux_reopen_address(
         .parent()
         .ok_or_else(|| std::io::Error::other("The instance directory is missing"))?
         .canonicalize()?;
+    // Only what every launch of this user's Cap sees alike. A terminal and
+    // GNOME's app grid pass different session variables (DISPLAY,
+    // XDG_SESSION_ID), and hashing those sent a relaunch to a socket nobody
+    // listened on. The owner's pid, start time and boot id already make the
+    // name unique, and the peer credentials check keeps it to this user.
     let mut scope = std::collections::hash_map::DefaultHasher::new();
     directory.hash(&mut scope);
     owner.hash(&mut scope);
-    for name in [
-        "XDG_RUNTIME_DIR",
-        "XDG_SESSION_ID",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-    ] {
-        std::env::var_os(name).hash(&mut scope);
-    }
     std::os::unix::net::SocketAddr::from_abstract_name(format!(
         "cap-gpui-reopen-{:016x}",
         scope.finish()
@@ -639,6 +808,38 @@ fn read_linux_reopen_actions(
     reader: &mut impl std::io::Read,
     owner: LinuxInstanceIdentity,
 ) -> std::io::Result<LinuxReopenActions> {
+    read_linux_reopen_request(reader, owner).map(|(actions, _)| actions)
+}
+
+/// The longest activation token a relaunch forwards. Compositors issue short
+/// opaque strings; anything this long is not one.
+#[cfg(target_os = "linux")]
+const MAX_ACTIVATION_TOKEN_BYTES: usize = 4096;
+
+#[cfg(target_os = "linux")]
+fn valid_activation_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= MAX_ACTIVATION_TOKEN_BYTES
+        && token.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// The relaunch's activation token, from the launcher that started it
+/// (`XDG_ACTIVATION_TOKEN` on Wayland). Focus stealing prevention lets the
+/// running instance raise its window with it.
+#[cfg(target_os = "linux")]
+fn launch_activation_token() -> Option<String> {
+    std::env::var("XDG_ACTIVATION_TOKEN")
+        .ok()
+        .filter(|token| valid_activation_token(token))
+}
+
+/// A forwarded relaunch: its actions, and the activation token it came with
+/// (`CAPACTV1` frames, which carry the token ahead of the actions).
+#[cfg(target_os = "linux")]
+fn read_linux_reopen_request(
+    reader: &mut impl std::io::Read,
+    owner: LinuxInstanceIdentity,
+) -> std::io::Result<(LinuxReopenActions, Option<String>)> {
     let invalid = || {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -649,7 +850,27 @@ fn read_linux_reopen_actions(
     reader.read_exact(&mut request)?;
     let mut header = linux_reopen_payload(owner);
     if request == header {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
+    }
+    let mut activation = header;
+    activation[..8].copy_from_slice(b"CAPACTV1");
+    let mut token = None;
+    if request == activation {
+        let mut size = [0; 4];
+        reader.read_exact(&mut size)?;
+        let size = u32::from_be_bytes(size) as usize;
+        if size > MAX_ACTIVATION_TOKEN_BYTES {
+            return Err(invalid());
+        }
+        let mut raw = vec![0; size];
+        reader.read_exact(&mut raw)?;
+        let raw = String::from_utf8(raw).map_err(|_| invalid())?;
+        if !valid_activation_token(&raw) {
+            return Err(invalid());
+        }
+        token = Some(raw);
+        request = header;
+        request[..8].copy_from_slice(b"CAPREOP2");
     }
     header[..8].copy_from_slice(b"CAPREOP2");
     if request != header {
@@ -680,7 +901,42 @@ fn read_linux_reopen_actions(
         actions.push(parse_linux_reopen_action(raw)?);
         remaining = rest;
     }
-    Ok(actions)
+    Ok((actions, token))
+}
+
+/// Writes a relaunch for the running instance, with the activation token
+/// when there is one.
+#[cfg(target_os = "linux")]
+fn write_linux_reopen_request(
+    writer: &mut impl std::io::Write,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+    token: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(token) = token.filter(|token| valid_activation_token(token)) else {
+        return write_linux_reopen_actions(writer, owner, actions);
+    };
+    if actions.len() > MAX_FORWARDED_DEEP_LINK_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Too many forwarded Cap action bytes",
+        ));
+    }
+    let mut header = linux_reopen_payload(owner);
+    header[..8].copy_from_slice(b"CAPACTV1");
+    writer.write_all(&header)?;
+    writer.write_all(&(token.len() as u32).to_be_bytes())?;
+    writer.write_all(token.as_bytes())?;
+    writer.write_all(&(actions.len() as u32).to_be_bytes())?;
+    writer.write_all(actions)
+}
+
+/// The newest activation token a relaunch brought, until the window it
+/// raises is shown.
+#[cfg(target_os = "linux")]
+fn pending_activation_token() -> &'static std::sync::Mutex<Option<String>> {
+    static TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    &TOKEN
 }
 
 #[cfg(target_os = "linux")]
@@ -734,7 +990,12 @@ fn receive_linux_reopen(
     stream.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_millis(250)))?;
     linux_peer(stream)?;
-    let actions = read_linux_reopen_actions(stream, owner)?;
+    let (actions, token) = read_linux_reopen_request(stream, owner)?;
+    if let Some(token) = token {
+        *pending_activation_token()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(token);
+    }
     match requests.try_send(actions) {
         Ok(()) => {}
         Err(flume::TrySendError::Full(actions)) if actions.is_empty() => {}
@@ -776,6 +1037,16 @@ fn send_linux_reopen(
     owner: LinuxInstanceIdentity,
     actions: &[u8],
 ) -> std::io::Result<()> {
+    send_linux_reopen_with_token(address, owner, actions, None)
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_reopen_with_token(
+    address: std::os::unix::net::SocketAddr,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+    token: Option<&str>,
+) -> std::io::Result<()> {
     use std::io::Read;
     let started = std::time::Instant::now();
     let mut stream = loop {
@@ -803,7 +1074,7 @@ fn send_linux_reopen(
             "The activation socket belongs to another process",
         ));
     }
-    write_linux_reopen_actions(&mut stream, owner, actions)?;
+    write_linux_reopen_request(&mut stream, owner, actions, token)?;
     let mut reply = [0];
     stream.read_exact(&mut reply)?;
     if reply != [1] || linux_instance_identity(owner.pid)? != owner {
@@ -812,6 +1083,20 @@ fn send_linux_reopen(
         ));
     }
     Ok(())
+}
+
+/// Whether the running Cap hung up without acknowledging: how an instance from
+/// before activation tokens rejects their frame, and how a current one fails
+/// before it queues anything. A timeout may come after the actions were
+/// queued, so resending then could run them twice.
+#[cfg(target_os = "linux")]
+fn closed_without_queueing(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -823,7 +1108,20 @@ fn forward_linux_reopen(path: &Path, pid: u32) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("cap-gpui-reopen-request".into())
         .spawn(move || {
-            let _ = send.send(send_linux_reopen(address, owner, &actions));
+            // An instance from before activation tokens rejects the frame
+            // that carries one; it still reopens without it.
+            let token = launch_activation_token();
+            if token.is_some() {
+                tracing::info!("forwarding the launcher's activation token");
+            }
+            let result = match send_linux_reopen_with_token(address.clone(), owner, &actions, token.as_deref()) {
+                Err(error) if token.is_some() && closed_without_queueing(&error) => {
+                    tracing::info!(%error, "the running Cap refused the activation token; reopening without it");
+                    send_linux_reopen(address, owner, &actions)
+                }
+                result => result,
+            };
+            let _ = send.send(result);
         })?;
     receive.recv_timeout(LINUX_REOPEN_TIMEOUT).map_err(|_| {
         std::io::Error::new(
@@ -845,6 +1143,35 @@ fn linux_reopen_allowed(
                 && mode == Some(crate::recording::RecordingMode::Studio)))
 }
 
+/// A hidden main window maps again a moment after it is shown, and an
+/// activation sent before then has no window to raise; the compositor drops
+/// repeats once the token is used.
+#[cfg(target_os = "linux")]
+fn raise_shown_window_with_token(token: String, cx: &mut gpui::App) {
+    let windows = cx.global::<crate::app_windows::AppWindows>();
+    // The reopen brings onboarding forward in place of the main window, which
+    // stays hidden (and unmapped) until onboarding is done.
+    let target: gpui::AnyWindowHandle = match windows.onboarding {
+        Some(onboarding) => onboarding.into(),
+        None => windows.main.into(),
+    };
+    cx.spawn(async move |cx| {
+        for delay in [0, 150, 400, 1000] {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(delay))
+                .await;
+            let token = token.clone();
+            if let Err(error) =
+                target.update(cx, |_, window, _| window.activate_window_with_token(token))
+            {
+                tracing::warn!(%error, "the reopened window was gone before it could be raised");
+                return;
+            }
+        }
+    })
+    .detach();
+}
+
 #[cfg(target_os = "linux")]
 pub fn init_linux_reopen(cx: &mut gpui::App) {
     let requests = linux_reopen_channel().1.clone();
@@ -859,8 +1186,16 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
                 }
                 let session = crate::session::RecordingSession::global(cx);
                 let current = session.read(cx);
+                let token = pending_activation_token()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 if linux_reopen_allowed(current.phase, current.mode(), current.instant_cleanup_safe()) {
                     crate::app_windows::show_main_window(cx);
+                    if let Some(token) = token {
+                        tracing::info!("raising the reopened window with the relaunch's activation token");
+                        raise_shown_window_with_token(token, cx);
+                    }
                 } else {
                     tracing::info!("Cap controls remain hidden while recording is changing state or cannot pause");
                 }
@@ -870,8 +1205,10 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
     .detach();
 }
 
+/// Held until this launch has published its pidfile and endpoint, so the next
+/// launch finds them instead of a stale pid.
 #[cfg(windows)]
-fn acquire_windows_instance(path: &Path) {
+fn acquire_windows_instance(path: &Path) -> WindowsLaunchLock {
     use std::hash::{Hash, Hasher};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError},
@@ -880,50 +1217,239 @@ fn acquire_windows_instance(path: &Path) {
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hasher);
-    let name = format!("Local\\CapGpui-{:016x}", hasher.finish())
+    let profile = format!("{:016x}", hasher.finish());
+    let launch_lock = match lock_windows_launch(&format!("Local\\CapGpuiLaunch-{profile}")) {
+        Ok(lock) => lock,
+        Err(error) => {
+            crate::startup::fail(format!("Could not acquire the Cap instance lock: {error}"))
+        }
+    };
+    let name = format!("Local\\CapGpui-{profile}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    let mut confirmed = None;
+    let mut ended = None;
+    let mutex = loop {
+        let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        let last_error = unsafe { GetLastError() };
+        if mutex.is_null() {
+            crate::startup::fail(format!(
+                "Could not create the Cap instance mutex (Windows error {last_error})."
+            ));
+        }
+        if last_error != ERROR_ALREADY_EXISTS {
+            break mutex;
+        }
+
+        let handed_off = hand_off_to_windows_instance(path);
+        let _ = unsafe { CloseHandle(mutex) };
+        let pid = match handed_off {
+            Ok(()) => crate::startup::exit(0),
+            Err(Some(pid)) => pid,
+            Err(None) => crate::startup::fail(
+                "Another copy of Cap is running but could not be reached. End Cap in Task Manager, then open it again.",
+            ),
+        };
+        match takeover_step(pid, confirmed, ended) {
+            TakeoverStep::Ask => {
+                tracing::warn!(pid, "the running Cap GPUI is not responding");
+                if !crate::startup::confirm_quit_unresponsive() {
+                    crate::startup::exit(0);
+                }
+                confirmed = Some(pid);
+            }
+            TakeoverStep::End => {
+                match end_windows_process(pid) {
+                    Ok(()) => tracing::info!(pid, "ended the unresponsive Cap GPUI"),
+                    Err(error) => {
+                        tracing::warn!(pid, %error, "could not end the unresponsive Cap GPUI")
+                    }
+                }
+                ended = Some(pid);
+            }
+            TakeoverStep::GiveUp => crate::startup::fail(format!(
+                "The copy of Cap that isn't responding (process {pid}) could not be quit. Restart your computer, then open Cap again."
+            )),
+        }
+    };
+
+    if INSTANCE_MUTEX.set(mutex as usize).is_err() {
+        let _ = unsafe { CloseHandle(mutex) };
+        crate::startup::fail("The Cap instance mutex was initialized twice.");
+    }
+
+    if let Err(error) = start_deep_link_forwarding(path) {
+        crate::startup::fail(format!("Could not start Cap deep-link forwarding: {error}"));
+    }
+    launch_lock
+}
+
+/// Launches of one profile take turns through this lock, and only the holder
+/// opens the instance mutex. A launch still checking on a frozen copy would
+/// otherwise keep that mutex alive after another launch ended the copy, so
+/// both would find it taken with nobody behind it and stop. A launch that
+/// dies while holding the lock leaves it abandoned, which counts as free.
+#[cfg(windows)]
+struct WindowsLaunchLock(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for WindowsLaunchLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::ReleaseMutex};
+
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn lock_windows_launch(name: &str) -> std::io::Result<WindowsLaunchLock> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0},
+        System::Threading::{CreateMutexW, INFINITE, WaitForSingleObject},
+    };
+
+    let name = name
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-    let last_error = unsafe { GetLastError() };
-
     if mutex.is_null() {
-        tracing::error!(
-            error = last_error,
-            "could not acquire the Cap GPUI instance mutex"
-        );
-        std::process::exit(1);
+        return Err(std::io::Error::last_os_error());
     }
-
-    if last_error == ERROR_ALREADY_EXISTS {
-        for _ in 0..40 {
-            if let Some(pid) = windows_instance_pid(path) {
-                tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
-                if forward_windows_deep_links(path, pid) {
-                    activate_windows_instance(pid);
-                } else if let Err(error) = reopen_windows_instance(path, pid) {
-                    tracing::warn!(%error, "could not reopen the running Cap GPUI");
-                    activate_windows_instance(pid);
-                }
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+    match unsafe { WaitForSingleObject(mutex, INFINITE) } {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(WindowsLaunchLock(mutex)),
+        _ => {
+            let error = std::io::Error::last_os_error();
+            let _ = unsafe { CloseHandle(mutex) };
+            Err(error)
         }
-
-        let _ = unsafe { CloseHandle(mutex) };
-        std::process::exit(0);
     }
+}
 
-    if INSTANCE_MUTEX.set(mutex as usize).is_err() {
-        let _ = unsafe { CloseHandle(mutex) };
-        tracing::error!("the Cap GPUI instance mutex was initialized twice");
-        std::process::exit(1);
-    }
+#[cfg(any(windows, target_os = "linux", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum TakeoverStep {
+    Ask,
+    End,
+    GiveUp,
+}
 
-    if let Err(error) = start_deep_link_forwarding(path) {
-        tracing::error!(%error, "could not start Cap GPUI deep-link forwarding");
-        std::process::exit(1);
+/// Every pass re-takes the lock and repeats the hand-off, so a copy that
+/// recovered or exited while the prompt was open is never ended, and only the
+/// exact process the user confirmed is.
+#[cfg(any(windows, target_os = "linux", test))]
+fn takeover_step(pid: u32, confirmed: Option<u32>, ended: Option<u32>) -> TakeoverStep {
+    if ended == Some(pid) {
+        TakeoverStep::GiveUp
+    } else if confirmed == Some(pid) {
+        TakeoverStep::End
+    } else {
+        TakeoverStep::Ask
     }
+}
+
+/// How long a window may go without handling messages before it counts as
+/// frozen: the same five seconds after which Windows itself marks a window
+/// "Not Responding".
+#[cfg(windows)]
+const WINDOW_RESPONSE_TIMEOUT_MS: u32 = 5000;
+
+/// `Err` carries the running instance's pid when one was identified. A
+/// failed reopen means the instance's listener thread is stuck; activating
+/// its window then showed nothing and the new launch exited without a trace.
+/// The listener acknowledges from its own thread, so an acknowledged reopen
+/// still needs a window that answers messages: a frozen main thread would
+/// otherwise swallow the request just as silently. A Cap whose window answers
+/// (including a build without the reopen endpoint) is activated as before.
+#[cfg(windows)]
+fn hand_off_to_windows_instance(path: &Path) -> Result<(), Option<u32>> {
+    let mut identified = None;
+    for _ in 0..40 {
+        identified = windows_instance_pid(path);
+        if identified.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let Some(pid) = identified else {
+        return Err(None);
+    };
+    tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
+    if forward_windows_deep_links(path, pid) {
+        activate_windows_instance(pid);
+        return Ok(());
+    }
+    let reopened = reopen_windows_instance(path, pid)
+        .inspect_err(|error| tracing::warn!(%error, "could not reopen the running Cap GPUI"))
+        .is_ok();
+    match windows_instance_window(pid) {
+        Some(window) if windows_window_responds(window) => {
+            if !reopened {
+                activate_windows_window(window);
+            }
+            Ok(())
+        }
+        Some(_) => Err(Some(pid)),
+        None if reopened => Ok(()),
+        None => Err(Some(pid)),
+    }
+}
+
+#[cfg(windows)]
+fn windows_window_responds(window: windows_sys::Win32::Foundation::HWND) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_NULL,
+    };
+
+    let mut result = 0;
+    unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_NULL,
+            0,
+            0,
+            SMTO_ABORTIFHUNG,
+            WINDOW_RESPONSE_TIMEOUT_MS,
+            &mut result,
+        ) != 0
+    }
+}
+
+#[cfg(windows)]
+fn end_windows_process(pid: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_OBJECT_0},
+        System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
+            WaitForSingleObject,
+        },
+    };
+
+    let process = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    if !windows_process_is_cap(pid) {
+        let _ = unsafe { CloseHandle(process) };
+        return Ok(());
+    }
+    let result = if unsafe { TerminateProcess(process, 1) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else if unsafe { WaitForSingleObject(process, 5000) } != WAIT_OBJECT_0 {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the process did not exit after being ended",
+        ))
+    } else {
+        Ok(())
+    };
+    let _ = unsafe { CloseHandle(process) };
+    result
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -1166,8 +1692,27 @@ fn read_forwarded_request(
     Ok(ForwardedRequest::DeepLink(url))
 }
 
+/// The pidfile, else the pid in the deep-link endpoint beside it: both live in
+/// this profile's app-data folder, the one the instance mutex is named after,
+/// so neither can name a Cap running for another profile.
 #[cfg(windows)]
 fn windows_instance_pid(path: &Path) -> Option<u32> {
+    let from_pidfile = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse().ok());
+    let from_endpoint = || {
+        std::fs::read_to_string(path.with_extension("ipc"))
+            .ok()
+            .and_then(|contents| parse_forwarding_endpoint(&contents))
+            .map(|endpoint| endpoint.pid)
+    };
+    from_pidfile
+        .filter(|pid| windows_process_is_cap(*pid))
+        .or_else(|| from_endpoint().filter(|pid| windows_process_is_cap(*pid)))
+}
+
+#[cfg(windows)]
+fn windows_process_is_cap(pid: u32) -> bool {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::{
         Foundation::CloseHandle,
@@ -1176,10 +1721,9 @@ fn windows_instance_pid(path: &Path) -> Option<u32> {
         },
     };
 
-    let pid = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
-        return None;
+        return false;
     }
 
     let mut image = [0_u16; 1024];
@@ -1187,22 +1731,36 @@ fn windows_instance_pid(path: &Path) -> Option<u32> {
     let found =
         unsafe { QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut len) } != 0;
     let _ = unsafe { CloseHandle(process) };
-    if !found {
-        return None;
-    }
-
-    let image = PathBuf::from(std::ffi::OsString::from_wide(&image[..len as usize]));
-    is_cap_gpui_image(&image).then_some(pid)
+    found
+        && is_cap_gpui_image(&PathBuf::from(std::ffi::OsString::from_wide(
+            &image[..len as usize],
+        )))
 }
 
 #[cfg(windows)]
 fn activate_windows_instance(pid: u32) {
+    if let Some(window) = windows_instance_window(pid) {
+        activate_windows_window(window);
+    }
+}
+
+#[cfg(windows)]
+fn activate_windows_window(window: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SW_RESTORE, SetForegroundWindow, ShowWindow,
+    };
+
+    unsafe {
+        ShowWindow(window, SW_RESTORE);
+        SetForegroundWindow(window);
+    }
+}
+
+#[cfg(windows)]
+fn windows_instance_window(pid: u32) -> Option<windows_sys::Win32::Foundation::HWND> {
     use windows_sys::Win32::{
         Foundation::{BOOL, HWND, LPARAM, TRUE},
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SW_RESTORE,
-            SetForegroundWindow, ShowWindow,
-        },
+        UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
     };
 
     struct Activation {
@@ -1238,12 +1796,7 @@ fn activate_windows_instance(pid: u32) {
         );
     }
 
-    if let Some(window) = activation.visible.or(activation.fallback) {
-        unsafe {
-            ShowWindow(window, SW_RESTORE);
-            SetForegroundWindow(window);
-        }
-    }
+    activation.visible.or(activation.fallback)
 }
 
 #[cfg(test)]
@@ -1438,7 +1991,18 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         entries.sort();
-        assert_eq!(entries, ["acquire-returned", "cap-gpui.pid"]);
+        // The launch lock stays on disk: removing it would let two launches
+        // lock different files and both carry on.
+        assert_eq!(
+            entries,
+            ["acquire-returned", "cap-gpui.lock", "cap-gpui.pid"]
+        );
+        let lock = std::fs::metadata(fixture.directory.join("cap-gpui.lock")).unwrap();
+        assert_eq!(lock.len(), 0);
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&lock.permissions()) & 0o777,
+            0o600
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -2374,6 +2938,91 @@ mod linux_reopen_tests {
         payload
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_hang_up_resends_the_request_without_its_token() {
+        use std::io::{Read, Write};
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let reply = |server: Box<dyn FnOnce(std::os::unix::net::UnixStream) + Send>| {
+            let (mut client, server_end) = std::os::unix::net::UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+                .unwrap();
+            let serving = std::thread::spawn(move || server(server_end));
+            write_linux_reopen_request(&mut client, owner, &[], Some("token")).unwrap();
+            let mut ack = [0];
+            let error = client.read_exact(&mut ack).unwrap_err();
+            serving.join().unwrap();
+            error
+        };
+
+        // An instance from before activation tokens reads the frame, fails to
+        // parse it and hangs up.
+        let rejected = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            drop(stream);
+        }));
+        assert!(closed_without_queueing(&rejected), "{rejected:?}");
+
+        // One that queued the actions but has not acknowledged them yet.
+        let slow = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = stream.write_all(&[1]);
+        }));
+        assert!(!closed_without_queueing(&slow), "{slow:?}");
+    }
+
+    /// A relaunch from a launcher brings an activation token, which the
+    /// running instance needs to raise its window past focus stealing
+    /// prevention. Without one the frame stays the legacy one.
+    #[test]
+    fn a_relaunch_forwards_its_activation_token_with_its_actions() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let mut plain = Vec::new();
+        write_linux_reopen_request(&mut plain, owner, &[], None).unwrap();
+        assert_eq!(plain, linux_reopen_payload(owner));
+
+        let mut bare = Vec::new();
+        write_linux_reopen_request(&mut bare, owner, &[], Some("gnome-shell/Cap/1234-5-host_TIME7")).unwrap();
+        assert_eq!(&bare[..8], b"CAPACTV1");
+        assert_eq!(
+            read_linux_reopen_request(&mut bare.as_slice(), owner).unwrap(),
+            (Vec::new(), Some("gnome-shell/Cap/1234-5-host_TIME7".to_string()))
+        );
+
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let mut with_actions = Vec::new();
+        write_linux_reopen_request(&mut with_actions, owner, &payload, Some("token")).unwrap();
+        assert_eq!(
+            read_linux_reopen_request(&mut with_actions.as_slice(), owner).unwrap(),
+            (vec![DeepLinkAction::StopRecording], Some("token".to_string()))
+        );
+
+        // A token with spaces or control characters is not a compositor's.
+        let mut odd = Vec::new();
+        write_linux_reopen_request(&mut odd, owner, &[], Some("two words")).unwrap();
+        assert_eq!(odd, linux_reopen_payload(owner));
+        let mut forged = linux_reopen_payload(owner).to_vec();
+        forged[..8].copy_from_slice(b"CAPACTV1");
+        forged.extend_from_slice(&3u32.to_be_bytes());
+        forged.extend_from_slice(b"a\nb");
+        forged.extend_from_slice(&0u32.to_be_bytes());
+        assert!(read_linux_reopen_request(&mut forged.as_slice(), owner).is_err());
+
+        // Another instance's frame is refused, token or not.
+        let other = LinuxInstanceIdentity {
+            pid: owner.pid.wrapping_add(1),
+            ..owner
+        };
+        let mut foreign = Vec::new();
+        write_linux_reopen_request(&mut foreign, other, &[], Some("token")).unwrap();
+        assert!(read_linux_reopen_request(&mut foreign.as_slice(), owner).is_err());
+    }
+
     #[test]
     fn duplicate_launch_during_startup_is_authenticated_and_coalesced() {
         let owner = linux_instance_identity(std::process::id()).unwrap();
@@ -2659,6 +3308,48 @@ mod linux_reopen_tests {
         assert!(fixture.children[0].try_wait().unwrap().is_none());
     }
 
+    /// A terminal launch and an app-grid launch carry different session
+    /// variables; both must find the same running instance.
+    #[test]
+    fn launches_with_different_session_variables_find_the_same_instance() {
+        const CHILD: &str = "CAP_REOPEN_ADDRESS_CHILD";
+        const OWNER: &str = "CAP_REOPEN_ADDRESS_OWNER";
+        let name = |address: std::os::unix::net::SocketAddr| {
+            String::from_utf8_lossy(address.as_abstract_name().unwrap()).into_owned()
+        };
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let owner: u32 = std::env::var(OWNER).unwrap().parse().unwrap();
+            let owner = linux_instance_identity(owner).unwrap();
+            let path = std::path::Path::new(&directory).join("cap-gpui.pid");
+            println!(
+                "ADDRESS {}",
+                name(linux_reopen_address(&path, owner).unwrap())
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let here =
+            name(linux_reopen_address(&directory.path().join("cap-gpui.pid"), owner).unwrap());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "single_instance::linux_reopen_tests::launches_with_different_session_variables_find_the_same_instance",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, directory.path())
+            .env(OWNER, std::process::id().to_string())
+            .env_remove("DISPLAY")
+            .env_remove("XDG_SESSION_ID")
+            .env("WAYLAND_DISPLAY", "wayland-9")
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/elsewhere")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(&format!("ADDRESS {here}")), "{stdout}");
+    }
+
     #[test]
     fn long_instance_directories_use_no_filesystem_socket() {
         let directory = std::env::temp_dir()
@@ -2699,5 +3390,478 @@ mod linux_reopen_tests {
                 assert_eq!(linux_reopen_allowed(phase, mode, true), expected);
             }
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_takeover_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A stand-in for a running Cap: `ping.exe` copied to `Cap.exe`, so its
+    /// image name is Cap's while it runs headless for as long as a test needs.
+    struct FakeCap {
+        directory: tempfile::TempDir,
+        child: std::process::Child,
+    }
+
+    impl FakeCap {
+        fn start() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let system = std::env::var_os("SystemRoot").unwrap();
+            let image = directory.path().join("Cap.exe");
+            std::fs::copy(
+                PathBuf::from(system).join("System32").join("PING.EXE"),
+                &image,
+            )
+            .unwrap();
+            let child = std::process::Command::new(&image)
+                .args(["-n", "60", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            Self { directory, child }
+        }
+
+        fn pid(&self) -> u32 {
+            self.child.id()
+        }
+
+        fn pidfile(&self) -> PathBuf {
+            let path = self.directory.path().join("cap-gpui.pid");
+            std::fs::write(&path, self.pid().to_string()).unwrap();
+            path
+        }
+    }
+
+    impl Drop for FakeCap {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn exited(child: &mut std::process::Child) -> bool {
+        child.try_wait().unwrap().is_some()
+    }
+
+    #[test]
+    fn a_pidfile_naming_a_process_that_is_not_cap_identifies_no_instance() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+        assert_eq!(windows_instance_pid(&path), None);
+
+        let mut gone = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .unwrap();
+        let gone_pid = gone.id();
+        gone.wait().unwrap();
+        std::fs::write(&path, gone_pid.to_string()).unwrap();
+        assert_eq!(windows_instance_pid(&path), None);
+
+        std::fs::write(&path, "not a pid").unwrap();
+        assert_eq!(windows_instance_pid(&path), None);
+    }
+
+    #[test]
+    fn a_held_lock_with_no_identifiable_instance_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+        let started = Instant::now();
+        assert_eq!(hand_off_to_windows_instance(&path), Err(None));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn an_instance_that_never_answers_reopen_is_reported_instead_of_silently_activated() {
+        let fake = FakeCap::start();
+        let path = fake.pidfile();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        write_forwarding_endpoint(
+            &path.with_extension("ipc"),
+            ForwardingEndpoint {
+                pid: fake.pid(),
+                port: listener.local_addr().unwrap().port(),
+                secret: 7,
+            },
+        )
+        .unwrap();
+        let started = Instant::now();
+        assert_eq!(hand_off_to_windows_instance(&path), Err(Some(fake.pid())));
+        assert!(started.elapsed() < Duration::from_secs(8));
+        drop(listener);
+    }
+
+    #[test]
+    fn an_instance_without_a_reopen_endpoint_or_window_is_reported() {
+        let fake = FakeCap::start();
+        let path = fake.pidfile();
+        assert_eq!(hand_off_to_windows_instance(&path), Err(Some(fake.pid())));
+    }
+
+    #[test]
+    fn an_instance_that_acknowledges_reopen_is_handed_off() {
+        use std::io::{Read, Write};
+
+        let fake = FakeCap::start();
+        let path = fake.pidfile();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let secret = 0x5eed;
+        write_forwarding_endpoint(
+            &path.with_extension("ipc"),
+            ForwardingEndpoint {
+                pid: fake.pid(),
+                port: listener.local_addr().unwrap().port(),
+                secret,
+            },
+        )
+        .unwrap();
+        let responder = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut header = [0_u8; 12];
+            stream.read_exact(&mut header).unwrap();
+            assert_eq!(&header[..8], &u64::to_be_bytes(secret));
+            assert_eq!(&header[8..], &0_u32.to_be_bytes());
+            stream.write_all(&[REOPEN_ACK]).unwrap();
+        });
+        assert_eq!(hand_off_to_windows_instance(&path), Ok(()));
+        responder.join().unwrap();
+    }
+
+    #[test]
+    fn the_endpoint_identifies_an_instance_whose_pidfile_is_missing() {
+        let fake = FakeCap::start();
+        let path = fake.directory.path().join("cap-gpui.pid");
+        assert_eq!(windows_instance_pid(&path), None);
+        write_forwarding_endpoint(
+            &path.with_extension("ipc"),
+            ForwardingEndpoint {
+                pid: fake.pid(),
+                port: 1,
+                secret: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(windows_instance_pid(&path), Some(fake.pid()));
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+        assert_eq!(windows_instance_pid(&path), Some(fake.pid()));
+    }
+
+    #[test]
+    fn ending_an_unresponsive_instance_waits_for_it_to_exit() {
+        let mut fake = FakeCap::start();
+        assert!(windows_process_is_cap(fake.pid()));
+        end_windows_process(fake.pid()).unwrap();
+        assert!(exited(&mut fake.child));
+        assert!(!windows_process_is_cap(fake.pid()));
+    }
+
+    fn launch_lock_name() -> String {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        format!(
+            "Local\\CapGpuiLaunchTest-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
+    #[test]
+    fn a_second_launch_waits_until_the_first_releases_the_lock() {
+        let name = launch_lock_name();
+        let first = lock_windows_launch(&name).unwrap();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        let second = std::thread::spawn({
+            let name = name.clone();
+            move || {
+                let lock = lock_windows_launch(&name).unwrap();
+                acquired.send(()).unwrap();
+                drop(lock);
+            }
+        });
+        assert!(waiting.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(first);
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        second.join().unwrap();
+    }
+
+    #[test]
+    fn a_launch_that_died_holding_the_lock_does_not_block_the_next() {
+        let name = launch_lock_name();
+        std::thread::spawn({
+            let name = name.clone();
+            move || std::mem::forget(lock_windows_launch(&name).unwrap())
+        })
+        .join()
+        .unwrap();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let lock = lock_windows_launch(&name).unwrap();
+            acquired.send(()).unwrap();
+            drop(lock);
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_launch_of_another_profile_never_waits() {
+        let held = lock_windows_launch(&launch_lock_name()).unwrap();
+        let other = launch_lock_name();
+        let (acquired, waiting) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let lock = lock_windows_launch(&other).unwrap();
+            acquired.send(()).unwrap();
+            drop(lock);
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(held);
+    }
+
+    #[test]
+    fn ending_never_touches_a_process_that_is_not_cap() {
+        let mut other = std::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        end_windows_process(other.id()).unwrap();
+        assert!(!exited(&mut other));
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_takeover_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_hung_instance_is_ended_with_sigterm() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
+        let started = Instant::now();
+        assert!(end_linux_instance(&process));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn an_instance_that_ignores_sigterm_is_killed() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
+        let started = Instant::now();
+        assert!(end_linux_instance(&process));
+        assert!(started.elapsed() >= Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(6));
+        child.wait().unwrap();
+    }
+
+    /// The pidfd keeps naming the original process: once it has exited, no
+    /// signal can reach whatever later receives its pid.
+    #[test]
+    fn a_process_that_exits_during_the_prompt_is_never_signalled_again() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let process = LinuxProcess::open(child.id() as i32).unwrap();
+        child.wait().unwrap();
+        let error = process.signal(libc::SIGTERM).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+        assert!(end_linux_instance(&process));
+    }
+
+    /// A copy of `sleep` named like Cap, so `is_cap_gpui` accepts it.
+    struct FakeCap(std::process::Child);
+
+    impl FakeCap {
+        fn start(directory: &Path, name: &str) -> Self {
+            let image = directory.join(name).join("cap-gpui");
+            std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+            std::fs::copy("/bin/sleep", &image).unwrap();
+            // A test forking on another thread while the copy was open for
+            // writing holds that descriptor until its exec, and exec fails
+            // with ETXTBSY until then.
+            let started = Instant::now();
+            let child = loop {
+                match std::process::Command::new(&image).arg("60").spawn() {
+                    Ok(child) => break child,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && started.elapsed() < Duration::from_secs(5) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("could not start the fake Cap: {error}"),
+                }
+            };
+            let fake = Self(child);
+            while !is_cap_gpui(fake.pid() as i32) {
+                assert!(started.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            fake
+        }
+
+        fn pid(&self) -> u32 {
+            self.0.id()
+        }
+
+        fn running(&mut self) -> bool {
+            self.0.try_wait().unwrap().is_none()
+        }
+    }
+
+    impl Drop for FakeCap {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn unanswered(_: u32) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "no answer",
+        ))
+    }
+
+    #[test]
+    fn an_instance_that_already_exited_starts_a_new_one_without_asking() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        std::fs::write(&path, child.id().to_string()).unwrap();
+        child.wait().unwrap();
+        let launch = acquire_linux_instance(&path, unanswered, || panic!("asked")).unwrap();
+        assert!(matches!(launch, LinuxLaunch::Start(_)));
+    }
+
+    #[test]
+    fn a_responsive_instance_is_handed_off_without_asking() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut running = FakeCap::start(directory.path(), "running");
+        std::fs::write(&path, running.pid().to_string()).unwrap();
+        let launch = acquire_linux_instance(&path, |_| Ok(()), || panic!("asked")).unwrap();
+        assert!(matches!(launch, LinuxLaunch::HandedOff));
+        assert!(running.running());
+    }
+
+    #[test]
+    fn a_cancelled_prompt_leaves_the_hung_instance_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut hung = FakeCap::start(directory.path(), "hung");
+        std::fs::write(&path, hung.pid().to_string()).unwrap();
+        let launch = acquire_linux_instance(&path, unanswered, || false).unwrap();
+        assert!(matches!(launch, LinuxLaunch::Cancelled));
+        assert!(hung.running());
+    }
+
+    #[test]
+    fn a_confirmed_hung_instance_is_ended_and_this_launch_starts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut hung = FakeCap::start(directory.path(), "hung");
+        std::fs::write(&path, hung.pid().to_string()).unwrap();
+        let mut asked = 0;
+        let launch = acquire_linux_instance(&path, unanswered, || {
+            asked += 1;
+            true
+        })
+        .unwrap();
+        assert!(matches!(launch, LinuxLaunch::Start(_)));
+        assert_eq!(asked, 1);
+        assert!(!hung.running());
+    }
+
+    /// The user confirms after the copy has started answering again: it is
+    /// handed the launch instead of being ended.
+    #[test]
+    fn an_instance_that_recovers_during_the_prompt_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut recovered = FakeCap::start(directory.path(), "recovered");
+        std::fs::write(&path, recovered.pid().to_string()).unwrap();
+        let answers = std::cell::Cell::new(false);
+        let launch = acquire_linux_instance(
+            &path,
+            |pid| {
+                if answers.get() {
+                    Ok(())
+                } else {
+                    unanswered(pid)
+                }
+            },
+            || {
+                answers.set(true);
+                true
+            },
+        );
+        assert!(matches!(launch.unwrap(), LinuxLaunch::HandedOff));
+        assert!(recovered.running());
+    }
+
+    /// Two launches meet the same hung copy. The second waits while the first
+    /// holds the prompt, then hands off to the copy the first one started
+    /// instead of starting a second one.
+    #[test]
+    fn a_second_launch_hands_off_to_the_copy_the_first_one_started() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.pid");
+        let mut hung = FakeCap::start(directory.path(), "hung");
+        let replacement = FakeCap::start(directory.path(), "replacement");
+        std::fs::write(&path, hung.pid().to_string()).unwrap();
+
+        let LinuxLaunch::Start(lock) = acquire_linux_instance(&path, unanswered, || true).unwrap()
+        else {
+            panic!("the first launch did not start");
+        };
+        assert!(!hung.running());
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let second = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let launch = acquire_linux_instance(
+                    &path,
+                    |pid| {
+                        sender.send(pid).unwrap();
+                        Ok(())
+                    },
+                    || panic!("the second launch asked"),
+                );
+                matches!(launch, Ok(LinuxLaunch::HandedOff))
+            })
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!second.is_finished());
+        std::fs::write(&path, replacement.pid().to_string()).unwrap();
+        drop(lock);
+
+        assert!(second.join().unwrap());
+        assert_eq!(receiver.recv().unwrap(), replacement.pid());
+    }
+}
+
+#[cfg(test)]
+mod takeover_step_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_confirmed_process_is_ended_and_only_once() {
+        assert_eq!(takeover_step(7, None, None), TakeoverStep::Ask);
+        assert_eq!(takeover_step(7, Some(7), None), TakeoverStep::End);
+        assert_eq!(takeover_step(8, Some(7), None), TakeoverStep::Ask);
+        assert_eq!(takeover_step(7, Some(7), Some(7)), TakeoverStep::GiveUp);
+        assert_eq!(takeover_step(8, Some(8), Some(7)), TakeoverStep::End);
     }
 }

@@ -23,7 +23,10 @@
 //!   (one letter, or a short function word such as "of", "to", "is") takes
 //!   more words, up to eight; when one or two words would be left over and
 //!   the first of them is weak, they join the last caption. Pauses do not
-//!   split captions.
+//!   split captions. In a transcript that reads as English, hesitation
+//!   fillers ("um", "uh") are not counted: a caption ends right after its
+//!   last counted word, so a filler opens the next caption, and fillers after
+//!   the last counted word stay in the last.
 //! - A caption spans its first word's start to its last word's end; its text
 //!   joins the words with spaces, except before attaching punctuation; ids
 //!   are `segment-<n>`.
@@ -35,6 +38,8 @@ use cap_verify::{
     media,
     report::{self, Case, Tier},
 };
+
+use cap_rendering::Video;
 
 use super::*;
 
@@ -109,24 +114,45 @@ fn reference_text(words: &[CaptionWord]) -> String {
     text
 }
 
+fn filler(text: &str) -> bool {
+    let letters: String = text
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '\'')
+        .collect::<String>()
+        .to_lowercase();
+    matches!(letters.as_str(), "um" | "uh" | "hmm" | "er")
+}
+
 fn reference_segments(tokens: &[CaptionWord]) -> Vec<CaptionSegment> {
     let words = reference_words(tokens);
+    let english = cap_project::caption_words::reads_as_english(&words);
+    let mut counted: Vec<usize> = (0..words.len())
+        .filter(|&i| !english || !filler(&words[i].text))
+        .collect();
+    if counted.is_empty() {
+        counted = (0..words.len()).collect();
+    }
     let mut groups: Vec<&[CaptionWord]> = Vec::new();
-    let mut rest = &words[..];
+    let mut rest = &counted[..];
+    let mut start = 0;
     while !rest.is_empty() {
-        if rest.len() <= 6 {
-            groups.push(rest);
-            break;
+        let mut take = rest.len().min(6);
+        if rest.len() > 6 {
+            while take < 8 && take < rest.len() && weak(&words[rest[take - 1]].text) {
+                take += 1;
+            }
+            let left = rest.len() - take;
+            if (1..3).contains(&left) && weak(&words[rest[take]].text) {
+                take = rest.len();
+            }
         }
-        let mut take = 6;
-        while take < 8 && take < rest.len() && weak(&rest[take - 1].text) {
-            take += 1;
-        }
-        let left = rest.len() - take;
-        if (1..3).contains(&left) && weak(&rest[take].text) {
-            take = rest.len();
-        }
-        groups.push(&rest[..take]);
+        let end = if take == rest.len() {
+            words.len()
+        } else {
+            rest[take - 1] + 1
+        };
+        groups.push(&words[start..end]);
+        start = end;
         rest = &rest[take..];
     }
     groups
@@ -335,10 +361,15 @@ fn takes_fixture() -> FixtureSpec {
 /// segments.
 fn check_project(case: &mut Case, project: &Path, takes: &Takes) {
     let mut tokens = Vec::new();
-    let result = transcribe_project_with(project, |audio_path| {
-        tokens = fake_tokens(audio_path)?;
-        caption_segments_from_tokens(tokens.clone())
-    });
+    let result = transcribe_project_with(
+        project,
+        None,
+        &takes.iter().map(|take| take.0).collect::<Vec<_>>(),
+        |audio_path| {
+            tokens = fake_tokens(audio_path)?;
+            Ok(caption_segments_from_tokens(tokens.clone()))
+        },
+    );
     let segments = match result {
         Ok(segments) => segments,
         Err(e) => {
@@ -526,7 +557,7 @@ fn instant_project_is_refused() {
         ),
     }
     let mut called = false;
-    let result = transcribe_project_with(&project, |_| {
+    let result = transcribe_project_with(&project, None, &[], |_| {
         called = true;
         Ok(Vec::new())
     });
@@ -542,9 +573,9 @@ fn instant_project_is_refused() {
     finish(case);
 }
 
-const ASCII_WORDS: [&str; 22] = [
+const ASCII_WORDS: [&str; 25] = [
     "hello", "world", "is", "a", "river", "cloud", "it", "to", "so", "screen", "record", "of",
-    "we", "on", "capture", "edit", "timeline", "in", "up", "my", "an", "I",
+    "we", "on", "capture", "edit", "timeline", "in", "up", "my", "an", "I", "um", "uh", "Hmm",
 ];
 /// Accented and CJK words, and "à", a one-letter (weak) French preposition
 /// outside ASCII.
@@ -606,32 +637,24 @@ fn segmentation_case(id: &str, unicode: bool) {
             unicode,
         );
         let reference = reference_segments(&tokens);
-        match caption_segments_from_tokens(tokens.clone()) {
-            Err(e) if reference.is_empty() && e.contains("No speech") => empty += 1,
-            Err(e) => {
-                failed += 1;
+        let product = caption_segments_from_tokens(tokens.clone());
+        if product.is_empty() {
+            empty += 1;
+        }
+        segments += product.len();
+        let problems = compare_segments(&product, &reference, 0.0);
+        if !problems.is_empty() {
+            failed += 1;
+            if failed <= 3 {
                 case.problem(
                     "caption-segments",
-                    format!("seed {seed}: unexpected error {e}"),
+                    format!(
+                        "seed {seed}: {} problems (first: {}); tokens {:?}",
+                        problems.len(),
+                        problems[0],
+                        tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
+                    ),
                 );
-            }
-            Ok(product) => {
-                segments += product.len();
-                let problems = compare_segments(&product, &reference, 0.0);
-                if !problems.is_empty() {
-                    failed += 1;
-                    if failed <= 3 {
-                        case.problem(
-                            "caption-segments",
-                            format!(
-                                "seed {seed}: {} problems (first: {}); tokens {:?}",
-                                problems.len(),
-                                problems[0],
-                                tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
-                            ),
-                        );
-                    }
-                }
             }
         }
     }
@@ -649,4 +672,326 @@ fn segmentation_matches_reference() {
 #[test]
 fn segmentation_matches_reference_unicode() {
     segmentation_case("captions/app/segmentation/unicode", true);
+}
+
+#[test]
+fn trimmed_transcription_extracts_only_used_audio_and_restores_source_times() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).expect("fixture");
+    let takes = multi_segment_takes(&project, &spec);
+    let durations: Vec<f64> = takes.iter().map(|take| take.0).collect();
+    for (clips, expected_ranges, expected_starts) in [
+        (
+            serde_json::json!([
+                {"recordingSegment": 0, "start": 1.0, "end": 3.0, "timescale": 2.0}
+            ]),
+            vec![1.0..3.0],
+            vec![0.125],
+        ),
+        (
+            serde_json::json!([
+                {"recordingSegment": 1, "start": 1.0, "end": 3.0, "timescale": 0.5},
+                {"recordingSegment": 0, "start": 3.0, "end": 4.0, "timescale": 2.0},
+                {"recordingSegment": 0, "start": 0.5, "end": 1.5, "timescale": 1.0},
+                {"recordingSegment": 0, "start": 1.0, "end": 2.0, "timescale": 1.0},
+                {"recordingSegment": 0, "start": 3.0, "end": 4.0, "timescale": 1.0}
+            ]),
+            vec![0.5..2.0, 3.0..4.0, durations[0] + 1.0..durations[0] + 3.0],
+            vec![0.5, 4.125, 4.75, 6.75],
+        ),
+        (
+            serde_json::json!([
+                {"recordingSegment":0,"start":4.0,"end":durations[0],"timescale":1.0},
+                {"recordingSegment":1,"start":0.0,"end":1.0,"timescale":1.0}
+            ]),
+            vec![4.0..durations[0] + 1.0],
+            vec![0.25],
+        ),
+    ] {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": clips, "zoomSegments": []
+        }))
+        .unwrap();
+        let mut called = 0;
+        let segments = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+            let expected_duration: f64 = expected_ranges
+                .iter()
+                .map(|range| range.end - range.start)
+                .sum();
+            let audio = media::decode_audio(path, Some(MARKER_RATE)).unwrap();
+            let duration = audio.mono().len() as f64 / f64::from(MARKER_RATE);
+            assert!(
+                (duration - expected_duration).abs() < 0.002,
+                "extracted {duration}s, expected {expected_duration}s"
+            );
+            called += 1;
+            let mut offset = 0.0;
+            Ok(expected_ranges
+                .iter()
+                .map(|range| {
+                    let start = offset + 0.25;
+                    let end = offset + 0.5;
+                    offset += (range.end - range.start) as f32;
+                    CaptionSegment {
+                        id: "segment-0".into(),
+                        start,
+                        end,
+                        text: "word".into(),
+                        words: vec![CaptionWord {
+                            text: "word".into(),
+                            start,
+                            end,
+                        }],
+                    }
+                })
+                .collect())
+        })
+        .unwrap();
+        assert_eq!(called, 1);
+        assert_eq!(segments.len(), expected_ranges.len());
+        for (segment, range) in segments.iter().zip(expected_ranges) {
+            assert!((f64::from(segment.start) - range.start - 0.25).abs() < 1e-5);
+            assert!((f64::from(segment.end) - range.start - 0.5).abs() < 1e-5);
+            assert_eq!(segment.words[0].start, segment.start);
+            assert_eq!(segment.words[0].end, segment.end);
+        }
+        let ids: std::collections::HashSet<_> =
+            segments.iter().map(|segment| &segment.id).collect();
+        assert_eq!(ids.len(), segments.len());
+        let tracks = derive_caption_track_segments(&segments, &timeline, &durations);
+        assert_eq!(tracks.len(), expected_starts.len());
+        for (track, expected) in tracks.iter().zip(expected_starts) {
+            assert!((track.start - expected).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn trimmed_sources_match_full_audio_with_positive_and_negative_offsets() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).unwrap();
+    let meta = RecordingMeta::load_for_project(&project).unwrap();
+    let Some(StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
+        panic!("studio")
+    };
+    let segment = &inner.segments[0];
+    for audio in [
+        segment.mic.as_ref().unwrap(),
+        segment.system_audio.as_ref().unwrap(),
+    ] {
+        let path = meta.path(&audio.path);
+        let decoded = cap_audio::AudioData::from_file(&path).unwrap();
+        for offset_secs in [-0.4, 0.3] {
+            let full = cap_editor::assemble_transcription_audio(
+                &[TranscriptionAudioTake {
+                    display_duration_secs: 5.0,
+                    sources: vec![TranscriptionAudioSource {
+                        samples: decoded.samples().to_vec(),
+                        channels: usize::from(decoded.channels()),
+                        offset_secs,
+                    }],
+                }],
+                DECODE_SAMPLE_RATE,
+            )
+            .unwrap();
+            for range in [0.0..1.0, 1.25..2.5, 3.0..4.0] {
+                let source =
+                    decode_transcription_source(&path, offset_secs, range.clone()).unwrap();
+                let trimmed = cap_editor::assemble_transcription_audio(
+                    &[TranscriptionAudioTake {
+                        display_duration_secs: range.end - range.start,
+                        sources: vec![source],
+                    }],
+                    DECODE_SAMPLE_RATE,
+                )
+                .unwrap();
+                let start = (range.start * f64::from(DECODE_SAMPLE_RATE)).round() as usize;
+                let reference = &full[start..start + trimmed.len()];
+                let worst = trimmed
+                    .iter()
+                    .zip(reference)
+                    .fold(0.0_f32, |worst, (a, b)| worst.max((a - b).abs()));
+                assert!(
+                    worst < 0.001,
+                    "offset {offset_secs}, range {range:?}, worst sample error {worst}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn transcription_keeps_speech_after_empty_ranges_and_cleans_up_on_failure() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).unwrap();
+    let takes = multi_segment_takes(&project, &spec);
+    let durations: Vec<_> = takes.iter().map(|take| take.0).collect();
+    let timeline = serde_json::from_value(serde_json::json!({"segments": [
+        {"start":0.0,"end":1.0,"timescale":1.0},
+        {"start":3.0,"end":4.0,"timescale":1.0}
+    ], "zoomSegments": []}))
+    .unwrap();
+    let mut calls = 0;
+    let mut temporary = PathBuf::new();
+    let result = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+        temporary = path.to_path_buf();
+        calls += 1;
+        Ok(caption_segments_from_tokens([CaptionWord {
+            text: "speech".into(),
+            start: 1.1,
+            end: 1.2,
+        }]))
+    })
+    .unwrap();
+    assert_eq!(calls, 1);
+    assert!((result[0].words[0].start - 3.1).abs() < 1e-5);
+    assert!(!temporary.parent().unwrap().exists());
+    let error = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+        temporary = path.to_path_buf();
+        Err("test engine failure".into())
+    })
+    .unwrap_err();
+    assert_eq!(error, "test engine failure");
+    assert!(!temporary.parent().unwrap().exists());
+    let empty = transcribe_project_with(&project, Some(&timeline), &durations, |_| Ok(Vec::new()))
+        .unwrap_err();
+    assert_eq!(empty, "No speech detected in the audio");
+    assert!(caption_segments_from_tokens(Vec::new()).is_empty());
+    let empty_timeline =
+        serde_json::from_value(serde_json::json!({"segments":[],"zoomSegments":[]})).unwrap();
+    let error = transcribe_project_with(&project, Some(&empty_timeline), &durations, |_| {
+        panic!("an empty timeline must not run the model")
+    })
+    .unwrap_err();
+    assert!(error.contains("No audio sources"));
+}
+
+#[test]
+fn source_timestamps_restore_words_in_two_ranges() {
+    let offsets = [
+        TranscriptionAudioOffset {
+            concatenated_start: 0.0,
+            source_start: 10.0,
+            length: 2.0,
+        },
+        TranscriptionAudioOffset {
+            concatenated_start: 2.0,
+            source_start: 20.0,
+            length: 3.0,
+        },
+    ];
+    let segments = restore_source_timestamps(
+        caption_segments_from_tokens([
+            CaptionWord {
+                text: "first".into(),
+                start: 0.25,
+                end: 0.5,
+            },
+            CaptionWord {
+                text: "second".into(),
+                start: 2.25,
+                end: 2.5,
+            },
+        ]),
+        &offsets,
+    );
+    assert_eq!(segments.len(), 1);
+    let segment = &segments[0];
+    assert_eq!((segment.start, segment.end), (10.25, 20.5));
+    assert_eq!(
+        (segment.words[0].start, segment.words[0].end),
+        (10.25, 10.5)
+    );
+    assert_eq!(
+        (segment.words[1].start, segment.words[1].end),
+        (20.25, 20.5)
+    );
+}
+
+#[test]
+fn source_timestamps_clamp_words_and_wordless_segments_at_junctions() {
+    let offsets = [
+        TranscriptionAudioOffset {
+            concatenated_start: 0.0,
+            source_start: 10.0,
+            length: 2.0,
+        },
+        TranscriptionAudioOffset {
+            concatenated_start: 2.0,
+            source_start: 20.0,
+            length: 3.0,
+        },
+    ];
+    let mut segments = caption_segments_from_tokens([
+        CaptionWord {
+            text: "across".into(),
+            start: 1.75,
+            end: 2.25,
+        },
+        CaptionWord {
+            text: "junction".into(),
+            start: 2.0,
+            end: 2.25,
+        },
+    ]);
+    segments.push(CaptionSegment {
+        start: 1.75,
+        end: 2.25,
+        text: "no words".into(),
+        ..Default::default()
+    });
+    let segments = restore_source_timestamps(segments, &offsets);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(
+        (segments[0].words[0].start, segments[0].words[0].end),
+        (11.75, 12.0)
+    );
+    assert_eq!(
+        (segments[0].words[1].start, segments[0].words[1].end),
+        (20.0, 20.25)
+    );
+    assert_eq!((segments[0].start, segments[0].end), (11.75, 20.25));
+    assert_eq!((segments[1].start, segments[1].end), (11.75, 12.0));
+}
+
+#[test]
+fn source_timestamps_for_one_range_match_a_source_offset() {
+    let offsets = [TranscriptionAudioOffset {
+        concatenated_start: 0.0,
+        source_start: 37.0,
+        length: 4.0,
+    }];
+    let segments = caption_segments_from_tokens([CaptionWord {
+        text: "word".into(),
+        start: 0.25,
+        end: 0.5,
+    }]);
+    let mut reference = segments.clone();
+    for segment in &mut reference {
+        segment.start += 37.0;
+        segment.end += 37.0;
+        for word in &mut segment.words {
+            word.start += 37.0;
+            word.end += 37.0;
+        }
+    }
+    let segments = restore_source_timestamps(segments, &offsets);
+    assert!(compare_segments(&segments, &reference, 0.0).is_empty());
+}
+
+#[test]
+fn source_timestamps_with_empty_ranges_produce_no_captions() {
+    let mut segments = caption_segments_from_tokens([CaptionWord {
+        text: "word".into(),
+        start: 0.25,
+        end: 0.5,
+    }]);
+    segments.push(CaptionSegment {
+        start: 0.25,
+        end: 0.5,
+        text: "no words".into(),
+        ..Default::default()
+    });
+    assert!(restore_source_timestamps(segments, &[]).is_empty());
+    assert!(restore_source_timestamps(Vec::new(), &[]).is_empty());
 }

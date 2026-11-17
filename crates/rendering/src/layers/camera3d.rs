@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SourceBindGroups;
 use crate::ProjectUniforms;
 use crate::camera3d::{CAMERA3D_BLUR_BASE_HEIGHT, camera3d_inverse_homography};
 use cap_project::Camera3DBlurMode;
@@ -30,6 +31,7 @@ pub struct Camera3DLayer {
     blur_v_buffer: wgpu::Buffer,
     blur_pipeline: Camera3DBlurPipeline,
     cached_blur_uniforms: Option<(Camera3DBlurUniforms, Camera3DBlurUniforms)>,
+    bind_groups: SourceBindGroups,
 }
 
 impl Camera3DLayer {
@@ -64,6 +66,7 @@ impl Camera3DLayer {
             blur_v_buffer: make_blur_buffer("Camera3D Blur V Uniform Buffer"),
             blur_pipeline: Camera3DBlurPipeline::new(device),
             cached_blur_uniforms: None,
+            bind_groups: SourceBindGroups::default(),
         }
     }
 
@@ -153,61 +156,74 @@ impl Camera3DLayer {
         }
     }
 
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.bind_groups.retain_views(views);
+    }
+
+    #[cfg(test)]
+    pub fn bind_groups_created(&self) -> usize {
+        self.bind_groups.created()
+    }
+
     pub fn render(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         content_texture: &wgpu::TextureView,
     ) {
+        let bind_group =
+            self.bind_groups
+                .get_or_create(&self.warp_uniforms_buffer, content_texture, || {
+                    self.warp_pipeline.bind_group(
+                        device,
+                        &self.warp_uniforms_buffer,
+                        content_texture,
+                        &self.sampler,
+                    )
+                });
         pass.set_pipeline(&self.warp_pipeline.render_pipeline);
-        pass.set_bind_group(
-            0,
-            &self.warp_pipeline.bind_group(
-                device,
-                &self.warp_uniforms_buffer,
-                content_texture,
-                &self.sampler,
-            ),
-            &[],
-        );
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
     /// Horizontal gaussian pass (or the single bokeh pass, which uses the V
     /// buffer via [`Self::render_blur_v`] instead).
     pub fn render_blur_h(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_blur(pass, device, &self.blur_h_buffer, source_texture);
+        self.render_blur(pass, device, false, source_texture);
     }
 
     pub fn render_blur_v(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_blur(pass, device, &self.blur_v_buffer, source_texture);
+        self.render_blur(pass, device, true, source_texture);
     }
 
     fn render_blur(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
-        buffer: &wgpu::Buffer,
+        vertical: bool,
         source_texture: &wgpu::TextureView,
     ) {
+        let buffer = if vertical {
+            &self.blur_v_buffer
+        } else {
+            &self.blur_h_buffer
+        };
+        let bind_group = self.bind_groups.get_or_create(buffer, source_texture, || {
+            self.blur_pipeline
+                .bind_group(device, buffer, source_texture, &self.sampler)
+        });
         pass.set_pipeline(&self.blur_pipeline.render_pipeline);
-        pass.set_bind_group(
-            0,
-            &self
-                .blur_pipeline
-                .bind_group(device, buffer, source_texture, &self.sampler),
-            &[],
-        );
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

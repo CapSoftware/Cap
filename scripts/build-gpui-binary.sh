@@ -6,7 +6,6 @@ requested_target="${2:-${RUST_TARGET_TRIPLE:-}}"
 toolchain="${CAP_GPUI_RUST_TOOLCHAIN:-1.95.0}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 gpui_dir="$repo_root/apps/desktop-gpui"
-binaries_dir="$repo_root/apps/desktop/src-tauri/binaries"
 
 case "$profile" in
 	debug)
@@ -61,7 +60,6 @@ node "$repo_root/scripts/sync-desktop-versions.mjs"
 )
 
 source_binary="$artifact_dir/cap-gpui$extension"
-staged_binary="$binaries_dir/cap-gpui-$target$extension"
 if [[ ! -f "$source_binary" ]]; then
 	echo "error: built GPUI binary not found at $source_binary" >&2
 	exit 1
@@ -75,9 +73,4 @@ if [[ "$target" == *linux* ]]; then
 	patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib/cap' "$source_binary"
 fi
 
-mkdir -p "$binaries_dir"
-cp "$source_binary" "$staged_binary"
-if [[ "$extension" != ".exe" ]]; then
-	chmod +x "$staged_binary"
-fi
-echo "Staged $source_binary -> $staged_binary"
+echo "Built $source_binary"

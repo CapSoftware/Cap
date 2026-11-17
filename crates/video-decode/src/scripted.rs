@@ -13,7 +13,9 @@
 //! - AVAssetReader: a reader started at time `T` vends the sample on screen at
 //!   `T` (the newest at or before it) and every later one. When that sample
 //!   starts before `T` its presentation time is trimmed to `T`. A reader started
-//!   at or after the end of the track vends nothing.
+//!   at or after the end of the track vends nothing. A read set up with
+//!   [`Registration::fail_avf_read_at`] fails like a decode error: the reader
+//!   vends nothing more and reports the failure.
 //!
 //! Every vended frame carries its sample index in its first luma row, see
 //! [`frame_id`].
@@ -25,6 +27,7 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 const MAGIC: [u8; 4] = *b"CAPS";
@@ -95,14 +98,30 @@ struct Counters {
 pub(crate) struct ScriptState {
     pub(crate) script: Script,
     counters: Counters,
+    vend_delay_micros: AtomicU64,
     vended: Mutex<Vec<u32>>,
+    failing_samples: Mutex<Vec<usize>>,
     #[cfg(target_os = "macos")]
     samples: Mutex<HashMap<usize, avf::SharedSample>>,
 }
 
 impl ScriptState {
     fn record_vend(&self, index: usize) {
+        let delay = self.vend_delay_micros.load(Ordering::Relaxed);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_micros(delay));
+        }
         self.vended.lock().unwrap().push(index as u32);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn take_failure(&self, index: usize) -> bool {
+        let mut failing = self.failing_samples.lock().unwrap();
+        let Some(position) = failing.iter().position(|&sample| sample == index) else {
+            return false;
+        };
+        failing.swap_remove(position);
+        true
     }
 
     /// Whether `pts` (in stream ticks) is at or before `value / scale` seconds.
@@ -156,6 +175,15 @@ impl Registration {
         std::mem::take(&mut *self.state.vended.lock().unwrap())
     }
 
+    /// Every reader of this script sleeps this long before each vend, so a
+    /// test can act while a read is still in progress.
+    pub fn set_vend_delay(&self, delay: Duration) {
+        let micros = u64::try_from(delay.as_micros()).unwrap_or(u64::MAX);
+        self.state
+            .vend_delay_micros
+            .store(micros, Ordering::Relaxed);
+    }
+
     /// AVAssetReader starts: creations and resets.
     pub fn reader_starts(&self) -> u64 {
         self.state.counters.reader_starts.load(Ordering::Relaxed)
@@ -164,6 +192,13 @@ impl Registration {
     /// FFmpeg demuxer seeks.
     pub fn seeks(&self) -> u64 {
         self.state.counters.seeks.load(Ordering::Relaxed)
+    }
+
+    /// The next AVAssetReader that reaches `index` fails there instead of
+    /// vending it, as a native reader does with a decode error: it vends
+    /// nothing more and reports the failure. Once per call.
+    pub fn fail_avf_read_at(&self, index: usize) {
+        self.state.failing_samples.lock().unwrap().push(index);
     }
 }
 
@@ -184,7 +219,9 @@ pub fn register(script: Script) -> Registration {
     let state = Arc::new(ScriptState {
         script,
         counters: Counters::default(),
+        vend_delay_micros: AtomicU64::new(0),
         vended: Mutex::new(Vec::new()),
+        failing_samples: Mutex::new(Vec::new()),
         #[cfg(target_os = "macos")]
         samples: Mutex::new(HashMap::new()),
     });
@@ -314,6 +351,7 @@ mod avf {
         state: Arc<ScriptState>,
         next: usize,
         trimmed_start: Option<cm::Time>,
+        failed: bool,
     }
 
     impl AvfReader {
@@ -339,12 +377,24 @@ mod avf {
                 state,
                 next,
                 trimmed_start,
+                failed: false,
             }
         }
 
+        pub(crate) fn failed(&self) -> bool {
+            self.failed
+        }
+
         pub(crate) fn next_sample_buf(&mut self) -> Option<R<cm::SampleBuf>> {
+            if self.failed {
+                return None;
+            }
             let script = &self.state.script;
             let frame = script.frames.get(self.next)?;
+            if self.state.take_failure(self.next) {
+                self.failed = true;
+                return None;
+            }
             let index = self.next;
             self.next += 1;
             self.state.record_vend(index);

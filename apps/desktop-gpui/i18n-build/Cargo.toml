@@ -1,0 +1,12 @@
+[package]
+name = "cap-i18n-build"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+toml = "1"
+
+[build-dependencies]
+toml = "1"

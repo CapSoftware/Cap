@@ -68,10 +68,9 @@ export function TimelineRail({
 		let lastSecond = -1;
 
 		return playback.subscribe((time) => {
-			const { start, end } = windowRef.current;
 			const fraction = Math.min(
 				1,
-				Math.max(0, fractionInWindow(time, start, end)),
+				Math.max(0, fractionInWindow(time, windowStart, windowEnd)),
 			);
 			progress.style.setProperty("--p", `${fraction * 100}%`);
 
@@ -82,7 +81,7 @@ export function TimelineRail({
 			rail.setAttribute("aria-valuenow", String(second));
 			rail.setAttribute("aria-valuetext", formatClock(time));
 		});
-	}, [playback, railRef, windowRef]);
+	}, [playback, railRef, windowStart, windowEnd]);
 
 	// Scrubbing lands at most one seek per frame; the media element is slow to
 	// honour `currentTime` and a pointermove burst would queue them all up.

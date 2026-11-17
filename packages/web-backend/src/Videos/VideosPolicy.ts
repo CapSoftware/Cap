@@ -1,6 +1,6 @@
 import { isEmailAllowedByRestriction } from "@cap/utils";
 import {
-	type CurrentUser,
+	CurrentUser,
 	type DatabaseError,
 	type Organisation,
 	Policy,
@@ -30,6 +30,9 @@ export type VideosPolicyDeps = {
 		hasViewerGrant: (
 			id: Video.VideoId,
 			email: string,
+		) => Effect.Effect<boolean, DatabaseError>;
+		isLinkOpenToAnyone: (
+			id: Video.VideoId,
 		) => Effect.Effect<boolean, DatabaseError>;
 	};
 	orgsRepo: {
@@ -121,19 +124,20 @@ const decideCanView = (
 
 		if (restriction.length > 0) {
 			if (Option.isNone(user)) {
-				yield* Effect.log(
-					"Email access restriction active and user not logged in. Access denied.",
-				);
-				return yield* Effect.fail(
-					new Policy.PolicyDeniedError({
-						reason: "email_restriction_login_required",
-					}),
-				);
-			}
-			if (
-				Option.isSome(user) &&
+				if (!(yield* repo.isLinkOpenToAnyone(video.id))) {
+					yield* Effect.log(
+						"Email access restriction active and user not logged in. Access denied.",
+					);
+					return yield* Effect.fail(
+						new Policy.PolicyDeniedError({
+							reason: "email_restriction_login_required",
+						}),
+					);
+				}
+			} else if (
 				!isEmailAllowedByRestriction(user.value.email, restriction) &&
-				!(yield* repo.hasViewerGrant(video.id, user.value.email))
+				!(yield* repo.hasViewerGrant(video.id, user.value.email)) &&
+				!(yield* repo.isLinkOpenToAnyone(video.id))
 			) {
 				yield* Effect.log("Email access restriction active. Access denied.");
 				return yield* Effect.fail(
@@ -192,6 +196,81 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 				password: Option.Option<string>,
 			) => buildCanViewLoaded(deps, video, password);
 
+			const canViewLoadedBulk = Effect.fn("VideosPolicy.canViewLoadedBulk")(
+				function* (
+					loaded: ReadonlyArray<
+						readonly [ViewableVideo, Option.Option<string>]
+					>,
+				) {
+					const user = yield* Effect.serviceOption(CurrentUser);
+					const videoIds = loaded
+						.filter(
+							([video]) =>
+								Option.isNone(user) || video.ownerId !== user.value.id,
+						)
+						.map(([video]) => video.id);
+					if (videoIds.length === 0)
+						return yield* Effect.forEach(loaded, ([video, password]) =>
+							canViewLoaded(video, password).pipe(Effect.exit),
+						);
+
+					// Retain lookup failures until each policy runs, including the owner bypass.
+					const [passwords, orgMemberships, spaceMemberships] =
+						yield* Effect.all(
+							[
+								spacesRepo.passwordsForVideos(videoIds).pipe(
+									Effect.map((rows) =>
+										Array.groupBy(rows, (row) => row.videoId),
+									),
+									Effect.exit,
+								),
+								(Option.isSome(user)
+									? orgsRepo.membershipsForVideos(user.value.id, videoIds)
+									: Effect.succeed([])
+								).pipe(
+									Effect.map((rows) =>
+										Array.groupBy(rows, (row) => row.videoId),
+									),
+									Effect.exit,
+								),
+								(Option.isSome(user)
+									? spacesRepo.membershipsForVideos(user.value.id, videoIds)
+									: Effect.succeed([])
+								).pipe(
+									Effect.map((rows) =>
+										Array.groupBy(rows, (row) => row.videoId),
+									),
+									Effect.exit,
+								),
+							],
+							{ concurrency: "unbounded" },
+						);
+					const bulkDeps: ViewDecisionDeps = {
+						...deps,
+						orgsRepo: {
+							...orgsRepo,
+							membershipForVideo: (_, id) =>
+								Effect.map(orgMemberships, (rows) => rows[id] ?? []),
+						},
+						spacesRepo: {
+							...spacesRepo,
+							passwordsForVideo: (id) =>
+								Effect.map(passwords, (rows) => rows[id] ?? []),
+							membershipForVideo: (_, id) =>
+								Effect.map(spaceMemberships, (rows) =>
+									Option.fromNullable(rows[id]?.[0]),
+								),
+						},
+					};
+					return yield* Effect.forEach(
+						loaded,
+						([video, password]) =>
+							buildCanViewLoaded(bulkDeps, video, password).pipe(Effect.exit),
+						{ concurrency: 10 },
+					);
+				},
+			);
+
 			const isOwner = (videoId: Video.VideoId) =>
 				Policy.policy((user) =>
 					repo.getById(videoId).pipe(
@@ -234,6 +313,7 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 			return {
 				canView,
 				canViewLoaded,
+				canViewLoadedBulk,
 				isOwner,
 				isOwnerLoaded,
 				getViewableById,

@@ -16,8 +16,8 @@ use cap_recording::{
     ChannelVideoSourceConfig, OutputPipeline,
     ffmpeg::{
         DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig, FFmpegVideoFrame,
-        FragmentedAudioMuxer, FragmentedAudioMuxerConfig, Mp4Muxer, OggMuxer, SegmentedVideoMuxer,
-        SegmentedVideoMuxerConfig,
+        FragmentedAudioMuxer, FragmentedAudioMuxerConfig, Mp4Muxer, OggMuxer, OggMuxerConfig,
+        SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
     },
 };
 use cap_timestamp::{Timestamp, Timestamps};
@@ -882,11 +882,12 @@ async fn run_audio(
         second = Some(tx2);
     }
     let built = match muxer {
-        AudioMuxerKind::Ogg => builder.build::<OggMuxer>(()).await,
+        AudioMuxerKind::Ogg => builder.build::<OggMuxer>(OggMuxerConfig::default()).await,
         AudioMuxerKind::FragmentedM4a => {
             builder
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: None,
+                    write_behind: false,
                 })
                 .await
         }
@@ -1112,10 +1113,11 @@ async fn run_mic(ctx: &Ctx, script: &MicScript, fragmented: bool) -> anyhow::Res
         builder
             .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                 shared_pause_state: None,
+                write_behind: false,
             })
             .await
     } else {
-        builder.build::<OggMuxer>(()).await
+        builder.build::<OggMuxer>(OggMuxerConfig::default()).await
     };
     let pipeline = match built {
         Ok(p) => p,

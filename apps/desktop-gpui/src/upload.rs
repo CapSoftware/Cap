@@ -15,9 +15,12 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod instant_cleanup;
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
+#[cfg(test)]
+mod real_app_tests;
 #[cfg(test)]
 mod verify_tests;
 
@@ -31,11 +34,16 @@ const SEGMENT_RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SEGMENT_RETRY_MIN_DELAY: Duration = Duration::from_secs(2);
 const SEGMENT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const MANIFEST_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
+const MANIFEST_SUBPATH: &str = "segments/manifest.json";
+// Presigned S3 PUT URLs are signed for 30 minutes and accept repeated PUTs, so
+// the manifest reuses one well inside that window instead of signing a new URL
+// every second. Google Drive upload sessions are single use and never reused.
+const MANIFEST_URL_REUSE: Duration = Duration::from_secs(10 * 60);
 const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPLOAD_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
 const UPLOAD_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct SignedUploadTarget {
     url: String,
     #[serde(default)]
@@ -229,6 +237,51 @@ impl SegmentUploadManifest {
     }
 }
 
+// Only the share page's early playback reads this; the complete manifest stays
+// the source of truth for everything else.
+const RECORDED_LENGTH_SUBPATH: &str = "segments/recording.json";
+const RECORDED_LENGTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn recorded_length_json(manifest: &SegmentUploadManifest) -> Option<Vec<u8>> {
+    let duration: f64 = manifest
+        .video_segments
+        .iter()
+        .map(|segment| segment.duration)
+        .sum();
+    if manifest.video_segments.is_empty() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "duration": duration,
+        "video_segments": manifest.video_segments.len(),
+        "audio_segments": manifest.audio_segments.len(),
+    }))
+    .ok()
+}
+
+async fn publish_recorded_length(video_id: String, bytes: Vec<u8>, cancel: Arc<AtomicBool>) {
+    match tokio::time::timeout(
+        RECORDED_LENGTH_TIMEOUT,
+        presigned_put_bytes_inner(&video_id, RECORDED_LENGTH_SUBPATH, bytes, Some(&cancel)),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::debug!(%error, "Recorded length upload failed"),
+        Err(_) => tracing::debug!("Recorded length upload timed out"),
+    }
+}
+
+async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = ()>) -> T {
+    let main = std::pin::pin!(main);
+    let side = std::pin::pin!(side);
+    match futures_util::future::select(main, side).await {
+        futures_util::future::Either::Left((output, _)) => output,
+        futures_util::future::Either::Right(((), main)) => main.await,
+    }
+}
+
 pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
@@ -243,7 +296,7 @@ pub async fn prepare_instant_upload(
     } else {
         "desktopSegments"
     };
-    let config = create_or_get_video_with_mode(
+    let created = create_or_get_video_with_mode(
         false,
         None,
         Some(project_name),
@@ -260,9 +313,11 @@ pub async fn prepare_instant_upload(
         error => format!("Could not create the shareable link: {error}"),
     })?;
 
+    let link = created.link();
+    let config = created.config;
     Ok(VideoUploadInfo {
         id: config.id.clone(),
-        link: format!("{}/s/{}", auth::server_url(), config.id),
+        link,
         config,
     })
 }
@@ -444,24 +499,39 @@ impl InstantUpload {
         Ok(())
     }
 
-    pub async fn finish_screenshot(&self, project_path: &Path) -> Result<(), String> {
+    fn screenshot_upload(
+        &self,
+        project_path: &Path,
+    ) -> impl Future<Output = Result<(), String>> + Send + use<> {
+        let video_id = self.video.id.clone();
+        let path = project_path.join("screenshots/display.jpg");
         #[cfg(target_os = "linux")]
-        let result = upload_screenshot_with_cancel(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-            &self.cancel,
-        )
-        .await;
-        #[cfg(not(target_os = "linux"))]
-        let result = upload_screenshot(
-            &self.video.id,
-            &project_path.join("screenshots/display.jpg"),
-        )
-        .await;
-        result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        let cancel = self.cancel.clone();
+        async move {
+            #[cfg(target_os = "linux")]
+            let result = upload_screenshot_with_cancel(&video_id, &path, &cancel).await;
+            #[cfg(not(target_os = "linux"))]
+            let result = upload_screenshot(&video_id, &path).await;
+            result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+        }
     }
 
-    pub async fn cancel(&mut self) -> Result<(), String> {
+    async fn finish_with_screenshot(
+        &mut self,
+        project_path: &Path,
+        manifest: SegmentUploadManifest,
+    ) -> Result<(), String> {
+        let screenshot = self.screenshot_upload(project_path);
+        if let Err(error) = self.authorize_manifest(manifest) {
+            self.finish_segments().await?;
+            return Err(error);
+        }
+        let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
+        screenshot?;
+        segments
+    }
+
+    pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
         self.abort_segments().await;
         if let Some(ownership) = &self.ownership {
             queue::record_cancelled(ownership.project_path())?;
@@ -469,7 +539,7 @@ impl InstantUpload {
         with_upload_context(
             self.request_context.clone(),
             self.reads.clone(),
-            delete_instant_video(&self.video.id),
+            delete_instant_video_with_query(&self.video.id, query),
         )
         .await
     }
@@ -491,11 +561,18 @@ impl InstantUpload {
     }
 }
 
-pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    let path = format!(
+pub(crate) async fn delete_instant_video_with_query(
+    video_id: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let mut path = format!(
         "/api/desktop/video/delete?videoId={}",
         urlencoding(video_id)
     );
+    if let Some(query) = query {
+        path.push('&');
+        path.push_str(query);
+    }
     let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| format!("Failed to delete instant recording: {error}"))?;
@@ -517,7 +594,7 @@ async fn run_segment_upload(
     authorization: Option<CompletionRequirement>,
 ) -> Result<(), String> {
     let result = upload_segments(
-        &LiveSegmentTransport,
+        &LiveSegmentTransport::default(),
         &video.id,
         events,
         cancel.clone(),
@@ -621,7 +698,43 @@ trait SegmentTransport: Send + Sync {
     ) -> impl Future<Output = Result<(), String>> + Send;
 }
 
-struct LiveSegmentTransport;
+struct ReusableUploadTarget {
+    target: SignedUploadTarget,
+    signed_at: tokio::time::Instant,
+}
+
+impl ReusableUploadTarget {
+    fn new(target: SignedUploadTarget, signed_at: tokio::time::Instant) -> Option<Self> {
+        (!is_google_drive_resumable_url(&target.url)).then_some(Self { target, signed_at })
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.signed_at.elapsed() < MANIFEST_URL_REUSE
+    }
+}
+
+#[derive(Default)]
+struct LiveSegmentTransport {
+    manifest_target: Mutex<Option<ReusableUploadTarget>>,
+}
+
+impl LiveSegmentTransport {
+    fn reusable_manifest_target(&self) -> Option<ReusableUploadTarget> {
+        self.manifest_target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .filter(ReusableUploadTarget::is_fresh)
+    }
+
+    fn keep_manifest_target(&self, target: Option<ReusableUploadTarget>) {
+        *self
+            .manifest_target
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = target;
+    }
+}
+
 impl SegmentTransport for LiveSegmentTransport {
     async fn prepare(
         &self,
@@ -664,9 +777,20 @@ impl SegmentTransport for LiveSegmentTransport {
         start: u32,
         count: u32,
     ) -> Result<HashMap<String, String>, String> {
-        prefetch_segment_urls(video_id, start, count)
+        let signed_at = tokio::time::Instant::now();
+        let mut urls = prefetch_segment_urls(video_id, start, count)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(url) = urls.remove(MANIFEST_SUBPATH) {
+            self.keep_manifest_target(ReusableUploadTarget::new(
+                SignedUploadTarget {
+                    url,
+                    headers: HashMap::new(),
+                },
+                signed_at,
+            ));
+        }
+        Ok(urls)
     }
     async fn segment(
         &self,
@@ -683,7 +807,7 @@ impl SegmentTransport for LiveSegmentTransport {
         manifest: &SegmentUploadManifest,
         cancel: &Arc<AtomicBool>,
     ) -> Result<(), String> {
-        upload_segment_manifest_with_retry(video_id, manifest, cancel).await
+        upload_segment_manifest_with_retry(self, video_id, manifest, cancel).await
     }
     async fn complete(&self, video_id: &str, cancel: &Arc<AtomicBool>) -> Result<(), String> {
         signal_recording_complete_with_retry(video_id, cancel).await
@@ -928,7 +1052,7 @@ fn prefetched_segment_paths(start: u32, count: u32) -> Vec<String> {
     if start == 1 {
         subpaths.push("segments/video/init.mp4".to_string());
         subpaths.push("segments/audio/init.mp4".to_string());
-        subpaths.push("segments/manifest.json".to_string());
+        subpaths.push(MANIFEST_SUBPATH.to_string());
     }
     for index in start..start.saturating_add(count) {
         subpaths.push(format!("segments/video/segment_{index:03}.m4s"));
@@ -1083,18 +1207,53 @@ fn segment_subpath(event: &SegmentCompletedEvent) -> String {
 }
 
 async fn upload_segment_manifest(
+    transport: &LiveSegmentTransport,
     video_id: &str,
     manifest: &SegmentUploadManifest,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let bytes = serde_json::to_vec(manifest)
         .map_err(|error| format!("Failed to serialize instant upload manifest: {error}"))?;
-    presigned_put_bytes_inner(video_id, "segments/manifest.json", bytes, Some(cancel))
+    if let Some(reusable) = transport.reusable_manifest_target() {
+        match upload_signed_bytes_inner(
+            reusable.target.clone(),
+            MANIFEST_SUBPATH,
+            bytes.clone(),
+            Some(cancel),
+        )
         .await
-        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))
+        {
+            Ok(()) => {
+                transport.keep_manifest_target(Some(reusable));
+                return Ok(());
+            }
+            Err(error @ AuthApiError::Status(..)) => {
+                check_segment_cancelled(cancel)?;
+                tracing::debug!(
+                    "Reused instant manifest URL was rejected; signing a new one: {error}"
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to upload instant recording manifest: {error}"
+                ));
+            }
+        }
+    }
+    let signed_at = tokio::time::Instant::now();
+    let target = presign_put_target(video_id, MANIFEST_SUBPATH, Some(cancel))
+        .await
+        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))?;
+    let reusable = ReusableUploadTarget::new(target.clone(), signed_at);
+    upload_signed_bytes_inner(target, MANIFEST_SUBPATH, bytes, Some(cancel))
+        .await
+        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))?;
+    transport.keep_manifest_target(reusable);
+    Ok(())
 }
 
 async fn upload_segment_manifest_with_retry(
+    transport: &LiveSegmentTransport,
     video_id: &str,
     manifest: &SegmentUploadManifest,
     cancel: &AtomicBool,
@@ -1104,7 +1263,7 @@ async fn upload_segment_manifest_with_retry(
             return Err("Instant recording upload cancelled".to_string());
         }
         match checked_segment_step(cancel, || {
-            upload_segment_manifest(video_id, manifest, cancel)
+            upload_segment_manifest(transport, video_id, manifest, cancel)
         })
         .await
         {
@@ -1210,9 +1369,28 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
-    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+    check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
+    let auth_state = crate::store::store_section("auth");
+    let Ok(context) = auth::UploadRequestContext::for_upload(
+        &auth::server_url(),
+        auth_state.get("user_id").and_then(Value::as_str),
+    ) else {
+        return Ok(UploadResult::NotAuthenticated);
+    };
+    let result = context
+        .run(upload_exported_video_inner(
+            project_path.clone(),
+            organization_id,
+            progress,
+            cancel,
+            false,
+        ))
         .await
-        .map(|(result, _)| result)
+        .map(|(result, _)| result);
+    if matches!(result, Ok(UploadResult::Success(_))) {
+        crate::automation::upload_completed(&project_path, None, None);
+    }
+    result
 }
 
 async fn upload_exported_video_inner(
@@ -1294,13 +1472,15 @@ async fn upload_exported_video_inner(
     })
     .await
     {
-        Ok(config) => config,
+        Ok(created) => created,
         Err(AuthApiError::InvalidAuthentication) => {
             return Ok((UploadResult::NotAuthenticated, None));
         }
         Err(AuthApiError::UpgradeRequired) => return Ok((UploadResult::UpgradeRequired, None)),
         Err(error) => return Err(error.to_string()),
     };
+    let created_link = s3_config.share_url;
+    let s3_config = s3_config.config;
     if s3_config.id != video_id {
         return Err("Server did not preserve the reserved upload identity".into());
     }
@@ -1331,6 +1511,7 @@ async fn upload_exported_video_inner(
                 .sharing
                 .as_ref()
                 .map(|sharing| sharing.link.clone())
+                .or(created_link)
                 .unwrap_or(link);
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
@@ -1411,7 +1592,7 @@ async fn create_or_get_video(
     name: Option<String>,
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
-) -> Result<S3UploadMeta, AuthApiError> {
+) -> Result<CreatedVideo, AuthApiError> {
     create_or_get_video_with_mode(
         is_screenshot,
         video_id,
@@ -1430,7 +1611,7 @@ async fn create_or_get_video_with_mode(
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
-) -> Result<S3UploadMeta, AuthApiError> {
+) -> Result<CreatedVideo, AuthApiError> {
     let mut path = format!(
         "/api/desktop/video/create?recordingMode={}",
         urlencoding(recording_mode)
@@ -1472,8 +1653,52 @@ async fn create_or_get_video_with_mode(
         .text()
         .await
         .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
-    serde_json::from_str::<S3UploadMeta>(&text)
+    parse_created_video(&text)
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
+}
+
+struct CreatedVideo {
+    config: S3UploadMeta,
+    share_url: Option<String>,
+}
+
+impl CreatedVideo {
+    fn link(&self) -> String {
+        self.share_url
+            .clone()
+            .unwrap_or_else(|| format!("{}/s/{}", auth::server_url(), self.config.id))
+    }
+}
+
+fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct CreateVideoResponse {
+        id: String,
+        #[serde(default)]
+        share_url: Option<String>,
+    }
+
+    let response = serde_json::from_str::<CreateVideoResponse>(body)?;
+    let share_url = response
+        .share_url
+        .filter(|share_url| is_share_url_for(share_url, &response.id));
+    Ok(CreatedVideo {
+        config: S3UploadMeta { id: response.id },
+        share_url,
+    })
+}
+
+fn is_share_url_for(share_url: &str, video_id: &str) -> bool {
+    reqwest::Url::parse(share_url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| !host.is_empty())
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none()
+            && url.path() == format!("/s/{video_id}")
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[derive(Debug)]
@@ -2024,6 +2249,7 @@ async fn upload_file_parts(
     let mut parts = Vec::new();
     let mut failed = Vec::new();
     let mut offset = 0u64;
+    let mut uploaded_bytes = 0u64;
     let mut part_number = 1u32;
 
     while offset < file_size {
@@ -2041,7 +2267,11 @@ async fn upload_file_parts(
             bytes: chunk.into(),
         };
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += size as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
@@ -2050,7 +2280,6 @@ async fn upload_file_parts(
         }
         offset += size as u64;
         part_number += 1;
-        progress((offset as f64 / file_size as f64).min(0.99));
     }
 
     for (chunk, first_error) in failed {
@@ -2058,7 +2287,11 @@ async fn upload_file_parts(
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += chunk.bytes.len() as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(_) => {
                 check_export_cancelled(cancel)?;
                 return Err(first_error);
@@ -2172,26 +2405,35 @@ async fn put_presigned_part(
     }
 }
 
+const SCREENSHOT_SUBPATH: &str = "screenshot/screen-capture.jpg";
+
 async fn upload_screenshot_with_cancel(
     video_id: &str,
     path: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), AuthApiError> {
     check_export_cancelled(cancel)?;
-    let bytes = compress_image(path)?;
-    presigned_put_bytes_inner(
-        video_id,
-        "screenshot/screen-capture.jpg",
-        bytes,
-        Some(cancel),
-    )
-    .await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, Some(cancel)),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, Some(cancel)).await
 }
 
 #[cfg(not(target_os = "linux"))]
 async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiError> {
-    let bytes = compress_image(path)?;
-    presigned_put_bytes(video_id, "screenshot/screen-capture.jpg", bytes).await
+    let (bytes, target) = tokio::try_join!(
+        compress_screenshot(path),
+        presign_put_target(video_id, SCREENSHOT_SUBPATH, None),
+    )?;
+    upload_signed_bytes_inner(target, SCREENSHOT_SUBPATH, bytes, None).await
+}
+
+async fn compress_screenshot(path: &Path) -> Result<Vec<u8>, AuthApiError> {
+    let path = path.to_path_buf();
+    tracked_upload_read(move || compress_image(&path))
+        .await
+        .map_err(|error| AuthApiError::Other(format!("Failed to compress image: {error}")))?
 }
 
 /// One presigned single-part PUT under a video's subpath -- `/api/upload/
@@ -2225,6 +2467,15 @@ async fn presigned_put_bytes_inner(
     bytes: Vec<u8>,
     cancel: Option<&AtomicBool>,
 ) -> Result<(), AuthApiError> {
+    let target = presign_put_target(video_id, subpath, cancel).await?;
+    upload_signed_bytes_inner(target, subpath, bytes, cancel).await
+}
+
+async fn presign_put_target(
+    video_id: &str,
+    subpath: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<SignedUploadTarget, AuthApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Response {
@@ -2250,12 +2501,43 @@ async fn presigned_put_bytes_inner(
             format!("api/upload_signed/{}", status.as_u16()),
         ));
     }
-    let target = response
+    response
         .json::<Response>()
         .await
-        .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))?
-        .presigned_put_data;
-    upload_signed_bytes_inner(target, subpath, bytes, cancel).await
+        .map(|response| response.presigned_put_data)
+        .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))
+}
+
+fn signed_upload_request(
+    client: &reqwest::Client,
+    target: SignedUploadTarget,
+    subpath: &str,
+    bytes: Vec<u8>,
+) -> reqwest::RequestBuilder {
+    let length = bytes.len() as u64;
+    let mut request = client
+        .put(&target.url)
+        .header("Content-Length", length)
+        .timeout(Duration::from_secs(5 * 60))
+        .body(bytes);
+    // reqwest appends headers; duplicating the signed Content-Type makes RustFS reject the PUT.
+    if !target
+        .headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        request = request.header("Content-Type", upload_content_type(subpath));
+    }
+    if is_google_drive_resumable_url(&target.url) && length > 0 {
+        request = request.header(
+            "Content-Range",
+            format!("bytes 0-{}/{}", length.saturating_sub(1), length),
+        );
+    }
+    for (name, value) in target.headers {
+        request = request.header(name, value);
+    }
+    request
 }
 
 async fn upload_signed_bytes_inner(
@@ -2266,23 +2548,7 @@ async fn upload_signed_bytes_inner(
 ) -> Result<(), AuthApiError> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-    let length = bytes.len() as u64;
-    let mut request = CLIENT
-        .get_or_init(upload_client)
-        .put(&target.url)
-        .header("Content-Length", length)
-        .header("Content-Type", upload_content_type(subpath))
-        .timeout(Duration::from_secs(5 * 60))
-        .body(bytes);
-    if is_google_drive_resumable_url(&target.url) && length > 0 {
-        request = request.header(
-            "Content-Range",
-            format!("bytes 0-{}/{}", length.saturating_sub(1), length),
-        );
-    }
-    for (name, value) in target.headers {
-        request = request.header(name, value);
-    }
+    let request = signed_upload_request(CLIENT.get_or_init(upload_client), target, subpath, bytes);
     let response = optional_upload_step(cancel, || async {
         send_upload_request(request).await.map_err(|error| {
             if error.is_timeout() {
@@ -2374,6 +2640,7 @@ pub async fn upload_rendered_screenshot(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<ScreenshotShareOutcome, String> {
     let auth = crate::store::auth_snapshot();
     if !auth.signed_in() {
@@ -2385,7 +2652,7 @@ pub async fn upload_rendered_screenshot(
         return Ok(ScreenshotShareOutcome::UpgradeRequired);
     }
 
-    match upload_screenshot_bytes(image_bytes, content_type, video_id).await {
+    match upload_screenshot_bytes(image_bytes, content_type, video_id, organization_id).await {
         Ok(item) => Ok(ScreenshotShareOutcome::Uploaded(item)),
         Err(AuthApiError::InvalidAuthentication) => Ok(ScreenshotShareOutcome::NotAuthenticated),
         Err(AuthApiError::UpgradeRequired) => Ok(ScreenshotShareOutcome::UpgradeRequired),
@@ -2398,12 +2665,15 @@ async fn upload_screenshot_bytes(
     image_bytes: Vec<u8>,
     content_type: &str,
     video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthApiError> {
-    let s3_config = create_or_get_video(true, video_id, None, None, None).await?;
+    let created = create_or_get_video(true, video_id, None, None, organization_id).await?;
+    let link = created.link();
+    let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
     presigned_put_bytes(&s3_config.id, subpath, image_bytes).await?;
     Ok(UploadedItem {
-        link: format!("{}/s/{}", auth::server_url(), s3_config.id),
+        link,
         id: s3_config.id,
     })
 }
@@ -2504,6 +2774,229 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn created_video_uses_a_custom_domain_share_link() {
+        let created = parse_created_video(
+            r#"{"id":"abc123","share_url":"https://videos.team.test/s/abc123","user_id":"u"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(
+            created.share_url.as_deref(),
+            Some("https://videos.team.test/s/abc123")
+        );
+    }
+
+    #[test]
+    fn created_video_without_a_share_link_keeps_the_default() {
+        let created = parse_created_video(r#"{"id":"abc123","user_id":"u"}"#).unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(created.share_url, None);
+
+        let created = parse_created_video(r#"{"id":"abc123","share_url":null}"#).unwrap();
+        assert_eq!(created.share_url, None);
+    }
+
+    #[test]
+    fn created_video_ignores_share_links_for_other_pages() {
+        for share_url in [
+            "",
+            "not a url",
+            "http://videos.team.test/s/abc123",
+            "https://videos.team.test/s/other",
+            "https://videos.team.test/s/abc123/extra",
+            "https://videos.team.test/c/abc123",
+            "https://videos.team.test/s/abc123?x=1",
+            "https://videos.team.test/s/abc123#x",
+            "https://user:pass@videos.team.test/s/abc123",
+            "https://videos.team.test:8443/s/abc123",
+            "javascript:alert(1)//s/abc123",
+        ] {
+            let body = serde_json::json!({ "id": "abc123", "share_url": share_url }).to_string();
+            let created = parse_created_video(&body).unwrap();
+            assert_eq!(created.share_url, None, "{share_url}");
+        }
+    }
+
+    async fn strict_put_server() -> (String, Arc<Mutex<Vec<Vec<String>>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/bucket/object", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                let header_end = loop {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break None;
+                    }
+                    raw.extend_from_slice(&buf[..read]);
+                    if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(end);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let lines: Vec<String> = String::from_utf8_lossy(&raw[..header_end])
+                    .lines()
+                    .skip(1)
+                    .map(str::to_owned)
+                    .collect();
+                let header = |name: &str| {
+                    lines
+                        .iter()
+                        .filter(|line| {
+                            line.split_once(':')
+                                .is_some_and(|(key, _)| key.eq_ignore_ascii_case(name))
+                        })
+                        .count()
+                };
+                let length: usize = lines
+                    .iter()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        if key.eq_ignore_ascii_case("content-length") {
+                            value.trim().parse().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let mut body = raw.len() - header_end - 4;
+                while body < length {
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    body += read;
+                }
+                let response: &[u8] = if header("content-type") > 1 {
+                    b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                } else {
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                };
+                seen.lock().unwrap().push(lines);
+                socket.write_all(response).await.ok();
+            }
+        });
+        (url, requests)
+    }
+
+    #[tokio::test]
+    async fn signed_uploads_send_one_content_type_on_the_wire() {
+        let (url, requests) = strict_put_server().await;
+        for (subpath, signed_type, sent_type) in [
+            ("segments/manifest.json", Some("application/json"), "application/json"),
+            ("segments/recording.json", Some("application/json"), "application/json"),
+            ("screenshot/screen-capture.jpg", Some("image/jpeg"), "image/jpeg"),
+            ("screenshot/screen-capture.png", Some("image/png"), "image/png"),
+            ("segments/video/segment_001.m4s", Some("video/mp4"), "video/mp4"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            ("segments/manifest.json", None, "application/json"),
+        ] {
+            let headers = signed_type
+                .map(|value| HashMap::from([("Content-Type".to_string(), value.to_string())]))
+                .unwrap_or_default();
+            upload_signed_bytes_inner(
+                SignedUploadTarget {
+                    url: url.clone(),
+                    headers,
+                },
+                subpath,
+                vec![7; 32],
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{subpath} with {signed_type:?}: {error}"));
+            let lines = requests.lock().unwrap().pop().unwrap();
+            let content_types: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    if key.eq_ignore_ascii_case("content-type") {
+                        Some(value.trim())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(content_types, [sent_type], "{subpath}");
+        }
+    }
+
+    #[test]
+    fn signed_upload_request_sends_one_content_type() {
+        let client = reqwest::Client::new();
+        for (subpath, supplied_name, expected) in [
+            ("segments/manifest.json", None, "application/json"),
+            ("screenshot/screen-capture.jpg", None, "image/jpeg"),
+            ("segments/video/segment_001.m4s", None, "video/mp4"),
+            (
+                "segments/manifest.json",
+                Some("Content-Type"),
+                "application/json",
+            ),
+            (
+                "screenshot/screen-capture.jpg",
+                Some("content-type"),
+                "image/jpeg",
+            ),
+            (
+                "segments/manifest.json",
+                Some("cOnTeNt-TyPe"),
+                "application/custom+json",
+            ),
+        ] {
+            let mut headers = HashMap::from([("x-amz-meta-test".into(), "preserved".into())]);
+            if let Some(name) = supplied_name {
+                headers.insert(name.into(), expected.into());
+            }
+            let request = signed_upload_request(
+                &client,
+                SignedUploadTarget {
+                    url: "http://127.0.0.1/upload".into(),
+                    headers,
+                },
+                subpath,
+                vec![1, 2, 3],
+            )
+            .build()
+            .unwrap();
+
+            assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
+            assert_eq!(request.headers()["content-type"], expected);
+            assert_eq!(request.headers()["content-length"], "3");
+            assert_eq!(request.headers()["x-amz-meta-test"], "preserved");
+            assert_eq!(
+                request.body().unwrap().as_bytes(),
+                Some([1, 2, 3].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn signed_upload_request_preserves_drive_content_range() {
+        let request = signed_upload_request(
+            &reqwest::Client::new(),
+            SignedUploadTarget {
+                url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=test".into(),
+                headers: HashMap::from([("Content-Type".into(), "image/png".into())]),
+            },
+            "screenshot/screen-capture.png",
+            vec![1, 2, 3],
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(request.headers()["content-range"], "bytes 0-2/3");
+        assert_eq!(request.headers().get_all("content-type").iter().count(), 1);
+    }
 
     #[tokio::test]
     async fn presigned_transfer_errors_never_expose_secret_urls() {
@@ -2633,6 +3126,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lost_completion_authorization_cannot_accept_a_successful_worker() {
+        let authorization = CompletionAuthorization::new();
+        drop(authorization.required);
+        let mut upload =
+            upload_with_task(tokio::spawn(async { Ok(()) }), Some(authorization.control));
+        upload.completion_permit = Some(authorization.permit);
+
+        let error = upload
+            .finish_with_screenshot(Path::new("unused.cap"), SegmentUploadManifest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Instant completion authorization was lost");
+        upload.abort_segments().await;
+    }
+
+    #[tokio::test]
     async fn denied_segment_finish_waits_until_the_owned_task_has_joined() {
         let authorization = CompletionAuthorization::new();
         let control = authorization.control.clone();
@@ -2736,6 +3245,112 @@ mod tests {
             is_init,
             media_type,
         }
+    }
+
+    /// The finished segment manifest this app uploads, checked against the
+    /// files the web server's own parser is tested with
+    /// (`apps/web/__tests__/unit/desktop-segments-manifest-contract.test.ts`),
+    /// so neither side can change the format without the other noticing. Run
+    /// with `CAP_UPDATE_CONTRACT_FIXTURES=1` to rewrite the files after an
+    /// intended change.
+    #[test]
+    fn finished_segment_manifests_match_the_server_contract_fixtures() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/__tests__/fixtures/desktop-segments");
+        for (name, audio) in [("with-audio", 2), ("video-only", 0)] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+            for (index, duration) in [(1, 2.0), (2, 2.0), (3, 1.25)] {
+                manifest.record(&segment_event(
+                    index,
+                    duration,
+                    false,
+                    SegmentMediaType::Video,
+                ));
+            }
+            if audio > 0 {
+                manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+                for index in 1..=audio {
+                    manifest.record(&segment_event(index, 3.0, false, SegmentMediaType::Audio));
+                }
+            }
+            manifest.is_complete = true;
+            let uploaded = serde_json::to_value(&manifest).unwrap();
+            let path = fixtures.join(format!("finished-manifest-{name}.json"));
+            if std::env::var_os("CAP_UPDATE_CONTRACT_FIXTURES").is_some() {
+                std::fs::create_dir_all(&fixtures).unwrap();
+                let mut json = Vec::new();
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+                let mut serializer = serde_json::Serializer::with_formatter(&mut json, formatter);
+                serde::Serialize::serialize(&uploaded, &mut serializer).unwrap();
+                json.push(b'\n');
+                std::fs::write(&path, json).unwrap();
+            }
+            let fixture: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+            )
+            .unwrap();
+            assert_eq!(
+                fixture,
+                uploaded,
+                "{} no longer matches what the app uploads",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_length_sums_the_complete_local_video_track() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+        manifest.record(&segment_event(2, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(3, 0.5, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Audio));
+
+        let value: Value =
+            serde_json::from_slice(&recorded_length_json(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            json!({ "version": 1, "duration": 4.5, "video_segments": 3, "audio_segments": 1 })
+        );
+    }
+
+    #[test]
+    fn recorded_length_is_skipped_without_a_usable_video_length() {
+        assert!(recorded_length_json(&SegmentUploadManifest::default()).is_none());
+        for duration in [0.0, f64::NAN, f64::INFINITY] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(1, duration, false, SegmentMediaType::Video));
+            assert!(recorded_length_json(&manifest).is_none(), "{duration}");
+        }
+    }
+
+    #[tokio::test]
+    async fn alongside_never_waits_for_its_side_task() {
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { 7 }, async move {
+            std::future::pending::<()>().await;
+            flag.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(output, 7);
+        assert!(!side_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn alongside_finishes_its_main_task_after_a_quick_side_task() {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<u32>();
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { receiver.await.unwrap() }, async move {
+            flag.store(true, Ordering::SeqCst);
+            sender.send(9).unwrap();
+        })
+        .await;
+        assert_eq!(output, 9);
+        assert!(side_ran.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -3253,7 +3868,7 @@ mod tests {
         control.deny();
         assert!(
             upload
-                .finish_screenshot(Path::new("/not-a-recording/cancelled.cap"))
+                .screenshot_upload(Path::new("/not-a-recording/cancelled.cap"))
                 .await
                 .unwrap_err()
                 .contains("Export cancelled")

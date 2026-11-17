@@ -26,6 +26,10 @@ fn odd_yuv_frames_preserve_every_chroma_row() {
             assert_eq!(decoded.byte_len(), expected_bytes);
             assert_eq!(raw_bytes, expected_bytes);
             assert_eq!(cached.estimated_bytes(), expected_bytes);
+            assert!(
+                decoded.data().is_empty(),
+                "{format:?} {width}x{height} should borrow its planes"
+            );
             assert_eq!(decoded.y_plane().unwrap(), expected[0]);
             for (plane, data) in match format {
                 format::Pixel::YUV420P => vec![
@@ -92,6 +96,137 @@ fn read_pixels(
         .collect();
     buffer.unmap();
     pixels
+}
+
+fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = crate::create_wgpu_instance_sync();
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .ok()?;
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+}
+
+fn render_rgba(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    converter: &mut YuvToRgbaConverter,
+    frame: &DecodedFrame,
+) -> Vec<u8> {
+    let width = frame.width();
+    let height = frame.height();
+    match frame.format() {
+        PixelFormat::Nv12 => converter
+            .convert_nv12(
+                device,
+                queue,
+                frame.y_plane().unwrap(),
+                frame.uv_plane().unwrap(),
+                width,
+                height,
+                frame.y_stride(),
+                frame.uv_stride(),
+            )
+            .unwrap(),
+        PixelFormat::Yuv420p => converter
+            .convert_yuv420p(
+                device,
+                queue,
+                frame.y_plane().unwrap(),
+                frame.u_plane().unwrap(),
+                frame.v_plane().unwrap(),
+                width,
+                height,
+                frame.y_stride(),
+                frame.uv_stride(),
+            )
+            .unwrap(),
+        PixelFormat::Rgba => panic!("the test only builds YUV frames"),
+    };
+    read_pixels(
+        device,
+        queue,
+        converter.output_texture().unwrap(),
+        width,
+        height,
+    )
+}
+
+#[test]
+fn borrowed_planes_render_the_same_rgba_as_the_copy_path() {
+    let Some((device, queue)) = gpu() else {
+        eprintln!("no GPU adapter available, skipping borrowed-plane pixel parity");
+        return;
+    };
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../video-decode/tests/fixtures/h264-no-reordering.mp4");
+    let mut decoder = cap_video_decode::FFmpegDecoder::new(fixture, None).unwrap();
+    let mut sources: Vec<frame::Video> = decoder.frames().take(4).map(Result::unwrap).collect();
+
+    for (width, height) in [(1u32, 1u32), (3, 4), (17, 9)] {
+        for format in [format::Pixel::YUV420P, format::Pixel::NV12] {
+            let mut frame = frame::Video::new(format, width, height);
+            for plane in 0..frame.planes() {
+                for (index, byte) in frame.data_mut(plane).iter_mut().enumerate() {
+                    *byte = (index * 37 + plane * 59) as u8;
+                }
+            }
+            sources.push(frame);
+        }
+    }
+
+    let mut rgba_converter = YuvToRgbaConverter::new(&device);
+    for source in sources {
+        let width = source.width();
+        let height = source.height();
+        let (format, y_stride, uv_stride) = match source.format() {
+            format::Pixel::YUV420P => (
+                PixelFormat::Yuv420p,
+                source.stride(0) as u32,
+                source.stride(1) as u32,
+            ),
+            format::Pixel::NV12 => (
+                PixelFormat::Nv12,
+                source.stride(0) as u32,
+                source.stride(1) as u32,
+            ),
+            other => panic!("unexpected decoded format {other:?}"),
+        };
+
+        let mut plane_converter = FrameConverter::new();
+        let (copied, _, _, _) = extract_yuv_planes(&source, plane_converter.plane_pool()).unwrap();
+        let copied = match format {
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::new(copied),
+                width,
+                height,
+                y_stride,
+                uv_stride,
+            ),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
+                Arc::new(copied),
+                width,
+                height,
+                y_stride,
+                uv_stride,
+            ),
+            PixelFormat::Rgba => unreachable!(),
+        };
+
+        let borrowed = CachedFrame::Raw {
+            frame: source,
+            number: 0,
+        }
+        .produce(&mut plane_converter);
+        assert!(
+            borrowed.frame.data().is_empty(),
+            "{format:?} {width}x{height} should borrow"
+        );
+
+        let expected = render_rgba(&device, &queue, &mut rgba_converter, &copied);
+        let actual = render_rgba(&device, &queue, &mut rgba_converter, &borrowed.frame);
+        assert_eq!(actual, expected, "{format:?} {width}x{height}");
+    }
 }
 
 #[test]
@@ -230,4 +365,56 @@ fn odd_yuv_gpu_conversion_matches_even_frame_edges() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "performance probe: compares the 4K NV12 plane copy against borrowing"]
+fn nv12_4k_plane_copy_benchmark() {
+    const WIDTH: u32 = 3840;
+    const HEIGHT: u32 = 2160;
+    const ITERS: u32 = 60;
+
+    let mut source = frame::Video::new(format::Pixel::NV12, WIDTH, HEIGHT);
+    for plane in 0..source.planes() {
+        for (index, byte) in source.data_mut(plane).iter_mut().enumerate() {
+            *byte = (index * 37 + plane * 59) as u8;
+        }
+    }
+
+    let y_stride = source.stride(0) as u32;
+    let uv_stride = source.stride(1) as u32;
+    let bytes = yuv_plane_bytes(PixelFormat::Nv12, y_stride, uv_stride, HEIGHT)
+        .saturating_mul(ITERS as usize);
+
+    let copy_start = std::time::Instant::now();
+    let pool = PlanePool::new();
+    for _ in 0..ITERS {
+        let copied = extract_yuv_planes(&source, &pool).unwrap();
+        std::hint::black_box(copied.0.len());
+        pool.recycle(copied.0);
+    }
+    let copy = copy_start.elapsed();
+
+    let borrow_start = std::time::Instant::now();
+    for _ in 0..ITERS {
+        let y = source
+            .data(0)
+            .get(..(y_stride as usize * HEIGHT as usize))
+            .unwrap();
+        let uv = source
+            .data(1)
+            .get(..(uv_stride as usize * HEIGHT.div_ceil(2) as usize))
+            .unwrap();
+        std::hint::black_box(y.len() + uv.len());
+    }
+    let borrow = borrow_start.elapsed();
+
+    let mib = bytes as f64 / (1024.0 * 1024.0);
+    println!(
+        "4K NV12 plane copy: {:.2} ms/frame, {:.1} MiB/s; borrowed: {:.3} ms/frame, {:.1} MiB/s",
+        copy.as_secs_f64() * 1000.0 / ITERS as f64,
+        mib / copy.as_secs_f64(),
+        borrow.as_secs_f64() * 1000.0 / ITERS as f64,
+        mib / borrow.as_secs_f64(),
+    );
 }

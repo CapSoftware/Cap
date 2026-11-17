@@ -17,8 +17,8 @@ vi.mock("@cap/ui", async () => {
 	};
 });
 
-const demoSource =
-	"https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd";
+const unavailableDemoId = "10512af0-b922-4efa-8974-f8f14fc1886a";
+const demoSource = `https://www.rend.so/embed/${unavailableDemoId}?accent=3e63dd`;
 const repairedSlugs = [
 	"screen-recorder-mac",
 	"screen-recorder-windows",
@@ -51,10 +51,19 @@ const renderDemo = (video: SeoPageContent["video"], showVideo = true) => {
 };
 
 describe("landing page demo videos", () => {
-	it.each(repairedSlugs)("%s uses the public inline demo", (slug) => {
-		expect(seoPages[slug]?.content.video).toEqual({
-			iframe: { src: demoSource, title: "Cap screen recording demo" },
-		});
+	it.each(repairedSlugs)("%s has no demo player", (slug) => {
+		const video = seoPages[slug]?.content.video;
+		expect(video).toBeDefined();
+		expect(video?.iframe?.src ?? video?.url).toBeUndefined();
+	});
+
+	it("does not embed the unavailable hosted demo on any landing page", () => {
+		const seoFiles = pageFiles.filter((file) => file.startsWith("seo/"));
+		expect(seoFiles.length).toBeGreaterThan(0);
+		for (const file of seoFiles) {
+			const source = readFileSync(join(pagesDirectory, file), "utf8");
+			expect(source, file).not.toContain(unavailableDemoId);
+		}
 	});
 
 	it("has no missing local video or poster files on landing pages", () => {

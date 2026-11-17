@@ -12,6 +12,31 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 			const db = yield* Database;
 
 			return {
+				membershipsForVideos: (
+					userId: User.UserId,
+					videoIds: readonly Video.VideoId[],
+				) =>
+					db.use((db) =>
+						db
+							.select({
+								videoId: Db.sharedVideos.videoId,
+								membershipId: Db.organizationMembers.id,
+							})
+							.from(Db.organizationMembers)
+							.innerJoin(
+								Db.sharedVideos,
+								Dz.eq(
+									Db.organizationMembers.organizationId,
+									Db.sharedVideos.organizationId,
+								),
+							)
+							.where(
+								Dz.and(
+									Dz.eq(Db.organizationMembers.userId, userId),
+									Dz.inArray(Db.sharedVideos.videoId, [...videoIds]),
+								),
+							),
+					),
 				membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
 					db.use((db) =>
 						db

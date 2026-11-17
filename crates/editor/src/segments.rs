@@ -18,23 +18,14 @@ fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
     }
 }
 
-/// Decodes every distinct music/imported-audio file referenced by the project's
-/// timeline audio segments, reusing `cache` so repeated playback/export starts
-/// don't re-decode. Returns a snapshot keyed by the config path string for the
-/// renderer to mix. Files that fail to decode are skipped (logged) so a missing
-/// or corrupt track never aborts playback or export.
-pub fn load_music_tracks(
-    project: &ProjectConfiguration,
-    project_path: &Path,
-    cache: &mut MusicTracks,
-) -> MusicTracks {
-    let mut result = MusicTracks::new();
-
-    let Some(timeline) = &project.timeline else {
-        return result;
-    };
-
+/// The source sample range (48 kHz frames) of every distinct timeline audio
+/// file the mixer will play, keyed by the config path string. Silent, disabled
+/// and empty segments are left out because playback never reads them.
+pub fn music_track_ranges(project: &ProjectConfiguration) -> HashMap<&str, (usize, usize)> {
     let mut ranges: HashMap<&str, (usize, usize)> = HashMap::new();
+    let Some(timeline) = &project.timeline else {
+        return ranges;
+    };
     let sample_rate = AudioData::SAMPLE_RATE as f64;
 
     for segment in &timeline.audio_segments {
@@ -60,30 +51,73 @@ pub fn load_music_tracks(
             })
             .or_insert((trim_start, trim_end));
     }
+    ranges
+}
 
+/// Decodes every distinct music/imported-audio file referenced by the project's
+/// timeline audio segments, reusing `cache` so repeated playback/export starts
+/// don't re-decode. Returns a snapshot keyed by the config path string for the
+/// renderer to mix. Files that fail to decode are skipped (logged) so a missing
+/// or corrupt track never aborts playback or export.
+pub fn load_music_tracks(
+    project: &ProjectConfiguration,
+    project_path: &Path,
+    cache: &mut MusicTracks,
+) -> MusicTracks {
+    let mut result = MusicTracks::new();
+    let ranges = music_track_ranges(project);
+
+    let mut missing = Vec::new();
     for (path, (source_start, source_end)) in ranges {
         if let Some(data) = cache.get(path)
             && data.covers_source_range(source_start, source_end)
         {
             result.insert(path.to_string(), Arc::clone(data));
-            continue;
+        } else {
+            missing.push((path, source_start, source_end));
         }
+    }
 
-        let resolved = resolve_music_path(project_path, path);
-        match AudioData::from_file_range(&resolved, source_start, source_end) {
-            Ok(data) => {
-                let data = Arc::new(data);
-                cache.insert(path.to_string(), Arc::clone(&data));
-                result.insert(path.to_string(), data);
+    let decode = |ranges: &[(&str, usize, usize)]| {
+        ranges
+            .iter()
+            .filter_map(|&(path, source_start, source_end)| {
+                let resolved = resolve_music_path(project_path, path);
+                match AudioData::from_file_range(&resolved, source_start, source_end) {
+                    Ok(data) => Some((path.to_string(), Arc::new(data))),
+                    Err(error) => {
+                        warn!(
+                            path = %resolved.display(),
+                            error,
+                            "Failed to load timeline audio track; skipping"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let decoded = if missing.len() < 2 {
+        decode(&missing)
+    } else {
+        std::thread::scope(|scope| {
+            let (left, right) = missing.split_at(missing.len().div_ceil(2));
+            match std::thread::Builder::new().spawn_scoped(scope, || decode(left)) {
+                Ok(worker) => {
+                    let mut decoded = decode(right);
+                    match worker.join() {
+                        Ok(other) => decoded.extend(other),
+                        Err(panic) => std::panic::resume_unwind(panic),
+                    }
+                    decoded
+                }
+                Err(_) => decode(&missing),
             }
-            Err(error) => {
-                warn!(
-                    path = %resolved.display(),
-                    error,
-                    "Failed to load timeline audio track; skipping"
-                );
-            }
-        }
+        })
+    };
+    for (path, data) in decoded {
+        cache.insert(path.clone(), Arc::clone(&data));
+        result.insert(path, data);
     }
 
     result
@@ -166,6 +200,37 @@ pub fn audio_segment_from_decoded(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>(),
+    }
+}
+
+#[cfg(test)]
+mod music_track_range_tests {
+    use super::*;
+
+    #[test]
+    fn ranges_union_each_files_audible_segments_in_source_frames() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 0.0, "end": 2.0, "path": "a.mp3", "trimStart": 1.0 },
+                    { "start": 10.0, "end": 11.0, "path": "a.mp3", "trimStart": 4.0 },
+                    { "start": 0.0, "end": 3.0, "path": "b.mp3" },
+                    { "start": 0.0, "end": 3.0, "path": "muted.mp3", "volumeDb": -60.0 },
+                    { "start": 0.0, "end": 3.0, "path": "off.mp3", "enabled": false },
+                    { "start": 2.0, "end": 2.0, "path": "empty.mp3" }
+                ]
+            }
+        }))
+        .expect("the fixture parses");
+        let rate = AudioData::SAMPLE_RATE as usize;
+        let mut ranges = music_track_ranges(&project).into_iter().collect::<Vec<_>>();
+        ranges.sort();
+        assert_eq!(
+            ranges,
+            vec![("a.mp3", (rate, 5 * rate)), ("b.mp3", (0, 3 * rate))]
+        );
     }
 }
 

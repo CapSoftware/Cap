@@ -142,6 +142,32 @@ describe("sendMessengerSupportEmail", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		["email_not_configured", "Email is not configured"],
+		["validation_error", "Sender domain is not verified"],
+	])("does not report a returned %s as sent", async (name, message) => {
+		whereMock.mockReturnValueOnce(mockDb).mockResolvedValueOnce([{ value: 0 }]);
+		sendEmailMock.mockResolvedValueOnce({
+			data: null,
+			error: { name, message },
+		});
+		const { sendMessengerSupportEmail } = await import(
+			"@/lib/messenger/support-email"
+		);
+
+		await expect(
+			sendMessengerSupportEmail({
+				user: {
+					id: User.UserId.make("user-123"),
+					email: "user@example.com",
+				},
+				conversationId: "conversation-123",
+				subject: "Upload issue",
+				message: "Uploads keep failing.",
+			}),
+		).rejects.toThrow(message);
+	});
+
 	it("does not send when the audit reservation fails", async () => {
 		whereMock.mockReturnValueOnce(mockDb).mockResolvedValueOnce([{ value: 1 }]);
 		valuesMock.mockRejectedValueOnce(new Error("insert failed"));

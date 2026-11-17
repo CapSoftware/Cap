@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@cap/database/auth/session";
+import { isEmailDeliveryConfigured } from "@cap/database/emails/config";
 import { serverEnv } from "@cap/env";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -30,6 +31,7 @@ export default async function VerifyOTPPage(props: {
 					email={searchParams.email?.toLowerCase() ?? ""}
 					next={searchParams.next}
 					lastSent={searchParams.lastSent}
+					emailDeliveryConfigured={isEmailDeliveryConfigured()}
 				/>
 			</Suspense>
 		</div>

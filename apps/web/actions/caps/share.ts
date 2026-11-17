@@ -14,17 +14,27 @@ import {
 import type { Organisation, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import {
+	type LinkAccessChoice,
+	linkAccessSettingsPatch,
+	resolveLinkAccessWrite,
+} from "@/lib/link-access";
 
 interface ShareCapParams {
 	capId: Video.VideoId;
 	spaceIds: Space.SpaceIdOrOrganisationId[];
 	public?: boolean;
+	linkAccess?: LinkAccessChoice;
+	keepExisting?: boolean;
 }
 
 export async function shareCap({
 	capId,
 	spaceIds,
 	public: isPublic,
+	linkAccess,
+	keepExisting = false,
 }: ShareCapParams) {
 	try {
 		const user = await getCurrentUser();
@@ -35,6 +45,20 @@ export async function shareCap({
 		const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
 		if (!cap || cap.ownerId !== user.id) {
 			return { success: false, error: "Unauthorized" };
+		}
+
+		if (linkAccess === "anyone") {
+			const [organization] = await db()
+				.select({ settings: organizations.settings })
+				.from(organizations)
+				.where(eq(organizations.id, cap.orgId));
+			if (organization?.settings?.allowPublicLinkOverride !== true) {
+				return {
+					success: false,
+					error:
+						"Your organization doesn't allow opening individual links to anyone",
+				};
+			}
 		}
 
 		const userOrganizations = await db()
@@ -69,6 +93,21 @@ export async function shareCap({
 				),
 			);
 
+		const currentSpaceVideos = await db()
+			.select()
+			.from(spaceVideos)
+			.where(eq(spaceVideos.videoId, capId));
+		const existingSpaceIds = new Set(currentSpaceVideos.map((s) => s.spaceId));
+
+		for (const space of spacesData) {
+			if (space.privacy === "Public" || existingSpaceIds.has(space.id))
+				continue;
+			const access = await getSpaceAccess(user.id, space.id);
+			if (!access || (!access.canManage && !access.spaceRole)) {
+				return { success: false, error: "Unauthorized" };
+			}
+		}
+
 		const organizationIds = directOrgIds;
 
 		const currentSharedOrganizations = await db()
@@ -76,9 +115,11 @@ export async function shareCap({
 			.from(sharedVideos)
 			.where(eq(sharedVideos.videoId, capId));
 
-		const orgIdsToRemove = currentSharedOrganizations
-			.filter((s) => !organizationIds.includes(s.organizationId))
-			.map((s) => s.organizationId);
+		const orgIdsToRemove = keepExisting
+			? []
+			: currentSharedOrganizations
+					.filter((s) => !organizationIds.includes(s.organizationId))
+					.map((s) => s.organizationId);
 		if (orgIdsToRemove.length > 0) {
 			await db()
 				.delete(sharedVideos)
@@ -107,14 +148,11 @@ export async function shareCap({
 
 		const spacesIds = spacesData.map((space) => space.id);
 
-		const currentSpaceVideos = await db()
-			.select()
-			.from(spaceVideos)
-			.where(eq(spaceVideos.videoId, capId));
-
-		const spaceIdsToRemove = currentSpaceVideos
-			.filter((s) => !spacesIds.includes(s.spaceId))
-			.map((s) => s.spaceId);
+		const spaceIdsToRemove = keepExisting
+			? []
+			: currentSpaceVideos
+					.filter((s) => !spacesIds.includes(s.spaceId))
+					.map((s) => s.spaceId);
 		if (spaceIdsToRemove.length > 0) {
 			await db()
 				.delete(spaceVideos)
@@ -126,7 +164,6 @@ export async function shareCap({
 				);
 		}
 
-		const existingSpaceIds = new Set(currentSpaceVideos.map((s) => s.spaceId));
 		const newSpaceEntries = spacesIds
 			.filter((id) => !existingSpaceIds.has(id))
 			.map((spaceId) => ({
@@ -139,11 +176,21 @@ export async function shareCap({
 			await db().insert(spaceVideos).values(newSpaceEntries);
 		}
 
-		// Update public status if provided
+		const nextLinkAccess = resolveLinkAccessWrite(isPublic, linkAccess);
+		const linkAccessPatch =
+			nextLinkAccess === undefined
+				? {}
+				: { settings: linkAccessSettingsPatch(nextLinkAccess) };
+
 		if (typeof isPublic === "boolean") {
 			await db()
 				.update(videos)
-				.set({ public: isPublic })
+				.set({ public: isPublic, ...linkAccessPatch })
+				.where(eq(videos.id, capId));
+		} else if (nextLinkAccess !== undefined) {
+			await db()
+				.update(videos)
+				.set(linkAccessPatch)
 				.where(eq(videos.id, capId));
 		}
 

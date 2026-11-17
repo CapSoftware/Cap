@@ -359,6 +359,19 @@ fn try_register_coreml(
 fn try_register_directml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {
+    // ort 2.0.0-rc.12 caches the DirectML API in a `OnceLock` that, when the
+    // lookup fails, is still marked initialized with nothing stored. Every
+    // later registration in the process then calls through a null pointer, so
+    // the second blur session (the next export, or the editor reopening) ended
+    // the process wherever ONNX Runtime has no DirectML. Ask the runtime once,
+    // ourselves, and only hand registration to ort when DirectML is there.
+    static DIRECTML: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    if let Err(reason) = DIRECTML.get_or_init(directml_available) {
+        tracing::warn!(
+            "Camera background blur: DirectML EP registration failed, using CPU: {reason}"
+        );
+        return builder;
+    }
     match builder.with_execution_providers([
         ort::execution_providers::DirectMLExecutionProvider::default()
             .build()
@@ -375,6 +388,35 @@ fn try_register_directml(
             e.recover()
         }
     }
+}
+
+/// Whether the loaded ONNX Runtime provides the DirectML execution provider,
+/// asked without going through ort's cache of the answer.
+#[cfg(target_os = "windows")]
+fn directml_available() -> Result<(), String> {
+    let api = ort::api();
+    let mut provider = std::ptr::null();
+    let status = unsafe { (api.GetExecutionProviderApi)(c"DML".as_ptr(), 0, &mut provider) };
+    if status.0.is_null() {
+        return if provider.is_null() {
+            Err("ONNX Runtime returned no DirectML API".into())
+        } else {
+            Ok(())
+        };
+    }
+    let message = unsafe {
+        let message = (api.GetErrorMessage)(status.0);
+        let message = if message.is_null() {
+            "unknown error".to_string()
+        } else {
+            std::ffi::CStr::from_ptr(message)
+                .to_string_lossy()
+                .into_owned()
+        };
+        (api.ReleaseStatus)(status.0);
+        message
+    };
+    Err(message)
 }
 
 #[cfg(test)]

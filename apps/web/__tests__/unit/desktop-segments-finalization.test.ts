@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
 	attach: vi.fn(),
 	dispatchFailure: vi.fn(),
 	transcribe: vi.fn(),
+	env: {} as { ASSEMBLY_API_KEY?: string },
 }));
 vi.mock("@cap/database", () => ({
 	db: () => ({ select: () => ({ from: () => ({ where: async () => [] }) }) }),
 }));
 vi.mock("@cap/database/schema", () => ({ users: {}, videos: {} }));
+vi.mock("@cap/env", () => ({ serverEnv: () => mocks.env }));
 vi.mock("drizzle-orm", () => ({ eq: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: mocks.start }));
 vi.mock("@/lib/ai-generation-entitlement", () => ({
@@ -66,7 +68,8 @@ beforeEach(() => {
 	mocks.start.mockResolvedValue({ runId: "run" });
 	mocks.attach.mockResolvedValue(undefined);
 	mocks.dispatchFailure.mockResolvedValue(undefined);
-	mocks.transcribe.mockResolvedValue({ success: true });
+	mocks.transcribe.mockReset().mockResolvedValue({ success: true });
+	mocks.env.ASSEMBLY_API_KEY = "assembly-test";
 	vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -127,6 +130,18 @@ describe("durable finalization acknowledgement", () => {
 			"[queueDesktopSegmentsFinalization] Early transcription queue failed",
 			{ videoId: request.videoId, error },
 		);
+	});
+
+	it("skips early transcription quietly when no provider is configured", async () => {
+		delete mocks.env.ASSEMBLY_API_KEY;
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		mocks.ensure.mockResolvedValue({ job: committed, created: true });
+		mocks.state.mockResolvedValue(committed);
+		await expect(queueDesktopSegmentsFinalization(input)).resolves.toBe(
+			"queued",
+		);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(warning).not.toHaveBeenCalled();
 	});
 
 	it("does not launch another workflow while an attempt has a live lease", async () => {

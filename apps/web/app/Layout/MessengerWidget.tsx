@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -200,12 +201,14 @@ function HomeView({
 	onNewChat,
 	onSelectConversation,
 	isCreating,
+	notice,
 }: {
 	conversations: ConversationSummary[];
 	isLoading: boolean;
 	onNewChat: () => void;
 	onSelectConversation: (id: string) => void;
 	isCreating: boolean;
+	notice: string | null;
 }) {
 	return (
 		<div className="flex-1 overflow-y-auto overscroll-contain bg-gray-1 px-4 py-4">
@@ -232,6 +235,11 @@ function HomeView({
 				</svg>
 				{isCreating ? "Starting..." : "New conversation"}
 			</button>
+			{notice && (
+				<p role="alert" className="mt-2 px-1 text-[12px] text-gray-10">
+					{notice}
+				</p>
+			)}
 
 			{!isLoading && conversations.length > 0 && (
 				<div className="mt-4">
@@ -321,9 +329,11 @@ function ChatView({
 	const [conversation, setConversation] =
 		useState<ActiveConversation>(initialConversation);
 	const [isPending, startTransition] = useTransition();
+	const [sendError, setSendError] = useState<string | null>(null);
 	const prevMessageCountRef = useRef(initialMessages.length);
 	const userScrolledRef = useRef(false);
 	const isSendingRef = useRef(false);
+	const messageVersionRef = useRef(0);
 	const wasPendingRef = useRef(false);
 	const isHoveringRef = useRef(false);
 	const agentMsgCountRef = useRef(
@@ -406,12 +416,25 @@ function ChatView({
 	}, []);
 
 	useEffect(() => {
+		let active = true;
+		let pollVersion = 0;
+		let appliedPollVersion = 0;
 		const interval = setInterval(async () => {
 			if (isSendingRef.current) return;
+			const requestVersion = ++pollVersion;
+			const messageVersion = messageVersionRef.current;
 			const data = await fetchMessengerConversation(
 				initialConversation.id,
 			).catch(() => null);
-			if (!data || isSendingRef.current) return;
+			if (
+				!active ||
+				!data ||
+				isSendingRef.current ||
+				requestVersion <= appliedPollVersion ||
+				messageVersion !== messageVersionRef.current
+			)
+				return;
+			appliedPollVersion = requestVersion;
 
 			const newAgentCount = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",
@@ -432,7 +455,10 @@ function ChatView({
 				}
 			}
 		}, WIDGET_POLL_MS);
-		return () => clearInterval(interval);
+		return () => {
+			active = false;
+			clearInterval(interval);
+		};
 	}, [initialConversation.id]);
 
 	const sendMessage = (text: string) => {
@@ -447,13 +473,22 @@ function ChatView({
 			content: text,
 		};
 		setMessages((prev) => [...prev, optimistic]);
+		setSendError(null);
 		isSendingRef.current = true;
+		messageVersionRef.current++;
 
 		startTransition(async () => {
-			await sendMessengerUserMessage({
+			const result = await sendMessengerUserMessage({
 				conversationId: conversation.id,
 				content: text,
 			});
+			if ("error" in result) {
+				setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+				setInput(text);
+				setSendError(result.error);
+				isSendingRef.current = false;
+				return;
+			}
 			const data = await fetchMessengerConversation(conversation.id);
 			agentMsgCountRef.current = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",
@@ -551,6 +586,11 @@ function ChatView({
 			</div>
 
 			<div className="shrink-0 border-t border-gray-4 bg-gray-1 px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+				{sendError && (
+					<p role="alert" className="px-1 pb-2 text-[12px] text-gray-10">
+						{sendError}
+					</p>
+				)}
 				<form onSubmit={handleSubmit} className="flex items-end gap-2">
 					<textarea
 						ref={inputRef}
@@ -595,11 +635,15 @@ export function MessengerWidget() {
 	const [conversations, setConversations] = useState<ConversationSummary[]>([]);
 	const [isLoadingConversations, setIsLoadingConversations] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
+	const [createError, setCreateError] = useState<string | null>(null);
 	const [activeConversation, setActiveConversation] =
 		useState<ActiveConversation | null>(null);
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatKey, setChatKey] = useState(0);
 	const panelRef = useRef<HTMLDivElement>(null);
+	const pathname = usePathname() ?? "";
+	const onDashboard =
+		pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 
 	const isOpen = view !== "closed";
 
@@ -652,12 +696,13 @@ export function MessengerWidget() {
 			if (opened) return;
 		}
 
-		const conversationId = await createMessengerConversation().catch(
-			() => null,
-		);
-		if (conversationId) {
-			const opened = await openConversation(conversationId);
+		const created = await createMessengerConversation().catch(() => null);
+		if (typeof created === "string") {
+			setCreateError(null);
+			const opened = await openConversation(created);
 			if (opened) return;
+		} else if (created) {
+			setCreateError(created.error);
 		}
 
 		setView("home");
@@ -692,16 +737,14 @@ export function MessengerWidget() {
 		}
 
 		setIsCreating(true);
-		const conversationId = await createMessengerConversation().catch(
-			() => null,
-		);
-		if (!conversationId) {
+		const created = await createMessengerConversation().catch(() => null);
+		if (typeof created !== "string") {
+			setCreateError(created?.error ?? null);
 			setIsCreating(false);
 			return;
 		}
-		const data = await fetchMessengerConversation(conversationId).catch(
-			() => null,
-		);
+		setCreateError(null);
+		const data = await fetchMessengerConversation(created).catch(() => null);
 		setIsCreating(false);
 		if (!data) return;
 		setActiveConversation(data.conversation);
@@ -800,6 +843,12 @@ export function MessengerWidget() {
 				}
 				.messenger-markdown a { color: var(--msngr-link); }
 				.messenger-markdown a:hover { color: var(--msngr-link-hover); }
+				@media (max-width: 1023.98px) {
+					.cap-messenger-panel-dashboard {
+						bottom: 152px;
+						height: min(760px, calc(100dvh - 172px));
+					}
+				}
 				@media (max-width: 480px) {
 					.cap-messenger-panel {
 						width: 100vw;
@@ -814,7 +863,7 @@ export function MessengerWidget() {
 			{isOpen && (
 				<div
 					ref={panelRef}
-					className={`cap-messenger-panel flex flex-col overflow-hidden rounded-2xl bg-gray-1 transition-all duration-200 ease-out ${
+					className={`cap-messenger-panel ${onDashboard ? "cap-messenger-panel-dashboard " : ""}flex flex-col overflow-hidden rounded-2xl bg-gray-1 transition-all duration-200 ease-out ${
 						isAnimating
 							? "opacity-100 translate-y-0 scale-100"
 							: "opacity-0 translate-y-3 scale-[0.97]"
@@ -846,6 +895,7 @@ export function MessengerWidget() {
 								onNewChat={handleNewChat}
 								onSelectConversation={handleSelectConversation}
 								isCreating={isCreating}
+								notice={createError}
 							/>
 						</>
 					)}
@@ -870,7 +920,7 @@ export function MessengerWidget() {
 			<button
 				type="button"
 				onClick={togglePanel}
-				className={`fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${isOpen ? "max-[480px]:hidden" : ""}`}
+				className={`fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${onDashboard ? "max-lg:bottom-[84px]" : ""} ${isOpen ? "max-[480px]:hidden" : ""}`}
 				style={{
 					boxShadow:
 						"0 4px 14px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)",

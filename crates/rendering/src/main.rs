@@ -201,6 +201,7 @@ async fn main() -> Result<()> {
             XY::new(output_size.0, output_size.1),
             &recordings,
             None,
+            false,
         )
         .await
     });

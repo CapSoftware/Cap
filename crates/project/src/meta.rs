@@ -55,6 +55,10 @@ pub struct AudioMeta {
     pub device_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap_summary: Option<AudioGapSummary>,
+    /// Milliseconds the unmuted microphone delivered sustained bit-exact silence,
+    /// e.g. while a VoIP call held the input on macOS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digital_silence_ms: Option<u32>,
 }
 
 /// Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
@@ -187,14 +191,46 @@ impl RecordingMeta {
     }
 
     pub fn save_for_project(&self) -> Result<(), Either<serde_json::Error, std::io::Error>> {
-        self.save_for_project_with(|file, bytes| {
+        self.save_for_project_logged(std::time::Duration::ZERO)
+    }
+
+    /// Like [`Self::save_for_project`], but on Windows waits up to two seconds
+    /// for another handle to release the metadata file. It can block, so only
+    /// call it off the UI thread.
+    pub fn save_for_project_with_retry(
+        &self,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        self.save_for_project_logged(std::time::Duration::from_secs(2))
+    }
+
+    fn save_for_project_logged(
+        &self,
+        busy_retry: std::time::Duration,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        self.save_for_project_with(busy_retry, |file, bytes| {
             file.write_all(bytes)?;
             file.sync_all()
+        })
+        .inspect_err(|error| {
+            let path = self.project_path.join("recording-meta.json");
+            let (kind, os_error) = match error {
+                Either::Left(_) => (None, None),
+                Either::Right(error) => (Some(error.kind()), error.raw_os_error()),
+            };
+            warn!(
+                path = %path.display(),
+                path_len = path.as_os_str().len(),
+                ?kind,
+                ?os_error,
+                %error,
+                "Recording metadata save failed"
+            );
         })
     }
 
     fn save_for_project_with(
         &self,
+        #[cfg_attr(not(windows), allow(unused_variables))] busy_retry: std::time::Duration,
         prepare: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
     ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
         let meta = serde_json::to_string_pretty(self).map_err(Either::Left)?;
@@ -216,11 +252,24 @@ impl RecordingMeta {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(Either::Right(error)),
         };
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".recording-meta-")
-            .suffix(".json.tmp")
-            .tempfile_in(&self.project_path)
-            .map_err(Either::Right)?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".recording-meta-").suffix(".json.tmp");
+        // tempfile marks its Windows files FILE_ATTRIBUTE_TEMPORARY and clears
+        // that in keep() through a SetFileAttributesW call on the raw path,
+        // which fails once the path passes MAX_PATH. Studio finalization saves
+        // inside `<project>/.recovery-<uuid>/staged`, so long recording names
+        // failed every stop there while std's long-path-aware I/O succeeded.
+        #[cfg(windows)]
+        let temporary = builder.make_in(&self.project_path, |path| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+        });
+        #[cfg(not(windows))]
+        let temporary = builder.tempfile_in(&self.project_path);
+        let mut temporary = temporary.map_err(Either::Right)?;
         if let Some(permissions) = permissions {
             temporary
                 .as_file()
@@ -231,11 +280,8 @@ impl RecordingMeta {
         #[cfg(windows)]
         {
             // tempfile 3.23 lacks Rust's Windows rename fallback for open readers.
-            let (file, path) = temporary
-                .keep()
-                .map_err(|error| Either::Right(error.error))?;
-            let mut path = tempfile::TempPath::from_path(path);
-            std::fs::rename(&path, &meta_path).map_err(Either::Right)?;
+            let (file, mut path) = temporary.into_parts();
+            replace_metadata_file(&path, &meta_path, busy_retry).map_err(Either::Right)?;
             path.disable_cleanup(true);
             drop(file);
         }
@@ -272,13 +318,12 @@ impl RecordingMeta {
         }
 
         if let Some(ref captions) = config.captions {
-            let timeline_has_captions = config
+            let timeline_needs_captions = config
                 .timeline
                 .as_ref()
-                .map(|t| !t.caption_segments.is_empty())
-                .unwrap_or(false);
+                .is_some_and(|timeline| timeline.caption_segments.is_empty());
 
-            if !timeline_has_captions && !captions.segments.is_empty() {
+            if timeline_needs_captions && !captions.segments.is_empty() {
                 let caption_track_segments: Vec<crate::CaptionTrackSegment> = captions
                     .segments
                     .iter()
@@ -365,6 +410,48 @@ impl RecordingMeta {
                 }
             },
             RecordingMetaInner::Instant(_) => {}
+        }
+    }
+}
+
+/// Antivirus, the search indexer and cloud sync briefly open a file that was
+/// just written, and Windows refuses to replace a file another handle holds
+/// without FILE_SHARE_DELETE, so callers off the UI thread retry those
+/// refusals for `busy_retry`.
+#[cfg(windows)]
+fn replace_metadata_file(
+    from: &Path,
+    to: &Path,
+    busy_retry: std::time::Duration,
+) -> std::io::Result<()> {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    let started = std::time::Instant::now();
+    let mut retries = 0_u32;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+                ) && started.elapsed() < busy_retry =>
+            {
+                retries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            result => {
+                if retries > 0 {
+                    warn!(
+                        path = %to.display(),
+                        retries,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        succeeded = result.is_ok(),
+                        "Recording metadata replace was blocked by another handle"
+                    );
+                }
+                return result;
+            }
         }
     }
 }
@@ -666,6 +753,12 @@ pub struct MultipleSegment {
 }
 
 impl MultipleSegment {
+    pub fn usable_system_audio(&self) -> Option<&AudioMeta> {
+        self.system_audio
+            .as_ref()
+            .filter(|audio| audio.start_time.is_some() == self.display.start_time.is_some())
+    }
+
     pub fn path(&self, meta: &RecordingMeta, path: impl AsRef<Path>) -> PathBuf {
         meta.project_path.join(path)
     }
@@ -737,7 +830,7 @@ impl MultipleSegment {
             value = value.max(mic.start_time?);
         }
 
-        if let Some(system_audio) = &self.system_audio {
+        if let Some(system_audio) = self.usable_system_audio() {
             value = value.max(system_audio.start_time?);
         }
 
@@ -767,8 +860,7 @@ impl MultipleSegment {
             .unwrap_or(0.0);
 
         let system_audio_offset = self
-            .system_audio
-            .as_ref()
+            .usable_system_audio()
             .and_then(|s| s.start_time)
             .map(|t| (latest - t) as f32 + cal_offset)
             .unwrap_or(0.0);
@@ -813,6 +905,80 @@ mod metadata_save_tests {
                 .to_string_lossy()
                 .starts_with(".recording-meta-")
         }));
+    }
+
+    #[test]
+    fn caption_loading_preserves_missing_empty_and_populated_timelines() {
+        let captions = CaptionsData {
+            source_timed: true,
+            segments: vec![crate::CaptionSegment {
+                id: "source-caption".into(),
+                start: 1.25,
+                end: 2.75,
+                text: "Café 字".into(),
+                words: vec![crate::CaptionWord {
+                    text: "Café".into(),
+                    start: 1.25,
+                    end: 2.0,
+                }],
+            }],
+            ..Default::default()
+        };
+        let saved: crate::CaptionTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "saved", "start": 5.0, "end": 6.0, "text": "Saved", "words": [],
+            "colorOverride": "#123456", "fadeDurationOverride": 0.75,
+        }))
+        .unwrap();
+        let generated = serde_json::json!([{
+            "id": "source-caption", "start": 1.25, "end": 2.75, "text": "Café 字",
+            "words": [{"text": "Café", "start": 1.25, "end": 2.0}],
+            "fadeDurationOverride": null, "lingerDurationOverride": null,
+            "positionOverride": null, "colorOverride": null,
+            "backgroundColorOverride": null, "fontSizeOverride": null,
+        }]);
+        for sidecar in [false, true] {
+            for timeline in 0..3 {
+                let directory = tempfile::tempdir().unwrap();
+                let meta = recording(directory.path());
+                let mut config = ProjectConfiguration {
+                    captions: (!sidecar).then(|| captions.clone()),
+                    ..Default::default()
+                };
+                if timeline > 0 {
+                    config.timeline = Some(serde_json::from_value(serde_json::json!({
+                        "segments": [], "zoomSegments": [],
+                        "captionSegments": if timeline == 2 { serde_json::to_value([&saved]).unwrap() } else { serde_json::json!([]) },
+                    })).unwrap());
+                }
+                if !sidecar || timeline > 0 {
+                    config.write(directory.path()).unwrap();
+                }
+                if sidecar {
+                    std::fs::write(
+                        directory.path().join("captions.json"),
+                        serde_json::to_vec(&captions).unwrap(),
+                    )
+                    .unwrap();
+                }
+                let loaded = meta.project_config();
+                assert_eq!(
+                    serde_json::to_value(loaded.captions.unwrap()).unwrap(),
+                    serde_json::to_value(&captions).unwrap()
+                );
+                if timeline == 0 {
+                    assert!(loaded.timeline.is_none());
+                } else {
+                    assert_eq!(
+                        serde_json::to_value(loaded.timeline.unwrap().caption_segments).unwrap(),
+                        if timeline == 1 {
+                            generated.clone()
+                        } else {
+                            serde_json::to_value([&saved]).unwrap()
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -911,7 +1077,7 @@ mod metadata_save_tests {
                 "injected file sync failure"
             };
 
-            let result = meta.save_for_project_with(|file, bytes| {
+            let result = meta.save_for_project_with(std::time::Duration::ZERO, |file, bytes| {
                 let count = if partial_write {
                     bytes.len() / 2
                 } else {
@@ -956,22 +1122,89 @@ mod metadata_save_tests {
         let path = project.path().join("recording-meta.json");
         std::fs::write(&path, LEGACY_METADATA).unwrap();
         let mut locked = None;
-        let result = recording(project.path()).save_for_project_with(|file, bytes| {
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            locked = Some(
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(0)
-                    .open(&path)?,
-            );
-            Ok(())
-        });
+        let result = recording(project.path()).save_for_project_with(
+            std::time::Duration::ZERO,
+            |file, bytes| {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                locked = Some(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(0)
+                        .open(&path)?,
+                );
+                Ok(())
+            },
+        );
 
         assert!(locked.is_some());
         drop(locked);
         assert!(result.is_err());
         assert_eq!(std::fs::read_to_string(path).unwrap(), LEGACY_METADATA);
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_saves_when_the_temporary_path_passes_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let padding = 245_usize.saturating_sub(root.path().as_os_str().len() + 1);
+        assert!((1..=255).contains(&padding));
+        let project = root.path().join("r".repeat(padding));
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            project
+                .join(".recording-meta-000000.json.tmp")
+                .as_os_str()
+                .len()
+                > 260
+        );
+
+        let mut meta = recording(&project);
+        meta.save_for_project().unwrap();
+        meta.pretty_name = "Finished recording".into();
+        meta.save_for_project().unwrap();
+
+        assert_eq!(
+            RecordingMeta::load_for_project(&project)
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
+        assert_no_temporary_metadata(&project);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_replacement_waits_for_a_handle_without_share_delete() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 1;
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&path)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        let mut meta = recording(project.path());
+        meta.pretty_name = "Finished recording".into();
+
+        let result = meta.save_for_project_with_retry();
+        release.join().unwrap();
+
+        result.unwrap();
+        assert_eq!(
+            RecordingMeta::load_for_project(project.path())
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
         assert_no_temporary_metadata(project.path());
     }
 
@@ -1142,6 +1375,7 @@ mod test {
                 start_time,
                 device_id: None,
                 gap_summary: None,
+                digital_silence_ms: None,
             }
         }
 
@@ -1204,6 +1438,24 @@ mod test {
             let offsets = early.calculate_audio_offsets_with_calibration(Some(0.05));
             assert_eq!(offsets.camera, 0.0);
             assert!((offsets.mic - 0.05).abs() < 1e-6);
+        }
+
+        #[test]
+        fn mismatched_system_audio_does_not_affect_timing_or_audio_selection() {
+            let mut segment = segment(10.0, Some(10.5), Some(11.0));
+            segment.camera = Some(video(Some(10.25)));
+            assert_eq!(segment.latest_start_time(), Some(11.0));
+            assert!(segment.usable_system_audio().is_some());
+
+            segment.system_audio.as_mut().unwrap().start_time = None;
+            assert!(segment.usable_system_audio().is_none());
+            assert_eq!(segment.latest_start_time(), Some(10.5));
+            let offsets = segment.calculate_audio_offsets();
+            assert_eq!(offsets.mic, 0.0);
+            assert_eq!(offsets.system_audio, 0.0);
+
+            segment.display.start_time = None;
+            assert!(segment.usable_system_audio().is_some());
         }
     }
 }

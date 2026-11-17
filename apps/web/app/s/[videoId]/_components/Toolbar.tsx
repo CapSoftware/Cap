@@ -5,7 +5,8 @@ import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import dynamic from "next/dynamic";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
@@ -13,6 +14,7 @@ import type { VideoData } from "../types";
 import { AuthOverlay } from "./AuthOverlayLazy";
 import { RecordActionButtons } from "./media-comment/record-actions";
 import type { RecordIntentKind } from "./timeline/TimelineComposer";
+import { handleEmojiReaction, REACTIONS } from "./toolbar-reactions";
 
 // Capture and upload code stays out of the page bundle until someone records.
 const RecorderSurface = dynamic(
@@ -65,6 +67,8 @@ export const Toolbar = ({
 	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
+	const [posting, setPosting] = useState(false);
+	const postingRef = useRef(false);
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
 	const [recordIntent, setRecordIntent] = useState<{
 		kind: RecordIntentKind;
@@ -84,56 +88,65 @@ export const Toolbar = ({
 		setRecordIntent({ kind, t });
 	};
 
-	const handleEmojiClick = async (emoji: string) => {
-		if (!canReact || !user) return;
-		const videoElement = document.querySelector("video") as HTMLVideoElement;
-		const currentTime = data.isScreenshot
-			? null
-			: videoElement?.currentTime || 0;
-		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}` as Comment.CommentId,
-			authorId: user.id,
-			authorName: user.name,
-			authorImage: user.imageUrl,
-			content: emoji,
-			createdAt: new Date(),
-			videoId: data.id,
-			parentCommentId: "" as Comment.CommentId,
-			type: "emoji",
-			timestamp: currentTime,
-			updatedAt: new Date(),
-			mediaKey: null,
-			mediaDuration: null,
-			mediaMeta: null,
-			sending: true,
-		};
+	const handleEmojiClick = (emoji: string) => {
+		handleEmojiReaction({
+			emoji,
+			canReact,
+			user,
+			onRequireAuth: () => setShowAuthOverlay(true),
+			onReact: async (chosenEmoji, authedUser) => {
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
+				const currentTime = data.isScreenshot
+					? null
+					: videoElement?.currentTime || 0;
+				const optimisticComment: CommentType = {
+					id: `temp-${Date.now()}` as Comment.CommentId,
+					authorId: authedUser.id,
+					authorName: authedUser.name,
+					authorImage: authedUser.imageUrl,
+					content: chosenEmoji,
+					createdAt: new Date(),
+					videoId: data.id,
+					parentCommentId: "" as Comment.CommentId,
+					type: "emoji",
+					timestamp: currentTime,
+					updatedAt: new Date(),
+					mediaKey: null,
+					mediaDuration: null,
+					mediaMeta: null,
+					sending: true,
+				};
 
-		onOptimisticComment?.(optimisticComment);
+				onOptimisticComment?.(optimisticComment);
 
-		try {
-			const newCommentData = await newComment({
-				content: emoji,
-				videoId: data.id,
-				authorImage: user.imageUrl,
-				parentCommentId: "" as Comment.CommentId,
-				type: "emoji",
-				timestamp: currentTime,
-			});
-			startTransition(() => {
-				onCommentSuccess?.(newCommentData);
-			});
-		} catch (error) {
-			console.error("Error posting comment:", error);
-		} finally {
-			setCommentBoxOpen(false);
-			setComment("");
-		}
+				try {
+					const newCommentData = await newComment({
+						content: chosenEmoji,
+						videoId: data.id,
+						authorImage: authedUser.imageUrl,
+						parentCommentId: "" as Comment.CommentId,
+						type: "emoji",
+						timestamp: currentTime,
+					});
+					startTransition(() => {
+						onCommentSuccess?.(newCommentData);
+					});
+				} catch (error) {
+					console.error("Error posting comment:", error);
+					toast.error("Couldn't add your reaction. Please try again.");
+				}
+			},
+		});
 	};
 
 	const handleCommentSubmit = async () => {
-		if (!canComment || comment.length === 0 || !user) {
+		if (!canComment || comment.length === 0 || !user || postingRef.current) {
 			return;
 		}
+		postingRef.current = true;
+		setPosting(true);
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = data.isScreenshot
 			? null
@@ -170,11 +183,14 @@ export const Toolbar = ({
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);
 			});
-		} catch (error) {
-			console.error("Error posting comment:", error);
-		} finally {
 			setCommentBoxOpen(false);
 			setComment("");
+		} catch (error) {
+			console.error("Error posting comment:", error);
+			toast.error("Couldn't post your comment. Please try again.");
+		} finally {
+			postingRef.current = false;
+			setPosting(false);
 		}
 	};
 
@@ -257,7 +273,7 @@ export const Toolbar = ({
 								className="flex-grow px-3 h-full outline-none"
 								maxLength={255}
 								onKeyDown={(e) => {
-									if (e.key === "Enter") {
+									if (e.key === "Enter" && !e.nativeEvent.isComposing) {
 										e.preventDefault();
 										handleCommentSubmit();
 									}
@@ -283,7 +299,7 @@ export const Toolbar = ({
 									</div>
 								)}
 								<MotionButton
-									disabled={comment.length === 0}
+									disabled={comment.length === 0 || posting}
 									variant="primary"
 									size="sm"
 									layout="position"
@@ -377,30 +393,3 @@ export const Toolbar = ({
 		</>
 	);
 };
-
-const REACTIONS = [
-	{
-		emoji: "😂",
-		label: "joy",
-	},
-	{
-		emoji: "😍",
-		label: "love",
-	},
-	{
-		emoji: "😮",
-		label: "wow",
-	},
-	{
-		emoji: "🙌",
-		label: "yay",
-	},
-	{
-		emoji: "👍",
-		label: "up",
-	},
-	{
-		emoji: "👎",
-		label: "down",
-	},
-];

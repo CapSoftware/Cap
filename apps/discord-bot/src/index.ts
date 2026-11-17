@@ -6,6 +6,11 @@ import * as jose from "jose";
 import { App } from "octokit";
 import nacl from "tweetnacl";
 import * as v from "valibot";
+import {
+	canManageGuild,
+	isGuildInvocation,
+	matchesRepositoryClaims,
+} from "./release-checks";
 
 const DISCORD_APP_ID = "1334742236096757861";
 const PUBLIC_KEY =
@@ -18,12 +23,16 @@ const GITHUB_APP_INSTALLATION = 63538726;
 const WORKFLOW_FILE = "publish.yml";
 
 const CHANNEL_MESSAGE_WITH_SOURCE = 4;
+const EPHEMERAL = 1 << 6;
 
 type InteractionBody = {
 	id: string;
 	token: string;
 	channel_id: string;
+	guild_id?: string;
+	authorizing_integration_owners?: Partial<Record<string, string>>;
 	member: {
+		permissions?: string;
 		user: {
 			id: string;
 			username: string;
@@ -59,10 +68,12 @@ type Message = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.post("/interactions", async (c) => {
-	const body = await c.req.json();
+	const rawBody = await c.req.text();
 
-	const verification = await verifyRequest(c.req.raw, body);
+	const verification = verifyRequest(c.req.raw, rawBody);
 	if (!verification) return new Response("Invalid signature", { status: 401 });
+
+	const body = JSON.parse(rawBody);
 
 	// Ping
 	if (body.type === 1) return Response.json({ type: 1 });
@@ -107,7 +118,7 @@ const ghActionsOidc = createMiddleware<{
 
 		if (!payload.sub) return new Response("Missing sub claim", { status: 401 });
 
-		if (!payload.sub?.includes(`${GITHUB_ORG}/${GITHUB_REPO}`)) {
+		if (!matchesRepositoryClaims(payload, GITHUB_ORG, GITHUB_REPO)) {
 			return new Response("Invalid repository", { status: 401 });
 		}
 
@@ -235,6 +246,25 @@ async function handleCommand(interaction: InteractionBody, env: Env) {
 
 	switch (data.name) {
 		case "release": {
+			if (!isGuildInvocation(interaction))
+				return {
+					type: CHANNEL_MESSAGE_WITH_SOURCE,
+					data: {
+						content: "/release can only be used in a server.",
+						flags: EPHEMERAL,
+					},
+				};
+
+			if (!canManageGuild(interaction.member.permissions))
+				return {
+					type: CHANNEL_MESSAGE_WITH_SOURCE,
+					data: {
+						content:
+							"/release requires the Manage Server or Administrator permission.",
+						flags: EPHEMERAL,
+					},
+				};
+
 			await env.release_discord_interactions.put(
 				interaction.id,
 				JSON.stringify(interaction),
@@ -266,17 +296,16 @@ async function handleCommand(interaction: InteractionBody, env: Env) {
 	}
 }
 
-async function verifyRequest(request: Request, jsonBody: unknown) {
+function verifyRequest(request: Request, rawBody: string) {
 	const signature = request.headers.get("X-Signature-Ed25519");
-	if (!signature) throw new Error("Signature header not found");
-
 	const timestamp = request.headers.get("X-Signature-Timestamp");
-	if (!timestamp) throw new Error("Timestamp header not found");
+	if (!signature || !/^[0-9a-f]{128}$/i.test(signature) || !timestamp)
+		return false;
 
 	return nacl.sign.detached.verify(
-		new Buffer(timestamp + JSON.stringify(jsonBody)),
-		new Buffer(signature, "hex"),
-		new Buffer(PUBLIC_KEY, "hex"),
+		Buffer.from(timestamp + rawBody),
+		Buffer.from(signature, "hex"),
+		Buffer.from(PUBLIC_KEY, "hex"),
 	);
 }
 

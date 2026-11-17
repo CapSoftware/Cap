@@ -153,6 +153,50 @@ describe("POST /audio/extract", () => {
 		expect(data.code).toBe("NO_AUDIO_TRACK");
 	});
 
+	for (const path of ["/audio/extract", "/audio/check"]) {
+		test(`${path} answers 422 for a source with no media stream`, async () => {
+			mock.module("../../lib/media-audio", () => ({
+				...mediaAudio,
+				checkHasAudioTrack: async () => {
+					throw new Error("No media stream found");
+				},
+			}));
+			const { default: appWithMock } = await import("../../app");
+
+			const response = await appWithMock.fetch(
+				audioPostRequest(path, {
+					videoUrl: "https://example.com/audio-only.m4a",
+				}),
+			);
+
+			expect(response.status).toBe(422);
+			const data = await response.json();
+			expect(data.code).toBe("NO_MEDIA_STREAM");
+			expect(data.details).toBe("No media stream found");
+			expect(data.error).toBe(
+				path === "/audio/extract"
+					? "Failed to extract audio"
+					: "Failed to check audio track",
+			);
+		});
+
+		test(`${path} still answers 500 for other failures`, async () => {
+			mock.module("../../lib/media-audio", () => ({
+				...mediaAudio,
+				checkHasAudioTrack: async () => {
+					throw new Error("FFprobe exited with code 1: broken");
+				},
+			}));
+			const { default: appWithMock } = await import("../../app");
+
+			const response = await appWithMock.fetch(
+				audioPostRequest(path, { videoUrl: "https://example.com/video.mp4" }),
+			);
+
+			expect(response.status).toBe(500);
+		});
+	}
+
 	test("returns audio data when extraction succeeds", async () => {
 		const mockAudioData = new Uint8Array([0x00, 0x00, 0x00, 0x1c, 0x66, 0x74]);
 
@@ -179,6 +223,42 @@ describe("POST /audio/extract", () => {
 
 		const buffer = await response.arrayBuffer();
 		expect(new Uint8Array(buffer)).toEqual(mockAudioData);
+	});
+
+	test("gives streamed extraction long enough for multi-hour recordings", async () => {
+		let timeoutMs: number | undefined;
+
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
+			checkHasAudioTrack: async () => true,
+			extractAudioStream: (
+				_videoUrl: string,
+				options?: { timeoutMs?: number },
+			) => {
+				timeoutMs = options?.timeoutMs;
+				return {
+					stream: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new Uint8Array([0x49, 0x44, 0x33]));
+							controller.close();
+						},
+					}),
+					cleanup: () => {},
+				};
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		await response.arrayBuffer();
+		expect(timeoutMs).toBe(15 * 60 * 1000);
 	});
 
 	test("returns 500 when mediaAudio extraction fails", async () => {

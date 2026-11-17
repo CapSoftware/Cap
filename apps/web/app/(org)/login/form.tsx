@@ -1,12 +1,10 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
-import {
-	faArrowLeft,
-	faEnvelope,
-	faExclamationCircle,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
+import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -26,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 import { getSafeNextPath } from "../safe-next";
@@ -40,7 +39,9 @@ export function LoginForm() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const next = searchParams?.get("next");
-	const [email, setEmail] = useState("");
+	const [email, setEmail] = useState(
+		() => searchParams?.get("email")?.trim().toLowerCase() ?? "",
+	);
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
@@ -98,6 +99,10 @@ export function LoginForm() {
 				return;
 			} else if (error === "SignupBlocked") {
 				return;
+			} else if (error === "DisposableEmail") {
+				return toast.error(
+					"Temporary email addresses can't be used with Cap. Please use your work or personal email.",
+				);
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(
@@ -162,19 +167,37 @@ export function LoginForm() {
 		});
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "login" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
 	}, [getNextPath]);
 
 	const handleAppleSignIn = useCallback(() => {
-		const nextPath = getNextPath();
-		trackEvent("auth_started", {
-			method: "apple",
-			is_signup: false,
-			auth_surface: "login",
-		});
-		signIn("apple", {
-			...(nextPath ? { callbackUrl: nextPath } : {}),
-		});
+		const startAppleSignIn = () => {
+			const nextPath = getNextPath();
+			trackEvent("auth_started", {
+				method: "apple",
+				is_signup: false,
+				auth_surface: "login",
+			});
+			signIn("apple", {
+				...(nextPath ? { callbackUrl: nextPath } : {}),
+			}).catch((error) => {
+				captureException(error, {
+					tags: { auth_provider: "apple", auth_surface: "login" },
+				});
+				toast.error(
+					"Could not start sign-in. Check your connection and try again.",
+					{ action: { label: "Try again", onClick: startAppleSignIn } },
+				);
+			});
+		};
+		startAppleSignIn();
 	}, [getNextPath]);
 
 	const handleOidcSignIn = useCallback(() => {

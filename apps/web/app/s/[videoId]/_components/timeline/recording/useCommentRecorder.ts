@@ -236,6 +236,13 @@ export function useCommentRecorder(options: {
 
 	const beginRecording = useCallback(
 		(stream: MediaStream) => {
+			const videoTrack = stream.getVideoTracks()[0];
+			if (!videoTrack || videoTrack.readyState === "ended") {
+				failRecording(
+					"The recording source ended before recording could start.",
+				);
+				return;
+			}
 			const hasAudio = stream.getAudioTracks().length > 0;
 			const pipeline = selectCommentVideoPipeline(hasAudio);
 			if (!pipeline) {
@@ -265,7 +272,7 @@ export function useCommentRecorder(options: {
 
 			// The browser's own "Stop sharing" bar ends the video track; treat it
 			// as a normal stop.
-			stream.getVideoTracks()[0]?.addEventListener(
+			videoTrack.addEventListener(
 				"ended",
 				() => {
 					void stopRef.current?.();
@@ -273,7 +280,14 @@ export function useCommentRecorder(options: {
 				{ once: true },
 			);
 
-			recorder.start(200);
+			try {
+				recorder.start(200);
+			} catch {
+				failRecording(
+					"Recording couldn't start. Please choose the source again.",
+				);
+				return;
+			}
 			startTimer();
 			setLiveMicSwitchable(mixerRef.current !== null);
 			updatePhase("recording");

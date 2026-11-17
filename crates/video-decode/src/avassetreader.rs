@@ -664,6 +664,25 @@ impl AVAssetReaderDecoder {
         }
     }
 
+    /// Why the reader stopped vending, when it failed instead of reaching the
+    /// end of its range. A failed reader never vends again.
+    pub fn failure(&self) -> Option<String> {
+        match &self.source {
+            ReaderSource::Native { reader, .. } => {
+                (reader.status() == av::AssetReaderStatus::Failed).then(|| {
+                    reader.error().map_or_else(
+                        || "unknown error".to_string(),
+                        |error| format!("{} ({})", error.localized_description(), error.code()),
+                    )
+                })
+            }
+            #[cfg(feature = "scripted")]
+            ReaderSource::Scripted(reader) => reader
+                .failed()
+                .then(|| "scripted decode failure".to_string()),
+        }
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }

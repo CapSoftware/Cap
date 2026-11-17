@@ -1,3 +1,4 @@
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateWhereMock = vi.fn();
@@ -36,12 +37,16 @@ describe("video processing starts", () => {
 		vi.clearAllMocks();
 	});
 
-	it("does not start a duplicate workflow when processing is already running", async () => {
+	it.each([
+		["processing", "already-processing"],
+		["generating_thumbnail", "already-processing"],
+		["complete", "already-complete"],
+	])("does not start a duplicate workflow during %s", async (phase, status) => {
 		updateWhereMock.mockResolvedValueOnce({ affectedRows: 0 });
 		selectWhereMock.mockResolvedValueOnce([
 			{
 				videoId: "video-123",
-				phase: "processing",
+				phase,
 				rawFileKey: "user-123/video-123/raw-upload.webm",
 			},
 		]);
@@ -59,9 +64,13 @@ describe("video processing starts", () => {
 				processingMessage: "Starting video processing...",
 				startFailureMessage: "Video processing could not start.",
 			}),
-		).resolves.toBe("already-processing");
+		).resolves.toBe(status);
 
 		expect(startMock).not.toHaveBeenCalled();
+		const condition = updateWhereMock.mock.calls[0]?.[0];
+		const query = new MySqlDialect().sqlToQuery(condition);
+		expect(query.params).toContain(phase);
+		expect(query.sql).toContain("`video_uploads`.`phase` <> ?");
 	});
 
 	it("starts the workflow after claiming the upload row", async () => {
@@ -131,6 +140,10 @@ describe("video processing starts", () => {
 		).resolves.toBe("started");
 
 		expect(startMock).toHaveBeenCalledTimes(1);
+		const condition = updateWhereMock.mock.calls[0]?.[0];
+		expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+			"video-123",
+		]);
 	});
 
 	it("marks the upload as errored when workflow start fails", async () => {

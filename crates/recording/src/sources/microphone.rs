@@ -75,6 +75,119 @@ fn reset_reconnect_after_frame(
     *next_reconnect_after = MIC_RECONNECT_AFTER;
 }
 
+// macOS can hand an active VoIP call the input while CoreAudio keeps delivering
+// on-time buffers of exact 0.0 (#2303). Those are real captured frames, so the
+// stall/keepalive path never fires. A live microphone's noise floor is never
+// bit-exact zero, even in a quiet room (~4% non-zero samples at -91 dBFS in the
+// issue's measurements), so a sustained run of exact zeros is the signal.
+const DIGITAL_SILENCE_WINDOW: Duration = Duration::from_secs(1);
+const DIGITAL_SILENCE_MIN_WINDOWS: u32 = 5;
+const DIGITAL_SILENCE_MAX_NONZERO_PER_MILLE: u64 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DigitalSilenceUpdate {
+    Unchanged,
+    RunStarted,
+    RunExtended,
+    RunEnded,
+}
+
+struct DigitalSilenceDetector {
+    sample_rate: u64,
+    window_len: u64,
+    window_total: u64,
+    window_nonzero: u64,
+    silent_windows: u32,
+    run_samples: u64,
+    flagged_samples: u64,
+}
+
+impl DigitalSilenceDetector {
+    fn new(sample_rate: u32) -> Self {
+        let sample_rate = u64::from(sample_rate).max(1);
+        Self {
+            sample_rate,
+            window_len: (sample_rate * DIGITAL_SILENCE_WINDOW.as_millis() as u64 / 1000).max(1),
+            window_total: 0,
+            window_nonzero: 0,
+            silent_windows: 0,
+            run_samples: 0,
+            flagged_samples: 0,
+        }
+    }
+
+    fn reset(&mut self) -> DigitalSilenceUpdate {
+        let was_flagged = self.silent_windows >= DIGITAL_SILENCE_MIN_WINDOWS;
+        self.window_total = 0;
+        self.window_nonzero = 0;
+        self.silent_windows = 0;
+        self.run_samples = 0;
+        if was_flagged {
+            DigitalSilenceUpdate::RunEnded
+        } else {
+            DigitalSilenceUpdate::Unchanged
+        }
+    }
+
+    fn observe(&mut self, total: u64, nonzero: u64) -> DigitalSilenceUpdate {
+        self.window_total = self.window_total.saturating_add(total);
+        self.window_nonzero = self.window_nonzero.saturating_add(nonzero);
+        if self.window_total < self.window_len {
+            return DigitalSilenceUpdate::Unchanged;
+        }
+
+        let window_total = self.window_total;
+        let silent = self.window_nonzero.saturating_mul(1000)
+            <= window_total.saturating_mul(DIGITAL_SILENCE_MAX_NONZERO_PER_MILLE);
+        self.window_total = 0;
+        self.window_nonzero = 0;
+
+        if !silent {
+            return self.reset();
+        }
+
+        self.silent_windows = self.silent_windows.saturating_add(1);
+        self.run_samples = self.run_samples.saturating_add(window_total);
+        match self.silent_windows.cmp(&DIGITAL_SILENCE_MIN_WINDOWS) {
+            std::cmp::Ordering::Less => DigitalSilenceUpdate::Unchanged,
+            std::cmp::Ordering::Equal => {
+                self.flagged_samples = self.flagged_samples.saturating_add(self.run_samples);
+                DigitalSilenceUpdate::RunStarted
+            }
+            std::cmp::Ordering::Greater => {
+                self.flagged_samples = self.flagged_samples.saturating_add(window_total);
+                DigitalSilenceUpdate::RunExtended
+            }
+        }
+    }
+
+    fn run_ms(&self) -> u64 {
+        self.run_samples.saturating_mul(1000) / self.sample_rate
+    }
+
+    fn flagged_ms(&self) -> u64 {
+        self.flagged_samples.saturating_mul(1000) / self.sample_rate
+    }
+}
+
+fn count_nonzero_samples(frame: &ffmpeg::frame::Audio) -> Option<(u64, u64)> {
+    if frame.format() != ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed) {
+        return None;
+    }
+    let samples = frame.samples() * usize::from(frame.channels());
+    // An empty device callback yields a frame with no planes, where
+    // `data(0)` panics instead of returning an empty slice.
+    if samples == 0 || frame.planes() == 0 {
+        return None;
+    }
+    let bytes = frame.data(0).get(..samples * size_of::<f32>())?;
+    let nonzero = bytes
+        .chunks_exact(size_of::<f32>())
+        .filter(|sample| f32::from_ne_bytes([sample[0], sample[1], sample[2], sample[3]]) != 0.0)
+        .count();
+    Some((samples as u64, nonzero as u64))
+}
+
 pub struct Microphone {
     #[cfg(windows)]
     capture_scope: crate::output_pipeline::PipelineBuildScope,
@@ -250,19 +363,15 @@ impl RequiredMicrophoneHealth {
     }
 }
 
-impl AudioSource for Microphone {
-    type Config = Arc<MicrophoneFeedLock>;
-
-    #[allow(clippy::manual_async_fn)]
-    fn setup(
-        feed_lock: Self::Config,
+impl Microphone {
+    pub(crate) fn setup_with_channels(
+        feed_lock: Arc<MicrophoneFeedLock>,
         mut audio_tx: mpsc::Sender<AudioFrame>,
         ctx: &mut crate::SetupCtx,
-    ) -> impl Future<Output = anyhow::Result<Self>> + 'static
-    where
-        Self: Sized,
-    {
+        target_channels: usize,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
         let health_tx = ctx.health_tx().clone();
+        let digital_silence_ms = ctx.digital_silence_ms();
         #[cfg(windows)]
         let capture_scope = crate::output_pipeline::PipelineBuildScope::new();
         #[cfg(windows)]
@@ -295,10 +404,9 @@ impl AudioSource for Microphone {
         let setup = async move {
             let source_info = feed_lock.audio_info();
             let audio_info = source_info
-                .with_max_channels(MICROPHONE_TARGET_CHANNELS)
                 .with_sample_rate(AudioMixer::INFO.sample_rate)
                 .with_sample_format(AudioMixer::INFO.sample_format)
-                .with_channels(MICROPHONE_TARGET_CHANNELS as usize);
+                .with_channels(target_channels);
             let is_wireless = source_info.is_wireless_transport;
             let device_name = feed_lock.device_name().to_string();
             let reconnect_settings = microphone::MicrophoneDeviceSettings {
@@ -375,6 +483,7 @@ impl AudioSource for Microphone {
                 let health_tx = health_tx.clone();
                 let cancel = cancel.clone();
                 let recording_muted = recording_muted.clone();
+                let digital_silence_ms = digital_silence_ms.clone();
                 #[cfg(windows)]
                 let capture_scope = capture_scope.clone();
                 #[cfg(windows)]
@@ -382,6 +491,9 @@ impl AudioSource for Microphone {
                 #[cfg(target_os = "linux")]
                 let required_health = required_health.clone();
                 async move {
+                    let mut digital_silence = DigitalSilenceDetector::new(
+                        audio_info.sample_rate * audio_info.channels as u32,
+                    );
                     let mut resampler: Option<MicResampler> = None;
                     let mut silence_mode = false;
                     let mut silence_start: Option<Instant> = None;
@@ -511,8 +623,50 @@ impl AudioSource for Microphone {
                                 // frame: cadence, sample counts, and timestamps must stay
                                 // identical to the unmuted stream so the muxer timeline
                                 // and the stall/keepalive machinery see no difference.
-                                if recording_muted.load(Ordering::Relaxed) {
+                                let muted = recording_muted.load(Ordering::Relaxed);
+                                if muted {
                                     silence_frame_payload(&mut audio_frame.inner);
+                                }
+
+                                let silence_update = if muted {
+                                    digital_silence.reset()
+                                } else {
+                                    count_nonzero_samples(&audio_frame.inner)
+                                        .map(|(total, nonzero)| {
+                                            digital_silence.observe(total, nonzero)
+                                        })
+                                        .unwrap_or(DigitalSilenceUpdate::Unchanged)
+                                };
+                                match silence_update {
+                                    DigitalSilenceUpdate::RunStarted => {
+                                        warn!(
+                                            run_ms = digital_silence.run_ms(),
+                                            "Microphone is delivering exact digital silence while unmuted; another app may be holding the input"
+                                        );
+                                        digital_silence_ms
+                                            .store(digital_silence.flagged_ms(), Ordering::Relaxed);
+                                        emit_health(
+                                            &health_tx,
+                                            PipelineHealthEvent::MicrophoneDigitalSilence,
+                                        );
+                                    }
+                                    DigitalSilenceUpdate::RunExtended => {
+                                        digital_silence_ms
+                                            .store(digital_silence.flagged_ms(), Ordering::Relaxed);
+                                    }
+                                    DigitalSilenceUpdate::RunEnded => {
+                                        info!(
+                                            total_digital_silence_ms = digital_silence.flagged_ms(),
+                                            muted, "Microphone digital silence ended"
+                                        );
+                                        if !muted {
+                                            emit_health(
+                                                &health_tx,
+                                                PipelineHealthEvent::SourceRestarted,
+                                            );
+                                        }
+                                    }
+                                    DigitalSilenceUpdate::Unchanged => {}
                                 }
 
                                 let sample_count = audio_frame.samples();
@@ -802,6 +956,23 @@ impl AudioSource for Microphone {
         {
             setup
         }
+    }
+}
+
+impl AudioSource for Microphone {
+    type Config = Arc<MicrophoneFeedLock>;
+
+    fn setup(
+        feed_lock: Self::Config,
+        audio_tx: mpsc::Sender<AudioFrame>,
+        ctx: &mut crate::SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
+        Self::setup_with_channels(
+            feed_lock,
+            audio_tx,
+            ctx,
+            usize::from(MICROPHONE_TARGET_CHANNELS),
+        )
     }
 
     fn audio_info(&self) -> AudioInfo {
@@ -1567,5 +1738,272 @@ mod owned_microphone_tests {
         let setup = async move { drop(guard.disarm()) };
         drop(setup);
         assert!(cancel.is_cancelled());
+    }
+}
+
+#[cfg(test)]
+mod digital_silence_tests {
+    use super::*;
+    use crate::{
+        feeds::microphone::synthetic::SyntheticMicrophone,
+        output_pipeline::{AudioMuxer, Muxer, OutputPipeline, TaskPool},
+    };
+    use cap_timestamp::Timestamp;
+
+    const RATE: u32 = 48_000;
+    const CHUNK: usize = 480;
+
+    fn target_info() -> AudioInfo {
+        AudioInfo::new_raw(
+            cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+            RATE,
+            1,
+        )
+    }
+
+    fn frame_with(samples: &[f32]) -> ffmpeg::frame::Audio {
+        let mut frame = create_silence_frame(&target_info(), samples.len());
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+        frame.data_mut(0)[..bytes.len()].copy_from_slice(&bytes);
+        frame
+    }
+
+    fn quiet_room(len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| if i % 25 == 0 { 3.0e-5 } else { 0.0 })
+            .collect()
+    }
+
+    fn feed_seconds(
+        detector: &mut DigitalSilenceDetector,
+        samples: &[f32],
+        seconds: f64,
+    ) -> Vec<DigitalSilenceUpdate> {
+        let frame = frame_with(samples);
+        let (total, nonzero) = count_nonzero_samples(&frame).unwrap();
+        let chunks = (seconds * f64::from(RATE) / samples.len() as f64).round() as usize;
+        (0..chunks)
+            .map(|_| detector.observe(total, nonzero))
+            .filter(|update| *update != DigitalSilenceUpdate::Unchanged)
+            .collect()
+    }
+
+    #[test]
+    fn exact_zero_frames_flag_after_a_sustained_window() {
+        let mut detector = DigitalSilenceDetector::new(RATE);
+        let zeros = vec![0.0; CHUNK];
+        assert!(feed_seconds(&mut detector, &zeros, 4.99).is_empty());
+        assert_eq!(
+            feed_seconds(&mut detector, &zeros, 0.01),
+            vec![DigitalSilenceUpdate::RunStarted]
+        );
+        assert_eq!(detector.flagged_ms(), 5_000);
+        assert_eq!(
+            feed_seconds(&mut detector, &zeros, 2.0),
+            vec![DigitalSilenceUpdate::RunExtended; 2]
+        );
+        assert_eq!(detector.flagged_ms(), 7_000);
+    }
+
+    #[test]
+    fn quiet_room_noise_floor_is_not_digital_silence() {
+        let mut detector = DigitalSilenceDetector::new(RATE);
+        assert!(feed_seconds(&mut detector, &quiet_room(CHUNK), 30.0).is_empty());
+        assert_eq!(detector.flagged_ms(), 0);
+    }
+
+    #[test]
+    fn muting_breaks_a_digital_silence_run() {
+        let mut detector = DigitalSilenceDetector::new(RATE);
+        let zeros = vec![0.0; CHUNK];
+        assert!(feed_seconds(&mut detector, &zeros, 4.0).is_empty());
+        assert_eq!(detector.reset(), DigitalSilenceUpdate::Unchanged);
+        assert!(feed_seconds(&mut detector, &zeros, 4.0).is_empty());
+        assert_eq!(detector.flagged_ms(), 0);
+    }
+
+    #[test]
+    fn real_audio_ends_a_run_and_later_runs_accumulate() {
+        let mut detector = DigitalSilenceDetector::new(RATE);
+        let zeros = vec![0.0; CHUNK];
+        feed_seconds(&mut detector, &zeros, 6.0);
+        assert_eq!(
+            feed_seconds(&mut detector, &quiet_room(CHUNK), 1.0),
+            vec![DigitalSilenceUpdate::RunEnded]
+        );
+        assert_eq!(detector.flagged_ms(), 6_000);
+        assert_eq!(
+            feed_seconds(&mut detector, &zeros, 5.0),
+            vec![DigitalSilenceUpdate::RunStarted]
+        );
+        assert_eq!(detector.flagged_ms(), 11_000);
+    }
+
+    #[test]
+    fn only_bit_exact_zero_counts_as_silent() {
+        let tiny = frame_with(&[1.0e-30; CHUNK]);
+        assert_eq!(
+            count_nonzero_samples(&tiny),
+            Some((CHUNK as u64, CHUNK as u64))
+        );
+        let negative_zero = frame_with(&[-0.0; CHUNK]);
+        assert_eq!(
+            count_nonzero_samples(&negative_zero),
+            Some((CHUNK as u64, 0))
+        );
+    }
+
+    #[test]
+    fn empty_frames_are_skipped_without_touching_planes() {
+        let empty = create_silence_frame(&target_info(), 0);
+        assert_eq!(count_nonzero_samples(&empty), None);
+    }
+
+    struct SinkMuxer;
+
+    impl Muxer for SinkMuxer {
+        type Config = ();
+
+        async fn setup(
+            _: (),
+            _: std::path::PathBuf,
+            _: Option<cap_media_info::VideoInfo>,
+            _: Option<AudioInfo>,
+            _: Arc<AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self)
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for SinkMuxer {
+        fn send_audio_frame(&mut self, _: AudioFrame, _: Duration) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Reported {
+        DigitalSilence,
+        Restarted,
+    }
+
+    enum Push<'a> {
+        Samples(&'a [f32], u32),
+        EmptyCallbacks(u32),
+    }
+
+    // Synchronizes on the source's own health events rather than on what the
+    // muxer accepted: downstream timing stages may drop frames whose
+    // timestamps run ahead of the wall clock, but the detector sits upstream.
+    async fn record_through_feed(pushes: &[Push<'_>], expected: &[Reported]) -> Option<u32> {
+        let mic = SyntheticMicrophone::spawn("voip-held-input", RATE, 1);
+        let lock = Arc::new(mic.lock().await.unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let mut pipeline = OutputPipeline::builder(temp.path().join("audio-input.ogg"))
+            .with_audio_source::<Microphone>(lock.clone())
+            .build::<SinkMuxer>(())
+            .await
+            .unwrap();
+        let mut health = pipeline.take_health_rx().unwrap();
+        let wanted = expected.len();
+        let collector = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while seen.len() < wanted {
+                match health.recv().await {
+                    Some(PipelineHealthEvent::MicrophoneDigitalSilence) => {
+                        seen.push(Reported::DigitalSilence)
+                    }
+                    Some(PipelineHealthEvent::SourceRestarted) => seen.push(Reported::Restarted),
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            seen
+        });
+
+        let start = Instant::now();
+        let mut pushed_samples: u64 = 0;
+        for push in pushes {
+            match push {
+                Push::Samples(samples, seconds) => {
+                    let chunks = RATE as usize / samples.len() * *seconds as usize;
+                    for _ in 0..chunks {
+                        let at = start
+                            + Duration::from_secs_f64(pushed_samples as f64 / f64::from(RATE));
+                        mic.push(samples, Timestamp::Instant(at)).await;
+                        pushed_samples += samples.len() as u64;
+                        tokio::task::yield_now().await;
+                    }
+                }
+                Push::EmptyCallbacks(count) => {
+                    for _ in 0..*count {
+                        let at = start
+                            + Duration::from_secs_f64(pushed_samples as f64 / f64::from(RATE));
+                        mic.push(&[], Timestamp::Instant(at)).await;
+                        tokio::task::yield_now().await;
+                    }
+                }
+            }
+        }
+
+        let seen = tokio::time::timeout(Duration::from_secs(20), collector)
+            .await
+            .expect("the source never reported the expected health events")
+            .unwrap();
+        assert_eq!(seen, expected);
+        pipeline.stop().await.unwrap().digital_silence_ms
+    }
+
+    #[tokio::test]
+    async fn all_zero_frames_through_the_feed_surface_on_stop() {
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&[0.0; 4_800], 8)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
+        assert!(
+            digital_silence_ms.is_some_and(|ms| ms >= 5_000),
+            "expected the stop result to carry the silent span, got {digital_silence_ms:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quiet_room_through_the_feed_reports_nothing() {
+        let room = quiet_room(4_800);
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&room, 8), Push::Samples(&[0.0; 4_800], 6)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
+        assert!(
+            digital_silence_ms.is_some_and(|ms| (5_000..=6_000).contains(&ms)),
+            "only the trailing zeros may count, got {digital_silence_ms:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn real_audio_after_the_call_clears_the_live_warning() {
+        let room = quiet_room(4_800);
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&[0.0; 4_800], 6), Push::Samples(&room, 2)],
+            &[Reported::DigitalSilence, Reported::Restarted],
+        )
+        .await;
+        assert_eq!(digital_silence_ms, Some(6_000));
+    }
+
+    #[tokio::test]
+    async fn empty_device_callbacks_do_not_stop_the_forwarder() {
+        let digital_silence_ms = record_through_feed(
+            &[Push::EmptyCallbacks(50), Push::Samples(&[0.0; 4_800], 6)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
+        assert!(digital_silence_ms.is_some_and(|ms| ms >= 5_000));
     }
 }

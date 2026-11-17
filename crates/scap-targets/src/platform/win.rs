@@ -1,4 +1,10 @@
+use image::{
+    ImageEncoder,
+    codecs::png::{CompressionType, FilterType, PngEncoder},
+};
 use std::{
+    cell::OnceCell,
+    collections::HashMap,
     ffi::OsString,
     mem,
     os::windows::ffi::OsStringExt,
@@ -46,7 +52,7 @@ use windows::{
                 GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect,
                 GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow,
                 GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
-                GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic,
+                GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindow,
                 IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON, WS_CHILD,
                 WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
@@ -308,20 +314,88 @@ fn get_cursor_position() -> Option<PhysicalPosition> {
     }
 }
 
+#[derive(Default)]
+pub struct WindowListCache {
+    processes: HashMap<u32, ProcessMetadata>,
+    executable_icons: HashMap<PathBuf, Option<Vec<u8>>>,
+}
+
+struct ProcessMetadata {
+    path: Option<PathBuf>,
+    owner_name: OnceCell<Option<String>>,
+}
+
+impl WindowListCache {
+    pub fn list(&mut self) -> Vec<crate::Window> {
+        self.processes.clear();
+        self.executable_icons.clear();
+        WindowImpl::list_with_cache(self)
+            .into_iter()
+            .map(crate::Window)
+            .collect()
+    }
+
+    pub fn is_valid(&mut self, window: &crate::Window) -> bool {
+        window.raw_handle().is_valid_with_cache(self)
+    }
+
+    pub fn is_on_screen(&mut self, window: &crate::Window) -> bool {
+        window.raw_handle().is_on_screen_with_cache(self)
+    }
+
+    pub fn owner_name(&mut self, window: &crate::Window) -> Option<String> {
+        self.window_owner_name(window.raw_handle())
+    }
+
+    pub fn app_icon(&mut self, window: &crate::Window) -> Option<Vec<u8>> {
+        window.raw_handle().app_icon_with_cache(self)
+    }
+
+    fn process(&mut self, pid: u32) -> &ProcessMetadata {
+        self.processes
+            .entry(pid)
+            .or_insert_with(|| ProcessMetadata {
+                path: unsafe { pid_to_exe_path(pid) }.ok(),
+                owner_name: OnceCell::new(),
+            })
+    }
+
+    fn window_owner_name(&mut self, window: &WindowImpl) -> Option<String> {
+        let process = self.process(window.process_id());
+        let path = process.path.as_ref()?;
+        process
+            .owner_name
+            .get_or_init(|| {
+                let path = path.to_string_lossy();
+                WindowImpl::get_file_description(&path).or_else(|| {
+                    Path::new(path.as_ref())
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                })
+            })
+            .clone()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct WindowImpl(HWND);
 
 impl WindowImpl {
     pub fn list() -> Vec<Self> {
-        struct EnumContext {
+        Self::list_with_cache(&mut WindowListCache::default())
+    }
+
+    fn list_with_cache(cache: &mut WindowListCache) -> Vec<Self> {
+        struct EnumContext<'a> {
             list: Vec<WindowImpl>,
             current_process_id: u32,
+            cache: &'a mut WindowListCache,
         }
 
         unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let context = unsafe { &mut *(lparam.0 as *mut EnumContext) };
 
-            if is_window_valid_for_enumeration(hwnd, context.current_process_id) {
+            if is_window_valid_for_enumeration(hwnd, context.current_process_id, context.cache) {
                 context.list.push(WindowImpl(hwnd));
             }
 
@@ -331,6 +405,7 @@ impl WindowImpl {
         let mut context = EnumContext {
             list: vec![],
             current_process_id: unsafe { GetCurrentProcessId() },
+            cache,
         };
 
         unsafe {
@@ -343,6 +418,18 @@ impl WindowImpl {
         }
 
         context.list
+    }
+
+    /// Resolve an id straight back to its HWND, without going through
+    /// `list()`. Enumeration deliberately skips minimized and cloaked
+    /// windows, so a window the user picked and then minimized is absent
+    /// from `list()` while still being a perfectly capturable target.
+    /// `IsWindow` is the only liveness question that matters here.
+    pub fn from_id_direct(id: &WindowIdImpl) -> Option<Self> {
+        let hwnd = HWND(id.0 as *mut std::ffi::c_void);
+        unsafe { IsWindow(Some(hwnd)) }
+            .as_bool()
+            .then_some(Self(hwnd))
     }
 
     pub fn inner(&self) -> HWND {
@@ -474,48 +561,16 @@ impl WindowImpl {
     }
 
     pub fn owner_name(&self) -> Option<String> {
-        unsafe {
-            let mut process_id = 0u32;
-            GetWindowThreadProcessId(self.0, Some(&mut process_id));
-
-            if process_id == 0 {
-                return None;
-            }
-
-            let process_handle =
-                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
-
-            let mut buffer = [0u16; 1024];
-            let mut buffer_size = buffer.len() as u32;
-
-            let result = QueryFullProcessImageNameW(
-                process_handle,
-                PROCESS_NAME_FORMAT::default(),
-                PWSTR(buffer.as_mut_ptr()),
-                &mut buffer_size,
-            );
-
-            let _ = CloseHandle(process_handle);
-
-            if result.is_ok() && buffer_size > 0 {
-                let path_str = String::from_utf16_lossy(&buffer[..buffer_size as usize]);
-
-                // Try to get the friendly name from version info first
-                if let Some(friendly_name) = self.get_file_description(&path_str) {
-                    return Some(friendly_name);
-                }
-
-                // Fallback to file stem
-                std::path::Path::new(&path_str)
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        }
+        WindowListCache::default().window_owner_name(self)
     }
 
-    fn get_file_description(&self, file_path: &str) -> Option<String> {
+    fn process_id(&self) -> u32 {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut pid)) };
+        pid
+    }
+
+    fn get_file_description(file_path: &str) -> Option<String> {
         unsafe {
             let wide_path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -562,21 +617,27 @@ impl WindowImpl {
     }
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
+        self.app_icon_with_cache(&mut WindowListCache::default())
+    }
+
+    fn app_icon_with_cache(&self, cache: &mut WindowListCache) -> Option<Vec<u8>> {
+        let exe_path = cache.process(self.process_id()).path.clone();
+        if let Some(path) = &exe_path {
+            let icon = cache
+                .executable_icons
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    let path = path.to_string_lossy();
+                    self.extract_shell_icon_high_res(&path, 512)
+                        .or_else(|| self.extract_executable_icons_high_res(&path))
+                });
+            if let Some(icon) = icon {
+                return Some(icon.clone());
+            }
+        }
+
         unsafe {
-            // Target size for acceptable icon quality - early termination threshold
             const GOOD_SIZE_THRESHOLD: i32 = 256;
-
-            if let Some(exe_path) = self.get_executable_path()
-                && let Some(icon_data) = self.extract_shell_icon_high_res(&exe_path, 512)
-            {
-                return Some(icon_data);
-            }
-
-            if let Some(exe_path) = self.get_executable_path()
-                && let Some(icon_data) = self.extract_executable_icons_high_res(&exe_path)
-            {
-                return Some(icon_data);
-            }
 
             // Method 3: Try to get the window's large icon
             let large_icon = SendMessageW(
@@ -594,9 +655,12 @@ impl WindowImpl {
             }
 
             // Method 4: Try executable file extraction (fallback to original method)
-            if let Some(exe_path) = self.get_executable_path() {
-                let wide_path: Vec<u16> =
-                    exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+            if let Some(exe_path) = &exe_path {
+                let wide_path: Vec<u16> = exe_path
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
 
                 let mut large_icon: HICON = HICON::default();
                 let mut small_icon: HICON = HICON::default();
@@ -759,38 +823,6 @@ impl WindowImpl {
             }
 
             best_icon
-        }
-    }
-
-    fn get_executable_path(&self) -> Option<String> {
-        unsafe {
-            let mut process_id = 0u32;
-            GetWindowThreadProcessId(self.0, Some(&mut process_id));
-
-            if process_id == 0 {
-                return None;
-            }
-
-            let process_handle =
-                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
-
-            let mut buffer = [0u16; 1024];
-            let mut buffer_size = buffer.len() as u32;
-
-            let result = QueryFullProcessImageNameW(
-                process_handle,
-                PROCESS_NAME_FORMAT::default(),
-                PWSTR(buffer.as_mut_ptr()),
-                &mut buffer_size,
-            );
-
-            let _ = CloseHandle(process_handle);
-
-            if result.is_ok() && buffer_size > 0 {
-                Some(String::from_utf16_lossy(&buffer[..buffer_size as usize]))
-            } else {
-                None
-            }
         }
     }
 
@@ -962,19 +994,21 @@ impl WindowImpl {
                             chunk.swap(0, 2);
                         }
 
-                        if let Some(img) =
-                            image::RgbaImage::from_raw(width as u32, height as u32, buffer)
+                        let mut png_data = Vec::new();
+                        if PngEncoder::new_with_quality(
+                            &mut png_data,
+                            CompressionType::Fast,
+                            FilterType::Sub,
+                        )
+                        .write_image(
+                            &buffer,
+                            width as u32,
+                            height as u32,
+                            image::ColorType::Rgba8,
+                        )
+                        .is_ok()
                         {
-                            let mut png_data = Vec::new();
-                            if img
-                                .write_to(
-                                    &mut std::io::Cursor::new(&mut png_data),
-                                    image::ImageFormat::Png,
-                                )
-                                .is_ok()
-                            {
-                                result = Some((png_data, width));
-                            }
+                            result = Some((png_data, width));
                         }
                     }
                 }
@@ -1125,6 +1159,10 @@ impl WindowImpl {
     }
 
     pub fn is_on_screen(&self) -> bool {
+        self.is_on_screen_with_cache(&mut WindowListCache::default())
+    }
+
+    fn is_on_screen_with_cache(&self, cache: &mut WindowListCache) -> bool {
         if !unsafe { IsWindowVisible(self.0) }.as_bool() {
             return false;
         }
@@ -1144,12 +1182,8 @@ impl WindowImpl {
             return false;
         }
 
-        let mut process_id = 0;
-        unsafe { GetWindowThreadProcessId(self.0, Some(&mut process_id)) };
-
-        let owner_process_path = match unsafe { pid_to_exe_path(process_id) } {
-            Ok(path) => path,
-            Err(_) => return false,
+        let Some(owner_process_path) = &cache.process(self.process_id()).path else {
+            return false;
         };
 
         if owner_process_path.starts_with("C:\\Windows\\SystemApps") {
@@ -1160,18 +1194,21 @@ impl WindowImpl {
     }
 
     pub fn is_valid(&self) -> bool {
+        self.is_valid_with_cache(&mut WindowListCache::default())
+    }
+
+    fn is_valid_with_cache(&self, cache: &mut WindowListCache) -> bool {
         if !unsafe { IsWindowVisible(self.0).as_bool() } {
             return false;
         }
 
-        let mut id = 0;
-        unsafe { GetWindowThreadProcessId(self.0, Some(&mut id)) };
+        let id = self.process_id();
         if id == unsafe { GetCurrentProcessId() } {
             return false;
         }
 
-        if let Ok(exe_path) = unsafe { pid_to_exe_path(id) }
-            && is_ignored_executable(&exe_path)
+        if let Some(exe_path) = &cache.process(id).path
+            && is_ignored_executable(exe_path)
         {
             return false;
         }
@@ -1211,7 +1248,11 @@ fn is_ignored_executable(path: &Path) -> bool {
         })
 }
 
-fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool {
+fn is_window_valid_for_enumeration(
+    hwnd: HWND,
+    current_process_id: u32,
+    cache: &mut WindowListCache,
+) -> bool {
     unsafe {
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return false;
@@ -1223,8 +1264,8 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
             return false;
         }
 
-        if let Ok(exe_path) = pid_to_exe_path(process_id)
-            && is_ignored_executable(&exe_path)
+        if let Some(exe_path) = &cache.process(process_id).path
+            && is_ignored_executable(exe_path)
         {
             return false;
         }
@@ -1367,7 +1408,7 @@ unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
         QueryFullProcessImageNameW(
             handle,
             PROCESS_NAME_FORMAT::default(),
-            windows::core::PWSTR(lpexename.as_mut_ptr()),
+            PWSTR(lpexename.as_mut_ptr()),
             &mut lpdwsize,
         )
     };

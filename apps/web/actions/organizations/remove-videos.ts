@@ -12,6 +12,10 @@ import {
 import type { Organisation, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 
 export async function removeVideosFromOrganization(
 	organizationId: Organisation.OrganisationId,
@@ -39,10 +43,11 @@ export async function removeVideosFromOrganization(
 
 		const isOrgOwner = organization.ownerId === user.id;
 		let hasAccess = isOrgOwner;
+		let memberRole: string | null = null;
 
 		if (!isOrgOwner) {
 			const orgMembership = await db()
-				.select({ id: organizationMembers.id })
+				.select({ id: organizationMembers.id, role: organizationMembers.role })
 				.from(organizationMembers)
 				.where(
 					and(
@@ -52,6 +57,7 @@ export async function removeVideosFromOrganization(
 				)
 				.limit(1);
 			hasAccess = orgMembership.length > 0;
+			memberRole = orgMembership[0]?.role ?? null;
 		}
 
 		if (!hasAccess) {
@@ -60,10 +66,19 @@ export async function removeVideosFromOrganization(
 			);
 		}
 
+		const canRemoveAnyVideo = canManageOrganizationSettings(
+			getEffectiveOrganizationRole({
+				userId: user.id,
+				ownerId: organization.ownerId,
+				memberRole,
+			}),
+		);
+
 		// Only allow removing videos that are currently shared with the organization
 		const existingSharedVideos = await db()
-			.select({ videoId: sharedVideos.videoId })
+			.select({ videoId: sharedVideos.videoId, ownerId: videos.ownerId })
 			.from(sharedVideos)
+			.leftJoin(videos, eq(videos.id, sharedVideos.videoId))
 			.where(
 				and(
 					eq(sharedVideos.organizationId, organizationId),
@@ -71,7 +86,9 @@ export async function removeVideosFromOrganization(
 				),
 			);
 
-		const existingVideoIds = existingSharedVideos.map((sv) => sv.videoId);
+		const existingVideoIds = existingSharedVideos
+			.filter((sv) => canRemoveAnyVideo || sv.ownerId === user.id)
+			.map((sv) => sv.videoId);
 
 		if (existingVideoIds.length === 0) {
 			return {
@@ -89,12 +106,17 @@ export async function removeVideosFromOrganization(
 				),
 			);
 
-		// Clear folderId for videos that are being removed from the organization and are currently in folders within that organization
-		// First, get all folder IDs that belong to this organization
+		// Clear folderId for videos that are being removed from the organization and are currently in the organization's own folders.
+		// Personal folders (spaceId null) also carry the organizationId, and a Cap's place in My Caps must survive unsharing it.
 		const organizationFolders = await db()
 			.select({ id: folders.id })
 			.from(folders)
-			.where(eq(folders.organizationId, organizationId));
+			.where(
+				and(
+					eq(folders.organizationId, organizationId),
+					eq(folders.spaceId, organizationId),
+				),
+			);
 
 		const organizationFolderIds = organizationFolders.map((f) => f.id);
 

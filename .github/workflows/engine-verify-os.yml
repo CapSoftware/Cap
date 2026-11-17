@@ -178,6 +178,33 @@ jobs:
           name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}
 
+      # A test process that crashes (SIGSEGV) leaves no Rust backtrace;
+      # macOS writes a crash report instead, collected below on failure.
+      - name: Mark crash report start
+        if: inputs.platform == 'macos'
+        shell: bash
+        run: touch "$RUNNER_TEMP/crash-reports-since"
+
+      # A test process that crashes on Windows (0xc0000005) leaves nothing:
+      # Git Bash starts run.sh's children with crash reporting off. Tests run
+      # through PowerShell instead (scripts/verify/native-launch.ps1, about
+      # 1 s per test process), and Windows keeps a dump of any crash.
+      - name: Keep Windows crash dumps
+        if: inputs.platform == 'windows'
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\verify-report\crash-dumps"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpFolder -Value $dir -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpCount -Value 10 -PropertyType DWord -Force | Out-Null
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting" -Name DontShowUI -Value 1 -Type DWord
+          Start-Service WerSvc
+          $launcher = Join-Path $env:GITHUB_WORKSPACE "scripts\verify\native-launch.ps1"
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $launcher" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Prepare recorded fixtures without concurrent rendering
         if: contains(format(',{0},', inputs.suites), ',export,')
         shell: bash
@@ -217,8 +244,44 @@ jobs:
           --junit "$CAP_VERIFY_REPORT_DIR/junit.xml" --flaky "$CAP_VERIFY_FLAKY_FILE"
           "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Collect macOS crash reports
+        id: crash-reports
+        if: failure() && inputs.platform == 'macos'
+        continue-on-error: true
+        shell: bash
+        run: |
+          dest="$RUNNER_TEMP/verify-report/crash-reports"
+          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            [[ -d "$dir" ]] || continue
+            { find "$dir" -type f \( -name '*.ips' -o -name '*.crash' \) -newer "$RUNNER_TEMP/crash-reports-since" -print0 2>/dev/null || true; } |
+              while IFS= read -r -d '' report; do
+                mkdir -p "$dest"
+                cp "$report" "$dest/" && echo "collected $report" || echo "could not copy $report"
+              done
+          done
+          if [[ -n "$(ls -A "$dest" 2>/dev/null)" ]]; then
+            echo "collected=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print Windows crash stacks
+        id: windows-crash-dumps
+        if: failure() && inputs.platform == 'windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
+          symbols="$(cygpath -w "$GITHUB_WORKSPACE/target/$CAP_VERIFY_CARGO_PROFILE/deps");srv*$(cygpath -w "$RUNNER_TEMP/symbols")*https://msdl.microsoft.com/download/symbols"
+          for dump in "$RUNNER_TEMP"/verify-report/crash-dumps/*.dmp; do
+            [[ -f "$dump" ]] || continue
+            echo "::group::$(basename "$dump")"
+            "$cdb" -z "$(cygpath -w "$dump")" -y "$symbols" -c ".ecxr; kn 40; q" 2>&1 |
+              grep -E 'Access violation|code [0-9a-f]{8} |^[^ ]+![^ ]+.*:$|^ # Child-SP|^[0-9a-f]{2} ' | head -60
+            echo "::endgroup::"
+            echo "collected=true" >> "$GITHUB_OUTPUT"
+          done
+
       - name: Upload report
-        if: always() && steps.test.outcome != 'skipped'
+        if: always() && (steps.test.outcome != 'skipped' || steps.crash-reports.outputs.collected == 'true' || steps.windows-crash-dumps.outputs.collected == 'true')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verify-report-${{ inputs.platform }}-${{ inputs.tier }}-${{ matrix.shard }}

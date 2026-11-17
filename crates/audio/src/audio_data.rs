@@ -250,12 +250,20 @@ impl AudioData {
         self.samples.as_slice()
     }
 
+    pub fn into_samples(self) -> Vec<f32> {
+        self.samples
+    }
+
     pub fn sample_count(&self) -> usize {
         self.samples.len() / self.channels as usize
     }
 
     pub fn source_start_sample(&self) -> usize {
         self.source_start_sample
+    }
+
+    pub fn covered_source_end_sample(&self) -> usize {
+        self.covered_source_end_sample
     }
 
     pub fn covers_source_range(

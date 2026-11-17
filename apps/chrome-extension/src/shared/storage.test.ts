@@ -66,6 +66,7 @@ const failedRecording = (sessionId: string): FailedRecording => ({
 
 beforeEach(() => {
 	(globalThis as { chrome?: unknown }).chrome = {
+		runtime: {},
 		storage: {
 			local: createAsyncStorageArea(),
 			session: createAsyncStorageArea(),
@@ -123,6 +124,7 @@ describe("storage read-modify-write serialization", () => {
 
 	it("keeps the newest recording status when an earlier write is slower", async () => {
 		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {},
 			storage: {
 				local: createAsyncStorageArea(),
 				session: createAsyncStorageArea((writeIndex) =>

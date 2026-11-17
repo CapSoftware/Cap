@@ -13,7 +13,6 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY vendor ./vendor
 COPY apps/cli ./apps/cli
-COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 # The hot loops run on the GPU (NVDEC, Vulkan compositing, NVENC); fat LTO
 # costs minutes per build for no measurable export speed.
 ENV CARGO_PROFILE_RELEASE_LTO=false \
@@ -22,7 +21,7 @@ ENV CARGO_PROFILE_RELEASE_LTO=false \
 RUN cargo build --release --locked -p cap-render-farm \
 	&& install -Dm755 target/release/cap-render-farm /out/cap-render-farm
 
-FROM oven/bun:1.4.0 AS bun
+FROM oven/bun:1.4.4 AS bun
 
 FROM debian:trixie-slim
 RUN apt-get update \

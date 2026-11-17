@@ -203,7 +203,7 @@ export const harnesses: readonly Harness[] = [
 		],
 		installs: [
 			{ label: "Transport", value: "stdio, stdout reserved for MCP" },
-			{ label: "Tools", value: "76 read and confirmed-write tools" },
+			{ label: "Tools", value: "82 read and confirmed-write tools" },
 		],
 		after:
 			"Keep cap mcp serve on stdio. Capture, uploads, passwords, and credentials stay in the CLI on purpose.",
@@ -371,7 +371,7 @@ export const agentFaqs = [
 	{
 		question: "What is the Cap MCP server?",
 		answer:
-			"cap mcp serve exposes 76 Cap tools over local stdio: listing and reading Caps, transcripts, comments, reactions, sharing, folders, spaces, organizations, notifications, analytics, storage, billing, and developer resources. Screen capture, uploads, passwords, and credentials deliberately stay in the CLI, so no secret ever passes through the model.",
+			"cap mcp serve exposes 82 Cap tools over local stdio: listing and reading Caps, transcripts, comments, reactions, sharing, folders, spaces, organizations, notifications, analytics, storage, billing, and developer resources, including developer video uploads and speech to text from a local file or a URL. Screen capture, Cap uploads, passwords, and credentials deliberately stay in the CLI, so no secret ever passes through the model.",
 	},
 	{
 		question: "Is it safe to give an AI agent access to my recordings?",
@@ -432,7 +432,7 @@ export const agentsSoftwareSchema = {
 	},
 	featureList: [
 		"Screen and window recording from the command line",
-		"Local MCP server with 76 tools for Claude Code, Codex, Cursor, OpenCode, and other MCP clients",
+		"Local MCP server with 82 tools for Claude Code, Codex, Cursor, OpenCode, and other MCP clients",
 		"One-command install of the Cap skill and MCP configuration",
 		"JSON output on every command and NDJSON events for recording and export",
 		"Upload recordings and return share links",

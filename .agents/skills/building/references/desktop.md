@@ -1,6 +1,6 @@
 # Desktop worktrees
 
-There are separate Tauri and GPUI Cargo workspaces and toolchains. Never assume one cache key or one native runtime verifies both.
+There are two Cargo workspaces with their own toolchains and lockfiles: the root workspace (`apps/cli` and `crates/*`) and the desktop app's standalone workspace (`apps/desktop-gpui`). Never assume one cache key or one native runtime verifies both.
 
 `warm --session <id> --source <idle-checkout>` snapshots prepared native dependencies into the Git-common cache, then creates a private copy-on-write clone in the worktree. `--rust` also warms `target/debug` and `apps/desktop-gpui/target/debug`. It excludes profiles, user media, release artifacts, and arbitrary contents of `target`.
 
@@ -16,6 +16,6 @@ Native runtime isolation is separate from build isolation. Cap has single-instan
 
 Use `run --native` and `check --native` for expensive Rust compilation as well. This queues native work across sessions instead of launching twenty large builds at once. Complete compile checks before holding the lease with a long-lived native runtime. Source editing and independent web work can continue while a native job waits.
 
-For v1, prefer a dedicated native runner/OS user with synthetic recordings and test credentials. Before any local native launch, explicitly verify its app identifier, data directory, recording library, frontend port, authentication callback, and existing process ownership. Do not launch it against the user's normal Cap profile. Native profile provisioning and parallel local Tauri/GPUI launch are not automated by this helper.
+For v1, prefer a dedicated native runner/OS user with synthetic recordings and test credentials. Before any local native launch, explicitly verify its app identifier, data directory, recording library, frontend port, authentication callback, and existing process ownership. Do not launch it against the user's normal Cap profile. Native profile provisioning and parallel local desktop app launches are not automated by this helper.
 
 Use the platform's actual Cap CLI to capture native demos. Linux Daytona evidence cannot close macOS ScreenCaptureKit, Windows capture, hardware GPU, microphone/camera, permissions, or updater gates. Retain a platform matrix in the PR and keep it draft when required native verification is missing.

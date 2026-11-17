@@ -6,18 +6,15 @@ import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
-const desktopDirectory = fileURLToPath(
-	new URL("../apps/desktop/", import.meta.url),
+const gpuiDirectory = fileURLToPath(
+	new URL("../apps/desktop-gpui/", import.meta.url),
 );
 const retryDelays = [15_000, 30_000];
 const outputTailLimit = 64 * 1024;
 
 export function resolveMacosDeploymentTarget(value) {
 	const minimum = JSON.parse(
-		readFileSync(
-			path.join(desktopDirectory, "src-tauri/tauri.conf.json"),
-			"utf8",
-		),
+		readFileSync(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
 	).bundle.macOS.minimumSystemVersion;
 	const target = value || minimum;
 	const parseVersion = (version) => {
@@ -98,7 +95,7 @@ export function executeMacosCommand(
 	signal?.throwIfAborted();
 	return new Promise((resolve, reject) => {
 		const child = spawnProcess("bun", ["run", ...args], {
-			cwd: desktopDirectory,
+			cwd: gpuiDirectory,
 			env,
 			detached: true,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -152,7 +149,6 @@ export async function buildMacosPackages(
 	target,
 	args = [],
 	{
-		bundleOnly = false,
 		platform = process.platform,
 		env = process.env,
 		signal,
@@ -184,20 +180,17 @@ export async function buildMacosPackages(
 	for (let attempt = 0; ; attempt++) {
 		signal?.throwIfAborted();
 		let outputTail = "";
-		const command =
-			attempt === 0 && !bundleOnly
-				? ["build:tauri", ...commandArguments]
-				: [
-						"dotenv",
-						"-e",
-						"../../.env",
-						"--",
-						"bun",
-						"run",
-						"tauri",
-						"bundle",
-						...commandArguments,
-					];
+		const command = [
+			"dotenv",
+			"-e",
+			"../../.env",
+			"--",
+			"bun",
+			"run",
+			"tauri",
+			"bundle",
+			...commandArguments,
+		];
 		const result = await execute(command, {
 			env: environment,
 			signal,

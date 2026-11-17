@@ -30,6 +30,14 @@ export function getActiveAudioOperationCount(): number {
 	return count;
 }
 
+export function getMaxConcurrentAudioOperations(): number {
+	return MAX_CONCURRENT_AUDIO_OPERATIONS;
+}
+
+export function getMaxConcurrentProbeOperations(): number {
+	return MAX_CONCURRENT_PROBE_OPERATIONS;
+}
+
 export function canAcceptNewAudioOperation(): boolean {
 	return (
 		!hasCriticalMemoryPressure() &&

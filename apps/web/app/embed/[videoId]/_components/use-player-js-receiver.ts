@@ -258,9 +258,10 @@ export const usePlayerJsReceiver = ({
 		let currentVideo: HTMLVideoElement | null = null;
 		let dispose: (() => void) | null = null;
 		const bind = () => {
-			if (videoRef.current === currentVideo) return;
+			const video = videoRef.current ?? playerContainer.querySelector("video");
+			if (video === currentVideo) return;
 			dispose?.();
-			currentVideo = videoRef.current;
+			currentVideo = video;
 			dispose = currentVideo
 				? createPlayerJsReceiver({
 						playerWindow: window,

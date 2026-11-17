@@ -38,10 +38,10 @@ pub fn arm_from_env(cx: &mut App) {
                 } else if target == "main" {
                     Some(cx.global::<crate::app_windows::AppWindows>().main.into())
                 } else {
-                        cx.global::<crate::app_windows::AppWindows>()
-                            .onboarding
-                            .map(Into::into)
-                    };
+                    cx.global::<crate::app_windows::AppWindows>()
+                        .onboarding
+                        .map(Into::into)
+                };
                 let Some(handle) = handle else {
                     tracing::warn!("snapshot: window handle missing");
                     return None;

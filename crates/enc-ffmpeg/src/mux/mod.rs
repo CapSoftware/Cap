@@ -10,3 +10,6 @@ pub mod mp4;
 pub mod ogg;
 pub mod segmented_audio;
 pub mod segmented_stream;
+pub(crate) mod write_behind;
+
+pub use write_behind::StorageStalled;

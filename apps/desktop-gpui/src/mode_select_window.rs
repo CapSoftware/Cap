@@ -9,11 +9,13 @@
 
 use gpui::{
     Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    Point, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, prelude::FluentBuilder, px, svg,
 };
 
-use crate::{main_window::Mode, theme::Theme};
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
+use crate::{main_window::Mode, theme::Theme, ui::keyboard_nav};
 
 /// `.inner_size(580.0, 340.0)` / `.min_inner_size(580.0, 340.0)` /
 /// `.resizable(false)` on the `ShowCapWindow::ModeSelect` arm in `windows.rs`,
@@ -30,9 +32,9 @@ impl Mode {
     /// app carries all three; so do we.
     fn card_description(self) -> &'static str {
         match self {
-            Self::Instant => "Share instantly with a link. Uploads as you record.",
-            Self::Studio => "Highest quality local recording for editing later.",
-            Self::Screenshot => "Capture and annotate screenshots instantly.",
+            Self::Instant => tr::dialog::mode_select::instant(),
+            Self::Studio => tr::dialog::mode_select::studio(),
+            Self::Screenshot => tr::dialog::mode_select::screenshot(),
         }
     }
 }
@@ -45,6 +47,8 @@ pub struct ModeSelectWindow {
     /// cannot drift.
     mode: Mode,
     focus: FocusHandle,
+    keyboard_nav: bool,
+    _keyboard_nav: Subscription,
 }
 
 impl ModeSelectWindow {
@@ -67,6 +71,8 @@ impl ModeSelectWindow {
             theme: Theme::for_window(window, cx, false),
             mode,
             focus: cx.focus_handle(),
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav::install(window, cx, |_, _| false),
         }
     }
 
@@ -104,6 +110,11 @@ impl ModeSelectWindow {
 
         div()
             .id(SharedString::from(mode.panel_title()))
+            .when(self.keyboard_nav, keyboard_nav::stop)
+            .role(Role::Button)
+            .aria_label(mode.display_name())
+            .aria_description(mode.card_description())
+            .aria_selected(selected)
             .relative()
             .flex()
             .flex_col()
@@ -217,7 +228,7 @@ impl ModeSelectWindow {
                             } else {
                                 Hsla::from(theme.gray_12)
                             })
-                            .child(mode.panel_title()),
+                            .child(mode.display_name()),
                     )
                     .child(
                         // `text-xs leading-relaxed text-gray-11 line-clamp-3`
@@ -236,10 +247,12 @@ impl ModeSelectWindow {
 impl Render for ModeSelectWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.keyboard_nav = keyboard_nav::active(window, cx);
         let theme = self.theme;
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(keyboard_nav::pointer_watcher())
             // `flex flex-col relative justify-center items-center min-h-screen
             //  bg-gray-1`
             .size_full()
@@ -250,6 +263,7 @@ impl Render for ModeSelectWindow {
             .items_center()
             .bg(Hsla::from(theme.gray_1))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)
@@ -279,14 +293,14 @@ impl Render for ModeSelectWindow {
                                     .text_size(px(20.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(Hsla::from(theme.gray_12))
-                                    .child("Choose Recording Mode"),
+                                    .child(tr::dialog::mode_select::title()),
                             )
                             .child(
                                 // `text-sm text-gray-11`
                                 div()
                                     .text_size(px(14.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child("Select how you want to capture your screen"),
+                                    .child(tr::dialog::mode_select::subtitle()),
                             ),
                     )
                     .child(

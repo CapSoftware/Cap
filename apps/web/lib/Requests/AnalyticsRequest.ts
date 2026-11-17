@@ -41,8 +41,10 @@ export namespace AnalyticsRequest {
 						),
 				);
 
+				// VideosGetAnalytics rejects more than 50 ids per call.
 				return yield* dataLoader(requestResolver, {
 					window: "10 millis",
+					maxBatchSize: 50,
 				});
 			}),
 			dependencies: [Rpc.Default],

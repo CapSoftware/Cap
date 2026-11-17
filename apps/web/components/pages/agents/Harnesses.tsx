@@ -63,8 +63,7 @@ const StepLabel = ({
 	<div>
 		<span
 			className={classNames(
-				MONO,
-				"text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.45)]",
+				"text-[12.5px] leading-none text-[rgba(17,17,17,0.45)]",
 			)}
 		>
 			{step}
@@ -183,8 +182,7 @@ export const Harnesses = () => {
 										<div key={snippet.label}>
 											<span
 												className={classNames(
-													MONO,
-													"mb-2 block text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.45)]",
+													"mb-2 block text-[12.5px] leading-none text-[rgba(17,17,17,0.45)]",
 												)}
 											>
 												{snippet.label}
@@ -207,8 +205,7 @@ export const Harnesses = () => {
 								<div className="flex flex-col rounded-[14px] bg-white p-5 shadow-[0_0_0_1px_rgba(17,17,17,0.06)]">
 									<span
 										className={classNames(
-											MONO,
-											"text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.45)]",
+											"text-[12.5px] leading-none text-[rgba(17,17,17,0.45)]",
 										)}
 									>
 										What gets installed

@@ -1,13 +1,16 @@
 "use client";
 
-import type { Folder, Organisation } from "@cap/web-domain";
+import type { Folder, Organisation, Video } from "@cap/web-domain";
+import { Option } from "effect";
 import { toast } from "sonner";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
 import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
 import type { UploadStatus } from "@/app/(org)/dashboard/caps/UploadingContext";
-import { uploadWithTarget } from "@/utils/upload-target";
+import { EffectRuntime } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { UploadRejectedError, uploadWithTarget } from "@/utils/upload-target";
 import {
 	getSupportedImageContentType,
 	isSupportedVideoFile,
@@ -51,6 +54,23 @@ export async function importMediaFile({
 	return false;
 }
 
+// A retry creates a new Cap, so keeping this one would leave a dead card in the
+// library for every failed attempt.
+async function deleteFailedImport(videoId: Video.VideoId) {
+	try {
+		await EffectRuntime.runPromise(withRpc((rpc) => rpc.VideoDelete(videoId)));
+	} catch (error) {
+		console.error("Failed to delete failed import", error);
+	}
+}
+
+async function isImageInStorage(videoId: Video.VideoId) {
+	const downloadInfo = await EffectRuntime.runPromise(
+		withRpc((rpc) => rpc.VideoGetDownloadInfo(videoId)),
+	);
+	return Option.isSome(downloadInfo);
+}
+
 async function uploadImageAsScreenshot(
 	file: File,
 	contentType: string,
@@ -77,24 +97,46 @@ async function uploadImageAsScreenshot(
 			thumbnailUrl,
 		});
 		let uploadTotal = file.size || 1;
+		let uploadedBytes = 0;
 
-		await uploadWithTarget({
-			target: imageData.uploadTarget,
-			body: file,
-			fileName:
-				file.name ||
-				(contentType === "image/png" ? "pasted-image.png" : "pasted-image.jpg"),
-			onProgress: ({ loaded, total }) => {
-				uploadTotal = Math.max(total, file.size, 1);
-				const percent = (loaded / uploadTotal) * 100;
-				setUploadStatus({
-					status: "uploadingVideo",
-					capId: imageData.id,
-					progress: percent,
-					thumbnailUrl,
-				});
-			},
-		});
+		try {
+			await uploadWithTarget({
+				target: imageData.uploadTarget,
+				body: file,
+				fileName:
+					file.name ||
+					(contentType === "image/png"
+						? "pasted-image.png"
+						: "pasted-image.jpg"),
+				onProgress: ({ loaded, total }) => {
+					uploadTotal = Math.max(total, file.size, 1);
+					uploadedBytes = loaded;
+					const percent = (loaded / uploadTotal) * 100;
+					setUploadStatus({
+						status: "uploadingVideo",
+						capId: imageData.id,
+						progress: percent,
+						thumbnailUrl,
+					});
+				},
+			});
+		} catch (uploadError) {
+			// Drive lists an object as soon as its upload starts, so storage can only
+			// settle a lost response, not overrule an explicit rejection.
+			if (
+				uploadedBytes < uploadTotal ||
+				uploadError instanceof UploadRejectedError ||
+				!(await isImageInStorage(imageData.id))
+			) {
+				await deleteFailedImport(imageData.id);
+				throw uploadError;
+			}
+
+			console.warn(
+				"Upload response was lost but storage has the image; keeping it:",
+				uploadError,
+			);
+		}
 		await sendProgressUpdate(imageData.id, uploadTotal, uploadTotal);
 
 		setUploadStatus(undefined);
@@ -231,6 +273,7 @@ async function uploadVideoForServerProcessing(
 		} catch (uploadError) {
 			if (!progressTracker.didFinishSending()) {
 				progressTracker.cleanup();
+				await deleteFailedImport(uploadId);
 				throw uploadError;
 			}
 
