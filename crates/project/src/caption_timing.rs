@@ -143,6 +143,20 @@ fn end_mappings_at_media(
     }
 }
 
+/// The clip a caption placed on recording clip `recording_clip` must be tied
+/// to (`CaptionSegment::recording_clip`): that clip when the caption ends past
+/// its media end, into a held tail where the shared source clock already
+/// belongs to the next clip, otherwise none.
+pub fn held_tail_clip(
+    recording_clip: u32,
+    source_end: f64,
+    recording_durations: &[f64],
+) -> Option<u32> {
+    let clip = recording_clip as usize;
+    let media_end = recording_durations.get(..=clip)?.iter().sum::<f64>();
+    (source_end > media_end).then_some(recording_clip)
+}
+
 pub fn transcription_source_ranges(
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],

@@ -2577,6 +2577,12 @@ pub fn write_caption_edit_to_source(
     {
         source.end = end as f32;
     }
+    // Over a clip's held tail (past its media end) the source clock already
+    // belongs to the next clip, so the caption is tied to the clip it sits on.
+    if let Some((clip, _)) = timeline.source_for_output_time((track_start + track_end) / 2.0) {
+        source.recording_clip =
+            cap_project::held_tail_clip(clip, f64::from(source.end), recording_durations);
+    }
     source.text = track_text;
     if !is_manual_caption(source) {
         source.words = sync_caption_words_with_text(
@@ -3403,6 +3409,52 @@ mod tests {
         assert!(
             crate::transcript::model::flatten_words(project.captions.as_ref().unwrap()).is_empty()
         );
+    }
+
+    // A migrated late-audio clip trimmed to 4..14 of its 10 s media (a held
+    // tail from 10 s), then another 10 s clip. A caption dragged onto the held
+    // tail is tied to its clip so it stays there instead of showing on the
+    // next clip; dragged back over the media it is untied again.
+    #[test]
+    fn a_caption_moved_onto_a_held_tail_stays_on_its_clip() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("caption-1-a", 6.0, 7.0, &[])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        let track = |project: &mut ProjectConfiguration| {
+            cap_project::synchronize_captions(project, &durations);
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(track(&mut project), [(2.0, 3.0)]);
+        let moved = |project: &mut ProjectConfiguration, start: f64, end: f64| {
+            let item = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+            (item.start, item.end) = (start, end);
+            write_caption_edit_to_source(project, 0, &durations);
+            project.captions.as_ref().unwrap().segments[0].recording_clip
+        };
+        assert_eq!(moved(&mut project, 8.0, 9.0), Some(0));
+        assert_eq!(track(&mut project), [(8.0, 9.0)]);
+        assert_eq!(moved(&mut project, 1.0, 2.0), None);
+        assert_eq!(track(&mut project), [(1.0, 2.0)]);
     }
 
     #[test]

@@ -2198,6 +2198,11 @@ pub fn add_caption_segment(
         (mapping.source_start + (time - mapping.effective_start) * mapping.timescale) as f32
     };
     let (source_start, source_end) = (source(start), source(end));
+    let recording_clip = cap_project::held_tail_clip(
+        mapping.recording_clip,
+        f64::from(source_end),
+        recording_durations,
+    );
     if project
         .captions
         .as_ref()
@@ -2226,7 +2231,7 @@ pub fn add_caption_segment(
             end: source_end,
             text: text.to_string(),
             words: Vec::new(),
-            recording_clip: None,
+            recording_clip,
         },
     );
     Some(index)
@@ -6044,6 +6049,52 @@ mod add_caption_tests {
             .iter()
             .map(|segment| (segment.text.clone(), segment.start, segment.end))
             .collect()
+    }
+
+    // A migrated late-audio clip trimmed to 4..14 of its 10 s media (a held
+    // tail from 10 s), then another 10 s clip. A caption typed over the held
+    // tail is tied to its clip, so it shows there and not on the next clip,
+    // whose own stretch of the source clock it shares.
+    #[test]
+    fn a_caption_over_a_held_tail_stays_on_its_clip() {
+        let mut project = project(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "start": 4.0, "end": 14.0, "timescale": 1.0 },
+                { "recordingSegment": 1, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+            ],
+            "zoomSegments": []
+        }));
+        let durations = [10.0, 10.0];
+        let add = |project: &mut ProjectConfiguration, output, id: &str| {
+            add_caption_segment(project, output, id.into(), "Hello", &durations)
+        };
+        add(&mut project, 8.0..9.0, "caption-tail").unwrap();
+        add(&mut project, 1.0..2.0, "caption-media").unwrap();
+        let ties: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| (segment.id.as_str(), segment.start, segment.recording_clip))
+            .collect();
+        assert_eq!(
+            ties,
+            [
+                ("caption-media", 5.0, None),
+                ("caption-tail", 12.0, Some(0))
+            ]
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track: Vec<_> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect();
+        assert_eq!(track, [(1.0, 2.0), (8.0, 9.0)]);
     }
 
     #[test]
