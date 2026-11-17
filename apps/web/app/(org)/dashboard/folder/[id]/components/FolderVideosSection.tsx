@@ -4,7 +4,7 @@ import type { Folder, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
@@ -16,9 +16,12 @@ import {
 } from "../../../_components/library-doodles";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
+import { CapListHeader } from "../../../caps/components/CapListHeader";
 import { DragHint } from "../../../caps/components/DragHint";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
+import { useArchiveCaps } from "../../../caps/components/useArchiveCaps";
+import { useCapSelection } from "../../../caps/components/useCapSelection";
 import { useCapsMoved } from "../../../caps/components/useCapsMoved";
 import { useUploadingStatus } from "../../../caps/UploadingContext";
 
@@ -44,8 +47,28 @@ export default function FolderVideosSection({
 	const router = useRouter();
 	const { user } = useDashboardContext();
 
-	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
-	const previousCountRef = useRef<number>(0);
+	const [isUploading, uploadingCapId] = useUploadingStatus();
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? initialVideos.filter((video) => video.id !== uploadingCapId)
+				: initialVideos,
+		[initialVideos, isUploading, uploadingCapId],
+	);
+	const pageIds = useMemo(
+		() => visibleVideos.map((video) => video.id),
+		[visibleVideos],
+	);
+	const canSelect = canMove || allowBulkDelete;
+	const selection = useCapSelection({ pageIds, enabled: canSelect });
+	const selectedCaps = selection.selected;
+	const setSelectedCaps = selection.setSelected;
+	// Personal folders hold the viewer's own Caps, the only ones they can archive.
+	const canArchive = allowBulkDelete && location.type === "personal";
+	const archiveCaps = useArchiveCaps({
+		onDone: (ids) =>
+			setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+	});
 
 	useCapsMoved((ids) =>
 		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
@@ -117,41 +140,25 @@ export default function FolderVideosSection({
 		},
 	});
 
-	const handleCapSelection = (capId: Video.VideoId) => {
-		setSelectedCaps((prev) => {
-			const newSelection = prev.includes(capId)
-				? prev.filter((id) => id !== capId)
-				: [...prev, capId];
-
-			previousCountRef.current = prev.length;
-
-			return newSelection;
-		});
-	};
-
 	const analyticsQuery = useVideosAnalyticsQuery(
 		initialVideos.map((video) => video.id),
 		analyticsEnabled,
-	);
-
-	const [isUploading, uploadingCapId] = useUploadingStatus();
-	const visibleVideos = useMemo(
-		() =>
-			isUploading && uploadingCapId
-				? initialVideos.filter((video) => video.id !== uploadingCapId)
-				: initialVideos,
-		[initialVideos, isUploading, uploadingCapId],
 	);
 
 	const analytics = analyticsQuery.data || {};
 
 	return (
 		<>
-			<div className="flex justify-between items-center mb-5 w-full">
-				<h2 className="text-lg font-semibold tracking-tight text-gray-12">
-					Videos and screenshots
-				</h2>
-			</div>
+			<CapListHeader
+				title="Videos and screenshots"
+				count={visibleVideos.length > 0 ? visibleVideos.length : undefined}
+				selectionState={
+					canSelect && visibleVideos.length > 0
+						? selection.pageState
+						: undefined
+				}
+				onToggleSelectAll={selection.togglePage}
+			/>
 			<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{visibleVideos.length === 0 && !isUploading ? (
 					<div
@@ -188,8 +195,17 @@ export default function FolderVideosSection({
 								anyCapSelected={selectedCaps.length > 0}
 								isDeleting={isDeletingCaps || isDeletingCap}
 								onSelectToggle={
-									canMove || allowBulkDelete
-										? () => handleCapSelection(video.id)
+									canSelect
+										? (options) => selection.toggle(video.id, options)
+										: undefined
+								}
+								onArchiveToggle={
+									canArchive
+										? () =>
+												void archiveCaps.mutate({
+													ids: [video.id],
+													archived: true,
+												})
 										: undefined
 								}
 								selectedIds={selectedCaps}
@@ -222,6 +238,19 @@ export default function FolderVideosSection({
 				moveLocation={canMove ? location : undefined}
 				moveRootLabel={canMove ? rootLabel : undefined}
 				currentFolderId={currentFolderId}
+				archive={
+					canArchive
+						? {
+								mode: "archive",
+								isPending: archiveCaps.isPending,
+								onArchive: () =>
+									void archiveCaps.mutate({
+										ids: selectedCaps,
+										archived: true,
+									}),
+							}
+						: undefined
+				}
 			/>
 		</>
 	);

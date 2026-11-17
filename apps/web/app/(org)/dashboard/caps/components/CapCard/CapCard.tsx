@@ -11,6 +11,11 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
+import { faBackwardStep } from "@fortawesome/free-solid-svg-icons/faBackwardStep";
+import { faBoxArchive } from "@fortawesome/free-solid-svg-icons/faBoxArchive";
+import { faBoxOpen } from "@fortawesome/free-solid-svg-icons/faBoxOpen";
 import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
@@ -131,7 +136,7 @@ export interface CapCardProps extends PropsWithChildren {
 	userId?: string;
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
-	onSelectToggle?: () => void;
+	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
 	selectedIds?: Video.VideoId[];
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
@@ -142,7 +147,17 @@ export interface CapCardProps extends PropsWithChildren {
 	moveLocation?: MoveLocation;
 	moveRootLabel?: string;
 	currentFolderId?: Folder.FolderId | null;
+	href?: string;
+	isArchived?: boolean;
+	onArchiveToggle?: () => void;
+	reorder?: CapCardReorderActions;
 }
+
+export type CapCardReorderActions = {
+	onMoveToStart?: () => void;
+	onMoveEarlier?: () => void;
+	onMoveLater?: () => void;
+};
 
 export const CapCard = ({
 	cap,
@@ -162,6 +177,10 @@ export const CapCard = ({
 	moveLocation,
 	moveRootLabel,
 	currentFolderId = null,
+	href,
+	isArchived = false,
+	onArchiveToggle,
+	reorder,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
 
@@ -335,7 +354,7 @@ export const CapCard = ({
 		e.preventDefault();
 		e.stopPropagation();
 		if (onSelectToggle) {
-			onSelectToggle();
+			onSelectToggle({ shiftKey: e.shiftKey });
 		}
 	};
 
@@ -558,6 +577,42 @@ export const CapCard = ({
 									<p className="text-sm text-gray-12">Move</p>
 								</DropdownMenuItem>
 							)}
+							{reorder?.onMoveToStart && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveToStart?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faBackwardStep} />
+									<p className="text-sm text-gray-12">Move to start</p>
+								</DropdownMenuItem>
+							)}
+							{reorder?.onMoveEarlier && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveEarlier?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
+									<p className="text-sm text-gray-12">Move earlier</p>
+								</DropdownMenuItem>
+							)}
+							{reorder?.onMoveLater && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveLater?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faArrowRight} />
+									<p className="text-sm text-gray-12">Move later</p>
+								</DropdownMenuItem>
+							)}
 							{isOwner && (
 								<>
 									<DropdownMenuItem
@@ -606,6 +661,23 @@ export const CapCard = ({
 											{passwordProtected ? "Edit password" : "Add password"}
 										</p>
 									</DropdownMenuItem>
+									{onArchiveToggle && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												onArchiveToggle();
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon
+												className="size-3"
+												icon={isArchived ? faBoxOpen : faBoxArchive}
+											/>
+											<p className="text-sm text-gray-12">
+												{isArchived ? "Unarchive" : "Archive"}
+											</p>
+										</DropdownMenuItem>
+									)}
 									{onDelete && (
 										<DropdownMenuItem
 											onClick={(e) => {
@@ -639,9 +711,11 @@ export const CapCard = ({
 				{!sharedCapCard && onSelectToggle && (
 					<button
 						type="button"
-						aria-label={isSelected ? "Deselect cap" : "Select cap"}
+						aria-pressed={isSelected}
+						aria-label={`Select ${cap.name}`}
+						title="Shift-click to select a range"
 						className={clsx(
-							"absolute top-2.5 left-2.5 z-[49] duration-200",
+							"absolute top-2.5 left-2.5 z-[49] duration-200 rounded-md focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
 							isSelected || anyCapSelected || isDropdownOpen
 								? "opacity-100"
 								: "group-hover:opacity-100 opacity-0",
@@ -676,7 +750,7 @@ export const CapCard = ({
 						onClick={(e) => {
 							if (isDeleting) e.preventDefault();
 						}}
-						href={`/s/${cap.id}`}
+						href={href ?? `/s/${cap.id}`}
 					>
 						{hasVisibleUploadProgress && (
 							<>
