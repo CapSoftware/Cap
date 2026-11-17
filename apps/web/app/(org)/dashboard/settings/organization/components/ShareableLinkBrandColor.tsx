@@ -203,7 +203,7 @@ export const ShareableLinkBrandColor = () => {
 								: brand && !brand.accent
 									? "This colour is too dark to see on video, so the progress bar and focus rings stay white. The play button uses it."
 									: brand
-										? `Play button text is ${brand.foreground === "#FFFFFF" ? "white" : "dark"} so it stays readable.`
+										? `The play icon is ${brand.foreground === "#FFFFFF" ? "white" : "dark"} on this colour so it stays readable.`
 										: "Share pages and embeds use Cap blue."}
 						</p>
 

@@ -85,6 +85,7 @@ export function CustomThumbnailDialog({
 	const busy = pending !== null;
 
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const tablistRef = useRef<HTMLDivElement>(null);
 	const [videoState, setVideoState] = useState<"loading" | "ready" | "error">(
 		"loading",
 	);
@@ -216,6 +217,12 @@ export function CustomThumbnailDialog({
 			<DialogContent
 				hideCloseButton
 				aria-describedby={undefined}
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					tablistRef.current
+						?.querySelector<HTMLButtonElement>("[aria-selected=true]")
+						?.focus({ preventScroll: true });
+				}}
 				className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[600px] flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1"
 			>
 				<header className="flex items-start gap-3 px-6 pb-4 pt-6">
@@ -243,6 +250,7 @@ export function CustomThumbnailDialog({
 
 				<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
 					<div
+						ref={tablistRef}
 						role="tablist"
 						aria-label="Thumbnail source"
 						className="flex w-fit items-center gap-0.5 rounded-full border border-gray-4 bg-gray-2 p-0.5"
