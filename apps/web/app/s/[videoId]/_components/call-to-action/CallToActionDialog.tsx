@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Check, Link2, MousePointer2, Pipette, Play, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -14,9 +14,11 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { updateOrganizationCallToAction } from "@/actions/organization/default-call-to-action";
 import { updateVideoCallToAction } from "@/actions/videos/call-to-action";
 import {
 	type CallToActionErrors,
+	type CallToActionSource,
 	CTA_COLOR_PRESETS,
 	CTA_HEADLINE_MAX_LENGTH,
 	CTA_LABEL_MAX_LENGTH,
@@ -33,6 +35,21 @@ import {
 } from "./CallToActionSurfaces";
 
 type PreviewMode = "end" | "playing";
+
+export type CallToActionDialogTarget =
+	| {
+			kind: "video";
+			videoId: Video.VideoId;
+			source: CallToActionSource | null;
+			workspaceCallToAction: ShareCallToAction | null;
+	  }
+	| {
+			kind: "workspace";
+			organizationId: Organisation.OrganisationId;
+			includeExisting: boolean;
+	  };
+
+type PendingAction = "save" | "remove" | "inherit";
 
 type FormState = {
 	label: string;
@@ -63,11 +80,11 @@ function formFromCallToAction(cta: ShareCallToAction | null): FormState {
 	};
 }
 
-function useVideoThumbnail(videoId: Video.VideoId, enabled: boolean) {
+function useVideoThumbnail(videoId: Video.VideoId | null, enabled: boolean) {
 	const [thumbnail, setThumbnail] = useState<string | null>(null);
 
 	useEffect(() => {
-		if (!enabled) return;
+		if (!enabled || !videoId) return;
 		const controller = new AbortController();
 		fetch(`/api/thumbnail?videoId=${encodeURIComponent(videoId)}`, {
 			signal: controller.signal,
@@ -93,32 +110,45 @@ function useVideoThumbnail(videoId: Video.VideoId, enabled: boolean) {
 export function CallToActionDialog({
 	open,
 	onOpenChange,
-	videoId,
+	target,
 	callToAction,
 	onSaved,
 	onUpgradeRequest,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	videoId: Video.VideoId;
+	target: CallToActionDialogTarget;
 	callToAction: ShareCallToAction | null;
 	onSaved?: (callToAction: ShareCallToAction | null) => void;
 	onUpgradeRequest: () => void;
 }) {
+	const isWorkspace = target.kind === "workspace";
+	const videoSource = target.kind === "video" ? target.source : null;
+	const workspaceCallToAction =
+		target.kind === "video" ? target.workspaceCallToAction : null;
+	const initialIncludeExisting =
+		target.kind === "workspace" ? target.includeExisting : false;
 	const [form, setForm] = useState<FormState>(() =>
 		formFromCallToAction(callToAction),
+	);
+	const [includeExisting, setIncludeExisting] = useState(
+		initialIncludeExisting,
 	);
 	const [errors, setErrors] = useState<CallToActionErrors>({});
 	const [touched, setTouched] = useState<Record<string, boolean>>({});
 	const [previewMode, setPreviewMode] = useState<PreviewMode>("end");
-	const [pending, setPending] = useState<"save" | "remove" | null>(null);
+	const [pending, setPending] = useState<PendingAction | null>(null);
 	const labelInputRef = useRef<HTMLInputElement>(null);
-	const thumbnail = useVideoThumbnail(videoId, open);
+	const thumbnail = useVideoThumbnail(
+		target.kind === "video" ? target.videoId : null,
+		open,
+	);
 	const ids = {
 		label: useId(),
 		url: useId(),
 		headline: useId(),
 		playing: useId(),
+		existing: useId(),
 		form: useId(),
 	};
 
@@ -128,11 +158,12 @@ export function CallToActionDialog({
 		wasOpenRef.current = open;
 		if (!opening) return;
 		setForm(formFromCallToAction(callToAction));
+		setIncludeExisting(initialIncludeExisting);
 		setErrors({});
 		setTouched({});
 		setPreviewMode("end");
 		setPending(null);
-	}, [open, callToAction]);
+	}, [open, callToAction, initialIncludeExisting]);
 
 	const liveErrors = useMemo(() => {
 		const result = validateCallToAction(form);
@@ -160,8 +191,27 @@ export function CallToActionDialog({
 	const markTouched = (field: string) =>
 		setTouched((previous) => ({ ...previous, [field]: true }));
 
-	const isEditing = callToAction !== null;
+	const usesWorkspaceDefault = videoSource === "workspace";
+	const isEditing = isWorkspace
+		? callToAction !== null
+		: videoSource === "video";
 	const busy = pending !== null;
+
+	const saveChange = (input: FormState) =>
+		target.kind === "workspace"
+			? updateOrganizationCallToAction(target.organizationId, {
+					...input,
+					includeExisting,
+				})
+			: updateVideoCallToAction(target.videoId, input);
+
+	const removeChange = (action: "remove" | "inherit") =>
+		target.kind === "workspace"
+			? updateOrganizationCallToAction(target.organizationId, null)
+			: updateVideoCallToAction(
+					target.videoId,
+					action === "inherit" ? null : "off",
+				);
 
 	const handleSave = async () => {
 		const result = validateCallToAction(form);
@@ -172,7 +222,7 @@ export function CallToActionDialog({
 		}
 		setPending("save");
 		try {
-			const response = await updateVideoCallToAction(videoId, form);
+			const response = await saveChange(form);
 			if (!response.success) {
 				if (response.upgradeRequired) {
 					onOpenChange(false);
@@ -183,7 +233,13 @@ export function CallToActionDialog({
 				return;
 			}
 			toast.success(
-				isEditing ? "Call to action updated" : "Call to action added",
+				isWorkspace
+					? isEditing
+						? "Default call to action updated"
+						: "Default call to action saved"
+					: isEditing
+						? "Call to action updated"
+						: "Call to action added",
 			);
 			onSaved?.(response.callToAction);
 			onOpenChange(false);
@@ -194,28 +250,54 @@ export function CallToActionDialog({
 		}
 	};
 
-	const handleRemove = async () => {
-		setPending("remove");
+	const handleRemove = async (action: "remove" | "inherit") => {
+		setPending(action);
 		try {
-			const response = await updateVideoCallToAction(videoId, null);
+			const response = await removeChange(action);
 			if (!response.success) {
 				if (response.upgradeRequired) {
 					onOpenChange(false);
 					onUpgradeRequest();
 				} else {
-					toast.error("Couldn't remove your call to action");
+					toast.error("Couldn't update your call to action");
 				}
 				return;
 			}
-			toast.success("Call to action removed");
-			onSaved?.(null);
+			toast.success(
+				action === "inherit"
+					? "Using the workspace default"
+					: isWorkspace
+						? "Default call to action removed"
+						: usesWorkspaceDefault
+							? "Call to action turned off for this video"
+							: "Call to action removed",
+			);
+			onSaved?.(action === "inherit" ? workspaceCallToAction : null);
 			onOpenChange(false);
 		} catch {
-			toast.error("Couldn't remove your call to action");
+			toast.error("Couldn't update your call to action");
 		} finally {
 			setPending(null);
 		}
 	};
+
+	const workspaceNotice =
+		target.kind === "video" && workspaceCallToAction
+			? usesWorkspaceDefault
+				? {
+						text: "This video uses your workspace default. Saving here gives it its own.",
+						action: null,
+					}
+				: videoSource === "off"
+					? {
+							text: "Call to action is off for this video.",
+							action: "Use workspace default",
+						}
+					: {
+							text: "This video has its own call to action.",
+							action: "Use workspace default",
+						}
+			: null;
 
 	return (
 		<Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
@@ -277,6 +359,7 @@ export function CallToActionDialog({
 							cta={previewCta}
 							mode={previewMode}
 							thumbnail={thumbnail}
+							plainBackdrop={isWorkspace}
 							onEnableWhilePlaying={() => update("showWhilePlaying", true)}
 						/>
 
@@ -297,10 +380,12 @@ export function CallToActionDialog({
 						</span>
 						<div className="min-w-0 flex-1">
 							<DialogTitle className="text-lg font-semibold leading-tight text-gray-12">
-								Call to action
+								{isWorkspace ? "Default call to action" : "Call to action"}
 							</DialogTitle>
 							<p className="mt-0.5 text-[13px] text-gray-10">
-								Give viewers a next step, right on your video.
+								{isWorkspace
+									? "Added to new videos in this workspace. Owners can change it or turn it off on any video."
+									: "Give viewers a next step, right on your video."}
 							</p>
 						</div>
 						<button
@@ -313,6 +398,26 @@ export function CallToActionDialog({
 							<X className="size-5" />
 						</button>
 					</header>
+
+					{workspaceNotice && (
+						<div className="mx-6 mb-4 flex items-center gap-3 rounded-xl border border-gray-4 bg-gray-2 px-3.5 py-2.5">
+							<p className="min-w-0 flex-1 text-xs leading-relaxed text-gray-11">
+								{workspaceNotice.text}
+							</p>
+							{workspaceNotice.action && (
+								<button
+									type="button"
+									onClick={() => void handleRemove("inherit")}
+									disabled={busy}
+									className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-blue-11 transition-colors hover:bg-blue-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:opacity-50"
+								>
+									{pending === "inherit"
+										? "Switching…"
+										: workspaceNotice.action}
+								</button>
+							)}
+						</div>
+					)}
 
 					<form
 						id={ids.form}
@@ -436,17 +541,45 @@ export function CallToActionDialog({
 								}}
 							/>
 						</label>
+
+						{isWorkspace && (
+							<label
+								htmlFor={ids.existing}
+								className="flex cursor-pointer items-start gap-4 rounded-xl border border-gray-4 bg-gray-2 p-4 transition-colors hover:border-gray-5"
+							>
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="text-[13px] font-medium text-gray-12">
+										Also show on existing videos
+									</span>
+									<span className="text-xs leading-relaxed text-gray-10">
+										Adds it to older videos that don't have their own call to
+										action.
+									</span>
+								</span>
+								<Switch
+									id={ids.existing}
+									checked={includeExisting}
+									onCheckedChange={setIncludeExisting}
+								/>
+							</label>
+						)}
 					</form>
 
 					<footer className="flex items-center gap-2 border-t border-gray-4 px-6 py-4">
-						{isEditing && (
+						{(isEditing || usesWorkspaceDefault) && (
 							<button
 								type="button"
-								onClick={() => void handleRemove()}
+								onClick={() => void handleRemove("remove")}
 								disabled={busy}
 								className="rounded-lg px-2 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-500/10"
 							>
-								{pending === "remove" ? "Removing…" : "Remove"}
+								{pending === "remove"
+									? usesWorkspaceDefault
+										? "Turning off…"
+										: "Removing…"
+									: usesWorkspaceDefault
+										? "Turn off for this video"
+										: "Remove"}
 							</button>
 						)}
 						<div className="ml-auto flex items-center gap-2">
@@ -466,9 +599,15 @@ export function CallToActionDialog({
 							>
 								{pending === "save"
 									? "Saving…"
-									: isEditing
-										? "Save changes"
-										: "Add to video"}
+									: isWorkspace
+										? isEditing
+											? "Save changes"
+											: "Save default"
+										: usesWorkspaceDefault
+											? "Save for this video"
+											: isEditing
+												? "Save changes"
+												: "Add to video"}
 							</button>
 						</div>
 					</footer>
@@ -482,11 +621,13 @@ function PreviewStage({
 	cta,
 	mode,
 	thumbnail,
+	plainBackdrop = false,
 	onEnableWhilePlaying,
 }: {
 	cta: ShareCallToAction;
 	mode: PreviewMode;
 	thumbnail: string | null;
+	plainBackdrop?: boolean;
 	onEnableWhilePlaying: () => void;
 }) {
 	return (
@@ -499,6 +640,8 @@ function PreviewStage({
 					className="absolute inset-0 bg-cover bg-center"
 					style={{ backgroundImage: `url(${JSON.stringify(thumbnail)})` }}
 				/>
+			) : plainBackdrop ? (
+				<div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_20%_10%,#2a3140_0%,#12151b_55%,#0b0c0f_100%)]" />
 			) : (
 				<div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_20%_10%,#2a3140_0%,#12151b_55%,#0b0c0f_100%)]">
 					<div className="absolute left-[8%] top-[12%] h-[8%] w-[34%] rounded-md bg-white/[0.07]" />

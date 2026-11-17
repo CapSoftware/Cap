@@ -1,12 +1,12 @@
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { describe, expect, it } from "vitest";
-import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 
 const render = (
-	settings: Parameters<typeof organizationSettingsKeepingLinkOverride>[0],
+	settings: Parameters<typeof organizationSettingsKeepingRowOwnedKeys>[0],
 ) =>
 	new MySqlDialect().sqlToQuery(
-		organizationSettingsKeepingLinkOverride(settings),
+		organizationSettingsKeepingRowOwnedKeys(settings),
 	);
 
 describe("organization settings writes", () => {
@@ -18,7 +18,23 @@ describe("organization settings writes", () => {
 
 		expect(query.params).toEqual(['{"disableComments":true}']);
 		expect(query.sql).toContain(
-			"JSON_OBJECT('allowPublicLinkOverride', JSON_EXTRACT(`organizations`.`settings`, '$.allowPublicLinkOverride'))",
+			"'allowPublicLinkOverride', JSON_EXTRACT(`organizations`.`settings`, '$.allowPublicLinkOverride')",
+		);
+	});
+
+	it("reads the default call to action from the row instead of the submitted snapshot", () => {
+		const query = render({
+			disableComments: true,
+			defaultCallToAction: {
+				label: "Stale",
+				url: "https://example.com/",
+				enabledAt: "2026-01-01T00:00:00.000Z",
+			},
+		});
+
+		expect(query.params).toEqual(['{"disableComments":true}']);
+		expect(query.sql).toContain(
+			"'defaultCallToAction', JSON_EXTRACT(`organizations`.`settings`, '$.defaultCallToAction')",
 		);
 	});
 
