@@ -27,6 +27,14 @@ use tracing::{debug, error, info, warn};
 
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
+const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+const WINDOW_GONE_CHECKS: u32 = 2;
+
+/// The window server still lists a minimized, hidden or off-Space window; only
+/// a closed window (or one whose app quit) disappears.
+fn recorded_window_exists(window: &WindowId) -> bool {
+    Window::from_id_direct(window).is_some_and(|window| window.owner_name().is_some())
+}
 
 // The display filter is what hides excluded windows, so an excluded selection must stay on
 // the display-crop path instead of being captured on its own.
@@ -47,6 +55,12 @@ fn capturable_window<'a>(
     }
 
     Some(window_id)
+}
+
+/// Only a stream with a window filter loses its source when the window closes.
+/// An excluded window is recorded as a display crop, which keeps capturing.
+fn window_to_watch(config: &Config, excluded_windows: &[WindowId]) -> Option<WindowId> {
+    capturable_window(config, excluded_windows, "watch").cloned()
 }
 
 fn window_content_filter(
@@ -758,10 +772,47 @@ impl output_pipeline::VideoSource for VideoSource {
         let original_capturer = capturer.clone();
         ctx.tasks().spawn("screen-capture-monitor", async move {
             let mut restart_count = 0u32;
+            let mut window_watch =
+                window_to_watch(&rebuild_params.config, &rebuild_params.excluded_windows)
+                    .map(|window| (window, tokio::time::interval(WINDOW_WATCH_INTERVAL), 0u32));
 
             loop {
                 select! {
                     _ = monitor_cancel.cancelled() => break Ok(()),
+                    _ = async {
+                        match window_watch.as_mut() {
+                            Some((_, interval, _)) => interval.tick().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        let Some((window, _, missed)) = window_watch.as_mut() else {
+                            continue;
+                        };
+                        if recorded_window_exists(window) {
+                            *missed = 0;
+                            continue;
+                        }
+                        *missed += 1;
+                        if *missed < WINDOW_GONE_CHECKS {
+                            continue;
+                        }
+                        // A window filter keeps its stream running after the window closes or
+                        // its app quits; ScreenCaptureKit just stops sending frames. The stream
+                        // is alive, so it is stopped normally with the pipeline.
+                        warn!(
+                            %window,
+                            "Screen capture source disappeared (recorded window closed); keeping what was recorded"
+                        );
+                        output_pipeline::emit_health(
+                            &health_tx,
+                            output_pipeline::PipelineHealthEvent::CaptureTargetLost {
+                                target: "window".to_string(),
+                            },
+                        );
+                        stop_signal.mark_user_stopped();
+                        pipeline_cancel.cancel();
+                        break Ok(());
+                    }
                     recv = error_rx.recv() => {
                         let err = match recv {
                             Ok(err) => err,
@@ -898,6 +949,17 @@ impl output_pipeline::VideoSource for VideoSource {
                             }
                         }
 
+                        // didStopWithError means the stream has already stopped, so Stop must
+                        // not wait on it, or it can never confirm cleanup.
+                        if let Ok(guard) = active_capturer.lock() {
+                            match guard.as_ref() {
+                                Some(c) => c.mark_stopped(),
+                                None => original_capturer.mark_stopped(),
+                            }
+                        } else {
+                            original_capturer.mark_stopped();
+                        }
+                        error!(error = %err, "Screen capture stream stopped with an error");
                         return Err(anyhow!(format!("{err}")));
                     }
                 }
@@ -1382,6 +1444,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                     if is_system_stop_error(err.as_ref()) {
                                         system_stop_count += 1;
                                         if system_stop_count > MAX_CAPTURE_RESTARTS {
+                                            capturer_for_monitor.mark_stopped();
                                             warn!("Screen capture audio stream stopped by the system (exhausted restarts)");
                                             return Err(anyhow!(system_stop_message()));
                                         }
@@ -1392,6 +1455,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                         tokio::time::sleep(RESTART_DELAY + Duration::from_secs(1)).await;
                                         continue;
                                     }
+                                    capturer_for_monitor.mark_stopped();
                                     return Err(anyhow!("{err}"));
                                 }
                                 Err(broadcast::error::RecvError::Closed) => break,
@@ -1584,6 +1648,25 @@ mod tests {
             capturable_window(&restart_config, &restart_excluded, "restart"),
             Some(&window_id("247"))
         );
+    }
+
+    #[test]
+    fn only_a_window_filter_is_watched_for_its_window_closing() {
+        let config = window_config(Some(window_id("247")));
+
+        assert_eq!(
+            window_to_watch(&config, &[window_id("12")]),
+            Some(window_id("247"))
+        );
+        assert_eq!(window_to_watch(&config, &[window_id("247")]), None);
+        assert_eq!(window_to_watch(&window_config(None), &[]), None);
+    }
+
+    /// A window filter never reports that its window closed, so the monitor
+    /// polls for it; an id the window server does not know counts as closed.
+    #[test]
+    fn a_window_the_window_server_does_not_list_counts_as_closed() {
+        assert!(!recorded_window_exists(&window_id("4294967294")));
     }
 
     #[test]

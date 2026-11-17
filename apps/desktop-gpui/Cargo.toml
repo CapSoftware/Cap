@@ -57,6 +57,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+cap-automation = { path = "../../crates/automation" }
 # The cursor style picker draws the same SVG assets the renderer composites.
 # gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
 # be rasterised instead: `resvg` at the pin cap-rendering already builds, into
@@ -94,6 +95,7 @@ cap-export = { path = "../../crates/export" }
 # workspace pins, and cap-recording already builds it, so this is an import,
 # not an extra dependency tree.
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
+notify-rust = "4.18"
 # Camera preview frames and Recents thumbnails both become gpui `RenderImage`s,
 # and the frame container type must match gpui's image crate version exactly
 # (`image = "0.25.1"` in the zed fork's workspace) or `Frame` would be two
@@ -207,6 +209,7 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
+same-file = "1.0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

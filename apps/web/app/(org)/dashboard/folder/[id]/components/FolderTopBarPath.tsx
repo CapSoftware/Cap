@@ -103,7 +103,17 @@ function DesktopPath({
 	useLayoutEffect(() => {
 		const row = rowRef.current;
 		if (!row || row.clientWidth === 0) return;
-		if (fit.level === 0) setWidth(row.scrollWidth);
+		// The row fills the title column, so its own width says nothing about
+		// how much the path needs. Sum the parts instead.
+		if (fit.level === 0)
+			setWidth(
+				Math.ceil(
+					Array.from(row.children).reduce(
+						(total, child) => total + child.scrollWidth,
+						0,
+					),
+				),
+			);
 		if (fit.level >= maxLevel) return;
 		if (row.scrollWidth > row.clientWidth + 1) setFit({ level: fit.level + 1 });
 	}, [fit, maxLevel, setWidth]);

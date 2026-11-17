@@ -4127,7 +4127,7 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip)))
+                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip + 1)))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {

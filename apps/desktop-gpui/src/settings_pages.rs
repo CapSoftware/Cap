@@ -1005,9 +1005,9 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     (
         store::PostStudioBehaviour::ShowOverlay,
         OutcomeOption {
-            icon: "icons/app-window.svg",
-            label: tr::settings::shortcuts::outcome::studio_show_cap,
-            hint: tr::settings::shortcuts::outcome::studio_show_cap_hint,
+            icon: "icons/layers.svg",
+            label: tr::settings::shortcuts::outcome::studio_show_overlay,
+            hint: tr::settings::shortcuts::outcome::studio_show_overlay_hint,
         },
     ),
     (
@@ -6146,6 +6146,26 @@ fn action_applies_to_trigger(kind: ActionType, trigger: Trigger) -> bool {
     required.iter().any(|field| provided.contains(field))
 }
 
+fn action_note(kind: ActionType, previous: Option<&Action>) -> Option<(&'static str, bool)> {
+    match kind {
+        ActionType::RecognizeTextToClipboard => {
+            Some((tr::settings::automations::action_unsupported(), true))
+        }
+        ActionType::Notify => Some((tr::settings::automations::notify_needs_setting(), false)),
+        ActionType::DeleteLocalFiles => Some(match previous {
+            Some(Action::Export {
+                destination: ExportDestination::CustomPath { .. },
+                ..
+            })
+            | Some(Action::SaveToLocation { .. }) => {
+                (tr::settings::automations::delete_guarded(), false)
+            }
+            _ => (tr::settings::automations::delete_needs_copy(), true),
+        }),
+        _ => None,
+    }
+}
+
 /// `DANGEROUS_ACTIONS`.
 fn action_is_dangerous(kind: ActionType) -> bool {
     matches!(kind, ActionType::RunCommand | ActionType::Webhook)
@@ -7222,6 +7242,15 @@ impl SettingsWindow {
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
         let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
+        let compatibility_message = if rule
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::RecognizeTextToClipboard))
+        {
+            tr::settings::automations::compatibility_unsupported()
+        } else {
+            tr::settings::automations::compatibility_checked()
+        };
         if let Some(editor) = &self.pages.rule_editor {
             for (field, input) in &editor.fields {
                 if let Some(placeholder) = translated_placeholder(*field, rule) {
@@ -7446,7 +7475,7 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::compatibility_checked()),
+                        .child(compatibility_message),
                 )
             })
             .child(footer)
@@ -7675,6 +7704,14 @@ impl SettingsWindow {
             ));
 
         let params = self.render_action_params(rule, index, action, cx);
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| self.rule_at(rule)?.actions.get(previous));
+        let note = if !applies {
+            Some((tr::settings::automations::action_no_effect(), true))
+        } else {
+            action_note(kind, previous)
+        };
 
         div()
             .flex()
@@ -7687,12 +7724,19 @@ impl SettingsWindow {
             .bg(theme.settings_card_bg())
             .child(header)
             .children(params)
-            .when(!applies, |this| {
+            .when_some(note, |this, (note, warning)| {
                 this.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::action_no_effect()),
+                        .line_height(px(16.))
+                        .map(|line| {
+                            if warning {
+                                line.text_color(Hsla::from(theme.amber_11))
+                            } else {
+                                line.text_color(theme.settings_muted())
+                            }
+                        })
+                        .child(note),
                 )
             })
             .into_any_element()
