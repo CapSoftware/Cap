@@ -2671,6 +2671,19 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    /// The recording clip this caption belongs to, set only when its times
+    /// cannot say: a caption in a clip's held tail (an edited late-audio clip
+    /// trimmed past its media end, see `migrate_late_audio_alignment`) sits
+    /// where the shared source clock starts the next clip, and a part of a
+    /// caption that migration cut where two clips meet may round across the
+    /// boundary. Such a caption is shown only through this clip's timeline
+    /// segments.
+    #[serde(
+        rename = "recordingSegment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recording_clip: Option<u32>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]

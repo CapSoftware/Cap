@@ -15084,6 +15084,7 @@ mod tests {
                     end: 4.0,
                     text: "hello world".into(),
                     words,
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -15196,6 +15197,7 @@ mod tests {
                             end: 4.0,
                         },
                     ],
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -15812,6 +15814,7 @@ mod tests {
                                 end: 7.0,
                             },
                         ],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,
@@ -15880,6 +15883,7 @@ mod tests {
                             start: 6.0,
                             end: 7.0,
                         }],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,

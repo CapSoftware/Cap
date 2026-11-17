@@ -48,6 +48,7 @@ fn fixture(
                         end: start + word as f32 * 0.4 + 0.3,
                     })
                     .collect(),
+                recording_clip: None,
             }
         })
         .collect();

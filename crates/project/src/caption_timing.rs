@@ -64,6 +64,7 @@ fn clamp_caption_segment_words(segment: &CaptionSegment) -> CaptionSegment {
         end: segment.end.min(last_word_end),
         text: segment.text.clone(),
         words: clamped_words,
+        recording_clip: segment.recording_clip,
     }
 }
 
@@ -289,6 +290,20 @@ fn map_captions_to_edited_timeline(
     }
 
     let mut mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    // A caption tied to its clip (one in a held tail) reads that clip's
+    // timeline segments only, past the media end too.
+    let clip_mappings: Vec<(u32, SourceToEditedMapping)> = if raw_segments
+        .iter()
+        .any(|caption| caption.recording_clip.is_some())
+    {
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .into_iter()
+            .zip(&timeline.segments)
+            .map(|(mapping, segment)| (segment.recording_clip, mapping))
+            .collect()
+    } else {
+        Vec::new()
+    };
     end_mappings_at_media(&mut mappings, timeline, recording_durations);
     let mappings_ordered = mappings
         .iter()
@@ -340,31 +355,42 @@ fn map_captions_to_edited_timeline(
         } else {
             word_bounds
         };
-        let caption_mappings = match (bounds, source_index.as_deref()) {
-            (Some((start, end)), _) if mappings_ordered && start.is_finite() && end.is_finite() => {
-                let first = mappings.partition_point(|mapping| mapping.source_end <= start);
-                let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
-                Either::Left(mappings[first..first + count].iter())
-            }
-            (Some((start, end)), Some(index))
-                if start.is_finite() && end.is_finite() && start < end =>
-            {
-                let first = index.partition_point(|entry| entry.maximum_end <= start);
-                let count = index[first..]
-                    .partition_point(|entry| mappings[entry.mapping_index].source_start < end);
-                if count >= mappings.len() / 2 {
-                    Either::Left(mappings.iter())
-                } else {
-                    candidates.clear();
-                    candidates.extend(index[first..first + count].iter().filter_map(|entry| {
-                        (mappings[entry.mapping_index].source_end > start)
-                            .then_some(entry.mapping_index)
-                    }));
-                    candidates.sort_unstable();
-                    Either::Right(candidates.iter().map(|index| &mappings[*index]))
+        let caption_mappings = match (caption.recording_clip, bounds, source_index.as_deref()) {
+            (Some(clip), _, _) => Either::Right(
+                clip_mappings
+                    .iter()
+                    .filter(move |(recording_clip, _)| *recording_clip == clip)
+                    .map(|(_, mapping)| mapping),
+            ),
+            (None, bounds, source_index) => Either::Left(match (bounds, source_index) {
+                (Some((start, end)), _)
+                    if mappings_ordered && start.is_finite() && end.is_finite() =>
+                {
+                    let first = mappings.partition_point(|mapping| mapping.source_end <= start);
+                    let count =
+                        mappings[first..].partition_point(|mapping| mapping.source_start < end);
+                    Either::Left(mappings[first..first + count].iter())
                 }
-            }
-            _ => Either::Left(mappings.iter()),
+                (Some((start, end)), Some(index))
+                    if start.is_finite() && end.is_finite() && start < end =>
+                {
+                    let first = index.partition_point(|entry| entry.maximum_end <= start);
+                    let count = index[first..]
+                        .partition_point(|entry| mappings[entry.mapping_index].source_start < end);
+                    if count >= mappings.len() / 2 {
+                        Either::Left(mappings.iter())
+                    } else {
+                        candidates.clear();
+                        candidates.extend(index[first..first + count].iter().filter_map(|entry| {
+                            (mappings[entry.mapping_index].source_end > start)
+                                .then_some(entry.mapping_index)
+                        }));
+                        candidates.sort_unstable();
+                        Either::Right(candidates.iter().map(|index| &mappings[*index]))
+                    }
+                }
+                _ => Either::Left(mappings.iter()),
+            }),
         };
 
         for mapping in caption_mappings {
@@ -542,6 +568,7 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
                     end,
                     text: caption.text.clone(),
                     words,
+                    recording_clip: None,
                 })
             })
             .collect();
@@ -659,7 +686,7 @@ mod tests {
                 "segments":[{"start":0.0,"end":5.0,"timescale":1.0},{"start":6.0,"end":10.0,"timescale":1.0}],
                 "zoomSegments":[]
             })).unwrap()),
-            captions: Some(CaptionsData { source_timed, segments:vec![CaptionSegment { id:"spoken".into(),start,end,text:"hello".into(),words:vec![CaptionWord { text:"hello".into(),start,end }] }], ..Default::default() }),
+            captions: Some(CaptionsData { source_timed, segments:vec![CaptionSegment { id:"spoken".into(),start,end,text:"hello".into(),words:vec![CaptionWord { text:"hello".into(),start,end }], recording_clip: None }], ..Default::default() }),
             ..Default::default()
         }
     }
@@ -818,6 +845,7 @@ mod tests {
                     end: 1.5,
                 },
             ],
+            recording_clip: None,
         }];
 
         let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);
@@ -868,6 +896,7 @@ mod tests {
                     end: 7.5,
                 },
             ],
+            recording_clip: None,
         }];
 
         let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);

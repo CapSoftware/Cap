@@ -83,6 +83,7 @@ fn borrowed_caption_projection_matches_sanitized_copy() {
                     } else {
                         Vec::new()
                     },
+                    recording_clip: None,
                 })
             })
         })
@@ -117,6 +118,7 @@ fn borrowed_projection_preserves_take_offsets_and_nonfinite_timestamps() {
                     start,
                     end: start + 0.75,
                 }],
+                recording_clip: None,
             }
         })
         .collect();
@@ -157,6 +159,7 @@ fn benchmark_caption_projection_allocations() {
                         }
                     })
                     .collect(),
+                recording_clip: None,
             }
         })
         .collect();
@@ -412,6 +415,7 @@ fn caption_overrides_match_owned_map_for_repeated_source_ids() {
             end: 8.0,
             text: "spoken text".into(),
             words: Vec::new(),
+            recording_clip: None,
         })
         .collect();
     for ranges in [
@@ -469,6 +473,7 @@ fn caption_overrides_preserve_nonfinite_float_bits() {
         end: 4.0,
         text: "hello".into(),
         words: Vec::new(),
+        recording_clip: None,
     }];
     let mut timeline = timeline(&[(0.0, 4.0)]);
     timeline.caption_segments = derive_caption_track_segments(&captions, &timeline, &[4.0]);
@@ -546,6 +551,7 @@ fn mapping_bounds_preserve_shared_edges_overlaps_duplicates_and_fallbacks() {
             } else {
                 Vec::new()
             },
+            recording_clip: None,
         })
         .collect();
         for ranges in [&sequential, &overlapping, &duplicated, &nested, &reversed] {

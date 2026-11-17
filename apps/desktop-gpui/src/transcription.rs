@@ -2031,6 +2031,7 @@ fn caption_segments_from_groups(
                 end: chunk.last().map_or(0.0, |word| word.end),
                 text: caption_text_from_words(chunk),
                 words: chunk.to_vec(),
+                recording_clip: None,
             });
         }
     }
@@ -2830,6 +2831,7 @@ mod tests {
             end,
             text: caption_text_from_words(&words),
             words,
+            recording_clip: None,
         }
     }
 

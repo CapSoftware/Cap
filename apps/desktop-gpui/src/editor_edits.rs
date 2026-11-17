@@ -2181,6 +2181,7 @@ pub fn add_caption_segment(
             end: source_end,
             text: text.to_string(),
             words: Vec::new(),
+            recording_clip: None,
         },
     );
     Some(index)
@@ -3446,6 +3447,7 @@ mod tests {
                             end: start + word as f32 * 0.35 + 0.3,
                         })
                         .collect(),
+                    recording_clip: None,
                 }
             })
             .collect();

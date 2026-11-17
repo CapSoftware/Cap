@@ -975,6 +975,7 @@ mod metadata_save_tests {
                     start: 1.25,
                     end: 2.0,
                 }],
+                recording_clip: None,
             }],
             ..Default::default()
         };
@@ -1047,6 +1048,7 @@ mod metadata_save_tests {
                 end: 2.0,
                 text: text.into(),
                 words: Vec::new(),
+                recording_clip: None,
             }],
             ..Default::default()
         };
