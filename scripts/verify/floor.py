@@ -96,8 +96,6 @@ def check_recording(config, runners, tier, reports):
     lines, failed = [], 0
     floor = config.get("recording", {}).get("cases", {}).get(tier, 0)
     for runner in runners:
-        # A runner's cases may be split across shard jobs, each uploading
-        # verify-recording-<runner>-<tier>-<shard>.
         dirs = [os.path.join(reports, f"verify-recording-{runner}")]
         dirs += sorted(glob.glob(os.path.join(reports, f"verify-recording-{runner}-{tier}-*")))
         dirs = [d for d in dirs if os.path.isdir(d)]
