@@ -286,6 +286,29 @@ fn sample_animation(
     }
 }
 
+/// Enter and exit durations, shrunk in proportion when together they outlast
+/// the segment so the text still reaches its resting state; an edge without
+/// an animation takes no time.
+fn edge_durations(segment: &TextSegment) -> (f64, f64) {
+    let duration = |animation, seconds: f64| {
+        if animation == TextAnimation::None {
+            0.0
+        } else {
+            seconds.max(0.0)
+        }
+    };
+    let enter = duration(segment.animation_in, segment.animation_in_duration);
+    let exit = duration(segment.animation_out, segment.animation_out_duration);
+    let length = (segment.end - segment.start).max(0.0);
+    let total = enter + exit;
+    if total > length {
+        let fit = length / total;
+        (enter * fit, exit * fit)
+    } else {
+        (enter, exit)
+    }
+}
+
 fn edge_progress(elapsed: f64, duration: f64) -> f32 {
     if duration <= 0.0 {
         1.0
@@ -351,15 +374,16 @@ pub fn prepare_texts(
         let font_size = segment.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE) * height_scale;
         let slide_px = font_size * 0.5;
 
+        let (enter_duration, exit_duration) = edge_durations(segment);
         let enter = sample_animation(
             segment.animation_in,
-            edge_progress(frame_time - segment.start, segment.animation_in_duration),
+            edge_progress(frame_time - segment.start, enter_duration),
             1.0,
             slide_px,
         );
         let exit = sample_animation(
             segment.animation_out,
-            edge_progress(segment.end - frame_time, segment.animation_out_duration),
+            edge_progress(segment.end - frame_time, exit_duration),
             -1.0,
             slide_px,
         );
@@ -861,6 +885,25 @@ mod tests {
 
         let done = prepare_one(seg, 2.0).unwrap();
         assert_eq!(done.content, "Hello");
+    }
+
+    #[test]
+    fn animations_longer_than_the_segment_still_reach_rest() {
+        let mut seg = segment(TextAnimation::Typewriter, TextAnimation::Fade);
+        seg.end = 1.0;
+        seg.animation_in_duration = 1.5;
+        seg.animation_out_duration = 0.5;
+        let rest = prepare_one(seg.clone(), 0.75).unwrap();
+        assert_eq!(rest.content, "Hello");
+        assert_eq!(rest.opacity, 1.0);
+        let fading = prepare_one(seg, 0.875).unwrap();
+        assert_eq!(fading.opacity, ease_out_cubic(0.5));
+
+        let mut fade_out_only = segment(TextAnimation::None, TextAnimation::Fade);
+        fade_out_only.end = 1.0;
+        fade_out_only.animation_out_duration = 1.0;
+        let half = prepare_one(fade_out_only, 0.5).unwrap();
+        assert_eq!(half.opacity, ease_out_cubic(0.5));
     }
 
     #[test]

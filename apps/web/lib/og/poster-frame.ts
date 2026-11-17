@@ -5,7 +5,11 @@
 
 import { spawn } from "node:child_process";
 import { buildEnv } from "@cap/env";
-import { getFfmpegPath } from "@/lib/audio-extract";
+import {
+	ffmpegChildEnv,
+	getFfmpegPath,
+	REMOTE_INPUT_ARGS,
+} from "@/lib/audio-extract";
 
 const OVERALL_DEADLINE_MS = 6500;
 const MIN_ATTEMPT_MS = 800;
@@ -35,6 +39,7 @@ const grabFrame = (
 				"error",
 				"-ss",
 				seek,
+				...REMOTE_INPUT_ARGS,
 				"-i",
 				url,
 				"-frames:v",
@@ -49,7 +54,7 @@ const grabFrame = (
 				"mjpeg",
 				"pipe:1",
 			],
-			{ stdio: ["ignore", "pipe", "pipe"] },
+			{ stdio: ["ignore", "pipe", "pipe"], env: ffmpegChildEnv() },
 		);
 
 		const chunks: Buffer[] = [];

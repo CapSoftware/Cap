@@ -183,3 +183,11 @@
 		animation: none;
 	}
 }
+
+.recorder-note {
+	max-width: 460px;
+	margin-bottom: 18px;
+	border-radius: 16px;
+	font-size: 13px;
+	text-align: left;
+}

@@ -720,7 +720,8 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct TextStyle {
     pub font_family: String,
     pub font_size: f32,
@@ -2723,6 +2724,7 @@ pub fn mask_effect_amount(segment: &MaskSegment) -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelSlider {
     Image(ImageProperty),
+    Shape(crate::editor_shapes::ShapeProperty),
     StyleCameraOnlyPadding,
     ZoomAmount,
     /// The multi-zoom panel's single Amount slider, which writes every selected
@@ -2794,6 +2796,11 @@ pub enum FieldKey {
     KeyboardStart(usize),
     KeyboardEnd(usize),
     SyncOffset(usize, OffsetKind),
+    CaptionManualX,
+    CaptionManualY,
+    /// The length, in seconds, of the transition into clip `.0`, in the
+    /// transition popover.
+    TransitionDuration(usize),
     /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do
     /// not edit the project at all -- they drive the open cropper, which is
     /// why they are the one key whose value comes from outside
@@ -2920,6 +2927,18 @@ impl EditorWindow {
             out.push_str(&ui::format_number(field.read(state.real())));
             return Some(());
         }
+        if matches!(key, FieldKey::CaptionManualX | FieldKey::CaptionManualY) {
+            let (x, y) = crate::editor_tabs::caption_manual_center(
+                &self.project.captions.as_ref()?.settings,
+            );
+            let value = if key == FieldKey::CaptionManualX {
+                x
+            } else {
+                y
+            };
+            out.push_str(&crate::editor_tabs::caption_percent_text(value));
+            return Some(());
+        }
         let timeline = self.project.timeline.as_ref()?;
         match key {
             FieldKey::StyleName(index) => out.push_str(&timeline.style_segments.get(index)?.name),
@@ -2970,6 +2989,11 @@ impl EditorWindow {
             }
             FieldKey::KeyboardEnd(index) => {
                 let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
+            }
+            FieldKey::TransitionDuration(index) => {
+                out.push_str(&format_transition_duration(
+                    timeline.effective_transition(index)?.duration,
+                ));
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -3175,6 +3199,23 @@ impl EditorWindow {
                     true
                 });
             }
+            FieldKey::CaptionManualX | FieldKey::CaptionManualY => {
+                if !final_commit {
+                    return;
+                }
+                let Some(value) = ui::parse_number(&text) else {
+                    return;
+                };
+                let value = value.clamp(0., 100.) as f32;
+                let horizontal = key == FieldKey::CaptionManualX;
+                self.set_caption_placement(window, cx, move |settings| {
+                    if horizontal {
+                        crate::editor_tabs::set_caption_manual_center(settings, Some(value), None);
+                    } else {
+                        crate::editor_tabs::set_caption_manual_center(settings, None, Some(value));
+                    }
+                });
+            }
             // The four `<Input type="number">` boxes commit `onChange`, which
             // in Solid is the *change* event -- blur or Enter, not every
             // keystroke (`:4280-4290`). So they only write on a final commit.
@@ -3209,6 +3250,23 @@ impl EditorWindow {
                     None => return,
                 };
                 self.set_clip_offset(clip, kind, value, window, cx);
+            }
+            FieldKey::TransitionDuration(index) => {
+                if !final_commit {
+                    return;
+                }
+                let current = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.effective_transition(index));
+                let Some(current) = current else {
+                    return;
+                };
+                let Some(value) = edited_transition_duration(&text, current.duration) else {
+                    return;
+                };
+                self.set_clip_transition(index, Some((current.kind, value)), window, cx);
             }
             _ => {}
         }
@@ -3273,7 +3331,7 @@ fn commit_segment_timing(
         return false;
     }
     if start {
-        segment.set_start(value);
+        segment.trim_start_to(value);
     } else {
         segment.set_end(value);
     }
@@ -3365,6 +3423,11 @@ segment_editor!(
     KeyboardTrackSegment
 );
 segment_editor!(edit_mask_segment, mask_segments, MaskSegment);
+segment_editor!(
+    edit_shape_segment,
+    shape_segments,
+    cap_project::ShapeSegment
+);
 segment_editor!(edit_scene_segment, scene_segments, SceneSegment);
 segment_editor!(edit_zoom_segment, zoom_segments, ZoomSegment);
 segment_editor!(edit_camera3d_segment, camera3d_segments, Camera3DSegment);
@@ -3381,6 +3444,7 @@ impl EditorWindow {
     pub(crate) fn panel_slider_limits(&self, slider: PanelSlider, index: usize) -> (f32, f32, f32) {
         match slider {
             PanelSlider::Image(property) => property.limits(),
+            PanelSlider::Shape(property) => property.limits(),
             PanelSlider::StyleCameraOnlyPadding => (0., 40., 1.),
             // `minValue={1} maxValue={4.5} step={0.001}` (`:5601-5603`).
             PanelSlider::ZoomAmount | PanelSlider::ZoomAmountAll => (1., 4.5, 0.001),
@@ -3432,6 +3496,10 @@ impl EditorWindow {
         match slider {
             PanelSlider::Image(property) => timeline
                 .image_segments
+                .get(index)
+                .map_or(0., |segment| property.read(segment)),
+            PanelSlider::Shape(property) => timeline
+                .shape_segments
                 .get(index)
                 .map_or(0., |segment| property.read(segment)),
             PanelSlider::StyleCameraOnlyPadding => timeline
@@ -3578,6 +3646,11 @@ impl EditorWindow {
                 self.edit_image_segment("image-transform", index, window, cx, move |segment| {
                     property.write(segment, value);
                     true
+                })
+            }
+            PanelSlider::Shape(property) => {
+                self.edit_shape_segment("shape-slider", index, window, cx, move |segment| {
+                    property.write(segment, value)
                 })
             }
             PanelSlider::StyleCameraOnlyPadding => {
@@ -4127,6 +4200,7 @@ impl EditorWindow {
             TrackKind::Style => self.stacked_panel(
                 "style",
                 "style",
+                Some(crate::style_presets::PresetKind::Style),
                 count(timeline.style_segments.len()),
                 cx,
                 |this, index, cx| this.render_style_panel(index, cx),
@@ -4134,6 +4208,7 @@ impl EditorWindow {
             TrackKind::Image => self.stacked_panel(
                 "image",
                 "image",
+                None,
                 count(timeline.image_segments.len()),
                 cx,
                 |this, index, cx| this.render_image_panel(index, cx),
@@ -4179,6 +4254,7 @@ impl EditorWindow {
             TrackKind::Text => self.stacked_panel(
                 "text",
                 "text",
+                Some(crate::style_presets::PresetKind::Text),
                 count(timeline.text_segments.len()),
                 cx,
                 |this, index, cx| this.render_text_panel(index, cx),
@@ -4186,6 +4262,7 @@ impl EditorWindow {
             TrackKind::Caption => self.stacked_panel(
                 "caption",
                 "caption",
+                None,
                 count(timeline.caption_segments.len()),
                 cx,
                 |this, index, cx| this.render_caption_panel(index, cx),
@@ -4193,6 +4270,7 @@ impl EditorWindow {
             TrackKind::Audio => self.stacked_panel(
                 "audio",
                 "audio",
+                None,
                 count(timeline.audio_segments.len()),
                 cx,
                 |this, index, cx| this.render_audio_panel(index, cx),
@@ -4200,13 +4278,23 @@ impl EditorWindow {
             TrackKind::Mask => self.stacked_panel(
                 "mask",
                 "mask",
+                Some(crate::style_presets::PresetKind::Mask),
                 count(timeline.mask_segments.len()),
                 cx,
                 |this, index, cx| this.render_mask_panel(index, cx),
             ),
+            TrackKind::Shape => self.stacked_panel(
+                "shape",
+                "shape",
+                Some(crate::style_presets::PresetKind::Shape),
+                count(timeline.shape_segments.len()),
+                cx,
+                |this, index, cx| this.render_shape_panel(index, cx),
+            ),
             TrackKind::Keyboard => self.stacked_panel(
                 "keyboard",
                 "keyboard",
+                None,
                 count(timeline.keyboard_segments.len()),
                 cx,
                 |this, index, cx| this.render_keyboard_panel(index, cx),
@@ -4298,6 +4386,7 @@ impl EditorWindow {
         &self,
         id: &'static str,
         noun: &'static str,
+        presets: Option<crate::style_presets::PresetKind>,
         indices: Vec<usize>,
         cx: &mut Context<Self>,
         mut render: impl FnMut(&Self, usize, &mut Context<Self>) -> AnyElement,
@@ -4306,7 +4395,12 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(self.panel_header(id, noun, indices.len(), cx));
+            .child(self.panel_header(id, noun, indices.len(), cx))
+            .children(
+                presets
+                    .filter(|_| !indices.is_empty())
+                    .map(|kind| self.render_style_presets_bar(kind, &indices, cx)),
+            );
         for index in indices {
             let content = render(self, index, cx);
             column = column.child(self.panel_card(content));
@@ -6412,7 +6506,11 @@ impl EditorWindow {
 /// `formatTime` -- the `M:SS` clock the timing cards print, as `H:MM:SS` from
 /// an hour on.
 fn format_time(seconds: f64) -> String {
-    let seconds = seconds.max(0.);
+    // Round to tenths before splitting, so 59.96 carries into the next minute
+    // instead of printing as 0:60.0.
+    let seconds: f64 = format!("{:.1}", seconds.max(0.))
+        .parse()
+        .unwrap_or_default();
     let hours = (seconds / 3600.).floor() as u32;
     let seconds = seconds - f64::from(hours) * 3600.;
     let minutes = (seconds / 60.).floor() as u32;
@@ -8207,6 +8305,12 @@ impl EditorWindow {
         // The crop dialog's four `BoundInput`s, while it is open. Created up
         // front because the match below bails early when the project has no
         // timeline and the dialog is independent of it.
+        if let Some(index) = self.transition_popover_index() {
+            let key = FieldKey::TransitionDuration(index);
+            self.ensure_field(key, window, cx);
+            fields.push(key);
+        }
+
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [
@@ -8279,6 +8383,14 @@ impl EditorWindow {
                             }
                         }
                     }
+                    TrackKind::Shape => {
+                        for index in indices(timeline.shape_segments.len()) {
+                            colors.push(ColorTarget::ShapeStroke(index));
+                            if timeline.shape_segments[index].fill {
+                                colors.push(ColorTarget::ShapeFill(index));
+                            }
+                        }
+                    }
                     TrackKind::Caption => {
                         for index in indices(timeline.caption_segments.len()) {
                             fields.push(FieldKey::CaptionText(index));
@@ -8302,11 +8414,21 @@ impl EditorWindow {
                 }
             }
             None => match self.sidebar.tab {
-                crate::editor_sidebar::SidebarTab::Captions => colors.extend([
-                    ColorTarget::CaptionColor,
-                    ColorTarget::CaptionBackground,
-                    ColorTarget::CaptionHighlight,
-                ]),
+                crate::editor_sidebar::SidebarTab::Captions => {
+                    colors.extend([
+                        ColorTarget::CaptionColor,
+                        ColorTarget::CaptionBackground,
+                        ColorTarget::CaptionHighlight,
+                    ]);
+                    if self
+                        .project
+                        .captions
+                        .as_ref()
+                        .is_some_and(|captions| captions.settings.position == "manual")
+                    {
+                        fields.extend([FieldKey::CaptionManualX, FieldKey::CaptionManualY]);
+                    }
+                }
                 crate::editor_sidebar::SidebarTab::Keyboard => {
                     colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
                 }
@@ -8345,9 +8467,61 @@ impl EditorWindow {
     }
 }
 
+fn format_transition_duration(duration: f64) -> String {
+    format!("{duration:.2}")
+}
+
+/// The length a committed duration field asks for, or `None` to leave the
+/// transition alone. The field shows the length rounded to hundredths, so
+/// text that still reads as the current length is not an edit, even when a
+/// drag left the stored length between two hundredths.
+fn edited_transition_duration(text: &str, current: f64) -> Option<f64> {
+    if text.trim() == format_transition_duration(current) {
+        return None;
+    }
+    ui::parse_number(text).filter(|value| value.is_finite())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn leaving_an_untouched_transition_duration_changes_nothing() {
+        let dragged = 0.613_257;
+        let shown = super::format_transition_duration(dragged);
+        assert_eq!(shown, "0.61");
+        assert_eq!(super::edited_transition_duration(&shown, dragged), None);
+        assert_eq!(super::edited_transition_duration(" 0.61 ", dragged), None);
+        assert_eq!(
+            super::edited_transition_duration("0.75", dragged),
+            Some(0.75)
+        );
+        assert_eq!(
+            super::edited_transition_duration("0.613", dragged),
+            Some(0.613)
+        );
+        assert_eq!(super::edited_transition_duration("", dragged), None);
+        assert_eq!(super::edited_transition_duration("abc", dragged), None);
+    }
+
     use super::*;
+
+    #[test]
+    fn keyboard_start_field_preserves_keypress_times() {
+        let mut segment: KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "typed", "start": 2.0, "end": 6.0, "displayText": "ab",
+            "keys": [
+                { "key": "a", "timeOffset": 0.0 },
+                { "key": "b", "timeOffset": 2000.0 }
+            ]
+        }))
+        .unwrap();
+        assert!(commit_segment_timing(&mut segment, true, "3.00", 3.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+        assert!(commit_segment_timing(&mut segment, false, "7.00", 7.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+    }
 
     #[test]
     fn unchanged_timing_fields_preserve_redo() {
@@ -8653,6 +8827,15 @@ mod tests {
         assert_eq!(format_time(3599.5), "59:59.5");
         assert_eq!(format_time(3600.), "1:00:00.0");
         assert_eq!(format_time(3905.5), "1:05:05.5");
+    }
+
+    #[test]
+    fn the_timing_cards_carry_a_rounded_up_minute() {
+        assert_eq!(format_time(59.94), "0:59.9");
+        assert_eq!(format_time(59.96), "1:00.0");
+        assert_eq!(format_time(119.97), "2:00.0");
+        assert_eq!(format_time(3599.96), "1:00:00.0");
+        assert_eq!(format_time(3659.99), "1:01:00.0");
     }
 
     // -- Text presets ------------------------------------------------------

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { CapRecorder } from "../src/index";
+import { createUpload, UPLOAD_TOKEN, UPLOADS_URL } from "./create-upload";
 
 class Track {
 	readonly kind = "video";
@@ -95,7 +96,7 @@ test.each(["recording", "paused"] as const)(
 		Object.defineProperty(globalThis, "fetch", {
 			configurable: true,
 			value: async (input: string, init?: RequestInit) => {
-				if (input.endsWith("/videos/create")) {
+				if (input === UPLOADS_URL) {
 					now = 5000;
 					return Response.json({
 						videoId: "test-video",
@@ -106,7 +107,11 @@ test.each(["recording", "paused"] as const)(
 				if (input.endsWith("/initiate"))
 					return Response.json({ uploadId: "test-upload" });
 				if (input.endsWith("/presign-part"))
-					return Response.json({ presignedUrl: "https://upload.invalid/part" });
+					return Response.json({
+						parts: [
+							{ partNumber: 1, presignedUrl: "https://upload.invalid/part" },
+						],
+					});
 				if (input === "https://upload.invalid/part")
 					return new Response(null, { headers: { ETag: "test-etag" } });
 				if (input.endsWith("/complete")) {
@@ -118,7 +123,7 @@ test.each(["recording", "paused"] as const)(
 			},
 		});
 		const recorder = new CapRecorder({
-			publicKey: "test-only",
+			createUpload,
 			mode: "camera",
 			microphone: { enabled: false },
 		});
@@ -158,7 +163,7 @@ test.each([
 		Object.defineProperty(globalThis, key, { configurable: true, value });
 	}
 	const recorder = new CapRecorder({
-		publicKey: "test-only",
+		createUpload,
 		mode: "camera",
 		microphone: { enabled: false },
 		maxDurationMs: scenario.constructorLimit,
@@ -187,9 +192,13 @@ test.each([
 	{ options: { apiBase: "" }, expectedBase: "" },
 ])("uploads to '$expectedBase' with options $options", async (scenario) => {
 	const requests: string[] = [];
-	const fetch = mock(async (input: string) => {
+	const credentials: (string | undefined)[] = [];
+	const fetch = mock(async (input: string, init?: RequestInit) => {
 		requests.push(input);
-		if (input.endsWith("/videos/create"))
+		credentials.push(
+			(init?.headers as Record<string, string> | undefined)?.Authorization,
+		);
+		if (input === UPLOADS_URL)
 			return Response.json({
 				videoId: "test-video",
 				s3Key: "test-key",
@@ -199,7 +208,9 @@ test.each([
 		if (input.endsWith("/initiate"))
 			return Response.json({ uploadId: "test-upload" });
 		if (input.endsWith("/presign-part"))
-			return Response.json({ presignedUrl: "https://upload.invalid/part" });
+			return Response.json({
+				parts: [{ partNumber: 1, presignedUrl: "https://upload.invalid/part" }],
+			});
 		if (input === "https://upload.invalid/part")
 			return new Response(null, { headers: { ETag: "test-etag" } });
 		if (input.endsWith("/complete")) return Response.json({ success: true });
@@ -210,7 +221,7 @@ test.each([
 		value: fetch,
 	});
 	const recorder = new CapRecorder({
-		publicKey: "test-only",
+		createUpload,
 		microphone: { enabled: false },
 		...scenario.options,
 	});
@@ -220,12 +231,14 @@ test.each([
 		expect(recorder.phase).toBe("complete");
 		const base = `${scenario.expectedBase}/api/developer/sdk/v1`;
 		expect(requests).toEqual([
-			`${base}/videos/create`,
+			UPLOADS_URL,
 			`${base}/upload/multipart/initiate`,
 			`${base}/upload/multipart/presign-part`,
 			"https://upload.invalid/part",
 			`${base}/upload/multipart/complete`,
 		]);
+		const bearer = `Bearer ${UPLOAD_TOKEN}`;
+		expect(credentials).toEqual([undefined, bearer, bearer, undefined, bearer]);
 	} finally {
 		recorder.destroy();
 	}
@@ -243,7 +256,7 @@ test.each([
 		let uploaded = "";
 		const fetch = mock(async (input: string, init?: RequestInit) => {
 			requests.push(input);
-			if (input.endsWith("/videos/create"))
+			if (input === UPLOADS_URL)
 				return Response.json({
 					videoId: "test-video",
 					s3Key: "test-key",
@@ -253,7 +266,11 @@ test.each([
 			if (input.endsWith("/initiate"))
 				return Response.json({ uploadId: "test-upload" });
 			if (input.endsWith("/presign-part"))
-				return Response.json({ presignedUrl: "https://upload.invalid/part" });
+				return Response.json({
+					parts: [
+						{ partNumber: 1, presignedUrl: "https://upload.invalid/part" },
+					],
+				});
 			if (input === "https://upload.invalid/part") {
 				uploaded = await new Response(init?.body).text();
 				return new Response(null, { headers: { ETag: "test-etag" } });
@@ -266,7 +283,7 @@ test.each([
 			value: fetch,
 		});
 		const recorder = new CapRecorder({
-			publicKey: "fixture",
+			createUpload,
 			mode: "camera",
 			microphone: { enabled: false },
 		});

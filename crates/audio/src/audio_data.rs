@@ -262,6 +262,10 @@ impl AudioData {
         self.source_start_sample
     }
 
+    pub fn covered_source_end_sample(&self) -> usize {
+        self.covered_source_end_sample
+    }
+
     pub fn covers_source_range(
         &self,
         source_start_sample: usize,

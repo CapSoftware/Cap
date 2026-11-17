@@ -10,6 +10,7 @@ import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { type Cause, Effect, Option, Stream } from "effect";
 
+import { attachmentContentDisposition } from "../Storage/content-disposition.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 
 const DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS = 3600;
@@ -226,6 +227,24 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					},
 				),
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
+		getSignedDownloadUrl: (
+			key: string,
+			fileName: string,
+			signingArgs?: RequestPresigningArguments,
+		) =>
+			withPublicSigningClient((client) =>
+				S3Presigner.getSignedUrl(
+					client,
+					new S3.GetObjectCommand({
+						Bucket: provider.bucket,
+						Key: key,
+						ResponseContentDisposition: attachmentContentDisposition(fileName),
+					}),
+					signingArgs ?? {
+						expiresIn: DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS,
+					},
+				),
+			).pipe(Effect.withSpan("getSignedDownloadUrl")),
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: RequestPresigningArguments,
@@ -295,10 +314,34 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					),
 				),
 			),
+		getObjectWithETag: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map(async (client) => {
+						const response = await client
+							.send(
+								new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							)
+							.catch((e) => {
+								if (e instanceof S3.NoSuchKey) return null;
+								throw e;
+							});
+						const body = await response?.Body?.transformToString();
+						return body === undefined
+							? Option.none()
+							: Option.some({ body, eTag: response?.ETag });
+					}),
+				),
+			),
 		putObject: <E>(
 			key: string,
 			body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
-			fields?: { contentType?: string; contentLength?: number },
+			fields?: {
+				contentType?: string;
+				contentLength?: number;
+				ifMatch?: string;
+				ifNoneMatch?: string;
+			},
 		) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
@@ -325,6 +368,8 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									Body: _body,
 									ContentType: fields?.contentType,
 									ContentLength: fields?.contentLength,
+									IfMatch: fields?.ifMatch,
+									IfNoneMatch: fields?.ifNoneMatch,
 								}),
 							);
 						}),
@@ -520,6 +565,55 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						),
 					"CompleteMultipartUpload",
 					options,
+				),
+			listParts: (key: string, uploadId: string) =>
+				Effect.gen(function* () {
+					const parts: S3.Part[] = [];
+					let partNumberMarker: string | undefined;
+					while (true) {
+						const page = yield* wrapS3Promise(
+							provider.getInternal.pipe(
+								Effect.map((client) =>
+									client.send(
+										new S3.ListPartsCommand({
+											Bucket: provider.bucket,
+											Key: key,
+											UploadId: uploadId,
+											PartNumberMarker: partNumberMarker,
+										}),
+									),
+								),
+							),
+						);
+						parts.push(...(page.Parts ?? []));
+						const nextMarker = page.NextPartNumberMarker;
+						if (
+							!page.IsTruncated ||
+							!nextMarker ||
+							nextMarker === partNumberMarker
+						)
+							return parts;
+						partNumberMarker = nextMarker;
+					}
+				}),
+			listUploads: (config: {
+				prefix: string;
+				keyMarker?: string;
+				uploadIdMarker?: string;
+			}) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.ListMultipartUploadsCommand({
+									Bucket: provider.bucket,
+									Prefix: config.prefix,
+									KeyMarker: config.keyMarker,
+									UploadIdMarker: config.uploadIdMarker,
+								}),
+							),
+						),
+					),
 				),
 			copyPart: (
 				key: string,

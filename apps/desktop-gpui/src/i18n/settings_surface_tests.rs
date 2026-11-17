@@ -242,7 +242,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),
-        (tr::settings::options::post_studio::show_cap(), "Show Cap"),
+        (
+            tr::settings::options::post_studio::show_overlay(),
+            "Show in overlay",
+        ),
         (
             tr::settings::options::post_studio::do_nothing(),
             "Do nothing",
@@ -283,6 +286,19 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::recording_description(),
             "Start a recording without opening Cap first.",
+        ),
+        (tr::settings::shortcuts::cancelling_title(), "Cancelling"),
+        (
+            tr::settings::shortcuts::cancelling_description(),
+            "For screenshots and recordings started from a shortcut or the tray.",
+        ),
+        (
+            tr::settings::shortcuts::closing_editor_title(),
+            "Closing the editor",
+        ),
+        (
+            tr::settings::shortcuts::closing_editor_description(),
+            "For the screenshot editor and the video editor.",
         ),
         (
             tr::settings::shortcuts::while_recording_title(),
@@ -350,12 +366,12 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Edit right away",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap(),
-            "Show Cap",
+            tr::settings::shortcuts::outcome::studio_show_overlay(),
+            "Show overlay",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap_hint(),
-            "Back to the recorder",
+            tr::settings::shortcuts::outcome::studio_show_overlay_hint(),
+            "Copy, share or export",
         ),
         (
             tr::settings::shortcuts::outcome::studio_do_nothing(),
@@ -384,6 +400,54 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::outcome::instant_copy_link_hint(),
             "Nothing opens",
+        ),
+        (
+            tr::settings::shortcuts::on_cancel::title(),
+            "When you cancel",
+        ),
+        (
+            tr::settings::shortcuts::on_cancel::hint(),
+            "Esc or closing the picker",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden_hint(),
+            "Unless Cap was open",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::title(),
+            "When you close the editor",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::hint(),
+            "After the last one closes",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden_hint(),
+            "Until you open Cap",
         ),
         (
             tr::settings::shortcuts::label::screenshot_area(),
@@ -426,6 +490,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Cycle recording mode",
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
+        (tr::settings::shortcuts::label::add_marker(), "Add marker"),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
@@ -872,7 +937,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::title(), "Automations"),
         (
             tr::settings::automations::description(),
-            "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet.",
+            "Rules are shared with the Cap CLI. Cap runs enabled rules automatically.",
         ),
         (tr::settings::automations::templates_title(), "Templates"),
         (
@@ -926,11 +991,31 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::delete(), "Delete"),
         (
             tr::settings::automations::dangerous(),
-            "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust.",
+            "This automation runs commands or sends network requests with your permissions. Only use values you trust.",
         ),
         (
             tr::settings::automations::compatibility_checked(),
-            "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run.",
+            "Compatibility checked: every action in this automation runs in Cap. No actions were run.",
+        ),
+        (
+            tr::settings::automations::action_unsupported(),
+            "Cap doesn't run this action yet, so it is skipped.",
+        ),
+        (
+            tr::settings::automations::delete_guarded(),
+            "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept.",
+        ),
+        (
+            tr::settings::automations::delete_needs_copy(),
+            "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step.",
+        ),
+        (
+            tr::settings::automations::notify_needs_setting(),
+            "Shows only while System notifications is on in General settings.",
+        ),
+        (
+            tr::settings::automations::compatibility_unsupported(),
+            "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
         (
             tr::settings::automations::condition_never_matches(),

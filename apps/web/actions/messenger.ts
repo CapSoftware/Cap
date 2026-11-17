@@ -9,8 +9,12 @@ import {
 import { buildEnv } from "@cap/env";
 import { asc, desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { generateMessengerAgentReply } from "@/lib/messenger/agent";
-import { MESSENGER_AGENT } from "@/lib/messenger/constants";
+import {
+	MESSENGER_AGENT,
+	MESSENGER_RATE_LIMITED_MESSAGE,
+} from "@/lib/messenger/constants";
 import {
 	getMessengerConversationForViewer,
 	getOrCreateAnonymousId,
@@ -26,8 +30,29 @@ import {
 	syncCapKnowledgeBase,
 } from "@/lib/messenger/supermemory";
 import { sendMessengerSupportEmail } from "@/lib/messenger/support-email";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const normalizeContent = (content: string) => content.trim().slice(0, 6000);
+
+const MEMORY_SYNC_MESSAGE_LIMIT = 50;
+
+const isMessengerRateLimited = async (userId: string | null) => {
+	const requestHeaders = await headers();
+	const checks = [
+		isRateLimited(RATE_LIMIT_IDS.MESSENGER_MESSAGE, {
+			headers: requestHeaders,
+		}),
+	];
+	if (userId) {
+		checks.push(
+			isRateLimited(RATE_LIMIT_IDS.MESSENGER_MESSAGE, {
+				key: `messenger-user:${userId}`,
+				headers: requestHeaders,
+			}),
+		);
+	}
+	return (await Promise.all(checks)).some(Boolean);
+};
 
 const assertMessengerEnabled = () => {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
@@ -53,11 +78,14 @@ const persistConversationToSupermemory = async ({
 	userId: string | null;
 	anonymousId: string | null;
 }) => {
-	const messages = await db()
-		.select()
-		.from(messengerMessages)
-		.where(eq(messengerMessages.conversationId, conversationId))
-		.orderBy(asc(messengerMessages.createdAt));
+	const messages = (
+		await db()
+			.select()
+			.from(messengerMessages)
+			.where(eq(messengerMessages.conversationId, conversationId))
+			.orderBy(desc(messengerMessages.createdAt))
+			.limit(MEMORY_SYNC_MESSAGE_LIMIT)
+	).reverse();
 	if (!messages.length) return;
 
 	await storeConversationInSupermemory({
@@ -71,10 +99,15 @@ const persistConversationToSupermemory = async ({
 	});
 };
 
-export const createMessengerConversation = async () => {
+export const createMessengerConversation = async (): Promise<
+	string | { error: string }
+> => {
 	assertMessengerEnabled();
 
 	const viewer = await getViewerContext();
+	if (await isMessengerRateLimited(viewer.user?.id ?? null)) {
+		return { error: MESSENGER_RATE_LIMITED_MESSAGE };
+	}
 	const anonymousId = viewer.user
 		? viewer.anonymousId
 		: await getOrCreateAnonymousId();
@@ -130,18 +163,25 @@ export const createMessengerConversation = async () => {
 	return conversationId;
 };
 
+type SendMessengerUserMessageResult =
+	| { mode: "agent" | "human" }
+	| { error: string };
+
 export const sendMessengerUserMessage = async ({
 	conversationId,
 	content,
 }: {
 	conversationId: string;
 	content: string;
-}) => {
+}): Promise<SendMessengerUserMessageResult> => {
 	assertMessengerEnabled();
 	const normalized = normalizeContent(content);
 	if (!conversationId || !normalized) throw new Error("Message is empty");
 
 	const viewer = await getViewerContext();
+	if (await isMessengerRateLimited(viewer.user?.id ?? null)) {
+		return { error: MESSENGER_RATE_LIMITED_MESSAGE };
+	}
 	const activeAnonymousId = viewer.user
 		? viewer.anonymousId
 		: (viewer.anonymousId ?? (await getOrCreateAnonymousId()));

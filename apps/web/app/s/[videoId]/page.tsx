@@ -1,5 +1,4 @@
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import {
 	comments,
@@ -38,12 +37,13 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
-import type { JSX } from "react";
+import { cache, type JSX } from "react";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
 	type Spaces,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { getUser } from "@/app/utils/auth";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
@@ -61,7 +61,10 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import {
+	resolveShareCallToAction,
+	withoutWorkspaceCallToAction,
+} from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import {
 	canStartPlaybackInHtml,
@@ -69,6 +72,7 @@ import {
 } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import {
+	resolveForeignShareRedirect,
 	resolveRestrictedShareRedirect,
 	resolveShareWebUrl,
 } from "@/lib/share-web-url";
@@ -79,7 +83,10 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	areViewerDownloadsEnabled,
+	canUserDownloadVideo,
+} from "@/lib/video-download-permissions";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
@@ -152,7 +159,9 @@ function resolveWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 	});
 }
 
-async function getSharedSpacesForVideo(videoId: Video.VideoId) {
+const getSharedSpacesForVideo = cache(async function getSharedSpacesForVideo(
+	videoId: Video.VideoId,
+) {
 	// Space-level and organization-level sharing are independent queries.
 	const [spaceSharing, orgSharing] = await Promise.all([
 		db()
@@ -220,7 +229,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		sharedSpaces,
 		sharedOrganizations: orgSharing.map(({ id, name }) => ({ id, name })),
 	};
-}
+});
 
 function PolicyDeniedView({
 	reason,
@@ -366,6 +375,24 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
+	const headersList = await headers();
+	// The desktop app opens the copied link with `recordingStopped` for the
+	// person who just recorded, and that link is on the organization's custom
+	// domain when it has one. The session cookie only exists on the main origin,
+	// so landing there would show the owner a signed-out page without transcript
+	// editing or any other owner control.
+	const recordingStoppedRedirect = awaitRecording
+		? await resolveRestrictedShareRedirect(headersList, videoId, searchParams)
+		: null;
+	if (recordingStoppedRedirect) redirect(recordingStoppedRedirect);
+
+	const foreignShareRedirect = await resolveForeignShareRedirect(
+		headersList,
+		videoId,
+		searchParams,
+	);
+	if (foreignShareRedirect) redirect(foreignShareRedirect);
+
 	const page = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 		const loadVideo = () =>
@@ -484,15 +511,14 @@ async function AuthorizedContent({
 		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		allowedEmailDomain?: string | null;
-		videoSettings?: OrganizationSettings | null;
+		videoSettings?: (typeof videos.$inferSelect)["settings"];
 		organizationName?: string | null;
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
 		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
 	};
 	searchParams: ShareVideoSearchParams;
 }) {
-	// will have already been fetched if auth is required
-	const user = await getCurrentUser();
+	const user = await getUser();
 	const videoId = video.id;
 	let recoveredDesktopSegmentsUpload = false;
 
@@ -646,27 +672,17 @@ async function AuthorizedContent({
 		if (!user || user.id !== video.owner.id) {
 			return { customDomain: null, domainVerified: false };
 		}
-		const activeOrganizationId = user.activeOrganizationId;
-		if (!activeOrganizationId) {
-			return { customDomain: null, domainVerified: false };
-		}
 
-		// Fetch the active org
-		const orgArr = await db()
+		const [org] = await db()
 			.select({
 				customDomain: organizations.customDomain,
 				domainVerified: organizations.domainVerified,
 			})
 			.from(organizations)
-			.where(eq(organizations.id, activeOrganizationId))
+			.where(eq(organizations.id, video.orgId))
 			.limit(1);
 
-		const org = orgArr[0];
-		if (
-			org?.customDomain &&
-			org.domainVerified !== null &&
-			user.id === video.owner.id
-		) {
+		if (org?.customDomain && org.domainVerified !== null) {
 			return { customDomain: org.customDomain, domainVerified: true };
 		}
 		return { customDomain: null, domainVerified: false };
@@ -820,7 +836,7 @@ async function AuthorizedContent({
 	const isVideoDownloadReady =
 		!hasActiveUpload && video.source?.type !== "desktopSegments";
 
-	const canDownloadVideoPromise =
+	const memberCanDownloadPromise =
 		userId && isVideoDownloadReady
 			? canUserDownloadVideo({
 					userId,
@@ -828,6 +844,25 @@ async function AuthorizedContent({
 					videoId,
 				})
 			: Promise.resolve(false);
+
+	// This component only renders once the view gates have passed, so the
+	// organization and cap download settings and the share limit are all that
+	// is left to decide. getVideoDownloadInfo checks everything again.
+	// Viewers only ever get the published MP4, which older HLS caps do not have.
+	const viewerDownloadsEnabled =
+		isVideoDownloadReady &&
+		!video.isScreenshot &&
+		(video.source?.type === "desktopMP4" || video.source?.type === "webMP4") &&
+		areViewerDownloadsEnabled({
+			videoSettings: video.videoSettings,
+			organizationSettings: video.orgSettings,
+		});
+	const canDownloadVideoPromise = viewerDownloadsEnabled
+		? Promise.all([memberCanDownloadPromise, overShareLimitPromise]).then(
+				([memberCanDownload, overShareLimit]) =>
+					memberCanDownload || !overShareLimit,
+			)
+		: memberCanDownloadPromise;
 
 	const dashboardDestinationPromise = getShareDashboardDestination({
 		viewer: user
@@ -844,7 +879,7 @@ async function AuthorizedContent({
 		return null;
 	});
 
-	const videoHasEditsPromise = canDownloadVideoPromise.then((canDownload) => {
+	const videoHasEditsPromise = memberCanDownloadPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
 		return db()
 			.select({ editSpec: videoEdits.editSpec })
@@ -956,6 +991,15 @@ async function AuthorizedContent({
 		aiGenerationStatus,
 	};
 
+	const resolvedCallToAction = ownerIsPro
+		? resolveShareCallToAction({
+				videoSettings: video.videoSettings,
+				organizationSettings: video.orgSettings,
+				videoCreatedAt: video.createdAt,
+			})
+		: null;
+	const viewerIsOwner = user?.id === video.owner.id;
+
 	const videoWithOrganizationInfo = {
 		...video,
 		hasActiveUpload,
@@ -973,7 +1017,7 @@ async function AuthorizedContent({
 		sharedOrganizations: sharedOrganizations,
 		password: null,
 		folderId: user?.id === video.owner.id ? video.folderId : null,
-		orgSettings: video.orgSettings || null,
+		orgSettings: withoutWorkspaceCallToAction(video.orgSettings),
 		organizationName: video.organizationName,
 		organizationIconUrl: resolvedImages.organization,
 		shareableLinkIconUrl: resolvedImages.shareableLink,
@@ -981,8 +1025,12 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
-		callToAction: ownerIsPro
-			? parseShareCallToAction(video.videoSettings)
+		callToAction: resolvedCallToAction?.callToAction ?? null,
+		callToActionSource: viewerIsOwner
+			? (resolvedCallToAction?.source ?? null)
+			: null,
+		workspaceCallToAction: viewerIsOwner
+			? (resolvedCallToAction?.workspaceCallToAction ?? null)
 			: null,
 	};
 	const isEditProcessing =
@@ -1030,6 +1078,10 @@ async function AuthorizedContent({
 						customDomain={customDomain}
 						domainVerified={domainVerified}
 						allowedEmailDomain={video.allowedEmailDomain}
+						allowLinkOverride={
+							video.orgSettings?.allowPublicLinkOverride === true
+						}
+						linkOpenToAnyone={video.videoSettings?.linkAccess === "anyone"}
 						sharedOrganizations={
 							videoWithOrganizationInfo.sharedOrganizations || []
 						}

@@ -49,6 +49,8 @@ pub(crate) static IMPORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 /// the drain recognises it and skips the error dialog.
 const IMPORT_CANCELLED: &str = "Import cancelled";
 
+const IMPORT_STOPPED: &str = "The import stopped unexpectedly";
+
 fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -91,15 +93,12 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-/// The `(1)`-suffix uniquing loop from `start_video_import` (`import.rs:1370-1376`).
-fn unique_project_path(recordings_dir: &Path, sanitized_name: &str) -> PathBuf {
-    let mut project_path = recordings_dir.join(format!("{sanitized_name}.cap"));
-    let mut counter = 1;
-    while project_path.exists() {
-        project_path = recordings_dir.join(format!("{sanitized_name} ({counter}).cap"));
-        counter += 1;
-    }
-    project_path
+/// The `(1)`-suffix uniquing from `start_video_import` (`import.rs:1370-1376`),
+/// through the helper the image import uses so a long source name is cut to
+/// fit a folder name instead of failing the import.
+fn unique_project_path(recordings_dir: &Path, sanitized_name: &str) -> Result<PathBuf, String> {
+    cap_utils::ensure_unique_filename(&format!("{sanitized_name}.cap"), recordings_dir)
+        .map(|name| recordings_dir.join(name))
 }
 
 fn check_project_exists(project_path: &Path) -> bool {
@@ -383,20 +382,38 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
     }
 
     cx.spawn(async move |cx| {
+        // Every worker path ends each import it reported with Complete or
+        // Failed. One that panics drops the sender first, and its entry would
+        // otherwise keep `imports_in_flight` true for the rest of the session.
+        let mut unfinished: Vec<ImportProgress> = Vec::new();
         while let Ok(update) = rx.recv_async().await {
-            let failed = update.stage == ImportStage::Failed;
-            let cancelled = failed && update.message == IMPORT_CANCELLED;
-            let kind = update.kind;
-            let message = update.message.clone();
-            cx.update(|cx| apply_progress(update, cx));
-            if failed && !cancelled {
-                // Outside the update: the modal spins AppKit's own run loop
-                // and may not hold a gpui borrow (the `confirm_dialog` rule).
-                show_import_error(kind, &message);
+            unfinished.retain(|entry| entry.project_path != update.project_path);
+            if !matches!(update.stage, ImportStage::Complete | ImportStage::Failed) {
+                unfinished.push(update.clone());
             }
+            drain_progress(update, cx);
+        }
+        for mut update in unfinished {
+            update.stage = ImportStage::Failed;
+            update.progress = 0.0;
+            update.message = IMPORT_STOPPED.to_string();
+            drain_progress(update, cx);
         }
     })
     .detach();
+}
+
+fn drain_progress(update: ImportProgress, cx: &mut gpui::AsyncApp) {
+    let failed = update.stage == ImportStage::Failed;
+    let cancelled = failed && update.message == IMPORT_CANCELLED;
+    let kind = update.kind;
+    let message = update.message.clone();
+    cx.update(|cx| apply_progress(update, cx));
+    if failed && !cancelled {
+        // Outside the update: the modal spins AppKit's own run loop
+        // and may not hold a gpui borrow (the `confirm_dialog` rule).
+        show_import_error(kind, &message);
+    }
 }
 
 /// `NSOpenPanel` through the platform helper on macOS (the generic file panel
@@ -436,6 +453,10 @@ fn show_import_error(kind: ImportKind, message: &str) {
         ImportKind::Image => "image",
     };
     tracing::error!("failed to import {media}: {message}");
+    // A blocking native dialog would hang a headless test run.
+    if cfg!(test) {
+        return;
+    }
     show_error_dialog(match kind {
         ImportKind::Video => tr::import::video_failed(message),
         ImportKind::Image => tr::import::image_failed(message),
@@ -483,7 +504,20 @@ impl ProgressSink<'_> {
 fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     let recordings_dir = crate::recording::recordings_dir();
     let project_name = generate_project_name(source_path, "Imported Video");
-    let project_path = unique_project_path(&recordings_dir, &sanitize_filename(&project_name));
+    let sanitized_name = sanitize_filename(&project_name);
+    let project_path = match unique_project_path(&recordings_dir, &sanitized_name) {
+        Ok(path) => path,
+        Err(error) => {
+            ProgressSink {
+                tx,
+                kind: ImportKind::Video,
+                project_path: &recordings_dir.join(format!("{sanitized_name}.cap")),
+                pretty_name: &project_name,
+            }
+            .send(ImportStage::Failed, 0.0, &error);
+            return;
+        }
+    };
     let sink = ProgressSink {
         tx,
         kind: ImportKind::Video,
@@ -637,6 +671,7 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
 
     sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "video import complete");
+    crate::automation::video_imported(project_path.clone());
 }
 
 /// `start_image_import` (`import.rs:1899-2017`).
@@ -947,7 +982,7 @@ fn transcode_video(
     .map_err(|error| format!("Failed to open video file: {error}"))?;
     check_editor_import_cancelled(project_path, cancelled)?;
 
-    let (video_stream_index, video_time_base, frame_rate, source_width, source_height) = {
+    let (video_stream_index, video_time_base, frame_rate, unrotated_size, rotation, source_color) = {
         let stream = input
             .streams()
             .best(ffmpeg::media::Type::Video)
@@ -957,17 +992,29 @@ fn transcode_video(
             .decoder()
             .video()
             .map_err(|e| format!("Failed to create decoder: {e}"))?;
+        let stream_aspect =
+            ffmpeg::Rational::from(unsafe { (*stream.as_ptr()).sample_aspect_ratio });
         (
             stream.index(),
             stream.time_base(),
             stream.avg_frame_rate(),
-            decoder.width(),
-            decoder.height(),
+            square_pixel_size(
+                decoder.width(),
+                decoder.height(),
+                [stream_aspect, decoder.aspect_ratio()],
+            ),
+            SourceRotation::from_parameters(&stream.parameters()),
+            SourceColor::new(
+                decoder.format(),
+                decoder.color_space(),
+                decoder.color_range(),
+                decoder.height(),
+            ),
         )
     };
 
-    let output_width = ensure_even(source_width);
-    let output_height = ensure_even(source_height);
+    let (scaled_width, scaled_height) = unrotated_size;
+    let (output_width, output_height) = rotation.rotated_size(scaled_width, scaled_height);
     let fps = if frame_rate.denominator() > 0 {
         ((f64::from(frame_rate.numerator()) / f64::from(frame_rate.denominator())).round() as u32)
             .clamp(1, 120)
@@ -1062,6 +1109,7 @@ fn transcode_video(
         output_height,
         fps,
         video_time_base,
+        source_color.output(),
     )?;
     video_encoder.strict = strict;
 
@@ -1090,7 +1138,7 @@ fn transcode_video(
 
     let mut video_frame = ffmpeg::frame::Video::empty();
     let mut audio_frame = ffmpeg::frame::Audio::empty();
-    let mut scaler: Option<ffmpeg::software::scaling::Context> = None;
+    let mut scaler: Option<ImportScaler> = None;
     let mut frames_processed = 0u64;
     let mut audio_samples_processed = 0u64;
     let mut last_progress = 0.0;
@@ -1122,9 +1170,11 @@ fn transcode_video(
                     &video_frame,
                     &mut scaler,
                     video_encoder.pixel_format,
-                    output_width,
-                    output_height,
+                    scaled_width,
+                    scaled_height,
+                    source_color,
                 )?;
+                let frame = rotation.apply(frame)?;
                 video_encoder.queue_frame(frame, timestamp, &mut output)?;
 
                 frames_processed += 1;
@@ -1181,9 +1231,11 @@ fn transcode_video(
             &video_frame,
             &mut scaler,
             video_encoder.pixel_format,
-            output_width,
-            output_height,
+            scaled_width,
+            scaled_height,
+            source_color,
         )?;
+        let frame = rotation.apply(frame)?;
         video_encoder.queue_frame(frame, timestamp, &mut output)?;
     }
 
@@ -1266,16 +1318,226 @@ fn frame_timestamp(frame: &ffmpeg::frame::Video, time_base: ffmpeg::Rational) ->
     Duration::from_secs_f64(seconds.max(0.0))
 }
 
+/// The Y'CbCr matrix an imported display.mp4 is written and tagged with. The
+/// renderer decodes with BT.709 for a BT.709 tag and BT.601 for anything
+/// else, so the tag has to describe the samples the scaler wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImportMatrix {
+    Bt601,
+    Bt709,
+}
+
+/// How the imported video's samples are encoded: the matrix and whether they
+/// use the full 0-255 range. The output is always limited range, which is
+/// what the renderer reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceColor {
+    matrix: ImportMatrix,
+    full_range: bool,
+    rgb: bool,
+}
+
+impl SourceColor {
+    fn new(
+        format: avformat::Pixel,
+        space: ffmpeg::color::Space,
+        range: ffmpeg::color::Range,
+        height: u32,
+    ) -> Self {
+        let rgb = pixel_format_is_rgb(format);
+        let matrix = match space {
+            _ if rgb => ImportMatrix::Bt709,
+            ffmpeg::color::Space::BT709 => ImportMatrix::Bt709,
+            ffmpeg::color::Space::BT470BG | ffmpeg::color::Space::SMPTE170M => ImportMatrix::Bt601,
+            // Untagged video follows the usual convention: BT.601 for
+            // standard definition, BT.709 for HD.
+            ffmpeg::color::Space::Unspecified if height < 720 => ImportMatrix::Bt601,
+            _ => ImportMatrix::Bt709,
+        };
+        let full_range = rgb
+            || range == ffmpeg::color::Range::JPEG
+            || matches!(
+                format,
+                avformat::Pixel::YUVJ420P
+                    | avformat::Pixel::YUVJ422P
+                    | avformat::Pixel::YUVJ444P
+                    | avformat::Pixel::YUVJ440P
+                    | avformat::Pixel::YUVJ411P
+            );
+        Self {
+            matrix,
+            full_range,
+            rgb,
+        }
+    }
+
+    /// Swscale converts range between Y'CbCr formats but never the matrix, so
+    /// a Y'CbCr source keeps its own; an RGB source is encoded with the
+    /// matrix chosen above.
+    fn output(self) -> ImportMatrix {
+        self.matrix
+    }
+}
+
+fn pixel_format_is_rgb(format: avformat::Pixel) -> bool {
+    format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
+}
+
+/// A swscale context built with the source range set before it initialises.
+/// Swscale picks a plain copy for matching formats at init and ignores a
+/// range changed afterwards, and `ffmpeg-next` only builds initialised
+/// contexts, so the options go in through the C API here.
+struct ImportScaler {
+    context: *mut ffmpeg::ffi::SwsContext,
+    input: (avformat::Pixel, u32, u32, bool),
+    output: (avformat::Pixel, u32, u32),
+}
+
+impl ImportScaler {
+    fn new(
+        input: (avformat::Pixel, u32, u32, bool),
+        output: (avformat::Pixel, u32, u32),
+        rgb: bool,
+    ) -> Result<Self, String> {
+        let (input_format, input_width, input_height, full_range) = input;
+        let (output_format, output_width, output_height) = output;
+        let context = unsafe { ffmpeg::ffi::sws_alloc_context() };
+        if context.is_null() {
+            return Err("Failed to create scaler".to_string());
+        }
+        let scaler = Self {
+            context,
+            input,
+            output,
+        };
+        let options: [(&std::ffi::CStr, i64); 9] = [
+            (c"srcw", i64::from(input_width)),
+            (c"srch", i64::from(input_height)),
+            (
+                c"src_format",
+                ffmpeg::ffi::AVPixelFormat::from(input_format) as i64,
+            ),
+            (c"dstw", i64::from(output_width)),
+            (c"dsth", i64::from(output_height)),
+            (
+                c"dst_format",
+                ffmpeg::ffi::AVPixelFormat::from(output_format) as i64,
+            ),
+            (
+                c"sws_flags",
+                i64::from(ffmpeg::software::scaling::Flags::BILINEAR.bits()),
+            ),
+            (c"src_range", i64::from(full_range)),
+            (c"dst_range", 0),
+        ];
+        for (name, value) in options {
+            let status =
+                unsafe { ffmpeg::ffi::av_opt_set_int(context.cast(), name.as_ptr(), value, 0) };
+            if status < 0 {
+                return Err(format!(
+                    "Failed to configure the scaler ({}): {}",
+                    name.to_string_lossy(),
+                    ffmpeg::Error::from(status)
+                ));
+            }
+        }
+        let status = unsafe {
+            ffmpeg::ffi::sws_init_context(context, std::ptr::null_mut(), std::ptr::null_mut())
+        };
+        if status < 0 {
+            return Err(format!(
+                "Failed to create scaler: {}",
+                ffmpeg::Error::from(status)
+            ));
+        }
+        // RGB input encodes with the BT.709 matrix the stream is tagged with
+        // (swscale defaults to BT.601), as `cap_enc_ffmpeg` does. Y'CbCr input
+        // keeps its matrix: swscale never converts it between Y'CbCr formats.
+        if rgb {
+            let status = unsafe {
+                let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+                ffmpeg::ffi::sws_setColorspaceDetails(
+                    context,
+                    bt709,
+                    1,
+                    bt709,
+                    0,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                )
+            };
+            if status < 0 {
+                return Err(format!(
+                    "Failed to configure the scaler colour: {}",
+                    ffmpeg::Error::from(status)
+                ));
+            }
+        }
+        Ok(scaler)
+    }
+
+    fn run(
+        &mut self,
+        frame: &ffmpeg::frame::Video,
+        output: &mut ffmpeg::frame::Video,
+    ) -> Result<(), String> {
+        let (format, width, height) = self.output;
+        if frame.width() != self.input.1
+            || frame.height() != self.input.2
+            || output.format() != format
+            || output.width() != width
+            || output.height() != height
+        {
+            return Err("Transcoding failed: scaler size changed".to_string());
+        }
+        let status = unsafe {
+            ffmpeg::ffi::sws_scale(
+                self.context,
+                (*frame.as_ptr()).data.as_ptr() as *const *const _,
+                (*frame.as_ptr()).linesize.as_ptr() as *const _,
+                0,
+                self.input.2 as std::os::raw::c_int,
+                (*output.as_mut_ptr()).data.as_ptr(),
+                (*output.as_mut_ptr()).linesize.as_ptr() as *mut _,
+            )
+        };
+        if status < 0 {
+            return Err(format!(
+                "Transcoding failed: {}",
+                ffmpeg::Error::from(status)
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ImportScaler {
+    fn drop(&mut self) {
+        unsafe { ffmpeg::ffi::sws_freeContext(self.context) };
+    }
+}
+
 /// The scaler half of the packet loop (`import.rs:1200-1241`), targeting the
-/// encoder's negotiated pixel format instead of a hardcoded YUV420P.
+/// encoder's negotiated pixel format instead of a hardcoded YUV420P. The
+/// scaler is rebuilt whenever a frame's format, size or range differs from
+/// the one it was built for.
 fn convert_for_encode(
     frame: &ffmpeg::frame::Video,
-    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    scaler: &mut Option<ImportScaler>,
     pixel_format: avformat::Pixel,
     width: u32,
     height: u32,
+    color: SourceColor,
 ) -> Result<ffmpeg::frame::Video, String> {
-    if frame.format() == pixel_format && frame.width() == width && frame.height() == height {
+    let full_range = color.full_range || frame.color_range() == ffmpeg::color::Range::JPEG;
+    if frame.format() == pixel_format
+        && frame.width() == width
+        && frame.height() == height
+        && !full_range
+    {
         let mut reference = ffmpeg::frame::Video::empty();
         let status = unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
         return Ok(if status >= 0 {
@@ -1285,28 +1547,177 @@ fn convert_for_encode(
         });
     }
 
-    if scaler.is_none() {
-        *scaler = Some(
-            ffmpeg::software::scaling::Context::get(
-                frame.format(),
-                frame.width(),
-                frame.height(),
-                pixel_format,
-                width,
-                height,
-                ffmpeg::software::scaling::Flags::BILINEAR,
-            )
-            .map_err(|e| format!("Failed to create scaler: {e}"))?,
-        );
+    let input = (frame.format(), frame.width(), frame.height(), full_range);
+    let output = (pixel_format, width, height);
+    let reusable = scaler
+        .as_ref()
+        .is_some_and(|scaler| scaler.input == input && scaler.output == output);
+    if !reusable {
+        *scaler = Some(ImportScaler::new(input, output, color.rgb)?);
     }
     let scaler = scaler.as_mut().expect("just created");
 
     let mut scaled = ffmpeg::frame::Video::new(pixel_format, width, height);
-    scaler
-        .run(frame, &mut scaled)
-        .map_err(|e| format!("Transcoding failed: {e}"))?;
+    scaler.run(frame, &mut scaled)?;
     scaled.set_pts(frame.pts());
     Ok(scaled)
+}
+
+/// The coded size resampled to square pixels. Anamorphic sources (a non-1:1
+/// sample aspect ratio) otherwise reach the editor at their coded size, which
+/// stretches them because nothing downstream reads the ratio.
+fn square_pixel_size(width: u32, height: u32, sample_aspects: [ffmpeg::Rational; 2]) -> (u32, u32) {
+    let display_width = sample_aspects
+        .into_iter()
+        .find(|ratio| ratio.numerator() > 0 && ratio.denominator() > 0)
+        .map(|ratio| {
+            f64::from(width) * f64::from(ratio.numerator()) / f64::from(ratio.denominator())
+        })
+        .filter(|width| width.is_finite() && (2.0..=f64::from(MAX_IMAGE_DIMENSION)).contains(width))
+        .map_or(width, |width| width.round() as u32);
+    (ensure_even(display_width), ensure_even(height))
+}
+
+/// Clockwise turn that makes a source upright. Phone cameras store portrait
+/// video as landscape pixels plus a display matrix; the bundle's display.mp4
+/// carries no matrix and the editor never reads one, so the import bakes the
+/// turn into the pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceRotation {
+    None,
+    Clockwise90,
+    Clockwise180,
+    Clockwise270,
+}
+
+impl SourceRotation {
+    fn from_parameters(parameters: &avcodec::Parameters) -> Self {
+        let counterclockwise = unsafe {
+            let parameters = parameters.as_ptr();
+            let side_data = ffmpeg::ffi::av_packet_side_data_get(
+                (*parameters).coded_side_data,
+                (*parameters).nb_coded_side_data,
+                ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+            );
+            if side_data.is_null()
+                || (*side_data).data.is_null()
+                || (*side_data).size < 9 * std::mem::size_of::<i32>()
+            {
+                return Self::None;
+            }
+            ffmpeg::ffi::av_display_rotation_get((*side_data).data.cast::<i32>())
+        };
+        Self::from_counterclockwise_degrees(counterclockwise)
+    }
+
+    fn from_counterclockwise_degrees(degrees: f64) -> Self {
+        if !degrees.is_finite() {
+            return Self::None;
+        }
+        match (-degrees.round()).rem_euclid(360.0) as u32 {
+            90 => Self::Clockwise90,
+            180 => Self::Clockwise180,
+            270 => Self::Clockwise270,
+            _ => Self::None,
+        }
+    }
+
+    fn rotated_size(self, width: u32, height: u32) -> (u32, u32) {
+        match self {
+            Self::Clockwise90 | Self::Clockwise270 => (height, width),
+            Self::None | Self::Clockwise180 => (width, height),
+        }
+    }
+
+    fn apply(self, frame: ffmpeg::frame::Video) -> Result<ffmpeg::frame::Video, String> {
+        if self == Self::None {
+            return Ok(frame);
+        }
+        let format = frame.format();
+        if !matches!(format, avformat::Pixel::YUV420P | avformat::Pixel::NV12) {
+            return Err(format!("Cannot rotate {format:?} video frames"));
+        }
+        let (width, height) = self.rotated_size(frame.width(), frame.height());
+        let mut rotated = ffmpeg::frame::Video::new(format, width, height);
+        for plane in 0..frame.planes() {
+            let sample_bytes = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let source = SourcePlane {
+                data: frame.data(plane),
+                stride: frame.stride(plane),
+                width: frame.plane_width(plane) as usize,
+                height: frame.plane_height(plane) as usize,
+                sample_bytes,
+            };
+            let dst_stride = rotated.stride(plane);
+            source.rotate_into(rotated.data_mut(plane), dst_stride, self);
+        }
+        rotated.set_pts(frame.pts());
+        Ok(rotated)
+    }
+}
+
+struct SourcePlane<'a> {
+    data: &'a [u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    sample_bytes: usize,
+}
+
+impl SourcePlane<'_> {
+    fn rotate_into(&self, dst: &mut [u8], dst_stride: usize, rotation: SourceRotation) {
+        match self.sample_bytes {
+            2 => self.rotate_samples::<2>(dst, dst_stride, rotation),
+            _ => self.rotate_samples::<1>(dst, dst_stride, rotation),
+        }
+    }
+
+    fn rotate_samples<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        rotation: SourceRotation,
+    ) {
+        let (width, height) = (self.width, self.height);
+        match rotation {
+            SourceRotation::None => self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (x, y)),
+            SourceRotation::Clockwise90 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (height - 1 - y, x))
+            }
+            SourceRotation::Clockwise180 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (width - 1 - x, height - 1 - y))
+            }
+            SourceRotation::Clockwise270 => {
+                self.copy_tiles::<SAMPLE>(dst, dst_stride, |x, y| (y, width - 1 - x))
+            }
+        }
+    }
+
+    fn copy_tiles<const SAMPLE: usize>(
+        &self,
+        dst: &mut [u8],
+        dst_stride: usize,
+        destination: impl Fn(usize, usize) -> (usize, usize),
+    ) {
+        const TILE: usize = 64;
+        for tile_y in (0..self.height).step_by(TILE) {
+            for tile_x in (0..self.width).step_by(TILE) {
+                for y in tile_y..(tile_y + TILE).min(self.height) {
+                    let row = &self.data[y * self.stride..];
+                    for x in tile_x..(tile_x + TILE).min(self.width) {
+                        let (dst_x, dst_y) = destination(x, y);
+                        let to = dst_y * dst_stride + dst_x * SAMPLE;
+                        let from = x * SAMPLE;
+                        dst[to..to + SAMPLE].copy_from_slice(&row[from..from + SAMPLE]);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1352,6 +1763,7 @@ fn open_h264_encoder(
     height: u32,
     fps: u32,
     time_base: ffmpeg::Rational,
+    matrix: ImportMatrix,
 ) -> Result<H264Output, String> {
     let mut last_error = None;
 
@@ -1372,7 +1784,16 @@ fn open_h264_encoder(
             avformat::Pixel::NV12
         };
 
-        match open_h264_with_codec(codec, name, pixel_format, width, height, fps, time_base) {
+        match open_h264_with_codec(
+            codec,
+            name,
+            pixel_format,
+            width,
+            height,
+            fps,
+            time_base,
+            matrix,
+        ) {
             Ok(encoder) => {
                 let mut stream = output
                     .add_stream(codec)
@@ -1413,6 +1834,7 @@ fn open_h264_encoder(
         .unwrap_or_else(|| "Failed to create encoder: no H264 codec found".to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_h264_with_codec(
     codec: ffmpeg::codec::codec::Codec,
     name: &str,
@@ -1421,6 +1843,7 @@ fn open_h264_with_codec(
     height: u32,
     fps: u32,
     time_base: ffmpeg::Rational,
+    matrix: ImportMatrix,
 ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
     // `get_codec_and_options` (`h264.rs:1021-1126`) for `H264Preset::Medium`
     // off the export path, which is what the import asks the builder for.
@@ -1458,12 +1881,24 @@ fn open_h264_with_codec(
     encoder.set_format(pixel_format);
     encoder.set_time_base(time_base);
     encoder.set_frame_rate(Some((fps as i32, 1)));
-    encoder.set_colorspace(ffmpeg::color::Space::BT709);
+    // BT.601 sources keep their matrix, so the stream says so; the SMPTE 170M
+    // primaries go with it. The transfer curve is the same for both.
+    let (space, primaries) = match matrix {
+        ImportMatrix::Bt709 => (
+            ffmpeg::color::Space::BT709,
+            ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709,
+        ),
+        ImportMatrix::Bt601 => (
+            ffmpeg::color::Space::SMPTE170M,
+            ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_SMPTE170M,
+        ),
+    };
+    encoder.set_colorspace(space);
     encoder.set_color_range(ffmpeg::color::Range::MPEG);
-    // `h264.rs:611-615`: the BT709 tags travel in the codec context, and
-    // ffmpeg-next exposes neither field.
+    // `h264.rs:611-615`: the primaries and transfer tags travel in the codec
+    // context, and ffmpeg-next exposes neither field.
     unsafe {
-        (*encoder.as_mut_ptr()).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+        (*encoder.as_mut_ptr()).color_primaries = primaries;
         (*encoder.as_mut_ptr()).color_trc =
             ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
     }
@@ -2003,6 +2438,43 @@ mod tests {
         assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline);
     }
 
+    /// A worker that panics never sends Complete or Failed, so its import has
+    /// to leave the list anyway or `imports_in_flight` stays true for good.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_panicking_import_worker_leaves_no_import_in_flight(cx: &mut gpui::TestAppContext) {
+        let _imports = IMPORT_TEST_LOCK.lock().unwrap();
+        let baseline = ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire);
+        let root = temp_dir("worker-panic");
+        let project_path = root.join("Imported Video.cap");
+        cx.update(|cx| {
+            spawn_import(cx, move |tx| {
+                let _ = tx.send(ImportProgress {
+                    kind: ImportKind::Video,
+                    project_path,
+                    pretty_name: "Imported Video".to_string(),
+                    stage: ImportStage::Converting,
+                    progress: 0.5,
+                    message: String::new(),
+                });
+                panic!("import worker panicked mid-conversion");
+            });
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire) != baseline {
+            assert!(std::time::Instant::now() < deadline, "worker never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(imports_snapshot(cx).is_empty());
+            assert!(!imports_in_flight(cx));
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn extension_filters_are_case_insensitive_and_file_gated() {
         let dir = temp_dir("extensions");
@@ -2052,17 +2524,82 @@ mod tests {
     fn unique_project_path_suffixes_like_the_tauri_import() {
         let dir = temp_dir("unique");
 
-        let first = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let first = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(first.ends_with("Video 2026-01-01 at 10.00.00.cap"));
         std::fs::create_dir_all(&first).unwrap();
 
-        let second = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let second = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(second.ends_with("Video 2026-01-01 at 10.00.00 (1).cap"));
         std::fs::create_dir_all(&second).unwrap();
 
-        let third = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let third = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(third.ends_with("Video 2026-01-01 at 10.00.00 (2).cap"));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unique_project_path_fits_a_long_source_name_in_a_folder_name() {
+        let dir = temp_dir("long-name");
+        let name = format!("{} 2026-01-01 at 10.00.00", "a".repeat(236));
+
+        let first = unique_project_path(&dir, &name).unwrap();
+        std::fs::create_dir_all(&first).unwrap();
+        let second = unique_project_path(&dir, &name).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        for path in [&first, &second] {
+            let folder = path.file_name().unwrap().to_str().unwrap();
+            assert!(folder.len() <= 255, "{} bytes", folder.len());
+            assert!(folder.starts_with("aaaa"), "{folder}");
+        }
+        assert!(first.to_str().unwrap().ends_with(".cap"));
+        assert!(second.to_str().unwrap().ends_with(" (1).cap"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unique_project_path_cuts_long_names_on_a_character_boundary() {
+        let dir = temp_dir("long-unicode");
+        for stem in [
+            "日本語".repeat(28),
+            "🎬".repeat(63),
+            "é".repeat(125),
+            format!("{}.final.cut", "a".repeat(240)),
+        ] {
+            let name = sanitize_filename(&format!("{stem} 2026-01-01 at 10.00.00"));
+            let first = unique_project_path(&dir, &name).unwrap();
+            std::fs::create_dir_all(&first).unwrap();
+            let second = unique_project_path(&dir, &name).unwrap();
+            std::fs::create_dir_all(&second).unwrap();
+
+            for path in [&first, &second] {
+                let folder = path.file_name().unwrap().to_str().unwrap();
+                assert!(folder.len() <= 255, "{} bytes", folder.len());
+                assert!(folder.starts_with(&stem.chars().take(3).collect::<String>()));
+                assert!(folder.ends_with(".cap"), "{folder}");
+            }
+            assert!(second.to_str().unwrap().ends_with(" (1).cap"));
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unique_project_path_keeps_short_names_as_they_were() {
+        let dir = temp_dir("short");
+        for name in [
+            "Video 2026-01-01 at 10.00.00",
+            "clip.v2 2026-01-01 at 10.00.00",
+            ".hidden 2026-01-01 at 10.00.00",
+            "会议记录 2026-01-01 at 10.00.00",
+        ] {
+            assert_eq!(
+                unique_project_path(&dir, name).unwrap(),
+                dir.join(format!("{name}.cap"))
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2083,6 +2620,275 @@ mod tests {
         assert_eq!(ensure_even(0), 2);
     }
 
+    fn limited_bt709() -> SourceColor {
+        SourceColor::new(
+            avformat::Pixel::YUV420P,
+            ffmpeg::color::Space::BT709,
+            ffmpeg::color::Range::MPEG,
+            1080,
+        )
+    }
+
+    fn yuv_frame(format: avformat::Pixel, [y, u, v]: [u8; 3]) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, 16, 12);
+        frame.data_mut(0).fill(y);
+        frame.data_mut(1).fill(u);
+        frame.data_mut(2).fill(v);
+        frame
+    }
+
+    /// The stored Y' sample at the centre of the first decoded frame, with
+    /// no range conversion on the way.
+    fn first_frame_center_luma(path: &Path) -> u8 {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                if decoder.receive_frame(&mut frame).is_ok() {
+                    break;
+                }
+            }
+        }
+        if frame.width() == 0 {
+            decoder.send_eof().unwrap();
+            decoder.receive_frame(&mut frame).unwrap();
+        }
+        let (x, y) = (frame.width() as usize / 2, frame.height() as usize / 2);
+        frame.data(0)[y * frame.stride(0) + x]
+    }
+
+    fn first_sample(frame: &ffmpeg::frame::Video) -> [u8; 3] {
+        [frame.data(0)[0], frame.data(1)[0], frame.data(2)[0]]
+    }
+
+    #[test]
+    fn source_matrix_follows_the_tag_and_the_sd_hd_convention() {
+        let matrix = |format, space, height| {
+            SourceColor::new(format, space, ffmpeg::color::Range::Unspecified, height).output()
+        };
+        use ffmpeg::color::Space;
+        let yuv = avformat::Pixel::YUV420P;
+        assert_eq!(matrix(yuv, Space::BT709, 480), ImportMatrix::Bt709);
+        assert_eq!(matrix(yuv, Space::SMPTE170M, 1080), ImportMatrix::Bt601);
+        assert_eq!(matrix(yuv, Space::BT470BG, 1080), ImportMatrix::Bt601);
+        assert_eq!(matrix(yuv, Space::Unspecified, 1080), ImportMatrix::Bt709);
+        assert_eq!(matrix(yuv, Space::Unspecified, 720), ImportMatrix::Bt709);
+        assert_eq!(matrix(yuv, Space::Unspecified, 480), ImportMatrix::Bt601);
+        assert_eq!(matrix(yuv, Space::BT2020NCL, 2160), ImportMatrix::Bt709);
+        assert_eq!(
+            matrix(avformat::Pixel::RGBA, Space::SMPTE170M, 480),
+            ImportMatrix::Bt709
+        );
+    }
+
+    #[test]
+    fn full_range_sources_are_detected_from_tag_or_pixel_format() {
+        let full_range = |format, range| {
+            SourceColor::new(format, ffmpeg::color::Space::BT709, range, 1080).full_range
+        };
+        use ffmpeg::color::Range;
+        assert!(!full_range(avformat::Pixel::YUV420P, Range::MPEG));
+        assert!(!full_range(avformat::Pixel::YUV420P, Range::Unspecified));
+        assert!(full_range(avformat::Pixel::YUV420P, Range::JPEG));
+        assert!(full_range(avformat::Pixel::YUVJ420P, Range::Unspecified));
+        assert!(full_range(avformat::Pixel::RGB24, Range::Unspecified));
+    }
+
+    #[test]
+    fn full_range_frames_are_scaled_to_limited_range() {
+        let color = SourceColor::new(
+            avformat::Pixel::YUV420P,
+            ffmpeg::color::Space::BT709,
+            ffmpeg::color::Range::JPEG,
+            12,
+        );
+        for (source, expected) in [([255, 128, 128], 235), ([0, 128, 128], 16)] {
+            let mut frame = yuv_frame(avformat::Pixel::YUV420P, source);
+            frame.set_color_range(ffmpeg::color::Range::JPEG);
+            let mut scaler = None;
+            let converted =
+                convert_for_encode(&frame, &mut scaler, avformat::Pixel::YUV420P, 16, 12, color)
+                    .unwrap();
+            assert!(scaler.is_some(), "a full-range frame skipped the scaler");
+            let [y, u, v] = first_sample(&converted);
+            assert!(y.abs_diff(expected) <= 1, "Y {y} for {source:?}");
+            assert!(
+                u.abs_diff(128) <= 1 && v.abs_diff(128) <= 1,
+                "chroma {u} {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn ten_bit_full_range_frames_are_scaled_to_limited_range() {
+        let color = SourceColor::new(
+            avformat::Pixel::YUV420P10LE,
+            ffmpeg::color::Space::BT709,
+            ffmpeg::color::Range::JPEG,
+            12,
+        );
+        for (luma, expected) in [(1023u16, 235u8), (0, 16)] {
+            let mut frame = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P10LE, 16, 12);
+            for (plane, value) in [(0, luma), (1, 512), (2, 512)] {
+                for sample in frame.data_mut(plane).chunks_mut(2) {
+                    sample.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            frame.set_color_range(ffmpeg::color::Range::JPEG);
+            let mut scaler = None;
+            let converted =
+                convert_for_encode(&frame, &mut scaler, avformat::Pixel::YUV420P, 16, 12, color)
+                    .unwrap();
+            let [y, u, v] = first_sample(&converted);
+            assert!(y.abs_diff(expected) <= 1, "Y {y} for 10-bit {luma}");
+            assert!(
+                u.abs_diff(128) <= 1 && v.abs_diff(128) <= 1,
+                "chroma {u} {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_change_mid_stream_rebuilds_the_scaler() {
+        // Resized (anamorphic) frames always go through the scaler; a frame
+        // that flips to full range must not abort the import.
+        let color = limited_bt709();
+        let mut scaler = None;
+        let limited = yuv_frame(avformat::Pixel::YUV420P, [235, 128, 128]);
+        let converted = convert_for_encode(
+            &limited,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            20,
+            12,
+            color,
+        )
+        .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
+
+        let mut full = yuv_frame(avformat::Pixel::YUV420P, [255, 128, 128]);
+        full.set_color_range(ffmpeg::color::Range::JPEG);
+        let converted =
+            convert_for_encode(&full, &mut scaler, avformat::Pixel::YUV420P, 20, 12, color)
+                .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
+
+        let converted = convert_for_encode(
+            &limited,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            20,
+            12,
+            color,
+        )
+        .unwrap();
+        assert!(first_sample(&converted)[0].abs_diff(235) <= 1);
+    }
+
+    #[test]
+    fn limited_range_bt601_frames_keep_their_samples() {
+        let color = SourceColor::new(
+            avformat::Pixel::YUV420P,
+            ffmpeg::color::Space::SMPTE170M,
+            ffmpeg::color::Range::MPEG,
+            12,
+        );
+        let frame = yuv_frame(avformat::Pixel::YUV420P, [81, 90, 240]);
+        let mut scaler = None;
+        let converted =
+            convert_for_encode(&frame, &mut scaler, avformat::Pixel::NV12, 16, 12, color).unwrap();
+        assert_eq!(converted.data(0)[0], 81);
+        assert_eq!(&converted.data(1)[..2], &[90, 240]);
+    }
+
+    #[test]
+    fn rgb_frames_are_encoded_with_the_bt709_matrix_they_are_tagged_with() {
+        let mut red = ffmpeg::frame::Video::new(avformat::Pixel::RGBA, 16, 12);
+        let stride = red.stride(0);
+        for row in red.data_mut(0).chunks_mut(stride) {
+            for pixel in row[..16 * 4].chunks_mut(4) {
+                pixel.copy_from_slice(&[255, 0, 0, 255]);
+            }
+        }
+        let color = SourceColor::new(
+            avformat::Pixel::RGBA,
+            ffmpeg::color::Space::Unspecified,
+            ffmpeg::color::Range::Unspecified,
+            12,
+        );
+        assert_eq!(color.output(), ImportMatrix::Bt709);
+        let mut scaler = None;
+        let converted =
+            convert_for_encode(&red, &mut scaler, avformat::Pixel::YUV420P, 16, 12, color).unwrap();
+        // BT.709 limited-range red is (63, 102, 240); BT.601 would give Y 81.
+        let [y, u, v] = first_sample(&converted);
+        assert!(y.abs_diff(63) <= 1, "Y {y}");
+        assert!(u.abs_diff(102) <= 1, "Cb {u}");
+        assert!(v.abs_diff(240) <= 1, "Cr {v}");
+    }
+
+    #[test]
+    fn bt601_tagged_video_imports_tagged_bt601_with_its_samples_intact() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("bt601-source");
+        let source = root.join("source.mp4");
+        let mut output = avformat::output(&source).unwrap();
+        let mut encoder = open_h264_encoder(
+            &mut output,
+            320,
+            240,
+            10,
+            (1, 10).into(),
+            ImportMatrix::Bt601,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+        for index in 0..10u64 {
+            let mut frame = ffmpeg::frame::Video::new(encoder.pixel_format, 320, 240);
+            frame.data_mut(0).fill(81);
+            if encoder.pixel_format == avformat::Pixel::NV12 {
+                for pair in frame.data_mut(1).chunks_mut(2) {
+                    pair.copy_from_slice(&[90, 240]);
+                }
+            } else {
+                frame.data_mut(1).fill(90);
+                frame.data_mut(2).fill(240);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_millis(index * 100), &mut output)
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(output);
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+
+        let imported = root.join("display.mp4");
+        transcode_video(&source, &imported, None, &root, &|_| {}, None).unwrap();
+
+        let input = avformat::input(&imported).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        assert_eq!(decoder.color_space(), ffmpeg::color::Space::SMPTE170M);
+        drop(input);
+
+        let center = first_frame_center_luma(&imported);
+        assert!(center.abs_diff(81) <= 2, "luma {center}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn matching_import_frame_reuses_reference_counted_pixels() {
         let mut original = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P, 16, 12);
@@ -2090,9 +2896,15 @@ mod tests {
         original.data_mut(0)[0] = 81;
         let mut scaler = None;
 
-        let converted =
-            convert_for_encode(&original, &mut scaler, avformat::Pixel::YUV420P, 16, 12)
-                .expect("reference-counted import frame");
+        let converted = convert_for_encode(
+            &original,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            16,
+            12,
+            limited_bt709(),
+        )
+        .expect("reference-counted import frame");
 
         assert!(scaler.is_none());
         assert_eq!(converted.data(0).as_ptr(), original.data(0).as_ptr());
@@ -2116,9 +2928,20 @@ mod tests {
         original.set_pts(Some(819));
         let mut scaler = None;
 
-        let converted =
-            convert_for_encode(&original, &mut scaler, avformat::Pixel::YUV420P, 16, 12)
-                .expect("converted import frame");
+        let converted = convert_for_encode(
+            &original,
+            &mut scaler,
+            avformat::Pixel::YUV420P,
+            16,
+            12,
+            SourceColor::new(
+                avformat::Pixel::RGBA,
+                ffmpeg::color::Space::Unspecified,
+                ffmpeg::color::Range::Unspecified,
+                12,
+            ),
+        )
+        .expect("converted import frame");
 
         assert!(scaler.is_some());
         assert_eq!(converted.format(), avformat::Pixel::YUV420P);
@@ -2220,6 +3043,402 @@ mod tests {
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn display_matrix_angles_map_to_the_clockwise_turn_ffmpeg_applies() {
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-90.0),
+            SourceRotation::Clockwise90
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(90.0),
+            SourceRotation::Clockwise270
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-180.0),
+            SourceRotation::Clockwise180
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(-0.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(45.0),
+            SourceRotation::None
+        );
+        assert_eq!(
+            SourceRotation::from_counterclockwise_degrees(f64::NAN),
+            SourceRotation::None
+        );
+    }
+
+    #[test]
+    fn anamorphic_sources_resample_to_square_pixels() {
+        let unset = ffmpeg::Rational::new(0, 1);
+        assert_eq!(
+            square_pixel_size(1440, 1080, [ffmpeg::Rational::new(4, 3), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(720, 720, [unset, ffmpeg::Rational::new(9, 16)]),
+            (404, 720)
+        );
+        assert_eq!(square_pixel_size(1920, 1080, [unset, unset]), (1920, 1080));
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(1, 1), unset]),
+            (1920, 1080)
+        );
+        assert_eq!(
+            square_pixel_size(1920, 1080, [ffmpeg::Rational::new(100, 1), unset]),
+            (1920, 1080)
+        );
+    }
+
+    /// Encodes a clip whose top-left quadrant is bright and everything else
+    /// dark, tagged with the display matrix and sample aspect ratio a phone or
+    /// editing app would write. The angle is the counterclockwise rotation
+    /// ffprobe reports (-90 for an iPhone portrait clip); `av_display_rotation_set`
+    /// takes the clockwise angle.
+    fn write_tagged_source(
+        path: &Path,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) {
+        let mut output = avformat::output(path).unwrap();
+        let mut encoder = open_h264_encoder(
+            &mut output,
+            width,
+            height,
+            10,
+            (1, 10).into(),
+            ImportMatrix::Bt709,
+        )
+        .unwrap();
+        unsafe {
+            let stream = (*output.as_mut_ptr())
+                .streams
+                .add(encoder.stream_index)
+                .read();
+            let parameters = (*stream).codecpar;
+            if let Some(degrees) = counterclockwise_degrees {
+                let side_data = ffmpeg::ffi::av_packet_side_data_new(
+                    &mut (*parameters).coded_side_data,
+                    &mut (*parameters).nb_coded_side_data,
+                    ffmpeg::ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+                    9 * std::mem::size_of::<i32>(),
+                    0,
+                );
+                assert!(!side_data.is_null());
+                ffmpeg::ffi::av_display_rotation_set((*side_data).data.cast::<i32>(), -degrees);
+            }
+            if let Some((num, den)) = sample_aspect {
+                let ratio = ffmpeg::ffi::AVRational { num, den };
+                (*parameters).sample_aspect_ratio = ratio;
+                (*stream).sample_aspect_ratio = ratio;
+            }
+        }
+        output.write_header().unwrap();
+        for index in 0..10u64 {
+            let mut frame = ffmpeg::frame::Video::new(encoder.pixel_format, width, height);
+            let luma_stride = frame.stride(0);
+            let luma = frame.data_mut(0);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let bright = x < width as usize / 2 && y < height as usize / 2;
+                    luma[y * luma_stride + x] = if bright { 235 } else { 16 };
+                }
+            }
+            for plane in 1..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_millis(index * 100), &mut output)
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+    }
+
+    fn first_frame_luma(path: &Path) -> (u32, u32, Vec<u8>) {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            if decoder.receive_frame(&mut frame).is_ok() {
+                break;
+            }
+        }
+        if frame.width() == 0 {
+            decoder.send_eof().unwrap();
+            decoder.receive_frame(&mut frame).unwrap();
+        }
+        let mut gray = ffmpeg::frame::Video::empty();
+        ffmpeg::software::scaling::Context::get(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            avformat::Pixel::GRAY8,
+            frame.width(),
+            frame.height(),
+            ffmpeg::software::scaling::Flags::POINT,
+        )
+        .unwrap()
+        .run(&frame, &mut gray)
+        .unwrap();
+        let (width, height, stride) = (gray.width(), gray.height(), gray.stride(0));
+        let luma = (0..height as usize)
+            .flat_map(|y| gray.data(0)[y * stride..y * stride + width as usize].to_vec())
+            .collect();
+        (width, height, luma)
+    }
+
+    /// Whether each quadrant is bright, in top-left, top-right, bottom-left,
+    /// bottom-right order.
+    fn quadrant_brightness(width: u32, height: u32, luma: &[u8]) -> [bool; 4] {
+        let (width, height) = (width as usize, height as usize);
+        let mut sums = [0u64; 4];
+        let mut counts = [0u64; 4];
+        for y in 0..height {
+            for x in 0..width {
+                let quadrant = usize::from(x >= width / 2) + 2 * usize::from(y >= height / 2);
+                sums[quadrant] += u64::from(luma[y * width + x]);
+                counts[quadrant] += 1;
+            }
+        }
+        std::array::from_fn(|quadrant| sums[quadrant] / counts[quadrant].max(1) > 128)
+    }
+
+    fn import_tagged_source(
+        tag: &str,
+        width: u32,
+        height: u32,
+        counterclockwise_degrees: Option<f64>,
+        sample_aspect: Option<(i32, i32)>,
+    ) -> (u32, u32, [bool; 4]) {
+        ffmpeg::init().unwrap();
+        let root = temp_dir(tag);
+        let source = root.join("source.mp4");
+        write_tagged_source(
+            &source,
+            width,
+            height,
+            counterclockwise_degrees,
+            sample_aspect,
+        );
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        transcode_video(&source, &output, None, &root, &|_| {}, None).unwrap();
+        let (out_width, out_height, luma) = first_frame_luma(&output);
+        std::fs::remove_dir_all(root).unwrap();
+        (
+            out_width,
+            out_height,
+            quadrant_brightness(out_width, out_height, &luma),
+        )
+    }
+
+    #[test]
+    fn untagged_sources_import_unchanged() {
+        assert_eq!(
+            import_tagged_source("untagged", 320, 240, None, None),
+            (320, 240, [true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn iphone_portrait_video_imports_upright_and_portrait() {
+        assert_eq!(
+            import_tagged_source("rotate-cw", 320, 240, Some(-90.0), None),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
+    #[test]
+    fn counterclockwise_and_upside_down_sources_import_upright() {
+        assert_eq!(
+            import_tagged_source("rotate-ccw", 320, 240, Some(90.0), None),
+            (240, 320, [false, false, true, false])
+        );
+        assert_eq!(
+            import_tagged_source("rotate-180", 320, 240, Some(180.0), None),
+            (320, 240, [false, false, false, true])
+        );
+    }
+
+    #[test]
+    fn anamorphic_video_imports_at_its_display_shape() {
+        assert_eq!(
+            import_tagged_source("anamorphic", 160, 240, None, Some((2, 1))),
+            (320, 240, [true, false, false, false])
+        );
+        assert_eq!(
+            import_tagged_source("anamorphic-rotated", 160, 240, Some(-90.0), Some((2, 1))),
+            (240, 320, [false, true, false, false])
+        );
+    }
+
+    const ALL_TURNS: [SourceRotation; 3] = [
+        SourceRotation::Clockwise90,
+        SourceRotation::Clockwise180,
+        SourceRotation::Clockwise270,
+    ];
+
+    /// The source position whose sample lands at (x, y) of a plane turned
+    /// clockwise, written from the output side so it does not mirror
+    /// `rotate_samples`.
+    fn source_position(
+        rotation: SourceRotation,
+        source_width: usize,
+        source_height: usize,
+        x: usize,
+        y: usize,
+    ) -> (usize, usize) {
+        match rotation {
+            SourceRotation::None => (x, y),
+            SourceRotation::Clockwise90 => (y, source_height - 1 - x),
+            SourceRotation::Clockwise180 => (source_width - 1 - x, source_height - 1 - y),
+            SourceRotation::Clockwise270 => (source_width - 1 - y, x),
+        }
+    }
+
+    /// Every sample in every plane gets its own value, and U never equals V,
+    /// so a misplaced, swapped or split chroma sample changes the result.
+    fn distinct_sample(plane: usize, channel: usize, x: usize, y: usize) -> u8 {
+        let base = [0, 64, 160][plane + channel];
+        (base + y * 8 + x) as u8
+    }
+
+    /// 8x6 luma with 4x3 chroma: small enough that every sample value above
+    /// stays distinct within its plane.
+    fn distinct_frame(format: avformat::Pixel) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, 8, 6);
+        frame.set_pts(Some(42));
+        for plane in 0..frame.planes() {
+            let channels = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let (width, height) = (frame.plane_width(plane), frame.plane_height(plane));
+            let stride = frame.stride(plane);
+            let data = frame.data_mut(plane);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    for channel in 0..channels {
+                        data[y * stride + x * channels + channel] =
+                            distinct_sample(plane, channel, x, y);
+                    }
+                }
+            }
+        }
+        frame
+    }
+
+    /// (plane, channel) for U and V in each supported layout.
+    fn chroma_channels(format: avformat::Pixel) -> [(usize, usize); 2] {
+        if format == avformat::Pixel::NV12 {
+            [(1, 0), (1, 1)]
+        } else {
+            [(1, 0), (2, 0)]
+        }
+    }
+
+    fn assert_turned_exactly(format: avformat::Pixel, rotation: SourceRotation) {
+        let rotated = rotation.apply(distinct_frame(format)).unwrap();
+        let (expected_width, expected_height) = rotation.rotated_size(8, 6);
+        assert_eq!(
+            (rotated.format(), rotated.width(), rotated.height()),
+            (format, expected_width, expected_height),
+            "{format:?} {rotation:?}"
+        );
+        assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
+
+        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
+        let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+        for (plane, channel, channels, source_width, source_height) in [
+            (0, 0, 1, 8, 6),
+            (u_plane, u_channel, chroma_samples, 4, 3),
+            (v_plane, v_channel, chroma_samples, 4, 3),
+        ] {
+            let (width, height) = rotation.rotated_size(source_width as u32, source_height as u32);
+            assert_eq!(
+                (rotated.plane_width(plane), rotated.plane_height(plane)),
+                (width, height),
+                "{format:?} {rotation:?} plane {plane}"
+            );
+            let (width, height) = (width as usize, height as usize);
+            let stride = rotated.stride(plane);
+            for y in 0..height {
+                for x in 0..width {
+                    let (source_x, source_y) =
+                        source_position(rotation, source_width, source_height, x, y);
+                    assert_eq!(
+                        rotated.data(plane)[y * stride + x * channels + channel],
+                        distinct_sample(plane, channel, source_x, source_y),
+                        "{format:?} {rotation:?} plane {plane} channel {channel} at ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn planar_chroma_lands_where_each_turn_puts_it() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::YUV420P, rotation);
+        }
+    }
+
+    #[test]
+    fn interleaved_nv12_chroma_pairs_turn_together_in_order() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::NV12, rotation);
+        }
+    }
+
+    #[test]
+    fn turned_chroma_corners_match_hand_worked_positions() {
+        // Source chroma is 4x3. A clockwise quarter turn moves the source's
+        // bottom-left sample to the top-left, so U there is distinct_sample
+        // at (0, 2); a counterclockwise one moves the top-right there.
+        for format in [avformat::Pixel::YUV420P, avformat::Pixel::NV12] {
+            let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+            for (rotation, (source_x, source_y)) in [
+                (SourceRotation::Clockwise90, (0, 2)),
+                (SourceRotation::Clockwise180, (3, 2)),
+                (SourceRotation::Clockwise270, (3, 0)),
+            ] {
+                let rotated = rotation.apply(distinct_frame(format)).unwrap();
+                assert_eq!(
+                    (
+                        rotated.data(u_plane)[u_channel],
+                        rotated.data(v_plane)[v_channel],
+                    ),
+                    (
+                        distinct_sample(1, 0, source_x, source_y),
+                        distinct_sample(1, 1, source_x, source_y),
+                    ),
+                    "{format:?} {rotation:?}"
+                );
+            }
+        }
     }
 
     /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`

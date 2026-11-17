@@ -1051,7 +1051,7 @@ impl MainWindow {
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]
-            cx.defer(crate::menus::quit);
+            cx.defer(|cx| crate::menus::quit(crate::menus::QuitSource::MainWindowClose, cx));
             #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false
@@ -1079,7 +1079,22 @@ impl MainWindow {
             }
             if phase == Phase::Idle && previous_phase != Phase::Idle {
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
-                if let Some(notice) = session.read(cx).storage_notice.clone() {
+                let notice = {
+                    let session = session.read(cx);
+                    session
+                        .storage_notice
+                        .clone()
+                        .map(|notice| (tr::main::storage::title(), notice))
+                        .or_else(|| {
+                            session.capture_source_lost.then(|| {
+                                (
+                                    tr::dialog::capture::source_lost_title(),
+                                    tr::dialog::capture::source_lost().into(),
+                                )
+                            })
+                        })
+                };
+                if let Some((title, notice)) = notice {
                     let main = cx.global::<app_windows::AppWindows>().main;
                     cx.spawn(async move |_, cx| {
                         let receiver = cx.update(|cx| {
@@ -1088,7 +1103,7 @@ impl MainWindow {
                             main.update(cx, |_, window, cx| {
                                 window.prompt(
                                     gpui::PromptLevel::Warning,
-                                    tr::main::storage::title(),
+                                    title,
                                     Some(&notice),
                                     &[gpui::PromptButton::cancel(tr::common::ok())],
                                     cx,
@@ -2134,6 +2149,7 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+        let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
             || mode == Mode::Screenshot;
@@ -2267,6 +2283,24 @@ impl MainWindow {
                 tracing::error!("auto-record could not start");
                 return;
             }
+            // Delete does nothing until the capture is running, so its
+            // seconds count from there.
+            if delete {
+                let mut waited = 0;
+                while !cx
+                    .update(|_, cx| matches!(session.read(cx).phase, Phase::Recording { .. }))
+                    .unwrap_or(false)
+                {
+                    if waited == 300 {
+                        tracing::error!("auto-record never reached Recording to delete");
+                        return;
+                    }
+                    waited += 1;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |cx: &gpui::AsyncApp| {
@@ -2283,9 +2317,40 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
-            tracing::info!("auto-record stop requested");
+            // Where the start put the main window, and where the end of the
+            // recording leaves it (`mainWindowRecordingStartBehaviour`).
+            let log_main_window = |when: &str, cx: &mut gpui::AsyncWindowContext| {
+                if let Ok((visible, minimized)) = cx.update(|window, _| {
+                    (
+                        crate::platform::window_is_visible(window),
+                        crate::platform::window_is_minimized(window),
+                    )
+                }) {
+                    tracing::info!(visible, minimized, "auto-record main window {when}");
+                }
+            };
+            log_main_window("while recording", cx);
             let app: &gpui::AsyncApp = cx;
-            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            if delete {
+                tracing::info!("auto-record delete requested");
+                app.update(|cx| session.update(cx, |session, cx| session.delete(cx)));
+            } else {
+                tracing::info!("auto-record stop requested");
+                app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            }
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let app: &gpui::AsyncApp = cx;
+                if app.update(|cx| session.read(cx).phase == Phase::Idle) {
+                    break;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            log_main_window("after the recording", cx);
         })
         .detach();
     }
@@ -4887,7 +4952,12 @@ impl MainWindow {
         let studio = item.mode == library::RecordingMode::Studio;
         let sharing = item.sharing.clone();
         let mode = item.mode;
-        let opens_editor = item.opens_editor();
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        let opens_editor = item.opens_editor(active.as_deref());
         let subtitle = item.upload.as_ref().map_or_else(
             || item.mode.label().to_string(),
             |upload| {
@@ -4935,7 +5005,12 @@ impl MainWindow {
             .items_center()
             .justify_between()
             .gap(px(2.));
-        if item.opens_editor() {
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        if item.opens_editor(active.as_deref()) {
             let editor = path.clone();
             row = row.child(self.library_action(
                 "lib-rec-edit",
@@ -4993,6 +5068,11 @@ impl MainWindow {
             tr::settings::screenshots::open_folder(),
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
+        // The recording being captured or finalized owns its folder; the
+        // delete itself refuses it too.
+        if library::is_recording_in_progress(&path) {
+            return row;
+        }
         row.child(self.library_action(
             "lib-rec-delete",
             "icons/trash.svg",
@@ -5181,6 +5261,14 @@ impl MainWindow {
             ) {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
             }) else {
@@ -5189,6 +5277,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
@@ -5203,7 +5292,8 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = app_windows::screenshot_editor_key(&bundle);
+        cx.spawn_in(window, async move |_this, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -5224,10 +5314,7 @@ impl MainWindow {
                 tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Screenshots, window, cx);
-            })
-            .ok();
+            app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }

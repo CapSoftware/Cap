@@ -129,6 +129,16 @@ const stripVttCueTags = (value: string) => {
 	return text.join("");
 };
 
+const parseVttTimingLine = (line: string) => {
+	const match = line.trim().match(/^(.+?)\s*-->\s*(\S+)(?:\s+.*)?$/);
+	if (!match) return null;
+	const startMs = parseVttTimestamp(match[1] ?? "");
+	const endMs = parseVttTimestamp(match[2] ?? "");
+	return startMs !== null && endMs !== null && endMs >= startMs
+		? { startMs, endMs }
+		: null;
+};
+
 const normalizeCueText = (lines: string[]) =>
 	stripVttCueTags(lines.join("\n")).trim();
 
@@ -140,13 +150,8 @@ export const parseAgentVtt = (
 
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index]?.trim() ?? "";
-		if (!line.includes("-->")) continue;
-		const [startValue, rawEnd] = line.split("-->");
-		const endValue = rawEnd?.trim().split(/\s+/)[0];
-		if (!startValue || !endValue) continue;
-		const startMs = parseVttTimestamp(startValue);
-		const endMs = parseVttTimestamp(endValue);
-		if (startMs === null || endMs === null || endMs < startMs) continue;
+		const timing = parseVttTimingLine(line);
+		if (!timing) continue;
 
 		const textLines: string[] = [];
 		for (let cueIndex = index + 1; cueIndex < lines.length; cueIndex++) {
@@ -155,7 +160,7 @@ export const parseAgentVtt = (
 				index = cueIndex;
 				break;
 			}
-			if (cueLine.includes("-->")) {
+			if (parseVttTimingLine(cueLine)) {
 				index = cueIndex - 1;
 				break;
 			}
@@ -164,7 +169,7 @@ export const parseAgentVtt = (
 		}
 
 		const text = normalizeCueText(textLines);
-		if (text) cues.push({ startMs, endMs, text });
+		if (text) cues.push({ ...timing, text });
 	}
 
 	return cues;
@@ -385,6 +390,9 @@ const normalizeAiStatus = (status: string | undefined) => {
 	}
 };
 
+const publicUploadErrorCode = (error: string | null) =>
+	error && /^[A-Z][A-Z0-9_]{2,63}$/.test(error) ? error : "PROCESSING_FAILED";
+
 const normalizeUploadStatus = (input: {
 	phase: string | null;
 	error: string | null;
@@ -395,7 +403,7 @@ const normalizeUploadStatus = (input: {
 		case "generating_thumbnail":
 			return processState("processing");
 		case "error":
-			return processState("error", input.error ?? "PROCESSING_FAILED", true);
+			return processState("error", publicUploadErrorCode(input.error), true);
 		case "complete":
 		case null:
 			return processState("complete");

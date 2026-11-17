@@ -5,8 +5,10 @@ pub mod caption_words;
 mod config_write_tests;
 mod configuration;
 pub mod cursor;
+pub mod disfluency;
 pub mod keyboard;
 mod meta;
+mod shapes;
 
 pub use animated_gradient::*;
 pub use caption_timing::{
@@ -22,6 +24,7 @@ pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
 pub use meta::*;
+pub use shapes::*;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
