@@ -2471,6 +2471,25 @@ pub fn map_edited_time_to_source(
     source_range: Option<(f64, f64)>,
     recording_clip: Option<u32>,
 ) -> Option<(f64, u32)> {
+    map_edited_time_to_piece(
+        edited_time,
+        timeline,
+        recording_durations,
+        source_range,
+        recording_clip,
+    )
+    .map(|(time, clip, _)| (time, clip))
+}
+
+/// [`map_edited_time_to_source`] plus the source end of the timeline piece
+/// the time was mapped through.
+fn map_edited_time_to_piece(
+    edited_time: f64,
+    timeline: &TimelineConfiguration,
+    recording_durations: &[f64],
+    source_range: Option<(f64, f64)>,
+    recording_clip: Option<u32>,
+) -> Option<(f64, u32, f64)> {
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
     let media_end = |clip: u32| {
         let clip = clip as usize;
@@ -2480,7 +2499,7 @@ pub fn map_edited_time_to_source(
     // Best first: a piece of the tied clip overlapping `source_range`, any
     // piece of the tied clip (a clip can be cut into pieces that overlap in
     // a crossfade), any piece overlapping `source_range`, then any piece.
-    let mut best: Option<(u8, (f64, u32))> = None;
+    let mut best: Option<(u8, (f64, u32, f64))> = None;
     for (mapping, segment) in build_source_to_edited_mappings(timeline, recording_durations)
         .into_iter()
         .zip(&timeline.segments)
@@ -2491,6 +2510,7 @@ pub fn map_edited_time_to_source(
             let hit = (
                 mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale,
                 segment.recording_clip,
+                mapping.source_end,
             );
             let tied = recording_clip == Some(segment.recording_clip);
             // A tied caption lives in its clip's held tail; any other reaches
@@ -2601,11 +2621,21 @@ pub fn write_caption_edit_to_source(
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
     let tie = source.recording_clip;
     let map =
-        |time| map_edited_time_to_source(time, timeline, recording_durations, source_range, tie);
-    if let Some((start, _)) = map(track_start) {
+        |time| map_edited_time_to_piece(time, timeline, recording_durations, source_range, tie);
+    let start_hit = map(track_start);
+    if let Some((start, _, _)) = start_hit {
         source.start = start as f32;
     }
-    if let Some((end, clip)) = map(track_end) {
+    if let Some((mut end, mut clip, _)) = map(track_end) {
+        // An end dragged into another clip whose source clock runs earlier
+        // (out of a held tail, or onto a clip placed before this one) would
+        // save the caption reversed; it ends where its start's piece does.
+        if let Some((start, start_clip, piece_end)) = start_hit
+            && clip != start_clip
+            && end <= start
+        {
+            (end, clip) = (piece_end, start_clip);
+        }
         source.end = end as f32;
         // Over a clip's held tail (past its media end) the source clock
         // already belongs to the next clip, so the caption is tied to the
@@ -3570,6 +3600,54 @@ mod tests {
                 ("tail".to_string(), 9.2, 9.8)
             ]
         );
+    }
+
+    // Greptile's resize case: two 10 s recordings trimmed to 4..14 (a held
+    // tail from 10 s) and 0..10. A caption tied to the first at 12..13 shows
+    // at 8..9; dragging its end to 11, into the second clip whose source clock
+    // reads 11 there, would save it reversed as 12..11. It ends where its
+    // clip does instead, at 10 (source 14), still tied.
+    #[test]
+    fn extending_a_held_tail_caption_into_the_next_clip_keeps_it() {
+        let mut tied = caption("caption-tail", 12.0, 13.0, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![tied],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        let track = |project: &mut ProjectConfiguration| {
+            cap_project::synchronize_captions(project, &durations);
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(track(&mut project), [(8.0, 9.0)]);
+        project.timeline.as_mut().unwrap().caption_segments[0].end = 11.0;
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(
+            (source.start, source.end, source.recording_clip),
+            (12.0, 14.0, Some(0))
+        );
+        assert_eq!(track(&mut project), [(8.0, 10.0)]);
     }
 
     #[test]
