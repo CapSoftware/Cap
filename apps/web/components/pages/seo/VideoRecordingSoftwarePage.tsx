@@ -29,9 +29,9 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 				"Stop recording and Cap generates a shareable link in seconds. No uploading, no waiting, no file transfers. Paste the link in Slack, email, or Notion and your viewers get instant access. <a href='/screen-recording'>Learn more about screen recording with Cap</a>.",
 		},
 		{
-			title: "Completely Free, No Watermarks",
+			title: "Free for personal use",
 			description:
-				"Cap's Studio Mode is 100% free for personal use with no watermarks, no time limits, and no hidden fees. Unlike most video recording software, Cap never adds branding overlays to your recordings. <a href='/free-screen-recorder'>Download Cap's free recorder</a> today.",
+				"Cap Desktop is free for personal use, and the free plan includes Studio Mode with the full editor and 4K export at 60 fps. <a href='/free-screen-recorder'>Download Cap's free recorder</a> today.",
 		},
 		{
 			title: "Open Source and Auditable",
@@ -81,97 +81,9 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Video Recording Software Compared",
-		headers: ["Feature", "Cap", "Loom", "Camtasia", "OBS Studio"],
-		rows: [
-			[
-				"Price",
-				{
-					text: `Free / $${PRICING.pro.annualPerMonth}/mo`,
-					status: "positive",
-				},
-				{ text: "Free / $18/mo", status: "warning" },
-				{ text: "$299.99 one-time", status: "negative" },
-				{ text: "Free", status: "positive" },
-			],
-			[
-				"No watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Free plan adds watermark", status: "negative" },
-				{ text: "Yes (paid only)", status: "warning" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Instant share link",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Open source",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Mac and Windows",
-				{ text: "Yes", status: "positive" },
-				{ text: "Browser only", status: "warning" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Webcam + screen",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"AI captions",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
-
-	comparisonTitle: "How Cap Compares to Other Video Recording Software",
-	comparisonDescription:
-		"The best video recording software for your workflow depends on what you need — here's how Cap stacks up",
-
-	comparison: [
-		{
-			title: "Cap vs Loom",
-			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap records at up to 4K, is open-source, and supports custom S3 storage — quality and flexibility that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
-		},
-		{
-			title: "Cap vs Camtasia",
-			description:
-				"Camtasia costs $299.99 and is built around editing rather than instant sharing. Cap is free and covers the full workflow from video recording to sharing — making it the better choice for users who want professional results without enterprise pricing.",
-		},
-		{
-			title: "Cap vs OBS Studio",
-			description:
-				"OBS is also open-source and free, but it requires significant configuration and is designed for live streaming rather than async video sharing. Cap delivers instant shareable links, built-in commenting, and a clean interface with no setup overhead. <a href='/screen-recording-software'>Compare screen recording software in detail</a>.",
-		},
-		{
-			title: "Cap vs Built-in OS Recorders",
-			description:
-				"macOS and Windows built-in recorders lack system audio, webcam overlay, and instant sharing. Cap adds all of these natively with no extra plugins required. <a href='/screen-recorder-mac'>Learn more about video recording on Mac</a> or <a href='/screen-recorder-windows'>Windows</a>.",
-		},
-	],
+	comparisonTitle: "How Cap compares to Loom",
+	comparisonDescription: `Both have a free plan. Cap Pro costs $${PRICING.pro.monthly} per user per month billed monthly, or $${PRICING.pro.yearlyTotal} per user per year billed annually. Loom lists its Business plan at $18 per user per month billed monthly, or $180 per user per year billed annually. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
+	comparison: [],
 
 	useCasesTitle: "Who Uses Cap as Their Video Recording Software",
 	useCasesDescription:
