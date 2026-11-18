@@ -3394,6 +3394,7 @@ changed_after = "The local recording changed after upload; it has been preserved
 already_queued = "This recording is already queued for upload"
 paused = "Upload paused; the local recording is preserved"
 worker_failed = "The upload worker failed; the local recording is preserved"
+deleted_on_web = "This recording was deleted on the web; the local recording is preserved"
 empty = "The saved recording is empty"
 no_resumable_state = "This recording has no resumable upload state"
 verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }
