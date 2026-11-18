@@ -12,6 +12,8 @@ use crate::{
 #[cfg(target_os = "macos")]
 use crate::yuv_converter::RetainedImageBuf;
 
+use crate::downscale::DownscalePrefilter;
+
 struct PendingTextureCopy {
     width: u32,
     height: u32,
@@ -25,6 +27,8 @@ pub struct DisplayLayer {
     uniforms_buffer: wgpu::Buffer,
     pipeline: std::sync::Arc<CompositeVideoFramePipeline>,
     bind_groups: [Option<wgpu::BindGroup>; 2],
+    /// Created on the first frame drawn smaller than its source.
+    downscale: Option<DownscalePrefilter>,
     last_recording_time: Option<f32>,
     last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
@@ -87,6 +91,7 @@ impl DisplayLayer {
             uniforms_buffer,
             pipeline: composite_pipeline,
             bind_groups: [bind_group_0, bind_group_1],
+            downscale: None,
             last_recording_time: None,
             last_frame_storage: None,
             yuv_converter,
@@ -1001,8 +1006,43 @@ impl DisplayLayer {
         );
     }
 
+    /// Prefilters the frame about to be drawn when `uniforms` shrink it;
+    /// `None` draws it as before. Runs after [`Self::copy_to_texture`].
+    pub fn encode_downscale(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        uniforms: Option<&CompositeVideoFrameUniforms>,
+    ) {
+        let Some(uniforms) = uniforms.filter(|_| self.has_valid_frame) else {
+            if let Some(downscale) = &mut self.downscale {
+                downscale.deactivate();
+            }
+            return;
+        };
+        let texture = &self.frame_textures[self.current_texture];
+        self.downscale
+            .get_or_insert_with(|| DownscalePrefilter::new(device))
+            .encode(
+                device,
+                queue,
+                encoder,
+                &self.pipeline,
+                [texture.width(), texture.height()],
+                &self.frame_texture_views[self.current_texture],
+                uniforms,
+            );
+    }
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_valid_frame {
+            return;
+        }
+        if let Some(bind_group) = self.downscale.as_ref().and_then(|d| d.bind_group()) {
+            pass.set_pipeline(&self.pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..3, 0..1);
             return;
         }
 

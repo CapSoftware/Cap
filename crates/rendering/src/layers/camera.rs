@@ -12,6 +12,8 @@ use crate::{
 #[cfg(target_os = "macos")]
 use crate::yuv_converter::RetainedImageBuf;
 
+use crate::downscale::DownscalePrefilter;
+
 pub struct CameraLayer {
     frame_textures: [wgpu::Texture; 2],
     frame_texture_views: [wgpu::TextureView; 2],
@@ -26,8 +28,12 @@ pub struct CameraLayer {
     #[cfg(target_os = "macos")]
     frame_sources: [Option<RetainedImageBuf>; 2],
     blur_bind_group: Option<wgpu::BindGroup>,
+    blur_view: Option<wgpu::TextureView>,
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
+    uniforms: Option<CompositeVideoFrameUniforms>,
+    /// Created on the first frame drawn smaller than its source.
+    downscale: Option<DownscalePrefilter>,
 }
 
 #[derive(Clone, Copy)]
@@ -95,8 +101,11 @@ impl CameraLayer {
             #[cfg(target_os = "macos")]
             frame_sources: [None, None],
             blur_bind_group: None,
+            blur_view: None,
             blur_active: false,
             blur_cache: None,
+            uniforms: None,
+            downscale: None,
         }
     }
 
@@ -108,6 +117,7 @@ impl CameraLayer {
         frame_data: Option<(XY<u32>, &DecodedFrame, f32)>,
     ) {
         self.blur_active = false;
+        self.uniforms = uniforms;
 
         let Some(uniforms) = uniforms else {
             self.hidden = true;
@@ -377,6 +387,7 @@ impl CameraLayer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         self.blur_active = false;
+        self.uniforms = uniforms;
 
         let Some(uniforms) = uniforms else {
             self.hidden = true;
@@ -597,6 +608,7 @@ impl CameraLayer {
             &self.uniforms_buffer,
             output_view,
         ));
+        self.blur_view = Some(output_view.clone());
         self.blur_cache = Some(BlurCacheEntry {
             recording_time,
             mode,
@@ -608,8 +620,48 @@ impl CameraLayer {
 
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 
+    /// Prefilters the frame about to be drawn when its uniforms shrink it;
+    /// with `enabled` false it is drawn as before.
+    pub fn encode_downscale(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        enabled: bool,
+    ) {
+        let Some(uniforms) = self.uniforms.filter(|_| enabled && !self.hidden) else {
+            if let Some(downscale) = &mut self.downscale {
+                downscale.deactivate();
+            }
+            return;
+        };
+        let texture = &self.frame_textures[self.current_texture];
+        // The blurred camera keeps the frame's size.
+        let view = match &self.blur_view {
+            Some(view) if self.blur_active && self.blur_bind_group.is_some() => view,
+            _ => &self.frame_texture_views[self.current_texture],
+        };
+        self.downscale
+            .get_or_insert_with(|| DownscalePrefilter::new(device))
+            .encode(
+                device,
+                queue,
+                encoder,
+                &self.pipeline,
+                [texture.width(), texture.height()],
+                view,
+                &uniforms,
+            );
+    }
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if self.hidden {
+            return;
+        }
+        if let Some(bind_group) = self.downscale.as_ref().and_then(|d| d.bind_group()) {
+            pass.set_pipeline(&self.pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..3, 0..1);
             return;
         }
 
