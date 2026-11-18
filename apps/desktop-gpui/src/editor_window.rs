@@ -141,6 +141,14 @@ pub fn default_preview_resolution() -> XY<u32> {
     preview_resolution(crate::store::EditorPreviewQuality::Half)
 }
 
+/// Whether a frame of `shown` output pixels is magnified on a canvas of
+/// `canvas` device pixels. The output keeps the canvas's aspect, so one side
+/// reaching the canvas (within the renderer's rounding) means it is drawn 1:1.
+fn sharp_preview_needed(canvas: [u32; 2], shown: (f32, f32)) -> bool {
+    let covers = |shown: f32, canvas: u32| shown >= canvas as f32 * 0.98;
+    canvas[0] > 0 && canvas[1] > 0 && !covers(shown.0, canvas[0]) && !covers(shown.1, canvas[1])
+}
+
 // ---------------------------------------------------------------------------
 // Shell metrics (`routes/editor/Editor.tsx:77-82`)
 // ---------------------------------------------------------------------------
@@ -652,10 +660,24 @@ const PREVIEW_RADIUS: f32 = 6.;
 const PLAYER_STAGE_PADDING: f32 = 16.;
 const STAGE_INSET: f32 = PLAYER_STAGE_PADDING - PLAYER_CANVAS_PADDING;
 
+/// How long a paused preview has to sit still before it is redrawn at the
+/// canvas's device-pixel size. Scrubs and slider drags deliver a frame every
+/// 16 to 60 ms, so they stay on the cheaper interactive size.
+const SHARP_PREVIEW_IDLE: Duration = Duration::from_millis(150);
+/// A pause stops the engine on the transport task, and the preview renderer
+/// ignores paused requests until it has.
+const SHARP_PREVIEW_ENGINE_WAIT: Duration = Duration::from_millis(500);
+const SHARP_PREVIEW_ENGINE_POLL: Duration = Duration::from_millis(10);
+
+/// The fitted preview's size in device pixels, written on every paint.
+pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
+
 struct PreviewFrameView {
     frame: Option<EditorPreviewFrame>,
     frame_size: (f32, f32),
     frame_rect: crate::editor_canvas::CanvasRect,
+    canvas_px: PreviewCanvasPx,
+    editor: WeakEntity<EditorWindow>,
     stats: Option<Arc<PumpStats>>,
     frame_sequence: u64,
     frame_number: u32,
@@ -665,11 +687,17 @@ struct PreviewFrameView {
 }
 
 impl PreviewFrameView {
-    fn new(frame_rect: crate::editor_canvas::CanvasRect) -> Self {
+    fn new(
+        frame_rect: crate::editor_canvas::CanvasRect,
+        canvas_px: PreviewCanvasPx,
+        editor: WeakEntity<EditorWindow>,
+    ) -> Self {
         Self {
             frame: None,
             frame_size: (1920., 1080.),
             frame_rect,
+            canvas_px,
+            editor,
             stats: None,
             frame_sequence: 0,
             frame_number: 0,
@@ -711,6 +739,8 @@ impl Render for PreviewFrameView {
         };
         let frame_size = self.frame_size;
         let frame_rect = self.frame_rect.clone();
+        let canvas_px = self.canvas_px.clone();
+        let editor = self.editor.clone();
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
         let frame_number = self.frame_number;
@@ -718,7 +748,7 @@ impl Render for PreviewFrameView {
 
         gpui::canvas(
             |bounds, _window, _cx| bounds,
-            move |_, bounds, window, _cx| {
+            move |_, bounds, window, cx| {
                 let container_width: f32 = bounds.size.width.into();
                 let container_height: f32 = bounds.size.height.into();
                 let (width, height) = letterbox(
@@ -739,6 +769,19 @@ impl Render for PreviewFrameView {
                     container: bounds,
                     frame: fitted,
                 }));
+                let scale = window.scale_factor() * crate::editor_latency::backing_scale();
+                let device = [
+                    (width * scale).round() as u32,
+                    (height * scale).round() as u32,
+                ];
+                if canvas_px.replace(Some(device)) != Some(device) {
+                    let editor = editor.clone();
+                    cx.defer(move |cx| {
+                        let _ = editor.update(cx, |editor, cx| {
+                            editor.schedule_sharp_preview(SHARP_PREVIEW_IDLE, cx);
+                        });
+                    });
+                }
                 let radius = px(PREVIEW_RADIUS);
                 window.paint_drop_shadows(fitted, gpui::Corners::all(radius), &shadow);
                 window.paint_quad(gpui::fill(fitted, gpui::black()).corner_radii(radius));
@@ -1445,6 +1488,10 @@ pub struct EditorWindow {
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
     preview: Entity<PreviewFrameView>,
+    preview_canvas_px: PreviewCanvasPx,
+    /// The pending device-pixel redraw of the paused frame, see
+    /// [`EditorWindow::schedule_sharp_preview`].
+    sharp_preview: Option<gpui::Task<()>>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
@@ -2187,7 +2234,13 @@ impl EditorWindow {
         ));
         let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
-        let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
+        let preview_canvas_px = PreviewCanvasPx::default();
+        let preview = cx.new({
+            let frame_rect = player_frame_rect.clone();
+            let canvas_px = preview_canvas_px.clone();
+            let editor = cx.entity().downgrade();
+            move |_| PreviewFrameView::new(frame_rect, canvas_px, editor)
+        });
         let editor = cx.entity();
         let header = cx.new({
             let editor = editor.clone();
@@ -2242,6 +2295,8 @@ impl EditorWindow {
             preparing_seed: None,
             latest_frame: None,
             preview,
+            preview_canvas_px,
+            sharp_preview: None,
             header,
             toolbar,
             transport_controls,
@@ -3622,6 +3677,7 @@ impl EditorWindow {
             self.view.playing = false;
             self.report_playback();
         }
+        self.schedule_sharp_preview(Duration::ZERO, cx);
         cx.notify();
     }
 
@@ -3650,6 +3706,7 @@ impl EditorWindow {
         self.ordinary_handoff_frame = None;
         self.preparing_presentation = None;
         self.preparing_seed = None;
+        self.sharp_preview = None;
         self.playback_follow.reset();
         // `Math.floor(editorState.playbackTime * FPS)`.
         let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
@@ -4674,6 +4731,73 @@ impl EditorWindow {
             (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
             self.preview_resolution(),
         );
+    }
+
+    /// Redraw the paused frame once at the canvas's device-pixel size.
+    ///
+    /// Playback and paused interactions keep rendering at the saved preview
+    /// quality, so their cost does not change. With the default Half quality
+    /// that frame is smaller than a Retina canvas and gets magnified, so once
+    /// the preview has been still for `delay` (a pause, the end of a scrub or
+    /// an edit, a resize) the same frame is rendered again at the canvas size.
+    /// Full and Quarter are explicit choices and are drawn as chosen.
+    pub(crate) fn schedule_sharp_preview(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.sharp_preview = None;
+        if self.playing
+            || self.preview_quality != crate::store::EditorPreviewQuality::Half
+            || self.preparing_presentation.is_some()
+            || self.ordinary_handoff_frame.is_some()
+            || self.preparing_transport_active()
+        {
+            return;
+        }
+        let Some(instance) = self.instance.clone() else {
+            return;
+        };
+        let Some(canvas) = self.preview_canvas_px.get() else {
+            return;
+        };
+        if !sharp_preview_needed(canvas, self.preview.read(cx).frame_size) {
+            return;
+        }
+        // A newer paused request means the preview is moving again; its frame
+        // schedules its own redraw when it lands.
+        let requests = instance.preview_tx.subscribe();
+        self.sharp_preview = Some(cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+            let engine = instance.playback_watch();
+            let mut waited = Duration::ZERO;
+            while *engine.borrow() {
+                if waited >= SHARP_PREVIEW_ENGINE_WAIT {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(SHARP_PREVIEW_ENGINE_POLL)
+                    .await;
+                waited += SHARP_PREVIEW_ENGINE_POLL;
+            }
+            if requests.has_changed().unwrap_or(true) {
+                return;
+            }
+            let _ = this.update(cx, |view, _| {
+                if view.playing || !view.is_instance(&instance) {
+                    return;
+                }
+                let Some(canvas) = view.preview_canvas_px.get() else {
+                    return;
+                };
+                let time = view.view.preview_time.unwrap_or(view.playhead).max(0.0);
+                instance.preview_tx.send_modify(|value| {
+                    *value = Some((
+                        (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
+                        EDITOR_PREVIEW_FPS,
+                        XY::new(canvas[0], canvas[1]),
+                    ))
+                });
+            });
+        }));
     }
 
     pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
@@ -7434,6 +7558,13 @@ impl EditorWindow {
         }
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
+        }
+        let interactive = self.preview_resolution();
+        if !self.playing
+            && frame_size.0 <= interactive.x as f32
+            && frame_size.1 <= interactive.y as f32
+        {
+            self.schedule_sharp_preview(SHARP_PREVIEW_IDLE, cx);
         }
         if frame_layout_requires_editor_invalidation(
             first_frame,
@@ -16903,6 +17034,50 @@ mod tests {
             preview_resolution(crate::store::EditorPreviewQuality::Quarter),
             XY::new(480, 270)
         );
+    }
+
+    #[test]
+    fn a_half_frame_on_a_retina_canvas_is_redrawn_until_the_canvas_size_lands() {
+        let mut project = ProjectConfiguration::default();
+        let options = cap_rendering::RenderOptions {
+            camera_size: None,
+            screen_size: XY::new(3024, 1964),
+            preserve_screen_alpha: false,
+        };
+        for padding in [0.0, 10.0, 30.0] {
+            project.background.padding = padding;
+            let half = cap_rendering::ProjectUniforms::get_output_size(
+                &options,
+                &project,
+                default_preview_resolution(),
+            );
+            let half = (half.0 as f32, half.1 as f32);
+            for logical in [(640., 400.), (1018., 702.), (1436., 933.), (2560., 1440.)] {
+                let (width, height) = letterbox(logical, half);
+                let canvas = [(width * 2.).round() as u32, (height * 2.).round() as u32];
+                assert!(
+                    sharp_preview_needed(canvas, half),
+                    "{padding} {logical:?}: a 2x canvas magnifies the Half frame"
+                );
+                let sharp = cap_rendering::ProjectUniforms::get_output_size(
+                    &options,
+                    &project,
+                    XY::new(canvas[0], canvas[1]),
+                );
+                assert!(
+                    !sharp_preview_needed(canvas, (sharp.0 as f32, sharp.1 as f32)),
+                    "{padding} {logical:?}: {sharp:?} must cover {canvas:?} or the redraw repeats"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_drawn_at_or_above_the_canvas_size_needs_no_redraw() {
+        assert!(!sharp_preview_needed([1200, 700], (1248., 702.)));
+        assert!(!sharp_preview_needed([1000, 650], (1018., 702.)));
+        assert!(!sharp_preview_needed([0, 0], (1018., 702.)));
+        assert!(sharp_preview_needed([1436, 990], (1018., 702.)));
     }
 
     #[test]
