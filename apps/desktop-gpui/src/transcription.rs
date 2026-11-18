@@ -2603,7 +2603,6 @@ fn effective_to_output(holds: &[(f64, f64)], effective: f64, at_end: bool) -> f6
 /// and the edit leaves its timing where it was.
 pub const MIN_TIED_CAPTION_SECS: f64 = 1e-3;
 
-/// `time` as the nearest `f32` at or after it.
 fn f32_at_or_after(time: f64) -> f32 {
     let rounded = time as f32;
     if f64::from(rounded) < time {
@@ -2613,7 +2612,6 @@ fn f32_at_or_after(time: f64) -> f32 {
     }
 }
 
-/// `time` as the nearest `f32` at or before it.
 fn f32_at_or_before(time: f64) -> f32 {
     let rounded = time as f32;
     if f64::from(rounded) > time {
