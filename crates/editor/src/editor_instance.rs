@@ -2361,11 +2361,15 @@ mod tests {
     #[test]
     fn hover_analysis_runs_for_the_base_cursor_or_any_cursor_style() {
         let mut project = ProjectConfiguration::default();
+        assert!(wants_hover_analysis(&project));
+        project.cursor.hover_anchors = false;
         assert!(!wants_hover_analysis(&project));
         project.cursor.hover_anchors = true;
-        assert!(wants_hover_analysis(&project));
+        project.cursor.interaction_anchors = false;
+        assert!(!wants_hover_analysis(&project));
 
         let styled: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "cursor": { "interactionAnchors": true },
             "timeline": { "segments": [], "zoomSegments": [], "styleSegments": [{
                 "start": 1.0, "end": 2.0,
                 "overrides": { "cursor": { "interactionAnchors": true, "hoverAnchors": true } }
