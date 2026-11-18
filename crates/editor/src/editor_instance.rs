@@ -1417,7 +1417,13 @@ impl EditorInstance {
                         );
                         break;
                     };
-                    if still_now && !segment_medias.decoders.has_source_video() {
+                    let sharpens = segment_medias.decoders.has_source_video()
+                        || transition_mapping.as_ref().is_some_and(|(outgoing, _, _)| {
+                            self.segment_medias
+                                .get(outgoing.segment.recording_clip as usize)
+                                .is_some_and(|media| media.decoders.has_source_video())
+                        });
+                    if still_now && !sharpens {
                         break;
                     }
                     let clip_config = project
@@ -1526,14 +1532,25 @@ impl EditorInstance {
                                         } else {
                                             &outgoing_media.decoders
                                         };
-                                        decoders
-                                            .get_frames_initial(
-                                                outgoing.source_time as f32,
-                                                project.requires_camera(),
-                                                true,
-                                                outgoing_offsets,
-                                            )
-                                            .await
+                                        if still_now {
+                                            decoders
+                                                .get_frames_still(
+                                                    outgoing.source_time as f32,
+                                                    project.requires_camera(),
+                                                    true,
+                                                    outgoing_offsets,
+                                                )
+                                                .await
+                                        } else {
+                                            decoders
+                                                .get_frames_initial(
+                                                    outgoing.source_time as f32,
+                                                    project.requires_camera(),
+                                                    true,
+                                                    outgoing_offsets,
+                                                )
+                                                .await
+                                        }
                                     } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
@@ -1718,7 +1735,7 @@ impl EditorInstance {
 
                             if rendered
                                 && !still_now
-                                && segment_medias.decoders.has_source_video()
+                                && sharpens
                                 && !*self.playback_active_rx.borrow()
                             {
                                 still_due = Some((
