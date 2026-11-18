@@ -243,7 +243,8 @@ fn shrunk_one_pixel_stripes_average_instead_of_beating() {
 fn shrunk_cutout_edges_keep_their_colour() {
     let Some(gpu) = gpu() else { return };
     // White foreground on transparent black, as a background-removed camera
-    // frame: shrinking must soften the edge alpha, not grey opaque pixels.
+    // frame: shrinking must soften the edge alpha without pulling in the
+    // colour hidden under the transparent texels.
     let source = Source::from_fn(192, 96, |x, y| {
         if (40..150).contains(&x) && (20..76).contains(&y) {
             [255, 255, 255, 255]
@@ -258,15 +259,22 @@ fn shrunk_cutout_edges_keep_their_colour() {
     let pixels = render(&gpu, &source, &draw);
     let mut edge_pixels = 0;
     for (index, pixel) in pixels.chunks_exact(4).enumerate() {
-        let alpha = pixel[3];
-        // A fully covered pixel must stay white; blending in the colour
-        // hidden under transparent texels would leave it opaque grey.
-        if alpha >= 250 {
+        let (x, y) = (index as u32 % 64, index as u32 / 64);
+        // Output pixel n centres on source texel 3n + 1; where that texel is
+        // opaque the shrink filter runs, and its result blended over the
+        // transparent clear colour must be white scaled by its alpha.
+        let (cx, cy) = (3 * x + 1, 3 * y + 1);
+        if !((40..150).contains(&cx) && (20..76).contains(&cy)) {
+            continue;
+        }
+        let alpha = pixel[3] as i32;
+        for channel in &pixel[..3] {
             assert!(
-                pixel[..3].iter().all(|channel| *channel >= 245),
-                "pixel {index} is {pixel:?}"
+                (*channel as i32 - alpha).abs() <= 2,
+                "pixel {x},{y} is {pixel:?}"
             );
-        } else if alpha > 0 {
+        }
+        if alpha < 255 {
             edge_pixels += 1;
         }
     }
