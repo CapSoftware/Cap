@@ -1108,6 +1108,11 @@ pub struct CursorConfiguration {
     pub stop_movement_in_last_seconds: Option<f32>,
     #[serde(default)]
     pub ripple: CursorRippleConfig,
+    /// The cursor meets the recorded pointer at presses, releases, drags and
+    /// shape changes. New projects turn it on; configs saved without the field
+    /// keep the plain spring they were made with.
+    #[serde(default)]
+    pub interaction_anchors: bool,
 }
 
 impl Default for CursorConfiguration {
@@ -1133,6 +1138,7 @@ impl Default for CursorConfiguration {
             click_spring: None,
             stop_movement_in_last_seconds: None,
             ripple: CursorRippleConfig::default(),
+            interaction_anchors: true,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -3745,6 +3751,21 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
+        assert!(ProjectConfiguration::default().cursor.interaction_anchors);
+
+        let saved: ProjectConfiguration =
+            serde_json::from_str(r#"{"cursor":{"tension":470.0,"mass":3.0,"friction":70.0}}"#)
+                .unwrap();
+        assert!(!saved.cursor.interaction_anchors);
+
+        let round_trip: ProjectConfiguration =
+            serde_json::from_value(serde_json::to_value(ProjectConfiguration::default()).unwrap())
+                .unwrap();
+        assert!(round_trip.cursor.interaction_anchors);
+    }
 
     #[test]
     fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
