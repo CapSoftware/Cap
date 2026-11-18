@@ -57,14 +57,26 @@ export const linkAnonymousConversationsToUser = async ({
 }) => {
 	if (!anonymousId) return;
 
+	const unlinked = await db()
+		.select({ id: messengerConversations.id })
+		.from(messengerConversations)
+		.where(
+			and(
+				eq(messengerConversations.anonymousId, anonymousId),
+				isNull(messengerConversations.userId),
+			),
+		);
+	if (!unlinked.length) return;
+	const conversationIds = unlinked.map((conversation) => conversation.id);
+
 	await Promise.all([
 		db()
 			.update(messengerConversations)
 			.set({ userId })
 			.where(
 				and(
+					inArray(messengerConversations.id, conversationIds),
 					isNull(messengerConversations.userId),
-					eq(messengerConversations.anonymousId, anonymousId),
 				),
 			),
 		db()
@@ -72,8 +84,8 @@ export const linkAnonymousConversationsToUser = async ({
 			.set({ userId })
 			.where(
 				and(
+					inArray(messengerMessages.conversationId, conversationIds),
 					isNull(messengerMessages.userId),
-					eq(messengerMessages.anonymousId, anonymousId),
 				),
 			),
 	]);
@@ -207,12 +219,6 @@ export const getMessengerConversationForViewer = async ({
 	allowAdmin?: boolean;
 }) => {
 	const viewer = await getViewerContext();
-	if (viewer.user && viewer.anonymousId) {
-		await linkAnonymousConversationsToUser({
-			userId: viewer.user.id,
-			anonymousId: viewer.anonymousId,
-		});
-	}
 
 	const [conversation] = await db()
 		.select({
