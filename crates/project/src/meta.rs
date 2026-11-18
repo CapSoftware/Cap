@@ -12,8 +12,13 @@ use tracing::{debug, info, warn};
 
 use crate::{
     CaptionsData, CursorEvents, CursorImage, KeyboardEvents, ProjectConfiguration, XY,
-    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    cursor::{MIN_VISIBLE_CURSOR_SHAPE_MS, SHORT_CURSOR_SHAPE_DEBOUNCE_MS},
 };
+
+/// Recordings made from this version on keep every cursor shape shown for at
+/// least `MIN_VISIBLE_CURSOR_SHAPE_MS`. Recordings saved without the field keep
+/// the one-second debounce they were made and exported with.
+pub const CURSOR_SHAPE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct VideoMeta {
@@ -622,6 +627,27 @@ impl StudioRecordingMeta {
         }
     }
 
+    pub fn cursor_shape_version(&self) -> u32 {
+        match self {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.cursor_shape_version,
+            StudioRecordingMeta::SingleSegment { .. } => 0,
+        }
+    }
+
+    pub fn stabilize_cursor_shapes(&self, events: &mut CursorEvents) {
+        let current = self.cursor_shape_version() >= CURSOR_SHAPE_VERSION;
+        let pointer_ids = match self {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.arrow_cursor_ids(current),
+            StudioRecordingMeta::SingleSegment { .. } => HashSet::new(),
+        };
+        let pointer_ids = (!pointer_ids.is_empty()).then_some(&pointer_ids);
+        if current {
+            events.hold_brief_cursor_shapes(pointer_ids, MIN_VISIBLE_CURSOR_SHAPE_MS);
+        } else {
+            events.stabilize_short_lived_cursor_shapes(pointer_ids, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        }
+    }
+
     pub fn min_fps(&self) -> u32 {
         match self {
             Self::SingleSegment { segment } => segment.display.fps,
@@ -662,6 +688,12 @@ pub struct MultipleSegments {
     pub cursors: Cursors,
     #[serde(default)]
     pub status: Option<StudioRecordingStatus>,
+    #[serde(default, skip_serializing_if = "is_legacy_cursor_shape_version")]
+    pub cursor_shape_version: u32,
+}
+
+fn is_legacy_cursor_shape_version(version: &u32) -> bool {
+    *version == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -711,16 +743,20 @@ impl MultipleSegments {
     }
 
     pub fn pointer_cursor_ids(&self) -> HashSet<String> {
+        self.arrow_cursor_ids(false)
+    }
+
+    fn arrow_cursor_ids(&self, include_tahoe: bool) -> HashSet<String> {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS, CursorShapeWindows};
         match &self.cursors {
             Cursors::Correct(map) => map
                 .iter()
                 .filter_map(|(id, cursor)| match cursor.shape.as_ref() {
-                    Some(cap_cursor_info::CursorShape::MacOS(
-                        cap_cursor_info::CursorShapeMacOS::Arrow,
-                    ))
-                    | Some(cap_cursor_info::CursorShape::Windows(
-                        cap_cursor_info::CursorShapeWindows::Arrow,
-                    )) => Some(id.clone()),
+                    Some(CursorShape::MacOS(CursorShapeMacOS::Arrow))
+                    | Some(CursorShape::Windows(CursorShapeWindows::Arrow)) => Some(id.clone()),
+                    Some(CursorShape::MacOS(CursorShapeMacOS::TahoeArrow)) if include_tahoe => {
+                        Some(id.clone())
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -806,14 +842,11 @@ impl MultipleSegment {
             }
         };
 
-        let pointer_ids = if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
-            studio_meta.pointer_cursor_ids()
+        if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
+            studio_meta.stabilize_cursor_shapes(&mut data);
         } else {
-            HashSet::new()
-        };
-
-        let pointer_ids_ref = (!pointer_ids.is_empty()).then_some(&pointer_ids);
-        data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+            data.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        }
 
         data
     }
@@ -1715,6 +1748,7 @@ mod ordinary_media_access_tests {
                 segments: Vec::new(),
                 cursors: Cursors::default(),
                 status,
+                cursor_shape_version: 0,
             },
         }
     }
@@ -1952,5 +1986,92 @@ mod nul_path_tests {
         let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
         normalize_relative_path(&mut path);
         assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
+    }
+}
+
+#[cfg(test)]
+mod cursor_shape_version_tests {
+    use super::*;
+
+    const HOVER: &str = r#"{"moves":[
+        {"active_modifiers":[],"cursor_id":"0","time_ms":0.0,"x":0.1,"y":0.1},
+        {"active_modifiers":[],"cursor_id":"2","time_ms":1000.0,"x":0.2,"y":0.2},
+        {"active_modifiers":[],"cursor_id":"2","time_ms":1300.0,"x":0.21,"y":0.2},
+        {"active_modifiers":[],"cursor_id":"0","time_ms":1600.0,"x":0.3,"y":0.3},
+        {"active_modifiers":[],"cursor_id":"0","time_ms":3000.0,"x":0.4,"y":0.4}
+    ],"clicks":[]}"#;
+
+    fn project(version: Option<u32>) -> (tempfile::TempDir, RecordingMeta) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("content/segments/segment-0")).unwrap();
+        std::fs::write(
+            dir.path().join("content/segments/segment-0/cursor.json"),
+            HOVER,
+        )
+        .unwrap();
+        let version = version
+            .map(|version| format!(r#","cursorShapeVersion":{version}"#))
+            .unwrap_or_default();
+        let meta = format!(
+            r#"{{"platform":"MacOS","pretty_name":"Hover","sharing":null,
+            "segments":[{{"display":{{"path":"content/segments/segment-0/display.mp4","fps":60}},
+            "cursor":"content/segments/segment-0/cursor.json"}}],
+            "cursors":{{
+              "0":{{"imagePath":"content/cursors/cursor_0.png","hotspot":{{"x":0.2,"y":0.1}},"shape":"MacOS|TahoeArrow"}},
+              "2":{{"imagePath":"content/cursors/cursor_2.png","hotspot":{{"x":0.4,"y":0.3}},"shape":"MacOS|TahoePointingHand"}}
+            }},
+            "status":{{"status":"Complete"}}{version}}}"#
+        );
+        std::fs::write(dir.path().join("recording-meta.json"), meta).unwrap();
+        let meta = RecordingMeta::load_for_project(dir.path()).unwrap();
+        (dir, meta)
+    }
+
+    fn loaded_shapes(meta: &RecordingMeta) -> Vec<String> {
+        let Some(StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0]
+            .cursor_events(meta)
+            .moves
+            .into_iter()
+            .map(|event| event.cursor_id)
+            .collect()
+    }
+
+    #[test]
+    fn saved_recordings_keep_the_one_second_debounce() {
+        let (_dir, meta) = project(None);
+        assert_eq!(meta.studio_meta().unwrap().cursor_shape_version(), 0);
+        assert_eq!(loaded_shapes(&meta), ["0", "0", "0", "0", "0"]);
+
+        let mut legacy = CursorEvents::load_from_reader(HOVER.as_bytes()).unwrap();
+        legacy.stabilize_short_lived_cursor_shapes(
+            Some(&HashSet::from(["0".to_string()])),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
+        let legacy = legacy
+            .moves
+            .into_iter()
+            .map(|event| event.cursor_id)
+            .collect::<Vec<_>>();
+        assert_eq!(loaded_shapes(&meta), legacy);
+    }
+
+    #[test]
+    fn new_recordings_keep_a_hover_shorter_than_a_second() {
+        let (_dir, meta) = project(Some(CURSOR_SHAPE_VERSION));
+        assert_eq!(loaded_shapes(&meta), ["0", "2", "2", "0", "0"]);
+    }
+
+    #[test]
+    fn the_version_is_written_only_for_new_recordings() {
+        let (_dir, legacy) = project(None);
+        let legacy = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy.contains("cursorShapeVersion"));
+
+        let (_dir, current) = project(Some(CURSOR_SHAPE_VERSION));
+        let current = serde_json::to_value(&current).unwrap();
+        assert_eq!(current["cursorShapeVersion"], CURSOR_SHAPE_VERSION);
     }
 }
