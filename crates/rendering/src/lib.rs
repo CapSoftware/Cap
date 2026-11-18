@@ -39,6 +39,7 @@ mod cursor_interpolation;
 #[cfg(target_os = "windows")]
 pub mod d3d_texture;
 pub mod decoder;
+pub mod downscale;
 pub mod frame_chrome;
 mod frame_pipeline;
 mod frame_windows;
@@ -8360,6 +8361,10 @@ pub struct RendererLayers {
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
     realtime_camera_effects: bool,
+    /// Software rasterizers (llvmpipe, WARP) would spend several times the
+    /// frame's own cost on the downscale prefilter, so they keep the
+    /// composite's single bilinear tap.
+    downscale_prefilter: bool,
     #[cfg(test)]
     split_layer_passes: bool,
 }
@@ -8489,6 +8494,7 @@ impl RendererLayers {
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
                 realtime_camera_effects: false,
+                downscale_prefilter: !prefer_cpu_conversion,
                 #[cfg(test)]
                 split_layer_passes: false,
             }
@@ -9085,6 +9091,17 @@ impl RendererLayers {
             }
             self.camera.copy_to_texture(encoder);
             self.camera_only.copy_to_texture(encoder);
+            let downscale = self.downscale_prefilter;
+            self.display.encode_downscale(
+                device,
+                queue,
+                encoder,
+                (downscale && render_display).then_some(&uniforms.display),
+            );
+            self.camera
+                .encode_downscale(device, queue, encoder, downscale);
+            self.camera_only
+                .encode_downscale(device, queue, encoder, downscale);
         }
         if parts.background {
             self.background.render_surface(encoder);
