@@ -883,6 +883,11 @@ impl EditorWindow {
                     &layout,
                     effective.aspect_ratio.is_some(),
                     fixed_canvas,
+                    cap_rendering::frame_chrome::chrome_insets(
+                        cap_project::FrameConfiguration::active_style(
+                            effective.background.frame.as_ref(),
+                        ),
+                    ),
                 )
             });
         self.shape_drag_up(window, cx);
@@ -2076,23 +2081,54 @@ fn display_resize_scales(rect: NormRect, layout: &FrameLayout, has_aspect: bool)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvenResize {
     output: (f64, f64),
-    /// Display aspect in output pixels.
+    /// Recording aspect in output pixels; padding is laid out around it.
     content_aspect: f64,
     fixed_aspect: bool,
     fixed_canvas: bool,
+    /// The dragged card (frame included) as a share of the padding box it is
+    /// fitted into: (1, 1) without a frame.
+    card_in_box: (f64, f64),
 }
 
 impl EvenResize {
-    fn new(rect: NormRect, layout: &FrameLayout, fixed_aspect: bool, fixed_canvas: bool) -> Self {
+    fn new(
+        rect: NormRect,
+        layout: &FrameLayout,
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+        insets: cap_rendering::frame_chrome::ChromeInsets,
+    ) -> Self {
         let output = (
             f64::from(layout.output_size[0]).max(1.),
             f64::from(layout.output_size[1]).max(1.),
         );
+        let card = ((rect.w * output.0).max(1e-6), (rect.h * output.1).max(1e-6));
+        Self::from_card(output, card, fixed_aspect, fixed_canvas, insets)
+    }
+
+    /// The renderer pads the recording, then fits the framed card inside that
+    /// box, so recover the recording's aspect and the box from the card and
+    /// the frame's insets (fractions of the recording height).
+    fn from_card(
+        output: (f64, f64),
+        card: (f64, f64),
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+        insets: cap_rendering::frame_chrome::ChromeInsets,
+    ) -> Self {
+        let content_height = card.1 / (1. + insets.top + insets.bottom);
+        let content_aspect = (card.0 / content_height - insets.left - insets.right).max(1e-6);
+        let box_size = if card.0 / card.1 >= content_aspect {
+            (card.0, card.0 / content_aspect)
+        } else {
+            (card.1 * content_aspect, card.1)
+        };
         Self {
             output,
-            content_aspect: ((rect.w * output.0) / (rect.h * output.1).max(1e-6)).max(1e-6),
+            content_aspect,
             fixed_aspect,
             fixed_canvas,
+            card_in_box: (card.0 / box_size.0, card.1 / box_size.1),
         }
     }
 
@@ -2180,8 +2216,9 @@ fn display_resize_rect(
     let (scale, guides) = resolve_scale(start, canvas, delta, direction, anchor, targets, shift);
     let target_width = (start.w * scale).max(1e-6);
     if let Some(even) = even {
-        let padding = even.padding_for_width(target_width);
+        let padding = even.padding_for_width(target_width / even.card_in_box.0);
         let (w, h) = even.size_at(padding);
+        let (w, h) = (w * even.card_in_box.0, h * even.card_in_box.1);
         return (
             NormRect {
                 x: clamp(anchor.0 - w / 2., 0., (1. - w).max(0.)),
@@ -2305,7 +2342,26 @@ mod tests {
             content_aspect: aspect,
             fixed_aspect,
             fixed_canvas,
+            card_in_box: (1., 1.),
         }
+    }
+
+    #[test]
+    fn even_resize_reads_a_framed_card_as_its_recording() {
+        // A 1920 x 1080 recording at Even padding 10 (2136 x 1296 canvas)
+        // with a browser frame: the card is the recording plus the bar, fitted
+        // into the 1920 x 1080 box padding leaves.
+        let insets = cap_rendering::frame_chrome::chrome_insets(cap_project::FrameStyle::Browser);
+        let content_h = (1920. / (16. / 9. + insets.left + insets.right))
+            .min(1080. / (1. + insets.top + insets.bottom));
+        let card = (
+            content_h * (16. / 9. + insets.left + insets.right),
+            content_h * (1. + insets.top + insets.bottom),
+        );
+        let resize = EvenResize::from_card((2136., 1296.), card, false, false, insets);
+        assert!((resize.content_aspect - 16. / 9.).abs() < 1e-9);
+        let box_width = card.0 / 2136. / resize.card_in_box.0;
+        assert!((resize.padding_for_width(box_width) - 10.).abs() < 1e-6);
     }
 
     #[test]
