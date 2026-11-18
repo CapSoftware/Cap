@@ -12339,3 +12339,99 @@ mod dx12_compiler_fallback_tests {
         assert!(!instance.enumerate_adapters(wgpu::Backends::DX12).is_empty());
     }
 }
+
+#[cfg(test)]
+mod source_video_tests {
+    use super::*;
+
+    fn constant_decoder(level: u8) -> AsyncVideoDecoderHandle {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        std::thread::spawn(move || {
+            while let Ok(decoder::VideoDecoderMessage::GetFrame(_, _, reply)) = receiver.recv() {
+                let _ = reply.send(DecodedFrame::new(vec![level; 4 * 4 * 4], 4, 4));
+            }
+        });
+        AsyncVideoDecoderHandle::for_test(sender, 4, 4)
+    }
+
+    fn segment(kept_source: bool) -> RecordingSegmentDecoders {
+        RecordingSegmentDecoders {
+            screen: constant_decoder(10),
+            camera: None,
+            source_video: kept_source.then(|| {
+                Arc::new(SourceVideo {
+                    source: DecoderSource {
+                        path: PathBuf::from("display-source.mp4"),
+                        fps: 30,
+                        offset: 0.0,
+                    },
+                    force_ffmpeg: false,
+                    decoder: tokio::sync::OnceCell::new_with(Some(Some(constant_decoder(200)))),
+                })
+            }),
+            segment_offset: 0.0,
+            transition_readers: None,
+        }
+    }
+
+    fn level(frames: Option<DecodedSegmentFrames>) -> u8 {
+        frames.unwrap().screen_frame.unwrap().data()[0]
+    }
+
+    #[tokio::test]
+    async fn settled_and_exported_frames_read_the_kept_source() {
+        let segment = segment(true);
+        let offsets = ClipOffsets::default();
+        assert_eq!(
+            level(segment.get_frames(0.5, false, true, offsets).await),
+            10
+        );
+        assert_eq!(
+            level(segment.get_frames_initial(0.5, false, true, offsets).await),
+            10
+        );
+        assert_eq!(
+            level(segment.get_frames_still(0.5, false, true, offsets).await),
+            200
+        );
+        let exported = segment
+            .get_frames_for_export(0.5, false, true, offsets, true)
+            .await
+            .unwrap();
+        assert_eq!(level(exported), 200);
+    }
+
+    #[tokio::test]
+    async fn without_a_kept_source_every_fetch_reads_display() {
+        let segment = segment(false);
+        let offsets = ClipOffsets::default();
+        assert!(!segment.has_source_video());
+        assert_eq!(
+            level(segment.get_frames_still(0.5, false, true, offsets).await),
+            10
+        );
+        let exported = segment
+            .get_frames_for_export(0.5, false, true, offsets, true)
+            .await
+            .unwrap();
+        assert_eq!(level(exported), 10);
+    }
+
+    #[test]
+    fn the_kept_source_is_found_only_next_to_display() {
+        let directory = tempfile::tempdir().unwrap();
+        let display = DecoderSource {
+            path: directory.path().join("display.mp4"),
+            fps: 30,
+            offset: 0.0,
+        };
+        assert!(SourceVideo::find(&display, false).is_none());
+        std::fs::write(source_video_path(&display.path), b"").unwrap();
+        assert!(SourceVideo::find(&display, false).is_some());
+        let camera = DecoderSource {
+            path: directory.path().join("camera.mp4"),
+            ..display
+        };
+        assert!(SourceVideo::find(&camera, false).is_none());
+    }
+}
