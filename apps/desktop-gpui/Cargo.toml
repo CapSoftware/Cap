@@ -121,7 +121,7 @@ sys-locale = "0.3"
 # lockfile through gpui, so this makes an existing build unit direct.
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 # The crate 0.6.0's global-shortcut plugin wrapped, at the same pin: stored
 # bindings are W3C `KeyboardEvent.code` strings and this owns the platform
 # mapping (Carbon RegisterEventHotKey on macOS).
