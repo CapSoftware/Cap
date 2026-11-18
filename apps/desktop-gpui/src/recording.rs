@@ -2594,11 +2594,16 @@ async fn start_internal(
 }
 
 async fn start_attempt_with_upload(
-    config: StartConfig,
+    mut config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
+    // The selected camera stays selected for the next video recording, but an
+    // audio-only start never waits on it, locks it or fails because of it.
+    if config.target.is_audio_only() {
+        config.camera = None;
+    }
     #[cfg(target_os = "linux")]
     validate_linux_camera_request(
         config.mode,
@@ -2656,11 +2661,7 @@ async fn start_attempt_with_upload(
         _ => (None, None, None),
     };
 
-    let camera = config
-        .camera
-        .as_ref()
-        .filter(|_| !config.target.is_audio_only());
-    let (camera_feed, camera_lock) = match camera {
+    let (camera_feed, camera_lock) = match &config.camera {
         Some(id) => {
             if let Some(actor) = &config.camera_feed {
                 match actor.ask(camera::Lock).await {
@@ -2921,7 +2922,7 @@ async fn start_attempt_with_upload(
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
         _in_progress: in_progress,
-        started_with_camera: config.camera.is_some() && !config.target.is_audio_only(),
+        started_with_camera: config.camera.is_some(),
         camera_only: matches!(config.target, ScreenCaptureTarget::CameraOnly),
         microphone_switch,
         switched_microphone: Arc::new(Mutex::new(None)),
