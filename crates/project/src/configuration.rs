@@ -1169,6 +1169,12 @@ pub struct CursorConfiguration {
     /// keep the plain spring they were made with.
     #[serde(default)]
     pub interaction_anchors: bool,
+    /// Also meet the pointer where the UI under it visibly reacts, found by
+    /// analysing the screen video in the background while the editor is open
+    /// and idle. New projects turn it on; configs saved without the field
+    /// keep it off.
+    #[serde(default)]
+    pub hover_anchors: bool,
 }
 
 impl Default for CursorConfiguration {
@@ -1195,6 +1201,7 @@ impl Default for CursorConfiguration {
             stop_movement_in_last_seconds: None,
             ripple: CursorRippleConfig::default(),
             interaction_anchors: true,
+            hover_anchors: true,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -3843,16 +3850,25 @@ mod tests {
     #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
+        assert!(ProjectConfiguration::default().cursor.hover_anchors);
+        assert!(ProjectConfiguration::for_new_project().cursor.hover_anchors);
 
         let saved: ProjectConfiguration =
             serde_json::from_str(r#"{"cursor":{"tension":470.0,"mass":3.0,"friction":70.0}}"#)
                 .unwrap();
         assert!(!saved.cursor.interaction_anchors);
+        assert!(!saved.cursor.hover_anchors);
 
         let round_trip: ProjectConfiguration =
             serde_json::from_value(serde_json::to_value(ProjectConfiguration::default()).unwrap())
                 .unwrap();
         assert!(round_trip.cursor.interaction_anchors);
+        assert!(round_trip.cursor.hover_anchors);
+
+        let turned_off: ProjectConfiguration =
+            serde_json::from_str(r#"{"cursor":{"interactionAnchors":true,"hoverAnchors":false}}"#)
+                .unwrap();
+        assert!(!turned_off.cursor.hover_anchors);
     }
 
     #[test]
