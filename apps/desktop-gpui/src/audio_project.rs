@@ -5,7 +5,7 @@ use std::{
 
 use cap_export::{
     audio::AudioExportFormat,
-    audio_project::{AudioProjectSources, create_audio_only_project},
+    audio_project::{AudioProjectError, AudioProjectSources, create_audio_only_project},
 };
 use gpui::{App, Window};
 
@@ -19,11 +19,19 @@ pub fn open_audio_in_editor(sources: AudioProjectSources, pretty_name: String, c
         let recordings_dir = crate::recording::recordings_dir();
         std::fs::create_dir_all(&recordings_dir).map_err(|error| error.to_string())?;
         let folder = sanitize_filename::sanitize(&pretty_name);
-        let name = cap_utils::ensure_unique_filename(&format!("{folder}.cap"), &recordings_dir)?;
-        let project_path = recordings_dir.join(name);
-        create_audio_only_project(&project_path, &pretty_name, &sources)
-            .map(|_| project_path)
-            .map_err(|error| error.to_string())
+        // A free name is only a hint: another import can claim it first, and
+        // creation then refuses it, so pick again.
+        let mut attempts = 0;
+        loop {
+            let name =
+                cap_utils::ensure_unique_filename(&format!("{folder}.cap"), &recordings_dir)?;
+            let project_path = recordings_dir.join(name);
+            match create_audio_only_project(&project_path, &pretty_name, &sources) {
+                Ok(_) => break Ok(project_path),
+                Err(AudioProjectError::Exists(_)) if attempts < 8 => attempts += 1,
+                Err(error) => break Err(error.to_string()),
+            }
+        }
     });
     cx.spawn(async move |cx| match created.await {
         Ok(project_path) => {

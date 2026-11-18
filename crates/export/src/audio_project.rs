@@ -48,9 +48,6 @@ pub fn create_audio_only_project(
     if tracks.iter().all(|(source, _)| source.is_none()) {
         return Err(AudioProjectError::NoSources);
     }
-    if project_path.exists() {
-        return Err(AudioProjectError::Exists(project_path.to_path_buf()));
-    }
     let duration = tracks
         .iter()
         .filter_map(|(source, _)| *source)
@@ -59,6 +56,18 @@ pub fn create_audio_only_project(
             duration.map(|duration| longest.max(duration))
         })?;
 
+    if let Some(parent) = project_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| io(parent, error))?;
+    }
+    // Claimed exclusively before cleanup is armed, so a failure here can only
+    // ever remove a folder this call created.
+    match std::fs::create_dir(project_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(AudioProjectError::Exists(project_path.to_path_buf()));
+        }
+        Err(error) => return Err(io(project_path, error)),
+    }
     let mut cleanup = RemoveOnDrop(Some(project_path.to_path_buf()));
     let segment_dir = project_path.join(SEGMENT_DIR);
     std::fs::create_dir_all(&segment_dir).map_err(|error| io(&segment_dir, error))?;
@@ -323,6 +332,27 @@ mod tests {
                 .count();
             assert_eq!(leftovers, 0);
         }
+    }
+
+    #[test]
+    fn a_folder_someone_else_holds_is_never_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("tone.wav");
+        write_tone(&tone, 1.0);
+        let project = dir.path().join("x.cap");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("theirs.txt"), b"keep").unwrap();
+        let result = create_audio_only_project(
+            &project,
+            "x",
+            &AudioProjectSources {
+                microphone: Some(tone),
+                system_audio: None,
+            },
+        );
+        assert!(matches!(result, Err(AudioProjectError::Exists(_))));
+        assert_eq!(std::fs::read(project.join("theirs.txt")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&project).unwrap().count(), 1);
     }
 
     #[test]
