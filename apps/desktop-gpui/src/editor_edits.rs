@@ -2558,6 +2558,12 @@ pub fn generate_zoom_segments_for_timeline(
             mapped.push(click);
         }
     }
+    // Crossfades overlap neighbouring clips, so clip order is not output
+    // order. Version 1 joins ranges in the order it is given them; version 0
+    // sorts on its own and is left exactly as it was.
+    if auto_zoom_version >= cap_project::auto_zoom::AUTO_ZOOM_VERSION {
+        mapped.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    }
     auto_zoom_segments(auto_zoom_version, mapped, timeline.duration(), zoom_amount)
 }
 
@@ -4193,6 +4199,109 @@ mod tests {
             )),
             bounds(expected)
         );
+    }
+
+    fn v1_bounds(zooms: Vec<ZoomSegment>) -> Vec<(f64, f64)> {
+        zooms
+            .into_iter()
+            .map(|zoom| ((zoom.start * 1000.0).round(), (zoom.end * 1000.0).round()))
+            .collect()
+    }
+
+    #[test]
+    fn newer_rules_follow_output_time_across_a_crossfade() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 8.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 2.0 }],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let zooms = generate_zoom_segments_for_timeline(
+            &[vec![click(9900.0)], vec![click(100.0)]],
+            timeline,
+            2.0,
+            version,
+        );
+        assert_eq!(v1_bounds(zooms), vec![(7800.0, 12400.0)]);
+        let earlier = generate_zoom_segments_for_timeline(
+            &[vec![click(9900.0)], vec![click(100.0)]],
+            timeline,
+            2.0,
+            0,
+        );
+        assert_eq!(
+            earlier
+                .iter()
+                .map(|zoom| (zoom.start, zoom.end))
+                .collect::<Vec<_>>(),
+            vec![(7.8, 12.4)]
+        );
+    }
+
+    #[test]
+    fn newer_rules_follow_output_time_across_reordered_and_repeated_takes() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 1, "timescale": 2.0, "start": 10.0, "end": 30.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                ],
+                "transitions": [{ "segmentIndex": 2, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let clicks = [
+            vec![click(4000.0), click(9800.0)],
+            vec![click(2000.0), click(14000.0), click(10200.0)],
+        ];
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let zooms = v1_bounds(generate_zoom_segments_for_timeline(
+            &clicks, timeline, 2.0, version,
+        ));
+        assert!(
+            zooms.windows(2).all(|pair| pair[0].1 < pair[1].0),
+            "{zooms:?}"
+        );
+        assert_eq!(
+            zooms,
+            v1_bounds(generate_zoom_segments_for_timeline(
+                &clicks, timeline, 2.0, 0
+            ))
+        );
+    }
+
+    #[test]
+    fn newer_rules_keep_a_single_take_the_same_across_a_split() {
+        let mut project = two_clip_config();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments.truncate(1);
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let clicks = vec![click(0.0), click(4000.0), click(5000.0), click(9500.0)];
+        let whole = v1_bounds(generate_zoom_segments_for_timeline(
+            std::slice::from_ref(&clicks),
+            timeline,
+            2.0,
+            version,
+        ));
+        assert!(split_clip_segment(timeline, 5.0, Some(0)));
+        assert_eq!(
+            v1_bounds(generate_zoom_segments_for_timeline(
+                &[clicks],
+                timeline,
+                2.0,
+                version
+            )),
+            whole
+        );
+        assert_eq!(whole, vec![(1.0, 7500.0)]);
     }
 
     #[test]
