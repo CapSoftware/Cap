@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.save_before_append_failed",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -1626,6 +1627,12 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::prepare_controls_failed(&error),
         format!("Could not prepare the recording controls: {error}")
+    );
+    assert_eq!(
+        tr::editor::clips::save_before_append_failed(&error),
+        format!(
+            "Could not save the current project, so the new recording was not added. It is still in your library: {error}"
+        )
     );
     assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),
