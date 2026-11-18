@@ -17,6 +17,8 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 const FAST_PENDING_RECHECKS: u32 = 12;
 const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
+pub(crate) const RECORDING_DELETED_ON_WEB: &str =
+    "This recording was deleted on the web; the local recording is preserved";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum UploadKind {
@@ -130,7 +132,7 @@ impl UploadState {
             || auth.contains("session has expired")
         {
             UploadPhase::NeedsAuthentication
-        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS {
+        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS && error != RECORDING_DELETED_ON_WEB {
             UploadPhase::Retrying
         } else {
             UploadPhase::Failed
@@ -373,6 +375,7 @@ enum Confirmation {
     Pending,
     Verified(VerifiedUploadReceipt),
     ReuploadRequired,
+    DeletedOnWeb,
 }
 
 trait UploadBackend: Send + Sync + 'static {
@@ -490,6 +493,11 @@ impl UploadBackend for LiveBackend {
             && response.get("status").and_then(Value::as_str) == Some("reupload-required")
         {
             return Ok(Confirmation::ReuploadRequired);
+        }
+        if status == StatusCode::NOT_FOUND
+            && response.get("error").and_then(Value::as_str) == Some("Video not found")
+        {
+            return Ok(Confirmation::DeletedOnWeb);
         }
         if !status.is_success() {
             return Err(format!("Recording verification failed: {status}"));
@@ -811,6 +819,7 @@ impl<B: UploadBackend> Manager<B> {
                     "Cloud verification failed; the saved recording will upload again".into(),
                 );
             }
+            Confirmation::DeletedOnWeb => return Err(RECORDING_DELETED_ON_WEB.into()),
             Confirmation::Verified(receipt) => state.receipt = Some(receipt),
         }
         let receipt = state.receipt.as_ref().ok_or("Upload receipt is missing")?;

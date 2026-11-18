@@ -3387,6 +3387,7 @@ changed_after = "La grabación local cambió después de la subida; se ha conser
 already_queued = "Esta grabación ya está en la cola de subida"
 paused = "Subida en pausa; la grabación local se conserva"
 worker_failed = "El proceso de subida ha fallado; la grabación local se conserva"
+deleted_on_web = "Esta grabación se eliminó en la web; la grabación local se conserva"
 empty = "La grabación guardada está vacía"
 no_resumable_state = "Esta grabación no tiene una subida que se pueda reanudar"
 verification_failed = "La verificación de la grabación ha fallado: {status}"

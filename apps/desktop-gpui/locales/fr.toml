@@ -3387,6 +3387,7 @@ changed_after = "L'enregistrement local a changé après l'envoi ; il a été co
 already_queued = "Cet enregistrement est déjà en attente d'envoi"
 paused = "Envoi en pause ; l'enregistrement local est conservé"
 worker_failed = "Le processus d'envoi a échoué ; l'enregistrement local est conservé"
+deleted_on_web = "Cet enregistrement a été supprimé sur le web ; l'enregistrement local est conservé"
 empty = "L'enregistrement sauvegardé est vide"
 no_resumable_state = "Cet enregistrement n'a pas d'envoi pouvant reprendre"
 verification_failed = "La vérification de l'enregistrement a échoué : {status}"

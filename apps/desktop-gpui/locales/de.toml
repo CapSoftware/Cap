@@ -3387,6 +3387,7 @@ changed_after = "Die lokale Aufnahme hat sich nach dem Upload geändert; sie ble
 already_queued = "Diese Aufnahme ist bereits zum Hochladen eingereiht"
 paused = "Upload pausiert; die lokale Aufnahme bleibt erhalten"
 worker_failed = "Der Upload-Vorgang ist fehlgeschlagen; die lokale Aufnahme bleibt erhalten"
+deleted_on_web = "Diese Aufnahme wurde im Web gelöscht; die lokale Aufnahme bleibt erhalten"
 empty = "Die gespeicherte Aufnahme ist leer"
 no_resumable_state = "Für diese Aufnahme gibt es keinen fortsetzbaren Upload"
 verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
