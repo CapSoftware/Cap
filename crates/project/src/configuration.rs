@@ -3296,8 +3296,10 @@ impl ProjectConfiguration {
     /// and the card fills the frame, so neither shows until the card has room
     /// around it.
     pub fn for_new_project() -> Self {
-        let mut config = Self::default();
-        config.screen_enhancement = ScreenEnhancement::for_new_projects();
+        let mut config = Self {
+            screen_enhancement: ScreenEnhancement::for_new_projects(),
+            ..Self::default()
+        };
         config.background.padding_mode = PaddingMode::Even;
         config.background.shadow = 50.0;
         config.background.advanced_shadow = Some(ShadowConfiguration {

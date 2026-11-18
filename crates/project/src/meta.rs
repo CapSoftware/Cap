@@ -300,9 +300,12 @@ impl RecordingMeta {
         // the plain default.
         let mut config = match ProjectConfiguration::load(&self.project_path) {
             Ok(config) => config,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ProjectConfiguration::for_new_project()
-            }
+            // Screen enhancement stays off: the recorder and imports write it
+            // into the file, so a project without one predates it.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
+                screen_enhancement: crate::ScreenEnhancement::default(),
+                ..ProjectConfiguration::for_new_project()
+            },
             Err(_) => ProjectConfiguration::default(),
         };
 
@@ -924,6 +927,7 @@ mod metadata_save_tests {
             meta.project_config().background.padding_mode,
             crate::PaddingMode::Even
         );
+        assert!(!meta.project_config().screen_enhancement.enabled);
 
         let mut saved = ProjectConfiguration::default();
         saved.background.padding = 10.0;
