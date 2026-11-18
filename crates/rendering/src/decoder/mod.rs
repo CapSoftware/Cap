@@ -866,6 +866,8 @@ fn answered_frame(frame: &DecodedFrame) -> Option<&DecodedFrame> {
 /// wait as long as for any frame, so their output does not depend on load.
 const LOOKAHEAD_TIMEOUT_MS: u64 = 250;
 
+/// Callers box this future: it holds both reads, and the export future that
+/// awaits it is already deep on debug-build stacks.
 /// Reads the newest sample on screen at `time` through `fetch`, which takes
 /// a time before the decoder's offset is added (`decoder_time` is `time`
 /// with it). A request past the middle of its grid cell also asks for the
@@ -1136,7 +1138,7 @@ impl AsyncVideoDecoderHandle {
         max_fallback_distance: u32,
         deadline: FrameDeadline,
     ) -> Result<Option<DecodedFrame>, DecodeStalled> {
-        read_presented_frame(
+        Box::pin(read_presented_frame(
             self.get_time(time),
             self.fps,
             time,
@@ -1144,7 +1146,7 @@ impl AsyncVideoDecoderHandle {
             Some,
             |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline),
             |time| self.fetch_next_frame(time, timeout_ms, max_fallback_distance, deadline),
-        )
+        ))
         .await
     }
 
@@ -1715,7 +1717,7 @@ impl ManagedVideoDecoder {
             return Err(error);
         }
         let decoder = self.decoder.as_ref().ok_or(ManagedVideoError::NotReady)?;
-        read_presented_frame(
+        Box::pin(read_presented_frame(
             decoder.get_time(time),
             decoder.fps,
             time,
@@ -1723,7 +1725,7 @@ impl ManagedVideoDecoder {
             std::convert::identity,
             |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance),
             |time| self.fetch_next_frame(time, timeout_ms, max_fallback_distance),
-        )
+        ))
         .await
     }
 
