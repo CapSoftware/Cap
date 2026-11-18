@@ -572,14 +572,14 @@ pub struct RecordingSegmentDecoders {
 
 /// The file an import keeps next to `display.mp4` when the source has
 /// chroma a re-encode would subsample. `display.mp4` stays the re-encode, so
-/// playback and scrubbing read it as before; export and settled frames read
-/// this one.
+/// playback, scrubbing and export read it as before; the settled editor frame
+/// reads this one.
 pub fn source_video_path(display: &Path) -> PathBuf {
     display.with_file_name("display-source.mp4")
 }
 
 /// The screen reader for a segment's kept source video, opened on first use
-/// so a session that only plays and scrubs never pays for it.
+/// so a session that only plays, scrubs or exports never pays for it.
 struct SourceVideo {
     source: DecoderSource,
     force_ffmpeg: bool,
@@ -939,7 +939,7 @@ impl RecordingSegmentDecoders {
 
         if needs_display {
             let screen_decoder = match (&self.source_video, fetch) {
-                (Some(video), FrameFetch::Still | FrameFetch::Export { .. }) => {
+                (Some(video), FrameFetch::Still) => {
                     video.decoder().await.unwrap_or(&self.screen)
                 }
                 _ => &self.screen,
@@ -12388,7 +12388,7 @@ mod source_video_tests {
     }
 
     #[tokio::test]
-    async fn settled_and_exported_frames_read_the_kept_source() {
+    async fn only_settled_frames_read_the_kept_source() {
         let segment = segment(true);
         let offsets = ClipOffsets::default();
         assert_eq!(
@@ -12407,7 +12407,7 @@ mod source_video_tests {
             .get_frames_for_export(0.5, false, true, offsets, true)
             .await
             .unwrap();
-        assert_eq!(level(exported), 200);
+        assert_eq!(level(exported), 10);
     }
 
     #[tokio::test]
