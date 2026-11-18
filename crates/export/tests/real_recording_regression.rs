@@ -192,10 +192,11 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
             reference_render_segments
                 .iter()
                 .map(|segment| {
-                    Arc::new(PrecomputedCursorTimeline::new(
+                    Arc::new(PrecomputedCursorTimeline::new_with_anchors(
                         &segment.cursor,
                         cursor_smoothing,
                         Some(click_spring),
+                        project_config.cursor.interaction_anchors,
                     ))
                 })
                 .collect();

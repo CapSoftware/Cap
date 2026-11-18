@@ -55,7 +55,7 @@ async fn preview_superseded_while_fresh(
     }
 }
 
-pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 7] {
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 8] {
     let click_spring = cursor.click_spring_config();
     [
         u32::from(cursor.raw),
@@ -65,6 +65,7 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
         click_spring.tension.to_bits(),
         click_spring.mass.to_bits(),
         click_spring.friction.to_bits(),
+        u32::from(cursor.interaction_anchors),
     ]
 }
 
@@ -82,7 +83,7 @@ struct PreviewCursorOrderEntry {
 struct PreviewCursorCacheEntry {
     recording_clip: u32,
     cursor: Arc<CursorEvents>,
-    settings: [u32; 7],
+    settings: [u32; 8],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -162,10 +163,11 @@ impl PreviewCursorCache {
             self.entries.remove(0);
         }
 
-        let timeline = Arc::new(PrecomputedCursorTimeline::new(
+        let timeline = Arc::new(PrecomputedCursorTimeline::new_with_anchors(
             cursor,
             (!project.cursor.raw).then_some(smoothing),
             Some(click_spring),
+            project.cursor.interaction_anchors,
         ));
         self.entries.push(PreviewCursorCacheEntry {
             recording_clip,
@@ -524,12 +526,27 @@ impl EditorInstance {
             }
         }
 
+        // Before any offsets are filled in below: those are already on the
+        // current segment clock.
+        let migrated = cap_project::migrate_late_audio_alignment(&mut project, meta, || {
+            match &preloaded_recordings {
+                Some(recordings) => recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect(),
+                None => display_durations(&recording_meta, meta),
+            }
+        });
+
         if project.clips.is_empty() {
             project.clips = initial_clip_configuration(&recording_meta.project_path, meta);
 
             if let Err(e) = project.write(&recording_meta.project_path) {
                 warn!("Failed to save auto-generated clip offsets: {}", e);
             }
+        } else if migrated && let Err(e) = project.write(&recording_meta.project_path) {
+            warn!("Failed to save late audio alignment: {}", e);
         }
 
         // Segment setup (decoder init + kicking off audio decodes) is
@@ -615,11 +632,14 @@ impl EditorInstance {
 
         cap_project::clamp_timeline_to_sources(
             &mut project,
-            &recordings
-                .segments
-                .iter()
-                .map(|segment| segment.display.duration)
-                .collect::<Vec<_>>(),
+            &cap_project::late_audio_trim_limits(
+                meta,
+                &recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect::<Vec<_>>(),
+            ),
         );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
         cap_project::synchronize_captions(
@@ -1984,6 +2004,22 @@ pub fn initial_clip_configuration(
     }
 }
 
+/// Each clip's display duration, the source clock captions are timed on.
+fn display_durations(recording_meta: &RecordingMeta, meta: &StudioRecordingMeta) -> Vec<f64> {
+    match meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            vec![display_video_duration(&recording_meta.path(&segment.display.path)).unwrap_or(0.0)]
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| {
+                display_video_duration(&recording_meta.path(&segment.display.path)).unwrap_or(0.0)
+            })
+            .collect(),
+    }
+}
+
 fn load_calibration_store(project_path: &std::path::Path) -> cap_audio::CalibrationStore {
     let calibration_dir = project_path
         .parent()
@@ -2424,7 +2460,7 @@ mod tests {
                     continue;
                 }
                 let cached = cached.unwrap();
-                let fresh = PrecomputedCursorTimeline::new(
+                let fresh = PrecomputedCursorTimeline::new_with_anchors(
                     &cursor,
                     (!raw).then_some(SpringMassDamperSimulationConfig {
                         tension: project.cursor.tension,
@@ -2432,6 +2468,7 @@ mod tests {
                         friction: project.cursor.friction,
                     }),
                     Some(project.cursor.click_spring_config()),
+                    project.cursor.interaction_anchors,
                 );
 
                 for time in [1.5, 0.0, 0.08, 0.1, 0.23, 0.24, 0.3, 1.0, 1.6, 2.5, -1.0] {

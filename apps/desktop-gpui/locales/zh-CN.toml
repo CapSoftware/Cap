@@ -2359,6 +2359,7 @@ background_blur = "背景模糊"
 custom_position = "自定义屏幕位置（在画布上拖动）"
 motion_blur = "运动模糊"
 padding = "边距"
+padding_style = "边距样式"
 rounded_corners = "圆角"
 title = "布局"
 
@@ -2856,6 +2857,10 @@ timeline_unavailable = "项目时间线不可用。"
 timeline_unreadable = "无法读取项目时间线。"
 title = "显示键盘"
 uppercase = "大写"
+
+[editor.tabs.padding]
+even = "均匀"
+proportional = "按比例"
 
 [editor.tabs.position]
 bottom_center = "底部居中"
