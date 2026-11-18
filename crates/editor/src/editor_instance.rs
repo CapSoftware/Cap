@@ -291,6 +291,17 @@ pub struct EditorInstance {
     audio_output: Arc<crate::AudioOutput>,
     preview_speed: crate::PreviewSpeedHandle,
     hover_analysis_cancel: Arc<AtomicBool>,
+    preview_activity_ms: AtomicU64,
+}
+
+/// Background hover analysis waits this long after the last preview request,
+/// so it never competes with scrubbing, dragging or settings changes.
+const HOVER_ANALYSIS_IDLE_MS: u64 = 1000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
 impl EditorInstance {
@@ -705,6 +716,7 @@ impl EditorInstance {
             audio_output,
             preview_speed: crate::PreviewSpeedHandle::default(),
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
+            preview_activity_ms: AtomicU64::new(0),
         });
 
         this.state.lock().await.preview_task =
@@ -762,6 +774,9 @@ impl EditorInstance {
                 || editor.upgrade().is_some_and(|editor| {
                     *editor.playback_active_rx.borrow()
                         || editor.export_preview_active.load(Ordering::Acquire)
+                        || now_ms()
+                            .saturating_sub(editor.preview_activity_ms.load(Ordering::Acquire))
+                            < HOVER_ANALYSIS_IDLE_MS
                 })
         };
         let spawned = std::thread::Builder::new()
@@ -932,6 +947,7 @@ impl EditorInstance {
             audio_output: self.audio_output.clone(),
             preview_speed: self.preview_speed.clone(),
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
+            preview_activity_ms: AtomicU64::new(0),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
@@ -1215,6 +1231,7 @@ impl EditorInstance {
 
             loop {
                 preview_rx.changed().await.unwrap();
+                self.preview_activity_ms.store(now_ms(), Ordering::Release);
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
