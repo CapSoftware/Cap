@@ -2299,6 +2299,29 @@ impl EditorWindow {
                     )),
             );
 
+        if smooth {
+            let hover = cursor.interaction_anchors && cursor.hover_anchors;
+            body = body.child(
+                ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
+                    ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = {
+                                let cursor = &this.style_control_project().cursor;
+                                !(cursor.interaction_anchors && cursor.hover_anchors)
+                            };
+                            this.edit_project("cursor-hover-anchors", window, cx, move |p| {
+                                p.cursor.hover_anchors = next;
+                                if next {
+                                    p.cursor.interaction_anchors = true;
+                                }
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            );
+        }
+
         // An explicit family forces the SVG assets, so the toggle would be
         // showing a setting the renderer is already overriding.
         if cursor.cursor_type().family().is_none() {

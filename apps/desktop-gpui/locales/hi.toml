@@ -2803,6 +2803,7 @@ rounded = "गोल"
 squircle = "स्क्वर्कल"
 
 [editor.tabs.cursor]
+follow_hover = "होवर हाइलाइट का अनुसरण करें"
 friction = "घर्षण"
 hide_when_idle = "निष्क्रिय होने पर छिपाएँ"
 inactivity_delay = "निष्क्रियता देरी"

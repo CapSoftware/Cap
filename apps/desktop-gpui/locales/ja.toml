@@ -2803,6 +2803,7 @@ rounded = "角丸"
 squircle = "スクワークル"
 
 [editor.tabs.cursor]
+follow_hover = "ホバー表示に合わせる"
 friction = "摩擦"
 hide_when_idle = "操作がないときは非表示"
 inactivity_delay = "非表示までの時間"
