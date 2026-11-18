@@ -27,6 +27,7 @@ const CAPTION_TOLERANCE: f64 = 1e-3;
 const MARKER_TOLERANCE: f64 = 1e-9;
 const SETTLE_WAIT: Duration = Duration::from_secs(30);
 const MEDIA_RELEASE_WAIT: Duration = Duration::from_secs(20);
+const COMMIT_RELEASE_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SegmentProbe {
@@ -131,8 +132,9 @@ fn segment_paths(segment: &MultipleSegment) -> Vec<String> {
         .collect()
 }
 
-/// The `content/segments/<name>` folder holding all of a segment's files, or
-/// `None` when they are not all inside one such folder.
+/// Media is only ever moved a whole folder at a time, so a segment whose files
+/// do not all sit in one `content/segments/<name>` folder is kept: moving part
+/// of one could take files the recording still points at.
 fn segment_folder(segment: &MultipleSegment) -> Option<String> {
     let mut folder: Option<&str> = None;
     let paths = segment_paths(segment);
@@ -1341,8 +1343,22 @@ fn wait_for_media(
     }
 }
 
+/// Waits, without holding the project, until the media a cleanup would move
+/// can be moved, so opening the project again never waits on it. `false` when
+/// it is still held after [`MEDIA_RELEASE_WAIT`]; anything this cannot read is
+/// left for [`run`] to decide.
+pub(crate) fn wait_until_free(project: &Path, request: &Request) -> bool {
+    let Ok(snapshot) = Snapshot::read(project) else {
+        return true;
+    };
+    let Ok(plan) = plan(&snapshot, &request.probes) else {
+        return true;
+    };
+    wait_for_media(project, &plan.folders, MEDIA_RELEASE_WAIT, &folder_in_use).unwrap_or(true)
+}
+
 pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
-    run_waiting(project, request, MEDIA_RELEASE_WAIT, &folder_in_use)
+    run_waiting(project, request, COMMIT_RELEASE_WAIT, &folder_in_use)
 }
 
 /// [`run`] with the wait for the removed media to be released spelled out.

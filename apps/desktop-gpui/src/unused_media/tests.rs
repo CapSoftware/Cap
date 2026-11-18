@@ -1165,6 +1165,21 @@ fn removed_media_still_in_use_is_waited_for() {
 }
 
 #[test]
+fn waiting_for_free_media_writes_nothing() {
+    let fixture = Fixture::new();
+    let before = fixture.files();
+    let tree = fixture.tree();
+    let started = std::time::Instant::now();
+    assert!(wait_until_free(
+        &fixture.project(),
+        &Request::from_probes(probes())
+    ));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(fixture.files(), before);
+    assert_eq!(fixture.tree(), tree);
+}
+
+#[test]
 fn removed_media_that_stays_in_use_leaves_the_project_untouched() {
     let fixture = Fixture::new();
     let before = fixture.files();

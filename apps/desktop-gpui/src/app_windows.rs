@@ -6762,14 +6762,42 @@ fn clean_unused_media(key: PathBuf, request: Option<crate::unused_media::Request
             .detach();
         return;
     };
+    if let Some(reason) = unused_media_busy(&key, cx) {
+        tracing::info!(path = %key.display(), reason, "Kept unused clip media");
+        return;
+    }
+    let (ready_tx, ready_rx) = flume::bounded(1);
+    let project = key.clone();
+    let spawned = std::thread::Builder::new()
+        .name("unused-media".into())
+        .spawn(move || {
+            let free = crate::unused_media::wait_until_free(&project, &request);
+            ready_tx.send((free, request)).ok();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "Could not start the unused clip media cleanup");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        if let Ok((free, request)) = ready_rx.recv_async().await {
+            cx.update(|cx| start_unused_media_cleanup(key, request, free, cx));
+        }
+    })
+    .detach();
+}
+
+/// Everything that keeps a closed editor's project out of reach of the
+/// cleanup, checked again once the media is free, since the project may have
+/// been opened, exported or deleted while the cleanup waited.
+fn unused_media_busy(key: &Path, cx: &App) -> Option<&'static str> {
     let session = RecordingSession::global(cx);
     let session = session.read(cx);
     let windows = cx.global::<AppWindows>();
-    let busy = crate::unused_media::Busy {
-        open_in_editor: windows.editors.iter().any(|(path, _)| path == &key)
-            || crate::library::ensure_not_open_in_editor(&key).is_err(),
-        deleting: windows.deleting_editors.contains(&key) || crate::library::is_being_deleted(&key),
-        recording: crate::library::is_recording_in_progress(&key)
+    crate::unused_media::Busy {
+        open_in_editor: windows.editors.iter().any(|(path, _)| path == key)
+            || crate::library::ensure_not_open_in_editor(key).is_err(),
+        deleting: windows.deleting_editors.contains(key) || crate::library::is_being_deleted(key),
+        recording: crate::library::is_recording_in_progress(key)
             || session
                 .active_project_dir()
                 .is_some_and(|path| editor_key(path) == key)
@@ -6777,9 +6805,22 @@ fn clean_unused_media(key: PathBuf, request: Option<crate::unused_media::Request
                 .preparing_studio_editor()
                 .is_some_and(|pending| editor_key(&pending.project_path) == key),
         exporting_or_uploading: crate::recordings_overlay::work_in_flight(cx),
-        automation: crate::automation::studio_rules_running(&key),
-    };
-    if let Some(reason) = busy.reason() {
+        automation: crate::automation::studio_rules_running(key),
+    }
+    .reason()
+}
+
+fn start_unused_media_cleanup(
+    key: PathBuf,
+    request: crate::unused_media::Request,
+    free: bool,
+    cx: &mut App,
+) {
+    if !free {
+        tracing::info!(path = %key.display(), reason = "media still in use", "Kept unused clip media");
+        return;
+    }
+    if let Some(reason) = unused_media_busy(&key, cx) {
         tracing::info!(path = %key.display(), reason, "Kept unused clip media");
         return;
     }
