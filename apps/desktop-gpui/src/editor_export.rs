@@ -1003,7 +1003,8 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         ui.estimate_cancel.store(true, Ordering::Release);
         ui.estimate_cancel = Arc::new(AtomicBool::new(false));
         ui.estimate = None;
@@ -1020,8 +1021,6 @@ impl EditorWindow {
         let estimate_turbo = ui.turbo;
         let estimate_instance = instance.clone();
         let estimate_project = project.clone();
-        let mut project = project;
-        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
