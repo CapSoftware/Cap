@@ -304,6 +304,7 @@ open_link = "Link öffnen"
 retry_upload = "Hochladen wiederholen"
 show_all = "Alle anzeigen"
 title = "Aufnahmen"
+save_audio = "Audio speichern"
 
 [settings.recordings.empty]
 all = "Keine Aufnahmen"
@@ -1537,12 +1538,14 @@ placeholder = "Skript einfügen oder eingeben…"
 words_per_minute = "{wpm} Wörter/Min."
 
 [import]
+audio_failed = "Audio konnte nicht importiert werden: {error}"
 error_title = "Importfehler"
 image_failed = "Bild konnte nicht importiert werden: {error}"
 unsupported = "Nicht unterstützte Mediendatei."
 video_failed = "Video konnte nicht importiert werden: {error}"
 
 [import.filter]
+audio = "Audiodateien"
 image = "Bilddateien"
 media = "Mediendateien"
 video = "Videodateien"

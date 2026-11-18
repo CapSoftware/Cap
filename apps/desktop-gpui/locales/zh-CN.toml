@@ -304,6 +304,7 @@ open_link = "打开链接"
 retry_upload = "重新上传"
 show_all = "全部显示"
 title = "录制"
+save_audio = "保存音频"
 
 [settings.recordings.empty]
 all = "没有录制"
@@ -1537,12 +1538,14 @@ placeholder = "粘贴或输入你的脚本…"
 words_per_minute = "{wpm} 字/分钟"
 
 [import]
+audio_failed = "无法导入音频：{error}"
 error_title = "导入错误"
 image_failed = "无法导入图像：{error}"
 unsupported = "不支持的媒体文件。"
 video_failed = "无法导入视频：{error}"
 
 [import.filter]
+audio = "音频文件"
 image = "图像文件"
 media = "媒体文件"
 video = "视频文件"

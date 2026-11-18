@@ -6,6 +6,7 @@
 mod app_sounds;
 mod app_windows;
 mod assets;
+mod audio_project;
 mod auth;
 mod automation;
 mod blur_recovery;

@@ -306,6 +306,7 @@ open_link = "Open link"
 retry_upload = "Retry upload"
 show_all = "Show all"
 title = "Recordings"
+save_audio = "Save Audio"
 
 [settings.recordings.empty]
 all = "No recordings"
@@ -1539,12 +1540,14 @@ placeholder = "Paste or type your script…"
 words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
+audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
 video_failed = { text = "Failed to import video: {error}", context = "{error} is a technical error message, usually in English." }
 
 [import.filter]
+audio = { text = "Audio Files", context = "File type name in the file picker's filter list." }
 image = { text = "Image Files", context = "File type name in the file picker's filter list." }
 media = { text = "Media Files", context = "File type name in the file picker's filter list." }
 video = { text = "Video Files", context = "File type name in the file picker's filter list." }

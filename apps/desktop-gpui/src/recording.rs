@@ -1779,6 +1779,16 @@ pub(crate) fn studio_thumbnails_pending() -> bool {
 /// recorded here would show the icon fallback forever, including in the
 /// shipping app.
 fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::path::Path) {
+    let audio_only = cap_project::RecordingMeta::load_for_project(project_dir)
+        .ok()
+        .and_then(|meta| {
+            meta.studio_meta()
+                .map(cap_project::StudioRecordingMeta::is_audio_only)
+        })
+        .unwrap_or(false);
+    if audio_only {
+        return;
+    }
     let output = crate::library::bundle_thumbnail_path(project_dir);
     match crate::library::create_screenshot(source_video, &output, None) {
         Ok(()) => tracing::info!(path = %output.display(), "wrote recording thumbnail"),

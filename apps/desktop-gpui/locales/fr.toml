@@ -304,6 +304,7 @@ open_link = "Ouvrir le lien"
 retry_upload = "Relancer la mise en ligne"
 show_all = "Tout afficher"
 title = "Enregistrements"
+save_audio = "Enregistrer l'audio"
 
 [settings.recordings.empty]
 all = "Aucun enregistrement"
@@ -1537,12 +1538,14 @@ placeholder = "Collez ou saisissez votre script…"
 words_per_minute = "{wpm} mots/min"
 
 [import]
+audio_failed = "Impossible d'importer l'audio : {error}"
 error_title = "Erreur d'importation"
 image_failed = "Impossible d'importer l'image : {error}"
 unsupported = "Fichier multimédia non pris en charge."
 video_failed = "Impossible d'importer la vidéo : {error}"
 
 [import.filter]
+audio = "Fichiers audio"
 image = "Fichiers image"
 media = "Fichiers multimédias"
 video = "Fichiers vidéo"

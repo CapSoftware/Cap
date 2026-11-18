@@ -304,6 +304,7 @@ open_link = "लिंक खोलें"
 retry_upload = "फिर से अपलोड करें"
 show_all = "सभी दिखाएँ"
 title = "रिकॉर्डिंग"
+save_audio = "ऑडियो सेव करें"
 
 [settings.recordings.empty]
 all = "कोई रिकॉर्डिंग नहीं"
@@ -1537,12 +1538,14 @@ placeholder = "अपनी स्क्रिप्ट पेस्ट कर�
 words_per_minute = "{wpm} शब्द/मिनट"
 
 [import]
+audio_failed = "ऑडियो इंपोर्ट नहीं हो सका: {error}"
 error_title = "इम्पोर्ट त्रुटि"
 image_failed = "इमेज इम्पोर्ट नहीं हो सकी: {error}"
 unsupported = "यह मीडिया फ़ाइल समर्थित नहीं है।"
 video_failed = "वीडियो इम्पोर्ट नहीं हो सका: {error}"
 
 [import.filter]
+audio = "ऑडियो फ़ाइलें"
 image = "इमेज फ़ाइलें"
 media = "मीडिया फ़ाइलें"
 video = "वीडियो फ़ाइलें"

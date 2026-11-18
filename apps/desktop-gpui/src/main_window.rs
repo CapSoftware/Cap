@@ -5092,7 +5092,11 @@ impl MainWindow {
         self.library_card(
             gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
-            "icons/square-play.svg",
+            if item.audio_only {
+                "icons/microphone.svg"
+            } else {
+                "icons/square-play.svg"
+            },
             item.pretty_name.clone(),
             Some(subtitle),
             item.clip_count,
@@ -5179,6 +5183,17 @@ impl MainWindow {
                     })
                     .detach();
                 }),
+            ));
+        }
+        if item.audio_only {
+            let audio = path.clone();
+            row = row.child(self.library_action(
+                "lib-rec-save-audio",
+                "icons/download.svg",
+                tr::settings::recordings::save_audio(),
+                move |_, window, cx| {
+                    crate::audio_project::save_audio_as(audio.clone(), window, cx);
+                },
             ));
         }
         let folder = path.clone();

@@ -304,6 +304,7 @@ open_link = "Abrir enlace"
 retry_upload = "Reintentar la subida"
 show_all = "Mostrar todo"
 title = "Grabaciones"
+save_audio = "Guardar audio"
 
 [settings.recordings.empty]
 all = "No hay grabaciones"
@@ -1537,12 +1538,14 @@ placeholder = "Pega o escribe tu guion…"
 words_per_minute = "{wpm} ppm"
 
 [import]
+audio_failed = "No se pudo importar el audio: {error}"
 error_title = "Error de importación"
 image_failed = "No se pudo importar la imagen: {error}"
 unsupported = "Archivo multimedia no compatible."
 video_failed = "No se pudo importar el vídeo: {error}"
 
 [import.filter]
+audio = "Archivos de audio"
 image = "Archivos de imagen"
 media = "Archivos multimedia"
 video = "Archivos de vídeo"

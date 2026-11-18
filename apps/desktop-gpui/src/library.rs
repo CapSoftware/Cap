@@ -256,6 +256,9 @@ pub struct RecordingItem {
     /// left to an `<img onError>`.
     pub thumbnail: Option<PathBuf>,
     pub thumbnail_version: Option<u128>,
+    /// Recorded from the microphone and system audio alone: no picture to
+    /// show, so cards draw a microphone instead of a thumbnail.
+    pub audio_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -344,6 +347,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         RecordingMetaInner::Instant(_) => 1,
     };
     let status = recording_status(&meta);
+    let audio_only = meta
+        .studio_meta()
+        .is_some_and(StudioRecordingMeta::is_audio_only);
 
     #[cfg(test)]
     RECORDING_ITEM_BUILDS.with(|builds| builds.set(builds.get() + 1));
@@ -354,6 +360,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
     } else {
         bundle_thumbnail_path(&path)
     };
+    let thumbnail = (!audio_only)
+        .then_some(thumbnail)
+        .filter(|thumbnail| thumbnail.is_file());
     let upload = crate::upload::queue::status(&path, &meta);
     RecordingItem {
         upload,
@@ -363,8 +372,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         pretty_name: meta.pretty_name,
         sharing: meta.sharing.map(|sharing| sharing.link),
         sort_time_millis,
-        thumbnail_version: source_mtime_nanos(&thumbnail),
-        thumbnail: thumbnail.is_file().then_some(thumbnail),
+        thumbnail_version: thumbnail.as_deref().and_then(source_mtime_nanos),
+        thumbnail,
+        audio_only,
         path,
     }
 }

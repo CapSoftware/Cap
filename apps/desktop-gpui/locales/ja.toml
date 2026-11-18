@@ -304,6 +304,7 @@ open_link = "リンクを開く"
 retry_upload = "アップロードを再試行"
 show_all = "すべて表示"
 title = "録画"
+save_audio = "音声を保存"
 
 [settings.recordings.empty]
 all = "録画はありません"
@@ -1537,12 +1538,14 @@ placeholder = "台本を貼り付けるか入力してください…"
 words_per_minute = "{wpm}語/分"
 
 [import]
+audio_failed = "音声を読み込めませんでした: {error}"
 error_title = "読み込みエラー"
 image_failed = "画像を読み込めませんでした：{error}"
 unsupported = "サポートされていないメディアファイルです。"
 video_failed = "動画を読み込めませんでした：{error}"
 
 [import.filter]
+audio = "音声ファイル"
 image = "画像ファイル"
 media = "メディアファイル"
 video = "動画ファイル"
