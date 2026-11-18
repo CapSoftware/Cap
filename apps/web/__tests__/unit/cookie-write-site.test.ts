@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => {
 		update: () => ({ set: () => ({ where: async () => undefined }) }),
 	};
 	return {
+		webUrl: "https://cap.so",
 		cookieUser,
 		keyUser,
 		client,
@@ -58,7 +59,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("server-only", () => ({}));
 
 vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+	serverEnv: () => ({ WEB_URL: mocks.webUrl }),
 	buildEnv: {
 		NEXT_PUBLIC_WEB_URL: "https://cap.so",
 		NEXT_PUBLIC_IS_CAP: "true",
@@ -103,8 +104,13 @@ const sameSite = {
 	"sec-fetch-site": "same-site",
 	origin: "https://www.cap.so",
 };
+const mediaHost = {
+	"sec-fetch-site": "same-site",
+	origin: "https://v.cap.so",
+};
 
 beforeEach(() => {
+	mocks.webUrl = "https://cap.so";
 	mocks.getServerSession.mockClear();
 	mocks.getSessionUser.mockClear();
 });
@@ -136,6 +142,94 @@ describe("isCrossSiteCookieWrite", () => {
 		["no browser headers", {}],
 	])("allows a %s write", (_label, headers) => {
 		expect(isCrossSiteCookieWrite(request("POST", headers))).toBe(false);
+	});
+
+	it.each([
+		["the media host", mediaHost],
+		[
+			"another sibling subdomain",
+			{ "sec-fetch-site": "same-site", origin: "https://uploads.cap.so" },
+		],
+		["an opaque origin", { "sec-fetch-site": "same-site", origin: "null" }],
+		["no Origin", { "sec-fetch-site": "same-site" }],
+		[
+			"the www host on another scheme",
+			{ "sec-fetch-site": "same-site", origin: "http://www.cap.so" },
+		],
+	])("flags a same-site write from %s", (_label, headers) => {
+		expect(isCrossSiteCookieWrite(request("POST", headers))).toBe(true);
+	});
+
+	it("allows a same-site write from the app's own host", () => {
+		expect(
+			isCrossSiteCookieWrite(
+				request(
+					"POST",
+					{ "sec-fetch-site": "same-site", origin: "https://www.cap.so" },
+					"https://www.cap.so/api/test",
+				),
+			),
+		).toBe(false);
+	});
+
+	it("allows a write from the extension's own pages", () => {
+		expect(
+			isCrossSiteCookieWrite(
+				request("POST", {
+					"sec-fetch-site": "none",
+					origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+				}),
+			),
+		).toBe(false);
+	});
+
+	it.each([
+		[
+			"its www host",
+			"https://cap.acme.example",
+			"https://www.cap.acme.example",
+			false,
+		],
+		[
+			"its apex host",
+			"https://www.acme.example",
+			"https://acme.example",
+			false,
+		],
+		[
+			"a sibling host",
+			"https://cap.acme.example",
+			"https://media.acme.example",
+			true,
+		],
+	])(
+		"checks a same-site write to a self-hosted install from %s",
+		(_label, webUrl, origin, flagged) => {
+			mocks.webUrl = webUrl;
+			const host = new URL(webUrl).host;
+			expect(
+				isCrossSiteCookieWrite(
+					request(
+						"POST",
+						{ "sec-fetch-site": "same-site", origin },
+						`https://${host}/api/test`,
+					),
+				),
+			).toBe(flagged);
+		},
+	);
+
+	it("allows a plain-http self-hosted write without fetch metadata", () => {
+		mocks.webUrl = "http://cap.acme.example";
+		expect(
+			isCrossSiteCookieWrite(
+				request(
+					"POST",
+					{ origin: "http://cap.acme.example" },
+					"http://cap.acme.example/api/test",
+				),
+			),
+		).toBe(false);
 	});
 
 	it("treats the request host as an own origin for custom domains and previews", () => {
@@ -241,9 +335,19 @@ describe("Hono cookie fallback", () => {
 		expect(await response.json()).toEqual({ user: "cookie-user" });
 	});
 
-	it("authenticates a bearer write from any site", async () => {
+	it("does not authenticate a cookie write from a page on the media host", async () => {
+		const response = await send("/required", "POST", mediaHost);
+		expect(response.status).toBe(401);
+		expect(mocks.getSessionUser).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["any site", crossSite],
+		["the media host", mediaHost],
+		["a native client", {}],
+	])("authenticates a bearer write from %s", async (_label, headers) => {
 		const response = await send("/required", "POST", {
-			...crossSite,
+			...headers,
 			authorization: `Bearer ${API_KEY}`,
 		});
 		expect(response.status).toBe(200);
@@ -269,6 +373,22 @@ describe("App Router cookie writes", () => {
 
 	it("does not authenticate a cross-site cookie write", async () => {
 		const response = await rename(crossSite);
+		expect(response.status).toBe(401);
+		expect(mocks.getSessionUser).not.toHaveBeenCalled();
+	});
+
+	it("does not rename the account from a page on the media host", async () => {
+		const response = await updateUserName(
+			new Request("https://cap.so/api/settings/user/name", {
+				method: "POST",
+				headers: {
+					host: "cap.so",
+					"content-type": "text/plain;charset=UTF-8",
+					...mediaHost,
+				},
+				body: JSON.stringify({ firstName: "A", lastName: "B" }),
+			}) as never,
+		);
 		expect(response.status).toBe(401);
 		expect(mocks.getSessionUser).not.toHaveBeenCalled();
 	});
@@ -310,6 +430,7 @@ describe("Effect getCurrentUser", () => {
 
 	it.each([
 		["plain cross-site write", request("POST", crossSite)],
+		["write from the media host", request("POST", mediaHost)],
 		[
 			"cross-site write carrying a bogus bearer",
 			request("POST", { ...crossSite, authorization: "Bearer other" }),
@@ -403,9 +524,18 @@ describe("HttpApi auth middleware", () => {
 		expect(await response.json()).toEqual({ user: "cookie-user" });
 	});
 
-	it("authenticates a bearer write from any site", async () => {
+	it("does not authenticate a cookie write from the media host", async () => {
+		const response = await send("POST", mediaHost);
+		expect(response.status).toBe(401);
+	});
+
+	it.each([
+		["any site", crossSite],
+		["the media host", mediaHost],
+		["a native client", {}],
+	])("authenticates a bearer write from %s", async (_label, headers) => {
 		const response = await send("POST", {
-			...crossSite,
+			...headers,
 			authorization: `Bearer ${API_KEY}`,
 		});
 		expect(response.status).toBe(200);
@@ -449,6 +579,12 @@ describe("RPC auth middleware", () => {
 
 	it("does not authenticate a cross-site cookie call", async () => {
 		const exit = await call(crossSite);
+		expect(exit._tag).toBe("Failure");
+		expect(JSON.stringify(exit.cause)).toContain("UnauthenticatedError");
+	});
+
+	it("does not authenticate a cookie call from the media host", async () => {
+		const exit = await call(mediaHost);
 		expect(exit._tag).toBe("Failure");
 		expect(JSON.stringify(exit.cause)).toContain("UnauthenticatedError");
 	});
