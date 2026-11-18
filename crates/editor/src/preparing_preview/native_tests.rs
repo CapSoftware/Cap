@@ -899,22 +899,25 @@ async fn native_preparing_svg_cursor_zoom_camera_and_relocation_match_finalized_
 }
 
 /// Display samples 0.75 of a frame after each grid line, read 0.98 of a
-/// frame into each cell (the 0.25 s screen offset of the mic start plus a
-/// 0.016 s trim): every request takes the sample filed under the next grid
-/// index, in the preparing preview as in the finished editor.
+/// frame into each cell (a mic that starts 0.266 s after the display puts
+/// the screen 7.98 frames in): every request takes the sample filed under
+/// the next grid index, in the preparing preview as in the finished editor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_preparing_reads_samples_between_grid_lines_like_the_finalized_editor() {
     let mut fixture = fixture_with_display_phase(false, 0.75);
-    fixture.project.timeline = Some(
-        serde_json::from_value(serde_json::json!({
-            "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.016, "end": 3.25}],
-            "zoomSegments": [{"start": 0.3, "end": 2.7, "amount": 1.6, "mode": "auto"}]
-        }))
-        .unwrap(),
-    );
+    let screen_offset = 0.266;
+    for metadata in [&mut fixture.metadata, &mut fixture.reference_metadata] {
+        let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+            panic!("Studio metadata expected");
+        };
+        let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("Indexed metadata expected");
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(screen_offset);
+    }
     let frames = [0, 45, 12, 90];
     for frame in frames {
-        let display_time = (f64::from(frame) / 30.0 + 0.016 + 0.25) as f32;
+        let display_time = (f64::from(frame) / 30.0 + screen_offset) as f32;
         assert!(
             cap_rendering::decoder::request_next_frame(display_time, 30).is_some(),
             "frame {frame} must read past the middle of its cell"
