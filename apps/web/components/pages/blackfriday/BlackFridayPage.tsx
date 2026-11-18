@@ -27,13 +27,21 @@ const WRAP = "mx-auto w-full max-w-[1184px] px-5 sm:px-8";
 const H2 =
 	"text-balance text-[32px] font-medium leading-[1.05] tracking-[-0.03em] sm:text-[48px]";
 
+const FOOTER_LINKS = [
+	{ label: "Home", href: "/" },
+	{ label: "Pricing", href: "/pricing" },
+	{ label: "Download", href: "/download" },
+	{ label: "Terms", href: "/terms" },
+	{ label: "Privacy", href: "/privacy" },
+] as const;
+
 const QUOTES = TESTIMONIAL_NAMES.map((name) =>
 	testimonials.find((t) => t.name === name),
 ).filter((t) => t !== undefined);
 
 function Header() {
 	return (
-		<header className="absolute inset-x-0 top-0 z-50">
+		<header className="absolute inset-x-0 top-0 z-50 animate-bf-fade motion-reduce:animate-none">
 			<div className={`${WRAP} flex h-16 items-center justify-between gap-4`}>
 				<Link
 					href="/"
@@ -67,28 +75,33 @@ function Hero() {
 		<section className="relative isolate overflow-hidden pb-16 pt-28 sm:pb-24 sm:pt-36">
 			<div
 				aria-hidden="true"
-				className="absolute inset-x-0 top-0 -z-10 h-[720px] bg-[radial-gradient(60%_55%_at_50%_0%,rgba(255,111,142,0.22),rgba(255,179,107,0.08)_45%,rgba(10,10,11,0)_75%)]"
+				className="absolute inset-x-0 top-0 -z-10 h-[720px] animate-bf-fade bg-[radial-gradient(60%_55%_at_50%_0%,rgba(255,111,142,0.22),rgba(255,179,107,0.08)_45%,rgba(10,10,11,0)_75%)] [animation-duration:1.4s] motion-reduce:animate-none"
 			/>
 			<div className={`${WRAP} flex flex-col items-center text-center`}>
 				<CapFridayMark animate className="w-[min(80vw,500px)]" />
-				<h1 className="mt-5 min-h-[2lh] text-balance text-[40px] font-medium leading-[1] tracking-[-0.035em] sm:min-h-0 sm:text-[68px]">
+				<h1 className="mt-5 min-h-[2lh] animate-bf-rise text-balance [animation-delay:0.3s] motion-reduce:animate-none text-[40px] font-medium leading-[1] tracking-[-0.035em] sm:min-h-0 sm:text-[68px]">
 					50% off Cap Pro Yearly
 				</h1>
 				<p
-					className={`mt-5 min-h-[2lh] max-w-[520px] text-balance text-[17px] leading-[1.5] sm:min-h-0 sm:text-[19px] ${DIM}`}
+					className={`mt-5 min-h-[2lh] max-w-[520px] animate-bf-rise text-balance [animation-delay:0.42s] motion-reduce:animate-none text-[17px] leading-[1.5] sm:min-h-0 sm:text-[19px] ${DIM}`}
 				>
 					Record, share and get AI notes on every video, at half the yearly
 					price.
 				</p>
-				<Claim location="hero" className="mt-8" />
+				<Claim
+					location="hero"
+					className="mt-8 animate-bf-rise [animation-delay:0.54s] motion-reduce:animate-none"
+				/>
 				<p
-					className={`mt-4 min-h-[2lh] text-balance text-[14px] sm:min-h-0 ${DIM}`}
+					className={`mt-4 min-h-[2lh] animate-bf-rise text-balance [animation-delay:0.66s] motion-reduce:animate-none text-[14px] sm:min-h-0 ${DIM}`}
 				>
 					Code <CodeChip location="hero" /> is applied at checkout.{" "}
 					<Countdown />.
 				</p>
 			</div>
-			<div className={`${WRAP} mt-12 sm:mt-16`}>
+			<div
+				className={`${WRAP} mt-12 animate-bf-rise-frame [animation-delay:0.4s] motion-reduce:animate-none sm:mt-16`}
+			>
 				<Film />
 			</div>
 		</section>
@@ -420,19 +433,13 @@ function Footer() {
 					aria-label="Footer"
 					className={`flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[14px] ${DIM}`}
 				>
-					{[
-						["Home", "/"],
-						["Pricing", "/pricing"],
-						["Download", "/download"],
-						["Terms", "/terms"],
-						["Privacy", "/privacy"],
-					].map(([label, href]) => (
+					{FOOTER_LINKS.map((link) => (
 						<Link
-							key={href}
-							href={href}
+							key={link.href}
+							href={link.href}
 							className={`${DIM} transition-colors hover:text-[#F5F1EA]`}
 						>
-							{label}
+							{link.label}
 						</Link>
 					))}
 				</nav>

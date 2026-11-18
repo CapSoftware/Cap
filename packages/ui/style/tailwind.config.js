@@ -203,6 +203,17 @@ module.exports = (__app, _options) => {
 						from: { opacity: "0" },
 						to: { opacity: "1" },
 					},
+					bfRise: {
+						from: { opacity: "0", transform: "translateY(14px)" },
+						to: { opacity: "1", transform: "none" },
+					},
+					bfRiseFrame: {
+						from: {
+							opacity: "0.35",
+							transform: "translateY(32px) scale(0.965)",
+						},
+						to: { opacity: "1", transform: "none" },
+					},
 				},
 				animation: {
 					flyEmoji: "flyEmoji 1.5s forwards",
@@ -212,6 +223,9 @@ module.exports = (__app, _options) => {
 						"bfDraw 1.1s cubic-bezier(0.55,0,0.3,1) 0.05s both, bfStrokeOut 0.5s ease-out 0.95s both",
 					"bf-fill": "bfFillIn 0.6s ease-out 0.45s both",
 					"bf-glow-in": "bfGlowIn 0.9s ease-out 0.6s both",
+					"bf-fade": "bfGlowIn 0.8s ease-out both",
+					"bf-rise": "bfRise 0.8s cubic-bezier(0.16,1,0.3,1) both",
+					"bf-rise-frame": "bfRiseFrame 1.1s cubic-bezier(0.16,1,0.3,1) both",
 				},
 			},
 		},
