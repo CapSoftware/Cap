@@ -1658,8 +1658,9 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
 /// the recording is saved locally either way, and its upload then fails as it
 /// did before sealing existed.
 ///
-/// Recovery can rescue a final fragment the manifest never listed, so the
-/// recovered `output.mp4` may hold more than the sealed tracks. Whenever
+/// Sealing adopts the finished segments the manifest never listed, as
+/// recovery does, but stops at the first damaged or missing one, so after
+/// damage the recovered `output.mp4` may hold more than the sealed tracks. Whenever
 /// sealing sets any media aside, or fails, the local recording is kept after
 /// its upload verifies, so it is never the only complete copy that gets
 /// deleted.
@@ -3233,7 +3234,10 @@ mod tests {
 
     /// A real Instant recording copied mid-capture, which is what a crash
     /// leaves, then recovered: Recover saves it locally and seals its track,
-    /// so the upload resume accepts every segment the crash saved.
+    /// so the upload resume accepts every segment the crash saved. The copy
+    /// lists only its first segment, as when the crash lands before the
+    /// encoder's next manifest scan, and the upload must still match the
+    /// local recording.
     #[test]
     fn recovering_a_crashed_instant_recording_seals_it_for_upload() {
         use cap_enc_ffmpeg::segmented_stream::{
@@ -3279,18 +3283,32 @@ mod tests {
         copy_tree(&display, &project.join("content/display"));
         encoder.finish().unwrap();
 
-        let manifest: Value = serde_json::from_slice(
-            &std::fs::read(project.join("content/display/manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let manifest_path = project.join("content/display/manifest.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
         assert_eq!(manifest["is_complete"], Value::Bool(false));
-        let finished = manifest["segments"]
-            .as_array()
+        let finished = std::fs::read_dir(project.join("content/display"))
             .unwrap()
-            .iter()
-            .filter(|segment| segment["is_complete"] == Value::Bool(true))
+            .filter(|entry| {
+                let name = entry.as_ref().unwrap().file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("segment_") && name.ends_with(".m4s")
+            })
             .count();
-        assert!(finished >= 1, "the crash saved no finished segment");
+        assert!(
+            finished >= 3,
+            "the crash saved {finished} finished segments"
+        );
+        let segments = manifest["segments"].as_array_mut().unwrap();
+        segments.truncate(1);
+        segments.push(serde_json::json!({
+            "path": "segment_002.m4s",
+            "index": 2,
+            "duration": 0.0,
+            "is_complete": false,
+            "file_size": null,
+        }));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         assert!(
             cap_recording::upload_resume::collect_segment_events(&project, false).is_err(),
             "a crashed recording must not be resumable before Recover"
@@ -3320,13 +3338,20 @@ mod tests {
         .unwrap();
 
         recover_instant_recording(&project).unwrap();
-        assert!(project.join("content/output.mp4").is_file());
+        let output = ffmpeg::format::input(&project.join("content/output.mp4")).unwrap();
+        let stream = output.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let local_duration = stream.duration() as f64 * f64::from(stream.time_base());
         let events = cap_recording::upload_resume::collect_segment_events(&project, false).unwrap();
-        let segments = events
+        let video: Vec<_> = events
             .iter()
             .filter(|event| !event.is_init && event.media_type == SegmentMediaType::Video)
-            .count();
-        assert_eq!(segments, finished);
+            .collect();
+        assert_eq!(video.len(), finished);
+        let uploaded_duration: f64 = video.iter().map(|event| event.duration).sum();
+        assert!(
+            (uploaded_duration - local_duration).abs() < 0.1,
+            "uploaded {uploaded_duration} s, local {local_duration} s"
+        );
     }
 
     #[cfg(target_os = "linux")]

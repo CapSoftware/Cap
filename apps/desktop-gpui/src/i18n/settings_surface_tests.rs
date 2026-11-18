@@ -772,6 +772,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::license::key(), "License Key"),
         (tr::settings::license::expires(), "Expires"),
         (tr::settings::license::deactivate(), "Deactivate License"),
+        (tr::settings::license::deactivating(), "Deactivating..."),
+        (
+            tr::settings::license::deactivate_failed(),
+            "Couldn't deactivate your license. Check your connection and try again.",
+        ),
         (tr::settings::license::have_key(), "Have a license key?"),
         (tr::settings::license::placeholder(), "License key"),
         (tr::settings::license::activating(), "Activating..."),
