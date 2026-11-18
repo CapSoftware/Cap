@@ -4,6 +4,7 @@ on:
     branches:
       - main
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,10 @@ jobs:
         uses: dorny/paths-filter@v3
         id: filter
         with:
+          # In the merge queue, compare the queued commit with the commit it
+          # was built on, so only this pull request's changes pick the jobs.
+          base: ${{ github.event.merge_group.base_sha }}
+          ref: ${{ github.event.merge_group.head_sha }}
           filters: |
             rust:
               - '.cargo/**'
@@ -321,11 +326,12 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
         # The Intel build is not a merge gate and takes over an hour on a
-        # GitHub-hosted runner, so it runs on main and by hand, not on PRs.
+        # GitHub-hosted runner, so it runs on main and by hand, not on PRs
+        # or in the merge queue.
         exclude:
           - settings:
               target: x86_64-apple-darwin
-              runner: ${{ github.event_name == 'pull_request' && 'macos-26-intel' || 'none' }}
+              runner: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'macos-26-intel' || 'none' }}
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
