@@ -429,9 +429,11 @@ extern "C" fn capture_audio(
             let data = unsafe {
                 std::slice::from_raw_parts(first.data.cast::<u8>(), first.data_bytes_size as usize)
             };
-            context
+            let mut frame = context
                 .info
-                .wrap_frame_with_max_channels(data, AudioInfo::MAX_AUDIO_CHANNELS as usize)
+                .wrap_frame_with_max_channels(data, AudioInfo::MAX_AUDIO_CHANNELS as usize);
+            frame.set_channel_layout(context.info.channel_layout());
+            frame
         } else {
             let samples = first.data_bytes_size as usize / bytes_per_frame;
             let mut frame = context.info.empty_frame(samples);
