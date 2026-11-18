@@ -951,11 +951,15 @@ impl EditorWindow {
                 cap_rendering::ProjectUniforms::get_base_size(&options, &self.project);
             XY::new(width, height)
         });
-        let fps = segments
-            .iter()
-            .map(|segment| segment.display.fps)
-            .max()
-            .filter(|fps| *fps > 0);
+        let fps = highest_recorded_fps(
+            segments.iter().map(|segment| {
+                (
+                    segment.display.fps,
+                    segment.camera.as_ref().map(|camera| camera.fps),
+                )
+            }),
+            !self.project.camera.hide,
+        );
         ExportSource { size, fps }
     }
 
@@ -4061,6 +4065,18 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     }
 }
 
+fn highest_recorded_fps(
+    segments: impl IntoIterator<Item = (u32, Option<u32>)>,
+    camera_visible: bool,
+) -> Option<u32> {
+    segments
+        .into_iter()
+        .flat_map(|(display, camera)| [Some(display), camera.filter(|_| camera_visible)])
+        .flatten()
+        .max()
+        .filter(|fps| *fps > 0)
+}
+
 fn source_resolution(
     source: Option<XY<u32>>,
     options: &[ExportResolution],
@@ -4267,7 +4283,7 @@ mod tests {
         ExportDestination, ExportFormatKind, ExportPhase, ExportResolution, ExportSource, ExportUi,
         GifQualityPreset, TrackKind, TrackOption, cancel_matching_export, estimated_tracks_bytes,
         export_file_name, export_fps_options, export_name_stem, export_resolutions,
-        normalize_export_options, selected_tracks,
+        highest_recorded_fps, normalize_export_options, selected_tracks,
     };
     use crate::store::ExportPrefs;
     use cap_project::XY;
@@ -4411,6 +4427,14 @@ mod tests {
         unknown.source = ExportSource::default();
         normalize_export_options(&mut unknown, false);
         assert_eq!(chosen(&unknown), (ExportResolution::P1080, 60));
+    }
+
+    #[test]
+    fn a_visible_faster_camera_sets_the_frame_rate() {
+        let segments = [(30, Some(60)), (30, None)];
+        assert_eq!(highest_recorded_fps(segments, true), Some(60));
+        assert_eq!(highest_recorded_fps(segments, false), Some(30));
+        assert_eq!(highest_recorded_fps([(0, None)], true), None);
     }
 
     #[test]
