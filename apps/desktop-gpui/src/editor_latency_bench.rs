@@ -1,7 +1,7 @@
 //! `CAP_GPUI_AUTO_LATENCY_BENCH=1` (with `CAP_GPUI_AUTO_EDITOR`): input to
 //! paint latency of the editor preview, per interaction, from the marks
 //! [`crate::editor_latency`] records. `CAP_GPUI_AUTO_LATENCY_SCENARIOS` picks a
-//! comma list of `playback,scrub-fast,scrub-fine,zoom-drag,preset,slider,resize`
+//! comma list of `playback,scrub-fast,scrub-fine,zoom-drag,preset,slider,resize,pause`
 //! (default all). Pointer scenarios post moves at 120 Hz through the timeline's
 //! own handlers, like `CAP_GPUI_AUTO_HOVER_BENCH`.
 //!
@@ -31,6 +31,9 @@ const DRAG: Duration = Duration::from_secs(4);
 const PRESET_CLICKS: usize = 40;
 const PRESET_GAP: Duration = Duration::from_millis(150);
 const RESIZE_STEPS: usize = 120;
+const PAUSE_ROUNDS: usize = 5;
+const PAUSE_PLAY: Duration = Duration::from_millis(1500);
+const PAUSE_SETTLE: Duration = Duration::from_secs(2);
 
 type Handle = WindowHandle<EditorWindow>;
 
@@ -38,8 +41,9 @@ pub(crate) async fn run(handle: Handle, cx: &mut AsyncApp) {
     if !std::env::var("CAP_GPUI_AUTO_LATENCY_BENCH").is_ok_and(|value| value == "1") {
         return;
     }
-    let scenarios = std::env::var("CAP_GPUI_AUTO_LATENCY_SCENARIOS")
-        .unwrap_or_else(|_| "playback,scrub-fast,scrub-fine,zoom-drag,preset,slider,resize".into());
+    let scenarios = std::env::var("CAP_GPUI_AUTO_LATENCY_SCENARIOS").unwrap_or_else(|_| {
+        "playback,scrub-fast,scrub-fine,zoom-drag,preset,slider,resize,pause".into()
+    });
 
     let started = Instant::now();
     loop {
@@ -80,6 +84,7 @@ pub(crate) async fn run(handle: Handle, cx: &mut AsyncApp) {
         exit_closed();
     };
     println!("{header}");
+    memory_report("start");
 
     for scenario in scenarios.split(',').map(str::trim) {
         match scenario {
@@ -90,8 +95,10 @@ pub(crate) async fn run(handle: Handle, cx: &mut AsyncApp) {
             "preset" => preset(handle, cx).await,
             "slider" => slider(handle, cx).await,
             "resize" => resize(handle, cx).await,
+            "pause" => pause(handle, cx).await,
             other => eprintln!("latency-bench: unknown scenario {other}"),
         }
+        memory_report(scenario);
     }
     std::process::exit(0);
 }
@@ -390,6 +397,146 @@ async fn resize(handle: Handle, cx: &mut AsyncApp) {
         rerendered.map_or("-".into(), |count| count.to_string())
     );
     report("resize", "draw", &mut draws);
+}
+
+/// Play, pause, and time how long the paused frame takes to be drawn at the
+/// canvas's own device-pixel size. A build that never re-renders on pause
+/// reports the size it settles at instead.
+async fn pause(handle: Handle, cx: &mut AsyncApp) {
+    let mut to_sharp = Vec::with_capacity(PAUSE_ROUNDS);
+    for round in 0..PAUSE_ROUNDS {
+        pause_at(handle, cx, 0.2 + 0.12 * round as f64).await;
+        update(handle, cx, |view, window, cx| view.toggle_play(window, cx));
+        wait(cx, PAUSE_PLAY).await;
+        editor_latency::take();
+        editor_latency::take_sizes();
+        let paused = Instant::now();
+        update(handle, cx, |view, _, cx| view.stop_for_measurement(cx));
+        wait(cx, PAUSE_SETTLE).await;
+        let marks = editor_latency::take();
+        let sizes: std::collections::HashMap<u64, [u32; 2]> =
+            editor_latency::take_sizes().into_iter().collect();
+        let Some(canvas) = update(handle, cx, |view, window, _| {
+            view.bench_preview_canvas(window)
+        }) else {
+            println!("latency-bench: pause skipped, the preview has no canvas");
+            return;
+        };
+        let mut seen = std::collections::HashSet::new();
+        let painted: Vec<(Instant, [u32; 2])> = marks
+            .iter()
+            .filter(|mark| mark.stage == Stage::Painted && mark.at >= paused)
+            .filter(|mark| seen.insert(mark.sequence))
+            .filter_map(|mark| sizes.get(&mark.sequence).map(|size| (mark.at, *size)))
+            .collect();
+        let covers =
+            |size: [u32; 2]| size[0] * 100 >= canvas[0] * 98 || size[1] * 100 >= canvas[1] * 98;
+        let sharp = painted
+            .iter()
+            .find(|(_, size)| covers(*size))
+            .map(|(at, _)| editor_latency::millis(paused, *at));
+        let settled = painted.last().map(|(_, size)| *size);
+        if let Some(ms) = sharp {
+            to_sharp.push(ms);
+        }
+        println!(
+            "latency-bench: pause round {round} canvas {}x{} device px, settled frame {}, \
+             magnified {}, canvas-size frame {} after pause, {} presentations",
+            canvas[0],
+            canvas[1],
+            settled.map_or("-".into(), |size| format!("{}x{}", size[0], size[1])),
+            settled.map_or("-".into(), |size| format!(
+                "{:.2}x",
+                canvas[0] as f64 / f64::from(size[0].max(1))
+            )),
+            sharp.map_or("never".into(), |ms| format!("{ms:.1} ms")),
+            painted.len(),
+        );
+        if round + 1 == PAUSE_ROUNDS {
+            screenshot(handle, cx);
+        }
+    }
+    report("pause", "pause->canvas-size frame", &mut to_sharp);
+}
+
+/// `CAP_GPUI_AUTO_LATENCY_SHOT=<png>`: capture the screen with the settled
+/// preview on it and print where the preview sits, so before and after crops
+/// show what the display really drew.
+fn screenshot(handle: Handle, cx: &mut AsyncApp) {
+    let Some(path) = std::env::var("CAP_GPUI_AUTO_LATENCY_SHOT")
+        .ok()
+        .filter(|path| !path.is_empty())
+    else {
+        return;
+    };
+    let Some(rect) = update(handle, cx, |view, window, _| {
+        let frame = view.player_frame_rect.get()?.frame;
+        let origin = window.bounds().origin;
+        Some([
+            f32::from(origin.x + frame.origin.x),
+            f32::from(origin.y + frame.origin.y),
+            f32::from(frame.size.width),
+            f32::from(frame.size.height),
+        ])
+    }) else {
+        return;
+    };
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("screencapture")
+            .args(["-x", &path])
+            .status()
+    } else {
+        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+        std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "x11grab", "-i", &display])
+            .args(["-frames:v", "1", &path])
+            .status()
+    };
+    println!(
+        "latency-bench: screenshot preview at {:.0},{:.0} {:.0}x{:.0} pt -> {path} ({status:?})",
+        rect[0], rect[1], rect[2], rect[3]
+    );
+}
+
+fn memory_report(label: &str) {
+    let format = |mb: Option<f64>| mb.map_or("-".into(), |mb| format!("{mb:.1} MB"));
+    println!(
+        "latency-bench: memory after {label} gpu {}, footprint {}",
+        format(gpu_mb()),
+        format(footprint_mb())
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn gpu_mb() -> Option<f64> {
+    use objc2::{msg_send, runtime::AnyObject};
+    let device = cidre::mtl::Device::sys_default()?;
+    let object = std::ptr::from_ref::<cidre::mtl::Device>(&device).cast::<AnyObject>();
+    let bytes: usize = unsafe { msg_send![&*object, currentAllocatedSize] };
+    Some(bytes as f64 / 1_048_576.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gpu_mb() -> Option<f64> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn footprint_mb() -> Option<f64> {
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as i32,
+            libc::RUSAGE_INFO_V2,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    (status == 0).then(|| unsafe { info.assume_init() }.ri_phys_footprint as f64 / 1_048_576.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn footprint_mb() -> Option<f64> {
+    None
 }
 
 fn intervals(shown: &[Presentation]) -> Vec<f64> {

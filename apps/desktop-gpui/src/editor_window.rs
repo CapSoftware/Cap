@@ -694,6 +694,10 @@ impl PreviewFrameView {
             frame_number,
             self.frame_sequence,
         );
+        crate::editor_latency::sized(
+            self.frame_sequence,
+            [frame_size.0 as u32, frame_size.1 as u32],
+        );
         let previous = self.frame.replace(frame);
         cx.notify();
         previous
@@ -4006,6 +4010,15 @@ impl EditorWindow {
 
     pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
         self.timeline.waveform_paths.stats()
+    }
+
+    /// The fitted preview's size in device pixels: what a frame must be to
+    /// be drawn 1:1.
+    pub(crate) fn bench_preview_canvas(&self, window: &Window) -> Option<[u32; 2]> {
+        let frame = self.player_frame_rect.get()?.frame;
+        let scale = window.scale_factor() * crate::editor_latency::backing_scale();
+        let device = |length: Pixels| (f32::from(length) * scale).round() as u32;
+        Some([device(frame.size.width), device(frame.size.height)])
     }
 
     pub(crate) fn bench_pump_snapshot(&self) -> Option<StatsSnapshot> {
