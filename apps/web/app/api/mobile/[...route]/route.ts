@@ -83,6 +83,7 @@ import {
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { toStoredUploadContentType } from "@/lib/media-processing-policy";
 import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
@@ -3427,11 +3428,12 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		},
 	);
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
+	const storedContentType = toStoredUploadContentType(input.contentType);
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
-		contentType: input.contentType,
+		contentType: storedContentType,
 		method: "put",
 		fields: {
-			"Content-Type": input.contentType,
+			"Content-Type": storedContentType,
 			"x-amz-meta-userid": user.id,
 			"x-amz-meta-source": "cap-mobile-ios",
 		},
