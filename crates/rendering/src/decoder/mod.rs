@@ -857,6 +857,67 @@ pub fn presented_by(secs: f64, time: f32, fps: u32) -> bool {
     secs <= f64::from(time) + request_slack_frames(time, fps) / f64::from(fps)
 }
 
+fn answered_frame(frame: &DecodedFrame) -> Option<&DecodedFrame> {
+    Some(frame)
+}
+
+/// Reads the newest sample on screen at `time` through `fetch`, which takes
+/// a time before the decoder's offset is added (`decoder_time` is `time`
+/// with it). A request past the middle of its grid cell also asks for the
+/// next grid index: a sample filed there can have been captured before
+/// `time` ([`request_next_frame`]), and answering with the one before it
+/// would show the screen a frame behind the cursor, which is drawn at
+/// `time` exactly. Every decoder handle reads through here, so the editor,
+/// the preparing preview and exports pick the same sample.
+async fn read_presented_frame<T, E, Fut>(
+    decoder_time: f32,
+    fps: u32,
+    time: f32,
+    frame_of: for<'a> fn(&'a T) -> Option<&'a DecodedFrame>,
+    fetch: impl Fn(f32) -> Fut,
+) -> Result<T, E>
+where
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let Some(next_frame) = (fps > 0)
+        .then(|| request_next_frame(decoder_time, fps))
+        .flatten()
+    else {
+        return fetch(time).await;
+    };
+    // A quarter into the next cell, so the f32 offset round trip cannot land
+    // the request back on this cell.
+    let next_cell_time = (f64::from(next_frame) + 0.25) / f64::from(fps);
+    let next_time = time + (next_cell_time - f64::from(decoder_time)) as f32;
+    // One after the other: sent together, the two requests reach the
+    // AVAssetReader decoder in one batch or two depending on timing, and the
+    // two take different reader paths.
+    let frame = fetch(time).await;
+    // A hold of two cells or more (past the stream's end, or a long gap) has
+    // nothing filed under the next index, and the AVAssetReader decoder
+    // counts each empty read past the end towards recreating its reader.
+    let holding = frame
+        .as_ref()
+        .ok()
+        .and_then(frame_of)
+        .and_then(DecodedFrame::presentation_secs)
+        .is_none_or(|secs| (secs * f64::from(fps)).round() + 1.0 < f64::from(next_frame - 1));
+    if holding {
+        return frame;
+    }
+    // An error (a stalled or failed decode) is the request's outcome too;
+    // only a next sample that is missing or not yet on screen leaves the
+    // grid answer standing.
+    let next = fetch(next_time).await?;
+    if frame_of(&next)
+        .and_then(DecodedFrame::presentation_secs)
+        .is_some_and(|secs| presented_by(secs, decoder_time, fps))
+    {
+        return Ok(next);
+    }
+    frame
+}
+
 pub(crate) fn pts_secs(pts: i64, time_base: Rational) -> f64 {
     pts as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator())
 }
@@ -1056,11 +1117,7 @@ impl AsyncVideoDecoderHandle {
             .await
     }
 
-    /// The newest sample on screen at `time`. A request past the middle of
-    /// its grid cell also asks for the next grid index: a sample filed there
-    /// can have been captured before `time` (see [`request_next_frame`]),
-    /// and answering with the one before it would show the screen a frame
-    /// behind the cursor, which is drawn at `time` exactly.
+    /// The newest sample on screen at `time` (see [`read_presented_frame`]).
     async fn get_frame_with_timeout(
         &self,
         time: f32,
@@ -1068,51 +1125,14 @@ impl AsyncVideoDecoderHandle {
         max_fallback_distance: u32,
         deadline: FrameDeadline,
     ) -> Result<Option<DecodedFrame>, DecodeStalled> {
-        let decoder_time = self.get_time(time);
-        let Some(next_frame) = (self.fps > 0)
-            .then(|| request_next_frame(decoder_time, self.fps))
-            .flatten()
-        else {
-            return self
-                .fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline)
-                .await;
-        };
-        // A quarter into the next cell, so the f32 offset round trip in
-        // `get_time` cannot land the request back on this cell.
-        let next_cell_time = (f64::from(next_frame) + 0.25) / f64::from(self.fps);
-        let next_time = time + (next_cell_time - f64::from(decoder_time)) as f32;
-        // One after the other: sent together, the two requests reach the
-        // AVAssetReader decoder in one batch or two depending on timing, and
-        // the two take different reader paths.
-        let frame = self
-            .fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline)
-            .await;
-        // A hold of two cells or more (past the stream's end, or a long gap)
-        // has nothing filed under the next index, and the AVAssetReader
-        // decoder counts each empty read past the end towards recreating its
-        // reader.
-        let holding = match &frame {
-            Ok(Some(frame)) => frame.presentation_secs().is_none_or(|secs| {
-                (secs * f64::from(self.fps)).round() + 1.0 < f64::from(next_frame - 1)
-            }),
-            _ => true,
-        };
-        if holding {
-            return frame;
-        }
-        let next = self
-            .fetch_frame_with_timeout(next_time, timeout_ms, max_fallback_distance, deadline)
-            .await;
-        match next {
-            Ok(Some(next))
-                if next
-                    .presentation_secs()
-                    .is_some_and(|secs| presented_by(secs, decoder_time, self.fps)) =>
-            {
-                Ok(Some(next))
-            }
-            _ => frame,
-        }
+        read_presented_frame(
+            self.get_time(time),
+            self.fps,
+            time,
+            Option::as_ref,
+            |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline),
+        )
+        .await
     }
 
     async fn fetch_frame_with_timeout(
@@ -1265,6 +1285,14 @@ impl AsyncVideoDecoderHandle {
 
     pub fn get_time(&self, time: f32) -> f32 {
         time + self.offset as f32
+    }
+
+    /// Sets the grid rate of a [`Self::for_test`] handle, which turns on the
+    /// [`request_next_frame`] check.
+    #[cfg(test)]
+    pub(crate) fn with_test_fps(mut self, fps: u32) -> Self {
+        self.fps = fps;
+        self
     }
 
     /// A handle served by a test thread instead of a real decoder.
@@ -1628,6 +1656,26 @@ impl ManagedVideoDecoder {
     }
 
     async fn get_frame_with_timeout(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+    ) -> Result<DecodedFrame, ManagedVideoError> {
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
+        let decoder = self.decoder.as_ref().ok_or(ManagedVideoError::NotReady)?;
+        read_presented_frame(
+            decoder.get_time(time),
+            decoder.fps,
+            time,
+            answered_frame,
+            |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance),
+        )
+        .await
+    }
+
+    async fn fetch_frame_with_timeout(
         &self,
         time: f32,
         timeout_ms: u64,
