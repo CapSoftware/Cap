@@ -31,6 +31,7 @@ import {
 	getMediaProcessingRejection,
 	isNonMediaRawUploadKey,
 	nonMediaUploadMessage,
+	toCompletedUploadContentType,
 	toStoredUploadContentType,
 } from "@/lib/media-processing-policy";
 import {
@@ -800,6 +801,7 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
+					let storedContentType: string | undefined;
 					yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((head) =>
 							isRawRecorderUpload(subpath) &&
@@ -821,11 +823,12 @@ app.post(
 									)
 								: Effect.void,
 						),
-						Effect.tap((headResult) =>
-							Effect.log(
+						Effect.tap((headResult) => {
+							storedContentType = headResult.ContentType;
+							return Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
-							),
-						),
+							);
+						}),
 						Effect.retry({
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
@@ -897,7 +900,10 @@ app.post(
 
 						yield* bucket
 							.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
-								ContentType: "video/mp4",
+								ContentType: toCompletedUploadContentType(
+									fileKey,
+									storedContentType,
+								),
 								MetadataDirective: "REPLACE",
 								...(result.ETag ? { CopySourceIfMatch: result.ETag } : {}),
 							})

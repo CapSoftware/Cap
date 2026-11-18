@@ -89,6 +89,22 @@ export function toStoredUploadContentType(contentType: string): string {
 	return "application/octet-stream";
 }
 
+// Completion rewrites the object's metadata. Keep the plain-download type set
+// when the upload started unless the key names a video file.
+export function toCompletedUploadContentType(
+	fileKey: string,
+	storedContentType: string | undefined,
+): string {
+	const essence = storedContentType?.split(";")[0]?.trim().toLowerCase();
+	if (
+		essence === "application/octet-stream" &&
+		!isProcessableMediaKey(fileKey)
+	) {
+		return "application/octet-stream";
+	}
+	return "video/mp4";
+}
+
 export function isMediaPolicyProcessingError(
 	error: string | null | undefined,
 ): error is string {

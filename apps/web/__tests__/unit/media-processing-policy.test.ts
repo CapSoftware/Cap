@@ -24,6 +24,7 @@ import {
 	MEDIA_INPUT_POLICY_STRIKE_WINDOW_MS,
 	mediaProcessingSuspendedError,
 	readMediaInputPolicyState,
+	toCompletedUploadContentType,
 	toStoredUploadContentType,
 	unsupportedMediaInputError,
 } from "@/lib/media-processing-policy";
@@ -243,5 +244,28 @@ describe("toStoredUploadContentType", () => {
 		expect(toStoredUploadContentType(contentType)).toBe(
 			"application/octet-stream",
 		);
+	});
+});
+
+describe("toCompletedUploadContentType", () => {
+	it.each([
+		["owner/video/page.html", "application/octet-stream"],
+		["owner/video/page", "application/octet-stream"],
+		["owner/video/image.svg", "Application/Octet-Stream"],
+	])("keeps %s stored as %s a download", (fileKey, stored) => {
+		expect(toCompletedUploadContentType(fileKey, stored)).toBe(
+			"application/octet-stream",
+		);
+	});
+
+	it.each([
+		["owner/video/result.mp4", "application/octet-stream"],
+		["owner/video/clip.webm", "application/octet-stream"],
+		["owner/video/result.mp4", "video/mp4"],
+		["owner/video/clip.webm", "video/webm"],
+		["owner/video/result.mp4", undefined],
+		["owner/video/page.html", undefined],
+	])("completes %s stored as %s as video/mp4", (fileKey, stored) => {
+		expect(toCompletedUploadContentType(fileKey, stored)).toBe("video/mp4");
 	});
 });

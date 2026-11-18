@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	complete: vi.fn(),
 	create: vi.fn(),
 	abort: vi.fn(),
+	copy: vi.fn(),
 }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ NEXTAUTH_SECRET: "test-reupload-secret" }),
@@ -167,7 +168,10 @@ describe("desktop reupload completion", () => {
 	const oldKey = "owner/video/.recording/outputs/original/result.mp4";
 	let events: string[];
 	let updates: Record<string, unknown>[];
-	let objects: Map<string, { ETag: string; ContentLength: number }>;
+	let objects: Map<
+		string,
+		{ ETag: string; ContentLength: number; ContentType?: string }
+	>;
 	let video: {
 		id: Video.VideoId;
 		ownerId: User.UserId;
@@ -309,10 +313,12 @@ describe("desktop reupload completion", () => {
 						getPresignedUploadPartUrl: mocks.sign,
 					},
 					headObject: (key: string) => Effect.suspend(() => mocks.head(key)),
-					copyObject: () =>
-						Effect.succeed({ CopyObjectResult: { ETag: "new-video" } }),
+					copyObject: (...args: unknown[]) => mocks.copy(...args),
 				},
 			]),
+		);
+		mocks.copy.mockReturnValue(
+			Effect.succeed({ CopyObjectResult: { ETag: "new-video" } }),
 		);
 		mocks.sign.mockReturnValue(Effect.succeed("https://uploads.example/part"));
 		mocks.prepareReplacement.mockImplementation(
@@ -634,6 +640,42 @@ describe("desktop reupload completion", () => {
 			expect(mocks.create).toHaveBeenCalledWith(
 				`owner/video/${subpath}`,
 				expect.objectContaining({ ContentType: stored }),
+			);
+		},
+	);
+
+	it.each([
+		["page.html", "application/octet-stream", "application/octet-stream"],
+		["result.mp4", "application/octet-stream", "video/mp4"],
+		["result.mp4", "video/mp4", "video/mp4"],
+	])(
+		"completes a %s upload stored as %s with content type %s",
+		async (subpath, storedType, completedType) => {
+			mocks.complete.mockImplementation((key: string) =>
+				Effect.sync(() => {
+					objects.set(key, {
+						ETag: "upload",
+						ContentLength: 100,
+						ContentType: storedType,
+					});
+					return { ETag: "upload" };
+				}),
+			);
+			const response = await app.request("/complete", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "video",
+					uploadId: "backend-upload",
+					subpath,
+					parts: [{ partNumber: 1, etag: "part", size: 100 }],
+				}),
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.copy).toHaveBeenCalledWith(
+				expect.any(String),
+				`owner/video/${subpath}`,
+				expect.objectContaining({ ContentType: completedType }),
 			);
 		},
 	);
