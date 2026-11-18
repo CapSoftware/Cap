@@ -152,7 +152,8 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
             return Err(tr::screenshot_editor::error::not_screenshot().to_string());
         }
     };
-    let config = ProjectConfiguration::load(bundle).unwrap_or_default();
+    let config = ProjectConfiguration::load_for_editing(bundle)
+        .map_err(tr::screenshot_editor::error::load_config)?;
 
     Ok(LoadedSource {
         rgba: image.to_rgba8().into_raw(),
