@@ -137,6 +137,10 @@ chrono = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
+# Moves media of clips removed from a project to the OS trash, so the user
+# can still recover it. Its platform deps (objc2 0.6, windows 0.62) are
+# already in the tree.
+trash = "=5.2.9"
 semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2.4"
