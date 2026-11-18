@@ -406,6 +406,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                     H264Preset::Ultrafast
                 },
                 output_size,
+                encoder_priority: None,
                 shared_pause_state,
                 segment_tx: None,
             })
@@ -429,6 +430,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 output_size: Some(output_size),
+                encoder_priority: None,
                 shared_pause_state: None,
                 segment_tx,
             })
