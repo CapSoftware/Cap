@@ -241,12 +241,20 @@ fn seg_gloss() -> Vec<gpui::BoxShadow> {
     ]
 }
 
-fn seg_glow(color: Hsla, dark: bool) -> Vec<gpui::BoxShadow> {
+/// The segment's own colour glowing under it: soft on hover, fuller once
+/// selected, so selection reads as lit rather than boxed in.
+fn seg_glow(color: Hsla, dark: bool, selected: bool) -> Vec<gpui::BoxShadow> {
+    let alpha = match (dark, selected) {
+        (true, true) => 0.6,
+        (false, true) => 0.45,
+        (true, false) => 0.38,
+        (false, false) => 0.3,
+    };
     vec![gpui::BoxShadow {
-        color: color.opacity(if dark { 0.38 } else { 0.3 }),
+        color: color.opacity(alpha),
         offset: gpui::point(px(0.), px(2.)),
-        blur_radius: px(12.),
-        spread_radius: px(-2.),
+        blur_radius: px(if selected { 16. } else { 12. }),
+        spread_radius: px(if selected { 0. } else { -2. }),
         inset: false,
     }]
 }
@@ -2027,17 +2035,35 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
             div()
                 .flex_none()
                 .size(px(TRACK_TILE_SIZE))
-                .rounded(px(6.))
+                .rounded(px(7.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(tile_bg(theme, color))
+                // A small piece of the track's own segment: the same
+                // gradient, lit edge and ring, with a white glyph.
+                .bg(seg_fill_sheen(theme, color))
+                .shadow(vec![
+                    gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 1., 0.22),
+                        offset: gpui::point(px(0.), px(1.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                        inset: true,
+                    },
+                    gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 1., 0.1),
+                        offset: gpui::point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(1.),
+                        inset: true,
+                    },
+                ])
                 .child(
                     svg()
                         .path(kind.icon())
                         .size(px(14.))
                         .flex_none()
-                        .text_color(tile_fg(theme, color)),
+                        .text_color(gpui::hsla(0., 0., 1., 0.95)),
                 ),
         )
         .child(
@@ -3053,7 +3079,7 @@ fn render_segment(
         .w(px(width))
         .rounded(px(SEGMENT_RADIUS))
         .when(hovered || selected, |this| {
-            this.shadow(seg_glow(color, theme.is_dark()))
+            this.shadow(seg_glow(color, theme.is_dark(), selected))
         })
         .when_some(dim, |this, opacity| this.opacity(opacity))
         // `interactMode === "split" && "timeline-scissors-cursor"`
@@ -3069,8 +3095,8 @@ fn render_segment(
                 .map(|border| {
                     if selected || (split_mode && hovered) {
                         border
-                            .border(px(2.))
-                            .border_color(gpui::hsla(0., 0., 1., 0.95))
+                            .border(px(1.5))
+                            .border_color(gpui::hsla(0., 0., 1., 0.9))
                     } else {
                         border.border_1().border_color(seg_border(
                             theme,

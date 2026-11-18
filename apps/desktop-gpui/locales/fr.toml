@@ -2470,6 +2470,7 @@ frames = { one = "{rendered} / {count} image", other = "{rendered} / {count} ima
 generating_preview = "Génération de l'aperçu…"
 link_unavailable_cursor = "Les exportations du curseur seul ne peuvent être enregistrées que dans un fichier ou le presse-papiers."
 link_unavailable_transparent = "Les exportations transparentes ne peuvent être enregistrées que dans un fichier ou le presse-papiers."
+more_formats = "Plus"
 organization = "Organisation"
 preview = "Aperçu"
 preview_info = "Ceci est une image rendue de votre vidéo. Ajustez les paramètres pour voir la qualité de l'exportation finale."
@@ -2508,7 +2509,9 @@ file = "Fichier"
 link = "Lien de partage"
 
 [editor.export.done]
+copy_file = "Copier dans le presse-papiers"
 copy_link = "Copier le lien"
+file_copied = "Copié"
 instant_hint = "Utilisez le mode Instant pour votre prochain enregistrement si vous voulez un lien dès que vous arrêtez."
 link_copied = "Lien copié"
 open_file = "Ouvrir le fichier"
@@ -2599,14 +2602,16 @@ format = "Pistes"
 microphone = "Micro"
 open_folder = "Ouvrir le dossier"
 screen = "Écran"
+separate = "Pistes séparées"
+separate_description = "Écran, caméra et audio, chacun dans son propre fichier"
 studio_only = "Les pistes séparées ne sont enregistrées qu'en mode Studio."
 system_audio = "Audio système"
 video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportation turbo"
-description = "Exporte beaucoup plus vite en utilisant tous les cœurs du processeur et le GPU"
-warning = "Utilise tout votre processeur, le GPU et plusieurs fois plus de mémoire jusqu'à la fin de l'exportation. Les autres apps peuvent ralentir, et votre ordinateur peut chauffer et devenir bruyant."
+description = "Termine les exportations beaucoup plus vite en utilisant davantage la puissance de votre ordinateur"
+warning = "Les autres apps peuvent sembler un peu plus lentes jusqu'à la fin de l'exportation."
 
 [editor.modal]
 cancel_export = "Annuler l'exportation"

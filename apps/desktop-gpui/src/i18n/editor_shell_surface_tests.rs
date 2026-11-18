@@ -223,6 +223,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
+        (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
+        (tr::editor::export::done::file_copied(), "Copied"),
+        (tr::editor::export::more_formats(), "More"),
+        (tr::editor::export::tracks::separate(), "Separate tracks"),
+        (
+            tr::editor::export::tracks::separate_description(),
+            "Screen, camera and audio, each as its own file",
+        ),
         (tr::editor::export::done::open_link(), "Open link"),
         (tr::editor::export::done::retry_copy(), "Retry Copy"),
         (
@@ -1322,11 +1330,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::turbo::title(), "Turbo export"),
         (
             tr::editor::export::turbo::description(),
-            "Exports much faster using every CPU core and the GPU",
+            "Finishes exports much faster by using more of your computer's power",
         ),
         (
             tr::editor::export::turbo::warning(),
-            "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud.",
+            "Other apps may feel a little slower until the export finishes.",
         ),
         (tr::editor::window::clip_menu::transition(), "TRANSITION"),
         (tr::editor::window::clip_menu::transition_none(), "None"),

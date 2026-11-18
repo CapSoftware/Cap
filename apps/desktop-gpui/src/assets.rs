@@ -182,7 +182,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "refresh-cw.svg",
     "rotate-ccw.svg",
     "volume-x.svg",
-    "gem.svg",
     "sliders-horizontal.svg",
     "zap.svg",
     "zoom-in.svg",

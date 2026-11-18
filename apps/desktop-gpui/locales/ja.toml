@@ -2470,6 +2470,7 @@ frames = { other = "{rendered} / {count}フレーム" }
 generating_preview = "プレビューを生成中…"
 link_unavailable_cursor = "カーソルのみの書き出しは、ファイルかクリップボードにのみ保存できます。"
 link_unavailable_transparent = "透過の書き出しは、ファイルかクリップボードにのみ保存できます。"
+more_formats = "その他"
 organization = "組織"
 preview = "プレビュー"
 preview_info = "動画からレンダリングしたフレームです。設定を調整すると、最終的な書き出しの品質を確認できます。"
@@ -2508,7 +2509,9 @@ file = "ファイル"
 link = "共有リンク"
 
 [editor.export.done]
+copy_file = "クリップボードにコピー"
 copy_link = "リンクをコピー"
+file_copied = "コピーしました"
 instant_hint = "停止した瞬間にリンクが欲しい場合は、次の録画でInstantモードを使ってください。"
 link_copied = "リンクをコピーしました"
 open_file = "ファイルを開く"
@@ -2599,14 +2602,16 @@ format = "トラック"
 microphone = "マイク"
 open_folder = "フォルダを開く"
 screen = "画面"
+separate = "個別のトラック"
+separate_description = "画面、カメラ、音声をそれぞれ別のファイルに"
 studio_only = "個別のトラックはStudioモードでのみ録画されます。"
 system_audio = "システム音声"
 video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "ターボ書き出し"
-description = "すべてのCPUコアとGPUを使って、はるかに高速に書き出します"
-warning = "書き出しが終わるまで、CPUとGPUをすべて使い、メモリも数倍多く消費します。ほかのアプリの動作が遅くなったり、コンピュータが熱くなってファンの音が大きくなったりすることがあります。"
+description = "コンピュータの性能をより多く使って、書き出しをはるかに速く終えます"
+warning = "書き出しが終わるまで、ほかのアプリが少し遅く感じられることがあります。"
 
 [editor.modal]
 cancel_export = "書き出しをキャンセル"

@@ -2470,6 +2470,7 @@ frames = { other = "{rendered} / {count} 帧" }
 generating_preview = "正在生成预览…"
 link_unavailable_cursor = "仅导出光标时，只能保存到文件或剪贴板。"
 link_unavailable_transparent = "透明导出只能保存到文件或剪贴板。"
+more_formats = "更多"
 organization = "组织"
 preview = "预览"
 preview_info = "这是从你的视频渲染出的一帧。调整设置即可查看最终导出的画质。"
@@ -2508,7 +2509,9 @@ file = "文件"
 link = "分享链接"
 
 [editor.export.done]
+copy_file = "复制到剪贴板"
 copy_link = "复制链接"
+file_copied = "已复制"
 instant_hint = "如果想在停止录制时立即获得链接，下次录制请使用 Instant 模式。"
 link_copied = "链接已复制"
 open_file = "打开文件"
@@ -2599,14 +2602,16 @@ format = "轨道"
 microphone = "麦克风"
 open_folder = "打开文件夹"
 screen = "屏幕"
+separate = "单独的轨道"
+separate_description = "屏幕、摄像头和音频分别保存为单独的文件"
 studio_only = "只有 Studio 模式会录制单独的轨道。"
 system_audio = "系统音频"
 video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "极速导出"
-description = "使用所有 CPU 核心和 GPU，大幅加快导出"
-warning = "导出完成前会占用全部 CPU、GPU 以及数倍的内存。其他应用可能会变慢，电脑也可能发热、风扇声变大。"
+description = "调用更多电脑性能，大幅加快导出"
+warning = "导出完成前，其他应用可能会稍慢一些。"
 
 [editor.modal]
 cancel_export = "取消导出"

@@ -2472,6 +2472,7 @@ frames = { one = "{rendered} / {count} frame", other = "{rendered} / {count} fra
 generating_preview = "Generating preview…"
 link_unavailable_cursor = "Cursor-only exports can only be saved to a file or clipboard."
 link_unavailable_transparent = "Transparent exports can only be saved to a file or clipboard."
+more_formats = { text = "More", context = "Export format option that reveals less common formats, such as separate tracks." }
 organization = "Organization"
 preview = "Preview"
 preview_info = "This is a rendered frame from your video. Adjust the settings to see the quality of the final export."
@@ -2510,7 +2511,9 @@ file = { text = "File", context = "Export destination." }
 link = { text = "Shareable Link", context = "Export destination." }
 
 [editor.export.done]
+copy_file = "Copy to Clipboard"
 copy_link = "Copy link"
+file_copied = "Copied"
 instant_hint = "Use Instant Mode for your next recording if you want a link the moment you stop."
 link_copied = "Link copied"
 open_file = "Open File"
@@ -2601,14 +2604,16 @@ format = { text = "Tracks", context = "Export format: separate screen, camera an
 microphone = "Microphone"
 open_folder = "Open Folder"
 screen = "Screen"
+separate = "Separate tracks"
+separate_description = "Screen, camera and audio, each as its own file"
 studio_only = "Separate tracks are only recorded in Studio Mode."
 system_audio = "System audio"
 video_detail = { text = "MP4 · {width}×{height}", context = "Video track file type and size, for example MP4 · 1920×1080." }
 
 [editor.export.turbo]
 title = "Turbo export"
-description = "Exports much faster using every CPU core and the GPU"
-warning = "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud."
+description = "Finishes exports much faster by using more of your computer's power"
+warning = "Other apps may feel a little slower until the export finishes."
 
 [editor.modal]
 cancel_export = "Cancel export"

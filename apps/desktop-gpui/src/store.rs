@@ -150,7 +150,8 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
-    #[serde(default)]
+    /// On unless turned off; prefs saved before the toggle existed read as on.
+    #[serde(default = "default_true")]
     pub turbo: bool,
     #[serde(default)]
     pub gif_quality: Option<String>,

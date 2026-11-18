@@ -2470,6 +2470,7 @@ frames = { one = "{rendered} / {count} Frame", other = "{rendered} / {count} Fra
 generating_preview = "Vorschau wird erstellt…"
 link_unavailable_cursor = "Exporte nur mit Cursor können nur als Datei oder in die Zwischenablage gespeichert werden."
 link_unavailable_transparent = "Transparente Exporte können nur als Datei oder in die Zwischenablage gespeichert werden."
+more_formats = "Mehr"
 organization = "Organisation"
 preview = "Vorschau"
 preview_info = "Dies ist ein gerendertes Bild aus Ihrem Video. Passen Sie die Einstellungen an, um die Qualität des fertigen Exports zu sehen."
@@ -2508,7 +2509,9 @@ file = "Datei"
 link = "Link zum Teilen"
 
 [editor.export.done]
+copy_file = "In Zwischenablage kopieren"
 copy_link = "Link kopieren"
+file_copied = "Kopiert"
 instant_hint = "Verwenden Sie für Ihre nächste Aufnahme den Instant-Modus, wenn Sie direkt nach dem Stoppen einen Link möchten."
 link_copied = "Link kopiert"
 open_file = "Datei öffnen"
@@ -2599,14 +2602,16 @@ format = "Spuren"
 microphone = "Mikrofon"
 open_folder = "Ordner öffnen"
 screen = "Bildschirm"
+separate = "Separate Spuren"
+separate_description = "Bildschirm, Kamera und Audio jeweils als eigene Datei"
 studio_only = "Separate Spuren werden nur im Studio-Modus aufgenommen."
 system_audio = "Systemaudio"
 video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Turbo-Export"
-description = "Exportiert deutlich schneller mit allen CPU-Kernen und der GPU"
-warning = "Nutzt bis zum Ende des Exports die gesamte CPU, die GPU und ein Vielfaches an Arbeitsspeicher. Andere Apps können langsamer werden, und Ihr Computer kann warm und laut werden."
+description = "Schließt Exporte deutlich schneller ab, indem mehr Leistung Ihres Computers genutzt wird"
+warning = "Andere Apps können sich bis zum Ende des Exports etwas langsamer anfühlen."
 
 [editor.modal]
 cancel_export = "Export abbrechen"

@@ -33,12 +33,13 @@ use crate::ui;
 use crate::{library, platform};
 
 const SIDEBAR_WIDTH: f32 = 400.;
+const EXPORT_PANEL_INSET: f32 = 12.;
 const HEADER_HEIGHT: f32 = 52.;
 const STAGE_PADDING_X: f32 = 24.;
 /// Stage top padding, caption row, preview padding, stats card and bottom
 /// padding: everything on the stage that is not the preview itself.
 const STAGE_VERTICAL_CHROME: f32 = 16. + 22. + 14. + 18. + STATS_HEIGHT + 20.;
-const STATS_HEIGHT: f32 = 44.;
+const STATS_HEIGHT: f32 = 50.;
 const SEGMENT_HEIGHT: f32 = 26.;
 const COMPRESSION_PRESETS: [(ExportCompression, fn() -> &'static str); 4] = [
     (
@@ -107,8 +108,6 @@ pub enum ExportFormatKind {
 }
 
 impl ExportFormatKind {
-    const ALL: [Self; 3] = [Self::Mp4, Self::Gif, Self::Tracks];
-
     fn label(self) -> &'static str {
         match self {
             Self::Mp4 => "MP4",
@@ -371,6 +370,8 @@ pub struct ExportUi {
     pub custom_bpp: Option<f32>,
     pub force_ffmpeg: bool,
     pub advanced_open: bool,
+    /// Whether Format's More reveal is open; not saved.
+    pub more_formats_open: bool,
     pub preview: Option<Arc<RenderImage>>,
     pub preview_stats: Option<PreviewStats>,
     pub preview_error: Option<String>,
@@ -397,6 +398,8 @@ pub struct ExportUi {
     pub reuploading: bool,
     pub upload_progress: f32,
     pub copy_link_pressed: bool,
+    /// The finished file was just copied; the button says so for a moment.
+    pub file_copied: bool,
     bpp_track: ui::SliderTrack,
     bpp_dragging: bool,
     pub track_options: Vec<TrackOption>,
@@ -454,7 +457,7 @@ impl ExportUi {
             force_ffmpeg_decoder: false,
             advanced_open: false,
             organization_id: None,
-            turbo: false,
+            turbo: true,
             gif_quality: None,
             excluded_tracks: None,
             resolution_from_source: true,
@@ -482,6 +485,7 @@ impl ExportUi {
             custom_bpp: prefs.custom_bpp,
             force_ffmpeg: prefs.force_ffmpeg_decoder,
             advanced_open: prefs.advanced_open,
+            more_formats_open: false,
             preview: None,
             preview_stats: None,
             preview_error: None,
@@ -505,6 +509,7 @@ impl ExportUi {
             reuploading: false,
             upload_progress: 0.0,
             copy_link_pressed: false,
+            file_copied: false,
             bpp_track: ui::SliderTrack::default(),
             bpp_dragging: false,
             track_options: Vec::new(),
@@ -906,6 +911,38 @@ impl EditorWindow {
         {
             self.close_export(window, cx);
         }
+    }
+
+    /// Puts the finished file on the clipboard, the way the Clipboard
+    /// destination does, and confirms it on the button for two seconds.
+    fn copy_exported_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.export.as_ref().and_then(|ui| ui.output_path.clone()) else {
+            return;
+        };
+        let result = platform::copy_file_to_clipboard(&path, cx);
+        if let Some(ui) = self.export.as_mut() {
+            match result {
+                Ok(()) => {
+                    ui.file_copied = true;
+                    ui.error = None;
+                }
+                Err(error) => {
+                    tracing::warn!(error, "copying the exported file failed");
+                    ui.error = Some(error);
+                }
+            }
+        }
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.file_copied = false;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn copy_share_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1945,8 +1982,6 @@ impl EditorWindow {
             .items_center()
             .pl(px(if cfg!(target_os = "macos") { 92. } else { 12. }))
             .pr(px(12.))
-            .border_b_1()
-            .border_color(Hsla::from(editor.line))
             .when(cfg!(target_os = "windows"), |header| {
                 header.window_control_area(gpui::WindowControlArea::Drag)
             })
@@ -1974,8 +2009,7 @@ impl EditorWindow {
                         .pr(px(10.))
                         .rounded(px(8.))
                         .cursor_pointer()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(13.))
                         .text_color(Hsla::from(editor.text_2))
                         .hover(move |style| {
                             style
@@ -2093,7 +2127,14 @@ impl EditorWindow {
                     .rounded(px(10.))
                     .overflow_hidden()
                     .shadow(crate::theme::preview_shadow())
-                    .child(img(image).object_fit(gpui::ObjectFit::Contain).size_full())
+                    // The image paints its own corners; the box's clip alone
+                    // leaves them square.
+                    .child(
+                        img(image)
+                            .object_fit(gpui::ObjectFit::Contain)
+                            .size_full()
+                            .rounded(px(10.)),
+                    )
                     .into_any_element()
             }
             None => div()
@@ -2121,7 +2162,7 @@ impl EditorWindow {
             .flex_col()
             .flex_1()
             .min_w_0()
-            .bg(Hsla::from(editor.stage))
+            .bg(Hsla::from(editor.window))
             .pt(px(16.))
             .px(px(STAGE_PADDING_X))
             .pb(px(20.))
@@ -2171,11 +2212,14 @@ impl EditorWindow {
                 div().flex().flex_row().justify_center().child(
                     div()
                         .h(px(STATS_HEIGHT))
-                        .min_w(px(520.))
                         .flex()
                         .flex_row()
-                        .rounded(px(10.))
-                        .bg(Hsla::from(editor.card))
+                        .items_center()
+                        .px(px(4.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(self.card_line())
+                        .bg(self.panel_bg())
                         .shadow(editor.card_shadow())
                         .child(export_stat(
                             &theme,
@@ -2367,7 +2411,7 @@ impl EditorWindow {
             .flex_col()
             .flex_1()
             .min_w_0()
-            .bg(Hsla::from(editor.stage))
+            .bg(Hsla::from(editor.window))
             .pt(px(16.))
             .px(px(STAGE_PADDING_X))
             .pb(px(20.))
@@ -2478,15 +2522,16 @@ impl EditorWindow {
         let resolutions = self.export_resolutions(ui);
         let fps_options = self.export_fps_options(ui);
 
-        div()
-            .w(px(SIDEBAR_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+        let panel = div()
+            .size_full()
             .flex()
             .flex_col()
-            .bg(Hsla::from(editor.card))
-            .border_l_1()
-            .border_color(Hsla::from(editor.line))
+            .rounded(px(crate::theme::EDITOR_CARD_RADIUS))
+            .border_1()
+            .border_color(self.card_line())
+            .bg(self.panel_bg())
+            .shadow(editor.card_shadow())
+            .overflow_hidden()
             .child(
                 div()
                     .id("export-settings")
@@ -2495,8 +2540,10 @@ impl EditorWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .p(px(16.))
-                    .gap(px(20.))
+                    .px(px(20.))
+                    .pt(px(18.))
+                    .pb(px(20.))
+                    .gap(px(22.))
                     .child(self.export_destination_field(ui, link_disabled, cx))
                     .child(self.export_format_field(ui, transparent, cx))
                     .when(tracks_mode, |this| {
@@ -2521,13 +2568,22 @@ impl EditorWindow {
             )
             .child(
                 div()
-                    .px(px(16.))
-                    .pt(px(12.))
-                    .pb(px(16.))
+                    .px(px(20.))
+                    .pt(px(14.))
+                    .pb(px(20.))
                     .border_t_1()
                     .border_color(Hsla::from(editor.line))
                     .child(self.export_cta(ui, cx)),
-            )
+            );
+        // The same raised card as the editor's side panel, inset from the
+        // window's right and bottom edges.
+        div()
+            .w(px(SIDEBAR_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .pr(px(EXPORT_PANEL_INSET))
+            .pb(px(EXPORT_PANEL_INSET))
+            .child(panel)
     }
 
     fn export_cta(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2585,6 +2641,19 @@ impl EditorWindow {
             )
         };
 
+        let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
+            gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(top, 0.),
+                gpui::linear_color_stop(bottom, 1.),
+            )
+        };
+        let tint = move |amount: f32, toward: u32| {
+            gradient(
+                crate::theme::mix(editor.accent_2, gpui::rgb(toward), amount),
+                crate::theme::mix(editor.accent, gpui::rgb(toward), amount),
+            )
+        };
         div()
             .id("export-cta")
             .tab_index(0)
@@ -2596,34 +2665,72 @@ impl EditorWindow {
             .justify_center()
             .gap(px(8.))
             .rounded(px(10.))
-            .bg(bg)
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(text)
-            .when(primary, |this| {
-                this.shadow(vec![gpui::BoxShadow {
-                    color: gpui::hsla(0., 0., 1., 0.18),
-                    offset: gpui::point(px(0.), px(1.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
-                    inset: true,
-                }])
+            // Primary matches the editor's Export button: an accent gradient
+            // with a lit top edge, lighter on hover and deeper when pressed.
+            .map(|this| {
+                if primary {
+                    this.bg(gradient(editor.accent_2, editor.accent))
+                        .shadow(vec![gpui::BoxShadow {
+                            color: gpui::hsla(0., 0., 1., 0.22),
+                            offset: gpui::point(px(0.), px(1.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(0.),
+                            inset: true,
+                        }])
+                } else {
+                    this.bg(bg)
+                }
             })
             .when(busy, |this| this.opacity(0.5))
             .when(!busy, |this| {
                 this.cursor_pointer()
-                    .hover(move |style| style.bg(hover_bg))
+                    .map(|this| {
+                        if primary {
+                            this.hover(move |style| style.bg(tint(0.10, 0xffffff)))
+                                .active(move |style| style.bg(tint(0.06, 0x000000)))
+                        } else {
+                            this.hover(move |style| style.bg(hover_bg))
+                        }
+                    })
                     .on_click(cx.listener(|this, _, window, cx| this.start_export(window, cx)))
             })
             .children(icon.map(|icon| svg().path(icon).size(px(16.)).text_color(text)))
             .child(label)
     }
 
-    fn export_section(&self, name: &'static str, icon: &'static str) -> ui::Field {
-        ui::Field::section(&self.theme, name)
-            .icon(icon)
-            .icon_size(px(14.))
-            .gap(px(8.))
+    fn export_section(&self, name: &'static str) -> ui::Field {
+        ui::Field::section(&self.theme, name).gap(px(10.))
+    }
+
+    fn select_export_destination(
+        &mut self,
+        dest: ExportDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ui) = self.export.as_mut() {
+            if ui.format == ExportFormatKind::Tracks && dest != ExportDestination::File {
+                return;
+            }
+            if dest == ExportDestination::Link
+                && (has_transparent_background(&self.project) || ui.cursor_only)
+            {
+                return;
+            }
+            ui.destination = dest;
+            if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
+                ui.format = ExportFormatKind::Mp4;
+            }
+        }
+        self.normalize_loaded_export_options();
+        if let Some(ui) = self.export.as_mut() {
+            ui.persist();
+        }
+        self.refresh_export_preview(window, cx);
+        cx.notify();
     }
 
     fn export_destination_field(
@@ -2634,194 +2741,241 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        self.export_section(
-            tr::editor::export::section::destination(),
-            "icons/upload-arrow.svg",
-        )
-        .child(
-            ui::SegmentedControl::editor(
-                &theme,
-                "export-destination",
-                ExportDestination::ALL
-                    .iter()
-                    .map(|dest| {
-                        let label = if *dest == ExportDestination::Link && self.sharing.is_some() {
+        self.export_section(tr::editor::export::section::destination())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .children(ExportDestination::ALL.iter().map(|dest| {
+                        let dest = *dest;
+                        let label = if dest == ExportDestination::Link && self.sharing.is_some() {
                             tr::editor::export::reupload()
                         } else {
                             dest.label()
                         };
-                        let mut option = ui::SegmentOption::new(label, ui.destination == *dest)
-                            .disabled(
-                                (*dest == ExportDestination::Link && link_disabled)
-                                    || (*dest == ExportDestination::Clipboard
-                                        && ui.format == ExportFormatKind::Tracks),
-                            );
-                        option.icon = Some(dest.icon().into());
-                        option
-                    })
-                    .collect(),
+                        let selected = ui.destination == dest;
+                        let disabled = (dest == ExportDestination::Link && link_disabled)
+                            || (dest == ExportDestination::Clipboard
+                                && ui.format == ExportFormatKind::Tracks);
+                        let ink = Hsla::from(if selected {
+                            editor.text_1
+                        } else {
+                            editor.text_2
+                        });
+                        // A tile per destination, the cursor panel's language:
+                        // room for "Shareable link" on one line under its icon.
+                        div()
+                            .id(gpui::SharedString::from(format!(
+                                "export-destination-{dest:?}"
+                            )))
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(64.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(7.))
+                            .px(px(6.))
+                            .rounded(px(12.))
+                            .text_size(px(12.5))
+                            .line_height(px(15.))
+                            .text_color(ink)
+                            .map(|this| {
+                                if selected {
+                                    this.bg(editor.pill_fill())
+                                        .shadow(editor.choice_selected_shadow())
+                                } else {
+                                    this.bg(Hsla::from(editor.ctl)).shadow(editor.trough_ring())
+                                }
+                            })
+                            .when(disabled, |this| this.opacity(0.4))
+                            .when(!disabled && !selected, |this| {
+                                this.cursor_pointer()
+                                    .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                            })
+                            .when(!disabled, |this| {
+                                this.on_click(cx.listener(move |this, _, window, cx| {
+                                    this.select_export_destination(dest, window, cx);
+                                }))
+                            })
+                            .child(
+                                svg()
+                                    .path(dest.icon())
+                                    .size(px(18.))
+                                    .flex_none()
+                                    .text_color(ink),
+                            )
+                            .child(div().max_w_full().truncate().child(label))
+                    })),
             )
-            .stretch()
-            .item_height(px(30.))
-            .on_select(cx.listener(|this, index: &usize, window, cx| {
-                let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
-                    return;
-                };
-                if let Some(ui) = this.export.as_mut() {
-                    if ui.format == ExportFormatKind::Tracks && dest != ExportDestination::File {
-                        return;
-                    }
-                    if dest == ExportDestination::Link
-                        && (has_transparent_background(&this.project) || ui.cursor_only)
-                    {
-                        return;
-                    }
-                    ui.destination = dest;
-                    if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
-                        ui.format = ExportFormatKind::Mp4;
-                    }
-                }
-                this.normalize_loaded_export_options();
-                if let Some(ui) = this.export.as_mut() {
-                    ui.persist();
-                }
-                this.refresh_export_preview(window, cx);
-                cx.notify();
-            })),
-        )
-        .when(link_disabled, |field| {
-            field.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(Hsla::from(editor.text_3))
-                    .child(if ui.format == ExportFormatKind::Tracks {
-                        tr::editor::export::tracks::file_only()
-                    } else if ui.cursor_only {
-                        tr::editor::export::link_unavailable_cursor()
-                    } else {
-                        tr::editor::export::link_unavailable_transparent()
-                    }),
-            )
-        })
-        .when(
-            ui.destination == ExportDestination::Link && self.sharing.is_some(),
-            |field| {
-                let link = self
-                    .sharing
-                    .as_ref()
-                    .map(|sharing| sharing.link.clone())
-                    .unwrap_or_default();
+            .when(link_disabled, |field| {
                 field.child(
                     div()
-                        .p(px(12.))
-                        .rounded(px(10.))
-                        .bg(Hsla::from(editor.card_2))
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(editor.text_1))
-                                .child(tr::editor::export::existing_link_title()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(px(15.))
-                                .text_color(Hsla::from(editor.text_3))
-                                .child(tr::editor::export::existing_link_description()),
-                        )
-                        .child(
-                            div()
-                                .id("reupload-existing-link")
-                                .text_size(px(11.5))
-                                .text_color(Hsla::from(editor.accent))
-                                .truncate()
-                                .cursor_pointer()
-                                .child(link.clone())
-                                .on_click(move |_, _, cx| cx.open_url(&link)),
-                        ),
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(if ui.format == ExportFormatKind::Tracks {
+                            tr::editor::export::tracks::file_only()
+                        } else if ui.cursor_only {
+                            tr::editor::export::link_unavailable_cursor()
+                        } else {
+                            tr::editor::export::link_unavailable_transparent()
+                        }),
                 )
-            },
-        )
-        .when(
-            ui.destination == ExportDestination::Link
-                && self.sharing.is_none()
-                && store::auth_snapshot().organizations.len() > 1,
-            |this| {
-                let orgs = store::auth_snapshot().organizations;
-                let selected = ui
-                    .organization_id
-                    .clone()
-                    .or_else(|| orgs.first().map(|org| org.id.clone()));
-                let label = orgs
-                    .iter()
-                    .find(|org| Some(org.id.as_str()) == selected.as_deref())
-                    .or(orgs.first())
-                    .map(|org| org.name.clone())
-                    .unwrap_or_else(|| tr::editor::export::organization().into());
-                this.child(
-                    div()
-                        .id("export-organization")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .h(px(30.))
-                        .px(px(10.))
-                        .rounded(px(7.))
-                        .bg(Hsla::from(editor.ctl))
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let orgs = store::auth_snapshot().organizations;
-                            if orgs.is_empty() {
-                                return;
-                            }
-                            if let Some(ui) = this.export.as_mut() {
-                                let current = ui
-                                    .organization_id
-                                    .as_deref()
-                                    .or(orgs.first().map(|org| org.id.as_str()));
-                                let index = orgs
-                                    .iter()
-                                    .position(|org| Some(org.id.as_str()) == current)
-                                    .unwrap_or(0);
-                                let next = orgs[(index + 1) % orgs.len()].id.clone();
-                                ui.organization_id = Some(next);
-                                ui.persist();
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(editor.text_2))
-                                .child(tr::editor::export::organization()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(editor.text_1))
-                                .child(label)
-                                .child(
-                                    svg()
-                                        .path("icons/caret-down.svg")
-                                        .size(px(14.))
-                                        .text_color(Hsla::from(editor.text_3)),
-                                ),
-                        ),
-                )
-            },
-        )
+            })
+            .when(
+                ui.destination == ExportDestination::Link && self.sharing.is_some(),
+                |field| {
+                    let link = self
+                        .sharing
+                        .as_ref()
+                        .map(|sharing| sharing.link.clone())
+                        .unwrap_or_default();
+                    field.child(
+                        div()
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .bg(Hsla::from(editor.card_2))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child(tr::editor::export::existing_link_title()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .line_height(px(15.))
+                                    .text_color(Hsla::from(editor.text_3))
+                                    .child(tr::editor::export::existing_link_description()),
+                            )
+                            .child(
+                                div()
+                                    .id("reupload-existing-link")
+                                    .text_size(px(11.5))
+                                    .text_color(Hsla::from(editor.accent))
+                                    .truncate()
+                                    .cursor_pointer()
+                                    .child(link.clone())
+                                    .on_click(move |_, _, cx| cx.open_url(&link)),
+                            ),
+                    )
+                },
+            )
+            .when(
+                ui.destination == ExportDestination::Link
+                    && self.sharing.is_none()
+                    && store::auth_snapshot().organizations.len() > 1,
+                |this| {
+                    let orgs = store::auth_snapshot().organizations;
+                    let selected = ui
+                        .organization_id
+                        .clone()
+                        .or_else(|| orgs.first().map(|org| org.id.clone()));
+                    let label = orgs
+                        .iter()
+                        .find(|org| Some(org.id.as_str()) == selected.as_deref())
+                        .or(orgs.first())
+                        .map(|org| org.name.clone())
+                        .unwrap_or_else(|| tr::editor::export::organization().into());
+                    this.child(
+                        div()
+                            .id("export-organization")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .h(px(30.))
+                            .px(px(10.))
+                            .rounded(px(7.))
+                            .bg(Hsla::from(editor.ctl))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let orgs = store::auth_snapshot().organizations;
+                                if orgs.is_empty() {
+                                    return;
+                                }
+                                if let Some(ui) = this.export.as_mut() {
+                                    let current = ui
+                                        .organization_id
+                                        .as_deref()
+                                        .or(orgs.first().map(|org| org.id.as_str()));
+                                    let index = orgs
+                                        .iter()
+                                        .position(|org| Some(org.id.as_str()) == current)
+                                        .unwrap_or(0);
+                                    let next = orgs[(index + 1) % orgs.len()].id.clone();
+                                    ui.organization_id = Some(next);
+                                    ui.persist();
+                                }
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(tr::editor::export::organization()),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child(label)
+                                    .child(
+                                        svg()
+                                            .path("icons/caret-down.svg")
+                                            .size(px(14.))
+                                            .text_color(Hsla::from(editor.text_3)),
+                                    ),
+                            ),
+                    )
+                },
+            )
     }
 
+    fn choose_export_format(
+        &mut self,
+        format: ExportFormatKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ui) = self.export.as_mut() {
+            ui.format = format;
+            if format == ExportFormatKind::Tracks {
+                ui.destination = ExportDestination::File;
+                ui.cursor_only = false;
+            } else {
+                ui.more_formats_open = false;
+            }
+            if format == ExportFormatKind::Gif {
+                if ui.destination == ExportDestination::Link {
+                    ui.destination = ExportDestination::File;
+                }
+                if ui.resolution == ExportResolution::P4k {
+                    ui.resolution = ExportResolution::P1080;
+                }
+            }
+        }
+        self.normalize_loaded_export_options();
+        if let Some(ui) = self.export.as_mut() {
+            ui.persist();
+        }
+        self.refresh_export_preview(window, cx);
+        cx.notify();
+    }
+
+    /// MP4 and GIF, then More: the less common formats (separate tracks)
+    /// open as a card underneath, so the everyday choice stays two options.
     fn export_format_field(
         &self,
         ui: &ExportUi,
@@ -2830,60 +2984,89 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let options = ExportFormatKind::ALL;
         let cursor_only = ui.cursor_only;
         let no_tracks = ui.track_options.is_empty();
+        let tracks = ui.format == ExportFormatKind::Tracks;
+        let open = tracks || ui.more_formats_open;
         let disabled = move |format: ExportFormatKind| match format {
             ExportFormatKind::Mp4 => transparent || cursor_only,
             ExportFormatKind::Gif => cursor_only,
             ExportFormatKind::Tracks => no_tracks,
         };
-        self.export_section(tr::editor::export::section::format(), "icons/video.svg")
+        let mut more = ui::SegmentOption::new(
+            if tracks {
+                ExportFormatKind::Tracks.label()
+            } else {
+                tr::editor::export::more_formats()
+            },
+            tracks,
+        );
+        more.icon = Some(if open {
+            "icons/chevron-up.svg".into()
+        } else {
+            "icons/chevron-down.svg".into()
+        });
+        self.export_section(tr::editor::export::section::format())
             .child(
                 ui::SegmentedControl::editor(
                     &theme,
                     "export-format",
-                    options
-                        .iter()
-                        .map(|format| {
-                            ui::SegmentOption::new(format.label(), ui.format == *format)
-                                .disabled(disabled(*format))
-                        })
-                        .collect(),
+                    vec![
+                        ui::SegmentOption::new(
+                            ExportFormatKind::Mp4.label(),
+                            ui.format == ExportFormatKind::Mp4,
+                        )
+                        .disabled(disabled(ExportFormatKind::Mp4)),
+                        ui::SegmentOption::new(
+                            ExportFormatKind::Gif.label(),
+                            ui.format == ExportFormatKind::Gif,
+                        )
+                        .disabled(disabled(ExportFormatKind::Gif)),
+                        more,
+                    ],
                 )
                 .stretch()
                 .item_height(px(SEGMENT_HEIGHT))
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                    let Some(format) = options.get(*index).copied() else {
-                        return;
+                    let format = match index {
+                        0 => ExportFormatKind::Mp4,
+                        1 => ExportFormatKind::Gif,
+                        _ => {
+                            if let Some(ui) = this.export.as_mut()
+                                && ui.format != ExportFormatKind::Tracks
+                            {
+                                ui.more_formats_open = !ui.more_formats_open;
+                                cx.notify();
+                            }
+                            return;
+                        }
                     };
-                    if disabled(format) {
-                        return;
+                    if !disabled(format) {
+                        this.choose_export_format(format, window, cx);
                     }
-                    if let Some(ui) = this.export.as_mut() {
-                        ui.format = format;
-                        if format == ExportFormatKind::Tracks {
-                            ui.destination = ExportDestination::File;
-                            ui.cursor_only = false;
-                        }
-                        if format == ExportFormatKind::Gif {
-                            if ui.destination == ExportDestination::Link {
-                                ui.destination = ExportDestination::File;
-                            }
-                            if ui.resolution == ExportResolution::P4k {
-                                ui.resolution = ExportResolution::P1080;
-                            }
-                        }
-                    }
-                    this.normalize_loaded_export_options();
-                    if let Some(ui) = this.export.as_mut() {
-                        ui.persist();
-                    }
-                    this.refresh_export_preview(window, cx);
-                    cx.notify();
                 })),
             )
-            .when(no_tracks, |field| {
+            .when(open, |field| {
+                field.child(self.export_choice_card(
+                    "export-format-tracks",
+                    "icons/layers.svg",
+                    tr::editor::export::tracks::separate(),
+                    tr::editor::export::tracks::separate_description(),
+                    tracks,
+                    no_tracks,
+                    cx.listener(move |this, _, window, cx| {
+                        let format = if tracks {
+                            ExportFormatKind::Mp4
+                        } else {
+                            ExportFormatKind::Tracks
+                        };
+                        if !disabled(format) {
+                            this.choose_export_format(format, window, cx);
+                        }
+                    }),
+                ))
+            })
+            .when(open && no_tracks, |field| {
                 field.child(
                     div()
                         .text_size(px(11.))
@@ -2893,9 +3076,121 @@ impl EditorWindow {
             })
     }
 
+    /// A row-sized choice: an icon tile, a title and a line under it, and a
+    /// check circle. Selected rows sit on the raised pill with the accent
+    /// ring; the rest are recessed and fill on hover.
+    #[allow(clippy::too_many_arguments)]
+    fn export_choice_card(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        title: impl Into<gpui::SharedString>,
+        detail: impl Into<gpui::SharedString>,
+        selected: bool,
+        disabled: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> impl IntoElement {
+        let editor = self.theme.editor;
+        let accent = Hsla::from(editor.accent);
+        div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(12.))
+            .min_h(px(54.))
+            .px(px(12.))
+            .py(px(9.))
+            .rounded(px(12.))
+            .map(|this| {
+                if selected {
+                    this.bg(editor.pill_fill())
+                        .shadow(editor.choice_selected_shadow())
+                } else {
+                    this.bg(Hsla::from(editor.ctl)).shadow(editor.trough_ring())
+                }
+            })
+            .when(disabled, |this| this.opacity(0.4))
+            .when(!disabled, |this| {
+                this.cursor_pointer()
+                    .when(!selected, |this| {
+                        this.hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                    })
+                    .on_click(on_click)
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(30.))
+                    .rounded(px(8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(Hsla::from(if selected {
+                        editor.ctl_active
+                    } else {
+                        editor.ctl
+                    }))
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size(px(15.))
+                            .text_color(Hsla::from(if selected {
+                                editor.text_1
+                            } else {
+                                editor.text_2
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(editor.text_1))
+                            .truncate()
+                            .child(title.into()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(15.))
+                            .text_color(Hsla::from(editor.text_3))
+                            .child(detail.into()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(20.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .map(|this| {
+                        if selected {
+                            this.bg(accent).child(
+                                svg()
+                                    .path("icons/check.svg")
+                                    .size(px(12.))
+                                    .text_color(gpui::white()),
+                            )
+                        } else {
+                            this.border_1().border_color(Hsla::from(editor.line_strong))
+                        }
+                    }),
+            )
+    }
+
     fn export_tracks_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.theme.editor;
-        self.export_section(tr::editor::export::section::tracks(), "icons/layers.svg")
+        self.export_section(tr::editor::export::section::tracks())
             .children(ui.track_options.iter().map(|option| {
                 self.export_track_row(option, ui.tracks.contains(&option.kind), cx)
                     .into_any_element()
@@ -2919,68 +3214,22 @@ impl EditorWindow {
         checked: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let editor = self.theme.editor;
         let kind = option.kind;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(10.))
-            .min_h(px(36.))
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(28.))
-                    .rounded(px(7.))
-                    .bg(Hsla::from(editor.ctl))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        svg()
-                            .path(track_icon(kind))
-                            .size(px(14.))
-                            .text_color(Hsla::from(if checked {
-                                editor.text_1
-                            } else {
-                                editor.text_3
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(1.))
-                    .child(
-                        div()
-                            .text_size(px(12.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_1))
-                            .child(track_label(kind)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .line_height(px(14.))
-                            .text_color(Hsla::from(editor.text_3))
-                            .truncate()
-                            .child(track_detail(option)),
-                    ),
-            )
-            .child(
-                ui::Toggle::plain(&self.theme, track_toggle_id(kind), checked).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(ui) = this.export.as_mut() {
-                            ui.toggle_track(kind);
-                            ui.persist();
-                        }
-                        cx.notify();
-                    }),
-                ),
-            )
+        self.export_choice_card(
+            track_toggle_id(kind),
+            track_icon(kind),
+            track_label(kind),
+            track_detail(option),
+            checked,
+            false,
+            cx.listener(move |this, _, _, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.toggle_track(kind);
+                    ui.persist();
+                }
+                cx.notify();
+            }),
+        )
     }
 
     fn export_resolution_field(
@@ -2991,33 +3240,30 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let resolutions = resolutions.to_vec();
-        self.export_section(
-            tr::editor::export::section::resolution(),
-            "icons/monitor-outline.svg",
-        )
-        .child(
-            ui::SegmentedControl::editor(
-                &theme,
-                "export-resolution",
-                resolutions
-                    .iter()
-                    .map(|res| ui::SegmentOption::new(res.label(), ui.resolution == *res))
-                    .collect(),
+        self.export_section(tr::editor::export::section::resolution())
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-resolution",
+                    resolutions
+                        .iter()
+                        .map(|res| ui::SegmentOption::new(res.label(), ui.resolution == *res))
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some(resolution) = resolutions.get(*index).copied() else {
+                        return;
+                    };
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.choose_resolution(resolution);
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                })),
             )
-            .stretch()
-            .item_height(px(SEGMENT_HEIGHT))
-            .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                let Some(resolution) = resolutions.get(*index).copied() else {
-                    return;
-                };
-                if let Some(ui) = this.export.as_mut() {
-                    ui.choose_resolution(resolution);
-                    ui.persist();
-                }
-                this.refresh_export_preview(window, cx);
-                cx.notify();
-            })),
-        )
     }
 
     fn export_fps_field(
@@ -3028,7 +3274,7 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let options = options.to_vec();
-        self.export_section(tr::editor::export::section::frame_rate(), "icons/gauge.svg")
+        self.export_section(tr::editor::export::section::frame_rate())
             .child(
                 ui::SegmentedControl::editor(
                     &theme,
@@ -3059,7 +3305,7 @@ impl EditorWindow {
     fn export_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        self.export_section(tr::editor::export::section::quality(), "icons/gem.svg")
+        self.export_section(tr::editor::export::section::quality())
             .child(
                 ui::SegmentedControl::editor(
                     &theme,
@@ -3109,7 +3355,7 @@ impl EditorWindow {
     fn export_gif_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        self.export_section(tr::editor::export::section::quality(), "icons/gem.svg")
+        self.export_section(tr::editor::export::section::quality())
             .child(
                 ui::SegmentedControl::editor(
                     &theme,
@@ -3225,33 +3471,14 @@ impl EditorWindow {
                     cx.notify();
                 }),
             ))
+            // A quiet note, not an alert: Turbo is on by default.
             .when(ui.turbo, |this| {
                 this.child(
                     div()
-                        .p(px(12.))
-                        .rounded(px(10.))
-                        .bg(Hsla::from(editor.card_2))
-                        .flex()
-                        .flex_row()
-                        .items_start()
-                        .gap(px(8.))
-                        .child(
-                            svg()
-                                .path("icons/triangle-alert.svg")
-                                .size(px(14.))
-                                .flex_shrink_0()
-                                .mt(px(1.))
-                                .text_color(Hsla::from(editor.text_2)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(px(11.5))
-                                .line_height(px(15.))
-                                .text_color(Hsla::from(editor.text_2))
-                                .child(tr::editor::export::turbo::warning()),
-                        ),
+                        .text_size(px(11.5))
+                        .line_height(px(15.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(tr::editor::export::turbo::warning()),
                 )
             })
     }
@@ -3276,14 +3503,11 @@ impl EditorWindow {
                     .px(px(6.))
                     .rounded(px(8.))
                     .cursor_pointer()
-                    .text_size(px(12.))
+                    // Reads as a section title, like the ones above it.
+                    .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(editor.text_2))
-                    .hover(move |style| {
-                        style
-                            .bg(Hsla::from(editor.ctl))
-                            .text_color(Hsla::from(editor.text_1))
-                    })
+                    .text_color(Hsla::from(editor.text_1))
+                    .hover(move |style| style.bg(Hsla::from(editor.ctl)))
                     .on_click(cx.listener(|this, _, _window, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.advanced_open = !ui.advanced_open;
@@ -3291,12 +3515,6 @@ impl EditorWindow {
                         }
                         cx.notify();
                     }))
-                    .child(
-                        svg()
-                            .path("icons/sliders-horizontal.svg")
-                            .size(px(14.))
-                            .text_color(Hsla::from(editor.text_2)),
-                    )
                     .child(tr::editor::export::advanced::title())
                     .child(
                         svg()
@@ -3540,24 +3758,30 @@ impl EditorWindow {
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
 
-        let mut wash: Hsla = editor.window.into();
-        wash.a = 0.94;
+        // A dark scrim in both themes, so the card reads as raised over the
+        // page rather than the page fading to white.
+        let wash = gpui::hsla(0., 0., 0., if theme.is_dark() { 0.55 } else { 0.32 });
 
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
+        // Everything sits on one raised card, the popovers' surface.
+        let card = div()
+            .w(px(380.))
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
-            .gap(px(16.))
-            .bg(wash)
+            .gap(px(14.))
+            .px(px(28.))
+            .pt(px(28.))
+            .pb(px(24.))
+            .rounded(px(16.))
+            .border_1()
+            .border_color(editor.pop_line())
+            .bg(editor.pop_bg())
+            .shadow(editor.pop_shadow())
             .text_color(Hsla::from(editor.text_1))
             .child({
                 let ring = ui::CircularProgress::new(
-                    px(80.),
-                    px(6.),
+                    px(64.),
+                    px(5.),
                     Hsla::from(editor.ctl_active),
                     Hsla::from(editor.accent),
                 )
@@ -3576,8 +3800,9 @@ impl EditorWindow {
                     .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(16.))
+                            .text_size(px(15.))
                             .font_weight(FontWeight::MEDIUM)
+                            .text_center()
                             .child(heading),
                     )
                     .when(
@@ -3604,6 +3829,7 @@ impl EditorWindow {
                     this.child(
                         div()
                             .text_size(px(12.))
+                            .font_features(crate::editor_timeline::tabular_numerals())
                             .text_color(Hsla::from(editor.text_2))
                             .child(tr::editor::export::frames(
                                 ui.total_frames as usize,
@@ -3677,9 +3903,11 @@ impl EditorWindow {
                 .when(ui.format != ExportFormatKind::Tracks, |this| {
                     this.child(
                         div()
-                            .max_w(px(320.))
+                            .max_w(px(300.))
+                            .pt(px(2.))
                             .text_size(px(12.))
-                            .text_color(Hsla::from(editor.text_2))
+                            .line_height(px(17.))
+                            .text_color(Hsla::from(editor.text_3))
                             .text_center()
                             .child(tr::editor::export::done::instant_hint()),
                     )
@@ -3688,106 +3916,148 @@ impl EditorWindow {
             .when(
                 ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed,
                 |this| {
-                    this.when(ui.clipboard_retry_path().is_some(), |this| {
-                        this.child(
-                            ui::Button::plain(
-                                &theme,
-                                "export-retry-copy",
-                                ui::ButtonVariant::Gray,
-                                ui::ButtonSize::Md,
-                            )
-                            .icon("icons/copy.svg")
-                            .label(tr::editor::export::done::retry_copy())
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.retry_clipboard_copy(window, cx);
-                                },
-                            )),
+                    // One accent action, a quieter second one beside it, and
+                    // the way back as a plain link underneath.
+                    let button = |id: &'static str, primary: bool| {
+                        ui::Button::plain(
+                            &theme,
+                            id,
+                            if primary {
+                                ui::ButtonVariant::Blue
+                            } else {
+                                ui::ButtonVariant::Gray
+                            },
+                            ui::ButtonSize::Md,
                         )
-                    })
-                    .when(
-                        (ui.phase == ExportPhase::Done
-                            && ui.destination == ExportDestination::File)
-                            || ui.clipboard_retry_path().is_some(),
-                        |this| {
-                            let path = ui.output_path.clone();
+                    };
+                    let retry = ui.clipboard_retry_path().is_some();
+                    let file_done =
+                        ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File;
+                    let tracks = ui.format == ExportFormatKind::Tracks;
+                    let link_done = ui.phase == ExportPhase::Done
+                        && ui.destination == ExportDestination::Link
+                        && ui.share_link.is_some();
+                    let path = ui.output_path.clone();
+                    let open_file = move |primary: bool| {
+                        let path = path.clone();
+                        button("export-open-file", primary)
+                            .icon("icons/folder-open.svg")
+                            .label(if tracks {
+                                tr::editor::export::tracks::open_folder()
+                            } else {
+                                tr::editor::export::done::open_file()
+                            })
+                            .on_click(move |_, _, cx| {
+                                if let Some(path) = &path {
+                                    library::open_with_system(path, cx);
+                                }
+                            })
+                    };
+                    let actions = div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap(px(8.))
+                        .pt(px(4.))
+                        .when(retry, |this| {
                             this.child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "export-open-file",
-                                    ui::ButtonVariant::Gray,
-                                    ui::ButtonSize::Md,
-                                )
-                                .label(if ui.format == ExportFormatKind::Tracks {
-                                    tr::editor::export::tracks::open_folder()
-                                } else {
-                                    tr::editor::export::done::open_file()
-                                })
-                                .on_click(move |_, _, cx| {
-                                    if let Some(path) = &path {
-                                        library::open_with_system(path, cx);
-                                    }
-                                }),
+                                button("export-retry-copy", true)
+                                    .icon("icons/copy.svg")
+                                    .label(tr::editor::export::done::retry_copy())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.retry_clipboard_copy(window, cx);
+                                    })),
                             )
-                        },
-                    )
-                    .when(
-                        ui.phase == ExportPhase::Done
-                            && ui.destination == ExportDestination::Link
-                            && ui.share_link.is_some(),
-                        |this| {
+                            .child(open_file(false))
+                        })
+                        .when(file_done && !retry, |this| {
+                            let copied = ui.file_copied;
+                            this.child(open_file(true)).when(!tracks, |this| {
+                                this.child(
+                                    button("export-copy-file", false)
+                                        .icon(if copied {
+                                            "icons/check.svg"
+                                        } else {
+                                            "icons/copy.svg"
+                                        })
+                                        .label(if copied {
+                                            tr::editor::export::done::file_copied()
+                                        } else {
+                                            tr::editor::export::done::copy_file()
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.copy_exported_file(window, cx);
+                                        })),
+                                )
+                            })
+                        })
+                        .when(link_done, |this| {
                             let copied = ui.copy_link_pressed;
                             let open = ui.share_link.clone().unwrap_or_default();
                             this.child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "export-copy-link",
-                                    ui::ButtonVariant::Gray,
-                                    ui::ButtonSize::Md,
-                                )
-                                .icon(if copied {
-                                    "icons/check.svg"
-                                } else {
-                                    "icons/copy.svg"
-                                })
-                                .label(if copied {
-                                    tr::editor::export::done::link_copied()
-                                } else {
-                                    tr::editor::export::done::copy_link()
-                                })
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
+                                button("export-copy-link", true)
+                                    .icon(if copied {
+                                        "icons/check.svg"
+                                    } else {
+                                        "icons/copy.svg"
+                                    })
+                                    .label(if copied {
+                                        tr::editor::export::done::link_copied()
+                                    } else {
+                                        tr::editor::export::done::copy_link()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         this.copy_share_link(window, cx);
-                                    },
-                                )),
+                                    })),
                             )
                             .child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "export-open-link",
-                                    ui::ButtonVariant::Primary,
-                                    ui::ButtonSize::Md,
-                                )
-                                .icon("icons/link.svg")
-                                .label(tr::editor::export::done::open_link())
-                                .on_click(move |_, _, cx| {
-                                    cx.open_url(&open);
-                                }),
+                                button("export-open-link", false)
+                                    .icon("icons/link.svg")
+                                    .label(tr::editor::export::done::open_link())
+                                    .on_click(move |_, _, cx| {
+                                        cx.open_url(&open);
+                                    }),
                             )
-                        },
-                    )
-                    .child(
-                        ui::Button::plain(
-                            &theme,
-                            "export-back-done",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Md,
+                        });
+                    let back = div()
+                        .id("export-back-done")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .h(px(28.))
+                        .px(px(10.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .text_color(Hsla::from(editor.text_2))
+                        .hover(move |style| {
+                            style
+                                .bg(Hsla::from(editor.ctl))
+                                .text_color(Hsla::from(editor.text_1))
+                        })
+                        .child(
+                            svg()
+                                .path("icons/move-left.svg")
+                                .size(px(14.))
+                                .text_color(Hsla::from(editor.text_2)),
                         )
-                        .label(tr::editor::export::back())
-                        .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
-                    )
+                        .child(tr::editor::export::back())
+                        .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx)));
+                    this.child(actions).child(back)
                 },
-            )
+            );
+
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(wash)
+            .child(card)
     }
 }
 
@@ -3951,35 +4221,48 @@ fn export_stat(
 ) -> impl IntoElement {
     let editor = theme.editor;
     div()
+        .relative()
         .flex()
-        .flex_1()
-        .min_w_0()
+        .flex_none()
         .flex_col()
         .justify_center()
-        .px(px(16.))
-        .gap(px(1.))
+        .h_full()
+        .min_w(px(96.))
+        .px(px(18.))
+        .gap(px(2.))
+        // An inset rule rather than a full-height border, so the card reads
+        // as one surface.
         .when(divided, |this| {
-            this.border_l_1().border_color(Hsla::from(editor.line))
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(12.))
+                    .bottom(px(12.))
+                    .w(px(1.))
+                    .bg(Hsla::from(editor.line)),
+            )
         })
         .child(
             div()
-                .text_size(px(10.5))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(11.))
+                .line_height(px(14.))
                 .text_color(Hsla::from(editor.text_3))
-                .truncate()
+                .whitespace_nowrap()
                 .child(label),
         )
         .child(match value {
             Some(value) => div()
-                .text_size(px(12.5))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(13.))
+                .line_height(px(17.))
+                .font_features(crate::editor_timeline::tabular_numerals())
                 .text_color(Hsla::from(editor.text_1))
                 .whitespace_nowrap()
                 .child(value)
                 .into_any_element(),
             None => div()
                 .my(px(3.))
-                .h(px(12.))
+                .h(px(11.))
                 .w(px(56.))
                 .rounded(px(4.))
                 .bg(Hsla::from(editor.ctl_active))
@@ -3998,7 +4281,7 @@ fn export_fps_options(format: ExportFormatKind, cursor_only: bool) -> &'static [
     if format == ExportFormatKind::Tracks {
         &[15, 30, 60]
     } else if format == ExportFormatKind::Gif && !cursor_only {
-        &[5, 10, 15, 20, 25, 30]
+        &[10, 15, 30]
     } else {
         &[15, 30, 60]
     }
@@ -4326,7 +4609,7 @@ mod tests {
     fn gif_exports_offer_smaller_options_that_other_formats_do_not() {
         assert_eq!(
             export_fps_options(ExportFormatKind::Gif, false),
-            [5, 10, 15, 20, 25, 30]
+            [10, 15, 30]
         );
         assert_eq!(
             export_fps_options(ExportFormatKind::Mp4, false),
@@ -4519,9 +4802,9 @@ mod tests {
         let mut ui = clipboard_export();
         ui.format = ExportFormatKind::Gif;
         ui.resolution = ExportResolution::P480;
-        ui.fps = 5;
+        ui.fps = 10;
         normalize_export_options(&mut ui, false);
-        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P480, 5));
+        assert_eq!((ui.resolution, ui.fps), (ExportResolution::P480, 10));
 
         ui.format = ExportFormatKind::Mp4;
         normalize_export_options(&mut ui, false);
