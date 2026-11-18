@@ -12271,24 +12271,37 @@ impl EditorWindow {
                     .absolute()
                     .bottom_0()
                     .left(px(4.))
-                    .h(px(24.))
+                    .h(px(28.))
                     .flex()
                     .flex_row()
                     .flex_none()
                     .items_center()
                     .justify_start()
-                    .gap(px(5.))
-                    .pl(px(6.))
-                    .pr(px(8.))
-                    .rounded(px(7.))
+                    .gap(px(6.))
+                    .pl(px(9.))
+                    .pr(px(12.))
+                    .rounded(px(8.))
                     .cursor_pointer()
-                    .bg(theme.editor.pill_fill())
-                    .shadow(theme.editor.pill_shadow())
-                    .hover(|style| style.bg(Hsla::from(theme.editor.ctl_active)))
-                    .active(|style| style.opacity(0.75))
-                    .text_size(px(12.))
+                    .bg(Hsla::from(theme.editor.accent).opacity(if theme.is_dark() {
+                        0.2
+                    } else {
+                        0.12
+                    }))
+                    .hover(|style| {
+                        style.bg(Hsla::from(theme.editor.accent).opacity(if theme.is_dark() {
+                            0.28
+                        } else {
+                            0.18
+                        }))
+                    })
+                    .active(|style| style.opacity(0.8))
+                    .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_1))
+                    .text_color(Hsla::from(if theme.is_dark() {
+                        theme.editor.accent_2
+                    } else {
+                        theme.editor.accent
+                    }))
                     .child(
                         svg()
                             .path(if self.add_track.is_some() {
@@ -12296,7 +12309,7 @@ impl EditorWindow {
                             } else {
                                 "icons/plus.svg"
                             })
-                            .size(px(12.))
+                            .size(px(14.))
                             .flex_none()
                             .text_color(Hsla::from(theme.editor.accent)),
                     )
@@ -15625,7 +15638,7 @@ mod tests {
     #[test]
     fn responsive_editor_hugs_its_rows_and_still_fits_a_short_viewport() {
         // The four-row scratch project: chrome plus four rows and their gaps.
-        assert_eq!(timeline::hug_height(4), 246.);
+        assert_eq!(timeline::hug_height(4), 268.);
         assert_eq!(timeline::hug_height(0), timeline::MIN_HUG_HEIGHT);
         for rows in 1..12usize {
             let hug = timeline::hug_height(rows);

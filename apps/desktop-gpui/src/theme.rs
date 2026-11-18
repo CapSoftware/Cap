@@ -584,33 +584,29 @@ impl EditorPalette {
         mix(self.seg_fill(color), rgb(0x000000), 0.32)
     }
 
-    pub fn badge_ink(&self, color: Rgba) -> Rgba {
-        let fill = self.badge_fill(color);
-        let shade = mix(color, rgb(0x000000), 0.86);
-        let lum = relative_luminance(fill);
-        if 1.05 / (lum + 0.05) >= (lum + 0.05) / (relative_luminance(shade) + 0.05) {
-            rgb(0xffffff)
-        } else {
-            shade
-        }
+    pub fn badge_ink(&self, _color: Rgba) -> Rgba {
+        rgb(0xffffff)
     }
 
-    fn seg_ink(&self, color: Rgba, alpha: f32) -> Rgba {
+    pub fn seg_gradient(&self, color: Rgba) -> (Rgba, Rgba) {
         let fill = self.seg_fill(color);
-        let lit = relative_luminance(self.sheen(fill).0).max(relative_luminance(fill));
-        let shade = mix(color, rgb(0x000000), 0.86);
-        let on_white = 1.05 / (lit + 0.05);
-        let on_shade = (lit + 0.05) / (relative_luminance(shade) + 0.05);
-        if on_white >= on_shade {
-            rgba_alpha(rgb(0xffffff), alpha)
-        } else {
-            rgba_alpha(shade, alpha)
-        }
+        (
+            mix(fill, rgb(0x000000), 0.24),
+            mix(fill, rgb(0xffffff), 0.22),
+        )
     }
 
-    /// The track gutter's icon tile: `color 16%` over transparent.
+    pub fn seg_text_band(&self, color: Rgba) -> [Rgba; 2] {
+        let (top, bottom) = self.seg_gradient(color);
+        [mix(top, bottom, 1. / 3.), mix(top, bottom, 2. / 3.)]
+    }
+
+    fn seg_ink(&self, _color: Rgba, alpha: f32) -> Rgba {
+        rgba_alpha(rgb(0xffffff), alpha)
+    }
+
     pub fn tile_bg(&self, color: Rgba) -> Rgba {
-        rgba_alpha(color, 0.16)
+        rgba_alpha(color, 0.2)
     }
 
     /// The tile's glyph: the track colour pulled 62% toward the label base.

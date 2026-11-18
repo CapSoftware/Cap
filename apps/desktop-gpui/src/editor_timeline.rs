@@ -84,8 +84,8 @@ pub const TIMELINE_SLOT_PADDING: f32 = 8.;
 /// the timeline is computed over a column four pixels narrower than the ruler's.
 pub const SCROLL_BODY_PADDING_RIGHT: f32 = 4.;
 
-pub const TRACK_HEIGHT: f32 = 44.;
-pub const TRACK_ROW_GAP: f32 = 6.;
+pub const TRACK_HEIGHT: f32 = 48.;
+pub const TRACK_ROW_GAP: f32 = 8.;
 /// The radius of the band a row draws across its gutter and lane.
 pub const TRACK_BAND_RADIUS: f32 = 8.;
 /// The gap between the ruler's baseline and the first track row. It is not the
@@ -116,7 +116,7 @@ pub fn hug_height(rows: usize) -> f32 {
 const RULER_MAJOR_TICK: f32 = 8.;
 const RULER_MINOR_TICK: f32 = 5.;
 /// The gutter cell: a 22px tile at 4px of left padding, then the label.
-const TRACK_TILE_SIZE: f32 = 22.;
+const TRACK_TILE_SIZE: f32 = 26.;
 const TRACK_TILE_INSET: f32 = 4.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
@@ -173,24 +173,25 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 // ---------------------------------------------------------------------------
 
 pub mod track_color {
-    pub const CLIP: u32 = 0x3167cc;
-    pub const ZOOM: u32 = 0x6e52e3;
-    pub const CAPTION: u32 = 0x0ea5e9;
-    pub const KEYBOARD: u32 = 0xf97316;
-    pub const STYLE: u32 = 0xa540bc;
-    pub const IMAGE: u32 = 0xe8930c;
-    pub const TEXT: u32 = 0x12a594;
+    pub const CLIP: u32 = 0x3065c8;
+    pub const ZOOM: u32 = 0x6c50de;
+    pub const CAPTION: u32 = 0x0a6ea9;
+    pub const KEYBOARD: u32 = 0xb44b0b;
+    pub const STYLE: u32 = 0xa33fba;
+    pub const IMAGE: u32 = 0x945c07;
+    pub const TEXT: u32 = 0x0e7768;
     pub const MASK: u32 = 0xc63838;
-    pub const SHAPE: u32 = 0x5d6a8b;
-    pub const SCENE: u32 = 0x067590;
-    pub const AUDIO: u32 = 0x22b35e;
+    pub const SHAPE: u32 = 0x5a6787;
+    pub const SCENE: u32 = 0x5e6f12;
+    pub const AUDIO: u32 = 0x1b7940;
     pub const THREE_D: u32 = 0xbe3b69;
+    pub const MUTED: u32 = 0x5f606a;
 }
 
 /// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
 /// the row's own disabled state rather than as a different track.
-fn muted_clip_color(theme: &Theme) -> Hsla {
-    Hsla::from(theme.editor.text_3)
+fn muted_clip_color(_theme: &Theme) -> Hsla {
+    gpui::rgb(track_color::MUTED).into()
 }
 
 /// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
@@ -200,7 +201,7 @@ fn seg_fill(theme: &Theme, color: Hsla) -> Hsla {
 }
 
 fn seg_fill_sheen(theme: &Theme, color: Hsla) -> gpui::Background {
-    let (top, bottom) = theme.editor.sheen(gpui::Rgba::from(seg_fill(theme, color)));
+    let (top, bottom) = theme.editor.seg_gradient(gpui::Rgba::from(color));
     gpui::linear_gradient(
         180.,
         gpui::linear_color_stop(top, 0.),
@@ -211,17 +212,24 @@ fn seg_fill_sheen(theme: &Theme, color: Hsla) -> gpui::Background {
 fn seg_gloss() -> Vec<gpui::BoxShadow> {
     vec![
         gpui::BoxShadow {
-            color: gpui::hsla(0., 0., 1., 0.24),
+            color: gpui::hsla(0., 0., 1., 0.2),
             offset: gpui::point(px(0.), px(1.)),
             blur_radius: px(0.),
             spread_radius: px(0.),
             inset: true,
         },
         gpui::BoxShadow {
-            color: gpui::hsla(0., 0., 0., 0.14),
-            offset: gpui::point(px(0.), px(-1.)),
+            color: gpui::hsla(0., 0., 1., 0.1),
+            offset: gpui::point(px(0.), px(-10.)),
+            blur_radius: px(14.),
+            spread_radius: px(-6.),
+            inset: true,
+        },
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.12),
+            offset: gpui::point(px(0.), px(0.)),
             blur_radius: px(0.),
-            spread_radius: px(0.),
+            spread_radius: px(1.),
             inset: true,
         },
     ]
@@ -2023,7 +2031,7 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
                 .child(
                     svg()
                         .path(kind.icon())
-                        .size(px(12.))
+                        .size(px(14.))
                         .flex_none()
                         .text_color(tile_fg(theme, color)),
                 ),
@@ -2032,9 +2040,8 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
             div()
                 .min_w_0()
                 .truncate()
-                .text_size(px(11.))
-                .line_height(px(14.))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(13.))
+                .line_height(px(16.))
                 .child(kind.label()),
         )
 }
@@ -2320,7 +2327,7 @@ pub fn render_row(
         .text_color(if selected {
             active_text
         } else {
-            Hsla::from(theme.editor.text_2)
+            Hsla::from(theme.editor.text_2).blend(Hsla::from(theme.editor.text_1).opacity(0.5))
         })
         .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
@@ -4215,7 +4222,10 @@ mod tests {
             track_color::THREE_D,
         ];
         for palette in [EditorPalette::light(), EditorPalette::dark()] {
-            let colors = tracks.into_iter().map(gpui::rgb).chain([palette.text_3]);
+            let colors = tracks
+                .into_iter()
+                .map(gpui::rgb)
+                .chain([gpui::rgb(track_color::MUTED)]);
             for color in colors {
                 let badge = palette.badge_fill(color);
                 assert!(
@@ -4223,10 +4233,7 @@ mod tests {
                     "badge {color:?}: {:.2}",
                     contrast(palette.badge_ink(color), badge)
                 );
-                for fill in [
-                    palette.seg_fill(color),
-                    palette.sheen(palette.seg_fill(color)).0,
-                ] {
+                for fill in palette.seg_text_band(color) {
                     for text in [palette.seg_label(color), palette.seg_muted(color)] {
                         let ink = mix(fill, gpui::Rgba { a: 1., ..text }, text.a);
                         assert!(
