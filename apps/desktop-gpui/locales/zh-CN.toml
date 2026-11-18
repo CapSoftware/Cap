@@ -2471,6 +2471,7 @@ split = "拆分 {number}"
 title = "片段"
 
 [editor.clips.error]
+audio_only_mix = "仅音频录制和视频片段不能合并到同一个项目中"
 cancelled = "已取消导入"
 cannot_decode = "无法解码视频 {path}：{error}"
 in_use = "此录制正在使用中，无法导入：{error}"

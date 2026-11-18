@@ -2471,6 +2471,7 @@ split = "Partie {number}"
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Les enregistrements audio seul et les clips vidéo ne peuvent pas être combinés dans un même projet"
 cancelled = "Importation annulée"
 cannot_decode = "Impossible de décoder la vidéo {path} : {error}"
 in_use = "Importation impossible tant que cet enregistrement est utilisé : {error}"

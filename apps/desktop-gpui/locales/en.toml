@@ -2473,6 +2473,7 @@ split = { text = "Split {number}", context = "Default name of a later piece cut 
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Audio only recordings and video clips cannot be combined in one project"
 cancelled = "Import cancelled"
 cannot_decode = "Cannot decode video {path}: {error}"
 in_use = "Cannot import while this recording is in use: {error}"

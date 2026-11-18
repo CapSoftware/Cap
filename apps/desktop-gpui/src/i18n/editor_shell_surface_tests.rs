@@ -142,6 +142,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Cannot import a recording into itself",
         ),
         (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
+        ),
+        (
             tr::editor::clips::error::no_duration(),
             "Imported video has no valid duration",
         ),
