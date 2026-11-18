@@ -1593,6 +1593,21 @@ impl EditorWindow {
         self.apply_slider(slider, value, window, cx);
     }
 
+    pub(crate) fn bench_slider_press(&mut self, slider: SliderKey) {
+        let history = &mut self.history;
+        self.sidebar.slider_drag.begin(slider, || history.pause());
+    }
+
+    pub(crate) fn bench_slider_move(
+        &mut self,
+        slider: SliderKey,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_slider(slider, value, window, cx);
+    }
+
     /// The release closes the undo bracket: everything the drag wrote becomes
     /// one entry.
     pub(crate) fn sidebar_mouse_up(&mut self, cx: &mut Context<Self>) {

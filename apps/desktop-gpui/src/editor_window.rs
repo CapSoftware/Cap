@@ -658,6 +658,7 @@ struct PreviewFrameView {
     frame_rect: crate::editor_canvas::CanvasRect,
     stats: Option<Arc<PumpStats>>,
     frame_sequence: u64,
+    frame_number: u32,
     /// The stage's lift under the preview. A canvas paints raw quads, so the
     /// shadow cannot come from a style and is carried here instead.
     shadow: Vec<gpui::BoxShadow>,
@@ -671,6 +672,7 @@ impl PreviewFrameView {
             frame_rect,
             stats: None,
             frame_sequence: 0,
+            frame_number: 0,
             shadow: crate::theme::preview_shadow(),
         }
     }
@@ -678,6 +680,7 @@ impl PreviewFrameView {
     fn set_frame(
         &mut self,
         frame: EditorPreviewFrame,
+        frame_number: u32,
         frame_size: (f32, f32),
         stats: Option<Arc<PumpStats>>,
         cx: &mut Context<Self>,
@@ -685,6 +688,12 @@ impl PreviewFrameView {
         self.frame_size = frame_size;
         self.stats = stats;
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        self.frame_number = frame_number;
+        crate::editor_latency::mark(
+            crate::editor_latency::Stage::Arrived,
+            frame_number,
+            self.frame_sequence,
+        );
         let previous = self.frame.replace(frame);
         cx.notify();
         previous
@@ -700,6 +709,7 @@ impl Render for PreviewFrameView {
         let frame_rect = self.frame_rect.clone();
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
+        let frame_number = self.frame_number;
         let shadow = self.shadow.clone();
 
         gpui::canvas(
@@ -740,6 +750,11 @@ impl Render for PreviewFrameView {
                 if let Some(stats) = &painted {
                     stats.record_paint(frame_sequence);
                 }
+                crate::editor_latency::mark(
+                    crate::editor_latency::Stage::Painted,
+                    frame_number,
+                    frame_sequence,
+                );
             },
         )
         .size_full()
@@ -3971,6 +3986,36 @@ impl EditorWindow {
         self.timeline.waveform_paths.stats()
     }
 
+    pub(crate) fn bench_pump_snapshot(&self) -> Option<StatsSnapshot> {
+        self.stats.as_ref().map(|stats| stats.snapshot())
+    }
+
+    pub(crate) fn bench_zoom_end_handle(
+        &self,
+        index: usize,
+        viewport_width: f32,
+    ) -> Option<(u32, f32)> {
+        let segment = self.timeline.segments(TrackKind::Zoom).get(index)?;
+        let content = timeline::content_width(viewport_width);
+        let x = ((segment.end - self.view.transform.position) / self.secs_per_pixel(viewport_width))
+            as f32
+            - 2.;
+        (2.0..content)
+            .contains(&x)
+            .then(|| (segment.lane, timeline::content_left() + x))
+    }
+
+    pub(crate) fn bench_zoom_segment(&self, index: usize) -> Option<(f64, f64)> {
+        self.timeline
+            .segments(TrackKind::Zoom)
+            .get(index)
+            .map(|segment| (segment.start, segment.end))
+    }
+
+    pub(crate) fn bench_zoom_count(&self) -> usize {
+        self.timeline.segments(TrackKind::Zoom).len()
+    }
+
     pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
         let total = self.total_duration();
         self.view
@@ -4904,7 +4949,7 @@ impl EditorWindow {
     /// a handle trims, a body moves (or splits, in split mode), and bare track
     /// falls through to the timeline container's own press-to-seek -- except on
     /// the zoom track, which creates a segment there.
-    fn track_mouse_down(
+    pub(crate) fn track_mouse_down(
         &mut self,
         kind: TrackKind,
         lane: u32,
@@ -5575,7 +5620,7 @@ impl EditorWindow {
     /// A pointer move with a segment drag live. Runs off the root's handler, so
     /// a drag that leaves its own row keeps tracking -- which is what
     /// `createEventListenerMap(window, ...)` gives the source.
-    fn drag_mouse_move(
+    pub(crate) fn drag_mouse_move(
         &mut self,
         x: f32,
         snap_disabled: bool,
@@ -6700,7 +6745,7 @@ impl EditorWindow {
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
-    fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drag_snap_targets = snap::SnapTargets::default();
         self.drag_snap_time = None;
         let Some(drag) = self.drag.take() else {
@@ -7327,7 +7372,13 @@ impl EditorWindow {
         );
         self.latest_frame = Some(frame.frame.clone());
         let previous = self.preview.update(cx, |preview, cx| {
-            preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
+            preview.set_frame(
+                frame.frame,
+                frame.number,
+                frame_size,
+                self.stats.clone(),
+                cx,
+            )
         });
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
             let _ = window.drop_image(previous);
@@ -8239,7 +8290,7 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
-    fn apply_project_preset(
+    pub(crate) fn apply_project_preset(
         &mut self,
         next: ProjectConfiguration,
         window: &mut Window,
@@ -13675,6 +13726,7 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
 /// `set_playhead_position` would move the playhead and render nothing --
 /// the classic "the editor opened but the canvas is black" bug.
 pub fn request_frame(instance: &EditorInstance, frame_number: u32, resolution: XY<u32>) {
+    crate::editor_latency::mark(crate::editor_latency::Stage::Demand, frame_number, 0);
     instance
         .preview_tx
         .send_modify(|value| *value = Some((frame_number, EDITOR_PREVIEW_FPS, resolution)));
@@ -13691,6 +13743,15 @@ pub fn make_frame_callback(
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
         stats.rendered.fetch_add(1, Ordering::Relaxed);
+        if crate::editor_latency::enabled() {
+            let frame_number = match &output {
+                EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                #[cfg(target_os = "macos")]
+                EditorFrameOutput::Surface(frame) => frame.frame_number,
+            };
+            crate::editor_latency::mark(crate::editor_latency::Stage::Rendered, frame_number, 0);
+        }
         #[cfg(target_os = "windows")]
         let sent = tx
             .send_timeout((output, layout), Duration::from_millis(100))
