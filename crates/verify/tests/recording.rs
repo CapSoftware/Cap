@@ -4113,16 +4113,30 @@ fn screen_samples(path: &Path) -> anyhow::Result<(Vec<(u32, f64)>, usize)> {
 }
 
 /// The first export frame at `export_fps` that shows the source picture
-/// labelled `label`, under the decoder contract described in `check_export`.
-fn contract_first_frame(label: f64, source_fps: f64, export_fps: f64, screen_offset: f64) -> f64 {
-    let request = |frame: f64| {
+/// labelled `label` and presented at `pts` on the display track, after the
+/// picture labelled `previous`, under the decoder contract described in
+/// `check_export`.
+fn contract_first_frame(
+    label: f64,
+    pts: f64,
+    previous: f64,
+    source_fps: f64,
+    export_fps: f64,
+    screen_offset: f64,
+) -> f64 {
+    let shows = |frame: f64| {
         let time = (frame / export_fps + screen_offset) as f32;
         let step = f32::from_bits(time.abs().to_bits() + 1) - time.abs();
         let slack = (f64::from(step) * 4.0 * source_fps).min(0.25);
-        (f64::from(time) * source_fps + slack).floor()
+        let grid = (f64::from(time) * source_fps + slack).floor();
+        grid >= label
+            || (grid + 1.0 == label
+                && previous + 1.0 >= grid
+                && f64::from(time) * source_fps - grid > 0.5 + slack
+                && pts <= f64::from(time) + slack / source_fps)
     };
     let mut frame = ((label / source_fps - screen_offset) * export_fps).floor() - 2.0;
-    while request(frame) < label {
+    while !shows(frame) {
         frame += 1.0;
     }
     frame
@@ -4131,26 +4145,51 @@ fn contract_first_frame(label: f64, source_fps: f64, export_fps: f64, screen_off
 #[test]
 fn contract_first_frame_follows_the_decoder_request_rule_for_long_recordings() {
     // Up to three hours in, with screen offsets on and between export
-    // frames: the export frame the check expects is the first one whose
-    // request the decoder answers with the picture.
-    for (fps, offset_frames) in [(30u32, 0.0), (30, 0.99), (60, 18.95), (60, 0.5)] {
+    // frames and pictures on and between grid lines: the export frame the
+    // check expects is the first one whose request the decoder answers with
+    // the picture.
+    use cap_rendering::decoder::{presented_by, request_frame, request_next_frame};
+    for (fps, offset_frames) in [
+        (30u32, 0.0),
+        (30, 0.99),
+        (60, 18.95),
+        (60, 0.5),
+        (60, 58.98),
+    ] {
         let fps_f = f64::from(fps);
         let offset = offset_frames / fps_f;
-        for label in (0..3 * 3600 * fps).step_by(997).map(f64::from) {
-            let expected = contract_first_frame(label, fps_f, fps_f, offset);
-            let asks = |frame: f64| {
-                let time = (frame / fps_f + offset) as f32;
-                f64::from(cap_rendering::decoder::request_frame(time, fps))
-            };
-            assert!(
-                asks(expected) >= label,
-                "{label} at {fps} fps, offset {offset_frames}"
-            );
-            // Export frames start at 0; the decoder clamps earlier times.
-            assert!(
-                expected < 1.0 || asks(expected - 1.0) < label,
-                "{label} at {fps} fps, offset {offset_frames}"
-            );
+        for label in (1..3 * 3600 * fps).step_by(997).map(f64::from) {
+            for (phase, gap) in [
+                (-0.4, 1.0),
+                (0.0, 1.0),
+                (0.3, 1.0),
+                (0.6, 1.0),
+                (0.9, 1.0),
+                (0.9, 3.0),
+            ] {
+                let rounds_to = if phase > 0.5 { label - 1.0 } else { label };
+                let pts = (rounds_to + phase) / fps_f;
+                let previous = label - gap;
+                let expected = contract_first_frame(label, pts, previous, fps_f, fps_f, offset);
+                // The decoder handle skips the next-index check while the
+                // grid answer is a hold of two cells or more.
+                let shows = |frame: f64| {
+                    let time = (frame / fps_f + offset) as f32;
+                    let grid = request_frame(time, fps);
+                    f64::from(grid) >= label
+                        || request_next_frame(time, fps).is_some_and(|next| {
+                            f64::from(next) == label
+                                && previous + 2.0 >= f64::from(next)
+                                && presented_by(pts, time, fps)
+                        })
+                };
+                let case = format!(
+                    "{label} at {fps} fps, phase {phase}, gap {gap}, offset {offset_frames}"
+                );
+                assert!(shows(expected), "{case}");
+                // Export frames start at 0; the decoder clamps earlier times.
+                assert!(expected < 1.0 || !shows(expected - 1.0), "{case}");
+            }
         }
     }
 }
@@ -4379,12 +4418,32 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
     // frame before (crates/rendering/src/decoder/mod.rs, request_frame).
     // Written out here rather than called, so a decoder that breaks the
     // contract disagrees with it. A picture first shows on the first export
-    // frame whose request reaches its label.
+    // frame whose request reaches its label, or whose request lies past the
+    // middle of the cell before its label at or after the picture's pts
+    // (request_next_frame).
     let source_fps = f64::from(display_fps(&rec.project)?);
     let screen_offset = timeline_start - layout.display.start;
-    let first_frame =
-        |label: f64| contract_first_frame(label, source_fps, f64::from(fps), screen_offset);
+    let first_frame = |label: f64, pts: f64, previous: f64| {
+        contract_first_frame(
+            label,
+            pts,
+            previous,
+            source_fps,
+            f64::from(fps),
+            screen_offset,
+        )
+    };
     let (samples, _) = screen_samples(&layout.display.path)?;
+    let previous_labels: BTreeMap<u32, f64> = {
+        let mut by_pts = samples.clone();
+        by_pts.sort_by(|a, b| a.1.total_cmp(&b.1));
+        by_pts
+            .windows(2)
+            .filter(|pair| pair[0].0 != pair[1].0)
+            .map(|pair| (pair[1].0, (pair[0].1 * source_fps).round()))
+            .rev()
+            .collect()
+    };
     let legal_labels = picture_start_labels(&samples, source_fps);
     let off_contract: Vec<String> = required
         .iter()
@@ -4392,8 +4451,13 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
             let shown_at = shown.get(i)?;
             let labels = legal_labels.get(i)?;
             let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
-            let expected = first_frame(labels[0]);
-            (!labels.iter().any(|label| first_frame(*label) == frame)).then(|| {
+            let pts = t - layout.display.start;
+            let previous = previous_labels.get(i).copied().unwrap_or(f64::MIN);
+            let expected = first_frame(labels[0], pts, previous);
+            (!labels
+                .iter()
+                .any(|label| first_frame(*label, pts, previous) == frame))
+            .then(|| {
                 format!(
                     "{i} at frame {frame} instead of {expected} (display pts {:.3} s)",
                     t - layout.display.start
