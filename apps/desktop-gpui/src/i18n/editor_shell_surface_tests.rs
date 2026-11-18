@@ -32,6 +32,10 @@ const FORMATTED: &[&str] = &[
     "editor.transcript.skipped_transition",
     "editor.transcript.words",
     "editor.window.clip_menu.transition_seconds",
+    "editor.window.history.added",
+    "editor.window.history.changed",
+    "editor.window.history.deleted",
+    "editor.window.history.edited",
     "editor.markers.button",
     "editor.markers.default_name",
     "editor.markers.hidden",
@@ -1494,6 +1498,75 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::timeline::picker::shape(),
             "Draw arrows, boxes, circles and highlights over your recording.",
         ),
+        (tr::editor::window::history::title(), "History"),
+        (tr::editor::window::history::opened(), "Opened project"),
+        (tr::editor::window::history::earlier(), "Earlier changes"),
+        (tr::editor::window::history::edit(), "Edit"),
+        (tr::editor::window::history::split_clip(), "Split clip"),
+        (tr::editor::window::history::item::clip(), "clip"),
+        (tr::editor::window::history::item::zoom(), "zoom"),
+        (tr::editor::window::history::item::text_item(), "text"),
+        (tr::editor::window::history::item::image(), "image"),
+        (
+            tr::editor::window::history::item::audio_clip(),
+            "audio clip",
+        ),
+        (tr::editor::window::history::item::mask(), "mask"),
+        (tr::editor::window::history::item::scene(), "scene"),
+        (tr::editor::window::history::item::style(), "style"),
+        (
+            tr::editor::window::history::item::keyboard_segment(),
+            "keyboard segment",
+        ),
+        (tr::editor::window::history::item::caption(), "caption"),
+        (tr::editor::window::history::item::three_d(), "3D segment"),
+        (tr::editor::window::history::item::shape(), "shape"),
+        (
+            tr::editor::window::history::item::transition(),
+            "transition",
+        ),
+        (
+            tr::editor::window::history::setting::aspect_ratio(),
+            "aspect ratio",
+        ),
+        (
+            tr::editor::window::history::setting::background(),
+            "background",
+        ),
+        (tr::editor::window::history::setting::camera(), "camera"),
+        (tr::editor::window::history::setting::audio(), "audio"),
+        (tr::editor::window::history::setting::cursor(), "cursor"),
+        (tr::editor::window::history::setting::hotkeys(), "hotkeys"),
+        (tr::editor::window::history::setting::captions(), "captions"),
+        (
+            tr::editor::window::history::setting::keyboard(),
+            "keyboard display",
+        ),
+        (
+            tr::editor::window::history::setting::clips(),
+            "clip settings",
+        ),
+        (
+            tr::editor::window::history::setting::annotations(),
+            "annotations",
+        ),
+        (
+            tr::editor::window::history::setting::motion_blur(),
+            "motion blur",
+        ),
+        (
+            tr::editor::window::history::setting::screen_movement(),
+            "screen movement",
+        ),
+        (
+            tr::editor::window::history::setting::color_correction(),
+            "color correction",
+        ),
+        (tr::editor::window::history::setting::markers(), "markers"),
+        (
+            tr::editor::window::history::setting::track_order(),
+            "track order",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -1566,6 +1639,24 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     let path = std::path::Path::new("/tmp/Demo.cap");
     let message = "Source Cap project is still recording".to_string();
 
+    for item in ["zoom", "audio clip"] {
+        assert_eq!(
+            tr::editor::window::history::added(item),
+            format!("Added {item}")
+        );
+        assert_eq!(
+            tr::editor::window::history::deleted(item),
+            format!("Deleted {item}")
+        );
+        assert_eq!(
+            tr::editor::window::history::edited(item),
+            format!("Edited {item}")
+        );
+        assert_eq!(
+            tr::editor::window::history::changed(item),
+            format!("Changed {item}")
+        );
+    }
     for seconds in [0.25, 0.5, 1.0] {
         assert_eq!(
             tr::editor::window::clip_menu::transition_seconds(seconds),

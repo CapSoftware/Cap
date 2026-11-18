@@ -34,6 +34,7 @@ use cap_project::{
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
+use crate::i18n::tr;
 
 // ---------------------------------------------------------------------------
 // Selection
@@ -149,6 +150,10 @@ const HISTORY_LIMIT: usize = 100;
 #[derive(Debug, Clone)]
 pub struct ProjectHistory {
     entries: Vec<ProjectConfiguration>,
+    /// Whether the limit has dropped the oldest entries, so the first one left
+    /// is no longer the state the project opened in.
+    trimmed: bool,
+    revision: u64,
     /// `history().count` -- steps walked back from the newest entry.
     count: usize,
     /// `pauseCount` (`:1917`). A drag brackets itself with `pause`/`resume` so
@@ -166,6 +171,8 @@ impl ProjectHistory {
     pub fn new(initial: ProjectConfiguration) -> Self {
         Self {
             entries: vec![initial],
+            trimmed: false,
+            revision: 0,
             count: 0,
             paused: 0,
             dirty: false,
@@ -184,9 +191,11 @@ impl ProjectHistory {
         if self.entries.len() >= HISTORY_LIMIT {
             let excess = self.entries.len() - HISTORY_LIMIT + 1;
             self.entries.drain(0..excess);
+            self.trimmed = true;
         }
         self.entries.push(config.clone());
         self.count = 0;
+        self.revision += 1;
     }
 
     /// Applies `change` to every entry, for a result that belongs to the
@@ -267,10 +276,158 @@ impl ProjectHistory {
         self.entries.get(self.entries.len() - self.count - 1)
     }
 
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Each entry's label, oldest first. Worked out on demand (when the
+    /// History menu opens) so `record` never pays for the diff.
+    pub fn labels(&self) -> Vec<String> {
+        let first = if self.trimmed {
+            tr::editor::window::history::earlier()
+        } else {
+            tr::editor::window::history::opened()
+        };
+        std::iter::once(first.to_string())
+            .chain(
+                self.entries
+                    .windows(2)
+                    .map(|pair| describe_change(&pair[0], &pair[1])),
+            )
+            .collect()
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.entries.len() - self.count - 1
+    }
+
+    pub fn jump_to(&mut self, index: usize) -> Option<&ProjectConfiguration> {
+        if index >= self.entries.len() || index == self.cursor() {
+            return None;
+        }
+        self.count = self.entries.len() - 1 - index;
+        self.entries.get(index)
+    }
+
     #[cfg(test)]
     fn depth(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// A short human label for what changed between two project snapshots, e.g.
+/// "Added zoom" or "Changed background". Clip edits come first: deleting or
+/// retiming a clip ripples every other track, and the label should name the
+/// clip edit, not a track it shifted. Among the rest, a track whose segment
+/// count changed beats one whose segments only moved.
+pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfiguration) -> String {
+    let (Ok(serde_json::Value::Object(before)), Ok(serde_json::Value::Object(after))) =
+        (serde_json::to_value(before), serde_json::to_value(after))
+    else {
+        return tr::editor::window::history::edit().to_string();
+    };
+    let empty = serde_json::Map::new();
+    let before_timeline = before
+        .get("timeline")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
+    let after_timeline = after
+        .get("timeline")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
+    let count =
+        |value: Option<&serde_json::Value>| value.and_then(|v| v.as_array()).map_or(0, Vec::len);
+    let mut keys: Vec<&String> = before_timeline
+        .keys()
+        .chain(after_timeline.keys())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    let changed: Vec<&String> = keys
+        .into_iter()
+        .filter(|key| before_timeline.get(*key) != after_timeline.get(*key))
+        .collect();
+    let counted =
+        |key: &&String| count(before_timeline.get(*key)) != count(after_timeline.get(*key));
+    let pick = changed
+        .iter()
+        .find(|key| key.as_str() == "segments")
+        .or_else(|| changed.iter().find(|key| key.as_str() == "transitions"))
+        .or_else(|| changed.iter().find(|key| counted(key)))
+        .or_else(|| changed.first());
+    if let Some(key) = pick {
+        let Some(item) = timeline_item(key) else {
+            return tr::editor::window::history::edit().to_string();
+        };
+        let (before_count, after_count) = (
+            count(before_timeline.get(*key)),
+            count(after_timeline.get(*key)),
+        );
+        return match after_count.cmp(&before_count) {
+            std::cmp::Ordering::Greater if key.as_str() == "segments" => {
+                tr::editor::window::history::split_clip().to_string()
+            }
+            std::cmp::Ordering::Greater => tr::editor::window::history::added(item),
+            std::cmp::Ordering::Less => tr::editor::window::history::deleted(item),
+            std::cmp::Ordering::Equal => tr::editor::window::history::edited(item),
+        };
+    }
+    let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .filter(|key| key.as_str() != "timeline" && before.get(*key) != after.get(*key))
+        .find_map(|key| settings_item(key))
+        .map_or_else(
+            || tr::editor::window::history::edit().to_string(),
+            tr::editor::window::history::changed,
+        )
+}
+
+fn timeline_item(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "segments" => tr::editor::window::history::item::clip(),
+        "zoomSegments" => tr::editor::window::history::item::zoom(),
+        "textSegments" => tr::editor::window::history::item::text_item(),
+        "imageSegments" => tr::editor::window::history::item::image(),
+        "audioSegments" => tr::editor::window::history::item::audio_clip(),
+        "maskSegments" => tr::editor::window::history::item::mask(),
+        "sceneSegments" => tr::editor::window::history::item::scene(),
+        "styleSegments" => tr::editor::window::history::item::style(),
+        "keyboardSegments" => tr::editor::window::history::item::keyboard_segment(),
+        "captionSegments" => tr::editor::window::history::item::caption(),
+        "camera3dSegments" => tr::editor::window::history::item::three_d(),
+        "shapeSegments" => tr::editor::window::history::item::shape(),
+        "transitions" => tr::editor::window::history::item::transition(),
+        _ => return None,
+    })
+}
+
+fn settings_item(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "aspectRatio" => tr::editor::window::history::setting::aspect_ratio(),
+        "background" => tr::editor::window::history::setting::background(),
+        "camera" => tr::editor::window::history::setting::camera(),
+        "audio" => tr::editor::window::history::setting::audio(),
+        "cursor" => tr::editor::window::history::setting::cursor(),
+        "hotkeys" => tr::editor::window::history::setting::hotkeys(),
+        "captions" => tr::editor::window::history::setting::captions(),
+        "keyboard" => tr::editor::window::history::setting::keyboard(),
+        "clips" => tr::editor::window::history::setting::clips(),
+        "annotations" => tr::editor::window::history::setting::annotations(),
+        "screenMotionBlur" => tr::editor::window::history::setting::motion_blur(),
+        "screenMovementSpring" => tr::editor::window::history::setting::screen_movement(),
+        "colorCorrection" => tr::editor::window::history::setting::color_correction(),
+        "markers" => tr::editor::window::history::setting::markers(),
+        "overlayOrder" | "overlayOrderWithShapes" => {
+            tr::editor::window::history::setting::track_order()
+        }
+        _ => return None,
+    })
 }
 
 /// Compares the JSON the two configs save as, stopping at the first differing
@@ -3411,6 +3568,91 @@ mod tests {
             .timeline
             .as_ref()
             .map_or(0, |timeline| timeline.zoom_segments.len())
+    }
+
+    #[test]
+    fn history_labels_steps_and_jumps_between_them() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        history.record(&with_zoom_count(2));
+        history.record(&with_zoom_count(1));
+        assert_eq!(
+            history.labels(),
+            ["Opened project", "Added zoom", "Added zoom", "Deleted zoom"]
+        );
+        assert_eq!(history.cursor(), 3);
+        assert_eq!(zoom_len(history.jump_to(0).unwrap()), 0);
+        assert_eq!(history.cursor(), 0);
+        assert!(history.can_redo());
+        assert_eq!(zoom_len(history.jump_to(2).unwrap()), 2);
+        assert!(history.jump_to(2).is_none(), "already there");
+        // A fresh edit drops the steps after the cursor
+        history.record(&with_zoom_count(5));
+        assert_eq!(history.labels().len(), 4);
+        assert_eq!(history.labels()[3], "Added zoom");
+    }
+
+    #[test]
+    fn a_clip_delete_is_labelled_as_one_even_when_it_shifts_other_tracks() {
+        let before = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 12.0, "end": 18.0, "track": 0, "path": "music.mp3", "name": "Music", "duration": 6.0 }
+                ],
+                "captionSegments": [
+                    { "id": "a", "start": 1.0, "end": 2.0, "text": "kept" },
+                    { "id": "b", "start": 3.0, "end": 4.0, "text": "deleted" }
+                ]
+            }
+        }));
+        let mut after = before.clone();
+        let timeline = after.timeline.as_mut().unwrap();
+        timeline.segments.remove(0);
+        timeline.audio_segments[0].start -= 10.0;
+        timeline.audio_segments[0].end -= 10.0;
+        timeline.caption_segments.remove(1);
+        assert_eq!(describe_change(&before, &after), "Deleted clip");
+
+        // Without a clip change, a track that lost a segment beats one that
+        // only shifted.
+        let mut shifted = before.clone();
+        let timeline = shifted.timeline.as_mut().unwrap();
+        timeline.audio_segments[0].start += 1.0;
+        timeline.caption_segments.remove(1);
+        assert_eq!(describe_change(&before, &shifted), "Deleted caption");
+    }
+
+    #[test]
+    fn history_revision_moves_only_when_the_entries_change() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        let recorded = history.revision();
+        history.undo();
+        assert_eq!(history.revision(), recorded, "undo keeps the labels");
+        history.redo();
+        history.jump_to(0);
+        assert_eq!(history.revision(), recorded, "jumps keep the labels");
+        history.pause();
+        history.record(&with_zoom_count(2));
+        assert_eq!(history.revision(), recorded, "paused");
+        history.resume(&with_zoom_count(2));
+        assert_ne!(history.revision(), recorded, "resumed");
+    }
+
+    #[test]
+    fn labels_are_worked_out_on_demand_and_survive_the_limit() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        for count in 1..=(HISTORY_LIMIT + 5) {
+            history.record(&with_zoom_count(count % 3));
+        }
+        let labels = history.labels();
+        assert_eq!(labels.len(), HISTORY_LIMIT);
+        assert_eq!(labels[0], "Earlier changes");
     }
 
     #[test]
