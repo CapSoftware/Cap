@@ -577,7 +577,7 @@ fn capture_target_kind(target: &ScreenCaptureTarget) -> Option<CaptureTargetKind
         ScreenCaptureTarget::Window { .. } => Some(CaptureTargetKind::Window),
         ScreenCaptureTarget::Display { .. } => Some(CaptureTargetKind::Display),
         ScreenCaptureTarget::Area { .. } => Some(CaptureTargetKind::Area),
-        ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
     }
 }
 

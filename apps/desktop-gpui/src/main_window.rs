@@ -520,6 +520,7 @@ pub enum TargetType {
     Window,
     Area,
     CameraOnly,
+    AudioOnly,
 }
 
 impl TargetType {
@@ -529,6 +530,7 @@ impl TargetType {
             Self::Window => "Window",
             Self::Area => "Area",
             Self::CameraOnly => "Camera Only",
+            Self::AudioOnly => "Audio Only",
         }
     }
 
@@ -540,6 +542,7 @@ impl TargetType {
             Self::Window => tr::main::target::window(),
             Self::Area => tr::main::target::area(),
             Self::CameraOnly => tr::main::target::camera_only(),
+            Self::AudioOnly => tr::main::target::audio_only(),
         }
     }
 
@@ -549,6 +552,7 @@ impl TargetType {
             Self::Window => "icons/window.svg",
             Self::Area => "icons/area.svg",
             Self::CameraOnly => "icons/camera.svg",
+            Self::AudioOnly => "icons/microphone.svg",
         }
     }
 }
@@ -1666,8 +1670,8 @@ impl MainWindow {
                     .ok();
                 }))
             }
-            // Area and Camera Only have no cards to fill.
-            TargetType::Area | TargetType::CameraOnly => None,
+            // Area, Camera Only and Audio Only have no cards to fill.
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly => None,
         }
     }
 
@@ -1685,7 +1689,10 @@ impl MainWindow {
     /// Nothing here runs while no target panel is open: `close_panel` drops the
     /// task, which is the `enabled:` on every one of those queries.
     fn start_target_poll(&mut self, kind: TargetType, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(kind, TargetType::Area | TargetType::CameraOnly) {
+        if matches!(
+            kind,
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly
+        ) {
             self.target_poll_task = None;
             return;
         }
@@ -2159,6 +2166,7 @@ impl MainWindow {
             }
             TargetType::Area => None,
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
+            TargetType::AudioOnly => Some(ScreenCaptureTarget::AudioOnly),
         }
     }
 
@@ -2534,7 +2542,9 @@ impl MainWindow {
         // needed here because a Screenshot-mode pill maps to no recording
         // mode at all and would otherwise bail out of an editor-flow start.
         let editor_flow = self.session.read(cx).editor_recording_target().is_some();
-        let mode = if editor_flow {
+        // An audio-only recording is always a Studio project: Instant uploads
+        // a video and Screenshot captures one.
+        let mode = if editor_flow || target.is_audio_only() {
             recording::RecordingMode::Studio
         } else {
             match requested.map_or_else(|| self.recording_mode(cx), recording_mode_for) {
@@ -2548,9 +2558,20 @@ impl MainWindow {
                 ScreenCaptureTarget::Window { .. } => TargetType::Window,
                 ScreenCaptureTarget::Area { .. } => TargetType::Area,
                 ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
+                ScreenCaptureTarget::AudioOnly => TargetType::AudioOnly,
             };
             self.show_sign_in_prompt_for(kind, requested, cx);
             cx.defer(app_windows::show_main_window);
+            return;
+        }
+        if target.is_audio_only() && self.microphone.is_none() && !self.system_audio {
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::audio_only_needs_audio().into());
+                cx.notify();
+            });
+            if editor_flow {
+                cx.defer(app_windows::abort_editor_recording_flow);
+            }
             return;
         }
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
@@ -2931,6 +2952,10 @@ impl MainWindow {
     }
 
     /// The microphone the next recording will use.
+    pub fn system_audio(&self) -> bool {
+        self.system_audio
+    }
+
     pub fn microphone_selection(&self) -> Option<&MicrophoneOption> {
         self.microphone.as_ref()
     }
@@ -6221,8 +6246,8 @@ impl MainWindow {
                     );
                 }
             }
-            // Area and Camera Only have nothing to pick between.
-            TargetType::Area | TargetType::CameraOnly => {}
+            // Area, Camera Only and Audio Only have nothing to pick between.
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly => {}
         }
 
         if cards.is_empty() {
@@ -6985,7 +7010,8 @@ impl MainWindow {
                     .items_stretch()
                     .w_full()
                     .child(self.render_target_tile(TargetType::Area, cx))
-                    .child(self.render_target_tile(TargetType::CameraOnly, cx)),
+                    .child(self.render_target_tile(TargetType::CameraOnly, cx))
+                    .child(self.render_target_tile(TargetType::AudioOnly, cx)),
             )
     }
 
@@ -7062,7 +7088,7 @@ impl MainWindow {
             )
     }
 
-    /// Area and Camera Only are plain tiles with their own border.
+    /// Area, Camera Only and Audio Only are plain tiles with their own border.
     fn render_target_tile(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
@@ -7397,6 +7423,7 @@ pub fn auto_overlay_kind() -> Option<TargetType> {
         "window" => Some(TargetType::Window),
         "area" => Some(TargetType::Area),
         "camera" => Some(TargetType::CameraOnly),
+        "audio" => Some(TargetType::AudioOnly),
         _ => None,
     }
 }

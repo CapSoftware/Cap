@@ -1046,6 +1046,7 @@ off = { text = "Off", max_px = 130, size = 11 }
 on = { text = "On", max_px = 130, size = 11 }
 
 [main.error]
+audio_only_needs_audio = "Audio only recording needs a microphone or system audio."
 camera_only_needs_camera = "Camera-only recording requires a selected camera."
 copy = "Copy error"
 devices_not_ready = "Recording devices are not ready. Open the recorder and try again."
@@ -1154,8 +1155,9 @@ record_anyway = "Record anyway"
 title = "Low storage"
 
 [main.target]
-area = { text = "Area", max_px = 140, size = 12 }
-camera_only = { text = "Camera Only", max_px = 140, size = 12 }
+area = { text = "Area", max_px = 84, size = 12 }
+audio_only = { text = "Audio Only", max_px = 84, size = 12 }
+camera_only = { text = "Camera Only", max_px = 84, size = 12 }
 choose_display = "Choose a display"
 choose_window = "Choose a window"
 display = { text = "Display", max_px = 100, size = 12 }
@@ -1585,6 +1587,13 @@ unlock_body = "Let the area be moved, resized or drawn again."
 locked_title = "Area locked"
 locked_body = "Click to unlock it, so it can be moved, resized or drawn again."
 
+[overlay.audio_only]
+choose_source = "Choose a microphone or turn on system audio"
+description = "Record your microphone and your computer's sound, without the screen or camera"
+meter_hint = "Say something to check your level"
+system_audio = "System audio"
+system_audio_only = "Recording system audio only"
+
 [overlay.camera_only]
 description = "Record using only your camera and microphone"
 select_camera = "Please select a camera"
@@ -1842,6 +1851,20 @@ change_hint = "Pick a different track for this segment"
 change_title = "Change audio"
 done = "Done"
 import = "Import file"
+
+[editor.audio_only]
+add_visuals = "Add Visuals"
+body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
+export_audio = "Export Audio"
+show_visuals = "Show visuals"
+size_large = "Large"
+size_medium = "Medium"
+size_small = "Small"
+style_bars = "Bars"
+style_circle = "Circle"
+style_wave = "Wave"
+title = "Audio only"
+visuals = "Visuals"
 
 [editor.color]
 apply_to_cursor = "Apply to cursor"
@@ -2486,6 +2509,15 @@ title = "Export"
 upgrade_message = "This feature requires an upgraded plan"
 upgrade_title = "Upgrade required"
 upload_failed = "Failed to upload recording"
+
+[editor.export.audio]
+cta = "Export Audio"
+exported = "Audio exported"
+exporting = "Exporting audio"
+file_type = "File type"
+format = { text = "Audio", context = "Export format: the sound alone as one MP3 or WAV file." }
+mp3_description = "Small and plays everywhere. 192 kb/s stereo."
+wav_description = "Lossless 16-bit, 48 kHz. Best for further editing."
 
 [editor.export.advanced]
 bits_per_pixel = "Bits per pixel"

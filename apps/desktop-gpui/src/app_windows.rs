@@ -4491,8 +4491,13 @@ pub fn close_camera_window(cx: &mut App) {
     }
 }
 
+/// Camera Only shows the preview inside its overlay; Audio Only records no
+/// camera, so the floating preview steps aside for both.
 fn camera_preview_is_inline(cx: &App) -> bool {
-    TargetSelect::global(cx).read(cx).mode == Some(TargetType::CameraOnly)
+    matches!(
+        TargetSelect::global(cx).read(cx).mode,
+        Some(TargetType::CameraOnly | TargetType::AudioOnly)
+    )
 }
 
 pub fn camera_preview_entity(cx: &mut App) -> Option<Entity<CameraWindow>> {

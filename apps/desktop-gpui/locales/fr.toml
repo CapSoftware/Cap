@@ -1044,6 +1044,7 @@ off = "Non"
 on = "Oui"
 
 [main.error]
+audio_only_needs_audio = "L'enregistrement audio seul nécessite un micro ou l'audio système."
 camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
 copy = "Copier l'erreur"
 devices_not_ready = "Les appareils d'enregistrement ne sont pas prêts. Ouvrez l'enregistreur et réessayez."
@@ -1153,6 +1154,7 @@ title = "Espace de stockage faible"
 
 [main.target]
 area = "Zone"
+audio_only = "Audio seul"
 camera_only = "Caméra seule"
 choose_display = "Choisir un écran"
 choose_window = "Choisir une fenêtre"
@@ -1583,6 +1585,13 @@ unlock_body = "Permettre de déplacer, redimensionner ou redessiner la zone."
 locked_title = "Zone verrouillée"
 locked_body = "Cliquez pour la déverrouiller afin de pouvoir la déplacer, la redimensionner ou la redessiner."
 
+[overlay.audio_only]
+choose_source = "Choisissez un micro ou activez l'audio système"
+description = "Enregistrez votre micro et le son de votre ordinateur, sans l'écran ni la caméra"
+meter_hint = "Dites quelque chose pour vérifier le niveau"
+system_audio = "Audio système"
+system_audio_only = "Seul l'audio système sera enregistré"
+
 [overlay.camera_only]
 description = "Enregistrez uniquement avec votre caméra et votre micro"
 select_camera = "Veuillez choisir une caméra"
@@ -1840,6 +1849,20 @@ change_hint = "Choisissez une autre piste pour ce segment"
 change_title = "Changer l'audio"
 done = "Terminé"
 import = "Importer un fichier"
+
+[editor.audio_only]
+add_visuals = "Ajouter des visuels"
+body = "Cet enregistrement n'a pas de vidéo. Exportez le son en MP3 ou WAV, ou ajoutez des visuels pour en faire une vidéo."
+export_audio = "Exporter l'audio"
+show_visuals = "Afficher les visuels"
+size_large = "Grand"
+size_medium = "Moyen"
+size_small = "Petit"
+style_bars = "Barres"
+style_circle = "Cercle"
+style_wave = "Onde"
+title = "Audio seul"
+visuals = "Visuels"
 
 [editor.color]
 apply_to_cursor = "Appliquer au curseur"
@@ -2484,6 +2507,15 @@ title = "Exporter"
 upgrade_message = "Cette fonctionnalité nécessite une offre supérieure"
 upgrade_title = "Mise à niveau requise"
 upload_failed = "Impossible de mettre en ligne l'enregistrement"
+
+[editor.export.audio]
+cta = "Exporter l'audio"
+exported = "Audio exporté"
+exporting = "Export de l'audio"
+file_type = "Type de fichier"
+format = "Audio"
+mp3_description = "Léger et lisible partout. 192 kb/s en stéréo."
+wav_description = "Sans perte, 16 bits, 48 kHz. Idéal pour continuer le montage."
 
 [editor.export.advanced]
 bits_per_pixel = "Bits par pixel"

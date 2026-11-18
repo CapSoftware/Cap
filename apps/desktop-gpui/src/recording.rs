@@ -2496,6 +2496,11 @@ async fn start_internal(
     if matches!(config.target, ScreenCaptureTarget::CameraOnly) && config.camera.is_none() {
         return Err(anyhow!("Camera-only recording requires a selected camera."));
     }
+    if config.target.is_audio_only() && config.microphone.is_none() && !config.system_audio {
+        return Err(anyhow!(
+            cap_recording::studio_recording::AUDIO_ONLY_NEEDS_A_SOURCE
+        ));
+    }
     if config.mode == RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
         return Err(anyhow!("Please sign in to use instant recording"));
     }
@@ -2641,7 +2646,11 @@ async fn start_attempt_with_upload(
         _ => (None, None, None),
     };
 
-    let (camera_feed, camera_lock) = match &config.camera {
+    let camera = config
+        .camera
+        .as_ref()
+        .filter(|_| !config.target.is_audio_only());
+    let (camera_feed, camera_lock) = match camera {
         Some(id) => {
             if let Some(actor) = &config.camera_feed {
                 match actor.ask(camera::Lock).await {
@@ -2714,6 +2723,7 @@ async fn start_attempt_with_upload(
     #[cfg(target_os = "macos")]
     let shareable_content = match config.target {
         ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::AudioOnly if !config.system_audio => None,
         _ => Some(read_shareable_content().await?),
     };
 
@@ -2901,7 +2911,7 @@ async fn start_attempt_with_upload(
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
         _in_progress: in_progress,
-        started_with_camera: config.camera.is_some(),
+        started_with_camera: config.camera.is_some() && !config.target.is_audio_only(),
         camera_only: matches!(config.target, ScreenCaptureTarget::CameraOnly),
         microphone_switch,
         switched_microphone: Arc::new(Mutex::new(None)),
