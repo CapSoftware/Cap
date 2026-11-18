@@ -90,7 +90,16 @@ const recording = (sessionId: string): FailedRecording => ({
 describe("Chrome storage callback errors", () => {
 	it.each([
 		["local", "get", () => loadFailedRecordings()],
-		["local", "set", () => saveAuth({ authApiKey: "key", userId: "user" })],
+		[
+			"local",
+			"set",
+			() =>
+				saveAuth({
+					authApiKey: "key",
+					userId: "user",
+					apiOrigin: "https://cap.so",
+				}),
+		],
 		["local", "remove", () => clearAuth()],
 		["session", "get", () => loadSharedRecordingState()],
 		[

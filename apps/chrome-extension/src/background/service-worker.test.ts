@@ -122,6 +122,7 @@ describe("bootstrap account ownership", () => {
 	const oldAuth: ExtensionAuth = {
 		authApiKey: "old-fixture-key",
 		userId: "old-account",
+		apiOrigin: "https://cap.so",
 	};
 	const oldBootstrap: BootstrapData = {
 		user: {
@@ -141,7 +142,7 @@ describe("bootstrap account ownership", () => {
 			onMessage({ target: "service-worker", type }, {}, resolve);
 		});
 
-	const signIn = async (auth: ExtensionAuth) => {
+	const signIn = async (auth: Omit<ExtensionAuth, "apiOrigin">) => {
 		expect(await send("auth-start")).toMatchObject({ ok: true });
 		const call = vi.mocked(chrome.identity.launchWebAuthFlow).mock.calls[0];
 		if (!call?.[1]) throw new Error("No pending sign-in");
@@ -151,7 +152,12 @@ describe("bootstrap account ownership", () => {
 			...auth,
 		});
 		call[1](`https://test.chromiumapp.org/#${fragment}`);
-		await vi.waitFor(() => expect(stored[AUTH_KEY]).toEqual(auth));
+		await vi.waitFor(() =>
+			expect(stored[AUTH_KEY]).toEqual({
+				...auth,
+				apiOrigin: "https://cap.so",
+			}),
+		);
 	};
 
 	beforeEach(() => {
@@ -256,6 +262,30 @@ describe("bootstrap account ownership", () => {
 
 		expect(await loading).toMatchObject({ ok: false });
 		expect(stored[cacheKey]).toBeUndefined();
+	});
+
+	it("revokes a key minted by another Cap server on its own server when signing in", async () => {
+		stored[AUTH_KEY] = { ...oldAuth, apiOrigin: "https://old-cap.example" };
+
+		expect(await send("bootstrap")).toMatchObject({ ok: true, auth: null });
+		await signIn({ authApiKey: "new-fixture-key", userId: "new-account" });
+
+		expect(requests).toHaveBeenCalledWith(
+			"https://old-cap.example/api/extension/auth/revoke",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					Authorization: `Bearer ${oldAuth.authApiKey}`,
+				}),
+			}),
+		);
+		expect(requests).not.toHaveBeenCalledWith(
+			expect.stringContaining("https://cap.so"),
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					Authorization: `Bearer ${oldAuth.authApiKey}`,
+				}),
+			}),
+		);
 	});
 
 	it("ignores another account's persisted cache after a worker restart", async () => {

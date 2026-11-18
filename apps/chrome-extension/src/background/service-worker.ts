@@ -27,6 +27,7 @@ import {
 	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
+	loadStoredAuth,
 	loadUploadProgressTabId,
 	loadWebcamPreviewDismissed,
 	registerOverlayToken,
@@ -1713,8 +1714,10 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			};
 			// Server-minted keys never expire, so a re-auth would otherwise leave
 			// the previous key live in auth_api_keys forever; revoke it
-			// best-effort before it is forgotten locally.
-			const previousAuth = await loadAuth().catch(() => null);
+			// best-effort before it is forgotten locally. That includes a key
+			// loadAuth() withholds because the Cap URL moved to another server,
+			// which is revoked against the server that minted it.
+			const previousAuth = await loadStoredAuth().catch(() => null);
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(
 					{ ...settings, apiBaseUrl: previousAuth.apiOrigin },
@@ -1815,10 +1818,10 @@ const handleRequest = async (
 
 	if (message.type === "auth-revoke") {
 		const settings = await loadSettings();
-		const auth = await loadAuth();
+		const auth = await loadStoredAuth();
 		if (auth) {
 			try {
-				await revokeAuth(settings, auth);
+				await revokeAuth({ ...settings, apiBaseUrl: auth.apiOrigin }, auth);
 			} catch (error) {
 				// A definitive 4xx means the server saw the request and the key
 				// is unusable or already gone, so clearing local state is right.

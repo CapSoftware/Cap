@@ -260,29 +260,47 @@ const originOf = (url: string) => {
 	}
 };
 
-// An API key is only valid on the Cap server that minted it. When the
-// effective Cap URL moves to another origin (an MDM policy being pushed or
-// lifted), the stored key is dropped rather than sent as a bearer token to
-// the new server. Auth saved before apiOrigin was recorded was issued against
-// the user's own Cap URL, since a policy URL could not be set back then.
-export const loadAuth = async (): Promise<ExtensionAuth | null> => {
-	const [result, userSettings, managedApiBaseUrl] = await Promise.all([
+// The stored key together with the origin of the Cap server that minted it,
+// whether or not that is still the effective Cap URL. Only for revoking the
+// key against its own server; requests must go through loadAuth(). Auth saved
+// before apiOrigin was recorded was issued against the user's own Cap URL,
+// since a policy URL could not be set back then.
+export const loadStoredAuth = async (): Promise<ExtensionAuth | null> => {
+	const [result, userSettings] = await Promise.all([
 		getLocal([AUTH_KEY]),
 		loadUserSettings(),
-		loadManagedApiBaseUrl(),
 	]);
 	const saved = result[AUTH_KEY];
 	if (!isStoredAuth(saved)) return null;
 	const apiOrigin = saved.apiOrigin ?? originOf(userSettings.apiBaseUrl);
+	if (!apiOrigin) return null;
+	return { authApiKey: saved.authApiKey, userId: saved.userId, apiOrigin };
+};
+
+// An API key is only valid on the Cap server that minted it. When the
+// effective Cap URL moves to another origin (an MDM policy being pushed or
+// lifted), the key is not handed out for requests, so it is never sent as a
+// bearer token to the new server, and the user is signed out there. The key
+// stays stored with its origin pinned: server-minted keys never expire, so the
+// next sign-in or sign-out must still be able to revoke it on its own server.
+export const loadAuth = async (): Promise<ExtensionAuth | null> => {
+	const [stored, userSettings, managedApiBaseUrl] = await Promise.all([
+		loadStoredAuth(),
+		loadUserSettings(),
+		loadManagedApiBaseUrl(),
+	]);
+	if (!stored) return null;
 	const currentOrigin = originOf(managedApiBaseUrl ?? userSettings.apiBaseUrl);
-	if (apiOrigin && apiOrigin === currentOrigin) {
-		return { authApiKey: saved.authApiKey, userId: saved.userId, apiOrigin };
-	}
+	if (stored.apiOrigin === currentOrigin) return stored;
 	await withKeyLock(AUTH_KEY, async () => {
 		const current = (await getLocal([AUTH_KEY]))[AUTH_KEY];
-		if (isStoredAuth(current) && current.authApiKey === saved.authApiKey) {
-			await removeLocal([AUTH_KEY, BOOTSTRAP_CACHE_KEY]);
+		if (!isStoredAuth(current) || current.authApiKey !== stored.authApiKey) {
+			return;
 		}
+		if (current.apiOrigin === undefined) {
+			await setLocal({ [AUTH_KEY]: stored });
+		}
+		await removeLocal(BOOTSTRAP_CACHE_KEY);
 	});
 	return null;
 };

@@ -10,6 +10,7 @@ import {
 	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
+	loadStoredAuth,
 	registerOverlayToken,
 	SETTINGS_KEY,
 	saveAuth,
@@ -298,8 +299,13 @@ describe("auth bound to the Cap server that issued it", () => {
 		setManagedPolicy({ apiBaseUrl: "https://cap.corp.example" });
 
 		expect(await loadAuth()).toBeNull();
-		expect(await readLocal(AUTH_KEY)).toBeUndefined();
 		expect(await loadCachedBootstrap()).toBeNull();
+		// Kept so it can still be revoked on the server that minted it.
+		expect(await loadStoredAuth()).toEqual({
+			authApiKey: "cap-key",
+			userId: "user",
+			apiOrigin: "https://cap.so",
+		});
 	});
 
 	it("signs out when the policy is lifted and the Cap URL moves back", async () => {
@@ -316,8 +322,12 @@ describe("auth bound to the Cap server that issued it", () => {
 		setManagedPolicy(null);
 
 		expect(await loadAuth()).toBeNull();
-		expect(await readLocal(AUTH_KEY)).toBeUndefined();
 		expect(await loadCachedBootstrap()).toBeNull();
+		expect(await loadStoredAuth()).toEqual({
+			authApiKey: "corp-key",
+			userId: "user",
+			apiOrigin: "https://cap.corp.example",
+		});
 	});
 
 	it("treats auth saved before apiOrigin existed as issued by the user's Cap URL", async () => {
@@ -333,6 +343,31 @@ describe("auth bound to the Cap server that issued it", () => {
 		setManagedPolicy({ apiBaseUrl: "https://cap.corp.example" });
 
 		expect(await loadAuth()).toBeNull();
-		expect(await readLocal(AUTH_KEY)).toBeUndefined();
+		// The origin is pinned once withheld, so a later change to the user's
+		// own Cap URL cannot reattribute the key to another server.
+		expect(await readLocal(AUTH_KEY)).toEqual({
+			authApiKey: "key",
+			userId: "user",
+			apiOrigin: "https://user.example",
+		});
+		setManagedPolicy(null);
+		await saveUserApiBaseUrl("https://other.example");
+		expect((await loadStoredAuth())?.apiOrigin).toBe("https://user.example");
+		expect(await loadAuth()).toBeNull();
+	});
+
+	it("hands the withheld key back once the Cap URL returns to its server", async () => {
+		await saveUserApiBaseUrl("https://cap.so");
+		await saveAuth({
+			authApiKey: "cap-key",
+			userId: "user",
+			apiOrigin: "https://cap.so",
+		});
+		setManagedPolicy({ apiBaseUrl: "https://cap.corp.example" });
+		expect(await loadAuth()).toBeNull();
+
+		setManagedPolicy(null);
+
+		expect((await loadAuth())?.authApiKey).toBe("cap-key");
 	});
 });
