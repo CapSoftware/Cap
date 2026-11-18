@@ -210,6 +210,18 @@ fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
     }
 }
 
+/// The segment body: its tint, lit a little toward the top edge.
+fn seg_fill_sheen(theme: &Theme, color: Hsla, selected: bool) -> gpui::Background {
+    let (top, bottom) = theme
+        .editor
+        .sheen(gpui::Rgba::from(seg_fill(theme, color, selected)));
+    gpui::linear_gradient(
+        180.,
+        gpui::linear_color_stop(top, 0.),
+        gpui::linear_color_stop(bottom, 1.),
+    )
+}
+
 fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
     let border = theme.editor.seg_border(gpui::Rgba::from(color));
     Hsla::from(crate::theme::rgba_alpha(
@@ -2853,7 +2865,7 @@ fn render_segment(
         .flex_row()
         .rounded(px(SEGMENT_RADIUS))
         .overflow_hidden()
-        .bg(seg_fill(theme, color, selected))
+        .bg(seg_fill_sheen(theme, color, selected))
         .child(
             div()
                 .absolute()
@@ -2933,12 +2945,27 @@ fn render_segment(
         ));
     }
 
+    let (label_width, label_center) = match &segment.detail {
+        SegmentDetail::Clip { holds, .. } if !holds.is_empty() => {
+            let spans: Vec<(f64, f64)> = holds
+                .iter()
+                .map(|(start, end)| {
+                    (
+                        (start - segment.start) / secs_per_pixel,
+                        (end - segment.start) / secs_per_pixel,
+                    )
+                })
+                .collect();
+            label_box_clear_of(visible_width, center_x, &spans)
+        }
+        _ => (visible_width, center_x),
+    };
     fill = fill.child(render_label(
         theme,
         color,
         segment,
-        visible_width,
-        center_x,
+        label_width,
+        label_center,
         kind,
     ));
 
@@ -3212,7 +3239,7 @@ fn render_fade(
 ) -> impl IntoElement {
     let span = (fraction * width).max(0.);
     let shade_x = if edge_in { 0. } else { width - span };
-    let shade = with_alpha(Hsla::from(theme.editor.card), 0.55);
+    let shade = with_alpha(Hsla::from(theme.editor.window), 0.55);
     let curve = with_alpha(seg_label(theme, color), 0.85);
     let corner = with_alpha(seg_handle(theme, color), 0.8);
 
@@ -3379,7 +3406,7 @@ fn render_hold(
                 .left(px(-x))
                 .w(px(segment_width))
                 .rounded(px(SEGMENT_RADIUS))
-                .bg(with_alpha(Hsla::from(theme.editor.card), 0.6)),
+                .bg(with_alpha(Hsla::from(theme.editor.window), 0.6)),
         )
         .children([0., width - 1.].map(|edge| {
             let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
@@ -3597,6 +3624,46 @@ fn waveform_canvas(
     .w(px(width))
     .h(px(wave_height))
     .into_any_element()
+}
+
+/// The stretch of a segment's visible box its label should sit in when parts
+/// of the box are covered (a clip's paused holds carry their own badge): the
+/// first uncovered run wide enough for a compact label, or the widest one.
+/// Returns the run's width and centre in the segment's own pixels.
+fn label_box_clear_of(visible_width: f64, center_x: f64, covered: &[(f64, f64)]) -> (f64, f64) {
+    let start = center_x - visible_width / 2.;
+    let end = center_x + visible_width / 2.;
+    let mut covered: Vec<(f64, f64)> = covered
+        .iter()
+        .map(|&(a, b)| (a.max(start), b.min(end)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    if covered.is_empty() {
+        return (visible_width, center_x);
+    }
+    covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs = Vec::new();
+    let mut cursor = start;
+    for (a, b) in covered {
+        if a > cursor {
+            runs.push((cursor, a));
+        }
+        cursor = cursor.max(b);
+    }
+    if end > cursor {
+        runs.push((cursor, end));
+    }
+    let pick = runs
+        .iter()
+        .find(|(a, b)| b - a >= SEGMENT_LABEL_COMPACT_PX)
+        .or_else(|| {
+            runs.iter()
+                .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+        });
+    match pick {
+        Some(&(a, b)) => (b - a, (a + b) / 2.),
+        None => (0., center_x),
+    }
 }
 
 /// `SegmentLabel` (`TL/Track.tsx:186-220`): full, compact and glyph tiers,
@@ -4077,14 +4144,14 @@ pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
         color,
         x,
         opacity,
-        Some((12., color, theme.editor.card.into())),
+        Some((12., color, theme.editor.window.into())),
     )
 }
 
 /// The hover preview line (`TL/index.tsx:1255-1277`).
 pub fn render_preview_line(theme: &Theme, x: f32) -> AnyElement {
     let color = with_alpha(Hsla::from(theme.editor.text_3), 0.5);
-    render_line(color, x, 1., Some((10., color, theme.editor.card.into())))
+    render_line(color, x, 1., Some((10., color, theme.editor.window.into())))
 }
 
 fn render_line(color: Hsla, x: f32, opacity: f32, head: Option<(f32, Hsla, Hsla)>) -> AnyElement {
@@ -4126,6 +4193,34 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clip_label_steps_past_a_hold_at_its_start() {
+        let (width, center) = label_box_clear_of(1000., 500., &[(0., 150.)]);
+        assert_eq!(width, 850.);
+        assert_eq!(center, 575.);
+    }
+
+    #[test]
+    fn a_clip_label_takes_the_first_gap_wide_enough() {
+        let (width, center) = label_box_clear_of(1000., 500., &[(0., 150.), (170., 400.)]);
+        assert_eq!(width, 600.);
+        assert_eq!(center, 700.);
+    }
+
+    #[test]
+    fn a_clip_label_without_holds_keeps_the_visible_box() {
+        assert_eq!(label_box_clear_of(320., 160., &[]), (320., 160.));
+        assert_eq!(
+            label_box_clear_of(320., 160., &[(400., 500.)]),
+            (320., 160.)
+        );
+    }
+
+    #[test]
+    fn a_clip_fully_held_shows_no_label() {
+        assert_eq!(label_box_clear_of(200., 100., &[(0., 200.)]).0, 0.);
+    }
 
     const AUDIO_SAMPLE_RATE: usize = 48_000;
 
@@ -6063,11 +6158,11 @@ pub(crate) fn render_preparing_timeline(
                 ),
         );
     }
-    let mut veil = theme.editor.card;
+    let mut veil = theme.editor.window;
     veil.a = 0.88;
-    let mut edge = theme.editor.card;
+    let mut edge = theme.editor.window;
     edge.a = 0.35;
-    let mut clear = theme.editor.card;
+    let mut clear = theme.editor.window;
     clear.a = 0.0;
     div()
         .size_full()
