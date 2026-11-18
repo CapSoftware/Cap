@@ -31,6 +31,8 @@ import {
 	getMediaProcessingRejection,
 	isNonMediaRawUploadKey,
 	nonMediaUploadMessage,
+	toCompletedUploadContentType,
+	toStoredUploadContentType,
 } from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
@@ -136,7 +138,7 @@ app.post(
 				});
 				const outputKey = createDesktopReuploadKey(video);
 				const result = yield* bucket.multipart.create(outputKey, {
-					ContentType: contentType || "video/mp4",
+					ContentType: toStoredUploadContentType(contentType || "video/mp4"),
 					CacheControl: "public, max-age=31536000, immutable",
 					Metadata: { userId: user.id, source: "cap-desktop-reupload" },
 				});
@@ -239,7 +241,9 @@ app.post(
 					const [video] = maybeVideo.value;
 					const [bucket] = yield* Storage.getAccessForVideo(video);
 
-					const finalContentType = contentType || "video/mp4";
+					const finalContentType = toStoredUploadContentType(
+						contentType || "video/mp4",
+					);
 					console.log(
 						`Creating multipart upload in bucket: ${bucket.bucketName}, content-type: ${finalContentType}, key: ${fileKey}`,
 					);
@@ -797,6 +801,7 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
+					let storedContentType: string | undefined;
 					yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((head) =>
 							isRawRecorderUpload(subpath) &&
@@ -818,11 +823,12 @@ app.post(
 									)
 								: Effect.void,
 						),
-						Effect.tap((headResult) =>
-							Effect.log(
+						Effect.tap((headResult) => {
+							storedContentType = headResult.ContentType;
+							return Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
-							),
-						),
+							);
+						}),
 						Effect.retry({
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
@@ -894,7 +900,10 @@ app.post(
 
 						yield* bucket
 							.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
-								ContentType: "video/mp4",
+								ContentType: toCompletedUploadContentType(
+									fileKey,
+									storedContentType,
+								),
 								MetadataDirective: "REPLACE",
 								...(result.ETag ? { CopySourceIfMatch: result.ETag } : {}),
 							})

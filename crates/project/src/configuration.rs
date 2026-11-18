@@ -2722,6 +2722,19 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    /// The recording clip this caption belongs to, set only when its times
+    /// cannot say: a caption in a clip's held tail (an edited late-audio clip
+    /// trimmed past its media end, see `migrate_late_audio_alignment`) sits
+    /// where the shared source clock starts the next clip, and a part of a
+    /// caption that migration cut where two clips meet may round across the
+    /// boundary. Such a caption is shown only through this clip's timeline
+    /// segments.
+    #[serde(
+        rename = "recordingSegment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recording_clip: Option<u32>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -3125,6 +3138,15 @@ pub struct ProjectConfiguration {
     /// grade.
     #[serde(default)]
     pub color_correction: ColorCorrectionConfiguration,
+    /// How clip audio offsets, markers and caption words of a segment with a
+    /// late audio track are timed. 0 (legacy): against the late audio start,
+    /// which also set where the segment's video began. 1: against the screen
+    /// and camera start (`MultipleSegment::latest_start_time`); legacy configs
+    /// are migrated by `migrate_late_audio_alignment` when the recording is
+    /// opened. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub clip_alignment_version: u32,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -3149,6 +3171,7 @@ pub struct ProjectConfiguration {
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
+pub const CLIP_ALIGNMENT_VERSION: u32 = 1;
 
 /// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
 /// that skips every value instead of building a JSON tree of a file that can
@@ -3195,6 +3218,7 @@ impl Default for ProjectConfiguration {
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
             color_correction: Default::default(),
+            clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             markers: Vec::new(),
@@ -3309,6 +3333,7 @@ impl ProjectConfiguration {
             (None, None) => None,
         };
         preset.timeline = self.timeline.clone();
+        preset.clip_alignment_version = self.clip_alignment_version;
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
