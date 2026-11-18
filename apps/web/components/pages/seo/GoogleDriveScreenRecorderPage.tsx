@@ -1,10 +1,8 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
-import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import clsx from "clsx";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
@@ -19,14 +17,10 @@ import {
 	Zap,
 } from "lucide-react";
 import Image from "next/image";
-import { type JSX, useState } from "react";
+import { useState } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { GoogleDriveLogo } from "@/components/icons/GoogleDriveLogo";
-import { PRICING } from "@/data/pricing";
 import { googleDriveScreenRecorderFaqs } from "./google-drive-screen-recorder-faqs";
-
-type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
-type ComparisonCell = { text: string; status?: ComparisonStatus };
 
 const features = [
 	{
@@ -88,66 +82,6 @@ const flow = [
 	},
 ];
 
-const comparisonTable: {
-	headers: string[];
-	rows: (string | ComparisonCell)[][];
-} = {
-	headers: ["Feature", "Cap + Google Drive", "Loom", "Vidyard"],
-	rows: [
-		[
-			"Store recordings in your own Google Drive",
-			{ text: "Yes, native integration", status: "positive" },
-			{ text: "Not available", status: "negative" },
-			{ text: "Not available", status: "negative" },
-		],
-		[
-			"You own the video files",
-			{ text: "Yes, in your account", status: "positive" },
-			{ text: "Stored on Loom", status: "negative" },
-			{ text: "Stored on Vidyard", status: "negative" },
-		],
-		[
-			"Connect with one Google sign-in",
-			{ text: "Yes", status: "positive" },
-			{ text: "Not applicable", status: "neutral" },
-			{ text: "Not applicable", status: "neutral" },
-		],
-		[
-			"Organization-wide storage",
-			{ text: "Connect once for the team", status: "positive" },
-			{ text: "Platform managed", status: "neutral" },
-			{ text: "Platform managed", status: "neutral" },
-		],
-		[
-			"Also supports your own S3 bucket",
-			{ text: "Yes", status: "positive" },
-			{ text: "No", status: "negative" },
-			{ text: "No", status: "negative" },
-		],
-		[
-			"Instant shareable links",
-			{ text: "Yes", status: "positive" },
-			{ text: "Yes", status: "positive" },
-			{ text: "Yes", status: "positive" },
-		],
-		[
-			"Open source",
-			{ text: "Yes, AGPLv3 and MIT crates", status: "positive" },
-			{ text: "No", status: "negative" },
-			{ text: "No", status: "negative" },
-		],
-		[
-			"Pricing",
-			{
-				text: `from $${PRICING.pro.annualPerMonth}/mo per user`,
-				status: "positive",
-			},
-			{ text: "$18/mo per user", status: "warning" },
-			{ text: "Quote based", status: "warning" },
-		],
-	],
-};
-
 const steps = [
 	{
 		title: "Upgrade to Cap Pro",
@@ -178,41 +112,6 @@ const fadeUp: Variants = {
 		y: 0,
 		transition: { delay: custom * 0.08, duration: 0.5, ease: "easeOut" },
 	}),
-};
-
-const statusIcons: Record<ComparisonStatus, JSX.Element> = {
-	positive: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-blue-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faCheck} className="text-[11px] text-white" />
-		</div>
-	),
-	negative: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-red-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faTimes} className="text-[11px] text-white" />
-		</div>
-	),
-	warning: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-yellow-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faMinus} className="text-[11px] text-white" />
-		</div>
-	),
-	neutral: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-gray-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faMinus} className="text-[11px] text-white" />
-		</div>
-	),
-};
-
-const renderComparisonCell = (cell: string | ComparisonCell) => {
-	if (typeof cell === "string") {
-		return <span className="font-medium text-gray-12">{cell}</span>;
-	}
-	return (
-		<div className="flex gap-3 items-center">
-			{cell.status && statusIcons[cell.status]}
-			<span>{cell.text}</span>
-		</div>
-	);
 };
 
 const ConnectionDemo = () => (
@@ -388,8 +287,9 @@ export const GoogleDriveScreenRecorderPage = () => {
 						Your recordings, in the Drive you already own
 					</h2>
 					<p className="text-xl leading-relaxed text-gray-10">
-						Cap brings the instant sharing you expect from Loom, while every new
-						recording stays in your own Google Drive.
+						Cap gives you an instant share link, and once Drive is connected,
+						every new shareable link uploads to a private Cap folder in your own
+						Google Drive.
 					</p>
 				</div>
 				<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -468,52 +368,6 @@ export const GoogleDriveScreenRecorderPage = () => {
 					</a>
 					.
 				</p>
-			</div>
-
-			<div className="px-5 mx-auto mt-32 max-w-4xl md:mt-44">
-				<div className="mx-auto mb-12 text-center max-w-[800px]">
-					<h2 className="text-3xl font-medium md:text-4xl text-gray-12">
-						Cap with Google Drive vs other recorders
-					</h2>
-				</div>
-				<div className="overflow-x-auto">
-					<table className="overflow-hidden mx-auto w-full rounded-2xl bg-gray-1">
-						<thead className="bg-gray-4">
-							<tr>
-								{comparisonTable.headers.map((header) => (
-									<th
-										key={header}
-										className="px-6 py-4 text-lg font-semibold text-left border-b border-gray-5 text-gray-12"
-									>
-										{header}
-									</th>
-								))}
-							</tr>
-						</thead>
-						<tbody>
-							{comparisonTable.rows.map((row, rowIndex) => (
-								<tr
-									key={row[0] as string}
-									className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-2"}
-								>
-									{row.map((cell, cellIndex) => (
-										<td
-											key={cellIndex.toString()}
-											className={clsx(
-												"px-6 py-4 text-[15px] text-gray-10",
-												rowIndex === comparisonTable.rows.length - 1
-													? ""
-													: "border-b border-gray-5",
-											)}
-										>
-											{renderComparisonCell(cell)}
-										</td>
-									))}
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
 			</div>
 
 			<div className="px-5 mx-auto mt-32 max-w-3xl md:mt-44">

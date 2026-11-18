@@ -113,6 +113,7 @@ async fn main() -> Result<()> {
 
             vec![RenderSegment {
                 cursor: Arc::new(Default::default()),
+                hover_changes: Arc::default(),
                 keyboard: Arc::new(Default::default()),
                 decoders,
                 render_display: true,
@@ -141,6 +142,7 @@ async fn main() -> Result<()> {
 
                 segments.push(RenderSegment {
                     cursor,
+                    hover_changes: Arc::default(),
                     keyboard,
                     decoders,
                     render_display: true,
