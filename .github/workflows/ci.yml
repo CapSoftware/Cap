@@ -95,6 +95,9 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
+      - name: Lint tests
+        run: bun run lint:tests
+
       - run: bun run --cwd apps/web next typegen
 
       - name: Check MCP card bundle
