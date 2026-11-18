@@ -35,6 +35,8 @@ const FORMATTED: &[&str] = &[
     "settings.sidebar.restart_to_update",
     "settings.shortcuts.saved",
     "settings.shortcuts.saved_moved",
+    "settings.shortcuts.conflict",
+    "settings.shortcuts.shared",
     "settings.cli.load_failed",
     "settings.cli.installs_command",
     "settings.cli.path_missing",
@@ -527,9 +529,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Another app or the system already uses this shortcut. Click to choose a different one.",
         ),
         (tr::settings::shortcuts::type_shortcut(), "Type shortcut…"),
+        (tr::settings::shortcuts::not_set(), "Not set"),
+        (tr::settings::shortcuts::replace(), "Replace"),
         (
-            tr::settings::shortcuts::record_shortcut(),
-            "Record shortcut",
+            tr::settings::shortcuts::label::start_selected(),
+            "Start in selected mode",
         ),
         (tr::settings::cli::title(), "Command Line"),
         (
@@ -1544,6 +1548,14 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::settings::shortcuts::saved_moved(&keys, effect, from),
         moved
+    );
+    assert_eq!(
+        tr::settings::shortcuts::conflict(from),
+        format!("Already used by {from}.")
+    );
+    assert_eq!(
+        tr::settings::shortcuts::shared(from),
+        format!("Same keys as {from}, so both run.")
     );
 
     let error = "permission denied".to_string();
