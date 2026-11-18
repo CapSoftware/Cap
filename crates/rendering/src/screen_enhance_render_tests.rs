@@ -345,11 +345,7 @@ async fn render_enhancement_fixtures() {
         let fixture = fixture(XY::new(image.width(), image.height())).await;
         for (label, enhancement, quality) in [
             ("main", ScreenEnhancement::default(), RenderQuality::Export),
-            (
-                "enhanced",
-                ScreenEnhancement::on(),
-                RenderQuality::Export,
-            ),
+            ("enhanced", ScreenEnhancement::on(), RenderQuality::Export),
         ] {
             let started = Instant::now();
             let frame = render(
