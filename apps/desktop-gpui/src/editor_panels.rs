@@ -4452,6 +4452,29 @@ impl EditorWindow {
                         .children(manual.then(|| self.render_pad(PadKey::ZoomManual(index), cx))),
                 ),
             )
+            .child(self.zoom_start_early_field(cx))
+            .into_any_element()
+    }
+
+    fn zoom_start_early_field(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let enabled = self.project.screen_movement_spring.start_zooms_early;
+        ui::Field::inline(&theme, tr::editor::panel::zoom::start_early())
+            .value(
+                ui::Toggle::plain(&theme, "zoom-start-early", enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_project_without_timeline(
+                            "zoom-start-early",
+                            window,
+                            cx,
+                            move |project| {
+                                project.screen_movement_spring.start_zooms_early = !enabled;
+                                true
+                            },
+                        );
+                    }))
+                    .into_any_element(),
+            )
             .into_any_element()
     }
 
@@ -4576,6 +4599,7 @@ impl EditorWindow {
                         field
                     }),
             )
+            .child(self.zoom_start_early_field(cx))
             // The per-segment preview grid (`:6046-6068`) is a decoded frame per
             // card; see the README's zoom-preview deviation. The remove-from-
             // selection affordance it carries is reproduced as a plain row.
