@@ -68,6 +68,7 @@ fn clamp_caption_segment_words(segment: &CaptionSegment) -> CaptionSegment {
 }
 
 struct SourceToEditedMapping {
+    clip: usize,
     source_start: f64,
     source_end: f64,
     edited_start: f64,
@@ -105,12 +106,14 @@ fn build_source_to_edited_mappings(
         .segments
         .iter()
         .zip(edited_offsets)
-        .map(|(segment, edited_start)| {
+        .enumerate()
+        .map(|(clip, (segment, edited_start))| {
             let recording_offset = recording_offsets
                 .get(segment.recording_clip as usize)
                 .copied()
                 .unwrap_or(0.0);
             SourceToEditedMapping {
+                clip,
                 source_start: recording_offset + segment.start,
                 source_end: recording_offset + segment.end,
                 edited_start,
@@ -245,6 +248,8 @@ struct MappedCaption {
     end: f64,
     text: String,
     words: Vec<CaptionWord>,
+    source_words: Vec<usize>,
+    clip: Option<usize>,
 }
 
 fn map_captions_to_edited_timeline(
@@ -261,6 +266,8 @@ fn map_captions_to_edited_timeline(
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
                 text: segment.text,
+                source_words: (0..segment.words.len()).collect(),
+                clip: None,
                 words: segment.words,
             })
             .collect();
@@ -353,7 +360,8 @@ fn map_captions_to_edited_timeline(
                 }
 
                 let mut mapped_words = Vec::new();
-                for word in &caption.words {
+                let mut source_words = Vec::new();
+                for (index, word) in caption.words.iter().enumerate() {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
                         f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
@@ -367,6 +375,7 @@ fn map_captions_to_edited_timeline(
                         start: start as f32,
                         end: end as f32,
                     });
+                    source_words.push(index);
                 }
 
                 if mapped_words.is_empty() {
@@ -385,6 +394,8 @@ fn map_captions_to_edited_timeline(
                     end,
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
+                    source_words,
+                    clip: Some(mapping.clip),
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -401,6 +412,8 @@ fn map_captions_to_edited_timeline(
                     end,
                     text: caption.text.clone(),
                     words: Vec::new(),
+                    source_words: Vec::new(),
+                    clip: Some(mapping.clip),
                 });
             }
         }
@@ -413,6 +426,34 @@ fn map_captions_to_edited_timeline(
     }
 
     result
+}
+
+/// One track piece of a source caption: its output-time span, the indices
+/// of the caption words it shows and the timeline clip showing them (none
+/// without a timeline). A word straddling a cut belongs to the pieces on both
+/// sides.
+pub struct CaptionPiece {
+    pub start: f64,
+    pub end: f64,
+    pub source_words: Vec<usize>,
+    pub clip: Option<usize>,
+}
+
+pub fn caption_piece(
+    caption: &CaptionSegment,
+    piece_id: &str,
+    timeline: &TimelineConfiguration,
+    recording_durations: &[f64],
+) -> Option<CaptionPiece> {
+    map_captions_to_edited_timeline(std::slice::from_ref(caption), timeline, recording_durations)
+        .into_iter()
+        .find(|piece| piece.id == piece_id)
+        .map(|piece| CaptionPiece {
+            start: piece.start,
+            end: piece.end,
+            source_words: piece.source_words,
+            clip: piece.clip,
+        })
 }
 
 pub fn derive_caption_track_segments(
@@ -823,6 +864,47 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("second-clip", 6.0, 6.5)]
         );
+    }
+
+    #[test]
+    fn caption_pieces_report_the_source_words_they_show() {
+        let timeline = project(true, 0.0, 0.5).timeline.unwrap();
+        let caption = |words: &[(&str, f32, f32)]| CaptionSegment {
+            id: "spoken".into(),
+            start: 0.0,
+            end: 0.0,
+            text: String::new(),
+            words: words
+                .iter()
+                .map(|(text, start, end)| CaptionWord {
+                    text: (*text).into(),
+                    start: *start,
+                    end: *end,
+                })
+                .collect(),
+        };
+        let pieces = |caption: &CaptionSegment| {
+            ["spoken::edl0", "spoken::edl1", "spoken"].map(|id| {
+                caption_piece(caption, id, &timeline, &[10.0]).map(|piece| piece.source_words)
+            })
+        };
+
+        let across_cut = caption(&[
+            ("before", 1.0, 2.0),
+            ("across", 4.5, 6.5),
+            ("after", 8.0, 9.0),
+        ]);
+        assert_eq!(
+            pieces(&across_cut),
+            [Some(vec![0, 1]), Some(vec![1, 2]), None]
+        );
+
+        let unsorted = caption(&[
+            ("late-first", 4.0, 4.5),
+            ("second-clip", 7.0, 7.5),
+            ("early-last", 1.0, 1.5),
+        ]);
+        assert_eq!(pieces(&unsorted), [Some(vec![0, 2]), Some(vec![1]), None]);
     }
 
     #[test]

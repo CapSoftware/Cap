@@ -71,6 +71,8 @@ fn assert_projection(
         assert_eq!(actual.text, expected.text);
         assert_eq!(actual.start.to_bits(), expected.start.to_bits());
         assert_eq!(actual.end.to_bits(), expected.end.to_bits());
+        assert_eq!(actual.source_words, expected.source_words);
+        assert_eq!(actual.clip, expected.clip);
         assert_eq!(actual.words.len(), expected.words.len());
         for (actual, expected) in actual.words.iter().zip(expected.words) {
             assert_eq!(actual.text, expected.text);
@@ -231,6 +233,8 @@ fn baseline_projection(
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
                 text: segment.text,
+                source_words: (0..segment.words.len()).collect(),
+                clip: None,
                 words: segment.words,
             })
             .collect();
@@ -299,7 +303,8 @@ fn baseline_projection(
                 }
 
                 let mut mapped_words = Vec::new();
-                for word in &caption.words {
+                let mut source_words = Vec::new();
+                for (index, word) in caption.words.iter().enumerate() {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
                         f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
@@ -313,6 +318,7 @@ fn baseline_projection(
                         start: start as f32,
                         end: end as f32,
                     });
+                    source_words.push(index);
                 }
 
                 if mapped_words.is_empty() {
@@ -331,6 +337,8 @@ fn baseline_projection(
                     end,
                     text: caption_text_from_words(&mapped_words),
                     words: mapped_words,
+                    source_words,
+                    clip: Some(mapping.clip),
                 });
             } else {
                 let Some((start, end)) = map_time_range_within_mapping(
@@ -347,6 +355,8 @@ fn baseline_projection(
                     end,
                     text: caption.text.clone(),
                     words: Vec::new(),
+                    source_words: Vec::new(),
+                    clip: Some(mapping.clip),
                 });
             }
         }

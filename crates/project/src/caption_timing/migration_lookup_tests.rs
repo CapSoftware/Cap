@@ -85,6 +85,7 @@ fn indexed_lookup_matches_reverse_scan_at_shared_edges_and_gaps() {
         .into_iter()
         .enumerate()
         .map(|(index, (start, end))| SourceToEditedMapping {
+            clip: index,
             source_start: index as f64 * 10.0,
             source_end: index as f64 * 10.0 + end - start,
             edited_start: start,
