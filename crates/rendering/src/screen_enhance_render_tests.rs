@@ -171,7 +171,7 @@ async fn playback_never_enhances() {
     let fixture = fixture(XY::new(96, 64)).await;
     let pixels = edge_pattern(96, 64);
     let off = project(ScreenEnhancement::default());
-    let on = project(ScreenEnhancement::for_new_projects());
+    let on = project(ScreenEnhancement::on());
     for scale in [1.0, 2.0] {
         let plain = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
         let playing = render(&fixture, &on, &pixels, scale, RenderQuality::Playback).await;
@@ -185,7 +185,7 @@ async fn software_adapters_export_without_enhancement() {
     fixture.constants.is_software_adapter = true;
     let pixels = edge_pattern(96, 64);
     let off = project(ScreenEnhancement::default());
-    let on = project(ScreenEnhancement::for_new_projects());
+    let on = project(ScreenEnhancement::on());
     for scale in [1.0, 2.0] {
         let plain = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
         let enhanced = render(&fixture, &on, &pixels, scale, RenderQuality::Export).await;
@@ -197,7 +197,7 @@ async fn software_adapters_export_without_enhancement() {
 async fn paused_preview_matches_export() {
     let fixture = fixture(XY::new(96, 64)).await;
     let pixels = edge_pattern(96, 64);
-    let on = project(ScreenEnhancement::for_new_projects());
+    let on = project(ScreenEnhancement::on());
     let paused = render(&fixture, &on, &pixels, 2.0, RenderQuality::PausedPreview).await;
     let export = render(&fixture, &on, &pixels, 2.0, RenderQuality::Export).await;
     assert_eq!(rgba(&paused), rgba(&export));
@@ -217,7 +217,7 @@ async fn export_upscale_sharpens_edges_without_ringing() {
     .await;
     let enhanced = render(
         &fixture,
-        &project(ScreenEnhancement::for_new_projects()),
+        &project(ScreenEnhancement::on()),
         &pixels,
         2.0,
         RenderQuality::Export,
@@ -267,7 +267,7 @@ async fn export_deband_smooths_steps_and_keeps_edges() {
     .await;
     let enhanced = render(
         &fixture,
-        &project(ScreenEnhancement::for_new_projects()),
+        &project(ScreenEnhancement::on()),
         &pixels,
         1.0,
         RenderQuality::Export,
@@ -347,7 +347,7 @@ async fn render_enhancement_fixtures() {
             ("main", ScreenEnhancement::default(), RenderQuality::Export),
             (
                 "enhanced",
-                ScreenEnhancement::for_new_projects(),
+                ScreenEnhancement::on(),
                 RenderQuality::Export,
             ),
         ] {
@@ -388,7 +388,7 @@ async fn bench_enhancement_frame_time() {
     for scale in [1.0f32, 2.0] {
         for (label, enhancement) in [
             ("off", ScreenEnhancement::default()),
-            ("on", ScreenEnhancement::for_new_projects()),
+            ("on", ScreenEnhancement::on()),
         ] {
             let project = project(enhancement);
             let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 10.0, screen);

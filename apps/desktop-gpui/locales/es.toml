@@ -2345,10 +2345,6 @@ importing = "Importando..."
 prompt = "Usa el fondo de tu escritorio"
 reimport = "Volver a importar"
 
-[editor.sidebar.enhance]
-strength = "Intensidad"
-title = "Mejorar la calidad"
-
 [editor.sidebar.gradient]
 angle = "Ángulo"
 from = "Desde"
@@ -2520,6 +2516,10 @@ open_link = "Abrir enlace"
 retry_copy = "Reintentar copia"
 reuploaded = "Tu última edición está lista en el mismo enlace"
 uploaded = "Tu Cap se subió correctamente"
+
+[editor.export.enhance]
+description = "Mejora la nitidez del contenido ampliado y de bajo contraste. Las exportaciones pueden tardar más."
+title = "Mejorar calidad"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -3256,7 +3256,11 @@ wipe_down = "Barrido hacia abajo"
 zoom = "Zoom"
 
 [editor.window.transport]
+compare = "Comparar"
+compare_tooltip = "Mantén pulsado para ver el original"
 done_splitting = "Terminar de dividir"
+enhance = "Mejorar"
+enhance_tooltip = "Mostrar mejorado el fotograma en pausa"
 play_pause = "Reproducir/pausar vídeo"
 speed = "Velocidad de la vista previa"
 split = "Dividir"

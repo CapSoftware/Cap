@@ -662,8 +662,6 @@ fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         return;
     }
 
-    write_new_import_project_config(&project_path);
-
     // Written before Complete rather than fire-and-forget as the Tauri spawn
     // does, so the refresh that Complete triggers already finds the file.
     let thumbnail = crate::library::bundle_thumbnail_path(&project_path);
@@ -785,16 +783,6 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
 
     sink.send(ImportStage::Complete, 1.0, tr::import::progress::complete());
     tracing::info!(path = %project_path.display(), "image import complete");
-}
-
-/// A new import starts from the settings every new project gets.
-fn write_new_import_project_config(project_path: &std::path::Path) {
-    if project_path.join("project-config.json").exists() {
-        return;
-    }
-    if let Err(error) = ProjectConfiguration::for_new_project().write(project_path) {
-        tracing::warn!(path = %project_path.display(), "could not write the imported project config: {error}");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3382,11 +3370,7 @@ mod tests {
         );
         assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
 
-        let chroma_samples = if format == avformat::Pixel::NV12 {
-            2
-        } else {
-            1
-        };
+        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
         let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
         for (plane, channel, channels, source_width, source_height) in [
             (0, 0, 1, 8, 6),

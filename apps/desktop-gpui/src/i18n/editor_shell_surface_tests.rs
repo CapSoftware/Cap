@@ -261,6 +261,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens zoomed-in and low-contrast screen content. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -1298,6 +1303,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
+        ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
         ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),

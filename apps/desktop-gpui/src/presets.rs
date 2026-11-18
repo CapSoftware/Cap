@@ -130,8 +130,8 @@ impl PresetsStore {
 
 /// The built-in "Default" preset: what a fresh screen recording looks like
 /// with no user preset -- `ProjectConfiguration::for_new_project()` with the
-/// background revealed: 10% even padding, the new-project rounding, the
-/// new-project zoom spring and screen enhancement.
+/// background revealed: 10% even padding, the new-project rounding and the
+/// new-project zoom spring.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
     let mut config = ProjectConfiguration::for_new_project();
     if config.background.padding <= f64::EPSILON {

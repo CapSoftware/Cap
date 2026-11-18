@@ -2345,10 +2345,6 @@ importing = "正在导入..."
 prompt = "使用桌面上的壁纸"
 reimport = "重新导入"
 
-[editor.sidebar.enhance]
-strength = "强度"
-title = "增强画质"
-
 [editor.sidebar.gradient]
 angle = "角度"
 from = "起始"
@@ -2520,6 +2516,10 @@ open_link = "打开链接"
 retry_copy = "重新复制"
 reuploaded = "你最新的编辑已在同一链接上就绪"
 uploaded = "你的录制已成功上传"
+
+[editor.export.enhance]
+description = "让放大和低对比度的屏幕内容更清晰。导出可能需要更长时间。"
+title = "提升画质"
 
 [editor.export.estimate]
 gigabytes = "约 {value} GB"
@@ -3256,7 +3256,11 @@ wipe_down = "向下擦除"
 zoom = "缩放"
 
 [editor.window.transport]
+compare = "对比"
+compare_tooltip = "按住查看原始画面"
 done_splitting = "完成拆分"
+enhance = "增强"
+enhance_tooltip = "以增强效果显示暂停的画面"
 play_pause = "播放/暂停视频"
 speed = "预览播放速度"
 split = "拆分"

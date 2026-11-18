@@ -4910,7 +4910,6 @@ mod tests {
             BgSlider::GradientAngle,
             BgSlider::GradientNoise,
             BgSlider::GradientGrain,
-            BgSlider::EnhanceStrength,
         ] {
             assert!(
                 !slider.changes_timeline_model(),

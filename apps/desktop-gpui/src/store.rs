@@ -160,6 +160,8 @@ pub struct ExportPrefs {
     pub resolution_from_source: bool,
     #[serde(default)]
     pub fps_from_source: bool,
+    #[serde(default)]
+    pub enhance_quality: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -1078,6 +1080,9 @@ pub struct GeneralSettings {
     /// How fast the editor preview plays. Preview only: export and the
     /// project never see it. Anything but one of the offered steps reads as 1x.
     pub editor_preview_speed: cap_editor::PreviewSpeed,
+    /// Whether the editor's paused preview shows the enhanced frame. Preview
+    /// only: exports use the export page's own option.
+    pub editor_preview_enhance: bool,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1095,6 +1100,7 @@ pub struct GeneralSettings {
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
 pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
@@ -1538,6 +1544,7 @@ impl GeneralSettings {
                 .and_then(Value::as_f64)
                 .and_then(cap_editor::PreviewSpeed::from_f64)
                 .unwrap_or_default(),
+            editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(

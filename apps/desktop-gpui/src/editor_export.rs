@@ -358,6 +358,15 @@ pub struct PreviewStats {
     pub estimated_size_mb: f64,
 }
 
+/// What a render gets for the export page's "Enhance quality" option.
+fn screen_enhancement(enhance: bool) -> cap_project::ScreenEnhancement {
+    if enhance {
+        cap_project::ScreenEnhancement::on()
+    } else {
+        cap_project::ScreenEnhancement::default()
+    }
+}
+
 pub struct ExportUi {
     pub destination: ExportDestination,
     pub format: ExportFormatKind,
@@ -366,6 +375,7 @@ pub struct ExportUi {
     pub compression: ExportCompression,
     pub gif_quality: GifQualityPreset,
     pub optimize_filesize: bool,
+    pub enhance_quality: bool,
     pub turbo: bool,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
@@ -459,6 +469,7 @@ impl ExportUi {
             excluded_tracks: None,
             resolution_from_source: true,
             fps_from_source: true,
+            enhance_quality: false,
         });
         Self::from_preferences(prefs)
     }
@@ -477,6 +488,7 @@ impl ExportUi {
             },
             gif_quality: GifQualityPreset::from_slug(prefs.gif_quality.as_deref()),
             optimize_filesize: prefs.optimize_filesize,
+            enhance_quality: prefs.enhance_quality,
             turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
             custom_bpp: prefs.custom_bpp,
@@ -594,6 +606,7 @@ impl ExportUi {
             resolution: self.resolution.label().to_string(),
             compression: format!("{:?}", self.compression),
             optimize_filesize: self.optimize_filesize,
+            enhance_quality: self.enhance_quality,
             cursor_only: self.cursor_only,
             custom_bpp: self.custom_bpp,
             force_ffmpeg_decoder: self.force_ffmpeg,
@@ -1007,6 +1020,8 @@ impl EditorWindow {
         let estimate_turbo = ui.turbo;
         let estimate_instance = instance.clone();
         let estimate_project = project.clone();
+        let mut project = project;
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
@@ -1185,7 +1200,8 @@ impl EditorWindow {
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = if destination == ExportDestination::File {
@@ -1668,7 +1684,8 @@ impl EditorWindow {
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         let organization_id = ui.organization_id.clone().or_else(|| {
             store::auth_snapshot()
                 .organizations
@@ -3098,6 +3115,7 @@ impl EditorWindow {
                     .child(tr::editor::export::quality::larger()),
             )
             .child(self.export_optimize_row(ui, cx))
+            .child(self.export_enhance_row(ui, cx))
             .when(turbo_available(), |this| {
                 this.child(self.export_turbo_row(ui, cx))
             })
@@ -3143,6 +3161,24 @@ impl EditorWindow {
                     .child(tr::editor::export::quality::smaller())
                     .child(tr::editor::export::quality::larger()),
             )
+            .child(self.export_enhance_row(ui, cx))
+    }
+
+    fn export_enhance_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        self.export_toggle_row(
+            "export-enhance",
+            tr::editor::export::enhance::title(),
+            tr::editor::export::enhance::description(),
+            ui.enhance_quality,
+            cx.listener(|this, _, window, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.enhance_quality = !ui.enhance_quality;
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            }),
+        )
     }
 
     fn export_toggle_row(
@@ -4315,6 +4351,7 @@ mod tests {
             excluded_tracks: None,
             resolution_from_source: false,
             fps_from_source: false,
+            enhance_quality: false,
         }
     }
 

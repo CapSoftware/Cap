@@ -831,7 +831,7 @@ impl PreparingProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_project::{MultipleSegments, RecordingMeta, RecordingMetaInner, ScreenEnhancement};
+    use cap_project::{MultipleSegments, RecordingMeta, RecordingMetaInner};
     use relative_path::RelativePathBuf;
 
     struct Fixture {
@@ -1232,33 +1232,6 @@ mod tests {
             let before = fixture.snapshot();
             assert!(project(&fixture.recording, &claim).is_err());
             assert_eq!(before, fixture.snapshot());
-        }
-    }
-
-    #[test]
-    fn preparing_projection_accepts_the_new_recording_enhancement_but_not_edits() {
-        let mut fixture = Fixture::new(1);
-        fixture.configuration = ProjectConfiguration {
-            timeline: fixture.configuration.timeline.clone(),
-            ..ProjectConfiguration::for_new_project()
-        };
-        assert_eq!(
-            fixture.configuration.screen_enhancement,
-            ScreenEnhancement::for_new_projects()
-        );
-        fixture.persist();
-        assert!(fixture.project().is_ok());
-
-        for edited in [
-            ScreenEnhancement {
-                strength: 0.75,
-                ..ScreenEnhancement::for_new_projects()
-            },
-            ScreenEnhancement::default(),
-        ] {
-            fixture.configuration.screen_enhancement = edited;
-            fixture.persist();
-            assert!(fixture.project().is_err());
         }
     }
 

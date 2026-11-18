@@ -1061,10 +1061,8 @@ impl Default for ScreenMovementSpring {
 }
 
 /// Export and paused-preview enhancement of the screen recording: debanding
-/// and an edge-aware upscale of magnified content. The serde default is off so
-/// projects saved before this setting existed render exactly as they did.
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
+/// and an edge-aware upscale of magnified content.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenEnhancement {
     pub enabled: bool,
     pub strength: f32,
@@ -1073,15 +1071,12 @@ pub struct ScreenEnhancement {
 impl ScreenEnhancement {
     pub const DEFAULT_STRENGTH: f32 = 0.5;
 
-    pub const fn for_new_projects() -> Self {
+    /// What the export page's option and the editor's preview toggle turn on.
+    pub const fn on() -> Self {
         Self {
             enabled: true,
             strength: Self::DEFAULT_STRENGTH,
         }
-    }
-
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
     }
 
     pub fn effective_strength(&self) -> f32 {
@@ -3175,7 +3170,9 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
-    #[serde(default, skip_serializing_if = "ScreenEnhancement::is_default")]
+    /// Set for one render by the export page's option or the editor's preview
+    /// toggle; never read from or written to a project file.
+    #[serde(skip)]
     pub screen_enhancement: ScreenEnhancement,
     /// Per-layer cinematic color grades. Field-level default keeps old
     /// project files (and old saved presets) deserializing to the identity
@@ -3339,16 +3336,13 @@ pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
-    /// is what an older project missing a field reads as) only in framing,
-    /// motion and enhancement: even padding, a lighter and softer card shadow,
-    /// the new-project zoom spring and screen enhancement on. At zero padding
-    /// both padding modes lay out identically and the card fills the frame, so
-    /// neither shows until the card has room around it.
+    /// is what an older project missing a field reads as) only in framing
+    /// and motion: even padding, a lighter and softer card shadow, and the
+    /// new-project zoom spring. At zero padding both padding modes lay out
+    /// identically and the card fills the frame, so neither shows until the
+    /// card has room around it.
     pub fn for_new_project() -> Self {
-        let mut config = Self {
-            screen_enhancement: ScreenEnhancement::for_new_projects(),
-            ..Self::default()
-        };
+        let mut config = Self::default();
         config.background.padding_mode = PaddingMode::Even;
         config.background.shadow = 50.0;
         config.background.advanced_shadow = Some(ShadowConfiguration {
@@ -3912,21 +3906,37 @@ mod tests {
     }
 
     #[test]
-    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_motion_and_enhancement() {
+    fn screen_enhancement_is_never_saved_or_loaded_with_the_project() {
+        let config = ProjectConfiguration {
+            screen_enhancement: ScreenEnhancement::on(),
+            ..ProjectConfiguration::default()
+        };
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written.get("screenEnhancement").is_none());
+        assert_eq!(
+            written,
+            serde_json::to_value(ProjectConfiguration::default()).unwrap()
+        );
+
+        let mut saved = written;
+        saved["screenEnhancement"] = serde_json::json!({"enabled": true, "strength": 1.0});
+        let loaded: ProjectConfiguration = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.screen_enhancement, ScreenEnhancement::default());
+        assert!(
+            !ProjectConfiguration::for_new_project()
+                .screen_enhancement
+                .enabled
+        );
+    }
+
+    #[test]
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
         assert_eq!(fresh.background.padding, 0.0);
         assert_eq!(fresh.background.rounding, 0.0);
-        assert_eq!(
-            fresh.screen_enhancement,
-            ScreenEnhancement::for_new_projects()
-        );
 
         let mut framing_reset = serde_json::to_value(&fresh).unwrap();
-        framing_reset
-            .as_object_mut()
-            .unwrap()
-            .remove("screenEnhancement");
         let default = serde_json::to_value(ProjectConfiguration::default()).unwrap();
         for key in ["paddingMode", "shadow", "advancedShadow"] {
             framing_reset["background"][key] = default["background"][key].clone();
