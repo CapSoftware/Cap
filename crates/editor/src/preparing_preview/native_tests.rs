@@ -370,7 +370,12 @@ async fn ordinary_composed_frames(
             )
             .await
             .unwrap();
-        let timeline = cache.get(segment.recording_clip, &fixture.cursor, &fixture.project);
+        let timeline = cache.get(
+            segment.recording_clip,
+            &fixture.cursor,
+            &cap_rendering::HoverChanges::default(),
+            &fixture.project,
+        );
         let mut zoom = ZoomTransformTimeline::from_project_for_clip(
             &fixture.project,
             &fixture.cursor,
