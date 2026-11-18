@@ -173,18 +173,18 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 // ---------------------------------------------------------------------------
 
 pub mod track_color {
-    pub const CLIP: u32 = 0x3b7cf6;
-    pub const ZOOM: u32 = 0x7c5cff;
+    pub const CLIP: u32 = 0x3167cc;
+    pub const ZOOM: u32 = 0x6e52e3;
     pub const CAPTION: u32 = 0x0ea5e9;
     pub const KEYBOARD: u32 = 0xf97316;
-    pub const STYLE: u32 = 0xc54ce0;
+    pub const STYLE: u32 = 0xa540bc;
     pub const IMAGE: u32 = 0xe8930c;
     pub const TEXT: u32 = 0x12a594;
-    pub const MASK: u32 = 0xef4444;
-    pub const SHAPE: u32 = 0x6b7aa0;
-    pub const SCENE: u32 = 0x0891b2;
+    pub const MASK: u32 = 0xc63838;
+    pub const SHAPE: u32 = 0x5d6a8b;
+    pub const SCENE: u32 = 0x067590;
     pub const AUDIO: u32 = 0x22b35e;
-    pub const THREE_D: u32 = 0xe0457b;
+    pub const THREE_D: u32 = 0xbe3b69;
 }
 
 /// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
@@ -195,19 +195,12 @@ fn muted_clip_color(theme: &Theme) -> Hsla {
 
 /// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
 /// tokens are; every track colour in this file is an `Hsla`.
-fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
-    let color = gpui::Rgba::from(color);
-    if selected {
-        theme.editor.seg_fill_selected(color).into()
-    } else {
-        theme.editor.seg_fill(color).into()
-    }
+fn seg_fill(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.seg_fill(gpui::Rgba::from(color)).into()
 }
 
-fn seg_fill_sheen(theme: &Theme, color: Hsla, selected: bool) -> gpui::Background {
-    let (top, bottom) = theme
-        .editor
-        .sheen(gpui::Rgba::from(seg_fill(theme, color, selected)));
+fn seg_fill_sheen(theme: &Theme, color: Hsla) -> gpui::Background {
+    let (top, bottom) = theme.editor.sheen(gpui::Rgba::from(seg_fill(theme, color)));
     gpui::linear_gradient(
         180.,
         gpui::linear_color_stop(top, 0.),
@@ -2656,7 +2649,7 @@ fn render_camera3d_ghost(
         .border_1()
         .border_dashed()
         .border_color(seg_border(theme, color, 0.))
-        .bg(seg_fill(theme, color, false))
+        .bg(seg_fill(theme, color))
         .child(
             div()
                 .h(px(height))
@@ -2716,7 +2709,7 @@ fn render_gap_ghost(
                 .justify_center()
                 .rounded(px(SEGMENT_RADIUS))
                 .overflow_hidden()
-                .bg(seg_fill(theme, color, false))
+                .bg(seg_fill(theme, color))
                 .border_1()
                 .border_dashed()
                 .border_color(seg_border(theme, color, 0.))
@@ -2748,7 +2741,7 @@ fn render_empty_prompt(
         .gap(px(5.))
         .px(px(10.))
         .rounded(px(SEGMENT_RADIUS))
-        .when(active, |this| this.bg(seg_fill(theme, color, false)))
+        .when(active, |this| this.bg(seg_fill(theme, color)))
         .text_size(px(12.))
         .line_height(px(16.))
         .text_color(Hsla::from(if hovered {
@@ -2881,7 +2874,7 @@ fn render_segment(
         .flex_row()
         .rounded(px(SEGMENT_RADIUS))
         .overflow_hidden()
-        .bg(seg_fill_sheen(theme, color, selected || hovered))
+        .bg(seg_fill_sheen(theme, color))
         .shadow(seg_gloss());
 
     // The clip track's waveform and its per-second markings, both under the
@@ -3395,7 +3388,7 @@ fn render_hold(
     segment_width: f32,
     height: f32,
 ) -> impl IntoElement {
-    let ink = with_alpha(seg_label(theme, color), 0.75);
+    let ink = gpui::hsla(0., 0., 1., 0.9);
     div()
         .absolute()
         .top_0()
@@ -4199,6 +4192,46 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_track_label_reads_at_aa_contrast_in_both_themes() {
+        use crate::theme::{EditorPalette, mix, relative_luminance};
+        let contrast = |a: gpui::Rgba, b: gpui::Rgba| {
+            let (a, b) = (relative_luminance(a), relative_luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        let tracks = [
+            track_color::CLIP,
+            track_color::ZOOM,
+            track_color::CAPTION,
+            track_color::KEYBOARD,
+            track_color::STYLE,
+            track_color::IMAGE,
+            track_color::TEXT,
+            track_color::MASK,
+            track_color::SHAPE,
+            track_color::SCENE,
+            track_color::AUDIO,
+            track_color::THREE_D,
+        ];
+        for palette in [EditorPalette::light(), EditorPalette::dark()] {
+            for track in tracks {
+                let color = gpui::rgb(track);
+                for fill in [
+                    palette.seg_fill(color),
+                    palette.sheen(palette.seg_fill(color)).0,
+                ] {
+                    let label = palette.seg_label(color);
+                    let ink = mix(fill, gpui::Rgba { a: 1., ..label }, label.a);
+                    assert!(
+                        contrast(ink, fill) >= 4.5,
+                        "{track:06x}: {:.2}",
+                        contrast(ink, fill)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_clip_label_steps_past_a_hold_at_its_start() {

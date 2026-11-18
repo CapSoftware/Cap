@@ -565,20 +565,32 @@ impl EditorPalette {
         }
     }
 
-    pub fn seg_fill_selected(&self, color: Rgba) -> Rgba {
-        mix(self.seg_fill(color), rgb(0xffffff), 0.12)
-    }
-
     pub fn seg_border(&self, color: Rgba) -> Rgba {
         rgba_alpha(mix(color, rgb(0x000000), 0.32), 0.9)
     }
 
-    pub fn seg_label(&self, _color: Rgba) -> Rgba {
-        rgba(0xfffffff5)
+    pub fn seg_label(&self, color: Rgba) -> Rgba {
+        self.seg_ink(color, 1.)
     }
 
-    pub fn seg_muted(&self, _color: Rgba) -> Rgba {
-        rgba(0xffffffb3)
+    pub fn seg_muted(&self, color: Rgba) -> Rgba {
+        self.seg_ink(color, 0.72)
+    }
+
+    /// White or a deep shade of the track colour, whichever contrasts more
+    /// with the brightest part of the fill (its lit top), so labels stay
+    /// readable on the bright hues without dulling every track.
+    fn seg_ink(&self, color: Rgba, alpha: f32) -> Rgba {
+        let fill = self.seg_fill(color);
+        let lit = relative_luminance(self.sheen(fill).0).max(relative_luminance(fill));
+        let shade = mix(color, rgb(0x000000), 0.86);
+        let on_white = 1.05 / (lit + 0.05);
+        let on_shade = (lit + 0.05) / (relative_luminance(shade) + 0.05);
+        if on_white >= on_shade {
+            rgba_alpha(rgb(0xffffff), alpha)
+        } else {
+            rgba_alpha(shade, alpha)
+        }
     }
 
     /// The track gutter's icon tile: `color 16%` over transparent.
@@ -591,8 +603,8 @@ impl EditorPalette {
         mix(self.seg_label_base, color, 0.62)
     }
 
-    pub fn seg_handle(&self, _color: Rgba) -> Rgba {
-        rgba(0xffffffe6)
+    pub fn seg_handle(&self, color: Rgba) -> Rgba {
+        self.seg_ink(color, 0.9)
     }
 
     pub fn card_shadow(&self) -> Vec<BoxShadow> {
@@ -779,6 +791,17 @@ pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
     }
+}
+
+pub fn relative_luminance(color: Rgba) -> f32 {
+    let channel = |value: f32| {
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 }
 
 pub fn rgba_alpha(color: Rgba, alpha: f32) -> Rgba {
