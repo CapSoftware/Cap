@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(levels.clips.len(), 1);
         assert_eq!(levels.clips[0][0], 1.0);
         assert_eq!(levels.clips[0][1], 0.0);
-        let only_system = AudioLevels::from_waveform_peaks::<Vec<f32>>(&[], &[vec![-25.0]]);
+        let only_system = AudioLevels::from_waveform_peaks(&Vec::<Vec<f32>>::new(), &[vec![-25.0]]);
         assert!((only_system.clips[0][0] - 0.5).abs() < 1.0e-4);
     }
 
