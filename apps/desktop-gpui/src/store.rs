@@ -501,8 +501,6 @@ pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
     })
 }
 
-/// The editor's quality control: the value and the mark that it was chosen,
-/// in one write.
 pub fn set_editor_preview_quality(quality: EditorPreviewQuality) -> bool {
     update_store_section(GENERAL_SETTINGS, |general| {
         general.insert(
