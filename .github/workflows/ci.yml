@@ -4,6 +4,7 @@ on:
     branches:
       - main
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,10 @@ jobs:
         uses: dorny/paths-filter@v3
         id: filter
         with:
+          # In the merge queue, compare the queued commit with the commit it
+          # was built on, so only this pull request's changes pick the jobs.
+          base: ${{ github.event.merge_group.base_sha }}
+          ref: ${{ github.event.merge_group.head_sha }}
           filters: |
             rust:
               - '.cargo/**'

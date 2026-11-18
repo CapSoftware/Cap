@@ -2255,6 +2255,7 @@ manual_help = "手動ズームは下で選んだ位置に固定されます。"
 mixed = "混在"
 mode = "ズームモード"
 positions_mixed = "セグメントごとにズーム位置が異なります。ドラッグするとすべて同じ位置に移動します。"
+start_early = "ズームを早めに開始"
 title = "ズーム{number}"
 
 [editor.side_panel]
@@ -3396,6 +3397,7 @@ changed_after = "アップロード後にローカルの録画が変更されま
 already_queued = "この録画はすでにアップロード待ちです"
 paused = "アップロードを一時停止しました。ローカルの録画は保持されています"
 worker_failed = "アップロード処理が失敗しました。ローカルの録画は保持されています"
+deleted_on_web = "この録画はWebで削除されました。ローカルの録画は保持されています"
 empty = "保存された録画は空です"
 no_resumable_state = "この録画には再開できるアップロード状態がありません"
 verification_failed = "録画の確認に失敗しました：{status}"

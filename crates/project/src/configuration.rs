@@ -1043,6 +1043,10 @@ pub struct ScreenMovementSpring {
     pub stiffness: f32,
     pub damping: f32,
     pub mass: f32,
+    /// Starts each zoom-in this far ahead of its segment so the zoom has
+    /// landed when the segment begins. Off unless chosen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_zooms_early: bool,
 }
 
 impl Default for ScreenMovementSpring {
@@ -1051,6 +1055,7 @@ impl Default for ScreenMovementSpring {
             stiffness: 200.0,
             damping: 40.0,
             mass: 2.25,
+            start_zooms_early: false,
         }
     }
 }
@@ -1095,6 +1100,20 @@ impl Default for ScreenEnhancement {
             strength: Self::DEFAULT_STRENGTH,
         }
     }
+}
+
+impl ScreenMovementSpring {
+    /// How far ahead of its segment an early zoom starts moving.
+    pub const EARLY_START_SECS: f64 = 0.35;
+
+    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
+    /// overshoot and settles within 1% by 500 ms.
+    pub const NEW_PROJECT: Self = Self {
+        stiffness: 205.0,
+        damping: 33.3,
+        mass: 1.5,
+        start_zooms_early: false,
+    };
 }
 
 impl CursorAnimationStyle {
@@ -1150,6 +1169,11 @@ pub struct CursorConfiguration {
     pub stop_movement_in_last_seconds: Option<f32>,
     #[serde(default)]
     pub ripple: CursorRippleConfig,
+    /// The cursor meets the recorded pointer at presses, releases, drags and
+    /// shape changes. New projects turn it on; configs saved without the field
+    /// keep the plain spring they were made with.
+    #[serde(default)]
+    pub interaction_anchors: bool,
 }
 
 impl Default for CursorConfiguration {
@@ -1175,6 +1199,7 @@ impl Default for CursorConfiguration {
             click_spring: None,
             stop_movement_in_last_seconds: None,
             ripple: CursorRippleConfig::default(),
+            interaction_anchors: true,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -2739,6 +2764,19 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    /// The recording clip this caption belongs to, set only when its times
+    /// cannot say: a caption in a clip's held tail (an edited late-audio clip
+    /// trimmed past its media end, see `migrate_late_audio_alignment`) sits
+    /// where the shared source clock starts the next clip, and a part of a
+    /// caption that migration cut where two clips meet may round across the
+    /// boundary. Such a caption is shown only through this clip's timeline
+    /// segments.
+    #[serde(
+        rename = "recordingSegment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recording_clip: Option<u32>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -3144,6 +3182,15 @@ pub struct ProjectConfiguration {
     /// grade.
     #[serde(default)]
     pub color_correction: ColorCorrectionConfiguration,
+    /// How clip audio offsets, markers and caption words of a segment with a
+    /// late audio track are timed. 0 (legacy): against the late audio start,
+    /// which also set where the segment's video began. 1: against the screen
+    /// and camera start (`MultipleSegment::latest_start_time`); legacy configs
+    /// are migrated by `migrate_late_audio_alignment` when the recording is
+    /// opened. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub clip_alignment_version: u32,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -3168,6 +3215,7 @@ pub struct ProjectConfiguration {
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
+pub const CLIP_ALIGNMENT_VERSION: u32 = 1;
 
 /// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
 /// that skips every value instead of building a JSON tree of a file that can
@@ -3215,6 +3263,7 @@ impl Default for ProjectConfiguration {
             screen_movement_spring: Default::default(),
             screen_enhancement: Default::default(),
             color_correction: Default::default(),
+            clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             markers: Vec::new(),
@@ -3290,11 +3339,11 @@ pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
-    /// is what an older project missing a field reads as) in framing (even
-    /// padding and a lighter, softer card shadow) and in having screen
-    /// enhancement on. At zero padding both padding modes lay out identically
-    /// and the card fills the frame, so neither shows until the card has room
-    /// around it.
+    /// is what an older project missing a field reads as) only in framing,
+    /// motion and enhancement: even padding, a lighter and softer card shadow,
+    /// the new-project zoom spring and screen enhancement on. At zero padding
+    /// both padding modes lay out identically and the card fills the frame, so
+    /// neither shows until the card has room around it.
     pub fn for_new_project() -> Self {
         let mut config = Self {
             screen_enhancement: ScreenEnhancement::for_new_projects(),
@@ -3307,6 +3356,7 @@ impl ProjectConfiguration {
             opacity: 62.4,
             blur: 46.7,
         });
+        config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
         config
     }
 
@@ -3331,6 +3381,7 @@ impl ProjectConfiguration {
             (None, None) => None,
         };
         preset.timeline = self.timeline.clone();
+        preset.clip_alignment_version = self.clip_alignment_version;
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
@@ -3796,6 +3847,21 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
+        assert!(ProjectConfiguration::default().cursor.interaction_anchors);
+
+        let saved: ProjectConfiguration =
+            serde_json::from_str(r#"{"cursor":{"tension":470.0,"mass":3.0,"friction":70.0}}"#)
+                .unwrap();
+        assert!(!saved.cursor.interaction_anchors);
+
+        let round_trip: ProjectConfiguration =
+            serde_json::from_value(serde_json::to_value(ProjectConfiguration::default()).unwrap())
+                .unwrap();
+        assert!(round_trip.cursor.interaction_anchors);
+    }
+
+    #[test]
     fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
         let legacy: CaptionSettings =
             serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
@@ -3846,7 +3912,7 @@ mod tests {
     }
 
     #[test]
-    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_and_enhancement() {
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_motion_and_enhancement() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
         assert_eq!(fresh.background.padding, 0.0);
@@ -3869,7 +3935,37 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("paddingMode");
+        framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
         assert_eq!(framing_reset, default);
+    }
+
+    #[test]
+    fn zoom_spring_keeps_saved_values_and_only_writes_early_start_when_on() {
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"screenMovementSpring":{"stiffness":200.0,"damping":40.0,"mass":2.25}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.screen_movement_spring,
+            ScreenMovementSpring::default()
+        );
+        let written = serde_json::to_value(saved.screen_movement_spring).unwrap();
+        assert!(written.get("startZoomsEarly").is_none());
+
+        let early = ScreenMovementSpring {
+            start_zooms_early: true,
+            ..ScreenMovementSpring::NEW_PROJECT
+        };
+        let written = serde_json::to_value(early).unwrap();
+        assert_eq!(written["startZoomsEarly"], true);
+        assert_eq!(
+            serde_json::from_value::<ScreenMovementSpring>(written).unwrap(),
+            early
+        );
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_movement_spring,
+            ScreenMovementSpring::NEW_PROJECT
+        );
     }
 
     #[test]

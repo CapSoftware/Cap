@@ -1356,6 +1356,28 @@ enum DragKind {
     },
 }
 
+/// `kind` with its bounds narrowed so the segment stays inside `window` (a
+/// tied caption's clip piece): a handle stops at the window's edge and a move
+/// slides up to it, snapping as at any other limit.
+fn keep_drag_in_window(kind: DragKind, window: (f64, f64)) -> DragKind {
+    match kind {
+        DragKind::TrimStart { start, bounds } => DragKind::TrimStart {
+            start,
+            bounds: edits::window_trim_start_bounds(window, bounds),
+        },
+        DragKind::TrimEnd { end, bounds } => DragKind::TrimEnd {
+            end,
+            bounds: edits::window_trim_end_bounds(window, bounds),
+        },
+        DragKind::Move { start, end, bounds } => DragKind::Move {
+            start,
+            end,
+            bounds: edits::window_move_bounds(window, (start, end), bounds),
+        },
+        other => other,
+    }
+}
+
 /// One live pointer drag on a segment.
 ///
 /// `createMouseDownDrag` (`TL/ZoomTrack.tsx:401-513` and its seven siblings) is
@@ -5178,6 +5200,19 @@ impl EditorWindow {
             (_, Hit::Empty) => None,
         };
 
+        // A caption tied to its clip stays on that clip's piece: its handles
+        // and body stop at the piece's edges.
+        let kind_of_drag = match kind {
+            TrackKind::Caption => kind_of_drag.map(|drag| {
+                crate::transcription::tied_caption_window(
+                    &self.project,
+                    index,
+                    &self.clip_display_durations,
+                )
+                .map_or(drag, |window| keep_drag_in_window(drag, window))
+            }),
+            _ => kind_of_drag,
+        };
         let clip_handle = matches!(
             kind_of_drag,
             Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
@@ -6163,11 +6198,12 @@ fn split_caption_segment(
     };
     let split_output = track.start + at;
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    let Some(split_source) = crate::transcription::map_edited_time_to_source(
+    let Some((split_source, _)) = crate::transcription::map_edited_time_to_source(
         split_output,
         timeline,
         recording_durations,
         source_range,
+        source.recording_clip,
     ) else {
         return false;
     };
@@ -13840,6 +13876,107 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 mod tests {
     use super::*;
 
+    // Two 10 s recordings: the second at 0..10, then the first held to 14 s
+    // (4..14) at output 10..20. A caption tied to the first shows at 18..19.
+    // Its handles stop at its piece's edges (10 and 20) and its body slides
+    // only within them; an untied caption's drag keeps its bounds.
+    #[test]
+    fn a_tied_caption_drag_stops_at_its_clip_piece() {
+        let durations = [10.0, 10.0];
+        let caption = |recording_clip| cap_project::CaptionSegment {
+            id: "caption-tied".into(),
+            start: 12.0,
+            end: 13.0,
+            text: "typed".into(),
+            words: Vec::new(),
+            recording_clip,
+        };
+        let project = |recording_clip| {
+            let mut project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [
+                            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                            { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 }
+                        ],
+                        "zoomSegments": []
+                    }))
+                    .unwrap(),
+                ),
+                captions: Some(cap_project::CaptionsData {
+                    segments: vec![caption(recording_clip)],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            cap_project::synchronize_captions(&mut project, &durations);
+            project
+        };
+
+        let tied = project(Some(0));
+        let item = &tied.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((item.start, item.end), (18.0, 19.0));
+        let window = crate::transcription::tied_caption_window(&tied, 0, &durations);
+        assert_eq!(window, Some((10.0, 20.0)));
+        let window = window.unwrap();
+
+        let free = edits::DragBounds { min: 0., max: 20. };
+        let DragKind::TrimStart { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimStart {
+                start: 18.,
+                bounds: edits::DragBounds { min: 0., max: 18.5 },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(4.), bounds.clamp(12.)), (10., 12.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: 18.5,
+                    max: 30.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(25.), bounds.clamp(19.5)), (20., 19.5));
+        let DragKind::Move { bounds, .. } = keep_drag_in_window(
+            DragKind::Move {
+                start: 18.,
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: -18.,
+                    max: 11.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(-12.), bounds.clamp(5.)), (-8., 1.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: free,
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(bounds.max, 20.);
+
+        let untied = project(None);
+        assert_eq!(
+            crate::transcription::tied_caption_window(&untied, 0, &durations),
+            None
+        );
+    }
+
     #[cfg(target_os = "linux")]
     mod side_panel {
         use super::*;
@@ -15302,6 +15439,7 @@ mod tests {
                     end: 4.0,
                     text: "hello world".into(),
                     words,
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -15321,6 +15459,60 @@ mod tests {
         cap_project::synchronize_captions(&mut project, &[10.0]);
         assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
+    }
+
+    // A migrated 10 s recording cut into 4..12 and 12..14 (a held tail from
+    // 10 s) with a 1 s crossfade, so both pieces of the same recording
+    // overlap at 7..8. A caption tied to it at 12.2..13.8 shows at 7.2..8.8
+    // through the second piece, and splitting it at 7.9, inside the overlap,
+    // cuts it at 12.9 rather than at the first piece's 11.9.
+    #[test]
+    fn a_tied_caption_inside_a_crossfade_of_its_own_clip_splits() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 4.0, "end": 12.0, "timescale": 1.0 },
+                    { "recordingSegment": 0, "start": 12.0, "end": 14.0, "timescale": 1.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "caption-tail", "start": 12.2, "end": 13.8,
+                    "text": "Held tail", "recordingSegment": 0
+                }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let track = project.timeline.as_ref().unwrap().caption_segments[0].clone();
+        assert!((track.start - 7.2).abs() < 1e-4 && (track.end - 8.8).abs() < 1e-4);
+
+        assert!(split_caption_segment(
+            &mut project,
+            0,
+            7.9 - track.start,
+            &[10.0]
+        ));
+        let halves: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| {
+                let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+                (
+                    near(segment.start),
+                    near(segment.end),
+                    segment.recording_clip,
+                )
+            })
+            .collect();
+        assert_eq!(halves, [(12.2, 12.9, Some(0)), (12.9, 13.8, Some(0))]);
     }
 
     #[test]
@@ -15414,6 +15606,7 @@ mod tests {
                             end: 4.0,
                         },
                     ],
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -16031,6 +16224,7 @@ mod tests {
                                 end: 7.0,
                             },
                         ],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,
@@ -16099,6 +16293,7 @@ mod tests {
                             start: 6.0,
                             end: 7.0,
                         }],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,

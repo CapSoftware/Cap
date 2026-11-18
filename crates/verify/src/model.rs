@@ -12,7 +12,9 @@
 //!   its last `duration` seconds) and the incoming one's; fades through black
 //!   are not checked.
 //! - Every track of a recording segment is aligned to the latest track start
-//!   (`latest_start_time - track.start_time` is added to the request). The
+//!   (`latest_start_time - track.start_time` is added to the request), except
+//!   an audio track starting more than `LATE_AUDIO_START_SECS` after the later
+//!   of the screen and camera starts, which does not count. The
 //!   camera additionally takes the clip's camera offset when the user set it;
 //!   an auto-calculated camera offset describes the same start alignment and
 //!   must not be applied a second time.
@@ -157,11 +159,17 @@ impl ReferenceModel {
                     .zip(present)
                     .all(|(start, present)| !present || start.is_some());
                 let latest = all_known.then(|| {
-                    starts
+                    let video = starts[..2]
                         .iter()
                         .flatten()
                         .copied()
-                        .fold(f64::NEG_INFINITY, f64::max)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    starts[2..]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .filter(|audio| audio - video <= cap_project::LATE_AUDIO_START_SECS)
+                        .fold(video, f64::max)
                 });
                 let align = |start: Option<f64>| match (latest, start) {
                     (Some(latest), Some(start)) => latest - start,

@@ -59,6 +59,7 @@ on:
     - cron: "41 3 * * *"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
   push:
     branches:
       - ci/verify-ci
@@ -95,6 +96,8 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
           BEFORE: ${{ github.event.before }}
+          MQ_BASE: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD: ${{ github.event.merge_group.head_sha }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_RUNNERS: ${{ inputs.runners }}
           INPUT_CASE: ${{ inputs.case_filter }}
@@ -119,6 +122,9 @@ jobs:
             *)
               if [[ "$EVENT" == pull_request ]]; then
                 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$files"
+                max=3000
+              elif [[ "$EVENT" == merge_group ]]; then
+                python3 scripts/ci/merge_queue.py files --base "$MQ_BASE" --head "$MQ_HEAD" > "$files"
                 max=3000
               elif [[ "$BEFORE" =~ ^0+$ ]]; then
                 : > "$files"; echo Cargo.toml >> "$files"
@@ -420,13 +426,13 @@ jobs:
       # Without the manifest the next restore cannot tell which sources the
       # cached build came from (scripts/verify/mtime.py).
       - name: Record sources of the cached build
-        if: github.event_name != 'pull_request' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
         shell: bash
         run: |
           "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
 
       - name: Save build cache
-        if: github.event_name != 'pull_request' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
