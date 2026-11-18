@@ -406,8 +406,6 @@ impl PrecomputedCursorTimeline {
         Self::new_with_anchors(cursor, smoothing, click_spring, false)
     }
 
-    /// `interaction_anchors` selects the anchored planner
-    /// (`build_anchored_timeline`); without it the path is the plain spring.
     pub fn new_with_anchors(
         cursor: &CursorEvents,
         smoothing: Option<SpringMassDamperSimulationConfig>,
@@ -430,9 +428,12 @@ impl PrecomputedCursorTimeline {
         let filtered_moves = filter_cursor_shake(&cursor.moves);
         let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
         let built = if interaction_anchors {
+            let with_drag_samples = keep_drag_samples(&cursor.moves, &cursor.clicks);
             build_anchored_timeline(
                 cursor,
-                prepared_moves.as_ref(),
+                with_drag_samples
+                    .as_deref()
+                    .unwrap_or(prepared_moves.as_ref()),
                 smoothing_config,
                 click_spring,
             )
@@ -762,20 +763,56 @@ fn primary_drags(clicks: &[CursorClickEvent]) -> Vec<(f64, f64)> {
 /// Inside a drag the gap is filled in a straight line instead. A real pause
 /// costs nothing either way, because the first sample after it is still
 /// next to where the pointer stopped.
+fn drag_at(drags: &[(f64, f64)], time_ms: f64) -> Option<usize> {
+    let next = drags.partition_point(|&(start, _)| start < time_ms);
+    next.checked_sub(1)
+        .filter(|&index| time_ms < drags[index].1)
+}
+
+/// Shake filtering and thinning would drop samples a drag has to meet, so
+/// samples inside a drag are kept exactly as recorded and only the moves
+/// between drags are filtered. `None` when there is nothing to keep.
+fn keep_drag_samples(
+    moves: &[CursorMoveEvent],
+    clicks: &[CursorClickEvent],
+) -> Option<Vec<CursorMoveEvent>> {
+    let drags = primary_drags(clicks);
+    if !moves
+        .iter()
+        .any(|event| drag_at(&drags, event.time_ms).is_some())
+    {
+        return None;
+    }
+
+    let mut kept = Vec::with_capacity(moves.len());
+    let mut start = 0;
+    while start < moves.len() {
+        let inside = drag_at(&drags, moves[start].time_ms).is_some();
+        let end = moves[start..]
+            .iter()
+            .position(|event| drag_at(&drags, event.time_ms).is_some() != inside)
+            .map_or(moves.len(), |offset| start + offset);
+        let run = &moves[start..end];
+        if inside {
+            kept.extend_from_slice(run);
+        } else {
+            let filtered = filter_cursor_shake(run);
+            kept.extend_from_slice(decimate_cursor_moves(filtered.as_ref()).as_ref());
+        }
+        start = end;
+    }
+    Some(kept)
+}
+
 fn fill_drag_gaps<'a>(
     moves: &'a [CursorMoveEvent],
     clicks: &[CursorClickEvent],
 ) -> Cow<'a, [CursorMoveEvent]> {
     let drags = primary_drags(clicks);
-    let in_drag = |time_ms: f64| {
-        let next = drags.partition_point(|&(start, _)| start < time_ms);
-        next.checked_sub(1)
-            .is_some_and(|index| time_ms < drags[index].1)
-    };
     let needs_fill = |pair: &[CursorMoveEvent]| {
         pair[1].time_ms - pair[0].time_ms > IDLE_GAP_THRESHOLD_MS
-            && in_drag(pair[0].time_ms)
-            && in_drag(pair[1].time_ms)
+            && drag_at(&drags, pair[0].time_ms)
+                .is_some_and(|drag| drag_at(&drags, pair[1].time_ms) == Some(drag))
     };
     if !moves.windows(2).any(needs_fill) {
         return Cow::Borrowed(moves);
@@ -3083,6 +3120,62 @@ mod tests {
                 "largest 1 ms step {:.3} vs {:.3}",
                 worst(&anchored),
                 worst(&plain)
+            );
+        }
+
+        #[test]
+        fn a_small_back_and_forth_while_drawing_is_kept() {
+            let path = |t: f64| {
+                let wiggle = if (500.0..=566.0).contains(&t) {
+                    20.0 * (1.0 - ((t - 533.0) / 33.0).abs())
+                } else {
+                    0.0
+                };
+                (300.0 + 0.2 * (t - 300.0).max(0.0) + wiggle, 500.0)
+            };
+            let cursor = CursorEvents {
+                moves: (0..=110)
+                    .map(|i| {
+                        let t = f64::from(i) * 11.0;
+                        let (x, y) = path(t);
+                        cursor_move(t, x / W, y / H)
+                    })
+                    .collect(),
+                clicks: clicks(&[(200.0, true), (1100.0, false)]),
+            };
+            assert!(
+                filter_cursor_shake(&cursor.moves).len() < cursor.moves.len(),
+                "the wiggle is small enough for the shake filter"
+            );
+            let anchored = timeline(&cursor, true);
+            let e = error(&cursor, &anchored, 528.0);
+            assert!(
+                e <= 2.0 * ANCHOR_DRAG_TOLERANCE,
+                "{e:.3} at the top of the wiggle"
+            );
+        }
+
+        #[test]
+        fn a_pause_between_two_drags_is_not_filled_in() {
+            let mut moves: Vec<_> = (0..=20)
+                .map(|i| {
+                    let t = f64::from(i) * 16.0;
+                    cursor_move(t, (300.0 + t) / W, 500.0 / H)
+                })
+                .collect();
+            moves.extend((0..=20).map(|i| {
+                let t = 900.0 + f64::from(i) * 16.0;
+                cursor_move(t, (700.0 + (t - 900.0)) / W, 500.0 / H)
+            }));
+            let cursor = CursorEvents {
+                moves,
+                clicks: clicks(&[(0.0, true), (330.0, false), (880.0, true), (1300.0, false)]),
+            };
+            assert!(keep_drag_samples(&cursor.moves, &cursor.clicks).is_some());
+            assert_eq!(
+                fill_drag_gaps(&cursor.moves, &cursor.clicks).len(),
+                cursor.moves.len(),
+                "no samples are invented across the release and the next press"
             );
         }
 
