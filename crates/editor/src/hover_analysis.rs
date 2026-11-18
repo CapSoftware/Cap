@@ -13,6 +13,10 @@ pub const DETECTOR_VERSION: u32 = 1;
 
 const CACHE_FILE: &str = "cursor-hover.json";
 
+/// Decoding is most of the cost. Two threads keep a full-screen recording
+/// well ahead of real time without taking the cores the editor is using.
+const ANALYSIS_DECODE_THREADS: usize = 2;
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HoverCache {
@@ -82,8 +86,9 @@ pub fn analyze(
         f64::from(time_base.numerator()) / f64::from(time_base.denominator()).max(1.0);
     let duration_secs = (stream.duration() as f64 * seconds_per_tick).max(0.001);
 
-    let context = ffmpeg::codec::Context::from_parameters(stream.parameters())
+    let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("video params: {e}"))?;
+    context.set_threading(ffmpeg::threading::Config::count(ANALYSIS_DECODE_THREADS));
     let mut decoder = context
         .decoder()
         .video()

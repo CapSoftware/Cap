@@ -746,7 +746,7 @@ const ANCHOR_SPEED_LEVELS: [f64; 16] = [
 /// catches up after it (to 1.4x).
 const ANCHOR_LEAD_DECAY_PER_MS: f64 = 0.35;
 /// Aiming at an upcoming press fades in over this long instead of jumping,
-/// so a cursor that was just held on the pointer (by a shape change on the
+/// so a cursor that was just held on the pointer (by a shape or hover change on the
 /// way) glides to the press rather than lurching there.
 const ANCHOR_PRESS_AIM_BLEND_MS: f64 = 150.0;
 const ANCHOR_LEAD_RISE_PER_MS: f64 = 0.4;
