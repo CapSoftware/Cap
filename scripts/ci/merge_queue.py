@@ -294,10 +294,15 @@ def cmd_gate(args):
         delay = args.poll
         try:
             runs = api.pages(runs_url, "workflow_runs")
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            print(f"::warning::listing runs failed ({error}); retrying", flush=True)
+            continue
+        try:
             checks = api.pages(checks_url, "check_runs")
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            print(f"::warning::reading runs failed ({error}); retrying", flush=True)
-            continue
+            # Without job results the gate still fails, once the failing workflow finishes.
+            print(f"::warning::reading check runs failed ({error}); judging by workflow conclusions", flush=True)
+            checks = []
         state, lines = gate_verdict(expected, runs, checks)
         elapsed = time.monotonic() - started
         pending = [line for line in lines if not line.split(": ", 1)[1].startswith(("success", "skipped"))]
