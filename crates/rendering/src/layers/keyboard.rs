@@ -947,7 +947,12 @@ mod gpu_tests {
         let project = ProjectConfiguration::default();
         let cursor = CursorEvents::default();
         let frames = frames(size);
-        let mut zoom = ZoomTransformTimeline::from_project(&project, &cursor, 60.0, size);
+        let mut zoom = ZoomTransformTimeline::from_project(
+            &project,
+            &cursor,
+            60.0,
+            crate::ZoomLayoutInputs::screen_only(size),
+        );
         zoom.ensure_precomputed_until(60.0);
         let mut uniforms = ProjectUniforms::new(
             constants,

@@ -375,7 +375,7 @@ async fn ordinary_composed_frames(
             &fixture.project,
             &fixture.cursor,
             duration,
-            constants.options.screen_size,
+            &constants.options,
             segment.recording_clip,
         );
         zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / 30.0);

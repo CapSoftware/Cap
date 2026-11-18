@@ -178,8 +178,12 @@ async fn main() -> Result<()> {
             project.background.padding = 20.0;
             let project = Arc::new(project);
             let duration = (args.frames + args.warmup) as f64 / 60.0;
-            let mut zoom =
-                ZoomTransformTimeline::from_project(&project, &cursor, duration, screen_size);
+            let mut zoom = ZoomTransformTimeline::from_project(
+                &project,
+                &cursor,
+                duration,
+                cap_rendering::ZoomLayoutInputs::screen_only(screen_size),
+            );
             zoom.ensure_precomputed_until(duration as f32);
             for mode in modes {
                 let mut renderer = FrameRenderer::new(&constants);

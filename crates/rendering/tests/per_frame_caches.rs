@@ -240,7 +240,12 @@ async fn reused_layers_match_fresh_layers_every_frame() {
             }
             let time = frame_number as f64 / FPS as f64;
             let frames = screen_frame(time);
-            let zoom = ZoomTransformTimeline::from_project(&project, &cursor, duration, SCREEN);
+            let zoom = ZoomTransformTimeline::from_project(
+                &project,
+                &cursor,
+                duration,
+                cap_rendering::ZoomLayoutInputs::screen_only(SCREEN),
+            );
             let uniforms = ProjectUniforms::new(
                 &constants,
                 &shared,

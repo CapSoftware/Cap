@@ -137,7 +137,12 @@ async fn main() -> Result<()> {
                         }]
                     }))?);
                 }
-                let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 6.0, size);
+                let zoom = ZoomTransformTimeline::from_project(
+                    &project,
+                    &cursor,
+                    6.0,
+                    cap_rendering::ZoomLayoutInputs::screen_only(size),
+                );
                 let project = std::sync::Arc::new(project);
                 let mut renderer = FrameRenderer::new(&constants);
                 let mut frame_ms = Vec::new();

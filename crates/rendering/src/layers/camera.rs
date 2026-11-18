@@ -763,7 +763,12 @@ mod tests {
     ) -> Vec<u8> {
         let cursor = CursorEvents::default();
         let size = XY::new(320, 180);
-        let zoom = ZoomTransformTimeline::from_project(project, &cursor, 6.0, size);
+        let zoom = ZoomTransformTimeline::from_project(
+            project,
+            &cursor,
+            6.0,
+            crate::ZoomLayoutInputs::screen_only(size),
+        );
         let uniforms = ProjectUniforms::new(
             constants,
             &std::sync::Arc::new(project.clone()),

@@ -8,7 +8,7 @@ use cap_rendering::{
     FrameLayout, FrameRenderer, FrozenRecordedCursorAssets, ManagedRecordingSegmentDecoders,
     ManagedSegmentDecoderStatus, ManagedSegmentStopHandles, ManagedSegmentVideoError,
     ManagedSegmentVideoExit, ManagedSegmentVideoInput, ProjectUniforms, RenderOptions,
-    RenderVideoConstants, RendererLayers, ZoomTransformTimeline,
+    RenderVideoConstants, RendererLayers, ZoomLayoutInputs, ZoomTransformTimeline,
 };
 use futures::{FutureExt, future::BoxFuture, future::Shared};
 use tokio::sync::watch;
@@ -625,6 +625,14 @@ async fn run_preview(
         let cursor = decoders.inputs[index].cursor.clone();
         for attempt in 0..PREVIEW_RENDER_MAX_ATTEMPTS {
             let segment = decoders.ensure(index, control, registry).await?;
+            let zoom_layout = ZoomLayoutInputs {
+                screen_size: constants.options.screen_size,
+                camera_size: segment
+                    .status
+                    .camera
+                    .as_ref()
+                    .map(|camera| XY::new(camera.video_width, camera.video_height)),
+            };
             let frames = tokio::select! {
                 biased;
                 _ = control.cancel.cancelled() => return Err(PreparingPreviewError::Cancelled),
@@ -652,7 +660,7 @@ async fn run_preview(
                 &project,
                 &cursor,
                 duration,
-                screen_size,
+                zoom_layout,
             );
             zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;
@@ -774,7 +782,7 @@ fn cached_zoom<'a>(
     project: &ProjectConfiguration,
     cursor: &CursorEvents,
     duration: f64,
-    screen_size: XY<u32>,
+    layout: ZoomLayoutInputs,
 ) -> &'a mut ZoomTransformTimeline {
     if let Some(position) = cache.iter().position(|(index, _)| *index == clip) {
         let entry = cache
@@ -787,13 +795,7 @@ fn cached_zoom<'a>(
         }
         cache.push_back((
             clip,
-            ZoomTransformTimeline::from_project_for_clip(
-                project,
-                cursor,
-                duration,
-                screen_size,
-                clip,
-            ),
+            ZoomTransformTimeline::from_project_for_clip(project, cursor, duration, layout, clip),
         ));
     }
     &mut cache.back_mut().expect("Requested zoom entry is cached").1

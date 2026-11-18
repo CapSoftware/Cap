@@ -1227,7 +1227,7 @@ impl Playback {
                                 project,
                                 &seg.cursor,
                                 duration,
-                                self.render_constants.options.screen_size,
+                                self.render_constants.zoom_layout(recording_clip as u32),
                                 recording_clip as u32,
                             )
                         })
@@ -1250,7 +1250,7 @@ impl Playback {
                                 project,
                                 &segment.cursor,
                                 duration,
-                                self.render_constants.options.screen_size,
+                                self.render_constants.zoom_layout(recording_clip as u32),
                                 recording_clip as u32,
                             )
                         })
@@ -1569,11 +1569,9 @@ impl Playback {
                         || clip_audio_changed(&cached_project, &next_project);
                     let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
                         != cursor_timeline_settings(&next_project.cursor);
-                    let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
-                        &cached_project,
-                        &next_project,
-                        self.render_constants.options.screen_size,
-                    );
+                    let zoom_changed = !self
+                        .render_constants
+                        .zoom_inputs_match(&cached_project, &next_project);
                     cached_project = Arc::new(next_project);
                     if adopted.is_none()
                         && audio_changed

@@ -6724,6 +6724,7 @@ impl EditorWindow {
         let mode = *mode;
         self.edit_scene_segment("scene-mode", index, window, cx, move |segment| {
             segment.mode = mode;
+            segment.from_silence = false;
             // Seed identity overrides so a new split segment renders and the
             // fine-tune controls have values to bind to (`:6361-6371`).
             if matches!(mode, SceneMode::SplitScreen | SceneMode::Floating)

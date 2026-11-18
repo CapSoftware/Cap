@@ -62,7 +62,7 @@ fn incremental_export_zoom_matches_eager_across_clips_transitions_and_seeks() {
                         &project,
                         &cursor,
                         30.0,
-                        XY::new(1920, 1080),
+                        cap_rendering::ZoomLayoutInputs::screen_only(XY::new(1920, 1080)),
                         clip,
                     )
                 } else {
@@ -70,7 +70,7 @@ fn incremental_export_zoom_matches_eager_across_clips_transitions_and_seeks() {
                         &project,
                         &cursor,
                         30.0,
-                        XY::new(1920, 1080),
+                        cap_rendering::ZoomLayoutInputs::screen_only(XY::new(1920, 1080)),
                         clip,
                     )
                 }
@@ -128,7 +128,7 @@ fn benchmark_long_recording_zoom_startup() {
             &project,
             &cursor,
             duration,
-            XY::new(1920, 1080),
+            cap_rendering::ZoomLayoutInputs::screen_only(XY::new(1920, 1080)),
             0,
         );
         eager.precompute();
@@ -138,7 +138,7 @@ fn benchmark_long_recording_zoom_startup() {
             &project,
             &cursor,
             duration,
-            XY::new(1920, 1080),
+            cap_rendering::ZoomLayoutInputs::screen_only(XY::new(1920, 1080)),
             0,
         );
         incremental.ensure_precomputed_until(1.0 / 60.0);

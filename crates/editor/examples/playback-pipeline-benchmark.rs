@@ -505,7 +505,7 @@ async fn run_full_pipeline_benchmark(
                 project,
                 &segment_media.cursor,
                 duration,
-                render_constants.options.screen_size,
+                &render_constants.options,
             )
         })
         .collect();
@@ -707,7 +707,7 @@ async fn run_scrubbing_benchmark(
                 project,
                 &segment_media.cursor,
                 duration,
-                render_constants.options.screen_size,
+                &render_constants.options,
             )
         })
         .collect();

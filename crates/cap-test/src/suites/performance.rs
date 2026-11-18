@@ -422,7 +422,7 @@ async fn benchmark_playback(
                 &context.project,
                 &segment_media.cursor,
                 duration,
-                context.render_constants.options.screen_size,
+                &context.render_constants.options,
             )
         })
         .collect();
@@ -676,7 +676,7 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
         &context.project,
         &segment_media.cursor,
         duration,
-        context.render_constants.options.screen_size,
+        &context.render_constants.options,
     );
     zoom_timeline.ensure_precomputed_until(1.0 / PLAYBACK_FPS as f32);
     let uniforms = ProjectUniforms::new(

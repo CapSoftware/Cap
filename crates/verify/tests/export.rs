@@ -199,6 +199,7 @@ fn hide_camera_scene(config: &mut ProjectConfiguration) {
             split_layout: None,
             transition_in: 0.3,
             transition_out: 0.3,
+            from_silence: false,
         });
 }
 

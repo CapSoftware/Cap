@@ -98,8 +98,7 @@ fn uniforms_for(
     segment_frames: &DecodedSegmentFrames,
 ) -> ProjectUniforms {
     let cursor = CursorEvents::default();
-    let zoom =
-        ZoomTransformTimeline::from_project(project, &cursor, 3.0, constants.options.screen_size);
+    let zoom = ZoomTransformTimeline::from_project(project, &cursor, 3.0, &constants.options);
     ProjectUniforms::new(
         constants,
         &std::sync::Arc::new(project.clone()),
