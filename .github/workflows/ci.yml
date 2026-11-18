@@ -317,7 +317,8 @@ jobs:
             runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
-        # The Intel macOS build is .github/workflows/intel-build.yml.
+        # The Intel macOS build runs only in nightly and release builds
+        # (desktop-release.yml), not in CI.
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
