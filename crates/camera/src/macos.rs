@@ -24,38 +24,40 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
 
 impl CameraInfo {
     pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
-        let device = find_device(self)?;
+        objc::ar_pool(|| {
+            let device = find_device(self)?;
 
-        let mut ret = vec![];
+            let mut ret = vec![];
 
-        for format in device.formats().iter() {
-            let desc = format.format_desc();
-            let width = desc.dims().width as u32;
-            let height = desc.dims().height as u32;
-            let pixel_format = fourcc_display(desc.media_sub_type());
+            for format in device.formats().iter() {
+                let desc = format.format_desc();
+                let width = desc.dims().width as u32;
+                let height = desc.dims().height as u32;
+                let pixel_format = fourcc_display(desc.media_sub_type());
 
-            for fr_range in format.video_supported_frame_rate_ranges().iter() {
-                // SAFETY: trust me bro it crashes on intel mac otherwise
-                let fr_range = unsafe {
-                    &*(fr_range as *const av::capture::device::FrameRateRange)
-                        .cast::<AVFrameRateRange>()
-                };
+                for fr_range in format.video_supported_frame_rate_ranges().iter() {
+                    // SAFETY: trust me bro it crashes on intel mac otherwise
+                    let fr_range = unsafe {
+                        &*(fr_range as *const av::capture::device::FrameRateRange)
+                            .cast::<AVFrameRateRange>()
+                    };
 
-                let min = unsafe { fr_range.minFrameDuration() };
+                    let min = unsafe { fr_range.minFrameDuration() };
 
-                ret.push(Format {
-                    native: format.retained(),
-                    info: FormatInfo {
-                        width,
-                        height,
-                        frame_rate: min.timescale as f32 / min.value as f32,
-                    },
-                    pixel_format: Some(pixel_format.clone()),
-                })
+                    ret.push(Format {
+                        native: format.retained(),
+                        info: FormatInfo {
+                            width,
+                            height,
+                            frame_rate: min.timescale as f32 / min.value as f32,
+                        },
+                        pixel_format: Some(pixel_format.clone()),
+                    })
+                }
             }
-        }
 
-        Some(ret)
+            Some(ret)
+        })
     }
 }
 
@@ -156,7 +158,7 @@ pub(super) fn start_capturing_impl(
     let input =
         av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
 
-    let queue = dispatch::Queue::new();
+    let queue = dispatch::Queue::serial_with_ar_pool();
     let mut missing_image_bufs: u64 = 0;
     let delegate =
         CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
