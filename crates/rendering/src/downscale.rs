@@ -14,8 +14,6 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 
-/// How the screen and camera are resampled where they are drawn smaller than
-/// their source. Applies to every project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownscaleFilter {
     /// One bilinear tap per output pixel, plus a light unsharp mask above a
@@ -25,14 +23,12 @@ pub enum DownscaleFilter {
     Lanczos,
 }
 
-/// The one switch for the downscale filter.
 pub const DOWNSCALE_FILTER: DownscaleFilter = DownscaleFilter::Lanczos;
 
 /// Shrink factors at or below this keep the composite's own sampling, so
 /// 1:1 output is untouched; the margin absorbs float noise in the ratio.
 const MIN_SHRINK: f32 = 1.001;
 
-/// Lanczos lobes on each side of the kernel centre.
 const KERNEL_RADIUS: f32 = 2.0;
 
 const SCRATCH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -53,13 +49,9 @@ struct PassParams {
     _padding: f32,
 }
 
-/// Where a shrinking layer's prefiltered pixels go and how each pass maps
-/// them back onto the source.
 #[derive(Debug, Clone, Copy)]
 struct Plan {
-    /// Output pixels covered: the target bounds rounded out to whole pixels.
     size: [u32; 2],
-    /// Source rows the horizontal pass keeps (the crop's rows).
     rows: u32,
     horizontal: PassParams,
     vertical: PassParams,
@@ -152,7 +144,6 @@ fn plan(
     })
 }
 
-/// Inclusive texel range a crop edge pair covers.
 fn texel_range(start: f32, end: f32, len: u32) -> (i32, i32) {
     let last = len as i32 - 1;
     let first = (start.floor() as i32).clamp(0, last);
@@ -168,7 +159,56 @@ struct Scratch {
     composite_bind_group: wgpu::BindGroup,
 }
 
+#[derive(Default)]
 pub struct DownscalePrefilter {
+    passes: Option<Passes>,
+    active: bool,
+}
+
+impl DownscalePrefilter {
+    /// Pipelines are built on the first shrinking frame, so layers that
+    /// never shrink never compile them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        composite: &CompositeVideoFramePipeline,
+        source_size: [u32; 2],
+        source_view: &wgpu::TextureView,
+        uniforms: &CompositeVideoFrameUniforms,
+    ) {
+        self.active = false;
+        let Some(plan) = plan(
+            uniforms,
+            source_size,
+            device.limits().max_texture_dimension_2d,
+        ) else {
+            return;
+        };
+        self.passes
+            .get_or_insert_with(|| Passes::new(device))
+            .encode(device, queue, encoder, composite, source_view, plan);
+        self.active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active = false;
+    }
+
+    pub fn bind_group(&self) -> Option<&wgpu::BindGroup> {
+        if !self.active {
+            return None;
+        }
+        self.passes
+            .as_ref()
+            .and_then(|passes| passes.scratch.as_ref())
+            .map(|scratch| &scratch.composite_bind_group)
+    }
+}
+
+struct Passes {
     layout: wgpu::BindGroupLayout,
     horizontal: wgpu::RenderPipeline,
     vertical: wgpu::RenderPipeline,
@@ -176,11 +216,10 @@ pub struct DownscalePrefilter {
     vertical_params: wgpu::Buffer,
     composite_uniforms: wgpu::Buffer,
     scratch: Option<Scratch>,
-    active: bool,
 }
 
-impl DownscalePrefilter {
-    pub fn new(device: &wgpu::Device) -> Self {
+impl Passes {
+    fn new(device: &wgpu::Device) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Downscale prefilter bind group layout"),
             entries: &[
@@ -261,36 +300,20 @@ impl DownscalePrefilter {
             horizontal,
             vertical,
             scratch: None,
-            active: false,
         }
     }
 
-    /// Records the prefilter for this frame when `uniforms` shrink `source`.
-    /// Afterwards [`Self::bind_group`] is the composite bind group to draw
-    /// the layer with, or `None` to draw it as before.
-    #[allow(clippy::too_many_arguments)]
-    pub fn encode(
+    fn encode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         composite: &CompositeVideoFramePipeline,
-        source_size: [u32; 2],
         source_view: &wgpu::TextureView,
-        uniforms: &CompositeVideoFrameUniforms,
+        mut plan: Plan,
     ) {
-        self.active = false;
-        let Some(mut plan) = plan(
-            uniforms,
-            source_size,
-            device.limits().max_texture_dimension_2d,
-        ) else {
-            return;
-        };
         self.ensure_scratch(device, composite, plan.size, plan.rows);
-        let Some(scratch) = self.scratch.as_ref() else {
-            return;
-        };
+        let scratch = self.scratch.as_ref().expect("scratch allocated above");
         plan.composite.frame_size = [
             scratch.output.width() as f32,
             scratch.output.height() as f32,
@@ -333,22 +356,6 @@ impl DownscalePrefilter {
             &scratch.vertical_bind_group,
             plan.size,
         );
-        self.active = true;
-    }
-
-    /// Draws the layer as before until the next [`Self::encode`].
-    pub fn deactivate(&mut self) {
-        self.active = false;
-    }
-
-    /// The composite bind group reading this frame's prefiltered texture.
-    pub fn bind_group(&self) -> Option<&wgpu::BindGroup> {
-        if !self.active {
-            return None;
-        }
-        self.scratch
-            .as_ref()
-            .map(|scratch| &scratch.composite_bind_group)
     }
 
     fn ensure_scratch(
@@ -425,7 +432,6 @@ fn scratch_texture(device: &wgpu::Device, label: &str, width: u32, height: u32) 
     })
 }
 
-/// One fullscreen-triangle pass into the top-left `size` texels of `target`.
 fn draw_pass(
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,

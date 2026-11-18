@@ -142,7 +142,7 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
         mapped_at_creation: false,
     });
     let mut encoder = device.create_command_encoder(&Default::default());
-    let mut prefilter = DownscalePrefilter::new(device);
+    let mut prefilter = DownscalePrefilter::default();
     if draw.filter == DownscaleFilter::Lanczos {
         prefilter.encode(
             device,

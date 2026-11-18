@@ -32,8 +32,7 @@ pub struct CameraLayer {
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
     uniforms: Option<CompositeVideoFrameUniforms>,
-    /// Created on the first frame drawn smaller than its source.
-    downscale: Option<DownscalePrefilter>,
+    downscale: DownscalePrefilter,
 }
 
 #[derive(Clone, Copy)]
@@ -105,7 +104,7 @@ impl CameraLayer {
             blur_active: false,
             blur_cache: None,
             uniforms: None,
-            downscale: None,
+            downscale: DownscalePrefilter::default(),
         }
     }
 
@@ -620,8 +619,6 @@ impl CameraLayer {
 
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 
-    /// Prefilters the frame about to be drawn when its uniforms shrink it;
-    /// with `enabled` false it is drawn as before.
     pub fn encode_downscale(
         &mut self,
         device: &wgpu::Device,
@@ -630,9 +627,7 @@ impl CameraLayer {
         enabled: bool,
     ) {
         let Some(uniforms) = self.uniforms.filter(|_| enabled && !self.hidden) else {
-            if let Some(downscale) = &mut self.downscale {
-                downscale.deactivate();
-            }
+            self.downscale.deactivate();
             return;
         };
         let texture = &self.frame_textures[self.current_texture];
@@ -641,24 +636,22 @@ impl CameraLayer {
             Some(view) if self.blur_active && self.blur_bind_group.is_some() => view,
             _ => &self.frame_texture_views[self.current_texture],
         };
-        self.downscale
-            .get_or_insert_with(|| DownscalePrefilter::new(device))
-            .encode(
-                device,
-                queue,
-                encoder,
-                &self.pipeline,
-                [texture.width(), texture.height()],
-                view,
-                &uniforms,
-            );
+        self.downscale.encode(
+            device,
+            queue,
+            encoder,
+            &self.pipeline,
+            [texture.width(), texture.height()],
+            view,
+            &uniforms,
+        );
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if self.hidden {
             return;
         }
-        if let Some(bind_group) = self.downscale.as_ref().and_then(|d| d.bind_group()) {
+        if let Some(bind_group) = self.downscale.bind_group() {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
