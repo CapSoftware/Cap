@@ -479,37 +479,30 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             // unsharp mask skipped: text stops aliasing and 1 px lines stop
             // turning into moire, for one tap fewer than that mask.
             let reach = scale_ratio / uniforms.frame_size * 0.25;
-            let a = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv - reach, safe_min, safe_max)
-            );
-            let b = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + reach, safe_min, safe_max)
-            );
-            let c = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max)
-            );
-            let d = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max)
-            );
+            let p0 = clamp(cropped_uv - reach, safe_min, safe_max);
+            let p1 = clamp(cropped_uv + reach, safe_min, safe_max);
+            let p2 = clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max);
+            let p3 = clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max);
 
             if uniforms.preserve_source_alpha > 0.5 {
                 // Straight-alpha sources (background removal, transparent
-                // images) keep their old colour under transparent texels, so
-                // weight each tap by its alpha and soften the edge alpha too.
+                // images) keep their old colour under transparent texels. A
+                // bilinear tap would mix that colour in before any weighting,
+                // so read whole texels and weight each by its alpha.
+                let a = load_texel(p0);
+                let b = load_texel(p1);
+                let c = load_texel(p2);
+                let d = load_texel(p3);
                 let alpha_sum = a.a + b.a + c.a + d.a;
                 let color_sum = a.rgb * a.a + b.rgb * b.a + c.rgb * c.a + d.rgb * d.a;
                 return vec4(color_sum / max(alpha_sum, 0.0001), alpha_sum * 0.25);
             }
 
-            return vec4((a.rgb + b.rgb + c.rgb + d.rgb) * 0.25, out_alpha);
+            let box_sum = textureSample(frame_texture, frame_sampler, p0).rgb
+                + textureSample(frame_texture, frame_sampler, p1).rgb
+                + textureSample(frame_texture, frame_sampler, p2).rgb
+                + textureSample(frame_texture, frame_sampler, p3).rgb;
+            return vec4(box_sum * 0.25, out_alpha);
         }
 
         if is_upscaling {
@@ -550,6 +543,12 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     }
 
     return vec4(0.0);
+}
+
+fn load_texel(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(frame_texture));
+    let texel = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), size - 1);
+    return textureLoad(frame_texture, texel, 0);
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
