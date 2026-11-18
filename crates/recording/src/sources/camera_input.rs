@@ -4,6 +4,7 @@ use crate::{
     output_pipeline::NativeCameraFrame,
 };
 use anyhow::{anyhow, bail};
+use cap_media_info::VideoInfo;
 use futures::{FutureExt, future::BoxFuture};
 use std::{
     sync::{Arc, Mutex, atomic::AtomicU64},
@@ -40,9 +41,43 @@ struct TrackQueue<T> {
     dropped: Option<Arc<AtomicU64>>,
     /// Keeps the queue open while no camera is attached.
     bridge: Option<flume::Sender<T>>,
+    /// Hands the track a queue sized for the camera it switched to.
+    next: flume::Sender<flume::Receiver<T>>,
+}
+
+/// The frames a camera track reads, across camera switches.
+pub(crate) struct TrackReceiver<T> {
+    rx: flume::Receiver<T>,
+    next: flume::Receiver<flume::Receiver<T>>,
+}
+
+impl<T> TrackReceiver<T> {
+    /// A queue that never moves to another camera.
+    #[cfg(test)]
+    pub(crate) fn fixed(rx: flume::Receiver<T>) -> Self {
+        Self {
+            rx,
+            next: flume::bounded(1).1,
+        }
+    }
+
+    /// The next frame. Fails once the current camera's queue has closed and
+    /// no switch replaced it.
+    pub(crate) async fn recv(&mut self) -> Result<T, flume::RecvError> {
+        loop {
+            tokio::select! {
+                biased;
+                Ok(rx) = self.next.recv_async() => self.rx = rx,
+                frame = self.rx.recv_async() => return frame,
+            }
+        }
+    }
 }
 
 pub trait CameraTrackFrame: Send + Sized + 'static {
+    /// Frames the track's queue holds for a camera of this format.
+    fn queue_capacity(info: &VideoInfo) -> usize;
+
     fn add_sender(
         lock: &CameraFeedLock,
         sender: flume::Sender<Self>,
@@ -56,6 +91,10 @@ pub trait CameraTrackFrame: Send + Sized + 'static {
 }
 
 impl CameraTrackFrame for NativeCameraFrame {
+    fn queue_capacity(info: &VideoInfo) -> usize {
+        super::native_ingress_capacity(info)
+    }
+
     fn add_sender(
         lock: &CameraFeedLock,
         sender: flume::Sender<Self>,
@@ -93,6 +132,10 @@ impl CameraTrackFrame for NativeCameraFrame {
 }
 
 impl CameraTrackFrame for FFmpegVideoFrame {
+    fn queue_capacity(_: &VideoInfo) -> usize {
+        256
+    }
+
     fn add_sender(
         lock: &CameraFeedLock,
         sender: flume::Sender<Self>,
@@ -143,34 +186,36 @@ impl<T: CameraTrackFrame> CameraTrackInput<T> {
         self.state().lock.clone()
     }
 
-    /// Connects the track's queue to the current camera. Called once, by the
+    /// Opens the track's queue on the current camera. Called once, by the
     /// track's source as it starts.
     pub(crate) async fn connect(
         &self,
-        sender: flume::Sender<T>,
         dropped: Option<Arc<AtomicU64>>,
         hold_full_res: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<TrackReceiver<T>> {
         let lock = self
             .lock()
             .ok_or_else(|| anyhow!("The camera track has no camera"))?;
+        let (sender, rx) = flume::bounded(T::queue_capacity(lock.video_info()));
         tokio::time::timeout(
             CAMERA_SENDER_TIMEOUT,
             T::add_sender(&lock, sender.clone(), dropped.clone()),
         )
         .await
         .map_err(|_| anyhow!("Timed out adding the camera sender"))??;
+        let (next, next_rx) = flume::bounded(1);
         let mut state = self.state();
         state.track = Some(TrackQueue {
             sender: sender.downgrade(),
             dropped,
             bridge: None,
+            next,
         });
         state.hold_full_res = hold_full_res;
         if hold_full_res {
             state.full_res = Some(lock.hold_full_resolution());
         }
-        Ok(())
+        Ok(TrackReceiver { rx, next: next_rx })
     }
 
     pub fn is_released(&self) -> bool {
@@ -212,31 +257,39 @@ impl<T: CameraTrackFrame> CameraTrackInput<T> {
         Ok(())
     }
 
-    /// Feeds the released track from `lock`'s camera. The track keeps the
-    /// size and pixel format it started with; the encoder scales the new
-    /// camera's frames to it.
+    /// Feeds the released track from `lock`'s camera, through a new queue
+    /// sized for that camera's frames. The track keeps the size and pixel
+    /// format it started with; the encoder scales the new camera's frames to
+    /// it.
     pub async fn attach(&self, lock: Arc<CameraFeedLock>) -> anyhow::Result<()> {
-        let (bridge, dropped) = {
+        let (dropped, next) = {
             let state = self.state();
-            let Some(TrackQueue {
-                bridge: Some(bridge),
-                dropped,
-                ..
-            }) = state.track.as_ref()
-            else {
+            let Some(track) = state.track.as_ref().filter(|track| track.bridge.is_some()) else {
                 bail!("The camera track is not released");
             };
-            (bridge.clone(), dropped.clone())
+            (track.dropped.clone(), track.next.clone())
         };
-        tokio::time::timeout(CAMERA_SENDER_TIMEOUT, T::add_sender(&lock, bridge, dropped))
-            .await
-            .map_err(|_| anyhow!("Timed out adding the camera sender"))??;
+        let (sender, rx) = flume::bounded(T::queue_capacity(lock.video_info()));
+        tokio::time::timeout(
+            CAMERA_SENDER_TIMEOUT,
+            T::add_sender(&lock, sender.clone(), dropped),
+        )
+        .await
+        .map_err(|_| anyhow!("Timed out adding the camera sender"))??;
+        if !matches!(
+            tokio::time::timeout(CAMERA_SENDER_TIMEOUT, next.send_async(rx)).await,
+            Ok(Ok(()))
+        ) {
+            T::remove_sender(&lock, sender).await.ok();
+            bail!("The camera track stopped taking frames");
+        }
         let mut state = self.state();
         if state.hold_full_res {
             state.full_res = Some(lock.hold_full_resolution());
         }
         state.lock = Some(lock);
         if let Some(track) = state.track.as_mut() {
+            track.sender = sender.downgrade();
             track.bridge = None;
         }
         Ok(())
@@ -257,8 +310,8 @@ mod tests {
         }
     }
 
-    async fn next(rx: &flume::Receiver<FFmpegVideoFrame>) -> Option<(u32, u32)> {
-        tokio::time::timeout(Duration::from_millis(500), rx.recv_async())
+    async fn next(rx: &mut TrackReceiver<FFmpegVideoFrame>) -> Option<(u32, u32)> {
+        tokio::time::timeout(Duration::from_millis(500), rx.recv())
             .await
             .ok()?
             .ok()
@@ -267,7 +320,7 @@ mod tests {
 
     /// A switch moves one open track from the first camera to the second:
     /// nothing reaches it in between, the first camera can be opened by
-    /// someone else, and the track's queue never closes.
+    /// someone else, and the track never sees its queue close.
     #[tokio::test]
     async fn a_released_track_moves_to_another_camera_without_closing() {
         let first = SyntheticCamera::spawn(
@@ -280,18 +333,16 @@ mod tests {
         );
         let input =
             CameraTrackInput::<FFmpegVideoFrame>::new(Arc::new(first.lock().await.unwrap()));
-        let (tx, rx) = flume::bounded(8);
-        input.connect(tx, None, true).await.unwrap();
+        let mut rx = input.connect(None, true).await.unwrap();
 
         first.push(frame(64, 36)).await;
-        assert_eq!(next(&rx).await, Some((64, 36)));
+        assert_eq!(next(&mut rx).await, Some((64, 36)));
 
         input.release().await.unwrap();
         assert!(input.is_released());
         assert!(input.lock().is_none());
         first.push(frame(64, 36)).await;
-        assert_eq!(next(&rx).await, None);
-        assert!(!rx.is_disconnected());
+        assert_eq!(next(&mut rx).await, None);
         drop(first.lock().await.expect("the released camera is unlocked"));
 
         input
@@ -300,14 +351,14 @@ mod tests {
             .unwrap();
         assert!(!input.is_released());
         second.push(frame(96, 54)).await;
-        assert_eq!(next(&rx).await, Some((96, 54)));
+        assert_eq!(next(&mut rx).await, Some((96, 54)));
         first.push(frame(64, 36)).await;
-        assert_eq!(next(&rx).await, None);
+        assert_eq!(next(&mut rx).await, None);
 
         drop(input);
         second.remove_input().await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(500), rx.recv_async())
+            tokio::time::timeout(Duration::from_millis(500), rx.recv())
                 .await
                 .is_ok_and(|result| result.is_err()),
             "the track sees its feed close once no switch holds it open"
@@ -327,8 +378,7 @@ mod tests {
         let input =
             CameraTrackInput::<FFmpegVideoFrame>::new(Arc::new(first.lock().await.unwrap()));
         assert!(input.release().await.is_err());
-        let (tx, _rx) = flume::bounded(8);
-        input.connect(tx, None, false).await.unwrap();
+        let _rx = input.connect(None, false).await.unwrap();
         assert!(
             input
                 .attach(Arc::new(second.lock().await.unwrap()))

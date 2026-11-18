@@ -79,7 +79,6 @@ impl VideoSource for Camera {
     where
         Self: Sized,
     {
-        let (tx, rx) = flume::bounded(256);
         let stall_health_tx = ctx.health_tx().clone();
         let original_video_info = *input
             .lock()
@@ -89,8 +88,8 @@ impl VideoSource for Camera {
         let original_height = original_video_info.height;
         let original_format = original_video_info.pixel_format;
 
-        input
-            .connect(tx, None, true)
+        let mut rx = input
+            .connect(None, true)
             .await
             .map_err(|e| anyhow!("Failed to add camera sender: {e:#}"))?;
 
@@ -126,7 +125,7 @@ impl VideoSource for Camera {
                         tracing::debug!("Camera source: received stop signal");
                         break;
                     }
-                    result = rx.recv_async() => {
+                    result = rx.recv() => {
                         match result {
                             Ok(mut frame) => {
                                 frame_count += 1;

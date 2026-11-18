@@ -1341,7 +1341,8 @@ impl Message<SetCameraFeed> for Actor {
                 Ok(())
             }
             Some(ActorState::Paused { .. }) => {
-                self.segment_factory.set_camera_feed(msg.camera_feed);
+                self.segment_factory
+                    .set_next_segment_camera(msg.camera_feed);
                 Ok(())
             }
             None => Err(anyhow!("Recording no longer active")),
@@ -3542,6 +3543,14 @@ impl SegmentPipelineFactory {
         self.base_inputs.camera_feed = camera_feed;
     }
 
+    /// The camera the next segment records. The stopped segment's input
+    /// still holds its camera's lock, so it goes too, or the app could not
+    /// open another camera on the same feed.
+    pub fn set_next_segment_camera(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
+        self.live_camera = None;
+        self.set_camera_feed(camera_feed);
+    }
+
     fn next_camera_input(&mut self) -> Option<StudioCameraInput> {
         self.live_camera = self
             .base_inputs
@@ -4979,6 +4988,45 @@ mod tests {
     }
 
     #[cfg(any(target_os = "macos", windows))]
+    /// A camera switch while paused hands the next segment another camera.
+    /// The stopped segment's camera input must let go of the old camera's
+    /// lock, or the app cannot open the new camera on the shared feed.
+    #[tokio::test]
+    async fn a_paused_camera_change_unlocks_the_stopped_segments_camera() {
+        let camera =
+            crate::feeds::camera::synthetic::SyntheticCamera::spawn("camera", test_video_info());
+        let dir = tempfile::tempdir().unwrap();
+        let (completion_tx, _completion_rx) = watch::channel(None);
+        let mut factory = SegmentPipelineFactory::new(
+            dir.path().join("content/segments"),
+            dir.path().join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: Some(Arc::new(camera.lock().await.unwrap())),
+                start_gate: None,
+                #[cfg(target_os = "macos")]
+                shareable_content: None,
+                #[cfg(target_os = "macos")]
+                excluded_windows: Vec::new(),
+            },
+            false,
+            false,
+            false,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            completion_tx,
+        );
+        drop(factory.next_camera_input());
+        factory.set_camera_feed(None);
+        assert!(camera.lock().await.is_err(), "the segment's input holds it");
+        factory.set_next_segment_camera(None);
+        assert!(camera.lock().await.is_ok());
+    }
+
     mod failed_resume_tests {
         use super::*;
 

@@ -1,4 +1,4 @@
-use super::CameraTrackInput;
+use super::{CameraTrackInput, TrackReceiver};
 use crate::{
     feeds::camera::{DropLog, NativeCameraIngress},
     output_pipeline::{
@@ -200,7 +200,7 @@ impl IngressReporter {
 }
 
 async fn forward_native_frames<T: Send + 'static>(
-    rx: flume::Receiver<T>,
+    mut rx: TrackReceiver<T>,
     video_tx: mpsc::Sender<T>,
     stop_rx: oneshot::Receiver<()>,
     stopped: Arc<AtomicBool>,
@@ -224,7 +224,7 @@ async fn forward_native_frames<T: Send + 'static>(
                 tracing::debug!("Native camera source: received stop signal");
                 break;
             }
-            result = rx.recv_async() => {
+            result = rx.recv() => {
                 match result {
                     Ok(frame) => {
                         report.received();
@@ -283,9 +283,10 @@ impl VideoSource for NativeCamera {
             .lock()
             .ok_or_else(|| anyhow!("The camera track has no camera"))?;
         let video_info = *feed_lock.video_info();
-        let capacity = native_ingress_capacity(&video_info);
-        tracing::debug!(capacity, "Native camera ingress queue");
-        let (tx, rx) = flume::bounded(capacity);
+        tracing::debug!(
+            capacity = native_ingress_capacity(&video_info),
+            "Native camera ingress queue"
+        );
         let ingress_dropped = Arc::new(AtomicU64::new(0));
         let report = IngressReporter::new(
             Some(feed_lock.native_ingress().clone()),
@@ -294,8 +295,8 @@ impl VideoSource for NativeCamera {
         );
 
         drop(feed_lock);
-        input
-            .connect(tx, Some(ingress_dropped), false)
+        let rx = input
+            .connect(Some(ingress_dropped), false)
             .await
             .map_err(|e| anyhow!("Failed to add native camera sender: {e:#}"))?;
 
@@ -348,7 +349,7 @@ mod forwarding_tests {
         let (_stop, stopped) = oneshot::channel();
         drop(sender);
         let result = forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -372,7 +373,7 @@ mod forwarding_tests {
         stop.send(()).unwrap();
         drop(sender);
         forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -390,7 +391,7 @@ mod forwarding_tests {
         let (video, mut frames) = mpsc::channel(1);
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -413,7 +414,7 @@ mod forwarding_tests {
         drop(frames);
         sender.send_async(17_u8).await.unwrap();
         let result = forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -436,7 +437,7 @@ mod forwarding_tests {
         let (_stop, stopped) = oneshot::channel();
         drop(sender);
         forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -491,7 +492,7 @@ mod forwarding_tests {
         }
         drop(sender);
         let summary = forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
@@ -522,7 +523,7 @@ mod forwarding_tests {
         sender.send_async(1_u8).await.unwrap();
         drop(sender);
         let summary = forward_native_frames(
-            receiver,
+            TrackReceiver::fixed(receiver),
             video,
             stopped,
             Arc::new(AtomicBool::new(false)),
