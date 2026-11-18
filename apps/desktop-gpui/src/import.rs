@@ -1777,8 +1777,12 @@ fn keep_source_video(
 
     audio.open_output(audio_output_path)?;
 
+    // The MP4 muxer leaves the colour tags out of the container unless asked,
+    // and readers that open only the headers would then see none.
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("movflags", "+write_colr");
     output
-        .write_header()
+        .write_header_with(options)
         .map_err(|e| format!("Failed to write header: {e}"))?;
     let output_time_base = output
         .stream(output_index)
@@ -4258,6 +4262,25 @@ mod tests {
         seconds
     }
 
+    /// The tag a reader sees without probing frames, as the native decoder
+    /// paths do.
+    fn header_color_space(path: &Path) -> ffmpeg::color::Space {
+        let path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        let mut context = std::ptr::null_mut();
+        let status = unsafe {
+            ffmpeg::ffi::avformat_open_input(
+                &mut context,
+                path.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(status >= 0);
+        let input = unsafe { avformat::context::Input::wrap(context) };
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        ffmpeg::color::Space::from(unsafe { (*stream.parameters().as_ptr()).color_space })
+    }
+
     fn stream_tags(path: &Path) -> (avformat::Pixel, ffmpeg::color::Space, ffmpeg::color::Range) {
         let input = avformat::input(path).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
@@ -4359,6 +4382,8 @@ mod tests {
         };
         assert_eq!(video_packets(&output), video_packets(&source));
         assert_eq!(stream_tags(&output).1, ffmpeg::color::Space::BT709);
+        let headers_only = header_color_space(&output);
+        assert_eq!(headers_only, ffmpeg::color::Space::BT709);
         let mut input = avformat::input(&output).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
         let index = stream.index();
