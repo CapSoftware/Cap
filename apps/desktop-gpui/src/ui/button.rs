@@ -130,6 +130,7 @@ pub struct Button {
     /// Whether the disabled look is the plain surface's `opacity-50` rather
     /// than the settings surface's repaint.
     dim_disabled: bool,
+    dark: bool,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
 }
@@ -158,6 +159,7 @@ impl Button {
             full_width: false,
             height: None,
             dim_disabled: false,
+            dark: theme.is_dark(),
             on_click: None,
             on_open: None,
         }
@@ -436,6 +438,7 @@ impl RenderOnce for Button {
             radius,
             disabled,
             dim_disabled,
+            dark,
             gap,
             font_weight,
             width,
@@ -446,6 +449,12 @@ impl RenderOnce for Button {
         } = self;
 
         let icon_color = paint.text;
+        let finish = paint.bg.map(|bg| ButtonFinish::new(bg, dark));
+        let hover_fill = paint.hover_bg.map(|bg| ButtonFinish::sheen(bg, dark));
+        let pressed_fill = paint
+            .hover_bg
+            .or(paint.bg)
+            .map(|bg| ButtonFinish::pressed(bg, dark));
 
         div()
             .id(id)
@@ -470,15 +479,17 @@ impl RenderOnce for Button {
             .text_size(size.text_size())
             .when_some(font_weight, |this, weight| this.font_weight(weight))
             .text_color(paint.text)
-            .when_some(paint.bg, |this, bg| this.bg(bg))
+            .when_some(finish, |this, finish| {
+                this.bg(finish.fill).shadow(finish.shadow)
+            })
             .when_some(paint.border, |this, border| {
                 this.border_1().border_color(border)
             })
             .when(dim_disabled, |this| this.opacity(0.5))
             .when(!disabled, |this| {
                 this.hover(move |style| {
-                    let style = match paint.hover_bg {
-                        Some(bg) => style.bg(bg),
+                    let style = match hover_fill {
+                        Some(fill) => style.bg(fill),
                         None => style,
                     };
                     let style = match paint.hover_text {
@@ -506,10 +517,91 @@ impl RenderOnce for Button {
                     .flex_shrink_0()
                     .text_color(icon_color)
             }))
+            .when(!disabled, |this| {
+                this.active(move |style| match pressed_fill {
+                    Some(fill) => style.bg(fill),
+                    None => style.opacity(0.8),
+                })
+            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })
             .when_some(on_open.filter(|_| !disabled), crate::ui::Menu::trigger)
+    }
+}
+
+/// How a filled button is lit: a soft vertical sheen over its fill, a 1px
+/// highlight along the top edge, and a contact shadow under opaque fills
+/// (with a tinted glow under saturated ones, so accent buttons glow rather
+/// than sit flat).
+struct ButtonFinish {
+    fill: gpui::Background,
+    shadow: Vec<gpui::BoxShadow>,
+}
+
+impl ButtonFinish {
+    fn new(bg: Hsla, dark: bool) -> Self {
+        let opaque = bg.a > 0.9;
+        let saturated = opaque && bg.s > 0.35 && bg.l > 0.2 && bg.l < 0.8;
+        let highlight = if saturated {
+            0.22
+        } else if opaque && bg.l > 0.6 {
+            0.7
+        } else if opaque {
+            0.12
+        } else {
+            0.07
+        };
+        let mut shadow = vec![gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., highlight),
+            offset: gpui::point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        }];
+        if opaque {
+            shadow.push(gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., if dark { 0.35 } else { 0.12 }),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            });
+        }
+        if saturated {
+            shadow.push(gpui::BoxShadow {
+                color: bg.opacity(if dark { 0.35 } else { 0.28 }),
+                offset: gpui::point(px(0.), px(4.)),
+                blur_radius: px(12.),
+                spread_radius: px(-4.),
+                inset: false,
+            });
+        }
+        Self {
+            fill: Self::sheen(bg, dark),
+            shadow,
+        }
+    }
+
+    fn sheen(bg: Hsla, dark: bool) -> gpui::Background {
+        let lift = if dark { 0.09 } else { 0.06 };
+        let top = bg.blend(gpui::hsla(0., 0., 1., lift * bg.a.max(0.3)));
+        gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(top, 0.),
+            gpui::linear_color_stop(bg, 1.),
+        )
+    }
+
+    fn pressed(bg: Hsla, dark: bool) -> gpui::Background {
+        let shade = if bg.l > 0.6 && bg.a > 0.9 { 0.08 } else { 0.14 };
+        let pressed = bg.blend(gpui::hsla(
+            0.,
+            0.,
+            if dark && bg.l < 0.5 { 1. } else { 0. },
+            shade * bg.a.max(0.4),
+        ));
+        pressed.into()
     }
 }
 
@@ -689,7 +781,14 @@ impl RenderOnce for IconButton {
                 Some(radius) => this.rounded(radius),
                 None => this.rounded_full(),
             })
-            .when_some(bg, |this, bg| this.bg(bg))
+            .when_some(bg, |this, bg| {
+                if bg.a > 0.9 {
+                    let finish = ButtonFinish::new(bg, bg.l > 0.5);
+                    this.bg(finish.fill).shadow(finish.shadow)
+                } else {
+                    this.bg(bg)
+                }
+            })
             .when_some(border, |this, border| this.border_1().border_color(border))
             .when(active, |this| {
                 this.when_some(active_bg, |this, bg| this.bg(bg))
@@ -715,6 +814,9 @@ impl RenderOnce for IconButton {
                     })
                 },
             )
+            .when(!disabled && on_click.is_some(), |this| {
+                this.active(|style| style.opacity(0.78))
+            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

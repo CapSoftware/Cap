@@ -467,6 +467,10 @@ pub struct Theme {
     pub editor: EditorPalette,
 }
 
+/// The corner every editor card (player, side panel, timeline, export
+/// panes) shares.
+pub const EDITOR_CARD_RADIUS: f32 = 14.;
+
 /// Editor surfaces, transcribed from the `--ed-*` custom properties in
 /// `apps/desktop/src/styles/theme.css`. A layered, low-contrast system
 /// (window < card < control) with one accent; change both files together.
@@ -508,60 +512,64 @@ pub struct EditorPalette {
 impl EditorPalette {
     pub fn light() -> Self {
         Self {
-            window: rgb(0xf1f1f3),
+            window: rgb(0xedeef1),
             card: rgb(0xffffff),
-            card_2: rgb(0xf6f6f7),
-            stage: rgb(0xe9e9ec),
-            line: rgba(0x00000013),
-            line_strong: rgba(0x0000001f),
-            text_1: rgb(0x1c1c1e),
-            text_2: rgb(0x6e6e75),
-            text_3: rgb(0xa0a0a8),
-            ctl: rgba(0x0000000b),
-            ctl_hover: rgba(0x00000013),
+            card_2: rgb(0xf6f6f8),
+            stage: rgb(0xe7e8ec),
+            line: rgba(0x0000001a),
+            line_strong: rgba(0x00000024),
+            text_1: rgb(0x18181b),
+            text_2: rgb(0x68686f),
+            text_3: rgb(0x9d9da5),
+            ctl: rgba(0x0000000a),
+            ctl_hover: rgba(0x00000012),
             ctl_active: rgba(0x0000001c),
-            accent: rgb(0x007aff),
+            accent: rgb(0x0a7cff),
             accent_2: rgb(0x2b8cff),
             playhead: rgb(0xff3b30),
             thumb: rgb(0xffffff),
-            seg_tint: 0.13,
-            seg_line: 0.34,
+            seg_tint: 0.22,
+            seg_line: 0.5,
             seg_label_base: rgb(0x000000),
-            seg_label_mix: 0.58,
-            card_shadow_alpha: 0.04,
-            pop_shadow_alpha: 0.25,
-            pop_shadow_offset: 12.,
-            pop_shadow_blur: 32.,
+            seg_label_mix: 0.62,
+            card_shadow_alpha: 0.05,
+            pop_shadow_alpha: 0.22,
+            pop_shadow_offset: 14.,
+            pop_shadow_blur: 36.,
         }
     }
 
     pub fn dark() -> Self {
         Self {
-            window: rgb(0x131315),
-            card: rgb(0x1b1b1e),
-            card_2: rgb(0x202024),
-            stage: rgb(0x121214),
-            line: rgba(0xffffff14),
-            line_strong: rgba(0xffffff21),
-            text_1: rgb(0xf4f4f5),
-            text_2: rgb(0x9a9aa3),
-            text_3: rgb(0x62626a),
-            ctl: rgba(0xffffff0f),
-            ctl_hover: rgba(0xffffff17),
+            window: rgb(0x0c0d10),
+            card: rgb(0x16171b),
+            card_2: rgb(0x1e1f24),
+            stage: rgb(0x0e0f12),
+            line: rgba(0xffffff12),
+            line_strong: rgba(0xffffff1f),
+            text_1: rgb(0xf5f5f7),
+            text_2: rgb(0x9d9ea8),
+            text_3: rgb(0x64656e),
+            ctl: rgba(0xffffff0d),
+            ctl_hover: rgba(0xffffff16),
             ctl_active: rgba(0xffffff21),
             accent: rgb(0x0a84ff),
             accent_2: rgb(0x3d9bff),
             playhead: rgb(0xff453a),
-            thumb: rgb(0xe8e8ea),
-            seg_tint: 0.20,
-            seg_line: 0.42,
+            thumb: rgb(0xf4f4f6),
+            seg_tint: 0.42,
+            seg_line: 0.6,
             seg_label_base: rgb(0xffffff),
-            seg_label_mix: 0.55,
-            card_shadow_alpha: 0.30,
-            pop_shadow_alpha: 0.60,
+            seg_label_mix: 0.3,
+            card_shadow_alpha: 0.42,
+            pop_shadow_alpha: 0.62,
             pop_shadow_offset: 16.,
-            pop_shadow_blur: 40.,
+            pop_shadow_blur: 44.,
         }
+    }
+
+    fn is_dark(&self) -> bool {
+        self.card.r < 0.5
     }
 
     /// `color-mix(in srgb, color <tint>, card)`: the segment fill.
@@ -605,26 +613,130 @@ impl EditorPalette {
         mix(self.seg_label_base, color, 0.70)
     }
 
-    /// `--ed-card-shadow`: `0 1px 2px` under every editor card.
+    /// The lift under every editor card: a 1px contact shadow, a wide soft
+    /// ambient one, and a 1px inner sheen along the top edge so the card
+    /// reads as a lit pane rather than a flat cut-out.
     pub fn card_shadow(&self) -> Vec<BoxShadow> {
+        let dark = self.is_dark();
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if dark { 0.045 } else { 0.9 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.card_shadow_alpha),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.card_shadow_alpha * 0.8),
+                offset: point(px(0.), px(8.)),
+                blur_radius: px(28.),
+                spread_radius: px(-10.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// The lift under a menu, popover or dialog, with the same top sheen as
+    /// a card.
+    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if self.is_dark() { 0.06 } else { 0.9 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
+                offset: point(px(0.), px(self.pop_shadow_offset)),
+                blur_radius: px(self.pop_shadow_blur),
+                spread_radius: px(-12.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// A menu, popover or dialog body: a step above the card it opens over.
+    pub fn pop_bg(&self) -> Hsla {
+        if self.is_dark() {
+            self.card_2.into()
+        } else {
+            self.card.into()
+        }
+    }
+
+    /// A popover's hairline, firmer than a card's so the edge holds over
+    /// busy content.
+    pub fn pop_line(&self) -> Hsla {
+        self.line_strong.into()
+    }
+
+    /// The 1px inner hairline around a trough (segmented controls, mode
+    /// switches). Drawn as an inset shadow so it adds no layout size.
+    pub fn trough_ring(&self) -> Vec<BoxShadow> {
         vec![BoxShadow {
-            color: gpui::hsla(0., 0., 0., self.card_shadow_alpha),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-            inset: false,
+            color: self.line.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.),
+            inset: true,
         }]
     }
 
-    /// `--ed-pop-shadow`: the lift under a menu, popover or dialog.
-    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
-        vec![BoxShadow {
-            color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
-            offset: point(px(0.), px(self.pop_shadow_offset)),
-            blur_radius: px(self.pop_shadow_blur),
-            spread_radius: px(-12.),
-            inset: false,
-        }]
+    /// A selected pill inside a trough (segmented controls, tab switchers):
+    /// raised and lit in both appearances.
+    pub fn pill_shadow(&self) -> Vec<BoxShadow> {
+        if self.is_dark() {
+            vec![
+                BoxShadow {
+                    color: gpui::hsla(0., 0., 1., 0.07),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+                BoxShadow {
+                    color: gpui::hsla(0., 0., 1., 0.06),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.5),
+                    inset: false,
+                },
+                BoxShadow {
+                    color: gpui::hsla(0., 0., 0., 0.4),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(3.),
+                    spread_radius: px(0.),
+                    inset: false,
+                },
+            ]
+        } else {
+            raised_pill_shadow()
+        }
+    }
+
+    /// The selected pill's fill: the card in light, a white wash in dark.
+    pub fn pill_fill(&self) -> Hsla {
+        if self.is_dark() {
+            gpui::hsla(0., 0., 1., 0.11)
+        } else {
+            self.card.into()
+        }
+    }
+
+    /// The vertical sheen a coloured fill (a timeline segment, a primary
+    /// button) carries: the colour lifted a little at the top.
+    pub fn sheen(&self, color: Rgba) -> (Rgba, Rgba) {
+        let lift = if self.is_dark() { 0.10 } else { 0.07 };
+        (mix(color, rgb(0xffffff), lift), color)
     }
 }
 
@@ -663,13 +775,22 @@ pub fn raised_pill_shadow() -> Vec<BoxShadow> {
 
 /// The drop shadow under a slider knob.
 pub fn thumb_shadow() -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: gpui::hsla(0., 0., 0., 0.25),
-        offset: point(px(0.), px(1.)),
-        blur_radius: px(3.),
-        spread_radius: px(0.),
-        inset: false,
-    }]
+    vec![
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.14),
+            offset: point(px(0.), px(3.)),
+            blur_radius: px(8.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+    ]
 }
 
 /// `color-mix(in srgb, b <t>, a)`: straight sRGB interpolation, which is what
@@ -732,12 +853,12 @@ impl Theme {
             editor: EditorPalette::light(),
 
             gray_1: rgb(0xfcfcfc),
-            gray_2: rgb(0xf9f9f9),
-            gray_3: rgb(0xf0f0f0),
-            gray_4: rgb(0xe8e8e8),
-            gray_5: rgb(0xe0e0e0),
-            gray_6: rgb(0xd9d9d9),
-            gray_7: rgb(0xcecece),
+            gray_2: rgb(0xf8f8fa),
+            gray_3: rgb(0xeff0f2),
+            gray_4: rgb(0xe7e8eb),
+            gray_5: rgb(0xdfe0e3),
+            gray_6: rgb(0xd8d9dd),
+            gray_7: rgb(0xcdced2),
             gray_8: rgb(0xbbbbbb),
             gray_9: rgb(0x8d8d8d),
             gray_10: rgb(0x838383),
@@ -786,19 +907,20 @@ impl Theme {
             material: None,
             editor: EditorPalette::dark(),
 
-            // gray 1-6 and 11 are the theme.css overrides, not stock Radix.
-            gray_1: rgb(0x111111),
-            gray_2: rgb(0x1c1c1c),
-            gray_3: rgb(0x282828),
-            gray_4: rgb(0x323232),
-            gray_5: rgb(0x3a3a3a),
-            gray_6: rgb(0x444444),
-            gray_7: rgb(0x484848),
-            gray_8: rgb(0x606060),
-            gray_9: rgb(0x6e6e6e),
-            gray_10: rgb(0x7b7b7b),
-            gray_11: rgb(0xa1a1a1),
-            gray_12: rgb(0xeeeeee),
+            // A cool-leaning neutral ramp shared with the editor palette, so
+            // every window sits on the same family of greys.
+            gray_1: rgb(0x101114),
+            gray_2: rgb(0x1a1b1f),
+            gray_3: rgb(0x26272c),
+            gray_4: rgb(0x303136),
+            gray_5: rgb(0x38393f),
+            gray_6: rgb(0x424349),
+            gray_7: rgb(0x47484e),
+            gray_8: rgb(0x5f6067),
+            gray_9: rgb(0x6d6e75),
+            gray_10: rgb(0x7a7b82),
+            gray_11: rgb(0xa1a2a9),
+            gray_12: rgb(0xeeeef0),
 
             blue_3: rgb(0x0d2847),
             blue_4: rgb(0x003362),
@@ -826,10 +948,10 @@ impl Theme {
             red_300: rgb(0xff4766),
 
             // `theme.css:101-107`.
-            gray_200_legacy: rgb(0x282828),
-            gray_300_legacy: rgb(0x323232),
+            gray_200_legacy: rgb(0x26272c),
+            gray_300_legacy: rgb(0x303136),
             // `--gray-400: #a1a1a1` (`theme.css:105`).
-            gray_400_legacy: rgb(0xa1a1a1),
+            gray_400_legacy: rgb(0xa1a2a9),
             gray_500_legacy: rgb(0xffffff),
 
             text_primary: rgba(0xfffffff2),

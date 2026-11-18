@@ -61,6 +61,7 @@ pub struct Toggle {
     on_fill: Hsla,
     /// `bg-white` -- the thumb is white on every surface.
     thumb: Hsla,
+    ring: Hsla,
     disabled: bool,
     label: Option<SharedString>,
     on_click: Option<crate::ui::button::ClickHandler>,
@@ -76,6 +77,7 @@ impl Toggle {
             off_fill: Hsla::from(theme.editor.ctl_active),
             on_fill: Hsla::from(theme.editor.accent),
             thumb: gpui::white(),
+            ring: Hsla::from(theme.editor.line),
             disabled: false,
             label: None,
             on_click: None,
@@ -148,6 +150,7 @@ impl RenderOnce for Toggle {
             off_fill,
             on_fill,
             thumb,
+            ring,
             disabled,
             label,
             on_click,
@@ -179,6 +182,15 @@ impl RenderOnce for Toggle {
             .when(checked, |this| this.justify_end())
             .when(!disabled, |this| this.cursor_pointer())
             .bg(if checked { on_fill } else { off_fill })
+            .when(!checked, |this| {
+                this.shadow(vec![gpui::BoxShadow {
+                    color: ring,
+                    offset: gpui::point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(1.),
+                    inset: true,
+                }])
+            })
             .child({
                 let (thumb_width, thumb_height) = size.thumb();
                 div()
