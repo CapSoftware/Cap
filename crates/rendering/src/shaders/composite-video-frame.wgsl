@@ -487,15 +487,11 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             if uniforms.preserve_source_alpha > 0.5 {
                 // Straight-alpha sources (background removal, transparent
                 // images) keep their old colour under transparent texels. A
-                // bilinear tap would mix that colour in before any weighting,
-                // so read whole texels and weight each by its alpha.
-                let a = load_texel(p0);
-                let b = load_texel(p1);
-                let c = load_texel(p2);
-                let d = load_texel(p3);
-                let alpha_sum = a.a + b.a + c.a + d.a;
-                let color_sum = a.rgb * a.a + b.rgb * b.a + c.rgb * c.a + d.rgb * d.a;
-                return vec4(color_sum / max(alpha_sum, 0.0001), alpha_sum * 0.25);
+                // hardware bilinear tap mixes that colour in, so these taps
+                // interpolate premultiplied texels instead.
+                let sum = sample_premultiplied(p0) + sample_premultiplied(p1)
+                    + sample_premultiplied(p2) + sample_premultiplied(p3);
+                return vec4(sum.rgb / max(sum.a, 0.0001), sum.a * 0.25);
             }
 
             let box_sum = textureSample(frame_texture, frame_sampler, p0).rgb
@@ -545,10 +541,29 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     return vec4(0.0);
 }
 
-fn load_texel(uv: vec2<f32>) -> vec4<f32> {
+// Bilinear sample of the frame as premultiplied colour.
+fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(frame_texture));
-    let texel = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), size - 1);
-    return textureLoad(frame_texture, texel, 0);
+    let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = floor(position);
+    let fraction = position - base;
+    let origin = vec2<i32>(base);
+    let last = size - 1;
+    let t00 = textureLoad(frame_texture, clamp(origin, vec2<i32>(0), last), 0);
+    let t10 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 0), vec2<i32>(0), last), 0);
+    let t01 = textureLoad(frame_texture, clamp(origin + vec2<i32>(0, 1), vec2<i32>(0), last), 0);
+    let t11 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 1), vec2<i32>(0), last), 0);
+    let top = mix(
+        vec4(t00.rgb * t00.a, t00.a),
+        vec4(t10.rgb * t10.a, t10.a),
+        fraction.x
+    );
+    let bottom = mix(
+        vec4(t01.rgb * t01.a, t01.a),
+        vec4(t11.rgb * t11.a, t11.a),
+        fraction.x
+    );
+    return mix(top, bottom, fraction.y);
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
