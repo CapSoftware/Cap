@@ -23,7 +23,6 @@ const nonIndexablePaths = [
 	"/cli/complete",
 	"/mcp/authorize",
 	"/docs/introduction",
-	"/docs/s3-config",
 	"/home",
 ];
 
@@ -44,6 +43,7 @@ describe("sitemap", () => {
 			"/docs",
 			"/download",
 			"/pricing",
+			"/docs/s3-config",
 			"/docs/s3-config/aws-s3",
 		]) {
 			expect(urls).toContain(`https://cap.so${routePath}`);

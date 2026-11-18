@@ -23,7 +23,6 @@ const NON_INDEXABLE_PATHS = new Set([
 	"/checkout/complete",
 	"/download/started",
 	"/redeem",
-	"/docs/s3-config",
 ]);
 const NON_INDEXABLE_PREFIXES = ["/admin", "/cli", "/mcp"];
 
