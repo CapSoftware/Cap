@@ -251,6 +251,12 @@ impl ProjectHistory {
         self.count > 0
     }
 
+    /// Nothing recorded since the project loaded and no gesture in progress,
+    /// including one that has changed the project but not yet committed.
+    pub fn is_untouched(&self) -> bool {
+        self.entries.len() == 1 && self.paused == 0 && !self.dirty
+    }
+
     /// `move(1)`: step the cursor back one and hand back the state there.
     pub fn undo(&mut self) -> Option<&ProjectConfiguration> {
         if !self.can_undo() {
@@ -3367,6 +3373,24 @@ mod tests {
             .timeline
             .as_ref()
             .map_or(0, |timeline| timeline.zoom_segments.len())
+    }
+
+    #[test]
+    fn history_counts_a_gesture_in_progress_as_an_edit() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        assert!(history.is_untouched());
+        history.pause();
+        assert!(!history.is_untouched());
+        history.record(&with_zoom_count(1));
+        assert!(!history.is_untouched());
+        history.resume(&with_zoom_count(1));
+        assert!(!history.is_untouched());
+        assert!(history.can_undo());
+
+        let mut clicked = ProjectHistory::new(with_zoom_count(0));
+        clicked.pause();
+        clicked.resume(&with_zoom_count(0));
+        assert!(clicked.is_untouched());
     }
 
     #[test]

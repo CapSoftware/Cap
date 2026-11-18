@@ -6803,7 +6803,7 @@ impl EditorWindow {
         if !self.project.auto_zoom_pending || !self.project_ready() {
             return;
         }
-        let untouched = !self.history.can_undo() && !self.history.can_redo();
+        let untouched = self.history.is_untouched();
         let settings = crate::store::GeneralSettings::load();
         let amount = f64::from(settings.zoom_amount_for(self.project.auto_zoom_version));
         let generated = edits::settle_pending_auto_zoom(
@@ -6813,7 +6813,7 @@ impl EditorWindow {
             settings.auto_zoom_on_clicks,
             amount,
         );
-        if untouched {
+        if generated {
             self.history = ProjectHistory::new(self.project.clone());
         } else {
             self.history
