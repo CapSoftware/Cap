@@ -8430,7 +8430,11 @@ impl EditorWindow {
                     }
                 }
                 crate::editor_sidebar::SidebarTab::Keyboard => {
-                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
+                    if crate::editor_tabs::keyboard_settings(&self.project).style
+                        == cap_project::KeyboardStyle::Text
+                    {
+                        colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
+                    }
                 }
                 crate::editor_sidebar::SidebarTab::Audio => {
                     if let Some(summary) = self.summary() {
