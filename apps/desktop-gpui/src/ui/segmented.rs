@@ -471,19 +471,11 @@ impl RenderOnce for SegmentedControl {
                             };
                             match hover_bg {
                                 Some(bg) if !disabled => {
-                                    let (fade, level) = fades[index].clone();
+                                    let level = fades[index].1;
                                     let rest = idle_bg.unwrap_or(bg.opacity(0.));
                                     this.when(level > 0., |this| {
                                         this.bg(crate::ui::hover_blend(rest, bg, level))
                                     })
-                                    .on_hover(
-                                        move |hovered, _, cx| {
-                                            fade.update(cx, |fade, cx| {
-                                                fade.set_hovered(*hovered);
-                                                cx.notify();
-                                            });
-                                        },
-                                    )
                                 }
                                 _ => this,
                             }
@@ -503,6 +495,15 @@ impl RenderOnce for SegmentedControl {
                             label.into_any_element()
                         }
                     }))
+                    .on_hover({
+                        let fade = fades[index].0.clone();
+                        move |hovered, _, cx| {
+                            fade.update(cx, |fade, cx| {
+                                fade.set_hovered(*hovered);
+                                cx.notify();
+                            });
+                        }
+                    })
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })

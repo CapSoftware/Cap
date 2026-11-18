@@ -261,12 +261,12 @@ impl RenderOnce for EditorButton {
                     })
                     .hover(move |this| this.text_color(hover_text))
                     .active(move |this| this.bg(active_bg))
-                    .on_hover(move |hovered, _, cx| {
-                        fade.update(cx, |fade, cx| {
-                            fade.set_hovered(*hovered);
-                            cx.notify();
-                        });
-                    })
+            })
+            .on_hover(move |hovered, _, cx| {
+                fade.update(cx, |fade, cx| {
+                    fade.set_hovered(*hovered);
+                    cx.notify();
+                });
             })
             .children(left_icon.map(|icon| {
                 let group = group.clone();

@@ -180,18 +180,19 @@ impl RenderOnce for TabRail {
                     .when(selected, |this| {
                         this.bg(indicator).shadow(indicator_shadow.clone())
                     })
-                    .when(!selected && !disabled, |this| {
+                    .map(|this| {
                         let (fade, level) = fades[index].clone();
-                        this.cursor_pointer()
-                            .when(level > 0., |this| {
+                        this.when(!selected && !disabled, |this| {
+                            this.cursor_pointer().when(level > 0., |this| {
                                 this.bg(crate::ui::hover_blend(hover.opacity(0.), hover, level))
                             })
-                            .on_hover(move |hovered, _, cx| {
-                                fade.update(cx, |fade, cx| {
-                                    fade.set_hovered(*hovered);
-                                    cx.notify();
-                                });
-                            })
+                        })
+                        .on_hover(move |hovered, _, cx| {
+                            fade.update(cx, |fade, cx| {
+                                fade.set_hovered(*hovered);
+                                cx.notify();
+                            });
+                        })
                     })
                     .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label.clone()).view(cx))
