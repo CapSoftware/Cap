@@ -59,8 +59,9 @@ describe("MacScreenRecordingWithAudioPage component content", () => {
 		);
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("has no comparison table or comparison cards", () => {
+		expect(componentSource).not.toContain("comparisonTable");
+		expect(componentSource).not.toContain("comparisonTitle");
 	});
 
 	it("includes recording modes section", () => {
@@ -71,40 +72,28 @@ describe("MacScreenRecordingWithAudioPage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("system audio");
 	});
 
-	it("mentions macOS built-in recorder limitation", () => {
-		expect(componentSource.toLowerCase()).toContain("cmd+shift+5");
+	it("does not name Cmd+Shift+5 as a comparison", () => {
+		expect(componentSource.toLowerCase()).not.toContain("cmd+shift+5");
 	});
 
-	it("mentions QuickTime as a comparison target", () => {
-		expect(componentSource).toContain("QuickTime");
+	it("does not name QuickTime", () => {
+		expect(componentSource).not.toContain("QuickTime");
 	});
 
-	it("mentions OBS as a comparison target", () => {
-		expect(componentSource).toContain("OBS");
+	it("does not name OBS", () => {
+		expect(componentSource).not.toContain("OBS");
 	});
 
-	it("mentions Loom as a comparison target", () => {
-		expect(componentSource).toContain("Loom");
+	it("does not keep the unverified Loom comparison", () => {
+		expect(componentSource).not.toContain("Loom");
 	});
 
 	it("explains no BlackHole required", () => {
 		expect(componentSource).toContain("BlackHole");
 	});
 
-	it("references the screen-recorder-mac internal link", () => {
-		expect(componentSource).toContain("/screen-recorder-mac");
-	});
-
 	it("references the free-screen-recorder internal link", () => {
 		expect(componentSource).toContain("/free-screen-recorder");
-	});
-
-	it("references the loom-alternative internal link", () => {
-		expect(componentSource).toContain("/loom-alternative");
-	});
-
-	it("references the screen-recording-software internal link", () => {
-		expect(componentSource).toContain("/screen-recording-software");
 	});
 
 	it("references the open-source-screen-recorder internal link", () => {

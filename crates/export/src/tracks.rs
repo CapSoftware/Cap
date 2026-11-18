@@ -181,6 +181,7 @@ pub async fn export_tracks(
     cancel: Arc<AtomicBool>,
     mut on_progress: impl FnMut(TrackProgress) + Send,
 ) -> Result<Vec<PathBuf>, TrackExportError> {
+    let _export_activity = cap_rendering::ExportActivity::begin();
     let mut tracks = settings.tracks.clone();
     tracks.sort();
     tracks.dedup();
@@ -403,13 +404,21 @@ async fn prepare(
             .map_err(|error| format!("Could not read the project: {error}"))?,
     };
     crate::synthesize_default_timeline(&mut project, &recordings);
-    crate::fill_clip_offsets(&mut project, &recording_meta.project_path, studio_meta);
     let recording_durations = recordings
         .segments
         .iter()
         .map(|segment| segment.display.duration)
         .collect::<Vec<_>>();
-    cap_project::clamp_timeline_to_sources(&mut project, &recording_durations);
+    crate::fill_clip_offsets(
+        &mut project,
+        &recording_meta.project_path,
+        studio_meta,
+        &recording_durations,
+    );
+    cap_project::clamp_timeline_to_sources(
+        &mut project,
+        &cap_project::late_audio_trim_limits(studio_meta, &recording_durations),
+    );
 
     let available = available_tracks(&recordings, &project);
     if let Some(missing) = tracks.iter().find(|kind| !available.contains(kind)) {

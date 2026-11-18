@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -637,6 +638,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::corner::rounded(), "Rounded"),
         (tr::editor::tabs::corner::squircle(), "Squircle"),
+        (tr::editor::tabs::padding::even(), "Even"),
+        (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -1624,6 +1631,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::prepare_controls_failed(&error),
         format!("Could not prepare the recording controls: {error}")
+    );
+    assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
     );
     assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),

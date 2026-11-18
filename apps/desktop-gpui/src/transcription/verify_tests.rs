@@ -164,6 +164,7 @@ fn reference_segments(tokens: &[CaptionWord]) -> Vec<CaptionSegment> {
             end: group[group.len() - 1].end,
             text: reference_text(group),
             words: group.to_vec(),
+            recording_clip: None,
         })
         .collect()
 }
@@ -742,6 +743,7 @@ fn trimmed_transcription_extracts_only_used_audio_and_restores_source_times() {
                             start,
                             end,
                         }],
+                        recording_clip: None,
                     }
                 })
                 .collect())

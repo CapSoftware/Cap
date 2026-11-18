@@ -356,14 +356,16 @@ impl RecoveryManager {
             return Ok(false);
         }
 
-        // Without a preparing editor nothing reads the originals once they are
-        // published, so the backup goes with the stop instead of doubling the
-        // recording's size on disk for good -- unless it holds a legacy
-        // omitted track, which publication leaves out and only the backup
-        // keeps.
-        let unread = preparing.is_none()
-            && legacy_omitted_tracks(&incomplete.meta, project_path)
-                .is_ok_and(|tracks| tracks.is_empty());
+        // Unless a preparing editor was handed the originals, nothing reads
+        // them once they are published, so the backup goes with the stop
+        // instead of doubling the recording's size on disk for good -- unless
+        // it holds a legacy omitted track, which publication leaves out and
+        // only the backup keeps. A preparing job that declined (a stopped
+        // config with markers, for one) never shares the lease, so the lease
+        // can't retire the backup and this is the only path that does.
+        let keeps_no_omitted_track = legacy_omitted_tracks(&incomplete.meta, project_path)
+            .is_ok_and(|tracks| tracks.is_empty());
+        let preparing_identity = preparing.as_ref().map(|job| job.identity().clone());
         let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
@@ -378,6 +380,8 @@ impl RecoveryManager {
             RecoveryLock::acquire,
             preparing,
         )?;
+        let unread = keeps_no_omitted_track
+            && !preparing_identity.is_some_and(|identity| identity.publication_succeeded());
         if unread && let Some(workspace) = published_workspace.into_inner() {
             let retired = RecoveryLock::acquire(project_path)
                 .and_then(|_lock| retirement::retire_unread_originals(project_path, &workspace));
@@ -2886,6 +2890,7 @@ impl RecoveryManager {
                         None
                     },
                     display_notch: original_segment.and_then(|s| s.display_notch),
+                    cursor_shape_version: original_segment.and_then(|s| s.cursor_shape_version),
                 }
             })
             .collect();
@@ -2897,6 +2902,10 @@ impl RecoveryManager {
                 segments,
                 cursors: existing_cursors,
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: recording
+                    .meta
+                    .studio_meta()
+                    .map_or(0, StudioRecordingMeta::cursor_shape_version),
             },
         })
     }
@@ -2958,7 +2967,7 @@ impl RecoveryManager {
             Ok(config) => config,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
                 markers: Self::recovered_markers(recording, inner, &timeline_segments),
-                ..Default::default()
+                ..ProjectConfiguration::for_new_project()
             },
             Err(error) => return Err(error.into()),
         };
@@ -5244,9 +5253,11 @@ mod clean_studio_snapshot_tests {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
+                    cursor_shape_version: 0,
                 },
             })),
         }
@@ -6305,6 +6316,52 @@ mod clean_studio_snapshot_tests {
     }
 
     #[test]
+    fn a_stop_whose_preparing_editor_declines_retires_the_original_media_backup() {
+        use super::preparing_observer::PreparingStudioTestTransition;
+        use crate::studio_recording::CleanStoppedStudio;
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let mut completed = completed_preparing_fixture(project);
+        let mut configuration = ProjectConfiguration::load(project).unwrap();
+        configuration.markers = vec![cap_project::TimelineMarker::new(0, 0.5)];
+        configuration.write(project).unwrap();
+        completed.clean_stopped = CleanStoppedStudio::for_test(
+            RecordingMeta::load_for_project(project).unwrap(),
+            configuration,
+        );
+        let (job, observer) = PreparingStudioJob::claim(&completed, 11).unwrap();
+        let transitions = job.test_transitions();
+
+        assert!(RecoveryManager::remux_stopped_with_preparing(&completed, job).unwrap());
+
+        assert_eq!(
+            *transitions.lock().unwrap(),
+            vec![
+                PreparingStudioTestTransition::Unavailable(
+                    "Edited or legacy configuration requires ordinary loading".into(),
+                ),
+                PreparingStudioTestTransition::Ended,
+            ]
+        );
+        assert!(!observer.publication_succeeded());
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].join("original-segments").exists());
+        assert!(probe_video_can_decode(&project.join(OUTPUT)).unwrap());
+        assert!(RecoveryLock::acquire(project).is_ok());
+    }
+
+    #[test]
     fn studio_finalization_keeps_the_recorded_display_fps() {
         let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
         let project = directory.path();
@@ -7283,6 +7340,7 @@ mod empty_orphan_segment_tests {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             })
             .collect();
 
@@ -7297,6 +7355,7 @@ mod empty_orphan_segment_tests {
                     segments,
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -7710,6 +7769,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -8411,6 +8471,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
