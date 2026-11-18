@@ -82,6 +82,7 @@ pub use layers::{
     BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
     new_font_system,
 };
+pub use layers::keycaps;
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,

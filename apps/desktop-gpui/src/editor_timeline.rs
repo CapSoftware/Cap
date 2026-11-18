@@ -36,6 +36,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use cap_rendering::keycaps::{self, KeycapStyle};
+
 mod playback_follow;
 
 pub use playback_follow::PlaybackFollow;
@@ -245,18 +247,29 @@ fn seg_gloss() -> Vec<gpui::BoxShadow> {
 /// selected, so selection reads as lit rather than boxed in.
 fn seg_glow(color: Hsla, dark: bool, selected: bool) -> Vec<gpui::BoxShadow> {
     let alpha = match (dark, selected) {
-        (true, true) => 0.6,
-        (false, true) => 0.45,
-        (true, false) => 0.38,
-        (false, false) => 0.3,
+        (true, true) => 0.7,
+        (false, true) => 0.55,
+        (true, false) => 0.6,
+        (false, false) => 0.46,
     };
-    vec![gpui::BoxShadow {
-        color: color.opacity(alpha),
-        offset: gpui::point(px(0.), px(2.)),
-        blur_radius: px(if selected { 16. } else { 12. }),
-        spread_radius: px(if selected { 0. } else { -2. }),
-        inset: false,
-    }]
+    // A tight glow that hugs the segment, then a wide one that lights the
+    // lane around it.
+    vec![
+        gpui::BoxShadow {
+            color: color.opacity(alpha),
+            offset: gpui::point(px(0.), px(2.)),
+            blur_radius: px(if selected { 16. } else { 14. }),
+            spread_radius: px(if selected { 0. } else { -1. }),
+            inset: false,
+        },
+        gpui::BoxShadow {
+            color: color.opacity(alpha * 0.45),
+            offset: gpui::point(px(0.), px(4.)),
+            blur_radius: px(30.),
+            spread_radius: px(2.),
+            inset: false,
+        },
+    ]
 }
 
 fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
@@ -1360,6 +1373,9 @@ pub enum SegmentDetail {
     /// `TL/KeyboardTrack.tsx:168-266`.
     Keyboard {
         text: SharedString,
+        /// The keys the overlay draws, as their labels, and whether each is
+        /// a modifier: what the segment shows as small keycaps.
+        keys: Arc<[(SharedString, bool)]>,
     },
 }
 
@@ -1610,6 +1626,14 @@ impl TimelineModel {
             })
             .collect();
 
+        // The keys print the way the chosen keyboard prints them; the classic
+        // label reads like a Mac's.
+        let key_style = config
+            .keyboard
+            .as_ref()
+            .map(|keyboard| KeycapStyle::from_str(&keyboard.settings.style))
+            .filter(|style| *style != KeycapStyle::Classic)
+            .unwrap_or(KeycapStyle::MacOs);
         let keyboard = timeline
             .keyboard_segments
             .iter()
@@ -1623,6 +1647,17 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.display_text.clone())
                     },
+                    keys: keycaps::keycaps_for(&segment.display_text, key_style)
+                        .into_iter()
+                        .map(|cap| {
+                            let label = if cap.label.is_empty() {
+                                SharedString::new_static("\u{2423}")
+                            } else {
+                                SharedString::from(cap.label)
+                            };
+                            (label, cap.modifier)
+                        })
+                        .collect(),
                 },
             })
             .collect();
@@ -2427,6 +2462,17 @@ fn render_track_content(
         if !view.transform.segment_visible(segment.start, segment.end) {
             continue;
         }
+        // Key presses linger after the key goes up, so one often runs past
+        // the next press; the overlay then shows the newer one. Each is drawn
+        // only until the next begins, so the row reads like the video.
+        let clipped = (row.kind == TrackKind::Keyboard)
+            .then(|| keyboard_visible_end(segments, index, secs_per_pixel))
+            .flatten()
+            .map(|end| Segment {
+                end,
+                ..segment.clone()
+            });
+        let segment = clipped.as_ref().unwrap_or(segment);
         content = content.child(render_segment(
             theme,
             model,
@@ -2623,6 +2669,23 @@ pub fn new_gap_segment(
     }
     let start = preview.min(gap_end - min_duration);
     Some((start, start + min_duration))
+}
+
+/// Where a key press stops being the one on screen: just before the next
+/// press starts, when that comes before its own end. Never shorter than a
+/// few pixels, so a burst of presses stays clickable.
+fn keyboard_visible_end(segments: &[Segment], index: usize, secs_per_pixel: f64) -> Option<f64> {
+    let segment = segments.get(index)?;
+    let next = segments
+        .iter()
+        .enumerate()
+        .filter(|(other, next)| {
+            *other != index && next.start > segment.start && next.start < segment.end
+        })
+        .map(|(_, next)| next.start)
+        .fold(f64::INFINITY, f64::min);
+    next.is_finite()
+        .then(|| (next - 2.0 * secs_per_pixel).max(segment.start + 6.0 * secs_per_pixel))
 }
 
 /// The 3D lane's create ghost: where a click would put a shot, and what it
@@ -3782,6 +3845,43 @@ fn label_secondary(theme: &Theme, color: Hsla) -> gpui::Div {
         .text_color(seg_muted(theme, color))
 }
 
+/// One key on a keyboard segment: a small white keycap on the segment's
+/// colour, its lit top and lower lip drawn as insets. Modifiers sit a step
+/// quieter than the key they modify.
+fn key_chip(label: &SharedString, modifier: bool) -> gpui::Div {
+    div()
+        .flex_none()
+        .min_w(px(18.))
+        .h(px(19.))
+        .px(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .bg(gpui::hsla(0., 0., 1., if modifier { 0.16 } else { 0.24 }))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.28),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.22),
+                offset: gpui::point(px(0.), px(-1.5)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ])
+        .text_size(px(11.))
+        .line_height(px(13.))
+        .text_color(gpui::hsla(0., 0., 1., 0.95))
+        .truncate()
+        .child(label.clone())
+}
+
 fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> AnyElement {
     svg()
         .path(path)
@@ -4049,7 +4149,18 @@ fn label_body(
         (SegmentDetail::Caption { .. }, LabelTier::Glyph) => return None,
 
         // -- Keyboard (`TL/KeyboardTrack.tsx:166-173, 260-268`) -----------
-        (SegmentDetail::Keyboard { text }, LabelTier::Full | LabelTier::Compact) => label_row()
+        (SegmentDetail::Keyboard { keys, .. }, LabelTier::Full | LabelTier::Compact)
+            if !keys.is_empty() =>
+        {
+            label_row()
+                .gap(px(3.))
+                .children(
+                    keys.iter()
+                        .map(|(label, modifier)| key_chip(label, *modifier)),
+                )
+                .into_any_element()
+        }
+        (SegmentDetail::Keyboard { text, .. }, LabelTier::Full | LabelTier::Compact) => label_row()
             .child(
                 label_primary(theme, color)
                     .font_family("monospace")

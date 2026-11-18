@@ -284,6 +284,127 @@ pub struct CaptionPreset {
     pub fade_duration: f32,
 }
 
+/// The key styles, each with the keys its tile shows.
+static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 4] = [
+    (
+        "classic",
+        tr::editor::tabs::keyboard::style_classic,
+        &["⌘", "K"],
+    ),
+    (
+        "macos",
+        tr::editor::tabs::keyboard::style_macos,
+        &["⌘", "K"],
+    ),
+    (
+        "windows",
+        tr::editor::tabs::keyboard::style_windows,
+        &["Ctrl", "K"],
+    ),
+    (
+        "linux",
+        tr::editor::tabs::keyboard::style_linux,
+        &["Super", "K"],
+    ),
+];
+
+static KEY_THEMES: [(&str, fn() -> &'static str); 3] = [
+    ("light", tr::editor::tabs::keyboard::theme_light),
+    ("dark", tr::editor::tabs::keyboard::theme_dark),
+    ("retro", tr::editor::tabs::keyboard::theme_retro),
+];
+
+fn rgba(color: [f32; 4]) -> Hsla {
+    gpui::Rgba {
+        r: color[0],
+        g: color[1],
+        b: color[2],
+        a: color[3],
+    }
+    .into()
+}
+
+/// A small key, painted like the renderer paints it: the gradient top, the
+/// side as a solid lip under it, a fine border and a soft shadow.
+fn key_chip(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    label: &str,
+    modifier: bool,
+) -> gpui::Div {
+    const HEIGHT: f32 = 24.;
+    let palette = theme.palette(modifier);
+    let geometry = style.geometry();
+    let depth = (geometry.depth * HEIGHT).max(2.);
+    div()
+        .h(px(HEIGHT - depth))
+        .min_w(px(HEIGHT - depth))
+        .px(px(6.))
+        .mb(px(depth))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(geometry.radius * HEIGHT))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(rgba(palette.top[0]), 0.),
+            gpui::linear_color_stop(rgba(palette.top[1]), 1.),
+        ))
+        .border_1()
+        .border_color(rgba(palette.border))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: rgba(palette.side[1]),
+                offset: gpui::point(px(0.), px(depth)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., palette.shadow * 0.7),
+                offset: gpui::point(px(0.), px(depth + 1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+        ])
+        .text_size(px(if label.chars().count() > 1 { 9.5 } else { 11. }))
+        .text_color(rgba(palette.label))
+        .child(label.to_string())
+}
+
+/// A tile's preview: its keys as keycaps, or the classic label.
+fn key_preview(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    keys: &[&str],
+) -> gpui::AnyElement {
+    if style == cap_rendering::keycaps::KeycapStyle::Classic {
+        return div()
+            .h(px(22.))
+            .px(px(9.))
+            .flex()
+            .items_center()
+            .rounded(px(11.))
+            .bg(gpui::hsla(0., 0., 0., 0.9))
+            .text_size(px(11.))
+            .text_color(gpui::white())
+            .child(keys.concat())
+            .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_end()
+        .gap(px(4.))
+        .children(
+            keys.iter()
+                .enumerate()
+                .map(|(index, key)| key_chip(style, theme, key, index + 1 < keys.len())),
+        )
+        .into_any_element()
+}
+
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
     CaptionPreset {
         id: "classic",
@@ -297,7 +418,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         outline: false,
         outline_color: "#000000",
         highlight_color: "#FFFFFF",
-        active_word_highlight: false,
+        active_word_highlight: true,
         highlight_style: "color",
         animation: "bounce",
         uppercase: false,
@@ -2511,6 +2632,119 @@ impl EditorWindow {
     }
 
     /// `KeyboardTab` (`KeyboardTab.tsx:128-553`).
+    /// The key style tiles, then, for keycaps, the theme tiles. Each tile
+    /// shows a small key in the renderer's own colours.
+    fn render_key_style_picker(
+        &self,
+        settings: &KeyboardSettings,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
+        let theme = self.theme;
+        let style = KeycapStyle::from_str(&settings.style);
+        let key_theme = KeycapTheme::from_str(&settings.theme);
+        let tiles = KEY_STYLES.iter().map(|(value, label, keys)| {
+            let value = *value;
+            let tile_style = KeycapStyle::from_str(value);
+            self.key_choice_tile(
+                SharedString::from(format!("keyboard-style-{value}")),
+                label(),
+                settings.style == value,
+                key_preview(tile_style, key_theme, keys),
+                cx.listener(move |this, _, window, cx| {
+                    this.set_keyboard_setting_inner(
+                        false,
+                        "keyboard-style",
+                        window,
+                        cx,
+                        move |settings| settings.style = value.to_string(),
+                    );
+                }),
+            )
+        });
+        let keys = KEY_STYLES
+            .iter()
+            .find(|(value, ..)| *value == settings.style)
+            .map_or(&["⌘", "K"][..], |(_, _, keys)| keys);
+        let themes = KEY_THEMES.iter().map(|(value, label)| {
+            let value = *value;
+            self.key_choice_tile(
+                SharedString::from(format!("keyboard-theme-{value}")),
+                label(),
+                settings.theme == value,
+                key_preview(style, KeycapTheme::from_str(value), keys),
+                cx.listener(move |this, _, window, cx| {
+                    this.set_keyboard_setting_inner(
+                        false,
+                        "keyboard-theme",
+                        window,
+                        cx,
+                        move |settings| settings.theme = value.to_string(),
+                    );
+                }),
+            )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::key_style())
+                    .child(div().flex().flex_row().gap(px(8.)).children(tiles)),
+            )
+            .when(style != KeycapStyle::Classic, |this| {
+                this.child(
+                    ui::Field::section(&theme, tr::editor::tabs::keyboard::key_theme())
+                        .child(div().flex().flex_row().gap(px(8.)).children(themes)),
+                )
+            })
+    }
+
+    fn key_choice_tile(
+        &self,
+        id: SharedString,
+        label: &'static str,
+        selected: bool,
+        preview: impl IntoElement,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> impl IntoElement {
+        let editor = self.theme.editor;
+        div()
+            .id(id)
+            .flex_1()
+            .min_w_0()
+            .h(px(78.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(10.))
+            .rounded(px(12.))
+            .map(|this| {
+                if selected {
+                    this.bg(editor.pill_fill())
+                        .shadow(editor.choice_selected_shadow())
+                } else {
+                    this.bg(Hsla::from(editor.ctl))
+                        .shadow(editor.trough_ring())
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                }
+            })
+            .on_click(on_click)
+            .child(preview)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(if selected {
+                        editor.text_1
+                    } else {
+                        editor.text_2
+                    }))
+                    .child(label),
+            )
+    }
+
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let settings = keyboard_settings(&self.project);
@@ -2532,12 +2766,15 @@ impl EditorWindow {
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or(tr::editor::tabs::weight::normal(), |(_, label)| label());
 
+        let classic = settings.style == "classic";
+
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
             .flex()
             .flex_col()
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
+            .child(self.render_key_style_picker(&settings, cx))
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::font_settings()).child(
                     div()
@@ -2562,42 +2799,48 @@ impl EditorWindow {
                             )
                             .into_any_element(),
                         )
-                        .child(self.labelled(
-                            tr::editor::tabs::keyboard::text_color(),
-                            self.render_hex_field(
-                                crate::editor_panels::FieldKey::KeyboardColor,
-                                &settings.color,
-                                cx,
-                            ),
-                        )),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                tr::editor::tabs::keyboard::background_color(),
+                        .when(classic, |this| {
+                            this.child(self.labelled(
+                                tr::editor::tabs::keyboard::text_color(),
                                 self.render_hex_field(
-                                    crate::editor_panels::FieldKey::KeyboardBackground,
-                                    &settings.background_color,
+                                    crate::editor_panels::FieldKey::KeyboardColor,
+                                    &settings.color,
                                     cx,
                                 ),
                             ))
-                            .child(
-                                self.slider_field(
-                                    tr::editor::tabs::keyboard::background_opacity(),
-                                    SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                    ),
+                        }),
+                ),
             )
+            // Keycaps take their colours from the theme; the label's own
+            // background only applies to the classic look.
+            .when(classic, |this| {
+                this.child(
+                    ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.))
+                                .child(self.labelled(
+                                    tr::editor::tabs::keyboard::background_color(),
+                                    self.render_hex_field(
+                                        crate::editor_panels::FieldKey::KeyboardBackground,
+                                        &settings.background_color,
+                                        cx,
+                                    ),
+                                ))
+                                .child(
+                                    self.slider_field(
+                                        tr::editor::tabs::keyboard::background_opacity(),
+                                        SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                        ),
+                )
+            })
             .child(
                 ui::Field::inline(&theme, tr::editor::tabs::keyboard::position()).child(
                     self.menu_select(

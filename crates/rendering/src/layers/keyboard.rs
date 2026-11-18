@@ -8,6 +8,7 @@ use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use super::captions::{CaptionOverlayLayout, CaptionPosition};
+use super::keycaps::{self, Keycap, KeycapStyle, KeycapTheme};
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 #[repr(C)]
@@ -18,6 +19,46 @@ struct KeyboardBackgroundUniforms {
     radius: f32,
     _padding: [f32; 3],
     _padding2: [f32; 4],
+}
+
+/// One key for `shaders/keycap.wgsl`.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug, Default)]
+struct KeycapUniform {
+    rect: [f32; 4],
+    top_a: [f32; 4],
+    top_b: [f32; 4],
+    side_a: [f32; 4],
+    side_b: [f32; 4],
+    border: [f32; 4],
+    highlight: [f32; 4],
+    shape: [f32; 4],
+    finish: [f32; 4],
+}
+
+const MAX_KEYCAPS: usize = 16;
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug)]
+struct KeycapUniforms {
+    caps: [KeycapUniform; MAX_KEYCAPS],
+    info: [f32; 4],
+    /// The keyboard deck behind the keys: its rect, top and bottom colours,
+    /// and its corner radius, whether it is drawn, and its reach.
+    plate: [f32; 4],
+    plate_top: [f32; 4],
+    plate_bottom: [f32; 4],
+    plate_shape: [f32; 4],
+}
+
+/// A key label placed for glyphon: which shaped buffer, where, in what colour.
+struct PlacedLabel {
+    slot: usize,
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    color: Color,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -183,6 +224,13 @@ pub struct KeyboardLayer {
     background_scissor: Option<[u32; 4]>,
     output_size: (u32, u32),
     has_content: bool,
+    keycap_pipeline: wgpu::RenderPipeline,
+    keycap_bind_group: wgpu::BindGroup,
+    keycap_uniform_buffer: wgpu::Buffer,
+    /// Shaped key labels, kept between frames while their text holds.
+    keycap_buffers: Vec<Option<(ShapedKeyboardText, Buffer)>>,
+    keycap_labels: Vec<PlacedLabel>,
+    keycap_mode: bool,
 }
 
 impl KeyboardLayer {
@@ -282,6 +330,9 @@ impl KeyboardLayer {
             cache: None,
         });
 
+        let (keycap_pipeline, keycap_bind_group, keycap_uniform_buffer) =
+            create_keycap_pipeline(device);
+
         Self {
             font_system,
             swash_cache,
@@ -296,6 +347,12 @@ impl KeyboardLayer {
             background_scissor: None,
             output_size: (0, 0),
             has_content: false,
+            keycap_pipeline,
+            keycap_bind_group,
+            keycap_uniform_buffer,
+            keycap_buffers: Vec::new(),
+            keycap_labels: Vec::new(),
+            keycap_mode: false,
         }
     }
 
@@ -308,6 +365,7 @@ impl KeyboardLayer {
         caption_layout: Option<CaptionOverlayLayout>,
     ) {
         self.has_content = false;
+        self.keycap_mode = false;
         self.background_scissor = None;
         self.output_size = (output_size.x, output_size.y);
 
@@ -439,6 +497,33 @@ impl KeyboardLayer {
         } else {
             Weight::NORMAL
         };
+
+        let style = KeycapStyle::from_str(&settings.style);
+        if style != KeycapStyle::Classic {
+            // The first key lands as the overlay finishes fading in, so the
+            // press is seen rather than lost in the fade.
+            let mut struck = last_struck_at(active.segment, current_time);
+            if struck <= active.segment.start {
+                struck += (segment_fade * 0.7).min(0.12);
+            }
+            self.prepare_keycaps(
+                KeycapFrame {
+                    text: &visible_text,
+                    style,
+                    theme: KeycapTheme::from_str(&settings.theme),
+                    font_size,
+                    opacity: fade_opacity,
+                    bounce: bounce_offset as f32,
+                    since_struck: current_time - struck,
+                    position,
+                    margin,
+                },
+                (width, height),
+                caption_layout,
+                constants,
+            );
+            return;
+        }
 
         let text_alpha = fade_opacity.clamp(0.0, 1.0);
         let color = Color::rgba(
@@ -611,6 +696,25 @@ impl KeyboardLayer {
             return;
         }
 
+        if self.keycap_mode {
+            if let Some([x, y, width, height]) = self.background_scissor {
+                pass.set_scissor_rect(x, y, width, height);
+                pass.set_pipeline(&self.keycap_pipeline);
+                pass.set_bind_group(0, &self.keycap_bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+            if let Err(e) = self
+                .text_renderer
+                .render(&self.text_atlas, &self.viewport, pass)
+            {
+                warn!("Error rendering keycap labels: {e:?}");
+            }
+            if self.output_size.0 > 0 && self.output_size.1 > 0 {
+                pass.set_scissor_rect(0, 0, self.output_size.0, self.output_size.1);
+            }
+            return;
+        }
+
         if let Some([x, y, width, height]) = self.background_scissor {
             pass.set_scissor_rect(x, y, width, height);
             pass.set_pipeline(&self.background_pipeline);
@@ -633,6 +737,444 @@ impl KeyboardLayer {
             pass.set_scissor_rect(0, 0, self.output_size.0, self.output_size.1);
         }
     }
+}
+
+/// A shaped label's set width and height, and where its baseline sits below
+/// the top of its line box.
+#[derive(Debug, Clone, Copy, Default)]
+struct LabelMetrics {
+    width: f32,
+    height: f32,
+    baseline: f32,
+    size: f32,
+}
+
+/// What one frame of keycaps needs from the segment and settings.
+struct KeycapFrame<'a> {
+    text: &'a str,
+    style: KeycapStyle,
+    theme: KeycapTheme,
+    font_size: f32,
+    opacity: f32,
+    bounce: f32,
+    since_struck: f64,
+    position: KeyboardPosition,
+    margin: f32,
+}
+
+impl KeyboardLayer {
+    /// Shapes `text` into the buffer at `slot`, reusing it while the text
+    /// holds, and returns how wide and tall the set text is.
+    fn shape_keycap_label(
+        &mut self,
+        slot: usize,
+        text: &str,
+        size: f32,
+        family: Family<'static>,
+        weight: Weight,
+    ) -> LabelMetrics {
+        if self.keycap_buffers.len() <= slot {
+            self.keycap_buffers.resize_with(slot + 1, || None);
+        }
+        let shaped = ShapedKeyboardText {
+            text: text.to_string(),
+            font_size: size.to_bits(),
+            wrap_width: 0,
+            family,
+            weight,
+        };
+        let fresh = !matches!(&self.keycap_buffers[slot], Some((held, _)) if *held == shaped);
+        if fresh {
+            let metrics = Metrics::new(size, size * 1.2);
+            let mut buffer = Buffer::new(&mut self.font_system, metrics);
+            buffer.set_size(&mut self.font_system, None, None);
+            buffer.set_text(
+                &mut self.font_system,
+                text,
+                &Attrs::new().family(family).weight(weight),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            self.keycap_buffers[slot] = Some((shaped, buffer));
+        }
+        let Some((_, buffer)) = &self.keycap_buffers[slot] else {
+            return LabelMetrics::default();
+        };
+        let mut metrics = LabelMetrics {
+            size,
+            ..LabelMetrics::default()
+        };
+        for (index, run) in glyphon::cosmic_text::LayoutRunIter::new(buffer).enumerate() {
+            metrics.width = metrics.width.max(run.line_w);
+            metrics.height = metrics.height.max(run.line_top + run.line_height);
+            if index == 0 {
+                metrics.baseline = run.line_y;
+            }
+        }
+        metrics.height = metrics.height.max(size * 1.2);
+        if metrics.baseline <= 0. {
+            metrics.baseline = size;
+        }
+        metrics
+    }
+
+    fn prepare_keycaps(
+        &mut self,
+        frame: KeycapFrame<'_>,
+        (width, height): (u32, u32),
+        caption_layout: Option<CaptionOverlayLayout>,
+        constants: &RenderVideoConstants,
+    ) {
+        let mut caps: Vec<Keycap> = keycaps::keycaps_for(frame.text, frame.style);
+        caps.truncate(MAX_KEYCAPS);
+        if caps.is_empty() {
+            return;
+        }
+        let available = (width as f32 - frame.margin * 2.0).max(1.0);
+        let geometry = frame.style.geometry();
+        let (face, face_weight) = keycaps::keycap_font(frame.style, frame.theme);
+        let family = Family::Name(face);
+        let weight = Weight(face_weight);
+
+        // Lay the keys out at the set size; a row too wide for the frame is
+        // set again, smaller, so every key stays on screen.
+        let mut cap_height = frame.font_size * 1.6;
+        let mut sizes: Vec<(LabelMetrics, LabelMetrics, f32)> = Vec::new();
+        let mut total = 0.;
+        for _ in 0..2 {
+            sizes.clear();
+            for (index, cap) in caps.iter().enumerate() {
+                let label = self.shape_keycap_label(
+                    index * 2,
+                    &cap.label,
+                    keycaps::label_size(cap, cap_height, frame.style),
+                    family,
+                    weight,
+                );
+                let legend = match &cap.legend {
+                    Some(legend) => self.shape_keycap_label(
+                        index * 2 + 1,
+                        legend,
+                        keycaps::legend_size(cap_height),
+                        family,
+                        weight,
+                    ),
+                    None => LabelMetrics::default(),
+                };
+                let cap_width = keycaps::cap_width(cap, cap_height, label.width, legend.width);
+                sizes.push((label, legend, cap_width));
+            }
+            total = sizes.iter().map(|size| size.2).sum::<f32>()
+                + keycaps::cap_gap(cap_height) * (caps.len() - 1) as f32;
+            if total <= available {
+                break;
+            }
+            cap_height *= available / total;
+        }
+        if total > available {
+            let scale = available / total;
+            for size in &mut sizes {
+                size.2 *= scale;
+            }
+            total = available;
+        }
+
+        let radius = geometry.radius * cap_height;
+        let depth = (geometry.depth * cap_height).max(2.0);
+        let inset = geometry.inset * cap_height;
+        let gap = keycaps::cap_gap(cap_height)
+            .min((available - total).max(0.) + keycaps::cap_gap(cap_height));
+
+        let resolved_position = resolve_keyboard_position(frame.position, caption_layout);
+        let left = match resolved_position {
+            KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => frame.margin,
+            KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+                (width as f32 - frame.margin - total).max(0.0)
+            }
+            _ => ((width as f32 - total) / 2.0).max(0.0),
+        };
+        let center_y = height as f32 * resolved_position.y_factor();
+        let max_top = (height as f32 - cap_height).max(0.0);
+        let base_top = (center_y - cap_height / 2.0).clamp(0.0, max_top);
+        let top = resolve_background_top(
+            [
+                left,
+                (base_top + frame.bounce).clamp(0.0, max_top),
+                total,
+                cap_height,
+            ],
+            height as f32,
+            frame.position,
+            caption_layout,
+        );
+
+        let press = keycaps::press_depth(frame.since_struck);
+        let opacity = frame.opacity.clamp(0.0, 1.0);
+        let mut uniforms = KeycapUniforms {
+            caps: [KeycapUniform::default(); MAX_KEYCAPS],
+            info: [caps.len() as f32, opacity, 0.0, 0.0],
+            plate: [0.0; 4],
+            plate_top: [0.0; 4],
+            plate_bottom: [0.0; 4],
+            plate_shape: [0.0; 4],
+        };
+        self.keycap_labels.clear();
+        let pad = cap_height * 0.13;
+        let mut x = left;
+        for (index, (cap, (label, legend, cap_width))) in caps.iter().zip(&sizes).enumerate() {
+            let palette = frame.theme.palette(cap.modifier);
+            uniforms.info[2] = uniforms.info[2].max(palette.shadow);
+            uniforms.caps[index] = KeycapUniform {
+                rect: [x, top, *cap_width, cap_height],
+                top_a: palette.top[0],
+                top_b: palette.top[1],
+                side_a: palette.side[0],
+                side_b: palette.side[1],
+                border: palette.border,
+                highlight: palette.highlight,
+                shape: [radius, depth, inset, press],
+                finish: [geometry.dish, palette.grain, palette.gloss, 0.0],
+            };
+            let sink = depth * press;
+            let face_x = x + inset;
+            let face_y = top + sink + inset * 0.4;
+            let face_w = cap_width - inset * 2.0;
+            let face_h = cap_height - depth - inset * 0.85;
+            let color = |c: [f32; 4]| {
+                Color::rgba(
+                    (c[0] * 255.0) as u8,
+                    (c[1] * 255.0) as u8,
+                    (c[2] * 255.0) as u8,
+                    (c[3] * opacity * 255.0) as u8,
+                )
+            };
+            // Labels are placed by their ink, not their line box: the
+            // baseline sits so the capitals (or running text) centre on the
+            // face, or, for Apple's modifiers, hug the corners as printed.
+            let place = |metrics: &LabelMetrics, left: f32, ink_top: f32, ink: f32| {
+                (left, ink_top + metrics.size * ink - metrics.baseline)
+            };
+            if cap.legend.is_some() {
+                // Apple's keys print towards the space bar: the symbol in
+                // the top corner, the word in the bottom one, same side.
+                let right = cap.align == keycaps::LegendAlign::Right;
+                let along = |width: f32| {
+                    if right {
+                        face_x + face_w - pad - width
+                    } else {
+                        face_x + pad
+                    }
+                };
+                if !cap.label.is_empty() {
+                    let (left, top) = place(label, along(label.width), face_y + pad * 0.75, 0.71);
+                    self.keycap_labels.push(PlacedLabel {
+                        slot: index * 2,
+                        left,
+                        top,
+                        width: label.width,
+                        height: label.height,
+                        color: color(palette.label),
+                    });
+                }
+                let legend_ink = legend.size * 0.71;
+                let (left, top) = place(
+                    legend,
+                    along(legend.width),
+                    face_y + face_h - pad * 0.7 - legend_ink,
+                    0.71,
+                );
+                self.keycap_labels.push(PlacedLabel {
+                    slot: index * 2 + 1,
+                    left,
+                    top,
+                    width: legend.width,
+                    height: legend.height,
+                    color: color(palette.legend),
+                });
+            } else if !cap.label.is_empty() {
+                let ink = keycaps::ink_height(cap);
+                let (left, top) = place(
+                    label,
+                    face_x + (face_w - label.width) / 2.0,
+                    face_y + (face_h - label.size * ink) / 2.0,
+                    ink,
+                );
+                self.keycap_labels.push(PlacedLabel {
+                    slot: index * 2,
+                    left,
+                    top,
+                    width: label.width,
+                    height: label.height,
+                    color: color(palette.label),
+                });
+            }
+            x += cap_width + gap;
+        }
+
+        // Apple's keys sit sunk in the keyboard's deck: a black well on a
+        // MacBook Pro, silver aluminium on a Magic Keyboard.
+        let plate_pad = if frame.style == KeycapStyle::MacOs {
+            cap_height * 0.17
+        } else {
+            0.0
+        };
+        if plate_pad > 0.0 {
+            let deck = frame.theme.palette(false).plate;
+            uniforms.plate = [
+                left - plate_pad,
+                top - plate_pad,
+                total + plate_pad * 2.0,
+                cap_height + plate_pad * 2.0,
+            ];
+            uniforms.plate_top = deck[0];
+            uniforms.plate_bottom = deck[1];
+            uniforms.plate_shape = [radius + plate_pad * 0.9, 1.0, plate_pad, 0.0];
+        }
+
+        let device = &constants.device;
+        let queue = &constants.queue;
+        queue.write_buffer(
+            &self.keycap_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+        self.viewport.update(queue, Resolution { width, height });
+
+        let text_areas: Vec<TextArea> = self
+            .keycap_labels
+            .iter()
+            .filter_map(|placed| {
+                let (_, buffer) = self.keycap_buffers.get(placed.slot)?.as_ref()?;
+                Some(TextArea {
+                    buffer,
+                    left: placed.left,
+                    top: placed.top,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: (placed.left - 2.0).floor() as i32,
+                        top: (placed.top - 2.0).floor() as i32,
+                        right: (placed.left + placed.width + 2.0).ceil() as i32,
+                        bottom: (placed.top + placed.height + 2.0).ceil() as i32,
+                    },
+                    default_color: placed.color,
+                    custom_glyphs: &[],
+                })
+            })
+            .collect();
+        if let Err(e) = self.text_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.text_atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+        ) {
+            warn!("Error preparing keycap labels: {e:?}");
+        }
+
+        // The shadow reaches below and around the keys.
+        let reach = cap_height * 0.42 + depth * 2.0 + plate_pad + 4.0;
+        let scissor_x = (left - reach).max(0.0).floor() as u32;
+        let scissor_y = (top - reach).max(0.0).floor() as u32;
+        let scissor_w = ((total + reach * 2.0).ceil() as u32).min(width.saturating_sub(scissor_x));
+        let scissor_h =
+            ((cap_height + reach * 2.0).ceil() as u32).min(height.saturating_sub(scissor_y));
+        if scissor_w == 0 || scissor_h == 0 {
+            return;
+        }
+        self.background_scissor = Some([scissor_x, scissor_y, scissor_w, scissor_h]);
+        self.keycap_mode = true;
+        self.has_content = true;
+    }
+}
+
+/// When the segment's latest key went down, in timeline seconds: the start,
+/// or the last typed key at or before `current_time`.
+fn last_struck_at(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> f64 {
+    let elapsed_ms = (current_time - segment.start) * 1000.0;
+    segment
+        .keys
+        .iter()
+        .map(|key| key.time_offset)
+        .filter(|offset| *offset <= elapsed_ms)
+        .fold(0.0_f64, f64::max)
+        / 1000.0
+        + segment.start
+}
+
+fn create_keycap_pipeline(
+    device: &Device,
+) -> (wgpu::RenderPipeline, wgpu::BindGroup, wgpu::Buffer) {
+    let uniforms = KeycapUniforms {
+        caps: [KeycapUniform::default(); MAX_KEYCAPS],
+        info: [0.0; 4],
+        plate: [0.0; 4],
+        plate_top: [0.0; 4],
+        plate_bottom: [0.0; 4],
+        plate_shape: [0.0; 4],
+    };
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Keycap Uniform Buffer"),
+        contents: bytemuck::bytes_of(&uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Keycap Bind Group Layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Keycap Bind Group"),
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+    let shader = device.create_shader_module(include_wgsl!("../shaders/keycap.wgsl"));
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Keycap Pipeline Layout"),
+        bind_group_layouts: &[&layout],
+        push_constant_ranges: &[],
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Keycap Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    });
+    (pipeline, bind_group, buffer)
 }
 
 struct ActiveKeyboardSegment<'a> {
@@ -964,6 +1506,7 @@ mod gpu_tests {
         std::sync::Arc::make_mut(&mut uniforms.project).keyboard = Some(KeyboardData {
             settings: KeyboardSettings {
                 enabled: true,
+                style: "classic".to_string(),
                 ..Default::default()
             },
         });
@@ -1188,6 +1731,113 @@ mod gpu_tests {
                 prepare(&mut reused, size, edit) == expected,
                 "{name} edit reused a stale layout"
             );
+        }
+    }
+
+    fn shortcut_segment(id: &str, start: f64, text: &str) -> KeyboardTrackSegment {
+        KeyboardTrackSegment {
+            keys: vec![KeyPressDisplay {
+                key: "P".to_string(),
+                time_offset: 0.0,
+            }],
+            ..typed_segment(id, start, text, 0.0)
+        }
+    }
+
+    fn with_keycaps(uniforms: &mut ProjectUniforms, style: &str, theme: &str) {
+        let settings = &mut std::sync::Arc::make_mut(&mut uniforms.project)
+            .keyboard
+            .as_mut()
+            .unwrap()
+            .settings;
+        settings.style = style.to_string();
+        settings.theme = theme.to_string();
+    }
+
+    /// Keycaps, like the classic label, draw the same from a reused layer as
+    /// from a fresh one on every frame, including while a key is pressed.
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn every_frame_of_a_keycap_segment_renders_like_a_fresh_layer() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let segments = [
+            shortcut_segment("shortcut", 0.2, "⇧⌘P"),
+            typed_segment("typed", 1.4, "git push", 90.0),
+        ];
+        let frames = frames(size);
+        for style in ["macos", "windows", "linux"] {
+            let mut uniforms = uniforms(&constants, &segments, size);
+            with_keycaps(&mut uniforms, style, "dark");
+            let mut reused = KeyboardLayer::new(&constants.device, &constants.queue);
+            let mut drawn_frames = 0;
+            for frame in 0..((segments[1].end + 0.2) * FPS as f64) as u32 {
+                uniforms.frame_number = frame;
+                reused.prepare(&uniforms, &frames, size, &constants, None);
+                let mut fresh = KeyboardLayer::new(&constants.device, &constants.queue);
+                fresh.prepare(&uniforms, &frames, size, &constants, None);
+                assert_eq!(reused.has_content(), fresh.has_content(), "{style} {frame}");
+                let pixels = render_pixels(&constants, &reused, size);
+                assert_eq!(
+                    pixels,
+                    render_pixels(&constants, &fresh, size),
+                    "{style} frame {frame}"
+                );
+                drawn_frames += usize::from(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+            }
+            assert!(drawn_frames > 60, "{style}: {drawn_frames}");
+        }
+    }
+
+    /// Writes every keycap style and theme, over a mid-grey frame, to
+    /// `CAP_KEYCAP_GALLERY` for a look by eye.
+    #[test]
+    #[ignore = "writes images; requires a working wgpu adapter"]
+    fn keycap_gallery() {
+        let Some(dir) = std::env::var_os("CAP_KEYCAP_GALLERY") else {
+            return;
+        };
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        for (name, segment, frame) in [
+            ("shortcut", shortcut_segment("s", 0.0, "⌃⌥⇧⌘P"), 30),
+            ("pressed", shortcut_segment("s", 0.0, "⇧⌘P"), 4),
+            ("named", shortcut_segment("s", 0.0, "⏎"), 30),
+            ("typed", typed_segment("t", 0.0, "hello world", 30.0), 50),
+        ] {
+            for style in ["macos", "windows", "linux"] {
+                for theme in ["light", "dark", "retro"] {
+                    let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
+                    with_keycaps(&mut uniforms, style, theme);
+                    std::sync::Arc::make_mut(&mut uniforms.project)
+                        .keyboard
+                        .as_mut()
+                        .unwrap()
+                        .settings
+                        .position = "top-center".to_string();
+                    uniforms.frame_number = frame;
+                    let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+                    layer.prepare(&uniforms, &frames, size, &constants, None);
+                    let pixels = render_pixels(&constants, &layer, size);
+                    let mut image = image::RgbaImage::from_pixel(
+                        size.x,
+                        size.y,
+                        image::Rgba([126, 132, 148, 255]),
+                    );
+                    for (pixel, src) in image.pixels_mut().zip(pixels.chunks_exact(4)) {
+                        let a = src[3] as f32 / 255.0;
+                        for c in 0..3 {
+                            pixel[c] = (src[c] as f32 * a + pixel[c] as f32 * (1.0 - a)) as u8;
+                        }
+                    }
+                    image
+                        .save(
+                            std::path::Path::new(&dir).join(format!("{name}-{style}-{theme}.png")),
+                        )
+                        .unwrap();
+                }
+            }
         }
     }
 

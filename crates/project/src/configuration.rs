@@ -2784,7 +2784,12 @@ pub struct CaptionSettings {
     pub linger_duration: f32,
     #[serde(alias = "wordTransitionDuration")]
     pub word_transition_duration: f32,
-    #[serde(alias = "activeWordHighlight")]
+    /// New captions highlight the spoken word; a project saved before this
+    /// setting existed keeps its captions unhighlighted.
+    #[serde(
+        alias = "activeWordHighlight",
+        default = "CaptionSettings::legacy_active_word_highlight"
+    )]
     pub active_word_highlight: bool,
     #[serde(alias = "manualPosition")]
     pub manual_position: Option<XY<f32>>,
@@ -2829,7 +2834,7 @@ impl CaptionSettings {
         0.25
     }
 
-    fn default_active_word_highlight() -> bool {
+    fn legacy_active_word_highlight() -> bool {
         false
     }
 
@@ -2851,7 +2856,8 @@ impl Default for CaptionSettings {
         Self {
             enabled: false,
             font: "System Sans-Serif".to_string(),
-            size: 24,
+            // The Classic preset's size, which new captions start from.
+            size: 50,
             color: "#FFFFFF".to_string(),
             background_color: "#000000".to_string(),
             background_opacity: 90,
@@ -2865,7 +2871,7 @@ impl Default for CaptionSettings {
             fade_duration: Self::default_fade_duration(),
             linger_duration: Self::default_linger_duration(),
             word_transition_duration: Self::default_word_transition_duration(),
-            active_word_highlight: Self::default_active_word_highlight(),
+            active_word_highlight: true,
             manual_position: None,
             preset: Self::default_preset(),
             animation: Self::default_animation(),
@@ -2909,6 +2915,37 @@ pub struct KeyboardSettings {
     pub show_modifiers: bool,
     pub show_special_keys: bool,
     pub uppercase: bool,
+    /// How key presses are drawn: `classic` (one rounded label), or keycaps
+    /// shaped like a `macos`, `windows` or `linux` keyboard. A project saved
+    /// before keycaps existed keeps the classic label.
+    #[serde(default = "KeyboardSettings::legacy_style")]
+    pub style: String,
+    /// The keycaps' colours: `light`, `dark` or `retro`.
+    #[serde(default = "KeyboardSettings::default_theme")]
+    pub theme: String,
+}
+
+impl KeyboardSettings {
+    fn legacy_style() -> String {
+        "classic".to_string()
+    }
+
+    fn default_theme() -> String {
+        "dark".to_string()
+    }
+
+    /// The keycap style a new project starts with: the keyboard of the
+    /// platform it was made on.
+    pub fn platform_style() -> String {
+        if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        }
+        .to_string()
+    }
 }
 
 impl Default for KeyboardSettings {
@@ -2928,6 +2965,8 @@ impl Default for KeyboardSettings {
             show_modifiers: true,
             show_special_keys: true,
             uppercase: false,
+            style: Self::platform_style(),
+            theme: Self::default_theme(),
         }
     }
 }

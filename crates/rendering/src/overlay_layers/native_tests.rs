@@ -199,6 +199,7 @@ fn with_overlay(kind: &str, path: &str) -> ProjectConfiguration {
             project.keyboard = Some(cap_project::KeyboardData {
                 settings: cap_project::KeyboardSettings {
                     enabled: true,
+                    style: "classic".to_string(),
                     ..Default::default()
                 },
             });
