@@ -564,6 +564,9 @@ fn shrink_ring(crop_bounds_uv: vec4<f32>) -> ShrinkRing {
     let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
     let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
     let ratio = max(scale_ratio.x, scale_ratio.y);
+    if ratio <= 2.2 || uniforms.preserve_source_alpha > 0.5 {
+        return ShrinkRing(false, vec2<f32>(0.0), vec2<f32>(0.0), 0.0);
+    }
     // Blend from the 2x2 box at 2.2x (45 degrees, a quarter footprint on each
     // axis) to the full ring at 2.8x, so a zoom passing through doesn't pop.
     let blend = smoothstep(2.2, 2.8, ratio);
@@ -572,7 +575,7 @@ fn shrink_ring(crop_bounds_uv: vec4<f32>) -> ShrinkRing {
     // One output pixel, in source UV.
     let footprint = scale_ratio / uniforms.frame_size;
     return ShrinkRing(
-        ratio > 2.2 && uniforms.preserve_source_alpha <= 0.5,
+        true,
         footprint * (radius * sin(angle)),
         footprint * (radius * cos(angle)),
         0.15 * blend,
