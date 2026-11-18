@@ -861,6 +861,11 @@ fn answered_frame(frame: &DecodedFrame) -> Option<&DecodedFrame> {
     Some(frame)
 }
 
+/// How long a playback or preview request waits for the next grid index
+/// ([`request_next_frame`]) before it settles for the grid answer. Exports
+/// wait as long as for any frame, so their output does not depend on load.
+const LOOKAHEAD_TIMEOUT_MS: u64 = 250;
+
 /// Reads the newest sample on screen at `time` through `fetch`, which takes
 /// a time before the decoder's offset is added (`decoder_time` is `time`
 /// with it). A request past the middle of its grid cell also asks for the
@@ -869,15 +874,22 @@ fn answered_frame(frame: &DecodedFrame) -> Option<&DecodedFrame> {
 /// would show the screen a frame behind the cursor, which is drawn at
 /// `time` exactly. Every decoder handle reads through here, so the editor,
 /// the preparing preview and exports pick the same sample.
-async fn read_presented_frame<T, E, Fut>(
+///
+/// `fetch_next` reads the next index: `Ok(None)` when it has nothing to
+/// offer (missing, slow, failed), which keeps the grid answer. Only an
+/// export returns `Err` from it, for a decode that really stalled.
+async fn read_presented_frame<T, E, Fut, NextFut>(
     decoder_time: f32,
     fps: u32,
     time: f32,
     frame_of: for<'a> fn(&'a T) -> Option<&'a DecodedFrame>,
-    fetch: impl Fn(f32) -> Fut,
+    into_answer: fn(DecodedFrame) -> T,
+    fetch: impl FnOnce(f32) -> Fut,
+    fetch_next: impl FnOnce(f32) -> NextFut,
 ) -> Result<T, E>
 where
     Fut: std::future::Future<Output = Result<T, E>>,
+    NextFut: std::future::Future<Output = Result<Option<DecodedFrame>, E>>,
 {
     let Some(next_frame) = (fps > 0)
         .then(|| request_next_frame(decoder_time, fps))
@@ -905,15 +917,14 @@ where
     if holding {
         return frame;
     }
-    // An error (a stalled or failed decode) is the request's outcome too;
-    // only a next sample that is missing or not yet on screen leaves the
-    // grid answer standing.
-    let next = fetch(next_time).await?;
-    if frame_of(&next)
-        .and_then(DecodedFrame::presentation_secs)
+    let Some(next) = fetch_next(next_time).await? else {
+        return frame;
+    };
+    if next
+        .presentation_secs()
         .is_some_and(|secs| presented_by(secs, decoder_time, fps))
     {
-        return Ok(next);
+        return Ok(into_answer(next));
     }
     frame
 }
@@ -1130,9 +1141,48 @@ impl AsyncVideoDecoderHandle {
             self.fps,
             time,
             Option::as_ref,
+            Some,
             |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline),
+            |time| self.fetch_next_frame(time, timeout_ms, max_fallback_distance, deadline),
         )
         .await
+    }
+
+    /// The next-index read of [`read_presented_frame`]. An export waits for
+    /// it like for any frame, and a stall fails the export. Playback and
+    /// previews give it [`LOOKAHEAD_TIMEOUT_MS`], and a miss neither fails
+    /// the request nor counts towards replacing the AVAssetReader decoder.
+    async fn fetch_next_frame(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        if deadline == FrameDeadline::Wait {
+            return self
+                .fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline)
+                .await;
+        }
+        let timeout_ms = timeout_ms.min(LOOKAHEAD_TIMEOUT_MS);
+        #[cfg(target_os = "macos")]
+        if let Some(fallback) = &self.fallback
+            && let Some(result) = fallback.decoder.get()
+        {
+            let Ok(decoder) = result else {
+                return Ok(None);
+            };
+            return Ok(decoder
+                .request_frame(time, timeout_ms, max_fallback_distance, FrameDeadline::Drop)
+                .await
+                .ok()
+                .flatten());
+        }
+        Ok(self
+            .request_frame(time, timeout_ms, max_fallback_distance, FrameDeadline::Drop)
+            .await
+            .ok()
+            .flatten())
     }
 
     async fn fetch_frame_with_timeout(
@@ -1670,9 +1720,47 @@ impl ManagedVideoDecoder {
             decoder.fps,
             time,
             answered_frame,
+            std::convert::identity,
             |time| self.fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance),
+            |time| self.fetch_next_frame(time, timeout_ms, max_fallback_distance),
         )
         .await
+    }
+
+    /// The next-index read of [`read_presented_frame`] for a managed worker:
+    /// at most [`LOOKAHEAD_TIMEOUT_MS`], and a miss or an error keeps the
+    /// grid answer without failing or stopping the worker. A worker that
+    /// really failed fails the next request instead.
+    async fn fetch_next_frame(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+    ) -> Result<Option<DecodedFrame>, ManagedVideoError> {
+        if self.terminal_error().is_some() {
+            return Ok(None);
+        }
+        let Some(decoder) = self.decoder.as_ref() else {
+            return Ok(None);
+        };
+        let (reply, receiver) = oneshot::channel();
+        if decoder
+            .sender
+            .send(VideoDecoderMessage::GetFrame(
+                decoder.get_time(time),
+                max_fallback_distance,
+                reply,
+            ))
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let wait = Duration::from_millis(timeout_ms.min(LOOKAHEAD_TIMEOUT_MS));
+        Ok(tokio::time::timeout(wait, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .filter(|_| self.terminal_error().is_none()))
     }
 
     async fn fetch_frame_with_timeout(
@@ -2734,6 +2822,96 @@ mod managed_worker_tests {
             fps: 30,
             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
         }
+    }
+
+    /// A managed worker whose samples sit 0.75 of a frame after each grid
+    /// line, answering every grid index except `held`, which it keeps
+    /// unanswered. Requests are served from a task on the paused clock, so
+    /// only the held one lets time run.
+    async fn lookahead_worker(held: u32) -> (ManagedVideoDecoder, mpsc::Sender<()>) {
+        let (worker, requests, release) = {
+            let control = ManagedVideoControl::new();
+            let (wake, requests) = mpsc::channel();
+            let (release, released) = mpsc::channel::<()>();
+            let (ready_sender, ready_receiver) = oneshot::channel();
+            let (sent, ready_sent) = mpsc::channel();
+            let worker_control = control.clone();
+            let join = std::thread::spawn(move || {
+                worker_control.run_worker(|| {
+                    let _ = ready_sender.send(Ok(DecoderInitResult {
+                        width: 2,
+                        height: 2,
+                        decoder_type: DecoderType::FFmpegSoftware,
+                    }));
+                    let _ = sent.send(());
+                    while !worker_control.is_cancelled()
+                        && released.recv_timeout(Duration::from_millis(5)).is_err()
+                    {
+                    }
+                });
+            });
+            *control.join.lock().unwrap() = Some(join);
+            ready_sent.recv().unwrap();
+            let worker = ManagedVideoStopHandle { control, wake };
+            let mut decoder = pending_decoder(worker);
+            decoder.ready = Some(ready_receiver);
+            decoder.wait_ready().await.unwrap();
+            (decoder, requests, release)
+        };
+        tokio::spawn(async move {
+            let mut kept = Vec::new();
+            loop {
+                match requests.try_recv() {
+                    Ok(VideoDecoderMessage::GetFrame(time, _, reply)) => {
+                        let index = request_frame(time, 30);
+                        if index == held {
+                            kept.push(reply);
+                            continue;
+                        }
+                        let _ = reply.send(
+                            DecodedFrame::new(vec![index as u8; 16], 2, 2)
+                                .with_presentation_secs((f64::from(index) - 0.25) / 30.0),
+                        );
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
+        });
+        (worker, release)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn managed_lookahead_past_its_wait_keeps_the_grid_frame_and_the_worker() {
+        let (decoder, release) = lookahead_worker(11).await;
+        let started = tokio::time::Instant::now();
+        let frame = decoder.get_frame(10.98 / 30.0).await.unwrap();
+        assert_eq!(frame.data()[0], 10);
+        assert!(started.elapsed() <= Duration::from_millis(LOOKAHEAD_TIMEOUT_MS + 50));
+        assert_eq!(decoder.terminal_error(), None);
+        assert!(!decoder.worker.control.is_cancelled());
+        let frame = decoder.get_frame_initial(10.98 / 30.0).await.unwrap();
+        assert_eq!(frame.data()[0], 10);
+        let frame = decoder.get_frame(5.98 / 30.0).await.unwrap();
+        assert_eq!(
+            frame.data()[0],
+            6,
+            "sample 6 is captured at 5.75, before 5.98"
+        );
+        assert_eq!(decoder.terminal_error(), None);
+        let _ = release.send(());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn managed_grid_timeout_still_fails_the_worker() {
+        let (decoder, release) = lookahead_worker(10).await;
+        assert_eq!(
+            decoder.get_frame(10.98 / 30.0).await.unwrap_err(),
+            ManagedVideoError::FrameTimeout
+        );
+        let _ = release.send(());
     }
 
     #[tokio::test]
