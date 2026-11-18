@@ -83,93 +83,18 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Self-Hosted Cap vs Other Screen Recorders",
-		headers: ["Feature", "Cap (Self-Hosted)", "Loom", "Vidyard", "Panopto"],
-		rows: [
-			[
-				"Self-hosted storage",
-				{ text: "Yes — any S3", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "On-premise only", status: "warning" },
-			],
-			[
-				"Self-hostable platform",
-				{ text: "Yes — full stack", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (enterprise)", status: "warning" },
-			],
-			[
-				"Open source",
-				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Instant share links",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"AI captions",
-				{ text: "Yes (optional)", status: "positive" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Paid only", status: "warning" },
-			],
-			[
-				"Free tier",
-				{ text: "Yes — Studio Mode", status: "positive" },
-				{ text: "Limited", status: "warning" },
-				{ text: "Limited", status: "warning" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Auditable code",
-				{ text: "Yes — full codebase", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
-
 	comparisonTitle: "Why Self-Host Your Screen Recordings with Cap",
-	comparisonDescription:
-		"Most screen recorders lock your data to their cloud — Cap is built from the ground up to run entirely on your own infrastructure",
 
 	comparison: [
 		{
-			title: "Cap vs Loom for Self-Hosting",
+			title: "Run the full Cap stack yourself",
 			description:
-				"Loom offers no self-hosting option. Every recording is stored on Loom's servers, and if Loom changes pricing or shuts down, your video library is at risk. Cap supports custom S3 storage so your recordings live in your bucket forever, regardless of what happens to Cap's cloud offering. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
-		},
-		{
-			title: "Cap vs Panopto for Self-Hosting",
-			description:
-				"Panopto offers on-premise deployment for enterprise customers at significant cost. Cap's self-hosting is available to any team — configure your S3 bucket in minutes, or deploy the full platform from the open-source repository. No enterprise contract required.",
-		},
-		{
-			title: "Cap vs OBS for Self-Hosted Recording",
-			description:
-				"OBS records locally but lacks any sharing or collaboration layer. Cap gives you OBS-level data control — recordings stay on your infrastructure — combined with async sharing links, thread commenting, and a web dashboard your team can actually use.",
+				"Cap Web can be self-hosted with Docker Compose, which runs the web app, media server, MySQL database and MinIO storage. You can also deploy it with a one-click Railway template or on Coolify.",
 		},
 		{
 			title: "Cap for Regulated Industries",
 			description:
-				"Healthcare, finance, legal, and government teams face strict data residency requirements. Cap with self-hosted S3 storage keeps recordings within your regulated environment. Combined with open-source auditability, Cap satisfies the compliance requirements that closed-source SaaS tools can't meet. <a href='/hipaa-compliant-screen-recording'>Learn about HIPAA-compliant recording with Cap</a>.",
+				"Teams that need full control can self-host Cap so recordings never leave their own infrastructure. Cap is HIPAA compliant, and organizations can add a signed Business Associate Agreement. <a href='/loom-alternative'>Loom</a> states it is not able to sign HIPAA Business Associate Agreements. <a href='/hipaa-compliant-screen-recording'>Learn about HIPAA-compliant recording with Cap</a>.",
 		},
 	],
 
@@ -262,11 +187,6 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 				"Does self-hosted storage still give me instant shareable links?",
 			answer:
 				"Yes. The instant sharing experience works the same way with self-hosted storage. Stop recording and Cap generates a shareable link immediately. The difference is that the link points to video content in your S3 bucket rather than Cap's CDN. Your infrastructure, same instant-share experience.",
-		},
-		{
-			question: "What is the best self-hosted screen recorder?",
-			answer:
-				"Cap is the best self-hosted screen recorder for teams that need both data control and a modern async video experience. It combines S3-compatible custom storage, instant shareable links, webcam overlay, AI captions, and thread commenting in an open-source package with most code under AGPLv3. Unlike local-only recorders, Cap gives you the collaboration layer. Unlike closed-source SaaS tools, Cap gives you full data ownership.",
 		},
 	],
 
