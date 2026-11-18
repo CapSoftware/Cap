@@ -295,3 +295,21 @@ fn shrunk_cutout_edges_keep_their_colour() {
         "the shrunk edge should be partly transparent"
     );
 }
+
+#[test]
+fn heavily_shrunk_stripes_stay_flat() {
+    let Some(gpu) = gpu() else { return };
+    // A 1 px stripe pattern shrunk 3.3x, as a Retina recording in a 720p
+    // export. A 2x2 box of bilinear taps passed about a third of the stripe
+    // contrast as a beat (spread about 62 levels); the turned ring takes it to
+    // about 9.
+    let source = Source::from_fn(330, 99, |x, _| {
+        let v = if x % 2 == 0 { 0 } else { 255 };
+        [v, v, v, 255]
+    });
+    let output = [100, 30];
+    let pixels = render(&gpu, &source, &full_frame_draw(&source, output));
+    let (mean, spread) = luma_spread(&pixels, output[0], 4);
+    assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
+    assert!(spread < 25.0, "spread {spread:.1}");
+}
