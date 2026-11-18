@@ -328,12 +328,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     let sample_target_uv = clamp(target_uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    var base_color = sample_texture(sample_target_uv, crop_bounds_uv);
-    base_color.a = base_color.a * shape_coverage * uniforms.opacity;
 
     let zoom_amount = uniforms.motion_blur_params.z;
 
     if !blur_active {
+        let base_color = still_color(sample_target_uv, crop_bounds_uv, shape_coverage);
         return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
@@ -348,6 +347,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if blur_mode < 1.5 {
         let velocity_uv = uniforms.motion_blur_vector;
         if length(velocity_uv) < 1e-5 {
+            let base_color = still_color(sample_target_uv, crop_bounds_uv, shape_coverage);
             return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
         }
 
@@ -379,6 +379,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let dir = zoom_center - target_uv;
     let center_dist = length(dir);
     if center_dist < 1e-4 || zoom_amount < 1e-4 {
+        let base_color = still_color(sample_target_uv, crop_bounds_uv, shape_coverage);
         return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
@@ -539,6 +540,65 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     }
 
     return vec4(0.0);
+}
+
+// The layer colour at a pixel that isn't motion blurred. Blurred pixels sample
+// with sample_texture() directly: the smear hides the finer filter, and those
+// already take 13 to 21 samples.
+fn still_color(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, coverage: f32) -> vec4<f32> {
+    var color = sample_texture_detail(uv, crop_bounds_uv);
+    color.a = color.a * coverage * uniforms.opacity;
+    return color;
+}
+
+// sample_texture() with a wider filter for opaque layers shrunk more than
+// 2.2x, such as a Retina or 4K recording in a 720p export, the camera bubble or
+// the editor preview. There the 2x2 box in sample_texture() covers too little
+// of the output pixel's footprint: its four taps share two rows and two
+// columns, so 1 px lines and text strokes alias. Turning the ring towards 22
+// degrees puts every tap on its own row and column, widening it covers more of
+// the footprint, and the centre tap that sample_texture() reads anyway keeps
+// it from going soft. Below 2.2x the box is already as good as five samples
+// get, so those layers render exactly as before.
+fn sample_texture_detail(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
+    let ratio = max(scale_ratio.x, scale_ratio.y);
+    if ratio <= 2.2 || uniforms.preserve_source_alpha > 0.5 ||
+        uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0
+    {
+        return sample_texture(uv, crop_bounds_uv);
+    }
+
+    var sample_uv = uv;
+    if uniforms.mirror_x != 0.0 {
+        sample_uv.x = 1.0 - sample_uv.x;
+    }
+    let texel_offset = 1.0 / uniforms.frame_size;
+    let safe_min = crop_bounds_uv.xy + texel_offset;
+    let safe_max = crop_bounds_uv.zw - texel_offset;
+    let center = clamp(sample_uv * crop_size + crop_bounds_uv.xy, safe_min, safe_max);
+
+    // Blend from the 2x2 box at 2.2x (45 degrees, a quarter footprint on each
+    // axis) to the full ring at 2.8x, so a zoom passing through doesn't pop.
+    let blend = smoothstep(2.2, 2.8, ratio);
+    let angle = radians(45.0 - 23.0 * blend);
+    let radius = 0.35355 + 0.09645 * blend;
+    let center_weight = 0.15 * blend;
+    // One output pixel, in source UV.
+    let footprint = scale_ratio / uniforms.frame_size;
+    let near = footprint * (radius * sin(angle));
+    let far = footprint * (radius * cos(angle));
+    let ring = sample_clamped(center + vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(-far.x, near.y), safe_min, safe_max)
+        + sample_clamped(center - vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(far.x, -near.y), safe_min, safe_max);
+    let color = mix(ring * 0.25, sample_clamped(center, safe_min, safe_max), center_weight);
+    return vec4(color, 1.0);
+}
+
+fn sample_clamped(uv: vec2<f32>, safe_min: vec2<f32>, safe_max: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(frame_texture, frame_sampler, clamp(uv, safe_min, safe_max), 0.0).rgb;
 }
 
 // Bilinear sample of the frame as premultiplied colour.
