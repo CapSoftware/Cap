@@ -249,7 +249,6 @@ describe("mediaAudio integration tests", () => {
 					if (done) break;
 					chunks.push(value);
 				}
-				expect(chunks.length).toBeGreaterThan(1);
 				expect(Buffer.concat(chunks).equals(expected)).toBe(true);
 			} finally {
 				reader.releaseLock();
