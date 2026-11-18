@@ -1225,6 +1225,35 @@ fn media_held_open_for_good_leaves_the_project_untouched() {
     assert!(!fixture.project().join(BACKUPS).exists());
 }
 
+/// Windows has no Recycle Bin for a network path, so a trash there deletes
+/// for good. Reached through the administrative share when the test machine
+/// has one.
+#[cfg(windows)]
+#[test]
+fn media_on_a_network_path_is_never_deleted_by_the_trash() {
+    let fixture = Fixture::new();
+    let local = fixture.project().canonicalize().unwrap();
+    let local_text = local.to_string_lossy().to_string();
+    let plain = local_text.trim_start_matches(r"\\?\");
+    let (drive, rest) = plain.split_at(2);
+    let remote = PathBuf::from(format!(r"\\localhost\{}${}", &drive[..1], rest));
+    if !remote.join("recording-meta.json").is_file() {
+        eprintln!("no administrative share at {}; skipping", remote.display());
+        return;
+    }
+    let outcome = run(&remote, &Request::from_probes(probes())).unwrap();
+    assert!(matches!(outcome, Outcome::Cleaned { .. }), "{outcome:?}");
+    assert!(!trash_staged(&remote, &move_to_trash));
+    let staged: Vec<_> = std::fs::read_dir(local.join(STAGING))
+        .unwrap()
+        .flatten()
+        .flat_map(|stamp| std::fs::read_dir(stamp.path()).unwrap().flatten())
+        .map(|label| label.path().join("segment-1/display.mp4"))
+        .collect();
+    assert_eq!(staged.len(), 1);
+    assert!(staged[0].is_file(), "{staged:?}");
+}
+
 #[test]
 fn busy_projects_are_never_touched() {
     assert_eq!(Busy::default().reason(), None);
