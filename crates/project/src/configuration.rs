@@ -3313,8 +3313,8 @@ pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
-    /// and motion: even padding, a lighter and softer card shadow, and the
-    /// new-project zoom spring. At zero padding both padding modes lay out
+    /// and motion: even padding, a lighter and softer card shadow, the
+    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3927,6 +3927,10 @@ mod tests {
             .unwrap()
             .remove("paddingMode");
         framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomVersion");
         assert_eq!(framing_reset, default);
     }
 

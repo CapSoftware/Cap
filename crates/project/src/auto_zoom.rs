@@ -363,7 +363,7 @@ mod tests {
     fn ranges_are_at_least_100_ms_and_only_fill_free_space() {
         assert_eq!(ranges(&[press(-500.0)], 700.0), vec![(1.0, 101.0)]);
         assert!(ranges(&[press(0.0)], 1000.0).is_empty());
-        assert_eq!(ranges(&[press(0.0)], 1001.0), vec![(1.0, 201.0)]);
+        assert_eq!(ranges(&[press(0.0)], 1500.0), vec![(1.0, 700.0)]);
         assert_eq!(free_range_at(&[(0.0, 500.0)], 250.0, 100.0, 1000.0), None);
         assert_eq!(
             free_range_at(&[(0.0, 500.0)], 500.0, 100.0, 1000.0),
