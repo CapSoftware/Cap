@@ -699,6 +699,10 @@ const ANCHOR_SPEED_LEVELS: [f64; 16] = [
 /// bounds how much the spring target slows down before a group (to 0.65x) and
 /// catches up after it (to 1.4x).
 const ANCHOR_LEAD_DECAY_PER_MS: f64 = 0.35;
+/// Aiming at an upcoming press fades in over this long instead of jumping,
+/// so a cursor that was just held on the pointer (by a shape change on the
+/// way) glides to the press rather than lurching there.
+const ANCHOR_PRESS_AIM_BLEND_MS: f64 = 150.0;
 const ANCHOR_LEAD_RISE_PER_MS: f64 = 0.4;
 
 #[derive(Clone, Copy, Debug)]
@@ -1023,6 +1027,11 @@ impl<'a> AnchoredPlanner<'a> {
         self.waypoints.get(next).is_some_and(|&time| time < to_ms)
     }
 
+    fn last_waypoint_by(&self, time_ms: f64) -> Option<f64> {
+        let next = self.waypoints.partition_point(|&time| time <= time_ms);
+        next.checked_sub(1).map(|index| self.waypoints[index])
+    }
+
     /// One 60 Hz step, mirroring `build_smoothed_timeline` except that the
     /// spring runs `1 / scale` times faster with its lead scaled to match, the
     /// target moves continuously through the step instead of jumping at step
@@ -1049,17 +1058,24 @@ impl<'a> AnchoredPlanner<'a> {
             .context
             .anticipated_press(t_ms)
             .filter(|click| !self.waypoint_between(t_ms - SIMULATION_STEP_MS, click.time_ms));
+        let lead_t = (clamped_t + state.lead_ms * scale).min(self.end_time_ms);
+        let (x, y) = position_at_time_hinted(self.moves, lead_t, &mut state.target_hint);
+        let along_path = XY::new(x as f32, y as f32);
         let target = if let Some(click) = press {
             let (x, y) = position_at_time(
                 self.moves,
                 click.time_ms.min(self.end_time_ms),
                 self.moves_are_ordered,
             );
-            XY::new(x as f32, y as f32)
+            let aim_from = (click.time_ms - CLICK_LOOKAHEAD_TARGET_MS)
+                .max(self.last_waypoint_by(t_ms).unwrap_or(f64::NEG_INFINITY));
+            let aim = ((t_ms - aim_from) / ANCHOR_PRESS_AIM_BLEND_MS).clamp(0.0, 1.0) as f32;
+            XY::new(
+                along_path.x + (x as f32 - along_path.x) * aim,
+                along_path.y + (y as f32 - along_path.y) * aim,
+            )
         } else {
-            let lead_t = (clamped_t + state.lead_ms * scale).min(self.end_time_ms);
-            let (x, y) = position_at_time_hinted(self.moves, lead_t, &mut state.target_hint);
-            XY::new(x as f32, y as f32)
+            along_path
         };
 
         let step_secs = (SIMULATION_STEP_MS / 1000.0) as f32;
