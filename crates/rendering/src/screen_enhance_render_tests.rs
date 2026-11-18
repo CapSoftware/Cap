@@ -180,6 +180,20 @@ async fn playback_never_enhances() {
 }
 
 #[tokio::test]
+async fn software_adapters_export_without_enhancement() {
+    let mut fixture = fixture(XY::new(96, 64)).await;
+    fixture.constants.is_software_adapter = true;
+    let pixels = edge_pattern(96, 64);
+    let off = project(ScreenEnhancement::default());
+    let on = project(ScreenEnhancement::for_new_projects());
+    for scale in [1.0, 2.0] {
+        let plain = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
+        let enhanced = render(&fixture, &on, &pixels, scale, RenderQuality::Export).await;
+        assert_eq!(rgba(&plain), rgba(&enhanced), "scale {scale}");
+    }
+}
+
+#[tokio::test]
 async fn paused_preview_matches_export() {
     let fixture = fixture(XY::new(96, 64)).await;
     let pixels = edge_pattern(96, 64);

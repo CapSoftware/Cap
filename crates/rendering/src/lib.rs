@@ -3823,8 +3823,10 @@ impl ProjectUniforms {
         self
     }
 
-    pub(crate) fn display_enhancement(&self) -> Option<ScreenEnhanceFrame> {
-        self.quality.enhances().then_some(self.screen_enhance)
+    /// Software adapters keep the plain frame: on one the network costs ten
+    /// times the rest of the frame.
+    pub(crate) fn display_enhancement(&self, software_adapter: bool) -> Option<ScreenEnhanceFrame> {
+        (self.quality.enhances() && !software_adapter).then_some(self.screen_enhance)
     }
 
     /// 0..1 multiplier for recording-anchored overlays (captions, keyboard).
@@ -8757,7 +8759,8 @@ impl RendererLayers {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
-            self.display.set_enhancement(uniforms.display_enhancement());
+            self.display
+                .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
             self.display.prepare(
                 &constants.device,
                 &constants.queue,
@@ -8916,7 +8919,8 @@ impl RendererLayers {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
-            self.display.set_enhancement(uniforms.display_enhancement());
+            self.display
+                .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
             let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
