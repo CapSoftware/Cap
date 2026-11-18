@@ -499,6 +499,45 @@ pub fn caption_resize_size(
         .clamp(CAPTION_SIZE_RANGE.0, CAPTION_SIZE_RANGE.1) as u32
 }
 
+/// Switches the caption on screen at `time` to Manual placement, centred on
+/// `drawn`: the setting, and the caption's own override when it has a
+/// preset one, since the renderer reads the override first. Returns whether
+/// anything changed.
+pub fn switch_captions_to_manual(
+    project: &mut cap_project::ProjectConfiguration,
+    time: f64,
+    drawn: NormRect,
+) -> bool {
+    let mut changed = false;
+    if let Some(timeline) = project.timeline.as_mut() {
+        for segment in timeline
+            .caption_segments
+            .iter_mut()
+            .filter(|segment| segment.start <= time && time < segment.end)
+        {
+            if segment
+                .position_override
+                .as_deref()
+                .is_some_and(|position| position != "manual")
+            {
+                segment.position_override = Some("manual".into());
+                changed = true;
+            }
+        }
+    }
+    if let Some(captions) = project.captions.as_mut()
+        && (captions.settings.position != "manual" || changed)
+    {
+        captions.settings.position = "manual".into();
+        captions.settings.manual_position = Some(XY::new(
+            (drawn.x + drawn.w / 2.) as f32,
+            (drawn.y + drawn.h / 2.) as f32,
+        ));
+        changed = true;
+    }
+    changed
+}
+
 /// The caption size slider's range, which a canvas resize keeps to.
 pub const CAPTION_SIZE_RANGE: (f64, f64) = (12., 100.);
 
@@ -1342,21 +1381,15 @@ impl EditorWindow {
         );
     }
 
-    /// Moving a caption that sits at a preset spot switches the placement to
-    /// Manual, centred where it is drawn, so the drag carries on from there.
+    /// Moving a caption that sits at a preset spot switches it to Manual,
+    /// centred where it is drawn, so the drag carries on from there. The
+    /// setting changes, and so does the caption's own placement override
+    /// when it has one, since the renderer reads the override first.
     fn make_captions_manual(&mut self, drawn: NormRect, cx: &mut Context<Self>) {
-        let Some(captions) = self.project.captions.as_mut() else {
-            return;
-        };
-        if captions.settings.position == "manual" {
-            return;
+        let time = self.preview_or_playhead();
+        if switch_captions_to_manual(&mut self.project, time, drawn) {
+            self.project_changed_live(cx);
         }
-        captions.settings.position = "manual".into();
-        captions.settings.manual_position = Some(XY::new(
-            (drawn.x + drawn.w / 2.) as f32,
-            (drawn.y + drawn.h / 2.) as f32,
-        ));
-        self.project_changed_live(cx);
     }
 
     fn write_caption_size(&mut self, size: u32, cx: &mut Context<Self>) {
@@ -2787,6 +2820,74 @@ mod tests {
             rect,
             gpui::point(px(40. + 0.425 * 960.), px(20. + 0.5 * 540.))
         ));
+    }
+
+    /// Picking up a preset caption makes it Manual where it is drawn, and a
+    /// caption with its own preset override gets that override switched too,
+    /// so the one on screen is the one that moves.
+    #[test]
+    fn picking_up_a_caption_switches_it_and_its_override_to_manual() {
+        let drawn = NormRect {
+            x: 0.4,
+            y: 0.8,
+            w: 0.2,
+            h: 0.1,
+        };
+        let mut project = cap_project::ProjectConfiguration::default();
+        project.captions = Some(cap_project::CaptionsData::default());
+        project.captions.as_mut().unwrap().settings.position = "bottom-center".into();
+        assert!(switch_captions_to_manual(&mut project, 1., drawn));
+        let settings = &project.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        let centre = settings.manual_position.unwrap();
+        assert!((centre.x - 0.5).abs() < 1e-6 && (centre.y - 0.85).abs() < 1e-6);
+        // Already manual with nothing overridden: nothing to do.
+        assert!(!switch_captions_to_manual(&mut project, 1., drawn));
+
+        let mut timeline = cap_project::TimelineConfiguration {
+            segments: Vec::new(),
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            shape_segments: Vec::new(),
+        };
+        timeline
+            .caption_segments
+            .push(cap_project::CaptionTrackSegment {
+                id: "a".into(),
+                start: 0.,
+                end: 2.,
+                text: "Hi".into(),
+                words: Vec::new(),
+                fade_duration_override: None,
+                linger_duration_override: None,
+                position_override: Some("top".into()),
+                color_override: None,
+                background_color_override: None,
+                font_size_override: None,
+            });
+        project.timeline = Some(timeline);
+        assert!(switch_captions_to_manual(&mut project, 1., drawn));
+        let segment = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!(segment.position_override.as_deref(), Some("manual"));
+        // A caption outside the playhead keeps its override.
+        project.timeline.as_mut().unwrap().caption_segments[0].position_override =
+            Some("top".into());
+        assert!(!switch_captions_to_manual(&mut project, 5., drawn));
+        assert_eq!(
+            project.timeline.as_ref().unwrap().caption_segments[0]
+                .position_override
+                .as_deref(),
+            Some("top")
+        );
     }
 
     /// A corner drag grows the caption about its centre and keeps to the

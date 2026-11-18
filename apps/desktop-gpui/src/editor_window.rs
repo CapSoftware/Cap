@@ -308,16 +308,15 @@ fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
     if playing { time } else { frame_seconds(frame) }
 }
 
-/// The part of a frame layout the canvas overlay draws from. A preset
-/// caption has no box on the canvas, and the overlay only draws while the
-/// player is hovered or dragged, so a new caption under the playhead only
-/// rebuilds the editor when its box could be on screen. Hovering the player
-/// rebuilds the editor anyway, which picks up the latest box.
+/// The part of a frame layout the canvas overlay draws from. Every caption,
+/// preset or manual, has a box on the canvas, and the overlay only draws
+/// while the player is hovered or dragged, so a new caption under the
+/// playhead only rebuilds the editor when its box could be on screen.
+/// Hovering the player rebuilds the editor anyway, which picks up the latest
+/// box.
 fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
     FrameLayout {
-        caption: layout
-            .caption
-            .filter(|caption| overlay_live && caption.is_manual()),
+        caption: layout.caption.filter(|_| overlay_live),
         ..layout
     }
 }
@@ -16968,12 +16967,11 @@ mod tests {
         ));
     }
 
-    /// Scrubbing across preset captions changes only the caption box, which
-    /// the canvas never draws, so it costs no editor rebuild. A manual
-    /// caption's box is a canvas hit target, so its change does while the
-    /// overlay is live, and not while the pointer is elsewhere.
+    /// Every caption's box is a canvas hit target, so a change to it rebuilds
+    /// the editor while the overlay is live, and not while the pointer is
+    /// elsewhere.
     #[test]
-    fn only_a_manual_caption_box_changes_the_canvas_layout() {
+    fn a_caption_box_changes_the_canvas_layout_only_while_the_overlay_is_live() {
         let base = FrameLayout {
             display: [0., 0., 1920., 1080.],
             camera: None,
@@ -16988,10 +16986,14 @@ mod tests {
             caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
             ..base
         };
-        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
-        assert_eq!(
+        assert_ne!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
+        assert_ne!(
             canvas_hit_layout(preset([0., 0., 10., 10.]), true),
             canvas_hit_layout(preset([5., 5., 50., 20.]), true)
+        );
+        assert_eq!(
+            canvas_hit_layout(preset([0., 0., 10., 10.]), false),
+            canvas_hit_layout(preset([5., 5., 50., 20.]), false)
         );
         assert_ne!(
             canvas_hit_layout(manual([0., 0., 10., 10.]), true),
