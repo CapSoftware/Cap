@@ -24,6 +24,7 @@ import {
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import type { SpaceUpNext } from "@/lib/space-up-next";
 import {
 	VideoStatusNotFoundError,
 	videoStatusQueryOptions,
@@ -186,6 +187,7 @@ type TranscriptionStatus =
 
 interface ShareProps {
 	data: VideoData;
+	upNext?: Promise<SpaceUpNext | null> | null;
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
 	posterUrl?: string | null;
@@ -344,6 +346,7 @@ export const Share = ({
 	viewerSignedIn = false,
 	header,
 	dashboardDestination = null,
+	upNext = null,
 }: ShareProps) => {
 	const isScreenshot = data.isScreenshot === true;
 	// Memoized: a fresh Date each render would defeat the memoized `data`
@@ -1010,6 +1013,7 @@ export const Share = ({
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
 														callToAction={data.callToAction}
+														upNext={upNext}
 														ref={playerRef}
 													/>
 												)}
