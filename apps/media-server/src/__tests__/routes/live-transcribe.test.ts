@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import app from "../../app";
 import { setDraining } from "../../lib/lifecycle";
+import { LiveSession } from "../../lib/live-transcribe";
 
 const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
 beforeAll(() => {
@@ -92,24 +93,30 @@ describe("POST /live-transcribe/sessions", () => {
 	});
 
 	test("starts a session that reports back to the web app", async () => {
-		const response = await post(body);
-		expect(response.status).toBe(202);
-		await firstReport;
-		expect(reports).toEqual([
-			{
-				action: "finish",
-				outcome: "no-audio",
-				videoId: "video1",
-				session: "s1",
-			},
-		]);
-		await Bun.sleep(20);
-		const status = await app.fetch(
-			new Request("http://localhost/live-transcribe/status"),
-		);
-		expect(await status.json()).toEqual({
-			sessions: 0,
-			canAcceptNewSession: true,
-		});
+		const started = spyOn(LiveSession.prototype, "start");
+		try {
+			const response = await post(body);
+			expect(response.status).toBe(202);
+			await firstReport;
+			expect(reports).toEqual([
+				{
+					action: "finish",
+					outcome: "no-audio",
+					videoId: "video1",
+					session: "s1",
+				},
+			]);
+			expect(started).toHaveBeenCalledTimes(1);
+			await started.mock.results[0]?.value;
+			const status = await app.fetch(
+				new Request("http://localhost/live-transcribe/status"),
+			);
+			expect(await status.json()).toEqual({
+				sessions: 0,
+				canAcceptNewSession: true,
+			});
+		} finally {
+			started.mockRestore();
+		}
 	});
 });

@@ -21,6 +21,7 @@ import { join } from "node:path";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import { deleteJob, getJob } from "../../lib/job-manager";
+import * as lifecycle from "../../lib/lifecycle";
 import * as mediaProbe from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
 import * as videoInputValidation from "../../lib/video-input-validation";
@@ -348,6 +349,7 @@ describe("raw recording input validation", () => {
 				);
 			}
 			const upload = spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
+			const tracked = spyOn(lifecycle, "trackBackgroundTask");
 			const secret =
 				globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET ?? "test-secret";
 			const previousSecret = globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET;
@@ -376,12 +378,8 @@ describe("raw recording input validation", () => {
 				const body = await response.json();
 				jobId = body.jobId;
 				if (!jobId) throw new Error("Missing processing job");
-				const deadline = Date.now() + 10_000;
-				while (Date.now() < deadline) {
-					const phase = getJob(jobId)?.phase;
-					if (phase === "complete" || phase === "error") break;
-					await Bun.sleep(10);
-				}
+				expect(tracked).toHaveBeenCalledTimes(1);
+				await tracked.mock.results[0]?.value;
 				expect(getJob(jobId)?.phase).toBe(expectedPhase);
 				expect(process).toHaveBeenCalledTimes(expectedProcessCalls);
 				if (expectedError) {
@@ -433,6 +431,7 @@ describe("raw recording input validation", () => {
 			},
 		);
 		const upload = spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
+		const tracked = spyOn(lifecycle, "trackBackgroundTask");
 		const secret =
 			globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET ?? "test-secret";
 		const previousSecret = globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET;
@@ -459,9 +458,8 @@ describe("raw recording input validation", () => {
 			expect(response.status).toBe(200);
 			jobId = (await response.json()).jobId;
 			if (!jobId) throw new Error("Missing processing job");
-			const deadline = Date.now() + 10_000;
-			while (Date.now() < deadline && getJob(jobId)?.phase !== "error")
-				await Bun.sleep(10);
+			expect(tracked).toHaveBeenCalledTimes(1);
+			await tracked.mock.results[0]?.value;
 			expect(getJob(jobId)?.phase).toBe("error");
 			expect(getJob(jobId)?.error).toContain("has no video");
 			expect(process).toHaveBeenCalled();

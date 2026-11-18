@@ -264,9 +264,14 @@ describe("durable recording workers", () => {
 		await claimRecordingWorker(job);
 		updateJob(job.jobId, { phase: "processing", progress: 60 });
 		const deadline = job.recordingWorkerLeaseExpiresAt;
+		const revoked = new Promise((resolve) =>
+			job.abortController?.signal.addEventListener("abort", resolve, {
+				once: true,
+			}),
+		);
 		const sending = sendWebhook(job);
 		try {
-			await Bun.sleep(40);
+			await revoked;
 			expect(job.phase).toBe("cancelled");
 			expect(job.abortController?.signal.aborted).toBe(true);
 		} finally {
@@ -413,7 +418,7 @@ describe("job cleanup", () => {
 			available = true;
 			expect(cleanupExpiredJobs()).toBe(0);
 			expect(getJob(job.jobId)).toBe(job);
-			await Bun.sleep(10);
+			await job.webhookPromise;
 			expect(job.terminalWebhookAcknowledgedAt).toBeNumber();
 			expect(payloads.at(-1)).toMatchObject({
 				generation: "generation-a",

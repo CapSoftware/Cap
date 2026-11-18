@@ -292,6 +292,7 @@ describe("mediaProbe integration tests", () => {
 
 		test("stops reading playlists when its time is up", async () => {
 			const requests: string[] = [];
+			const variantCancelled = Promise.withResolvers<void>();
 			const server = Bun.serve({
 				port: 0,
 				async fetch(request) {
@@ -302,6 +303,11 @@ describe("mediaProbe integration tests", () => {
 							"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2\nb.m3u8\n",
 						);
 					}
+					request.signal.addEventListener(
+						"abort",
+						() => variantCancelled.resolve(),
+						{ once: true },
+					);
 					await new Promise((resolve) => setTimeout(resolve, 2_000));
 					return new Response("#EXTM3U\n");
 				},
@@ -313,7 +319,7 @@ describe("mediaProbe integration tests", () => {
 					assertRemotePlaylistStaysOnHost(`${server.url}master.m3u8`, 200),
 				).rejects.toThrow("timed out");
 				expect(Date.now() - started).toBeLessThan(1_500);
-				await new Promise((resolve) => setTimeout(resolve, 300));
+				await variantCancelled.promise;
 				expect(requests).toEqual(["/master.m3u8", "/a.m3u8"]);
 			} finally {
 				await server.stop(true);

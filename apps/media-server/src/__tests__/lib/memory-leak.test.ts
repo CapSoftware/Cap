@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import {
 	checkHasAudioTrack,
@@ -6,6 +6,7 @@ import {
 	extractAudioStream,
 	getActiveProcessCount,
 } from "../../lib/media-audio";
+import * as subprocess from "../../lib/subprocess";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
@@ -30,7 +31,7 @@ async function waitForProcessCleanup(
 
 describe("memory and resource leak tests", () => {
 	afterAll(async () => {
-		await new Promise((r) => setTimeout(r, 1000));
+		await subprocess.terminateAllSubprocesses();
 	});
 
 	describe("process cleanup", () => {
@@ -226,11 +227,14 @@ describe("memory and resource leak tests", () => {
 			await checkHasAudioTrack(TEST_VIDEO_WITH_AUDIO);
 			await extractAudio(TEST_VIDEO_WITH_AUDIO);
 
+			const registration = spyOn(subprocess, "registerSubprocess");
 			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const proc = registration.mock.calls[0][0];
+			registration.mockRestore();
 			await stream.cancel();
 			cleanup();
 
-			await new Promise((r) => setTimeout(r, 3000));
+			await proc.exited;
 
 			expect(getActiveProcessCount()).toBe(baselineCount);
 		});
@@ -252,23 +256,18 @@ describe("abort signal handling", () => {
 
 		const controller = new AbortController();
 
-		setTimeout(() => controller.abort(), 50);
-
 		controller.signal.addEventListener("abort", () => {
 			wrappedCleanup();
 		});
 
+		const reader = stream.getReader();
+		const first = await reader.read();
+		controller.abort();
 		try {
-			const reader = stream.getReader();
-			while (!controller.signal.aborted) {
-				const { done } = await reader.read();
-				if (done) break;
-				await new Promise((r) => setTimeout(r, 10));
-			}
 			reader.releaseLock();
 		} catch {}
 
-		await new Promise((r) => setTimeout(r, 100));
+		expect(first.done).toBe(false);
 		expect(cleanupCalled).toBe(true);
 	});
 });
