@@ -209,9 +209,9 @@ module.exports = (__app, _options) => {
 					fadeIn: "capFadeIn 200ms ease-out",
 					fadeOut: "capFadeOut 150ms ease-in",
 					"bf-draw":
-						"bfDraw 1.8s cubic-bezier(0.55,0,0.3,1) 0.1s both, bfStrokeOut 0.7s ease-out 1.75s both",
-					"bf-fill": "bfFillIn 0.8s ease-out 1.35s both",
-					"bf-glow-in": "bfGlowIn 1.2s ease-out 1.3s both",
+						"bfDraw 1.1s cubic-bezier(0.55,0,0.3,1) 0.05s both, bfStrokeOut 0.5s ease-out 0.95s both",
+					"bf-fill": "bfFillIn 0.6s ease-out 0.45s both",
+					"bf-glow-in": "bfGlowIn 0.9s ease-out 0.6s both",
 				},
 			},
 		},
