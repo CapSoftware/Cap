@@ -95,13 +95,14 @@ export function useMessengerPoll({
 				(updates) => ({ updates }),
 				() => null,
 			);
-			if (!active) return;
 			if (
-				!result ||
+				!active ||
 				isSendingRef.current ||
 				requestVersion <= appliedPollVersion ||
 				messageVersion !== messageVersionRef.current
-			) {
+			)
+				return;
+			if (!result) {
 				idlePolls++;
 				schedule();
 				return;

@@ -259,6 +259,41 @@ describe("updates route contract", () => {
 		expect(requests[1]?.searchParams.get("mode")).toBe("human");
 	});
 
+	it("keeps the 3 s pace after a send when an older poll lands late", async () => {
+		let pending: ((response: Response) => void) | null = null;
+		const requests: URL[] = [];
+		vi.stubGlobal("fetch", (input: string) => {
+			requests.push(new URL(input, "https://cap.so"));
+			if (pending === null)
+				return Promise.resolve(new Response(null, { status: 204 }));
+			return new Promise<Response>((resolve) => {
+				pending = resolve;
+			});
+		});
+		await act(async () =>
+			root.render(
+				createElement(ChatWindow, { conversation, initialMessages: [] }),
+			),
+		);
+		await advance(60_000);
+		pending = () => {};
+		const beforeSlowPoll = requests.length;
+		while (requests.length === beforeSlowPoll) await advance(1000);
+		const prompt = [...container.querySelectorAll("button")].find(
+			(element) => element.textContent === MESSENGER_SUGGESTED_PROMPTS[0],
+		);
+		if (!prompt) throw new Error("Missing suggested prompt");
+		actions.fetchMessengerConversation.mockResolvedValue(snapshot("Answer"));
+		await act(async () => prompt.click());
+		expect(container.textContent).toContain("Answer");
+		const resolveLate = pending as (response: Response) => void;
+		pending = null;
+		await act(async () => resolveLate(new Response(null, { status: 204 })));
+		const afterSend = requests.length;
+		await advance(3000);
+		expect(requests.length).toBe(afterSend + 1);
+	});
+
 	it("leaves the conversation alone and slows down on 204", async () => {
 		const requests = await mountPage(() => new Response(null, { status: 204 }));
 		const before = container.innerHTML;
