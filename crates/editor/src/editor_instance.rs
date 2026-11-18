@@ -149,11 +149,6 @@ impl PreviewCursorCache {
         let click_spring = project.cursor.click_spring_config();
         let settings = cursor_timeline_settings(&project.cursor);
         let (hover_generation, hover_times_ms) = hover_changes.snapshot();
-        let hover_times_ms = if project.cursor.interaction_anchors && project.cursor.hover_anchors {
-            hover_times_ms
-        } else {
-            Arc::from(&[][..])
-        };
 
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.recording_clip == recording_clip
@@ -177,7 +172,7 @@ impl PreviewCursorCache {
             cursor,
             (!project.cursor.raw).then_some(smoothing),
             Some(click_spring),
-            project.cursor.interaction_anchors,
+            cap_rendering::CursorAnchors::from_config(&project.cursor),
             &hover_times_ms,
         ));
         self.entries.push(PreviewCursorCacheEntry {
@@ -297,6 +292,7 @@ pub struct EditorInstance {
     audio_output: Arc<crate::AudioOutput>,
     preview_speed: crate::PreviewSpeedHandle,
     hover_analysis_cancel: Arc<AtomicBool>,
+    hover_analysis_started: AtomicBool,
     preview_activity_ms: AtomicU64,
 }
 
@@ -722,19 +718,21 @@ impl EditorInstance {
             audio_output,
             preview_speed: crate::PreviewSpeedHandle::default(),
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
+            hover_analysis_started: AtomicBool::new(false),
             preview_activity_ms: AtomicU64::new(0),
         });
 
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
-        this.spawn_hover_analysis();
+        this.ensure_hover_analysis();
 
         Ok(this)
     }
 
-    fn spawn_hover_analysis(self: &Arc<Self>) {
-        let cursor = self.project_config.1.borrow().cursor.clone();
-        if !(cursor.interaction_anchors && cursor.hover_anchors) {
+    fn ensure_hover_analysis(self: &Arc<Self>) {
+        if !cap_rendering::CursorAnchors::from_config(&self.project_config.1.borrow().cursor).hover
+            || self.hover_analysis_started.swap(true, Ordering::AcqRel)
+        {
             return;
         }
         let Some(studio) = self.meta.studio_meta() else {
@@ -954,11 +952,12 @@ impl EditorInstance {
             audio_output: self.audio_output.clone(),
             preview_speed: self.preview_speed.clone(),
             hover_analysis_cancel: Arc::new(AtomicBool::new(false)),
+            hover_analysis_started: AtomicBool::new(false),
             preview_activity_ms: AtomicU64::new(0),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
-        next.spawn_hover_analysis();
+        next.ensure_hover_analysis();
         Ok(next)
     }
 
@@ -1239,6 +1238,7 @@ impl EditorInstance {
             loop {
                 preview_rx.changed().await.unwrap();
                 self.preview_activity_ms.store(now_ms(), Ordering::Release);
+                self.ensure_hover_analysis();
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
@@ -2657,7 +2657,7 @@ mod tests {
                         friction: project.cursor.friction,
                     }),
                     Some(project.cursor.click_spring_config()),
-                    project.cursor.interaction_anchors,
+                    cap_rendering::CursorAnchors::from_config(&project.cursor),
                     &[],
                 );
 

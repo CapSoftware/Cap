@@ -223,7 +223,9 @@ mod font_family_tests {
 }
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
-pub use cursor_interpolation::{CursorEventOrder, HoverChanges, PrecomputedCursorTimeline};
+pub use cursor_interpolation::{
+    CursorAnchors, CursorEventOrder, HoverChanges, PrecomputedCursorTimeline,
+};
 pub use export_activity::ExportActivity;
 use mask::interpolate_masks;
 use scene::*;
@@ -1068,8 +1070,8 @@ pub async fn render_video_to_channel(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
-                project.cursor.interaction_anchors,
-                &segment.hover_changes.times_for(&project.cursor),
+                CursorAnchors::from_config(&project.cursor),
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -1643,8 +1645,8 @@ pub async fn render_video_to_channel_nv12(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
-                project.cursor.interaction_anchors,
-                &segment.hover_changes.times_for(&project.cursor),
+                CursorAnchors::from_config(&project.cursor),
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -4427,7 +4429,8 @@ impl ProjectUniforms {
                 || current_click.tension != base_click.tension
                 || current_click.mass != base_click.mass
                 || current_click.friction != base_click.friction
-                || cursor.interaction_anchors != project.cursor.interaction_anchors)
+                || CursorAnchors::from_config(cursor)
+                    != CursorAnchors::from_config(&project.cursor))
         {
             Some(precomputed_cursor.cached_variant(
                 cursor_events,
@@ -4437,7 +4440,7 @@ impl ProjectUniforms {
                     friction: cursor.friction,
                 },
                 current_click,
-                cursor.interaction_anchors,
+                CursorAnchors::from_config(cursor),
             ))
         } else {
             None

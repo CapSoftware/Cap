@@ -355,7 +355,7 @@ fn interpolate_raw_cursor(
 const CURSOR_VARIANT_CACHE_CAPACITY: usize = 2;
 
 struct CursorTimelineVariant {
-    settings: [u32; 7],
+    settings: [u32; 8],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -419,16 +419,6 @@ impl HoverChanges {
         Arc::clone(&self.times_ms.lock().unwrap())
     }
 
-    /// The times a cursor with these settings anchors to: none unless hover
-    /// anchors are chosen.
-    pub fn times_for(&self, cursor: &cap_project::CursorConfiguration) -> Arc<[f64]> {
-        if cursor.interaction_anchors && cursor.hover_anchors {
-            self.times_ms()
-        } else {
-            Arc::from(&[][..])
-        }
-    }
-
     pub fn generation(&self) -> u64 {
         self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -448,20 +438,42 @@ impl HoverChanges {
     }
 }
 
+/// Which interactions a smoothed cursor is anchored to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CursorAnchors {
+    pub interaction: bool,
+    pub hover: bool,
+}
+
+impl CursorAnchors {
+    pub fn from_config(cursor: &cap_project::CursorConfiguration) -> Self {
+        Self {
+            interaction: cursor.interaction_anchors,
+            hover: cursor.interaction_anchors && cursor.hover_anchors,
+        }
+    }
+}
+
 impl PrecomputedCursorTimeline {
     pub fn new(
         cursor: &CursorEvents,
         smoothing: Option<SpringMassDamperSimulationConfig>,
         click_spring: Option<ClickSpringConfig>,
     ) -> Self {
-        Self::new_with_anchors(cursor, smoothing, click_spring, false, &[])
+        Self::new_with_anchors(
+            cursor,
+            smoothing,
+            click_spring,
+            CursorAnchors::default(),
+            &[],
+        )
     }
 
     pub fn new_with_anchors(
         cursor: &CursorEvents,
         smoothing: Option<SpringMassDamperSimulationConfig>,
         click_spring: Option<ClickSpringConfig>,
-        interaction_anchors: bool,
+        anchors: CursorAnchors,
         hover_changes_ms: &[f64],
     ) -> Self {
         let event_order = CursorEventOrder::new(cursor);
@@ -480,7 +492,7 @@ impl PrecomputedCursorTimeline {
         let smoothing_config = smoothing.unwrap();
         let filtered_moves = filter_cursor_shake(&cursor.moves);
         let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
-        let built = if interaction_anchors {
+        let built = if anchors.interaction {
             let with_drag_samples = keep_drag_samples(&cursor.moves, &cursor.clicks);
             build_anchored_timeline(
                 cursor,
@@ -489,7 +501,7 @@ impl PrecomputedCursorTimeline {
                     .unwrap_or(prepared_moves.as_ref()),
                 smoothing_config,
                 click_spring,
-                hover_changes_ms,
+                if anchors.hover { hover_changes_ms } else { &[] },
             )
         } else {
             build_smoothed_timeline(
@@ -527,7 +539,7 @@ impl PrecomputedCursorTimeline {
             cursor,
             smoothing,
             Some(project.cursor.click_spring_config()),
-            project.cursor.interaction_anchors,
+            CursorAnchors::from_config(&project.cursor),
             hover_changes_ms,
         )
     }
@@ -537,7 +549,7 @@ impl PrecomputedCursorTimeline {
         cursor: &CursorEvents,
         smoothing: SpringMassDamperSimulationConfig,
         click_spring: ClickSpringConfig,
-        interaction_anchors: bool,
+        anchors: CursorAnchors,
     ) -> Arc<Self> {
         let settings = [
             smoothing.tension.to_bits(),
@@ -546,7 +558,8 @@ impl PrecomputedCursorTimeline {
             click_spring.tension.to_bits(),
             click_spring.mass.to_bits(),
             click_spring.friction.to_bits(),
-            u32::from(interaction_anchors),
+            u32::from(anchors.interaction),
+            u32::from(anchors.hover),
         ];
         let mut variants = self.variants.lock().unwrap();
         if let Some(index) = variants.iter().position(|entry| entry.settings == settings) {
@@ -560,7 +573,7 @@ impl PrecomputedCursorTimeline {
             cursor,
             Some(smoothing),
             Some(click_spring),
-            interaction_anchors,
+            anchors,
             &self.hover_changes_ms,
         ));
         if variants.len() == CURSOR_VARIANT_CACHE_CAPACITY {
@@ -2404,7 +2417,7 @@ mod tests {
                 4 => click.mass += 0.5,
                 _ => click.friction += 10.0,
             }
-            let variant = base.cached_variant(&cursor, smoothing, click, false);
+            let variant = base.cached_variant(&cursor, smoothing, click, CursorAnchors::default());
             for time in [-0.1, 0.0, 0.175, 0.5, 1.0, 1.5, 2.9, 3.5] {
                 assert_position_bits(
                     interpolate_cursor_with_click_spring(
@@ -2416,7 +2429,7 @@ mod tests {
                     variant.interpolate(time),
                 );
             }
-            let reused = base.cached_variant(&cursor, smoothing, click, false);
+            let reused = base.cached_variant(&cursor, smoothing, click, CursorAnchors::default());
             assert!(Arc::ptr_eq(&variant, &reused));
         }
         assert!(base.raw_cursor.moves.is_empty());
@@ -2438,15 +2451,15 @@ mod tests {
             tension: 1100.0,
             ..a
         };
-        let first = base.cached_variant(&cursor, a, click, false);
-        let second = base.cached_variant(&cursor, b, click, false);
+        let first = base.cached_variant(&cursor, a, click, CursorAnchors::default());
+        let second = base.cached_variant(&cursor, b, click, CursorAnchors::default());
         let old_second = Arc::downgrade(&second);
         drop(second);
         assert!(Arc::ptr_eq(
             &first,
-            &base.cached_variant(&cursor, a, click, false)
+            &base.cached_variant(&cursor, a, click, CursorAnchors::default())
         ));
-        let third = base.cached_variant(&cursor, c, click, false);
+        let third = base.cached_variant(&cursor, c, click, CursorAnchors::default());
         assert!(old_second.upgrade().is_none());
         assert_eq!(
             base.variants.lock().unwrap().len(),
@@ -2454,12 +2467,12 @@ mod tests {
         );
         assert!(Arc::ptr_eq(
             &third,
-            &base.cached_variant(&cursor, c, click, false)
+            &base.cached_variant(&cursor, c, click, CursorAnchors::default())
         ));
         assert_position_bits(original, base.interpolate(0.8));
         let first_output = first.interpolate(0.8);
         let weak_first = Arc::downgrade(&first);
-        drop(base.cached_variant(&cursor, b, click, false));
+        drop(base.cached_variant(&cursor, b, click, CursorAnchors::default()));
         assert_eq!(Arc::strong_count(&first), 1);
         assert_position_bits(first_output, first.interpolate(0.8));
         drop(first);
@@ -2482,8 +2495,8 @@ mod tests {
             ..DEFAULT_CLICK_SPRING
         };
         let click = ClickSpringConfig::default();
-        let av = a.cached_variant(&first, smoothing, click, false);
-        let bv = b.cached_variant(&second, smoothing, click, false);
+        let av = a.cached_variant(&first, smoothing, click, CursorAnchors::default());
+        let bv = b.cached_variant(&second, smoothing, click, CursorAnchors::default());
         assert!(!Arc::ptr_eq(&av, &bv));
         for time in [0.0, 0.2, 1.0, 1.9] {
             assert_position_bits(
@@ -2511,7 +2524,7 @@ mod tests {
                             &cursor,
                             DEFAULT_CLICK_SPRING,
                             ClickSpringConfig::default(),
-                            false,
+                            CursorAnchors::default(),
                         )
                     })
                 })
@@ -3059,7 +3072,16 @@ mod tests {
         }
 
         fn timeline(cursor: &CursorEvents, anchors: bool) -> PrecomputedCursorTimeline {
-            PrecomputedCursorTimeline::new_with_anchors(cursor, Some(spring()), None, anchors, &[])
+            PrecomputedCursorTimeline::new_with_anchors(
+                cursor,
+                Some(spring()),
+                None,
+                CursorAnchors {
+                    interaction: anchors,
+                    hover: false,
+                },
+                &[],
+            )
         }
 
         fn rendered(timeline: &PrecomputedCursorTimeline, t: f64) -> (f64, f64) {

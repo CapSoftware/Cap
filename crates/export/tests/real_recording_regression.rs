@@ -198,8 +198,8 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                         &segment.cursor,
                         cursor_smoothing,
                         Some(click_spring),
-                        project_config.cursor.interaction_anchors,
-                        &segment.hover_changes.times_for(&project_config.cursor),
+                        cap_rendering::CursorAnchors::from_config(&project_config.cursor),
+                        &segment.hover_changes.times_ms(),
                     ))
                 })
                 .collect();

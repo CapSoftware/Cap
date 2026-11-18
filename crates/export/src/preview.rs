@@ -290,9 +290,7 @@ async fn render_preview_frame(
 
     let cursor_timeline = PrecomputedCursorTimeline::from_project(
         segment_media.cursor,
-        &segment_media
-            .hover_changes
-            .times_for(&project_config.cursor),
+        &segment_media.hover_changes.times_ms(),
         project_config,
     );
     let uniforms = ProjectUniforms::new_with_precomputed_cursor(
@@ -366,9 +364,7 @@ async fn render_preview_frame(
         } else {
             Some(PrecomputedCursorTimeline::from_project(
                 outgoing_media.cursor,
-                &outgoing_media
-                    .hover_changes
-                    .times_for(&project_config.cursor),
+                &outgoing_media.hover_changes.times_ms(),
                 project_config,
             ))
         };

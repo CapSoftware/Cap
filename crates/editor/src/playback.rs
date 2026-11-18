@@ -1212,8 +1212,8 @@ impl Playback {
                                 &seg.cursor,
                                 cursor_smoothing,
                                 Some(click_spring),
-                                project.cursor.interaction_anchors,
-                                &seg.hover_changes.times_for(&project.cursor),
+                                cap_rendering::CursorAnchors::from_config(&project.cursor),
+                                &seg.hover_changes.times_ms(),
                             ))
                         })
                         .collect()
