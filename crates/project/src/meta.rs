@@ -295,7 +295,16 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
+        // Imports have no config until their first edit, so a missing file is
+        // a new project. One that exists but fails to parse keeps reading as
+        // the plain default.
+        let mut config = match ProjectConfiguration::load(&self.project_path) {
+            Ok(config) => config,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                ProjectConfiguration::for_new_project()
+            }
+            Err(_) => ProjectConfiguration::default(),
+        };
 
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
@@ -959,6 +968,32 @@ mod metadata_save_tests {
                 .to_string_lossy()
                 .starts_with(".recording-meta-")
         }));
+    }
+
+    #[test]
+    fn only_a_project_without_a_config_starts_as_a_new_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        assert_eq!(
+            meta.project_config().background.padding_mode,
+            crate::PaddingMode::Even
+        );
+
+        let mut saved = ProjectConfiguration::default();
+        saved.background.padding = 10.0;
+        saved.write(directory.path()).unwrap();
+        let loaded = meta.project_config();
+        assert_eq!(
+            loaded.background.padding_mode,
+            crate::PaddingMode::Proportional
+        );
+        assert_eq!(loaded.background.padding, 10.0);
+
+        std::fs::write(directory.path().join("project-config.json"), b"{not json").unwrap();
+        assert_eq!(
+            meta.project_config().background.padding_mode,
+            crate::PaddingMode::Proportional
+        );
     }
 
     #[test]

@@ -2359,6 +2359,7 @@ background_blur = "बैकग्राउंड ब्लर"
 custom_position = "कस्टम स्क्रीन पोज़िशन (कैनवास पर ड्रैग की गई)"
 motion_blur = "मोशन ब्लर"
 padding = "पैडिंग"
+padding_style = "पैडिंग शैली"
 rounded_corners = "गोल कोने"
 title = "लेआउट"
 
@@ -2856,6 +2857,10 @@ timeline_unavailable = "प्रोजेक्ट टाइमलाइन उ
 timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
 title = "कीबोर्ड दिखाएँ"
 uppercase = "बड़े अक्षर"
+
+[editor.tabs.padding]
+even = "समान"
+proportional = "आनुपातिक"
 
 [editor.tabs.position]
 bottom_center = "नीचे बीच में"
