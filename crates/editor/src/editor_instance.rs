@@ -816,6 +816,7 @@ impl EditorInstance {
                         || now_ms()
                             .saturating_sub(editor.preview_activity_ms.load(Ordering::Acquire))
                             < HOVER_ANALYSIS_IDLE_MS
+                        || !wants_hover_analysis(&editor.project_config.1.borrow())
                 })
         };
         let spawned = std::thread::Builder::new()
