@@ -1,7 +1,3 @@
-//! Export a Studio project's edited sound as one audio file: the same mix the
-//! MP4 export muxes (every clip edit, levels and mute), rendered by the
-//! editor's audio renderer and written as MP3 or 16-bit WAV.
-
 use std::{
     fs::File,
     io::{BufWriter, Seek, SeekFrom, Write},
@@ -69,8 +65,6 @@ impl AudioExportFormat {
         }
     }
 
-    /// Size of the file for a timeline of this length, within a few
-    /// kilobytes: both formats write at a constant rate.
     pub fn estimated_bytes(self, duration_secs: f64) -> u64 {
         let duration_secs = if duration_secs.is_finite() {
             duration_secs.max(0.0)
@@ -91,7 +85,6 @@ impl AudioExportFormat {
     }
 }
 
-/// Whether the timeline plays any clip that recorded sound.
 pub fn has_audio(
     recordings: &cap_rendering::ProjectRecordingsMeta,
     project: &ProjectConfiguration,
@@ -199,7 +192,8 @@ pub async fn export_audio(
                 segment.audio_timing_repair,
             ));
         }
-        let mut renderer = AudioRenderer::new(audio_segments);
+        let music = cap_editor::load_music_tracks_uncached(&project, &recording_meta.project_path);
+        let mut renderer = AudioRenderer::new(audio_segments).with_music(music);
         renderer.set_playhead(0.0, &project);
         AudioSource::Renderer(Box::new(renderer))
     };
@@ -262,8 +256,6 @@ enum AudioSource {
 }
 
 impl AudioSource {
-    /// Renders up to `samples` stereo frames into `sink` and returns how many
-    /// it wrote; the caller pads the rest with silence.
     fn render(
         &mut self,
         samples: usize,
