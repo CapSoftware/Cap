@@ -929,6 +929,9 @@ impl EditorWindow {
                     })
             }
             cap_project::OverlayTrackKind::Mask => {
+                if !self.show_mask_tracking {
+                    return false;
+                }
                 timeline
                     .mask_segments
                     .iter()
@@ -1123,6 +1126,7 @@ impl EditorWindow {
     pub(crate) fn arm_shape_tool(&mut self, kind: Option<ShapeKind>, cx: &mut Context<Self>) {
         self.shape_tool_menu = false;
         if let Some(kind) = kind {
+            self.mask_tracking_points = None;
             self.last_shape_kind = kind;
             if self.playing {
                 self.stop_playback(cx);

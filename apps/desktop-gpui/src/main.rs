@@ -35,6 +35,7 @@ mod editor_crop;
 mod editor_edits;
 mod editor_export;
 mod editor_hover_bench;
+mod editor_mask_tracking;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
