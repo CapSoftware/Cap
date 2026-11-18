@@ -48,13 +48,7 @@ const files = [
 
 const linted = spawnSync(
 	process.execPath,
-	[
-		oxlint,
-		"-c",
-		path.join(here, "oxlintrc.json"),
-		"--format=json",
-		...files,
-	],
+	[oxlint, "-c", path.join(here, "oxlintrc.json"), "--format=json", ...files],
 	{ cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
 );
 
