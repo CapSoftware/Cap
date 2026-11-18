@@ -53,6 +53,7 @@ struct Draw {
     crop: [f32; 4],
     target: [f32; 4],
     preserve_alpha: bool,
+    motion_blur: [f32; 2],
 }
 
 fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
@@ -104,6 +105,12 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
         rounding_px: 0.0,
         corner_radii: [0.0; 4],
         preserve_source_alpha: if draw.preserve_alpha { 1.0 } else { 0.0 },
+        motion_blur_vector: draw.motion_blur,
+        motion_blur_params: if draw.motion_blur == [0.0; 2] {
+            [0.0; 4]
+        } else {
+            [1.0, 1.0, 0.0, 0.0]
+        },
         ..Default::default()
     };
     let frame_view = frame.create_view(&Default::default());
@@ -189,6 +196,7 @@ fn full_frame_draw(source: &Source, output: [u32; 2]) -> Draw {
         crop: [0.0, 0.0, source.width as f32, source.height as f32],
         target: [0.0, 0.0, output[0] as f32, output[1] as f32],
         preserve_alpha: false,
+        motion_blur: [0.0; 2],
     }
 }
 
@@ -312,4 +320,34 @@ fn heavily_shrunk_stripes_stay_flat() {
     let (mean, spread) = luma_spread(&pixels, output[0], 4);
     assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
     assert!(spread < 25.0, "spread {spread:.1}");
+}
+
+#[test]
+fn motion_blur_keeps_the_shrink_filter() {
+    let Some(gpu) = gpu() else { return };
+    // Horizontal 1 px stripes shrunk 3.3x and blurred by a horizontal move:
+    // the blur runs along the stripes, so it can't hide aliasing and the
+    // blurred frame has to be as flat as the still one (spread about 9). The
+    // 2x2 box left a beat with a spread of about 60 levels in both.
+    let source = Source::from_fn(330, 99, |_, y| {
+        let v = if y % 2 == 0 { 0 } else { 255 };
+        [v, v, v, 255]
+    });
+    let output = [100, 30];
+    let still = render(&gpu, &source, &full_frame_draw(&source, output));
+    let moving = render(
+        &gpu,
+        &source,
+        &Draw {
+            motion_blur: [0.02, 0.0],
+            ..full_frame_draw(&source, output)
+        },
+    );
+    let (_, still_spread) = luma_spread(&still, output[0], 4);
+    let (mean, moving_spread) = luma_spread(&moving, output[0], 4);
+    assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
+    assert!(
+        moving_spread < 25.0,
+        "still {still_spread:.1}, moving {moving_spread:.1}"
+    );
 }
