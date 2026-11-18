@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
+
+import { is, SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import NextAuth from "next-auth";
 import { decode } from "next-auth/jwt";
@@ -18,6 +20,7 @@ const env = vi.hoisted(() => ({
 const store = vi.hoisted(() => ({
 	tables: new Map<unknown, Record<string, unknown>[]>(),
 	sentTo: [] as { email: string; code: string }[],
+	skipNextUserSelect: false,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -63,7 +66,12 @@ vi.mock("@cap/database/emails/otp-email", () => ({
 	OTPEmail: (props: { code: string; email: string }) => props,
 }));
 
-const { users } = await import("@cap/database/schema");
+const { DrizzleAdapter } = await import(
+	"../../../../packages/database/auth/drizzle-adapter"
+);
+const { organizations, users, verificationTokens } = await import(
+	"@cap/database/schema"
+);
 
 // Equality as utf8mb4_0900_ai_ci compares these values: case and accents are ignored.
 const collationKey = (value: unknown) =>
@@ -102,6 +110,10 @@ const collatingDb = {
 	select: () => ({
 		from: (table: unknown) => {
 			let rows = [...rowsOf(table)];
+			if (table === users && store.skipNextUserSelect) {
+				store.skipNextUserSelect = false;
+				rows = [];
+			}
 			const query = {
 				innerJoin: () => {
 					rows = [];
@@ -120,17 +132,29 @@ const collatingDb = {
 	insert: (table: unknown) => ({
 		values: (values: Row) => {
 			const rows = rowsOf(table);
-			if (
-				table === users &&
-				rows.some(
-					(row) => collationKey(row.email) === collationKey(values.email),
-				)
-			) {
-				return Promise.reject(new Error("Duplicate entry for key email_idx"));
+			const duplicate =
+				table === users
+					? rows.find(
+							(row) => collationKey(row.email) === collationKey(values.email),
+						)
+					: undefined;
+			if (!duplicate) {
+				rows.push({ ...values });
+				return Object.assign(Promise.resolve([{ affectedRows: 1 }]), {
+					onDuplicateKeyUpdate: async () => [{ affectedRows: 1 }],
+				});
 			}
-			rows.push({ ...values });
-			return Object.assign(Promise.resolve([{ affectedRows: 1 }]), {
-				onDuplicateKeyUpdate: () => Promise.resolve([{ affectedRows: 1 }]),
+			const rejected = Promise.reject(
+				new Error("Duplicate entry for key email_idx"),
+			);
+			rejected.catch(() => {});
+			return Object.assign(rejected, {
+				onDuplicateKeyUpdate: async ({ set }: { set: Row }) => {
+					for (const [column, value] of Object.entries(set)) {
+						if (!is(value, SQL)) duplicate[column] = value;
+					}
+					return [{ affectedRows: 2 }];
+				},
 			});
 		},
 	}),
@@ -252,6 +276,7 @@ beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
 	store.tables.clear();
 	store.sentTo = [];
+	store.skipNextUserSelect = false;
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -292,6 +317,15 @@ describe("email sign-in against a case- and accent-insensitive users.email", () 
 
 		expect(redirect).toBe(`${env.WEB_URL}/dashboard`);
 		expect(session?.id).toBe("owner");
+		expect(rowsOf(users)).toHaveLength(1);
+	});
+
+	it("signs in an account stored with the Unicode spelling of its domain", async () => {
+		seedUser("unicode-domain", "person@exämple.com");
+
+		const { session } = await signInWithMailedCode("Person@Exämple.com");
+
+		expect(session?.id).toBe("unicode-domain");
 		expect(rowsOf(users)).toHaveLength(1);
 	});
 
@@ -344,6 +378,54 @@ describe("DrizzleAdapter email lookups", () => {
 			}),
 		).rejects.toThrow();
 		expect(rowsOf(users)).toHaveLength(1);
+	});
+});
+
+describe("DrizzleAdapter stored-email checks", () => {
+	const ssoIdentity = {
+		organizationId: "org",
+		workosOrganizationId: "workos-org",
+		connectionId: "connection",
+		profileId: "profile",
+		email: "pérson@example.com",
+	};
+
+	it("keeps the stored email when an SSO insert meets an existing row", async () => {
+		seedUser("existing", "person@example.com");
+		rowsOf(organizations).push({ id: "org" });
+		store.skipNextUserSelect = true;
+		const adapter = DrizzleAdapter(collatingDb as never, {
+			getSsoIdentity: () => ssoIdentity as never,
+		});
+
+		await expect(
+			adapter.createUser?.({
+				email: "pérson@example.com",
+				emailVerified: new Date(),
+				name: null,
+				image: null,
+			}),
+		).rejects.toThrow();
+		expect(rowsOf(users)).toEqual([
+			expect.objectContaining({ id: "existing", email: "person@example.com" }),
+		]);
+	});
+
+	it("leaves a verification token stored under a different identifier", async () => {
+		rowsOf(verificationTokens).push({
+			identifier: "person@example.com",
+			token: "issued",
+			expires: new Date(Date.now() + 60_000),
+		});
+		const adapter = DrizzleAdapter(collatingDb as never);
+
+		expect(
+			await adapter.useVerificationToken?.({
+				identifier: "pérson@example.com",
+				token: "other",
+			}),
+		).toBeNull();
+		expect(rowsOf(verificationTokens)).toHaveLength(1);
 	});
 });
 
