@@ -617,11 +617,43 @@ fn exists_unfollowed(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Serializes everything that moves media in or out of `content/removed-media`.
-static STAGING_LOCK: Mutex<()> = Mutex::new(());
+/// Serializes, per project, everything that moves media in or out of
+/// `content/removed-media`, so a slow trash of one project never holds up
+/// another.
+static STAGING_HOLDS: Active = Active {
+    projects: Mutex::new(Vec::new()),
+    released: Condvar::new(),
+};
 
-fn staging_lock() -> MutexGuard<'static, ()> {
-    STAGING_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+struct StagingGuard(PathBuf);
+
+fn staging_lock(project: &Path) -> StagingGuard {
+    let key = project
+        .canonicalize()
+        .unwrap_or_else(|_| project.to_path_buf());
+    let mut projects = STAGING_HOLDS
+        .projects
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    while projects.contains(&key) {
+        projects = STAGING_HOLDS
+            .released
+            .wait(projects)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    projects.push(key.clone());
+    StagingGuard(key)
+}
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        STAGING_HOLDS
+            .projects
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|held| held != &self.0);
+        STAGING_HOLDS.released.notify_all();
+    }
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -907,7 +939,7 @@ pub(crate) fn settle(project: &Path) -> Result<(), String> {
     projects.push(key.clone());
     drop(projects);
     let _claim = Claim(key.clone());
-    let _staging = staging_lock();
+    let _staging = staging_lock(&key);
     roll_back(&key).map(drop).map_err(|error| {
         tracing::error!(path = %key.display(), %error, "Could not roll back an interrupted unused media cleanup");
         format!("an interrupted unused clip media cleanup could not be undone: {error}")
@@ -956,7 +988,7 @@ pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
 /// Sends what earlier cleanups moved out to the trash. Only plain folders
 /// inside the project's own staging folder are sent; links are left alone.
 pub(crate) fn trash_staged(project: &Path, trash: &dyn Fn(&Path) -> Result<(), String>) -> bool {
-    let _staging = staging_lock();
+    let _staging = staging_lock(project);
     let staging = project.join(STAGING);
     if !matches!(is_plain_dir(&project.join("content")), Ok(true))
         || !matches!(is_plain_dir(&staging), Ok(true))
@@ -1053,7 +1085,7 @@ pub(crate) enum Outcome {
 /// The caller then sends it to the trash with [`trash_staged`], after
 /// releasing its [`Claim`] so opening the project does not wait on the trash.
 pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
-    let _staging = staging_lock();
+    let _staging = staging_lock(project);
     roll_back(project).map_err(|error| error.to_string())?;
     let snapshot = Snapshot::read(project)?;
     let plan = match plan(&snapshot, &request.probes) {

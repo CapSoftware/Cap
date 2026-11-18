@@ -885,6 +885,25 @@ fn settle_waits_for_a_cleanup_in_this_process() {
 }
 
 #[test]
+fn trashing_one_project_never_waits_on_another() {
+    let busy = Fixture::new();
+    let idle = Fixture::new();
+    run(&idle.project(), &Request::from_probes(probes())).unwrap();
+    let held = staging_lock(&busy.project());
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let project = idle.project();
+    let worker = std::thread::spawn(move || {
+        let trash_dir = tempfile::tempdir().unwrap();
+        done_tx
+            .send(trash_staged(&project, &trash_into(trash_dir.path())))
+            .unwrap();
+    });
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(10)), Ok(true));
+    drop(held);
+    worker.join().unwrap();
+}
+
+#[test]
 fn busy_projects_are_never_touched() {
     assert_eq!(Busy::default().reason(), None);
     for busy in [
