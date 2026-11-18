@@ -2986,11 +2986,20 @@ mod linux_reopen_tests {
         assert_eq!(plain, linux_reopen_payload(owner));
 
         let mut bare = Vec::new();
-        write_linux_reopen_request(&mut bare, owner, &[], Some("gnome-shell/Cap/1234-5-host_TIME7")).unwrap();
+        write_linux_reopen_request(
+            &mut bare,
+            owner,
+            &[],
+            Some("gnome-shell/Cap/1234-5-host_TIME7"),
+        )
+        .unwrap();
         assert_eq!(&bare[..8], b"CAPACTV1");
         assert_eq!(
             read_linux_reopen_request(&mut bare.as_slice(), owner).unwrap(),
-            (Vec::new(), Some("gnome-shell/Cap/1234-5-host_TIME7".to_string()))
+            (
+                Vec::new(),
+                Some("gnome-shell/Cap/1234-5-host_TIME7".to_string())
+            )
         );
 
         let payload =
@@ -2999,7 +3008,10 @@ mod linux_reopen_tests {
         write_linux_reopen_request(&mut with_actions, owner, &payload, Some("token")).unwrap();
         assert_eq!(
             read_linux_reopen_request(&mut with_actions.as_slice(), owner).unwrap(),
-            (vec![DeepLinkAction::StopRecording], Some("token".to_string()))
+            (
+                vec![DeepLinkAction::StopRecording],
+                Some("token".to_string())
+            )
         );
 
         // A token with spaces or control characters is not a compositor's.

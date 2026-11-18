@@ -2892,11 +2892,31 @@ mod tests {
     async fn signed_uploads_send_one_content_type_on_the_wire() {
         let (url, requests) = strict_put_server().await;
         for (subpath, signed_type, sent_type) in [
-            ("segments/manifest.json", Some("application/json"), "application/json"),
-            ("segments/recording.json", Some("application/json"), "application/json"),
-            ("screenshot/screen-capture.jpg", Some("image/jpeg"), "image/jpeg"),
-            ("screenshot/screen-capture.png", Some("image/png"), "image/png"),
-            ("segments/video/segment_001.m4s", Some("video/mp4"), "video/mp4"),
+            (
+                "segments/manifest.json",
+                Some("application/json"),
+                "application/json",
+            ),
+            (
+                "segments/recording.json",
+                Some("application/json"),
+                "application/json",
+            ),
+            (
+                "screenshot/screen-capture.jpg",
+                Some("image/jpeg"),
+                "image/jpeg",
+            ),
+            (
+                "screenshot/screen-capture.png",
+                Some("image/png"),
+                "image/png",
+            ),
+            (
+                "segments/video/segment_001.m4s",
+                Some("video/mp4"),
+                "video/mp4",
+            ),
             ("segments/video/segment_001.m4s", None, "video/mp4"),
             ("segments/manifest.json", None, "application/json"),
         ] {

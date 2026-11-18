@@ -259,13 +259,19 @@ mod tests {
         .unwrap();
         assert_eq!(user, root.path().join("home/.local/share/applications"));
         let exec = Path::new(r#"/opt/100% Cap/"beta" $HOME `x`\.AppImage"#);
-        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Written);
-        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Found);
+        assert_eq!(
+            ensure_desktop_entry(&user, &dirs, exec),
+            DesktopEntry::Written
+        );
+        assert_eq!(
+            ensure_desktop_entry(&user, &dirs, exec),
+            DesktopEntry::Found
+        );
         let entry = std::fs::read_to_string(user.join("so.cap.Cap.desktop")).unwrap();
         assert!(entry.contains("NoDisplay=true"));
-        assert!(entry.contains(
-            r#"Exec=env "/opt/100%% Cap/\\"beta\\" \\$HOME \\`x\\`\\\\.AppImage""#
-        ));
+        assert!(
+            entry.contains(r#"Exec=env "/opt/100%% Cap/\\"beta\\" \\$HOME \\`x\\`\\\\.AppImage""#)
+        );
 
         // An entry a package installed wins: nothing is written for the user.
         let packaged = tempfile::tempdir().unwrap();
@@ -278,7 +284,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Found);
+        assert_eq!(
+            ensure_desktop_entry(&user, &dirs, exec),
+            DesktopEntry::Found
+        );
         assert!(!user.join("so.cap.Cap.desktop").exists());
 
         // Without a home there is nowhere safe to write.

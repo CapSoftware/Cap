@@ -16,9 +16,7 @@ fn socket_path(display: &OsStr, runtime_dir: Option<&OsStr>) -> Option<PathBuf> 
         return Some(display.to_path_buf());
     }
     let runtime_dir = Path::new(runtime_dir?);
-    runtime_dir
-        .is_absolute()
-        .then(|| runtime_dir.join(display))
+    runtime_dir.is_absolute().then(|| runtime_dir.join(display))
 }
 
 /// Only a missing socket or a refused connection counts: anything else, such

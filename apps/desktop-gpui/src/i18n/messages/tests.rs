@@ -55,7 +55,12 @@ fn every_message_is_still_written_by_the_app() {
 
 #[test]
 fn unknown_and_hostile_text_passes_through() {
-    for message in ["", "encoder died", "Stop task failed: ", ". Cleanup is unconfirmed; retry Stop."] {
+    for message in [
+        "",
+        "encoder died",
+        "Stop task failed: ",
+        ". Cleanup is unconfirmed; retry Stop.",
+    ] {
         assert_eq!(localize(message), message);
     }
     let deep = format!(
@@ -90,7 +95,10 @@ fn messages_follow_the_language() {
     }
 
     init(Some(Locale::Ja.code()));
-    assert_eq!(localize("Recording task failed."), "録画タスクが失敗しました。");
+    assert_eq!(
+        localize("Recording task failed."),
+        "録画タスクが失敗しました。"
+    );
     assert_eq!(
         localize(
             "Stop task failed: Recording startup cancelled; local files preserved. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop."
@@ -106,7 +114,9 @@ fn messages_follow_the_language() {
         "カメラへのアクセスを利用できません。「システム設定」>「プライバシーとセキュリティ」>「カメラ」でCapを許可してから、デバイスをもう一度選択してください。"
     );
     assert_eq!(
-        localize("Low storage. Your recording files are preserved at /Users/me/Cap/Stop task failed: x. Free up space, then recover the recording in Cap."),
+        localize(
+            "Low storage. Your recording files are preserved at /Users/me/Cap/Stop task failed: x. Free up space, then recover the recording in Cap."
+        ),
         "ストレージの空き容量が不足しています。録画ファイルは/Users/me/Cap/Stop task failed: xに保持されています。空き容量を確保してから、Capで録画を復元してください。"
     );
 

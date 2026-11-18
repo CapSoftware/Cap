@@ -92,6 +92,8 @@ pub use field::{Field, Subfield};
 #[allow(unused_imports)]
 pub use hint::{Hint, Hints, Side as HintSide};
 
+#[allow(unused_imports)]
+pub use glass_switch::Switch as GlassSwitch;
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
@@ -126,8 +128,6 @@ pub use text_input::{
     TextInput, TextInputEvent, TextInputState, bind_keys as bind_text_input_keys,
     text_input_has_focus,
 };
-#[allow(unused_imports)]
-pub use glass_switch::Switch as GlassSwitch;
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]
 pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};

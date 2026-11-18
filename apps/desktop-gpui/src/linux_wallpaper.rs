@@ -32,7 +32,11 @@ fn sources(current_desktop: &str) -> Vec<Source> {
         .split(':')
         .map(|desktop| desktop.trim().to_ascii_lowercase())
         .collect();
-    let has = |names: &[&str]| desktops.iter().any(|desktop| names.contains(&desktop.as_str()));
+    let has = |names: &[&str]| {
+        desktops
+            .iter()
+            .any(|desktop| names.contains(&desktop.as_str()))
+    };
     let mut sources = Vec::new();
     if has(&["kde"]) {
         sources.push(Source::Plasma);
@@ -154,7 +158,11 @@ fn gvariant_string(printed: &str) -> Option<String> {
     let inner = printed
         .strip_prefix('\'')
         .and_then(|rest| rest.strip_suffix('\''))
-        .or_else(|| printed.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')))?;
+        .or_else(|| {
+            printed
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+        })?;
     let mut value = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -238,7 +246,9 @@ fn wallpaper_package_image(package: &Path) -> Option<PathBuf> {
             path.file_stem()
                 .and_then(|stem| stem.to_str())
                 .and_then(|stem| stem.split_once('x'))
-                .and_then(|(width, height)| Some(width.parse::<u64>().ok()? * height.parse::<u64>().ok()?))
+                .and_then(|(width, height)| {
+                    Some(width.parse::<u64>().ok()? * height.parse::<u64>().ok()?)
+                })
                 .unwrap_or(0)
         })
 }
@@ -427,7 +437,9 @@ pub fn decode_jpeg_xl(path: &Path) -> Option<Result<image::DynamicImage, String>
 
 fn is_jpeg_xl(head: &[u8]) -> bool {
     head.starts_with(&[0xFF, 0x0A])
-        || head.starts_with(&[0, 0, 0, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A])
+        || head.starts_with(&[
+            0, 0, 0, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+        ])
 }
 
 #[cfg(test)]
@@ -491,7 +503,10 @@ Image=/home/a/second.png
             plasma_image(appletsrc),
             Some(PathBuf::from("/usr/share/wallpapers/Mountain/"))
         );
-        assert_eq!(plasma_image("[Containments][2][Applets]\nImage=/x.png\n"), None);
+        assert_eq!(
+            plasma_image("[Containments][2][Applets]\nImage=/x.png\n"),
+            None
+        );
     }
 
     #[test]
@@ -499,7 +514,12 @@ Image=/home/a/second.png
         let root = tempfile::tempdir().unwrap();
         let images = root.path().join("Next/contents/images");
         std::fs::create_dir_all(&images).unwrap();
-        for name in ["1920x1080.png", "5120x2880.png", "1366x768.png", "screenshot.png"] {
+        for name in [
+            "1920x1080.png",
+            "5120x2880.png",
+            "1366x768.png",
+            "screenshot.png",
+        ] {
             std::fs::write(images.join(name), b"x").unwrap();
         }
         assert_eq!(
@@ -548,7 +568,10 @@ Image=/home/a/second.png
     #[test]
     fn swaybg_is_only_read_on_this_wayland_display() {
         let ours = Some(std::ffi::OsStr::new("wayland-1"));
-        assert!(same_display(ours, Some(b"HOME=/h\0WAYLAND_DISPLAY=wayland-1\0")));
+        assert!(same_display(
+            ours,
+            Some(b"HOME=/h\0WAYLAND_DISPLAY=wayland-1\0")
+        ));
         assert!(!same_display(ours, Some(b"WAYLAND_DISPLAY=wayland-0\0")));
         assert!(same_display(ours, Some(b"HOME=/h\0")));
         assert!(same_display(ours, None));
@@ -580,7 +603,9 @@ Image=/home/a/second.png
         );
         assert_eq!(hyprpaper_image("no wallpapers active\n"), None);
         assert_eq!(
-            cosmic_image("(\n    output: \"all\",\n    source: Path(\"/usr/share/backgrounds/cosmic/a.jpg\"),\n)"),
+            cosmic_image(
+                "(\n    output: \"all\",\n    source: Path(\"/usr/share/backgrounds/cosmic/a.jpg\"),\n)"
+            ),
             Some(PathBuf::from("/usr/share/backgrounds/cosmic/a.jpg"))
         );
     }
