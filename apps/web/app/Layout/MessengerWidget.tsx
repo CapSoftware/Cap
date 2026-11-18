@@ -12,6 +12,10 @@ import {
 	sendMessengerUserMessage,
 } from "@/actions/messenger";
 import { MESSENGER_SUGGESTED_PROMPTS } from "@/lib/messenger/constants";
+import {
+	MESSENGER_HIDDEN_POLL_MS,
+	useMessengerPoll,
+} from "@/lib/messenger/use-messenger-poll";
 
 interface ConversationSummary {
 	id: string;
@@ -289,8 +293,6 @@ function HomeView({
 	);
 }
 
-const WIDGET_POLL_MS = 3000;
-
 function playNotificationSound() {
 	try {
 		const ctx = new AudioContext();
@@ -415,27 +417,13 @@ function ChatView({
 		userScrolledRef.current = distanceFromBottom > 80;
 	}, []);
 
-	useEffect(() => {
-		let active = true;
-		let pollVersion = 0;
-		let appliedPollVersion = 0;
-		const interval = setInterval(async () => {
-			if (isSendingRef.current) return;
-			const requestVersion = ++pollVersion;
-			const messageVersion = messageVersionRef.current;
-			const data = await fetchMessengerConversation(
-				initialConversation.id,
-			).catch(() => null);
-			if (
-				!active ||
-				!data ||
-				isSendingRef.current ||
-				requestVersion <= appliedPollVersion ||
-				messageVersion !== messageVersionRef.current
-			)
-				return;
-			appliedPollVersion = requestVersion;
-
+	const resetPollBackoff = useMessengerPoll({
+		conversation,
+		messages,
+		hiddenPollMs: MESSENGER_HIDDEN_POLL_MS,
+		isSendingRef,
+		messageVersionRef,
+		onSnapshot: (data) => {
 			const newAgentCount = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",
 			).length;
@@ -454,12 +442,8 @@ function ChatView({
 					playNotificationSound();
 				}
 			}
-		}, WIDGET_POLL_MS);
-		return () => {
-			active = false;
-			clearInterval(interval);
-		};
-	}, [initialConversation.id]);
+		},
+	});
 
 	const sendMessage = (text: string) => {
 		if (!text || isPending) return;
@@ -496,6 +480,7 @@ function ChatView({
 			setMessages(data.messages);
 			setConversation(data.conversation);
 			isSendingRef.current = false;
+			resetPollBackoff();
 		});
 	};
 

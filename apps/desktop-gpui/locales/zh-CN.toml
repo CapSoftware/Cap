@@ -2255,6 +2255,7 @@ manual_help = "手动缩放会固定在你在下方选择的位置。"
 mixed = "不一致"
 mode = "缩放模式"
 positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
+start_early = "提前开始缩放"
 title = "缩放 {number}"
 
 [editor.side_panel]
@@ -2359,6 +2360,7 @@ background_blur = "背景模糊"
 custom_position = "自定义屏幕位置（在画布上拖动）"
 motion_blur = "运动模糊"
 padding = "边距"
+padding_style = "边距样式"
 rounded_corners = "圆角"
 title = "布局"
 
@@ -2856,6 +2858,10 @@ timeline_unavailable = "项目时间线不可用。"
 timeline_unreadable = "无法读取项目时间线。"
 title = "显示键盘"
 uppercase = "大写"
+
+[editor.tabs.padding]
+even = "均匀"
+proportional = "按比例"
 
 [editor.tabs.position]
 bottom_center = "底部居中"
@@ -3387,6 +3393,7 @@ changed_after = "本地录制在上传后发生了变化；已将其保留"
 already_queued = "此录制已在上传队列中"
 paused = "上传已暂停；本地录制已保留"
 worker_failed = "上传进程失败；本地录制已保留"
+deleted_on_web = "此录制已在网页端删除；本地录制已保留"
 empty = "已保存的录制为空"
 no_resumable_state = "此录制没有可继续的上传状态"
 verification_failed = "录制验证失败：{status}"

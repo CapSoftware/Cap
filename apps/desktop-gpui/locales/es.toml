@@ -2255,6 +2255,7 @@ manual_help = "El zoom manual se queda en el punto fijo que elijas abajo."
 mixed = "Mixto"
 mode = "Modo de zoom"
 positions_mixed = "Los segmentos hacen zoom en puntos distintos. Arrastra para moverlos todos al mismo."
+start_early = "Iniciar zooms antes"
 title = "Zoom {number}"
 
 [editor.side_panel]
@@ -2359,6 +2360,7 @@ background_blur = "Desenfoque del fondo"
 custom_position = "Posición de pantalla personalizada (arrastrada en el lienzo)"
 motion_blur = "Desenfoque de movimiento"
 padding = "Margen"
+padding_style = "Estilo de margen"
 rounded_corners = "Esquinas redondeadas"
 title = "Diseño"
 
@@ -2856,6 +2858,10 @@ timeline_unavailable = "La línea de tiempo del proyecto no está disponible."
 timeline_unreadable = "No se pudo leer la línea de tiempo del proyecto."
 title = "Mostrar teclado"
 uppercase = "Mayúsculas"
+
+[editor.tabs.padding]
+even = "Uniforme"
+proportional = "Proporcional"
 
 [editor.tabs.position]
 bottom_center = "Abajo al centro"
@@ -3387,6 +3393,7 @@ changed_after = "La grabación local cambió después de la subida; se ha conser
 already_queued = "Esta grabación ya está en la cola de subida"
 paused = "Subida en pausa; la grabación local se conserva"
 worker_failed = "El proceso de subida ha fallado; la grabación local se conserva"
+deleted_on_web = "Esta grabación se eliminó en la web; la grabación local se conserva"
 empty = "La grabación guardada está vacía"
 no_resumable_state = "Esta grabación no tiene una subida que se pueda reanudar"
 verification_failed = "La verificación de la grabación ha fallado: {status}"

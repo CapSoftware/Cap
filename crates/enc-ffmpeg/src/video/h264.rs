@@ -466,6 +466,7 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = self.input_config;
+        let software_fallback = Box::new(self.clone());
 
         if input_config.pixel_format != ffmpeg::format::Pixel::NV12 {
             return Err(H264EncoderError::VideoToolboxHwInput(format!(
@@ -582,7 +583,7 @@ impl H264EncoderBuilder {
             converted_frame_pool: None,
             hw_upload: HwUpload::default(),
             videotoolbox_hw: Some(Arc::new(hw_frames)),
-            software_fallback: None,
+            software_fallback: Some(software_fallback),
             #[cfg(test)]
             injected_failure: None,
             hardware_session: None,
@@ -1209,6 +1210,16 @@ impl H264Encoder {
         }
     }
 
+    /// An IOSurface-backed CVPixelBuffer frame holding `software`'s pixels,
+    /// for queueing through the zero-copy input path in tests.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_videotoolbox_frame(&self, software: &frame::Video) -> frame::Video {
+        self.videotoolbox_hw
+            .as_ref()
+            .expect("zero-copy VideoToolbox input")
+            .upload(software)
+    }
+
     #[cfg(test)]
     fn injected_codec_failure(&mut self) -> Option<ffmpeg::Error> {
         let failure = self.injected_failure.as_mut()?;
@@ -1255,6 +1266,13 @@ impl H264Encoder {
         #[cfg(test)]
         if let Some(error) = self.injected_codec_failure() {
             return Err(QueueFrameError::Encode(error));
+        }
+
+        #[cfg(target_os = "macos")]
+        if frame.format() == format::Pixel::VIDEOTOOLBOX
+            && self.output_format != format::Pixel::VIDEOTOOLBOX
+        {
+            frame = download_videotoolbox_frame(&frame).map_err(QueueFrameError::Converter)?;
         }
 
         self.base
@@ -1380,6 +1398,20 @@ impl H264Encoder {
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
         self.base.set_packet_stats(stats);
     }
+}
+
+/// A zero-copy VideoToolbox encoder replaced by libx264 keeps receiving
+/// CVPixelBuffer frames, so their planes are copied out for the software
+/// encoder from then on.
+#[cfg(target_os = "macos")]
+fn download_videotoolbox_frame(frame: &frame::Video) -> Result<frame::Video, ffmpeg::Error> {
+    let mut software = frame::Video::empty();
+    let result =
+        unsafe { ffmpeg::ffi::av_hwframe_transfer_data(software.as_mut_ptr(), frame.as_ptr(), 0) };
+    if result < 0 {
+        return Err(ffmpeg::Error::from(result));
+    }
+    Ok(software)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
