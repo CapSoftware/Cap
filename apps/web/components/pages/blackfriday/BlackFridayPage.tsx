@@ -96,14 +96,16 @@ function Hero() {
 }
 
 async function Loved() {
-	const stars = formatStarCount(await getGitHubStars());
+	const stars = formatStarCount(await getGitHubStars().catch(() => 0));
 	return (
 		<section className="py-16 sm:py-24">
 			<div className={WRAP}>
 				<div className="mx-auto max-w-[640px] text-center">
 					<h2 className={H2}>Loved by people who record a lot</h2>
 					<p className={`mt-4 text-[17px] ${DIM}`}>
-						Open source, with {stars} stars on GitHub.
+						{stars
+							? `Open source, with ${stars} stars on GitHub.`
+							: "Open source."}
 					</p>
 				</div>
 				<div className="mt-12 grid gap-px overflow-hidden rounded-[20px] bg-[rgba(245,241,234,0.1)] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.1)] sm:grid-cols-2 lg:grid-cols-3">
