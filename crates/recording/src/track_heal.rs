@@ -790,9 +790,11 @@ mod tests {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: None,
+                    cursor_shape_version: 0,
                 },
             })),
         }

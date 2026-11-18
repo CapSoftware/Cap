@@ -862,6 +862,7 @@ mod tests {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 });
                 recovered.push(super::super::RecoverableSegment {
                     index,
@@ -885,6 +886,7 @@ mod tests {
                             segments,
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::NeedsRemux),
+                            cursor_shape_version: 0,
                         },
                     },
                 )),
