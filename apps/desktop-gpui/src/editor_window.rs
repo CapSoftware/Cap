@@ -6803,30 +6803,16 @@ impl EditorWindow {
         if !self.project.auto_zoom_pending || !self.project_ready() {
             return;
         }
-        self.project.auto_zoom_pending = false;
         let untouched = !self.history.can_undo() && !self.history.can_redo();
         let settings = crate::store::GeneralSettings::load();
-        let version = self.project.auto_zoom_version;
-        let segments = self
-            .project
-            .timeline
-            .as_ref()
-            .filter(|_| untouched && settings.auto_zoom_on_clicks)
-            .map(|timeline| {
-                edits::first_open_zoom_segments(
-                    clicks,
-                    timeline,
-                    f64::from(settings.zoom_amount_for(version)),
-                    version,
-                )
-            })
-            .unwrap_or_default();
-        let generated = !segments.is_empty();
-        if let Some(timeline) = self.project.timeline.as_mut()
-            && generated
-        {
-            timeline.zoom_segments = segments;
-        }
+        let amount = f64::from(settings.zoom_amount_for(self.project.auto_zoom_version));
+        let generated = edits::settle_pending_auto_zoom(
+            &mut self.project,
+            clicks,
+            !untouched,
+            settings.auto_zoom_on_clicks,
+            amount,
+        );
         if untouched {
             self.history = ProjectHistory::new(self.project.clone());
         } else {
