@@ -1591,7 +1591,7 @@ pub struct EditorWindow {
 
     // -- Timeline -----------------------------------------------------------
     /// Every track the strip draws.
-    timeline: TimelineModel,
+    pub(crate) timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
     pub(crate) view: TimelineView,
     playback_follow: timeline::PlaybackFollow,

@@ -3197,6 +3197,7 @@ impl EditorWindow {
         let options = ExportFormatKind::options(self.is_audio_only(), self.audio_visuals_enabled());
         let cursor_only = ui.cursor_only;
         let no_tracks = ui.track_options.is_empty();
+        let offers_tracks = options.contains(&ExportFormatKind::Tracks);
         let disabled = move |format: ExportFormatKind| match format {
             ExportFormatKind::Mp4 => transparent || cursor_only,
             ExportFormatKind::Gif => cursor_only,
@@ -3248,17 +3249,14 @@ impl EditorWindow {
                     cx.notify();
                 })),
             )
-            .when(
-                no_tracks && options.contains(&ExportFormatKind::Tracks),
-                |field| {
-                    field.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(Hsla::from(editor.text_3))
-                            .child(tr::editor::export::tracks::studio_only()),
-                    )
-                },
-            )
+            .when(no_tracks && offers_tracks, |field| {
+                field.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(tr::editor::export::tracks::studio_only()),
+                )
+            })
     }
 
     fn export_tracks_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
