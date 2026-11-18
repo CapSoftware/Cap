@@ -373,23 +373,6 @@ impl SegmentedVideoEncoder {
         )
     }
 
-    pub fn init_with_encoder_priority(
-        base_path: PathBuf,
-        video_config: VideoInfo,
-        config: SegmentedVideoEncoderConfig,
-        timed_fragments: bool,
-        encoder_priority: &'static [&'static str],
-    ) -> Result<Self, InitError> {
-        Self::init_with_options(
-            base_path,
-            video_config,
-            config,
-            timed_fragments,
-            false,
-            Some(encoder_priority),
-        )
-    }
-
     /// Like [`Self::init_with_timed_fragments`], but muxing, segment
     /// publication and manifest writes (including the initial manifest) run on
     /// a dedicated writer thread with a memory budget sized from the stream

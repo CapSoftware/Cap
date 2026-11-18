@@ -3079,15 +3079,20 @@ async fn stop_recording(
             // content by the length of every capture gap (static screens, dropped frames).
             // This is the timeline the recorder persists to project-config.json, so it is
             // what un-edited recordings use.
-            let display_media_duration = match s.pipeline.screen.video_timestamp_span {
-                Some((first, last)) if display_fps > 0 => {
-                    last.saturating_sub(first).as_secs_f64() + 1.0 / f64::from(display_fps)
-                }
-                _ if display_fps > 0 => {
-                    s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-                }
-                _ => 0.0,
-            };
+            let standin_duration = audio_only
+                .then(|| cap_enc_ffmpeg::remux::get_media_duration(&s.pipeline.screen.path))
+                .flatten();
+            let display_media_duration = standin_duration
+                .map(|duration| duration.as_secs_f64())
+                .unwrap_or(match s.pipeline.screen.video_timestamp_span {
+                    Some((first, last)) if display_fps > 0 => {
+                        last.saturating_sub(first).as_secs_f64() + 1.0 / f64::from(display_fps)
+                    }
+                    _ if display_fps > 0 => {
+                        s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+                    }
+                    _ => 0.0,
+                });
 
             // Non-fragmented recordings have their final display file already;
             // verify the muxed container matches the timestamps we sent it.
@@ -3621,21 +3626,14 @@ async fn create_segment_pipeline(
     let mut start_time = start_time;
 
     let (screen, system_audio, cursor_display) = if audio_only {
-        let builder = OutputPipeline::builder(dir.join("display"))
-            .with_video::<sources::AudioOnlyCanvas>(sources::AudioOnlyCanvasConfig)
+        let screen = OutputPipeline::builder(dir.join("display.mp4"))
+            .with_video::<sources::AudioOnlyClock>(sources::AudioOnlyClockConfig)
             .with_timestamps(start_time)
-            .with_start_gate(start_gate.clone());
-        let screen = builder
-            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
-                timed_fragments: true,
-                segment_duration: Duration::from_secs(2),
-                encoder_priority: Some(sources::AUDIO_ONLY_CANVAS_ENCODERS),
-                shared_pause_state: shared_pause_state.clone(),
-                ..Default::default()
-            })
+            .with_start_gate(start_gate.clone())
+            .build::<sources::AudioOnlyStandinMuxer>(())
             .instrument(error_span!("screen-out"))
             .await
-            .context("audio-only canvas pipeline setup")?;
+            .context("audio-only display pipeline setup")?;
         let system_audio = if base_inputs.capture_system_audio {
             Some(
                 audio_only_system_audio(&base_inputs, start_time)

@@ -1,27 +1,52 @@
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use cap_media_info::{Pixel, VideoInfo};
+use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use cap_timestamp::Timestamp;
 use ffmpeg::util::rational::Rational as FFRational;
 use futures::{FutureExt, SinkExt, channel::mpsc, future::BoxFuture};
 
-use crate::output_pipeline::{FFmpegVideoFrame, SetupCtx, VideoSource};
+use crate::output_pipeline::{
+    AudioFrame, AudioMuxer, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer, VideoSource,
+};
 
 pub use cap_project::{
     AUDIO_ONLY_CANVAS_ENCODERS, AUDIO_ONLY_CANVAS_FPS, AUDIO_ONLY_CANVAS_HEIGHT,
     AUDIO_ONLY_CANVAS_WIDTH,
 };
 
-pub struct AudioOnlyCanvasConfig;
+/// A primed recording drops what arrives before the start cue, so the clock
+/// keeps ticking for the display track's first timestamp to land within this
+/// of the cue. A tick carries only its time: nothing is drawn or encoded.
+const TICK: Duration = Duration::from_millis(100);
 
-pub struct AudioOnlyCanvas {
-    info: VideoInfo,
+pub struct AudioOnlyClockConfig;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ClockTick {
+    timestamp: Timestamp,
+}
+
+impl VideoFrame for ClockTick {
+    fn timestamp(&self) -> Timestamp {
+        self.timestamp
+    }
+
+    fn duplicate(&self) -> Option<Self> {
+        Some(*self)
+    }
+}
+
+/// The display track of an audio-only segment: it times the segment the way a
+/// screen does, so pause, stop, recovery and the editor treat the segment like
+/// any other, while the recording itself never touches video.
+pub struct AudioOnlyClock {
     stop: Arc<AtomicBool>,
 }
 
@@ -35,36 +60,21 @@ pub fn audio_only_canvas_info() -> VideoInfo {
     }
 }
 
-pub fn black_frame(info: &VideoInfo) -> ffmpeg::frame::Video {
-    let mut frame = ffmpeg::frame::Video::new(info.pixel_format, info.width, info.height);
-    for (plane, value) in [(0, 16u8), (1, 128u8), (2, 128u8)] {
-        frame.data_mut(plane).fill(value);
-    }
-    frame
-}
-
-impl VideoSource for AudioOnlyCanvas {
-    type Config = AudioOnlyCanvasConfig;
-    type Frame = FFmpegVideoFrame;
+impl VideoSource for AudioOnlyClock {
+    type Config = AudioOnlyClockConfig;
+    type Frame = ClockTick;
 
     async fn setup(
         _: Self::Config,
         mut video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self> {
-        let info = audio_only_canvas_info();
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = ctx.stop_token();
-        let template = FFmpegVideoFrame {
-            inner: black_frame(&info),
-            timestamp: Timestamp::Instant(Instant::now()),
-        };
-
-        ctx.tasks().spawn("audio-only-canvas", {
+        ctx.tasks().spawn("audio-only-clock", {
             let stop = stop.clone();
             async move {
-                let period = Duration::from_secs(1) / AUDIO_ONLY_CANVAS_FPS;
-                let mut ticks = tokio::time::interval(period);
+                let mut ticks = tokio::time::interval(TICK);
                 ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tokio::select! {
@@ -74,12 +84,9 @@ impl VideoSource for AudioOnlyCanvas {
                             if stop.load(Ordering::Relaxed) {
                                 break;
                             }
-                            let Some(mut frame) =
-                                crate::output_pipeline::VideoFrame::duplicate(&template)
-                            else {
-                                continue;
+                            let frame = ClockTick {
+                                timestamp: Timestamp::Instant(tick.into_std()),
                             };
-                            frame.timestamp = Timestamp::Instant(tick.into_std());
                             if video_tx.send(frame).await.is_err() {
                                 break;
                             }
@@ -89,12 +96,11 @@ impl VideoSource for AudioOnlyCanvas {
                 Ok(())
             }
         });
-
-        Ok(Self { info, stop })
+        Ok(Self { stop })
     }
 
     fn video_info(&self) -> VideoInfo {
-        self.info
+        audio_only_canvas_info()
     }
 
     fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
@@ -103,17 +109,113 @@ impl VideoSource for AudioOnlyCanvas {
     }
 }
 
+/// Keeps the tick times and, when the segment finishes, writes the display
+/// track once: a black stand-in as long as the segment.
+pub struct AudioOnlyStandinMuxer {
+    output_path: PathBuf,
+    first: Option<Duration>,
+    last: Option<Duration>,
+}
+
+impl Muxer for AudioOnlyStandinMuxer {
+    type Config = ();
+
+    async fn setup(
+        _: Self::Config,
+        output_path: PathBuf,
+        _: Option<VideoInfo>,
+        _: Option<AudioInfo>,
+        _: Arc<AtomicBool>,
+        _: &mut TaskPool,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            output_path,
+            first: None,
+            last: None,
+        })
+    }
+
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let Some(first) = self.first else {
+            return Ok(Ok(()));
+        };
+        let end = self.last.map_or(timestamp, |last| last.max(timestamp));
+        Ok(standin_for_span(
+            &self.output_path,
+            end.saturating_sub(first),
+        ))
+    }
+}
+
+impl AudioMuxer for AudioOnlyStandinMuxer {
+    fn send_audio_frame(&mut self, _: AudioFrame, _: Duration) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+impl VideoMuxer for AudioOnlyStandinMuxer {
+    type VideoFrame = ClockTick;
+
+    fn send_video_frame(&mut self, _: Self::VideoFrame, timestamp: Duration) -> anyhow::Result<()> {
+        self.first.get_or_insert(timestamp);
+        self.last = Some(timestamp);
+        Ok(())
+    }
+}
+
+pub fn standin_for_span(path: &std::path::Path, duration: Duration) -> anyhow::Result<()> {
+    cap_enc_ffmpeg::video::standin::write_black_standin(
+        path,
+        AUDIO_ONLY_CANVAS_WIDTH,
+        AUDIO_ONLY_CANVAS_HEIGHT,
+        AUDIO_ONLY_CANVAS_FPS,
+        duration,
+        AUDIO_ONLY_CANVAS_ENCODERS,
+    )
+    .map_err(|error| anyhow::anyhow!("Could not write the audio-only display track: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn muxer(path: PathBuf) -> AudioOnlyStandinMuxer {
+        AudioOnlyStandinMuxer {
+            output_path: path,
+            first: None,
+            last: None,
+        }
+    }
+
     #[test]
-    fn black_frame_is_limited_range_black() {
-        let info = audio_only_canvas_info();
-        let frame = black_frame(&info);
-        assert_eq!((frame.width(), frame.height()), (1920, 1080));
-        assert!(frame.data(0).iter().all(|value| *value == 16));
-        assert!(frame.data(1).iter().all(|value| *value == 128));
-        assert!(frame.data(2).iter().all(|value| *value == 128));
+    fn the_muxer_writes_one_standin_spanning_the_segment() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("display.mp4");
+        let mut muxer = muxer(path.clone());
+        for ms in [200u64, 300, 400] {
+            let tick = ClockTick {
+                timestamp: Timestamp::Instant(std::time::Instant::now()),
+            };
+            muxer
+                .send_video_frame(tick, Duration::from_millis(ms))
+                .unwrap();
+        }
+        assert!(!path.exists(), "nothing is written while recording");
+        muxer.finish(Duration::from_millis(3_200)).unwrap().unwrap();
+        let input = ffmpeg::format::input(&path).unwrap();
+        let seconds = input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE);
+        assert!((seconds - 3.0).abs() < 0.05, "{seconds}");
+    }
+
+    #[test]
+    fn a_segment_without_ticks_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("display.mp4");
+        muxer(path.clone())
+            .finish(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(!path.exists());
     }
 }
