@@ -45,14 +45,12 @@ struct TrackQueue<T> {
     next: flume::Sender<flume::Receiver<T>>,
 }
 
-/// The frames a camera track reads, across camera switches.
 pub(crate) struct TrackReceiver<T> {
     rx: flume::Receiver<T>,
     next: flume::Receiver<flume::Receiver<T>>,
 }
 
 impl<T> TrackReceiver<T> {
-    /// A queue that never moves to another camera.
     #[cfg(test)]
     pub(crate) fn fixed(rx: flume::Receiver<T>) -> Self {
         Self {
@@ -61,8 +59,6 @@ impl<T> TrackReceiver<T> {
         }
     }
 
-    /// The next frame. Fails once the current camera's queue has closed and
-    /// no switch replaced it.
     pub(crate) async fn recv(&mut self) -> Result<T, flume::RecvError> {
         loop {
             tokio::select! {
@@ -84,7 +80,6 @@ impl<T> TrackReceiver<T> {
 }
 
 pub trait CameraTrackFrame: Send + Sized + 'static {
-    /// Frames the track's queue holds for a camera of this format.
     fn queue_capacity(info: &VideoInfo) -> usize;
 
     fn add_sender(
@@ -195,8 +190,6 @@ impl<T: CameraTrackFrame> CameraTrackInput<T> {
         self.state().lock.clone()
     }
 
-    /// Opens the track's queue on the current camera. Called once, by the
-    /// track's source as it starts.
     pub(crate) async fn connect(
         &self,
         dropped: Option<Arc<AtomicU64>>,

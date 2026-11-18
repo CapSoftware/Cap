@@ -660,7 +660,6 @@ struct AttachOutcome {
     holds_selection: bool,
 }
 
-/// Attaches `request`, or `previous` again when that fails.
 async fn attach_or_restore(
     this: &WeakEntity<RecordingSession>,
     cx: &mut AsyncApp,
