@@ -1166,14 +1166,17 @@ impl EditorInstance {
                             break;
                         }
                         let playing = *playback_rx.borrow_and_update();
-                        if playing {
-                            still_due = None;
-                        }
+                        still_due = None;
                         let request = *preview_rx.borrow();
                         if !playing && let Some((_, fps, resolution_base)) = request {
                             let frame = self.state.lock().await.playhead_position;
-                            self.preview_tx
-                                .send_replace(Some((frame, fps, resolution_base)));
+                            let request = (frame, fps, resolution_base);
+                            self.preview_tx.send_if_modified(|value| {
+                                *value = Some(request);
+                                false
+                            });
+                            still_due =
+                                Some((tokio::time::Instant::now() + PREVIEW_STILL_SETTLE, request));
                         }
                         continue;
                     }
@@ -1256,6 +1259,9 @@ impl EditorInstance {
                         );
                         break;
                     };
+                    if still_now && !segment_medias.decoders.has_source_video() {
+                        break;
+                    }
                     let clip_config = project
                         .clips
                         .iter()
@@ -1487,6 +1493,9 @@ impl EditorInstance {
                                     )
                                 };
 
+                                if still_now {
+                                    self.renderer.forget_last_frame().await;
+                                }
                                 let render_confirmed = if let Some((
                                     outgoing_frames,
                                     outgoing_uniforms,
