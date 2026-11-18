@@ -15201,11 +15201,7 @@ mod tests {
                     .map_or_else(cap_project::CursorEvents::default, |cursor| {
                         cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap()
                     });
-                let pointer_ids = studio.pointer_cursor_ids();
-                events.stabilize_short_lived_cursor_shapes(
-                    (!pointer_ids.is_empty()).then_some(&pointer_ids),
-                    cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
-                );
+                studio.stabilize_cursor_shapes(None, &mut events);
                 vec![events.clicks]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
