@@ -44,6 +44,14 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - a11y rules are enforced everywhere (`apps/web`, `packages/ui`, etc.).
 - CSS overrides: `noUnknownAtRules`, `noUnknownTypeSelector`, `noDescendingSpecificity` are off for `**/*.css`.
 
+### Tests: wait on signals, not time
+`scripts/test-lint` runs Oxlint with the `@interfere/landmines` testing rules over every test file in `apps/`, `packages/` and `scripts/` (`bun run lint:tests`, a CI gate). Write the honest form the first time:
+- **No fixed sleeps** (`await new Promise((r) => setTimeout(r, n))`, `Bun.sleep`). Await the operation, a promise its handler resolves, or move time with fake timers.
+- **No polling spies or request recorders** with `expect.poll` / `vi.waitFor`. Resolve a `Promise.withResolvers()` deferred from the callback and await it.
+- **No retries or raised per-test timeouts.** A test that passes on rerun is a flake to fix.
+- **No test doubles** in `apps/media-server`, `apps/render-farm`, `apps/discord-bot`, `apps/status`, `packages/*` and `scripts/*`: no `spyOn(...).mockReturnValue`, `vi.mock`, or replaced `fetch`. Use the real implementation and a real local server. `apps/web` and `apps/chrome-extension` are exempt until they have a real database and browser harness.
+- Existing violations are frozen per file in `scripts/test-lint/oxlintrc.json` (sleeps, polls, timeouts) and `scripts/test-lint/test-doubles-allow.json` (doubles). Counts only go down: when you fix one, lower the entry (delete it at 0). Never raise a count or add an entry.
+
 ### TypeScript — strictness
 - Avoid `any`. Use `unknown` + narrowing, or existing shared types from `@cap/utils`, `@cap/web-domain`, generated bindings, etc.
 - Do not introduce `@ts-expect-error` / `@ts-ignore` without a concrete reason. Prefer fixing the type.
