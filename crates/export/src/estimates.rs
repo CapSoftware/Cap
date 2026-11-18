@@ -303,6 +303,7 @@ async fn estimate(
                 system_audio: segment.system_audio.clone(),
                 audio_timing_repair: segment.audio_timing_repair,
                 cursor: segment.cursor.clone(),
+                hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
                 decoders: sample.decoders.clone(),
             })
