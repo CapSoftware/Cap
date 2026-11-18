@@ -1411,6 +1411,11 @@ struct Pipeline {
     pub track_failures: SharedTrackFailures,
     pub watcher_task: Option<JoinHandle<()>>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
+    /// macOS records an audio-only segment's system audio from its own
+    /// ScreenCaptureKit stream, so that stream ending (sharing stopped, the
+    /// display gone, a system stop) has to end the recording the way the
+    /// screen ending does, instead of leaving only the black canvas running.
+    system_audio_required: bool,
 }
 
 struct FinishedPipeline {
@@ -1935,9 +1940,10 @@ impl Pipeline {
         }
 
         if let Some(ref system_audio) = self.system_audio {
+            let required = self.system_audio_required;
             futures.push(Box::pin({
                 let done_fut = system_audio.done_fut();
-                async move { (RecordingTrackKind::SystemAudio, false, done_fut.await) }
+                async move { (RecordingTrackKind::SystemAudio, required, done_fut.await) }
             }));
         }
 
@@ -4029,6 +4035,7 @@ async fn create_segment_pipeline(
         track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         watcher_task: None,
         stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        system_audio_required: audio_only && cfg!(target_os = "macos"),
     })
 }
 
@@ -4074,7 +4081,9 @@ async fn audio_only_system_audio(
         .context("system audio capture init")?;
         let (video, system_audio) = config.to_sources().await?;
         drop(video);
-        system_audio.ok_or_else(|| anyhow!("System audio capture is unavailable"))
+        system_audio
+            .map(screen_capture::SystemAudioSourceConfig::standalone)
+            .ok_or_else(|| anyhow!("System audio capture is unavailable"))
     }
 }
 
@@ -4843,6 +4852,7 @@ mod tests {
                     track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                     watcher_task: None,
                     stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    system_audio_required: false,
                 },
                 index: 0,
                 segment_start_time: 0.0,
@@ -5220,6 +5230,7 @@ mod tests {
                                 track_failures: Default::default(),
                                 watcher_task: None,
                                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                                system_audio_required: false,
                             })
                         }
                         .boxed()
@@ -5924,6 +5935,7 @@ mod tests {
                                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                                 watcher_task: None,
                                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                                system_audio_required: false,
                             })
                         }
                         .boxed()
@@ -6031,6 +6043,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
 
         let stopping = tokio::spawn(pipeline.stop());
@@ -6153,6 +6166,7 @@ mod tests {
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
             };
 
             let stopping = tokio::spawn(pipeline.stop());
@@ -6251,6 +6265,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_watcher(completion_tx.clone());
         (
@@ -6543,6 +6558,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_start_time_persister();
         let persisted = || -> Option<SegmentStartTimes> {
