@@ -367,6 +367,7 @@ pub fn synthetic_meta(durations: &[f64]) -> (RecordingMeta, SourceTruth) {
                 segments,
                 cursors: Default::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
             },
         })),
         upload: None,

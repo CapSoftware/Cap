@@ -881,6 +881,7 @@ mod fixture {
                 segments: vec![segment],
                 cursors: Default::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
             },
         };
 

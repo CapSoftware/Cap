@@ -3231,6 +3231,7 @@ async fn stop_recording(
                     .collect(),
             ),
             status,
+            cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
         },
     };
 
@@ -4088,6 +4089,7 @@ fn write_in_progress_meta(recording_dir: &Path, pretty_name: Option<&str>) -> an
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
+                cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
             },
         })),
         upload: None,
@@ -4129,14 +4131,16 @@ mod tests {
         let started = tempfile::tempdir().unwrap();
         write_in_progress_meta(started.path(), None).unwrap();
         preserve_failed_startup(started.path(), Ok(())).unwrap();
+        let started_meta = RecordingMeta::load_for_project(started.path()).unwrap();
+        let started_meta = started_meta.studio_meta().unwrap();
         assert!(matches!(
-            RecordingMeta::load_for_project(started.path())
-                .unwrap()
-                .studio_meta()
-                .unwrap()
-                .status(),
+            started_meta.status(),
             StudioRecordingStatus::InProgress
         ));
+        assert_eq!(
+            started_meta.cursor_shape_version(),
+            cap_project::CURSOR_SHAPE_VERSION
+        );
 
         let unwritten = tempfile::tempdir().unwrap();
         assert!(preserve_failed_startup::<()>(unwritten.path(), Err(anyhow!("no meta"))).is_err());
@@ -4501,9 +4505,11 @@ mod tests {
 
         actor.ask(Stop).await.unwrap();
 
+        let meta = RecordingMeta::load_for_project(root).unwrap();
+        assert_eq!(meta.pretty_name, name);
         assert_eq!(
-            RecordingMeta::load_for_project(root).unwrap().pretty_name,
-            name
+            meta.studio_meta().unwrap().cursor_shape_version(),
+            cap_project::CURSOR_SHAPE_VERSION
         );
     }
 
@@ -7458,6 +7464,7 @@ mod tests {
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
             },
         };
         let persisted =
@@ -7597,6 +7604,7 @@ mod clean_stop_receipt_tests {
                             .collect(),
                     ),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
             upload: None,

@@ -143,6 +143,7 @@ fn imported_video_meta(
                 }],
                 cursors: Cursors::default(),
                 status: Some(status),
+                cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
             },
         })),
         upload: None,

@@ -2897,6 +2897,10 @@ impl RecoveryManager {
                 segments,
                 cursors: existing_cursors,
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: recording
+                    .meta
+                    .studio_meta()
+                    .map_or(0, StudioRecordingMeta::cursor_shape_version),
             },
         })
     }
@@ -5247,6 +5251,7 @@ mod clean_studio_snapshot_tests {
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
+                    cursor_shape_version: 0,
                 },
             })),
         }
@@ -7297,6 +7302,7 @@ mod empty_orphan_segment_tests {
                     segments,
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -7710,6 +7716,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -8411,6 +8418,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };

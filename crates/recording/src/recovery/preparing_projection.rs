@@ -885,6 +885,7 @@ mod tests {
                             segments,
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::NeedsRemux),
+                            cursor_shape_version: 0,
                         },
                     },
                 )),

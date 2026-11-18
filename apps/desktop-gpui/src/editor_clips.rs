@@ -2488,6 +2488,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
             },
         };
     }
@@ -3706,6 +3707,7 @@ mod tests {
                             segments: vec![recording_segment.clone()],
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::Complete),
+                            cursor_shape_version: 0,
                         },
                     },
                 )),
