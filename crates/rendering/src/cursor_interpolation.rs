@@ -423,8 +423,16 @@ impl HoverChanges {
         self.generation.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// The generation together with the times it belongs to, so a cache can
+    /// never record a newer generation than the times it was built from.
+    pub fn snapshot(&self) -> (u64, Arc<[f64]>) {
+        let times_ms = self.times_ms.lock().unwrap();
+        (self.generation(), Arc::clone(&times_ms))
+    }
+
     pub fn replace(&self, times_ms: Vec<f64>) {
-        *self.times_ms.lock().unwrap() = times_ms.into();
+        let mut current = self.times_ms.lock().unwrap();
+        *current = times_ms.into();
         self.generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }

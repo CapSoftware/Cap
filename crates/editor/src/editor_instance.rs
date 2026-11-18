@@ -147,11 +147,12 @@ impl PreviewCursorCache {
         };
         let click_spring = project.cursor.click_spring_config();
         let settings = cursor_timeline_settings(&project.cursor);
+        let (hover_generation, hover_times_ms) = hover_changes.snapshot();
 
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.recording_clip == recording_clip
                 && Arc::ptr_eq(&entry.cursor, cursor)
-                && entry.hover_generation == hover_changes.generation()
+                && entry.hover_generation == hover_generation
                 && entry.settings == settings
         }) {
             let entry = self.entries.remove(index);
@@ -171,12 +172,12 @@ impl PreviewCursorCache {
             (!project.cursor.raw).then_some(smoothing),
             Some(click_spring),
             project.cursor.interaction_anchors,
-            &hover_changes.times_ms(),
+            &hover_times_ms,
         ));
         self.entries.push(PreviewCursorCacheEntry {
             recording_clip,
             cursor: Arc::clone(cursor),
-            hover_generation: hover_changes.generation(),
+            hover_generation,
             settings,
             timeline: Arc::clone(&timeline),
         });
@@ -713,10 +714,6 @@ impl EditorInstance {
         Ok(this)
     }
 
-    /// Finds hover changes for segments that have none saved yet, one at a
-    /// time on a background thread, and hands each result to preview,
-    /// playback and export as it lands. Only projects that anchor the cursor
-    /// use them.
     fn spawn_hover_analysis(&self) {
         if !self.project_config.1.borrow().cursor.interaction_anchors {
             return;
@@ -732,9 +729,17 @@ impl EditorInstance {
                 .segments
                 .iter()
                 .map(|segment| {
+                    // Rendering skips the display video forward to the
+                    // latest track start and reads the cursor at that same
+                    // later time, so a display frame's cursor time is its
+                    // timestamp plus the display's own start.
+                    let display_start = segment
+                        .latest_start_time()
+                        .and(segment.display.start_time)
+                        .unwrap_or(0.0);
                     (
                         self.meta.path(&segment.display.path),
-                        segment.latest_start_time().unwrap_or(0.0) * 1000.0,
+                        display_start * 1000.0,
                     )
                 })
                 .collect(),
