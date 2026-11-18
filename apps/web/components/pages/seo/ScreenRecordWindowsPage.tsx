@@ -9,11 +9,11 @@ export const screenRecordWindowsContent: SeoPageContent = {
 	title:
 		"Free Screen Recorder for Windows 10 & 11 — Record Your Screen Instantly",
 	description:
-		"Cap is the best free screen recorder for Windows. Record your screen in HD with audio, webcam overlay, and instant sharing on Windows 10 and Windows 11. No watermarks, and no time limit in Studio Mode — a lightweight alternative to OBS and Windows Game Bar.",
+		"Cap is an open source screen recorder with instant share links. Cap Desktop runs on 64-bit Windows 10 version 1903 or later, including Windows 11.",
 
 	featuresTitle: "Why Cap Is the Best Screen Recorder for Windows",
 	featuresDescription:
-		"Everything Windows users need to record, edit, and share screen recordings — without the bloat of traditional screen recording software for PC",
+		"Instant Mode uploads while you record, so the share link is ready the moment you stop.",
 
 	features: [
 		{
@@ -57,100 +57,6 @@ export const screenRecordWindowsContent: SeoPageContent = {
 				"Cap is fully <a href='https://github.com/CapSoftware/Cap'>open source</a>. Your recordings stay on your machine unless you choose to share them. No telemetry, no tracking, no data harvesting — a transparent <a href='/loom-alternative'>Loom alternative</a> you can trust.",
 		},
 	],
-
-	comparisonTitle: "Cap vs Windows Game Bar: Why Upgrade?",
-	comparisonDescription:
-		"Windows Game Bar (Win + G) ships with Windows 10 and 11, but it was designed for gaming clips — not professional screen recording. Here is how Cap compares",
-
-	comparison: [
-		{
-			title: "Record Any Window or Region",
-			description:
-				"Windows Game Bar can only record a single application window and cannot capture the desktop or File Explorer. Cap lets you record your full screen, any window, or a custom-drawn region — perfect for multi-app workflows and tutorials.",
-		},
-		{
-			title: "Webcam Overlay Built In",
-			description:
-				"Game Bar has no webcam overlay support. Cap adds a resizable facecam bubble so your viewers can see you while you present, explain, or demo on screen.",
-		},
-		{
-			title: "Instant Shareable Links",
-			description:
-				"Game Bar saves an MP4 to your Videos folder and that is it. Cap generates a shareable link the moment you stop recording — no manual upload required.",
-		},
-		{
-			title: "No Time Limit in Studio Mode",
-			description:
-				"Windows Game Bar limits recordings to 4 hours and stops automatically if you minimize the target window. Cap's Studio Mode records locally for as long as you need.",
-		},
-	],
-
-	comparisonTable: {
-		title: "Feature Comparison: Cap vs Game Bar vs OBS",
-		headers: ["Feature", "Cap", "Game Bar", "OBS"],
-		rows: [
-			[
-				"Price",
-				{ text: "Free & open source", status: "positive" },
-				{ text: "Free (built-in)", status: "positive" },
-				{ text: "Free & open source", status: "positive" },
-			],
-			[
-				"Setup Time",
-				{ text: "Under 2 minutes", status: "positive" },
-				{ text: "Pre-installed", status: "positive" },
-				{ text: "15-30 minutes", status: "warning" },
-			],
-			[
-				"Full Screen Recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "No — single app only", status: "negative" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Custom Region Capture",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Webcam Overlay",
-				{ text: "Built-in", status: "positive" },
-				{ text: "Not available", status: "negative" },
-				{ text: "Requires scene setup", status: "warning" },
-			],
-			[
-				"System + Mic Audio",
-				{ text: "One-click toggle", status: "positive" },
-				{ text: "Limited controls", status: "warning" },
-				{ text: "Advanced mixer", status: "positive" },
-			],
-			[
-				"Instant Link Sharing",
-				{ text: "Yes — auto-generated", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Learning Curve",
-				{ text: "Minimal", status: "positive" },
-				{ text: "Minimal", status: "positive" },
-				{ text: "Steep", status: "negative" },
-			],
-			[
-				"Recording Time Limit",
-				{ text: "Unlimited (Studio Mode)", status: "positive" },
-				{ text: "4 hours max", status: "warning" },
-				{ text: "Unlimited", status: "positive" },
-			],
-			[
-				"Built-In Editor",
-				{ text: "Trim, crop, backgrounds", status: "positive" },
-				{ text: "Basic trim only", status: "warning" },
-				{ text: "None", status: "negative" },
-			],
-		],
-	},
 
 	recordingModes: {
 		title: "Two Ways to Record on Windows",
@@ -220,7 +126,7 @@ export const screenRecordWindowsContent: SeoPageContent = {
 		{
 			question: "How do I screen record on Windows 10?",
 			answer:
-				"Download Cap from cap.so/download, install it on your Windows 10 PC, and click the record button. Choose full screen, a single window, or a custom region, toggle your microphone and system audio on or off, and hit start. When you are done, Cap gives you a shareable link instantly. It is the easiest way to screen record on Windows 10 without fiddling with Game Bar or OBS settings.",
+				"Download Cap from cap.so/download, install it on your Windows 10 PC, and click the record button.",
 		},
 		{
 			question: "How do I screen record on Windows 11?",
@@ -238,16 +144,6 @@ export const screenRecordWindowsContent: SeoPageContent = {
 				"Absolutely. Cap records system audio (everything you hear through your speakers or headphones) and microphone input simultaneously. You can toggle each source independently before or during recording. This makes Cap ideal for tutorials, gameplay, and presentations where both audio tracks matter. If Windows 11 removed your Stereo Mix device, our <a href='/blog/windows-11-record-screen-system-audio-no-stereo-mix'>guide to recording Windows system audio</a> walks through it step by step.",
 		},
 		{
-			question: "What is the best free screen recording software for Windows?",
-			answer:
-				"Cap is the best free screen recording software for Windows if you want a balance of simplicity, quality, and sharing speed. Unlike OBS, Cap requires zero configuration. Unlike Windows Game Bar, Cap can record your full desktop, custom regions, and add a webcam overlay. Microsoft's built-in Clipchamp records and edits too, but it steers you toward an account and a web editor — Cap keeps recordings local and shareable in a single click. And unlike Loom, Cap is fully <a href='/loom-alternative'>open source</a> with no per-seat pricing.",
-		},
-		{
-			question: "How does Cap compare to OBS for Windows screen recording?",
-			answer:
-				"OBS is a powerful streaming and recording tool, but it is designed for broadcasters and has a steep learning curve. Cap is built for fast screen recording and sharing — you can go from zero to a shareable recording in under two minutes. If you need streaming overlays and multi-scene switching, use OBS. If you need quick, polished screen recordings with instant links, Cap is the better choice.",
-		},
-		{
 			question: "Can I record a specific window or region on Windows?",
 			answer:
 				"Yes. Cap supports three capture modes on Windows: full screen, single window, and custom region. Select your mode before recording, and Cap captures exactly what you need — nothing more, nothing less.",
@@ -256,22 +152,6 @@ export const screenRecordWindowsContent: SeoPageContent = {
 			question: "Does Cap add a watermark to recordings?",
 			answer:
 				"No. Cap never adds watermarks to your recordings, even on the free plan. Your screen recordings are clean and professional, ready to share with clients, teammates, or your audience.",
-		},
-		{
-			question: "Can I use Cap for recording gameplay on Windows?",
-			answer:
-				"Yes. Cap can record full-screen applications including games. While Windows Game Bar is limited to a single app window and has a 4-hour cap, Cap records for as long as you want with system audio captured natively. For dedicated streamers, OBS may offer more broadcast features, but for quick gameplay clips and highlights, Cap is the simpler choice.",
-		},
-		{
-			question: "What are the limitations of the Windows Game Bar?",
-			answer:
-				"Xbox Game Bar (Win + G) is handy for quick clips, but it has real limits. It records only a single app window — not the desktop or File Explorer — and stops if you switch windows. It caps recordings at 4 hours, has no webcam overlay, no custom-region capture, and no instant share link. Cap covers all of those, which is why most people outgrow Game Bar quickly. For a full walkthrough, see <a href='/how-to-screen-record'>how to screen record</a>.",
-		},
-		{
-			question:
-				"Is Cap better than Windows Snipping Tool for screen recording?",
-			answer:
-				"Windows Snipping Tool (available on Windows 11) can record your screen but offers no audio recording, no webcam overlay, no editing, and no sharing features. Cap records with audio, adds facecam, includes a built-in editor, and generates instant share links — making it a far more complete <a href='/screen-recording-software'>screen recording solution</a> for Windows.",
 		},
 	],
 

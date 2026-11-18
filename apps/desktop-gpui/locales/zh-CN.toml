@@ -2805,6 +2805,7 @@ rounded = "圆角"
 squircle = "超椭圆"
 
 [editor.tabs.cursor]
+follow_hover = "跟随悬停高亮"
 friction = "摩擦"
 hide_when_idle = "空闲时隐藏"
 inactivity_delay = "空闲延迟"
