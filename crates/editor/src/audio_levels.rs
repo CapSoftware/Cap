@@ -12,8 +12,6 @@ use cap_rendering::AudioLevels;
 /// long recording never sits in memory whole.
 const CHUNK_FRAMES: usize = AudioData::SAMPLE_RATE as usize * 60;
 
-/// The loudness envelope an audio-only recording's visualiser draws from:
-/// every clip's microphone and system audio, ten values a second.
 pub fn compute_audio_levels(
     recording: &RecordingMeta,
     meta: &StudioRecordingMeta,

@@ -1,7 +1,3 @@
-//! The editor for a recording with no video: a calm card in place of the
-//! preview that offers the two ways to finish it, export the sound or add
-//! visuals, and the visualiser's settings once visuals are on.
-
 use std::sync::Arc;
 
 use cap_project::{AudioVisualizerStyle, AudioVisualsConfiguration};
@@ -15,7 +11,6 @@ use crate::editor_window::EditorWindow;
 use crate::i18n::tr;
 use crate::ui;
 
-/// Bars across the card's waveform.
 const CARD_BARS: usize = 120;
 
 const VISUALIZER_COLORS: [&str; 6] = [
@@ -38,9 +33,6 @@ impl EditorWindow {
             .is_some_and(|visuals| visuals.enabled)
     }
 
-    /// Rebuilds the loudness envelope from the timeline's waveforms and hands
-    /// it to the renderer, so the visualiser follows the sound as soon as the
-    /// waveforms land.
     pub(crate) fn refresh_audio_levels(&mut self) {
         if !self.is_audio_only() {
             return;
@@ -94,7 +86,6 @@ impl EditorWindow {
         });
     }
 
-    /// The preview area of an audio-only recording without visuals.
     pub(crate) fn render_audio_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let editor = theme.editor;
@@ -227,8 +218,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// The visualiser's settings, shown above the background settings of an
-    /// audio-only recording.
     pub(crate) fn render_audio_visuals_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.is_audio_only() {
             return None;
@@ -380,8 +369,6 @@ fn style_label(style: AudioVisualizerStyle) -> &'static str {
     }
 }
 
-/// The loudest moment in each of `count` equal slices of the edited timeline,
-/// 0 to 1, for the card's overview waveform.
 fn card_bars(
     levels: Option<&AudioLevels>,
     project: &cap_project::ProjectConfiguration,

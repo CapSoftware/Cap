@@ -32,10 +32,8 @@ pub const VIDEO_IMPORT_EXTENSIONS: &[&str] =
     &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
 pub const IMAGE_IMPORT_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
-/// Sound files, which import as audio-only projects.
 pub const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac"];
-/// The tray's combined "Media Files" filter (`src-tauri/src/tray.rs:845-851`),
-/// plus sound files.
+/// The tray's combined "Media Files" filter (`src-tauri/src/tray.rs:845-851`).
 const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
     "bmp", "tif", "tiff", "mp3", "wav", "m4a", "aac", "ogg", "opus", "flac",
@@ -369,7 +367,6 @@ pub fn import_video_from_path(source_path: PathBuf, cx: &mut App) {
     spawn_import(cx, move |tx| run_video_import(&source_path, &tx));
 }
 
-/// A sound file becomes an audio-only project, opened in the editor.
 pub fn import_audio_from_path(source_path: PathBuf, cx: &mut App) {
     tracing::info!(source = %source_path.display(), "starting audio import");
     let pretty_name = generate_project_name(&source_path, "Imported Audio");

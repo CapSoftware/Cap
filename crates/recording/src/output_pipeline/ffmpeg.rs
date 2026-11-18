@@ -488,7 +488,6 @@ pub struct SegmentedVideoMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
-    /// Encoders to try, in order, instead of the usual hardware-first choice.
     pub encoder_priority: Option<&'static [&'static str]>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,

@@ -7,8 +7,6 @@ use cap_project::{AudioVisualizerStyle, AudioVisualsConfiguration, ShapeArrowHea
 
 use crate::shape::{PreparedShape, parse_shape_color};
 
-/// Loudness per clip, 0 (silence) to 1 (full scale), `LEVELS_PER_SECOND`
-/// values a second from the clip's start.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AudioLevels {
     pub clips: Vec<Vec<f32>>,
@@ -83,7 +81,6 @@ const CIRCLE_BARS: usize = 72;
 /// the newest sound sits in the middle and spreads out as it ages.
 const HISTORY_STEP_SECS: f64 = 0.05;
 
-/// The visualiser's shapes for one frame, in output pixels.
 pub fn visualizer_shapes(
     config: &AudioVisualsConfiguration,
     levels: &AudioLevels,

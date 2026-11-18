@@ -1551,8 +1551,6 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
-    /// An audio-only recording's loudness envelope, from the timeline
-    /// waveforms, for its preview card and visualiser.
     pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
     /// Held from the window opening until it gives up its engine, so the
     /// library refuses to delete the project from under an open editor.

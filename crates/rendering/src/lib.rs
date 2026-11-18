@@ -3306,8 +3306,6 @@ pub struct ProjectUniforms {
     /// Shape-track marks for this frame, drawn in output-frame space like
     /// text: zoom, crop, scenes and the 3D camera never move them.
     pub shapes: Vec<PreparedShape>,
-    /// An audio-only recording's visualiser, drawn over the background where
-    /// the screen would be.
     pub audio_visualizer: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).

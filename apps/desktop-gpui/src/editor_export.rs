@@ -105,8 +105,6 @@ pub enum ExportFormatKind {
     Mp4,
     Gif,
     Tracks,
-    /// The edited sound as one MP3 or WAV file. Offered for audio-only
-    /// recordings.
     Audio,
 }
 
@@ -122,9 +120,6 @@ impl ExportFormatKind {
         }
     }
 
-    /// The formats an export of this project can pick between. An audio-only
-    /// recording exports its sound, and becomes a video only once it has
-    /// visuals.
     fn options(audio_only: bool, visuals: bool) -> Vec<Self> {
         match (audio_only, visuals) {
             (false, _) => Self::ALL.to_vec(),
@@ -1629,8 +1624,6 @@ impl EditorWindow {
         }));
     }
 
-    /// Saves the edited sound as one MP3 or WAV file, chosen with a save
-    /// panel the same way a video export is.
     fn start_audio_export(
         &mut self,
         pretty_name: String,
@@ -1869,8 +1862,6 @@ impl EditorWindow {
             )
     }
 
-    /// The left pane for an audio export: what will be written, how long it
-    /// is and about how big.
     fn render_audio_stage(&self, ui: &ExportUi) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;

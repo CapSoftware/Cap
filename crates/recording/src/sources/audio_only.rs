@@ -20,8 +20,6 @@ pub use cap_project::{
 
 pub struct AudioOnlyCanvasConfig;
 
-/// Emits one shared black frame per tick so an audio-only segment has the same
-/// display track, timing and fragment layout as every other Studio segment.
 pub struct AudioOnlyCanvas {
     info: VideoInfo,
     stop: Arc<AtomicBool>,

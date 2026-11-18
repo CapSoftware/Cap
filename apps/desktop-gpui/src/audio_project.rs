@@ -1,7 +1,3 @@
-//! Audio-only projects made outside the recorder, and saving a project's
-//! sound to a file of the user's choosing. These are the entry points for any
-//! surface that holds audio, such as an imported file or a meeting's tracks.
-
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},

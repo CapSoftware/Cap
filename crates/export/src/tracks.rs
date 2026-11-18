@@ -383,9 +383,6 @@ struct Prepared {
     duration: f64,
 }
 
-/// The edited timeline every separate-file export follows: the default
-/// timeline a fresh recording gets, clip offsets and late-audio trims filled
-/// in the way the main export does, and its duration.
 pub(crate) struct PreparedTimeline {
     pub recording_meta: RecordingMeta,
     pub project: ProjectConfiguration,
@@ -437,8 +434,6 @@ pub(crate) fn prepare_timeline(
 }
 
 impl PreparedTimeline {
-    /// Measures the timeline and rejects one that is empty or names a clip
-    /// the recording does not have.
     pub(crate) fn measured(mut self) -> Result<Self, TrackExportError> {
         let studio_meta = self
             .recording_meta

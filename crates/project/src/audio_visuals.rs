@@ -27,16 +27,12 @@ impl AudioVisualizerStyle {
     pub const ALL: [Self; 3] = [Self::Bars, Self::Wave, Self::Circle];
 }
 
-/// How an audio-only recording looks once it is given visuals. The background,
-/// title text and cover image come from the project's usual background and
-/// text settings; this adds the visualiser drawn over them.
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioVisualsConfiguration {
     pub enabled: bool,
     pub style: AudioVisualizerStyle,
     pub color: String,
-    /// Share of the frame the visualiser spans, 0.2 to 1.
     pub size: f32,
 }
 

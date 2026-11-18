@@ -256,8 +256,6 @@ pub struct RecordingItem {
     /// left to an `<img onError>`.
     pub thumbnail: Option<PathBuf>,
     pub thumbnail_version: Option<u128>,
-    /// Recorded from the microphone and system audio alone: no picture to
-    /// show, so cards draw a microphone instead of a thumbnail.
     pub audio_only: bool,
 }
 

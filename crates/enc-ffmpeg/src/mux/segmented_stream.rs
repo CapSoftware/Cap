@@ -373,8 +373,6 @@ impl SegmentedVideoEncoder {
         )
     }
 
-    /// Like [`Self::init_with_timed_fragments`], restricted to the named
-    /// encoders in order.
     pub fn init_with_encoder_priority(
         base_path: PathBuf,
         video_config: VideoInfo,

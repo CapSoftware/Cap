@@ -3390,9 +3390,6 @@ impl OverlayWindow {
             .child(self.render_controls_cluster(self.target(cx), false, cx))
     }
 
-    /// Audio Only: the same dimmed stage as Camera Only, with a live level
-    /// meter where the camera preview would be and the microphone and system
-    /// audio side by side under Start.
     fn render_audio_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let main = cx.global::<app_windows::AppWindows>().main;
         let (has_microphone, system_audio) = main
@@ -3463,8 +3460,6 @@ impl OverlayWindow {
             .child(self.render_controls_cluster(self.target(cx), false, cx))
     }
 
-    /// Bars that rise with the microphone level, tallest in the middle, the
-    /// shape a voice makes on the editor's waveform.
     fn render_level_bars(&self, fill: f32, live: bool) -> impl IntoElement {
         const BARS: usize = 31;
         const MAX_HEIGHT: f32 = 56.;
