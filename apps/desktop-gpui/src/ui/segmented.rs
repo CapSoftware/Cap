@@ -332,6 +332,15 @@ impl RenderOnce for SegmentedControl {
             Some((place, glide.generation))
         });
         let glides = indicator.is_some();
+        let fades: Vec<_> = (0..count)
+            .map(|index| {
+                crate::ui::hover_fade(
+                    window,
+                    cx,
+                    SharedString::from(format!("{prefix}-hover-{index}")),
+                )
+            })
+            .collect();
 
         div()
             .id(id)
@@ -461,7 +470,21 @@ impl RenderOnce for SegmentedControl {
                                 None => this,
                             };
                             match hover_bg {
-                                Some(bg) if !disabled => this.hover(move |style| style.bg(bg)),
+                                Some(bg) if !disabled => {
+                                    let (fade, level) = fades[index].clone();
+                                    let rest = idle_bg.unwrap_or(bg.opacity(0.));
+                                    this.when(level > 0., |this| {
+                                        this.bg(crate::ui::hover_blend(rest, bg, level))
+                                    })
+                                    .on_hover(
+                                        move |hovered, _, cx| {
+                                            fade.update(cx, |fade, cx| {
+                                                fade.set_hovered(*hovered);
+                                                cx.notify();
+                                            });
+                                        },
+                                    )
+                                }
                                 _ => this,
                             }
                         }

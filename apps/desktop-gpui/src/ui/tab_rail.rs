@@ -112,7 +112,7 @@ impl TabRail {
 }
 
 impl RenderOnce for TabRail {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let TabRail {
             id,
             items,
@@ -136,6 +136,15 @@ impl RenderOnce for TabRail {
             other => SharedString::from(format!("{other:?}")),
         };
         let handler: Option<std::rc::Rc<TabHandler>> = on_select.map(std::rc::Rc::new);
+        let fades: Vec<_> = (0..items.len())
+            .map(|index| {
+                crate::ui::hover_fade(
+                    window,
+                    cx,
+                    SharedString::from(format!("{prefix}-hover-{index}")),
+                )
+            })
+            .collect();
 
         div()
             .id(id)
@@ -172,7 +181,17 @@ impl RenderOnce for TabRail {
                         this.bg(indicator).shadow(indicator_shadow.clone())
                     })
                     .when(!selected && !disabled, |this| {
-                        this.cursor_pointer().hover(move |style| style.bg(hover))
+                        let (fade, level) = fades[index].clone();
+                        this.cursor_pointer()
+                            .when(level > 0., |this| {
+                                this.bg(crate::ui::hover_blend(hover.opacity(0.), hover, level))
+                            })
+                            .on_hover(move |hovered, _, cx| {
+                                fade.update(cx, |fade, cx| {
+                                    fade.set_hovered(*hovered);
+                                    cx.notify();
+                                });
+                            })
                     })
                     .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label.clone()).view(cx))
