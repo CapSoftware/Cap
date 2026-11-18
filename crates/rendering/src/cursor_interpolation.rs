@@ -731,6 +731,77 @@ struct AnchorGroup {
     anchors: std::ops::Range<usize>,
 }
 
+/// Spans where the primary button is held, in time order.
+fn primary_drags(clicks: &[CursorClickEvent]) -> Vec<(f64, f64)> {
+    let mut clicks: Vec<&CursorClickEvent> = clicks
+        .iter()
+        .filter(|click| is_primary_button(click.cursor_num))
+        .collect();
+    clicks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    let mut drags = Vec::new();
+    let mut drag_start = None;
+    for click in clicks {
+        match (click.down, drag_start) {
+            (true, None) => drag_start = Some(click.time_ms),
+            (false, Some(start)) => {
+                drags.push((start, click.time_ms));
+                drag_start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = drag_start {
+        drags.push((start, f64::INFINITY));
+    }
+    drags
+}
+
+/// A gap in the samples normally means the pointer stood still, so the path
+/// holds there and then moves on. While the button is held that reading is
+/// wrong when the recorder missed samples mid-drag: the pointer kept moving.
+/// Inside a drag the gap is filled in a straight line instead. A real pause
+/// costs nothing either way, because the first sample after it is still
+/// next to where the pointer stopped.
+fn fill_drag_gaps<'a>(
+    moves: &'a [CursorMoveEvent],
+    clicks: &[CursorClickEvent],
+) -> Cow<'a, [CursorMoveEvent]> {
+    let drags = primary_drags(clicks);
+    let in_drag = |time_ms: f64| {
+        let next = drags.partition_point(|&(start, _)| start < time_ms);
+        next.checked_sub(1)
+            .is_some_and(|index| time_ms < drags[index].1)
+    };
+    let needs_fill = |pair: &[CursorMoveEvent]| {
+        pair[1].time_ms - pair[0].time_ms > IDLE_GAP_THRESHOLD_MS
+            && in_drag(pair[0].time_ms)
+            && in_drag(pair[1].time_ms)
+    };
+    if !moves.windows(2).any(needs_fill) {
+        return Cow::Borrowed(moves);
+    }
+
+    let mut filled = Vec::with_capacity(moves.len());
+    for pair in moves.windows(2) {
+        filled.push(pair[0].clone());
+        if needs_fill(pair) {
+            let gap = pair[1].time_ms - pair[0].time_ms;
+            let steps = (gap / SIMULATION_STEP_MS).ceil() as usize;
+            for step in 1..steps {
+                let u = step as f64 / steps as f64;
+                filled.push(CursorMoveEvent {
+                    time_ms: pair[0].time_ms + gap * u,
+                    x: pair[0].x + (pair[1].x - pair[0].x) * u,
+                    y: pair[0].y + (pair[1].y - pair[0].y) * u,
+                    ..pair[0].clone()
+                });
+            }
+        }
+    }
+    filled.extend(moves.last().cloned());
+    Cow::Owned(filled)
+}
+
 fn interaction_anchors(
     cursor: &CursorEvents,
     start_ms: f64,
@@ -747,27 +818,10 @@ fn interaction_anchors(
         }
     };
 
-    let mut clicks: Vec<&CursorClickEvent> = cursor.clicks.iter().collect();
-    clicks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-    let mut drags = Vec::new();
-    let mut drag_start = None;
-    for click in &clicks {
+    for click in &cursor.clicks {
         push(click.time_ms, AnchorKind::Click);
-        if !is_primary_button(click.cursor_num) {
-            continue;
-        }
-        match (click.down, drag_start) {
-            (true, None) => drag_start = Some(click.time_ms),
-            (false, Some(start)) => {
-                drags.push((start, click.time_ms));
-                drag_start = None;
-            }
-            _ => {}
-        }
     }
-    if let Some(start) = drag_start {
-        drags.push((start, f64::INFINITY));
-    }
+    let drags = primary_drags(&cursor.clicks);
 
     let mut drag_index = 0;
     let mut previous_id: Option<&str> = None;
@@ -938,7 +992,7 @@ impl<'a> AnchoredPlanner<'a> {
         let press = state
             .context
             .anticipated_press(t_ms)
-            .filter(|click| !self.waypoint_between(t_ms, click.time_ms));
+            .filter(|click| !self.waypoint_between(t_ms - SIMULATION_STEP_MS, click.time_ms));
         let target = if let Some(click) = press {
             let (x, y) = position_at_time(
                 self.moves,
@@ -1076,6 +1130,8 @@ fn build_anchored_timeline(
         };
     }
 
+    let filled = fill_drag_gaps(moves, &cursor.clicks);
+    let moves = filled.as_ref();
     let end_time_ms = moves.last().unwrap().time_ms;
     let anchors = interaction_anchors(cursor, moves[0].time_ms, end_time_ms);
     let planner = AnchoredPlanner {
@@ -2987,17 +3043,47 @@ mod tests {
         #[test]
         fn a_shape_change_on_the_way_to_a_click_is_met() {
             let cursor = CursorEvents {
-                moves: sampled(travel, |t| if t >= 900.0 { "text" } else { "arrow" }),
+                moves: sampled(travel, |t| if t >= 905.0 { "text" } else { "arrow" }),
                 clicks: clicks(&[(1200.0, true), (1260.0, false)]),
             };
             let anchored = timeline(&cursor, true);
-            let e = error(&cursor, &anchored, 900.0);
+            let e = error(&cursor, &anchored, 910.0);
             assert!(
                 e <= ANCHOR_CURSOR_IMAGE_TOLERANCE,
                 "{e:.3} at the shape change"
             );
             let e = error(&cursor, &anchored, 1200.0);
             assert!(e <= ANCHOR_CLICK_TOLERANCE, "{e:.3} at the press");
+        }
+
+        #[test]
+        fn samples_missing_mid_drag_do_not_make_the_cursor_jump() {
+            let mut cursor = scenario("eased drag");
+            cursor
+                .moves
+                .retain(|m| !(800.0 < m.time_ms && m.time_ms < 920.0));
+            let plain = timeline(&cursor, false);
+            let anchored = timeline(&cursor, true);
+            let e = error(&cursor, &anchored, 920.0);
+            let plain_e = error(&cursor, &plain, 920.0);
+            assert!(
+                e <= plain_e,
+                "{e:.3} after the gap, plain spring {plain_e:.3}"
+            );
+            let worst = |timeline: &PrecomputedCursorTimeline| {
+                (800..=1000)
+                    .map(|t| {
+                        let t = f64::from(t);
+                        (rendered(timeline, t).0 - rendered(timeline, t - 1.0).0).abs()
+                    })
+                    .fold(0.0, f64::max)
+            };
+            assert!(
+                worst(&anchored) <= worst(&plain) * 1.5,
+                "largest 1 ms step {:.3} vs {:.3}",
+                worst(&anchored),
+                worst(&plain)
+            );
         }
 
         #[test]
