@@ -73,6 +73,16 @@ async fn playback_started(mut playing: watch::Receiver<bool>) {
     }
 }
 
+async fn still_interrupted(
+    preview: watch::Receiver<PreviewRequest>,
+    playing: watch::Receiver<bool>,
+) {
+    tokio::select! {
+        _ = preview_changed(preview) => {}
+        _ = playback_started(playing) => {}
+    }
+}
+
 pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 9] {
     let click_spring = cursor.click_spring_config();
     [
@@ -1440,10 +1450,11 @@ impl EditorInstance {
 
                         _ = async {
                             if still_now {
-                                tokio::select! {
-                                    _ = preview_changed(preview_rx.clone()) => {}
-                                    _ = playback_started(self.playback_active_rx.clone()) => {}
-                                }
+                                still_interrupted(
+                                    preview_rx.clone(),
+                                    self.playback_active_rx.clone(),
+                                )
+                                .await;
                             } else {
                                 preview_superseded_while_fresh(preview_rx.clone(), last_presented)
                                     .await;
@@ -1518,10 +1529,21 @@ impl EditorInstance {
                                     .unwrap_or_default();
                                 let outgoing_frames = tokio::select! {
                                     biased;
-                                    _ = preview_superseded_while_fresh(
-                                        preview_rx.clone(),
-                                        last_presented,
-                                    ) => {
+                                    _ = async {
+                                        if still_now {
+                                            still_interrupted(
+                                                preview_rx.clone(),
+                                                self.playback_active_rx.clone(),
+                                            )
+                                            .await;
+                                        } else {
+                                            preview_superseded_while_fresh(
+                                                preview_rx.clone(),
+                                                last_presented,
+                                            )
+                                            .await;
+                                        }
+                                    } => {
                                         continue;
                                     }
                                     frames = async {
@@ -1553,6 +1575,12 @@ impl EditorInstance {
                                         }
                                     } => frames,
                                 };
+                                if still_now
+                                    && (preview_rx.has_changed().unwrap_or(false)
+                                        || *self.playback_active_rx.borrow())
+                                {
+                                    continue;
+                                }
                                 if let Some(outgoing_frames) = outgoing_frames {
                                     let outgoing_zoom = outgoing_zoom_timelines
                                         .entry(outgoing.segment.recording_clip)
