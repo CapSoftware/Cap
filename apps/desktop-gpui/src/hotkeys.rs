@@ -1121,7 +1121,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             })
             .await;
         if !confirm {
-            cx.update(|cx| start_now(main, mode, target, cx));
+            cx.update(|cx| start_now(main, mode, target, false, cx));
             return;
         }
         // The availability probe the Tauri confirm runs. On macOS that is a
@@ -1138,7 +1138,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             None => false,
         };
         if available {
-            cx.update(|cx| start_now(main, mode, target, cx));
+            cx.update(|cx| start_now(main, mode, target, false, cx));
             return;
         }
         // The Tauri dialog, word for word
@@ -1167,7 +1167,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
         // `receiver.await.unwrap_or(false)`: a dismissed sheet records
         // nothing.
         if receiver.await == Ok(0) {
-            cx.update(|cx| start_now(main, mode, target, cx));
+            cx.update(|cx| start_now(main, mode, target, true, cx));
         }
     })
     .detach();
@@ -1213,6 +1213,7 @@ fn start_now(
     main: gpui::WindowHandle<crate::main_window::MainWindow>,
     mode: Mode,
     target: ScreenCaptureTarget,
+    confirmed_without_microphone: bool,
     cx: &mut App,
 ) {
     // The start waited on the target lookup (and maybe the microphone
@@ -1222,7 +1223,13 @@ fn start_now(
         app_windows::set_recording_mode(mode, cx);
     }
     main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, Vec::new(), window, cx)
+        view.start_recording_with_target(
+            target,
+            Vec::new(),
+            confirmed_without_microphone,
+            window,
+            cx,
+        )
     })
     .ok();
 }
