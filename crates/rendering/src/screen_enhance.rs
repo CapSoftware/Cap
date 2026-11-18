@@ -164,10 +164,20 @@ impl ScreenEnhanceFrame {
             motion_blur_amount,
             magnification,
         );
+        // The default strength (0.5) gives the full upscale; lower settings
+        // fade it out, and the 0.2 floor still applies after scaling.
+        let scaled = quantize(
+            upscale_strength(motion_px, motion_blur_amount, magnification)
+                * (setting_strength * 2.0).min(1.0),
+        );
         Self {
             deband_threshold,
             deband_iterations,
-            upscale_strength: upscale_strength(motion_px, motion_blur_amount, magnification),
+            upscale_strength: if scaled < UPSCALE_MIN_STRENGTH {
+                0.0
+            } else {
+                scaled
+            },
         }
     }
 
@@ -816,6 +826,15 @@ mod tests {
         assert_eq!(slowest_pixel_motion(panned, before), 5.0);
         let diagonal = [103.0, 104.0, 1103.0, 704.0];
         assert_eq!(slowest_pixel_motion(diagonal, before), 5.0);
+    }
+
+    #[test]
+    fn strength_scales_the_upscale_below_the_default() {
+        let at = |strength| ScreenEnhanceFrame::resolve(strength, 0.0, 1.0, 2.0).upscale_strength;
+        assert_eq!(at(1.0), 1.0);
+        assert_eq!(at(0.5), 1.0);
+        assert_eq!(at(0.25), 0.5);
+        assert_eq!(at(0.05), 0.0);
     }
 
     #[test]
