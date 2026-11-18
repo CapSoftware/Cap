@@ -120,9 +120,7 @@ const TRACK_TILE_SIZE: f32 = 22.;
 const TRACK_TILE_INSET: f32 = 4.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
-const SEGMENT_RADIUS: f32 = 8.;
-const SEGMENT_ACCENT_BAR: f32 = 3.;
-const SEGMENT_PADDING_LEFT: f32 = 13.;
+const SEGMENT_RADIUS: f32 = 10.;
 const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// The selected 3D shot's pose dots: 6px, 5px inside each edge, so the resize
 /// handles still own the outer pixels.
@@ -174,23 +172,19 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 // Colours
 // ---------------------------------------------------------------------------
 
-/// The single source of truth for track colour is eleven CSS custom properties
-/// with one definition each -- not per-appearance values -- so they are literal
-/// in both themes exactly as they are there
-/// (`apps/desktop/src/styles/theme.css`).
 pub mod track_color {
-    pub const CLIP: u32 = 0x3b82f6;
-    pub const ZOOM: u32 = 0x64748b;
+    pub const CLIP: u32 = 0x3b7cf6;
+    pub const ZOOM: u32 = 0x7c5cff;
     pub const CAPTION: u32 = 0x0ea5e9;
     pub const KEYBOARD: u32 = 0xf97316;
-    pub const STYLE: u32 = 0xec4899;
-    pub const IMAGE: u32 = 0xf59e0b;
-    pub const TEXT: u32 = 0x14b8a6;
+    pub const STYLE: u32 = 0xc54ce0;
+    pub const IMAGE: u32 = 0xe8930c;
+    pub const TEXT: u32 = 0x12a594;
     pub const MASK: u32 = 0xef4444;
-    pub const SHAPE: u32 = 0xd946ef;
-    pub const SCENE: u32 = 0x8b5cf6;
-    pub const AUDIO: u32 = 0x22c55e;
-    pub const THREE_D: u32 = 0x6366f1;
+    pub const SHAPE: u32 = 0x6b7aa0;
+    pub const SCENE: u32 = 0x0891b2;
+    pub const AUDIO: u32 = 0x22b35e;
+    pub const THREE_D: u32 = 0xe0457b;
 }
 
 /// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
@@ -210,7 +204,6 @@ fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
     }
 }
 
-/// The segment body: its tint, lit a little toward the top edge.
 fn seg_fill_sheen(theme: &Theme, color: Hsla, selected: bool) -> gpui::Background {
     let (top, bottom) = theme
         .editor
@@ -220,6 +213,35 @@ fn seg_fill_sheen(theme: &Theme, color: Hsla, selected: bool) -> gpui::Backgroun
         gpui::linear_color_stop(top, 0.),
         gpui::linear_color_stop(bottom, 1.),
     )
+}
+
+fn seg_gloss() -> Vec<gpui::BoxShadow> {
+    vec![
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.24),
+            offset: gpui::point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        },
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.14),
+            offset: gpui::point(px(0.), px(-1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        },
+    ]
+}
+
+fn seg_glow(color: Hsla, dark: bool) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: color.opacity(if dark { 0.38 } else { 0.3 }),
+        offset: gpui::point(px(0.), px(2.)),
+        blur_radius: px(12.),
+        spread_radius: px(-2.),
+        inset: false,
+    }]
 }
 
 fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
@@ -967,10 +989,8 @@ pub fn waveform_sample_count(canvas_width: f64) -> usize {
     ((canvas_width * WAVEFORM_SAMPLES_PER_PIXEL).ceil() as usize).min(MAX_WAVEFORM_SAMPLES)
 }
 
-/// Both waveforms are the lane's own colour at 55 %: over a tinted segment a
-/// white or orange fill (`TL/ClipTrack.tsx:293-302`) has nothing to sit on.
-pub fn waveform_color(color: Hsla) -> Hsla {
-    with_alpha(color, 0.55)
+pub fn waveform_color(_color: Hsla) -> Hsla {
+    gpui::hsla(0., 0., 1., 0.42)
 }
 
 // ---------------------------------------------------------------------------
@@ -2293,7 +2313,7 @@ pub fn render_row(
 ) -> AnyElement {
     let height = model.track_height();
     let selected = ui.row_selected(model, row);
-    let active_bg = Hsla::from(theme.editor.ctl_hover);
+    let active_bg = Hsla::from(theme.editor.ctl);
     let active_text = Hsla::from(theme.editor.text_1);
     div()
         .relative()
@@ -2303,11 +2323,7 @@ pub fn render_row(
         .h(px(height))
         .flex_none()
         .rounded(px(TRACK_BAND_RADIUS))
-        .bg(if selected {
-            active_bg
-        } else {
-            Hsla::from(theme.editor.ctl)
-        })
+        .when(selected, |this| this.bg(active_bg))
         .text_color(if selected {
             active_text
         } else {
@@ -2865,17 +2881,8 @@ fn render_segment(
         .flex_row()
         .rounded(px(SEGMENT_RADIUS))
         .overflow_hidden()
-        .bg(seg_fill_sheen(theme, color, selected))
-        .child(
-            div()
-                .absolute()
-                .top(px(SEGMENT_RADIUS))
-                .bottom(px(SEGMENT_RADIUS))
-                .left(px(2.))
-                .w(px(SEGMENT_ACCENT_BAR))
-                .rounded_full()
-                .bg(color),
-        );
+        .bg(seg_fill_sheen(theme, color, selected || hovered))
+        .shadow(seg_gloss());
 
     // The clip track's waveform and its per-second markings, both under the
     // label (`TL/ClipTrack.tsx:943-957`).
@@ -3041,6 +3048,9 @@ fn render_segment(
         .left(px(x))
         .w(px(width))
         .rounded(px(SEGMENT_RADIUS))
+        .when(hovered || selected, |this| {
+            this.shadow(seg_glow(color, theme.is_dark()))
+        })
         .when_some(dim, |this, opacity| this.opacity(opacity))
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
@@ -3055,8 +3065,8 @@ fn render_segment(
                 .map(|border| {
                     if selected || (split_mode && hovered) {
                         border
-                            .border(px(1.5))
-                            .border_color(Hsla::from(theme.editor.accent))
+                            .border(px(2.))
+                            .border_color(gpui::hsla(0., 0., 1., 0.95))
                     } else {
                         border.border_1().border_color(seg_border(
                             theme,
@@ -3406,7 +3416,7 @@ fn render_hold(
                 .left(px(-x))
                 .w(px(segment_width))
                 .rounded(px(SEGMENT_RADIUS))
-                .bg(with_alpha(Hsla::from(theme.editor.window), 0.6)),
+                .bg(gpui::hsla(0., 0., 0., 0.32)),
         )
         .children([0., width - 1.].map(|edge| {
             let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
@@ -3626,10 +3636,6 @@ fn waveform_canvas(
     .into_any_element()
 }
 
-/// The stretch of a segment's visible box its label should sit in when parts
-/// of the box are covered (a clip's paused holds carry their own badge): the
-/// first uncovered run wide enough for a compact label, or the widest one.
-/// Returns the run's width and centre in the segment's own pixels.
 fn label_box_clear_of(visible_width: f64, center_x: f64, covered: &[(f64, f64)]) -> (f64, f64) {
     let start = center_x - visible_width / 2.;
     let end = center_x + visible_width / 2.;
@@ -3702,9 +3708,9 @@ fn render_label(
     let (pad_left, pad_right) = if tier == LabelTier::Glyph {
         (4., 4.)
     } else if visible_width >= 60. {
-        (SEGMENT_PADDING_LEFT as f64, SEGMENT_PADDING_RIGHT as f64)
+        (SEGMENT_PADDING_RIGHT as f64, SEGMENT_PADDING_RIGHT as f64)
     } else {
-        (6., 4.)
+        (5., 5.)
     };
     let max_width = (visible_width - pad_left - pad_right).max(0.);
     let left = center_x - visible_width / 2. + pad_left;
@@ -3718,7 +3724,7 @@ fn render_label(
             .w(px(max_width as f32))
             .flex()
             .items_center()
-            .when(tier == LabelTier::Glyph, |this| this.justify_center())
+            .justify_center()
             .overflow_hidden()
             .child(body),
     )
@@ -5304,7 +5310,7 @@ mod tests {
                     let (first, last) = path
                         .vertices
                         .iter()
-                        .filter(|vertex| f32::from(vertex.xy_position.y) < 35.)
+                        .filter(|vertex| f32::from(vertex.xy_position.y) < 43. - SEGMENT_RADIUS)
                         .map(|vertex| {
                             range.0
                                 + f64::from(f32::from(vertex.xy_position.x)) / 600.
