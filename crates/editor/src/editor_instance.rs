@@ -300,6 +300,21 @@ pub struct EditorInstance {
 /// so it never competes with scrubbing, dragging or settings changes.
 const HOVER_ANALYSIS_IDLE_MS: u64 = 1000;
 
+/// Hover anchors can be chosen on the base cursor or on any cursor style.
+fn wants_hover_analysis(project: &ProjectConfiguration) -> bool {
+    let wants = |cursor: &cap_project::CursorConfiguration| {
+        cap_rendering::CursorAnchors::from_config(cursor).hover
+    };
+    wants(&project.cursor)
+        || project.timeline.as_ref().is_some_and(|timeline| {
+            timeline
+                .style_segments
+                .iter()
+                .filter_map(|style| style.overrides.cursor.as_ref())
+                .any(wants)
+        })
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -730,7 +745,7 @@ impl EditorInstance {
     }
 
     fn ensure_hover_analysis(self: &Arc<Self>) {
-        if !cap_rendering::CursorAnchors::from_config(&self.project_config.1.borrow().cursor).hover
+        if !wants_hover_analysis(&self.project_config.1.borrow())
             || self.hover_analysis_started.swap(true, Ordering::AcqRel)
         {
             return;
@@ -2300,6 +2315,24 @@ mod tests {
             })
             .collect(),
         })
+    }
+
+    #[test]
+    fn hover_analysis_runs_for_the_base_cursor_or_any_cursor_style() {
+        let mut project = ProjectConfiguration::default();
+        assert!(!wants_hover_analysis(&project));
+        project.cursor.hover_anchors = true;
+        assert!(wants_hover_analysis(&project));
+
+        let styled: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "segments": [], "zoomSegments": [], "styleSegments": [{
+                "start": 1.0, "end": 2.0,
+                "overrides": { "cursor": { "interactionAnchors": true, "hoverAnchors": true } }
+            }] }
+        }))
+        .unwrap();
+        assert!(!styled.cursor.hover_anchors);
+        assert!(wants_hover_analysis(&styled));
     }
 
     #[test]
