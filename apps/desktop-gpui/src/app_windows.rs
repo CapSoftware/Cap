@@ -8003,29 +8003,7 @@ mod tests {
             window.window_handle().downcast::<EditorWindow>().unwrap()
         });
         cx.cx.update(|cx| {
-            cx.set_global(AppWindows {
-                main: WindowHandle::new(handle.window_id()),
-                controls: None,
-                camera: None,
-                settings: None,
-                onboarding: None,
-                mode_select: None,
-                teleprompter: None,
-                overlays: Vec::new(),
-                editors: vec![(project.path().into(), handle)],
-                deleting_editors: HashSet::new(),
-                preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
-                screenshot_editors: Vec::new(),
-                main_hidden_for_picker: false,
-                main_visible_before_picker: false,
-                main_hidden_by_app: false,
-                editor_hidden_for_picker: None,
-                camera_park: CameraPark::default(),
-                #[cfg(target_os = "linux")]
-                clean_capture: None,
-                #[cfg(target_os = "linux")]
-                clean_capture_generation: 0,
-            });
+            cx.set_global(test_app_windows(vec![(project.path().into(), handle)]));
         });
         for phase in [
             ExportPhase::ChoosingFile,
