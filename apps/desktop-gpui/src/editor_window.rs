@@ -3141,6 +3141,7 @@ impl EditorWindow {
         }
         self.publish_project();
         self.schedule_save(window, cx);
+        self.sync_enhance_section(window, cx);
         if animated_background_changed {
             self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
         }
@@ -8321,6 +8322,7 @@ impl EditorWindow {
         });
         self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
         self.close_color_picker(cx);
+        self.sync_enhance_section(window, cx);
         self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
     }
 

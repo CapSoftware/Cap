@@ -3933,6 +3933,16 @@ impl EditorWindow {
     /// gpui only renders on invalidation, so a height transition needs someone
     /// to ask for the next frame. Same ticker the settings window's collapsible
     /// uses.
+    /// The enhancement section follows the setting when undo, redo or a
+    /// preset changes it, not only when its toggle is clicked.
+    pub(crate) fn sync_enhance_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let enabled = self.project.screen_enhancement.enabled;
+        if self.sidebar.enhance_open.is_open() != enabled {
+            self.sidebar.enhance_open.set_open(enabled);
+            self.animate_collapsibles(window, cx);
+        }
+    }
+
     pub(crate) fn animate_collapsibles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.notify();
         window.refresh();
