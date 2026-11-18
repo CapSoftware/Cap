@@ -398,7 +398,6 @@ pub fn show_after(capture: Capture, cx: &mut App) {
     }
 }
 
-/// A recording's files changed under its card: read its size again.
 pub fn project_changed(project: &Path, cx: &mut App) {
     let Some(model) = existing_model(cx) else {
         return;
@@ -1145,6 +1144,10 @@ async fn render_for_project(
         cancel.store(true, Ordering::Release);
         return Err("Export cancelled".into());
     }
+    let settling = project_path.to_path_buf();
+    cx.background_executor()
+        .spawn(async move { crate::unused_media::settle(&settling) })
+        .await?;
     let project = cap_project::ProjectConfiguration::load(project_path).unwrap_or_default();
     let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
     let (width, height) = OVERLAY_EXPORT_SIZE;

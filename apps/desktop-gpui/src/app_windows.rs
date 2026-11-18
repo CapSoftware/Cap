@@ -6793,18 +6793,21 @@ fn clean_unused_media(key: PathBuf, request: Option<crate::unused_media::Request
         .spawn(move || {
             let started = std::time::Instant::now();
             let outcome = match cap_recording::upload_resume::UploadLock::acquire(&project) {
-                Ok(_lock) => crate::unused_media::run(
-                    &project,
-                    &request,
-                    &crate::unused_media::move_to_trash,
-                ),
+                Ok(_lock) => crate::unused_media::run(&project, &request),
                 Err(error) => Err(format!("project in use: {error}")),
             };
             drop(claim);
             let elapsed_ms = started.elapsed().as_millis() as u64;
             match &outcome {
                 Ok(outcome) => {
-                    tracing::info!(path = %project.display(), ?outcome, elapsed_ms, "Unused clip media cleanup finished");
+                    let trashed = matches!(outcome, crate::unused_media::Outcome::Cleaned { .. })
+                        .then(|| {
+                            crate::unused_media::trash_staged(
+                                &project,
+                                &crate::unused_media::move_to_trash,
+                            )
+                        });
+                    tracing::info!(path = %project.display(), ?outcome, ?trashed, elapsed_ms, "Unused clip media cleanup finished");
                 }
                 Err(error) => {
                     tracing::warn!(path = %project.display(), %error, elapsed_ms, "Unused clip media cleanup failed");

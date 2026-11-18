@@ -25,8 +25,6 @@ const CAPTION_TOLERANCE: f64 = 1e-3;
 const MARKER_TOLERANCE: f64 = 1e-9;
 const SETTLE_WAIT: Duration = Duration::from_secs(30);
 
-/// What the closing editor knew about one recording segment: the values the
-/// renderer and the caption clock read from the media itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SegmentProbe {
     pub duration: f64,
@@ -83,7 +81,6 @@ impl Request {
     }
 }
 
-/// Why a project kept its unused media.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Skip {
     NotStudio,
@@ -107,11 +104,9 @@ pub(crate) struct Plan {
     pub removed: Vec<usize>,
     pub meta: RecordingMeta,
     pub config: ProjectConfiguration,
-    /// Segment folders to move out, relative to the project.
     pub folders: Vec<String>,
 }
 
-/// Every relative path one recording segment owns.
 fn segment_paths(segment: &MultipleSegment) -> Vec<String> {
     let mut paths = vec![segment.display.path.as_str()];
     paths.extend(segment.camera.as_ref().map(|camera| camera.path.as_str()));
@@ -335,7 +330,6 @@ fn same_result(
         })
 }
 
-/// Everything read from the project before anything is changed.
 pub(crate) struct Snapshot {
     pub meta_bytes: Vec<u8>,
     pub config_bytes: Vec<u8>,
@@ -606,6 +600,30 @@ fn sync_dir(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `false` when nothing is there; a symlink is never followed.
+fn is_plain_dir(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.is_dir() && !metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn exists_unfollowed(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Serializes everything that moves media in or out of `content/removed-media`.
+static STAGING_LOCK: Mutex<()> = Mutex::new(());
+
+fn staging_lock() -> MutexGuard<'static, ()> {
+    STAGING_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -697,6 +715,11 @@ pub(crate) fn commit(
     {
         return Err(io::Error::other("project changed before cleanup"));
     }
+    for folder in &plan.folders {
+        if !is_plain_dir(&project.join(folder))? {
+            return Err(io::Error::other("segment folder missing before cleanup"));
+        }
+    }
 
     let (backup, backup_name) = unique_dir(&project.join(BACKUPS), stamp)?;
     write_new(&backup.join(META), &snapshot.meta_bytes)?;
@@ -776,19 +799,38 @@ pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
         return Err(io::Error::other("unexpected paths in the cleanup journal"));
     }
     let staging = project.join(&journal.staging);
-    if let Ok(entries) = std::fs::read_dir(&staging) {
-        for label in entries.flatten() {
-            for folder in &journal.folders {
-                let Some(name) = folder_name(folder) else {
-                    continue;
-                };
-                let moved = label.path().join(name);
-                let original = project.join(folder);
-                if moved.exists() && !original.exists() {
-                    std::fs::rename(&moved, &original)?;
-                }
+    let entries = match std::fs::read_dir(&staging) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if entries.is_some() && !is_plain_dir(&staging)? {
+        return Err(io::Error::other("cleanup staging is not a plain folder"));
+    }
+    for label in entries.into_iter().flatten() {
+        let label = label?.path();
+        if !is_plain_dir(&label)? {
+            return Err(io::Error::other(
+                "cleanup staging holds an unexpected entry",
+            ));
+        }
+        for folder in &journal.folders {
+            let Some(name) = folder_name(folder) else {
+                continue;
+            };
+            let moved = label.join(name);
+            let original = project.join(folder);
+            if is_plain_dir(&moved)? && !exists_unfollowed(&original)? {
+                std::fs::rename(&moved, &original)?;
             }
-            std::fs::remove_dir(label.path()).ok();
+        }
+        std::fs::remove_dir(&label).ok();
+    }
+    for folder in &journal.folders {
+        if !is_plain_dir(&project.join(folder))? {
+            return Err(io::Error::other(format!(
+                "{folder} is missing; the cleanup journal is kept"
+            )));
         }
     }
     let backup = project.join(&journal.backup);
@@ -819,7 +861,6 @@ fn active() -> MutexGuard<'static, Vec<PathBuf>> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Held while this process changes a project's files; [`settle`] waits for it.
 pub(crate) struct Claim(PathBuf);
 
 impl Claim {
@@ -841,8 +882,9 @@ impl Drop for Claim {
 }
 
 /// Runs before a project is opened: waits for a cleanup of it still running
-/// in this process, then rolls back one a crash interrupted.
-pub(crate) fn settle(project: &Path) {
+/// in this process, then rolls back one a crash interrupted. An error means
+/// the project's files may not agree and it must not be read.
+pub(crate) fn settle(project: &Path) -> Result<(), String> {
     let key = project
         .canonicalize()
         .unwrap_or_else(|_| project.to_path_buf());
@@ -851,8 +893,7 @@ pub(crate) fn settle(project: &Path) {
     while projects.contains(&key) {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
-            tracing::warn!(path = %key.display(), "Opening while an unused media cleanup is still running");
-            return;
+            return Err("the unused clip media cleanup is still running".into());
         }
         projects = ACTIVE
             .released
@@ -860,15 +901,17 @@ pub(crate) fn settle(project: &Path) {
             .unwrap_or_else(PoisonError::into_inner)
             .0;
     }
-    if !key.join(JOURNAL).exists() {
-        return;
+    if !exists_unfollowed(&key.join(JOURNAL)).map_err(|error| error.to_string())? {
+        return Ok(());
     }
     projects.push(key.clone());
     drop(projects);
     let _claim = Claim(key.clone());
-    if let Err(error) = roll_back(&key) {
+    let _staging = staging_lock();
+    roll_back(&key).map(drop).map_err(|error| {
         tracing::error!(path = %key.display(), %error, "Could not roll back an interrupted unused media cleanup");
-    }
+        format!("an interrupted unused clip media cleanup could not be undone: {error}")
+    })
 }
 
 fn directory_size(path: &Path) -> u64 {
@@ -910,23 +953,58 @@ pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// Sends whatever an earlier cleanup moved out but could not trash.
-fn trash_staged(project: &Path, trash: &dyn Fn(&Path) -> Result<(), String>) -> bool {
+/// Sends what earlier cleanups moved out to the trash. Only plain folders
+/// inside the project's own staging folder are sent; links are left alone.
+pub(crate) fn trash_staged(project: &Path, trash: &dyn Fn(&Path) -> Result<(), String>) -> bool {
+    let _staging = staging_lock();
     let staging = project.join(STAGING);
+    if !matches!(is_plain_dir(&project.join("content")), Ok(true))
+        || !matches!(is_plain_dir(&staging), Ok(true))
+        || exists_unfollowed(&project.join(JOURNAL)).unwrap_or(true)
+    {
+        return !exists_unfollowed(&staging).unwrap_or(true);
+    }
+    let Ok(root) = staging.canonicalize() else {
+        return false;
+    };
     let Ok(stamps) = std::fs::read_dir(&staging) else {
-        return true;
+        return false;
     };
     let mut done = true;
-    for stamp in stamps.flatten() {
-        if let Ok(labels) = std::fs::read_dir(stamp.path()) {
-            for label in labels.flatten() {
-                if let Err(error) = trash(&label.path()) {
-                    tracing::warn!(path = %label.path().display(), %error, "Could not move unused clip media to the trash");
-                    done = false;
-                }
+    for stamp in stamps {
+        let Ok(stamp) = stamp.map(|stamp| stamp.path()) else {
+            done = false;
+            continue;
+        };
+        if !matches!(is_plain_dir(&stamp), Ok(true)) {
+            tracing::warn!(path = %stamp.display(), "Left an unexpected entry in the removed clip media folder");
+            done = false;
+            continue;
+        }
+        let Ok(labels) = std::fs::read_dir(&stamp) else {
+            done = false;
+            continue;
+        };
+        for label in labels {
+            let Ok(label) = label.map(|label| label.path()) else {
+                done = false;
+                continue;
+            };
+            let inside = matches!(is_plain_dir(&label), Ok(true))
+                && label
+                    .canonicalize()
+                    .is_ok_and(|resolved| resolved.starts_with(&root));
+            if !inside {
+                tracing::warn!(path = %label.display(), "Left an unexpected entry in the removed clip media folder");
+                done = false;
+                continue;
+            }
+            if let Err(error) = trash(&label) {
+                tracing::warn!(path = %label.display(), %error, "Could not move unused clip media to the trash");
+                done = false;
             }
         }
-        std::fs::remove_dir(stamp.path()).ok();
+        std::fs::remove_dir(&stamp).ok();
     }
     std::fs::remove_dir(&staging).ok();
     done
@@ -935,17 +1013,13 @@ fn trash_staged(project: &Path, trash: &dyn Fn(&Path) -> Result<(), String>) -> 
 /// A close that found nothing unused still finishes an earlier cleanup whose
 /// trash step failed.
 pub(crate) fn trash_leftovers(project: PathBuf) {
-    if !project.join(STAGING).exists() || project.join(JOURNAL).exists() {
+    if !exists_unfollowed(&project.join(STAGING)).unwrap_or(false) {
         return;
     }
-    let Some(claim) = Claim::take(&project) else {
-        return;
-    };
     let spawned = std::thread::Builder::new()
         .name("unused-media".into())
         .spawn(move || {
             trash_staged(&project, &move_to_trash);
-            drop(claim);
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "Could not start trashing unused clip media");
@@ -972,22 +1046,15 @@ fn trash_label(pretty_name: &str) -> String {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Outcome {
     Skipped(Skip),
-    Cleaned {
-        removed: Vec<usize>,
-        bytes: u64,
-        trashed: bool,
-    },
+    Cleaned { removed: Vec<usize>, bytes: u64 },
 }
 
-/// Removes the unused segments of a closed project: plan, commit, trash.
-/// Blocking.
-pub(crate) fn run(
-    project: &Path,
-    request: &Request,
-    trash: &dyn Fn(&Path) -> Result<(), String>,
-) -> Result<Outcome, String> {
+/// Removes the unused segments of a closed project and stages their media.
+/// The caller then sends it to the trash with [`trash_staged`], after
+/// releasing its [`Claim`] so opening the project does not wait on the trash.
+pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
+    let _staging = staging_lock();
     roll_back(project).map_err(|error| error.to_string())?;
-    trash_staged(project, trash);
     let snapshot = Snapshot::read(project)?;
     let plan = match plan(&snapshot, &request.probes) {
         Ok(plan) => plan,
@@ -997,16 +1064,12 @@ pub(crate) fn run(
     let label = trash_label(&snapshot.meta.pretty_name);
     let staged = commit(project, &snapshot, &plan, &stamp, &label, Step::Done)
         .map_err(|error| error.to_string())?;
-    let bytes = directory_size(&staged);
-    let trashed = trash_staged(project, trash);
     Ok(Outcome::Cleaned {
         removed: plan.removed,
-        bytes,
-        trashed,
+        bytes: directory_size(&staged),
     })
 }
 
-/// The app-level reasons a closed editor's project must be left alone.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Busy {
     pub open_in_editor: bool,

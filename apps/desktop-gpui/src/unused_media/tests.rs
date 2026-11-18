@@ -173,8 +173,6 @@ fn write_media(project: &Path, relative: &str, index: usize) {
     std::fs::write(&path, format!("media {index} {relative}").repeat(64)).unwrap();
 }
 
-/// What the editor needs to open the project: both files parse, every media
-/// path exists, and every clip, offset and marker points at a segment.
 fn assert_opens(project: &Path) {
     let meta = RecordingMeta::load_for_project(project).unwrap();
     let config = ProjectConfiguration::load(project).unwrap();
@@ -200,6 +198,13 @@ fn assert_opens(project: &Path) {
 
 fn no_trash(_: &Path) -> Result<(), String> {
     Err("no trash in this test".into())
+}
+
+fn trash_into(dir: &Path) -> impl Fn(&Path) -> Result<(), String> + '_ {
+    move |path: &Path| {
+        std::fs::rename(path, dir.join(path.file_name().unwrap()))
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[test]
@@ -381,12 +386,7 @@ fn a_project_with_nothing_unused_stays_byte_identical() {
     let tree = fixture.tree();
     assert_eq!(fixture.plan().unwrap_err(), Skip::NothingUnused);
     assert_eq!(
-        run(
-            &fixture.project(),
-            &Request::from_probes(probes()),
-            &no_trash
-        )
-        .unwrap(),
+        run(&fixture.project(), &Request::from_probes(probes())).unwrap(),
         Outcome::Skipped(Skip::NothingUnused)
     );
     assert_eq!(fixture.files(), before);
@@ -430,12 +430,8 @@ fn skip_for(meta: Value, config: Value) -> Skip {
     let fixture = Fixture::with(meta, config);
     let before = fixture.files();
     let tree = fixture.tree();
-    let outcome = run(
-        &fixture.project(),
-        &Request::from_probes(probes()),
-        &no_trash,
-    )
-    .unwrap();
+    let outcome = run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    assert!(trash_staged(&fixture.project(), &no_trash));
     assert_eq!(fixture.files(), before, "skipped project changed");
     assert_eq!(fixture.tree(), tree, "skipped project changed");
     match outcome {
@@ -597,7 +593,7 @@ fn every_crash_point_leaves_a_project_that_opens() {
         )
         .unwrap();
 
-        settle(&fixture.project());
+        settle(&fixture.project()).unwrap();
         assert!(!fixture.project().join(JOURNAL).exists(), "{step:?}");
         assert_opens(&fixture.project());
         let backup = fixture.project().join("backups/2026-11-17 10.00.00");
@@ -645,6 +641,39 @@ fn a_failed_step_rolls_back_at_once() {
     let original = fixture.files();
     let snapshot = fixture.snapshot();
     let mut plan = fixture.plan().unwrap();
+    write_media(
+        &fixture.project(),
+        "content/segments/x/segment-1/clash.bin",
+        9,
+    );
+    plan.folders.push("content/segments/x/segment-1".into());
+    let error = commit(
+        &fixture.project(),
+        &snapshot,
+        &plan,
+        "stamp",
+        "label",
+        Step::Done,
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("missing"), "{error}");
+    assert_eq!(fixture.files(), original);
+    assert!(!fixture.project().join(JOURNAL).exists());
+    assert!(
+        fixture
+            .project()
+            .join("content/segments/x/segment-1/clash.bin")
+            .is_file()
+    );
+    assert_opens(&fixture.project());
+}
+
+#[test]
+fn a_missing_segment_folder_stops_the_cleanup_before_any_write() {
+    let fixture = Fixture::new();
+    let original = fixture.files();
+    let snapshot = fixture.snapshot();
+    let mut plan = fixture.plan().unwrap();
     plan.folders.push("content/segments/segment-9".into());
     assert!(
         commit(
@@ -658,8 +687,77 @@ fn a_failed_step_rolls_back_at_once() {
         .is_err()
     );
     assert_eq!(fixture.files(), original);
+    assert!(!fixture.project().join(BACKUPS).exists());
+    assert!(!fixture.project().join(JOURNAL).exists());
+}
+
+#[test]
+fn rollback_keeps_the_journal_until_every_folder_is_back() {
+    let fixture = Fixture::new();
+    let snapshot = fixture.snapshot();
+    let plan = fixture.plan().unwrap();
+    let staged = commit(
+        &fixture.project(),
+        &snapshot,
+        &plan,
+        "stamp",
+        "label",
+        Step::Stage,
+    )
+    .unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::rename(staged.join("label"), elsewhere.path().join("label")).unwrap();
+    let written = fixture.files();
+
+    assert!(settle(&fixture.project()).is_err());
+    assert!(fixture.project().join(JOURNAL).exists());
+    assert_eq!(fixture.files(), written);
+    assert!(!trash_staged(&fixture.project(), &no_trash));
+    assert!(staged.is_dir());
+
+    std::fs::rename(elsewhere.path().join("label"), staged.join("label")).unwrap();
+    settle(&fixture.project()).unwrap();
     assert!(!fixture.project().join(JOURNAL).exists());
     assert_opens(&fixture.project());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_trash_never_follows_links_out_of_the_project() {
+    let fixture = Fixture::new();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(outside.path().join("precious")).unwrap();
+    std::fs::write(outside.path().join("precious/file.txt"), b"keep").unwrap();
+    std::fs::create_dir_all(fixture.project().join(STAGING)).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path(),
+        fixture.project().join(STAGING).join("stamp"),
+    )
+    .unwrap();
+    std::fs::create_dir(fixture.project().join(STAGING).join("real")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("precious"),
+        fixture.project().join(STAGING).join("real/label"),
+    )
+    .unwrap();
+
+    let called = std::sync::Mutex::new(Vec::new());
+    let trash = |path: &Path| -> Result<(), String> {
+        called.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    };
+    assert!(!trash_staged(&fixture.project(), &trash));
+    assert!(called.lock().unwrap().is_empty());
+    assert!(outside.path().join("precious/file.txt").is_file());
+
+    std::fs::remove_dir_all(fixture.project().join(STAGING)).unwrap();
+    let linked = tempfile::tempdir().unwrap();
+    std::fs::create_dir(linked.path().join("stamp")).unwrap();
+    std::fs::create_dir(linked.path().join("stamp/label")).unwrap();
+    std::os::unix::fs::symlink(linked.path(), fixture.project().join(STAGING)).unwrap();
+    assert!(!trash_staged(&fixture.project(), &trash));
+    assert!(called.lock().unwrap().is_empty());
+    assert!(linked.path().join("stamp/label").is_dir());
 }
 
 #[test]
@@ -710,18 +808,13 @@ fn cleaning_moves_the_media_to_the_trash_and_keeps_a_backup() {
         trashed.lock().unwrap().push(target);
         Ok(())
     };
-    let outcome = run(&fixture.project(), &Request::from_probes(probes()), &trash).unwrap();
-    let Outcome::Cleaned {
-        removed,
-        bytes,
-        trashed: all_trashed,
-    } = outcome
-    else {
+    let outcome = run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    let Outcome::Cleaned { removed, bytes } = outcome else {
         panic!("{outcome:?}");
     };
     assert_eq!(removed, vec![1]);
     assert!(bytes > 0);
-    assert!(all_trashed);
+    assert!(trash_staged(&fixture.project(), &trash));
     let trashed = trashed.lock().unwrap().clone();
     assert_eq!(trashed.len(), 1);
     assert_eq!(
@@ -746,29 +839,24 @@ fn cleaning_moves_the_media_to_the_trash_and_keeps_a_backup() {
         original.0
     );
 
-    let again = run(&fixture.project(), &Request::from_probes(probes()), &trash);
+    let again = run(&fixture.project(), &Request::from_probes(probes()));
     assert!(matches!(again, Ok(Outcome::Skipped(_))), "{again:?}");
 }
 
 #[test]
 fn media_the_trash_refused_is_trashed_on_a_later_close() {
     let fixture = Fixture::new();
-    let outcome = run(
-        &fixture.project(),
-        &Request::from_probes(probes()),
-        &no_trash,
-    )
-    .unwrap();
-    assert!(matches!(outcome, Outcome::Cleaned { trashed: false, .. }));
+    let outcome = run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    assert!(matches!(outcome, Outcome::Cleaned { .. }));
+    assert!(!trash_staged(&fixture.project(), &no_trash));
     assert!(fixture.project().join(STAGING).exists());
     assert_opens(&fixture.project());
 
     let trash_dir = tempfile::tempdir().unwrap();
-    let trash = |path: &Path| -> Result<(), String> {
-        std::fs::rename(path, trash_dir.path().join(path.file_name().unwrap()))
-            .map_err(|error| error.to_string())
-    };
-    assert!(trash_staged(&fixture.project(), &trash));
+    assert!(trash_staged(
+        &fixture.project(),
+        &trash_into(trash_dir.path())
+    ));
     assert!(!fixture.project().join(STAGING).exists());
     assert!(
         trash_dir
@@ -791,7 +879,7 @@ fn settle_waits_for_a_cleanup_in_this_process() {
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
         drop(claim);
     });
-    settle(&fixture.project());
+    settle(&fixture.project()).unwrap();
     assert!(released.load(std::sync::atomic::Ordering::SeqCst));
     releaser.join().unwrap();
 }

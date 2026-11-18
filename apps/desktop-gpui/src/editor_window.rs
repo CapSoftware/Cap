@@ -402,7 +402,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err(tr::editor::window::open::not_found(path.display()));
     }
 
-    crate::unused_media::settle(path);
+    crate::unused_media::settle(path).map_err(tr::editor::window::open::meta_failed)?;
 
     // Repairs tracks older recorders stamped at the wrong rate, and display
     // fps that finalization replaced with the average rate, before anything
