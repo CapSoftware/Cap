@@ -50,7 +50,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - **No polling spies or request recorders** with `expect.poll` / `vi.waitFor`. Resolve a `Promise.withResolvers()` deferred from the callback and await it.
 - **No retries or raised per-test timeouts.** A test that passes on rerun is a flake to fix.
 - **No test doubles** in `apps/media-server`, `apps/render-farm`, `apps/discord-bot`, `apps/status`, `packages/*` and `scripts/*`: no `spyOn(...).mockReturnValue`, `vi.mock`, or replaced `fetch`. Use the real implementation and a real local server. `apps/web` and `apps/chrome-extension` are exempt until they have a real database and browser harness.
-- Existing violations are frozen per file in `scripts/test-lint/oxlintrc.json`. Counts only go down: when you fix one, lower the entry (delete it at 0). Never raise a count or add an entry.
+- Existing violations are frozen per file in `scripts/test-lint/oxlintrc.json` (sleeps, polls, timeouts) and `scripts/test-lint/test-doubles-allow.json` (doubles). Counts only go down: when you fix one, lower the entry (delete it at 0). Never raise a count or add an entry.
 
 ### TypeScript — strictness
 - Avoid `any`. Use `unknown` + narrowing, or existing shared types from `@cap/utils`, `@cap/web-domain`, generated bindings, etc.
