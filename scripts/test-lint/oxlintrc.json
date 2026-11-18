@@ -42,8 +42,6 @@
 			"error",
 			{
 				"allow": {
-					"apps/chrome-extension/src/popup/account-cache.test.ts": 1,
-					"apps/chrome-extension/src/popup/settings-sync.test.ts": 1,
 					"apps/media-server/src/__tests__/lib/audio-levels.integration.test.ts": 1,
 					"apps/media-server/src/__tests__/lib/audio-only-source.integration.test.ts": 3,
 					"apps/media-server/src/__tests__/lib/audio-quality-formats.integration.test.ts": 3,
@@ -96,7 +94,6 @@
 			"error",
 			{
 				"allow": {
-					"apps/chrome-extension/src/background/service-worker.test.ts": 9,
 					"apps/web/__tests__/unit/analytics-track-route.test.ts": 1,
 					"apps/web/__tests__/unit/cap-player-messages.test.ts": 1,
 					"apps/web/__tests__/unit/cap-player-source.test.ts": 3,

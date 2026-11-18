@@ -22,6 +22,29 @@ let closeOffscreenDocument: ReturnType<typeof vi.fn>;
 let onActionClicked: (tab: chrome.tabs.Tab) => void;
 let tabsApi: Record<string, ReturnType<typeof vi.fn>>;
 
+const arrivals = () => {
+	let count = 0;
+	const waiting: Array<{ count: number; resolve: () => void }> = [];
+	return {
+		arrive() {
+			count += 1;
+			for (const waiter of waiting.filter((entry) => entry.count <= count)) {
+				waiting.splice(waiting.indexOf(waiter), 1);
+				waiter.resolve();
+			}
+		},
+		nth(target: number) {
+			return new Promise<void>((resolve) => {
+				if (count >= target) resolve();
+				else waiting.push({ count: target, resolve });
+			});
+		},
+	};
+};
+
+let contextQueries: ReturnType<typeof arrivals>;
+let offscreenMessages: ReturnType<typeof arrivals>;
+
 const liveStatus: RecordingStatus = {
 	phase: "recording",
 	startedAt: 1,
@@ -34,6 +57,8 @@ beforeEach(async () => {
 	stored = {};
 	pollReplies = [];
 	contextReplies = [];
+	contextQueries = arrivals();
+	offscreenMessages = arrivals();
 	const storage = {
 		get: (_keys: string[], callback: (items: object) => void) =>
 			callback({ ...stored }),
@@ -66,9 +91,11 @@ beforeEach(async () => {
 			ContextType: { OFFSCREEN_DOCUMENT: "OFFSCREEN_DOCUMENT" },
 			getContexts: vi.fn((_filter, callback) => {
 				contextReplies.push(callback);
+				contextQueries.arrive();
 			}),
 			sendMessage: vi.fn((_message, callback) => {
 				pollReplies.push(callback);
+				offscreenMessages.arrive();
 			}),
 			onMessage: {
 				addListener: (listener: MessageListener) => {
@@ -191,6 +218,7 @@ describe("bootstrap account ownership", () => {
 		async (userId) => {
 			const stale = deferred<Response>();
 			const fresh = deferred<Response>();
+			const freshAsked = deferred<void>();
 			const newAuth = { authApiKey: "new-fixture-key", userId };
 			const newBootstrap: BootstrapData = {
 				user: {
@@ -207,22 +235,25 @@ describe("bootstrap account ownership", () => {
 				if (!String(url).endsWith("/bootstrap")) {
 					return Response.json({ success: true });
 				}
-				return new Headers(options?.headers).get("Authorization") ===
+				if (
+					new Headers(options?.headers).get("Authorization") ===
 					`Bearer ${oldAuth.authApiKey}`
-					? stale.promise
-					: fresh.promise;
+				) {
+					return stale.promise;
+				}
+				freshAsked.resolve();
+				return fresh.promise;
 			});
 			await send("bootstrap");
 			await signIn(newAuth);
-			await vi.waitFor(() =>
-				expect(requests).toHaveBeenCalledWith(
-					expect.stringContaining("/bootstrap"),
-					expect.objectContaining({
-						headers: expect.objectContaining({
-							Authorization: `Bearer ${newAuth.authApiKey}`,
-						}),
+			await freshAsked.promise;
+			expect(requests).toHaveBeenCalledWith(
+				expect.stringContaining("/bootstrap"),
+				expect.objectContaining({
+					headers: expect.objectContaining({
+						Authorization: `Bearer ${newAuth.authApiKey}`,
 					}),
-				),
+				}),
 			);
 			expect(stored[cacheKey]).toBeUndefined();
 			fresh.resolve(Response.json(newBootstrap));
@@ -244,13 +275,17 @@ describe("bootstrap account ownership", () => {
 	it("discards an initial fetch that finishes after sign-out", async () => {
 		delete stored[cacheKey];
 		const stale = deferred<Response>();
-		requests.mockImplementation(async (url) =>
-			String(url).endsWith("/bootstrap")
-				? stale.promise
-				: Response.json({ success: true }),
-		);
+		const asked = deferred<void>();
+		requests.mockImplementation(async (url) => {
+			if (!String(url).endsWith("/bootstrap")) {
+				return Response.json({ success: true });
+			}
+			asked.resolve();
+			return stale.promise;
+		});
 		const loading = send("bootstrap");
-		await vi.waitFor(() => expect(requests).toHaveBeenCalledTimes(1));
+		await asked.promise;
+		expect(requests).toHaveBeenCalledTimes(1);
 		await send("auth-revoke");
 		stale.resolve(Response.json(oldBootstrap));
 
@@ -316,9 +351,11 @@ describe("recording status synchronization", () => {
 			const currentStatus = { ...liveStatus, phase };
 			const response = pollStatus();
 			answerContexts(true);
-			await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+			await contextQueries.nth(2);
+			expect(contextReplies).toHaveLength(1);
 			answerContexts(true);
-			await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+			await offscreenMessages.nth(1);
+			expect(pollReplies).toHaveLength(1);
 			pollReplies[0]({ ok: true, status: currentStatus });
 
 			expect(await response).toMatchObject({ ok: true, status: currentStatus });
@@ -340,9 +377,11 @@ describe("recording status synchronization", () => {
 		async (nextStatus) => {
 			const response = pollStatus();
 			answerContexts(true);
-			await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+			await contextQueries.nth(2);
+			expect(contextReplies).toHaveLength(1);
 			answerContexts(true);
-			await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+			await offscreenMessages.nth(1);
+			expect(pollReplies).toHaveLength(1);
 
 			broadcast(nextStatus);
 			pollReplies[0]({ ok: true, status: liveStatus });
@@ -390,7 +429,8 @@ describe("offscreen messaging", () => {
 			);
 		});
 		answerContexts(true);
-		await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+		await offscreenMessages.nth(1);
+		expect(pollReplies).toHaveLength(1);
 		const runtime = chrome.runtime as { lastError?: { message: string } };
 		runtime.lastError = {
 			message: "The message port closed before a response was received.",
@@ -398,9 +438,11 @@ describe("offscreen messaging", () => {
 		pollReplies[0](undefined as unknown as OffscreenResponse);
 		runtime.lastError = undefined;
 
-		await vi.waitFor(() => expect(contextReplies).toHaveLength(1));
+		await contextQueries.nth(2);
+		expect(contextReplies).toHaveLength(1);
 		answerContexts(true);
-		await vi.waitFor(() => expect(pollReplies).toHaveLength(2));
+		await offscreenMessages.nth(2);
+		expect(pollReplies).toHaveLength(2);
 		const pausedStatus = { ...liveStatus, phase: "paused" as const };
 		pollReplies[1]({ ok: true, status: pausedStatus });
 
@@ -410,14 +452,23 @@ describe("offscreen messaging", () => {
 
 describe("recorder on browser pages", () => {
 	const clickOn = async (url: string) => {
-		onActionClicked({ id: 7, index: 2, windowId: 1, url } as chrome.tabs.Tab);
 		// No recorder document exists, however many times the worker asks.
-		await vi.waitFor(() => {
-			while (contextReplies.length > 0) answerContexts(false);
-			expect(
-				tabsApi.update.mock.calls.length + tabsApi.create.mock.calls.length,
-			).toBe(1);
-		});
+		vi.mocked(chrome.runtime.getContexts).mockImplementation(
+			(_filter, callback) => queueMicrotask(() => callback([])),
+		);
+		const opened = deferred<void>();
+		for (const open of [tabsApi.update, tabsApi.create]) {
+			const answer = open.getMockImplementation();
+			open.mockImplementation((...args: unknown[]) => {
+				answer?.(...args);
+				opened.resolve();
+			});
+		}
+		onActionClicked({ id: 7, index: 2, windowId: 1, url } as chrome.tabs.Tab);
+		await opened.promise;
+		expect(
+			tabsApi.update.mock.calls.length + tabsApi.create.mock.calls.length,
+		).toBe(1);
 	};
 	const capPage = expect.stringMatching(
 		/^chrome-extension:\/\/test\/how-it-works\.html\?recorder=open$/,
