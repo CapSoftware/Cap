@@ -4787,11 +4787,11 @@ impl EditorWindow {
     /// Redraw the paused frame once at the canvas's device-pixel size.
     ///
     /// Playback and paused interactions keep rendering at the saved preview
-    /// quality, so their cost does not change. With the default Half quality
-    /// that frame is smaller than a Retina canvas and gets magnified, so once
-    /// the preview has been still for `delay` (a pause, the end of a scrub or
-    /// an edit, a resize) the same frame is rendered again at the canvas size.
-    /// Full and Quarter are explicit choices and are drawn as chosen.
+    /// quality, so their cost does not change. Half and Full frames are
+    /// smaller than a large Retina canvas and get magnified, so once the
+    /// preview has been still for `delay` (a pause, the end of a scrub or an
+    /// edit, a resize) the same frame is rendered again at the canvas size.
+    /// Quarter is an explicit choice for speed and is drawn as chosen.
     pub(crate) fn schedule_sharp_preview(
         &mut self,
         delay: Duration,
@@ -4801,7 +4801,7 @@ impl EditorWindow {
         if self.playing {
             return SharpPreview::Playing;
         }
-        if self.preview_quality != crate::store::EditorPreviewQuality::Half {
+        if self.preview_quality == crate::store::EditorPreviewQuality::Quarter {
             return SharpPreview::ChosenQuality;
         }
         if self.preparing_presentation.is_some()
@@ -14387,6 +14387,26 @@ mod tests {
                 assert_eq!(editor.finish_ordinary_handoff(13, window, cx), None);
                 assert_eq!(editor.ordinary_handoff_frame, Some(12));
                 assert!(editor.preparing_presentation.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn full_gets_the_sharp_redraw_and_quarter_is_drawn_as_chosen(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.playing = false;
+                editor.preview_quality = crate::store::EditorPreviewQuality::Full;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::NoEngine
+                );
+                editor.preview_quality = crate::store::EditorPreviewQuality::Quarter;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::ChosenQuality
+                );
             });
         }
 
