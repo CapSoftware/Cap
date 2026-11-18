@@ -52,6 +52,7 @@ struct Draw {
     output: [u32; 2],
     crop: [f32; 4],
     target: [f32; 4],
+    preserve_alpha: bool,
 }
 
 fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
@@ -102,6 +103,7 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
         target_size,
         rounding_px: 0.0,
         corner_radii: [0.0; 4],
+        preserve_source_alpha: if draw.preserve_alpha { 1.0 } else { 0.0 },
         ..Default::default()
     };
     let frame_view = frame.create_view(&Default::default());
@@ -186,6 +188,7 @@ fn full_frame_draw(source: &Source, output: [u32; 2]) -> Draw {
         output,
         crop: [0.0, 0.0, source.width as f32, source.height as f32],
         target: [0.0, 0.0, output[0] as f32, output[1] as f32],
+        preserve_alpha: false,
     }
 }
 
@@ -234,4 +237,42 @@ fn shrunk_one_pixel_stripes_average_instead_of_beating() {
     // bring it to about 32.
     assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
     assert!(spread < 45.0, "spread {spread:.1}");
+}
+
+#[test]
+fn shrunk_cutout_edges_keep_their_colour() {
+    let Some(gpu) = gpu() else { return };
+    // White foreground on transparent black, as a background-removed camera
+    // frame: shrinking must soften the edge alpha, not grey the colour.
+    let source = Source::from_fn(192, 96, |x, y| {
+        if (40..150).contains(&x) && (20..76).contains(&y) {
+            [255, 255, 255, 255]
+        } else {
+            [0, 0, 0, 0]
+        }
+    });
+    let draw = Draw {
+        preserve_alpha: true,
+        ..full_frame_draw(&source, [64, 32])
+    };
+    let pixels = render(&gpu, &source, &draw);
+    let mut edge_pixels = 0;
+    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        let alpha = pixel[3] as i32;
+        // Blended over the transparent clear colour, a white pixel of any
+        // coverage has every channel equal to its alpha.
+        for channel in &pixel[..3] {
+            assert!(
+                (*channel as i32 - alpha).abs() <= 2,
+                "pixel {index} is {pixel:?}"
+            );
+        }
+        if (1..255).contains(&alpha) {
+            edge_pixels += 1;
+        }
+    }
+    assert!(
+        edge_pixels > 0,
+        "the shrunk edge should be partly transparent"
+    );
 }
