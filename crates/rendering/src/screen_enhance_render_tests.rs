@@ -159,7 +159,7 @@ async fn enhancement_off_exports_exactly_like_main() {
     let fixture = fixture(XY::new(96, 64)).await;
     let pixels = edge_pattern(96, 64);
     let off = project(ScreenEnhancement::default());
-    for scale in [1.0, 2.0] {
+    for scale in [0.5, 0.75, 1.0, 2.0] {
         let playback = render(&fixture, &off, &pixels, scale, RenderQuality::Playback).await;
         let export = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
         assert_eq!(rgba(&playback), rgba(&export), "scale {scale}");
@@ -172,7 +172,7 @@ async fn playback_never_enhances() {
     let pixels = edge_pattern(96, 64);
     let off = project(ScreenEnhancement::default());
     let on = project(ScreenEnhancement::on());
-    for scale in [1.0, 2.0] {
+    for scale in [0.5, 0.75, 1.0, 2.0] {
         let plain = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
         let playing = render(&fixture, &on, &pixels, scale, RenderQuality::Playback).await;
         assert_eq!(rgba(&plain), rgba(&playing), "scale {scale}");
@@ -186,7 +186,7 @@ async fn software_adapters_export_without_enhancement() {
     let pixels = edge_pattern(96, 64);
     let off = project(ScreenEnhancement::default());
     let on = project(ScreenEnhancement::on());
-    for scale in [1.0, 2.0] {
+    for scale in [0.5, 0.75, 1.0, 2.0] {
         let plain = render(&fixture, &off, &pixels, scale, RenderQuality::Export).await;
         let enhanced = render(&fixture, &on, &pixels, scale, RenderQuality::Export).await;
         assert_eq!(rgba(&plain), rgba(&enhanced), "scale {scale}");
@@ -251,6 +251,47 @@ async fn export_upscale_sharpens_edges_without_ringing() {
             assert!((63..=193).contains(&value), "ringing at {x},{y}: {value}");
         }
     }
+}
+
+#[tokio::test]
+async fn export_shrink_keeps_edges_sharper() {
+    let fixture = fixture(XY::new(192, 128)).await;
+    let pixels = edge_pattern(192, 128);
+    let plain = render(
+        &fixture,
+        &project(ScreenEnhancement::default()),
+        &pixels,
+        0.5,
+        RenderQuality::Export,
+    )
+    .await;
+    let enhanced = render(
+        &fixture,
+        &project(ScreenEnhancement::on()),
+        &pixels,
+        0.5,
+        RenderQuality::Export,
+    )
+    .await;
+    assert_ne!(rgba(&plain), rgba(&enhanced));
+
+    let soft = |frame: &RenderedFrame| {
+        let mut count = 0;
+        for y in 2..frame.height - 2 {
+            for x in 2..frame.width - 2 {
+                if (96..=160).contains(&luma_at(frame, x, y)) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    assert!(
+        soft(&enhanced) < soft(&plain),
+        "enhanced {} vs plain {} mid-grey pixels",
+        soft(&enhanced),
+        soft(&plain)
+    );
 }
 
 #[tokio::test]
