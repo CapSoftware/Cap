@@ -4061,8 +4061,6 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     }
 }
 
-/// The largest offered resolution, up to `largest`, that does not scale the
-/// project's output up. Exporting past the source only adds bytes.
 fn source_resolution(
     source: Option<XY<u32>>,
     options: &[ExportResolution],
@@ -4085,19 +4083,17 @@ fn source_resolution(
         .unwrap_or(smallest)
 }
 
-/// The lowest offered frame rate that keeps every source frame, capped at
-/// the highest offered.
 fn source_fps(source: Option<u32>, options: &[u32]) -> u32 {
     let highest = options.iter().copied().max().unwrap_or(30);
     let Some(source) = source else {
         return highest;
     };
-    // A variable-rate recording's average frame rate lands a few percent
-    // either side of the rate it was captured at.
+    // A variable-rate recording's average frame rate reads a little under
+    // the rate it was captured at (a 60 fps recording reads 57 to 59).
     options
         .iter()
         .copied()
-        .filter(|fps| fps * 10 >= source * 9)
+        .filter(|fps| u64::from(*fps) * 10 >= u64::from(source) * 9)
         .min()
         .unwrap_or(highest)
 }
