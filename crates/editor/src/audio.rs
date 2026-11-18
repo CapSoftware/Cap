@@ -2114,6 +2114,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         text_size_version: _,
         text_anim_version: _,
         auto_zoom_version: _,
+        auto_zoom_pending: _,
         markers: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
