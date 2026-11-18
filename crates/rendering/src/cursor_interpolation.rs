@@ -419,6 +419,16 @@ impl HoverChanges {
         Arc::clone(&self.times_ms.lock().unwrap())
     }
 
+    /// The times a cursor with these settings anchors to: none unless hover
+    /// anchors are chosen.
+    pub fn times_for(&self, cursor: &cap_project::CursorConfiguration) -> Arc<[f64]> {
+        if cursor.interaction_anchors && cursor.hover_anchors {
+            self.times_ms()
+        } else {
+            Arc::from(&[][..])
+        }
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation.load(std::sync::atomic::Ordering::Acquire)
     }

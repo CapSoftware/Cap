@@ -55,7 +55,7 @@ async fn preview_superseded_while_fresh(
     }
 }
 
-pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 8] {
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 9] {
     let click_spring = cursor.click_spring_config();
     [
         u32::from(cursor.raw),
@@ -66,6 +66,7 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
         click_spring.mass.to_bits(),
         click_spring.friction.to_bits(),
         u32::from(cursor.interaction_anchors),
+        u32::from(cursor.hover_anchors),
     ]
 }
 
@@ -84,7 +85,7 @@ struct PreviewCursorCacheEntry {
     recording_clip: u32,
     cursor: Arc<CursorEvents>,
     hover_generation: u64,
-    settings: [u32; 8],
+    settings: [u32; 9],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -148,6 +149,11 @@ impl PreviewCursorCache {
         let click_spring = project.cursor.click_spring_config();
         let settings = cursor_timeline_settings(&project.cursor);
         let (hover_generation, hover_times_ms) = hover_changes.snapshot();
+        let hover_times_ms = if project.cursor.interaction_anchors && project.cursor.hover_anchors {
+            hover_times_ms
+        } else {
+            Arc::from(&[][..])
+        };
 
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.recording_clip == recording_clip
@@ -727,7 +733,8 @@ impl EditorInstance {
     }
 
     fn spawn_hover_analysis(self: &Arc<Self>) {
-        if !self.project_config.1.borrow().cursor.interaction_anchors {
+        let cursor = self.project_config.1.borrow().cursor.clone();
+        if !(cursor.interaction_anchors && cursor.hover_anchors) {
             return;
         }
         let Some(studio) = self.meta.studio_meta() else {

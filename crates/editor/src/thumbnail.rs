@@ -89,7 +89,7 @@ impl EditorInstance {
         zoom.ensure_precomputed_until(1.0 / THUMBNAIL_FPS as f32);
         let cursor_timeline = PrecomputedCursorTimeline::from_project(
             &media.cursor,
-            &media.hover_changes.times_ms(),
+            &media.hover_changes.times_for(&project.cursor),
             &project,
         );
         let uniforms = ProjectUniforms::new_with_precomputed_cursor(

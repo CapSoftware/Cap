@@ -199,7 +199,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                         cursor_smoothing,
                         Some(click_spring),
                         project_config.cursor.interaction_anchors,
-                        &segment.hover_changes.times_ms(),
+                        &segment.hover_changes.times_for(&project_config.cursor),
                     ))
                 })
                 .collect();

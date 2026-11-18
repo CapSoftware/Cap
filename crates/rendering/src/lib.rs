@@ -1069,7 +1069,7 @@ pub async fn render_video_to_channel(
                 cursor_smoothing,
                 Some(click_spring),
                 project.cursor.interaction_anchors,
-                &segment.hover_changes.times_ms(),
+                &segment.hover_changes.times_for(&project.cursor),
             ))
         })
         .collect();
@@ -1644,7 +1644,7 @@ pub async fn render_video_to_channel_nv12(
                 cursor_smoothing,
                 Some(click_spring),
                 project.cursor.interaction_anchors,
-                &segment.hover_changes.times_ms(),
+                &segment.hover_changes.times_for(&project.cursor),
             ))
         })
         .collect();
