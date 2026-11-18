@@ -6,7 +6,7 @@ name: rc064 bench
 on:
   push:
     branches:
-      - "ci/rc064-**"
+      - "ci/rc064b-**"
 
 permissions:
   contents: read
