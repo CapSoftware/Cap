@@ -10,3 +10,4 @@ Sentry project when `NEXT_PUBLIC_SENTRY_DSN` is set. Performance tracing and
 Session Replay are disabled. Builds upload source maps when `SENTRY_AUTH_TOKEN`
 is available; keep that token in deployment secrets. Deployments without a DSN
 do not initialize Sentry.
+
