@@ -9,6 +9,30 @@ import {
 } from "@/utils/changelog";
 import { seoPages } from "../lib/seo-pages";
 
+const NON_INDEXABLE_PATHS = new Set([
+	"/home",
+	"/c",
+	"/s",
+	"/embed",
+	"/messenger",
+	"/login",
+	"/signup",
+	"/verify-otp",
+	"/onboarding",
+	"/checkout",
+	"/checkout/complete",
+	"/download/started",
+	"/redeem",
+]);
+const NON_INDEXABLE_PREFIXES = ["/admin", "/cli", "/mcp"];
+
+function isIndexablePath(routePath: string) {
+	if (NON_INDEXABLE_PATHS.has(routePath)) return false;
+	return !NON_INDEXABLE_PREFIXES.some(
+		(prefix) => routePath === prefix || routePath.startsWith(`${prefix}/`),
+	);
+}
+
 // Changelog list + platform filter + paginated pages. Pages 2+ live under
 // /page/<n>; lastModified is the newest entry visible on that page so crawlers
 // only refetch pages whose slice actually changed.
@@ -109,7 +133,7 @@ export default async function sitemap() {
 	// Add docs routes
 	const docs = getDocs();
 	const docsRoutes = docs.map((doc) => ({
-		path: `/docs/${doc.slug}`,
+		path: doc.slug === "introduction" ? "/docs" : `/docs/${doc.slug}`,
 		lastModified: new Date().toISOString(), // You might want to add a publishedAt to doc metadata
 	}));
 
@@ -140,7 +164,7 @@ export default async function sitemap() {
 		{ path: string; lastModified?: string }
 	>();
 	for (const route of combined) {
-		if (route.path !== "/home" && !uniqueByPath.has(route.path)) {
+		if (isIndexablePath(route.path) && !uniqueByPath.has(route.path)) {
 			uniqueByPath.set(route.path, route);
 		}
 	}

@@ -1572,14 +1572,28 @@ mod mac {
         super::MAIN_WINDOW_LEVEL + 1
     }
 
-    /// The level `windows.rs` gives every `TargetSelectOverlay`:
-    /// `CGWindowLevelForKey(10) - 1`, i.e. one below the recording controls
-    /// bar. Same mislabeled constant as [`recording_controls_level`] (key 10 is
-    /// `kCGModalPanelWindowLevelKey`, level 8), so the shipping overlay really
-    /// runs at level 7 -- above ordinary app windows, below the bar. Reproduced
-    /// verbatim rather than "fixed" from over here.
+    /// The target picker runs one level above the menu bar's status items
+    /// (`kCGStatusWindowLevelKey`, level 25; the menu bar itself is 24). At the
+    /// Tauri app's level 7 the menu bar sat over the overlay, so an area could
+    /// not be started or dragged into it (#1852).
     pub fn target_overlay_level() -> isize {
+        unsafe { CGWindowLevelForKey(9) as isize + 1 }
+    }
+
+    /// Where an Area overlay kept on screen as the recording outline goes once
+    /// the recording starts: the level every overlay had before #1852, one
+    /// below the recording controls bar (and the camera bubble), so the
+    /// stacking while recording is unchanged.
+    pub fn recording_area_level() -> isize {
         recording_controls_level() - 1
+    }
+
+    /// Set a panel's level outright, lowering it if needed. Same task-only rule
+    /// as every other ordering call here.
+    pub fn set_panel_level(native: &NativeWindow, level: isize) {
+        if native.0.level() != level {
+            native.0.setLevel(level);
+        }
     }
 
     /// A retained `NSWindow` that can outlive a `&Window` borrow -- what
@@ -3352,6 +3366,10 @@ mod stub {
     pub fn target_overlay_level() -> isize {
         0
     }
+    pub fn recording_area_level() -> isize {
+        0
+    }
+    pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
     pub fn teleprompter_level() -> isize {
         0
     }
@@ -3674,6 +3692,19 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn target_picker_sits_above_the_menu_bar_and_recording_stacking_is_unchanged() {
+        const MAIN_MENU_LEVEL: isize = 24;
+        const STATUS_LEVEL: isize = 25;
+        const POP_UP_MENU_LEVEL: isize = 101;
+        let picker = super::target_overlay_level();
+        assert!(picker > STATUS_LEVEL && picker > MAIN_MENU_LEVEL);
+        assert!(picker < POP_UP_MENU_LEVEL);
+        assert_eq!(super::recording_controls_level(), 8);
+        assert_eq!(super::recording_area_level(), 7);
+    }
+
     #[test]
     fn dock_hide_waits_for_the_latest_show_without_extending_on_read() {
         use std::time::{Duration, Instant};
