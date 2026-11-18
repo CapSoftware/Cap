@@ -7,8 +7,8 @@ use std::{
 };
 
 use cap_project::{
-    AudioMeta, CursorMeta, Cursors, MultipleSegment, ProjectConfiguration, ScreenEnhancement,
-    StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
+    AudioMeta, CursorMeta, Cursors, MultipleSegment, ProjectConfiguration, StudioRecordingMeta,
+    StudioRecordingStatus, VideoMeta,
 };
 
 use super::{
@@ -294,19 +294,22 @@ fn validate_configuration(
     }) {
         return Err("Timeline overlays require ordinary loading".into());
     }
-    // New recordings start with enhancement on; either untouched value is fine.
-    let screen_enhancement = if config.screen_enhancement == ScreenEnhancement::for_new_projects() {
-        config.screen_enhancement
-    } else {
-        ScreenEnhancement::default()
-    };
-    let expected = ProjectConfiguration {
-        timeline: config.timeline.clone(),
-        clips: config.clips.clone(),
-        screen_enhancement,
-        ..ProjectConfiguration::default()
-    };
-    if persisted_json_value(config)? != persisted_json_value(&expected)? {
+    // The recorder writes `for_new_project()`; a plain default is what
+    // earlier builds and tests stop with. Anything else was edited.
+    let written = persisted_json_value(config)?;
+    let mut untouched = false;
+    for base in [
+        ProjectConfiguration::for_new_project(),
+        ProjectConfiguration::default(),
+    ] {
+        let expected = ProjectConfiguration {
+            timeline: config.timeline.clone(),
+            clips: config.clips.clone(),
+            ..base
+        };
+        untouched |= written == persisted_json_value(&expected)?;
+    }
+    if !untouched {
         return Err("Edited or legacy configuration requires ordinary loading".into());
     }
     let mut indexes = HashSet::new();
@@ -828,7 +831,7 @@ impl PreparingProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_project::{MultipleSegments, RecordingMeta, RecordingMetaInner};
+    use cap_project::{MultipleSegments, RecordingMeta, RecordingMetaInner, ScreenEnhancement};
     use relative_path::RelativePathBuf;
 
     struct Fixture {
@@ -1235,25 +1238,45 @@ mod tests {
     #[test]
     fn preparing_projection_accepts_the_new_recording_enhancement_but_not_edits() {
         let mut fixture = Fixture::new(1);
-        fixture.configuration.screen_enhancement = ScreenEnhancement::for_new_projects();
+        fixture.configuration = ProjectConfiguration {
+            timeline: fixture.configuration.timeline.clone(),
+            ..ProjectConfiguration::for_new_project()
+        };
+        assert_eq!(
+            fixture.configuration.screen_enhancement,
+            ScreenEnhancement::for_new_projects()
+        );
         fixture.persist();
-        assert!(project(&fixture.recording, &fixture.claim()).is_ok());
+        assert!(fixture.project().is_ok());
 
         for edited in [
             ScreenEnhancement {
                 strength: 0.75,
                 ..ScreenEnhancement::for_new_projects()
             },
-            ScreenEnhancement {
-                strength: 0.75,
-                ..ScreenEnhancement::default()
-            },
+            ScreenEnhancement::default(),
         ] {
-            let mut fixture = Fixture::new(1);
             fixture.configuration.screen_enhancement = edited;
             fixture.persist();
-            assert!(project(&fixture.recording, &fixture.claim()).is_err());
+            assert!(fixture.project().is_err());
         }
+    }
+
+    #[test]
+    fn preparing_projection_accepts_the_new_project_configuration_but_not_edits_to_it() {
+        let mut fixture = Fixture::new(1);
+        fixture.configuration = ProjectConfiguration {
+            timeline: fixture.configuration.timeline.clone(),
+            ..ProjectConfiguration::for_new_project()
+        };
+        fixture.persist();
+        assert!(fixture.project().is_ok());
+
+        fixture.configuration.background.padding = 10.0;
+        fixture.persist();
+        let before = fixture.snapshot();
+        assert!(fixture.project().is_err());
+        assert_eq!(before, fixture.snapshot());
     }
 
     #[test]

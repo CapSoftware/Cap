@@ -2363,6 +2363,7 @@ background_blur = "Desenfoque del fondo"
 custom_position = "Posición de pantalla personalizada (arrastrada en el lienzo)"
 motion_blur = "Desenfoque de movimiento"
 padding = "Margen"
+padding_style = "Estilo de margen"
 rounded_corners = "Esquinas redondeadas"
 title = "Diseño"
 
@@ -2860,6 +2861,10 @@ timeline_unavailable = "La línea de tiempo del proyecto no está disponible."
 timeline_unreadable = "No se pudo leer la línea de tiempo del proyecto."
 title = "Mostrar teclado"
 uppercase = "Mayúsculas"
+
+[editor.tabs.padding]
+even = "Uniforme"
+proportional = "Proporcional"
 
 [editor.tabs.position]
 bottom_center = "Abajo al centro"

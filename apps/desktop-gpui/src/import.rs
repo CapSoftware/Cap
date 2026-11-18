@@ -787,17 +787,12 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     tracing::info!(path = %project_path.display(), "image import complete");
 }
 
-/// A new import starts from the defaults the editor would load for it, with
-/// the settings only new projects get.
+/// A new import starts from the settings every new project gets.
 fn write_new_import_project_config(project_path: &std::path::Path) {
     if project_path.join("project-config.json").exists() {
         return;
     }
-    let config = ProjectConfiguration {
-        screen_enhancement: cap_project::ScreenEnhancement::for_new_projects(),
-        ..ProjectConfiguration::default()
-    };
-    if let Err(error) = config.write(project_path) {
+    if let Err(error) = ProjectConfiguration::for_new_project().write(project_path) {
         tracing::warn!(path = %project_path.display(), "could not write the imported project config: {error}");
     }
 }
@@ -3387,7 +3382,11 @@ mod tests {
         );
         assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
 
-        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
+        let chroma_samples = if format == avformat::Pixel::NV12 {
+            2
+        } else {
+            1
+        };
         let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
         for (plane, channel, channels, source_width, source_height) in [
             (0, 0, 1, 8, 6),

@@ -498,6 +498,7 @@ fn editor_panels_match_the_literals_they_replaced() {
             "Background Blur",
         ),
         (tr::editor::sidebar::layout::padding(), "Padding"),
+        (tr::editor::sidebar::layout::padding_style(), "Padding Style"),
         (
             tr::editor::sidebar::layout::custom_position(),
             "Custom screen position (dragged on canvas)",

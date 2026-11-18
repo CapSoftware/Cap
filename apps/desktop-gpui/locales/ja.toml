@@ -2363,6 +2363,7 @@ background_blur = "背景のぼかし"
 custom_position = "カスタムの画面位置（キャンバスでドラッグ）"
 motion_blur = "モーションブラー"
 padding = "余白"
+padding_style = "余白のスタイル"
 rounded_corners = "角丸"
 title = "レイアウト"
 
@@ -2860,6 +2861,10 @@ timeline_unavailable = "プロジェクトのタイムラインを利用でき�
 timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
 title = "キーボードを表示"
 uppercase = "大文字"
+
+[editor.tabs.padding]
+even = "均等"
+proportional = "比例"
 
 [editor.tabs.position]
 bottom_center = "下中央"

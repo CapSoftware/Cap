@@ -313,19 +313,12 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: blacksmith-6vcpu-macos-15
-          # Cap still ships an Intel build, and Blacksmith has no Intel Macs.
-          - target: x86_64-apple-darwin
-            runner: macos-26-intel
           - target: x86_64-pc-windows-msvc
             runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
-        # The Intel build is not a merge gate and takes over an hour on a
-        # GitHub-hosted runner, so it runs on main and by hand, not on PRs.
-        exclude:
-          - settings:
-              target: x86_64-apple-darwin
-              runner: ${{ github.event_name == 'pull_request' && 'macos-26-intel' || 'none' }}
+        # The Intel macOS build runs only in nightly and release builds
+        # (desktop-release.yml), not in CI.
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
