@@ -300,8 +300,6 @@ const RowCopyButton = ({
 	</button>
 );
 
-// Orders with more than one license: the whole batch is what the buyer wants
-// to take away, so export comes first and each key fits on one line.
 const BulkLicenses = ({
 	gift,
 	duration,
@@ -334,7 +332,12 @@ const BulkLicenses = ({
 
 	return (
 		<>
-			<div className="grid gap-2.5 sm:grid-cols-2">
+			<div
+				className={classNames(
+					"grid gap-2.5",
+					open.length > 0 && "sm:grid-cols-2",
+				)}
+			>
 				<button
 					type="button"
 					onClick={() => downloadCsv({ gift, duration, licenses })}
@@ -343,24 +346,26 @@ const BulkLicenses = ({
 					<FileDown className="relative size-4" strokeWidth={2} />
 					<span className="relative">Download CSV</span>
 				</button>
-				<button
-					type="button"
-					onClick={copyAll}
-					className={classNames(BTN_SECONDARY, "w-full cursor-pointer gap-2")}
-				>
-					{copied === "all" ? (
-						<Check className="size-4 text-[#3F9974]" strokeWidth={2.5} />
-					) : (
-						<Copy className="size-4" strokeWidth={2} />
-					)}
-					<span aria-live="polite">
-						{copied === "all"
-							? "Copied"
-							: gift
-								? "Copy all links"
-								: "Copy all keys"}
-					</span>
-				</button>
+				{open.length > 0 ? (
+					<button
+						type="button"
+						onClick={copyAll}
+						className={classNames(BTN_SECONDARY, "w-full cursor-pointer gap-2")}
+					>
+						{copied === "all" ? (
+							<Check className="size-4 text-[#3F9974]" strokeWidth={2.5} />
+						) : (
+							<Copy className="size-4" strokeWidth={2} />
+						)}
+						<span aria-live="polite">
+							{copied === "all"
+								? "Copied"
+								: gift
+									? "Copy all links"
+									: "Copy all keys"}
+						</span>
+					</button>
+				) : null}
 			</div>
 
 			<div className="mt-7 flex items-baseline justify-between gap-3">
@@ -368,9 +373,11 @@ const BulkLicenses = ({
 					{gift ? "Gift links" : "License keys"}
 				</span>
 				<span className="text-[13px] tabular-nums text-[rgba(17,17,17,0.55)]">
-					{gift && open.length < licenses.length
-						? `${open.length} of ${licenses.length} not claimed yet`
-						: `${licenses.length} ${gift ? "links" : "keys"}`}
+					{gift && open.length === 0
+						? "All claimed"
+						: gift && open.length < licenses.length
+							? `${open.length} of ${licenses.length} not claimed yet`
+							: `${licenses.length} ${gift ? "links" : "keys"}`}
 				</span>
 			</div>
 			<ul className="mt-3 max-h-[min(460px,60vh)] divide-y divide-[#E6ECF2] overflow-y-auto rounded-[14px] border border-[#E1E7EE] bg-[#FAFBFD]">
@@ -990,10 +997,7 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					</Panel>
 				);
 			case "gifted":
-				if (
-					view.licenses.length > 1 &&
-					view.licenses.some((license) => !license.redeemed)
-				) {
+				if (view.licenses.length > 1) {
 					return (
 						<Panel className="p-4">
 							<BulkLicenses
@@ -1003,13 +1007,15 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 								copied={copied}
 								copy={copy}
 							/>
-							<p className={classNames(NOTE, "mt-5")}>
-								{view.email
-									? `We also emailed every link to ${view.email}. `
-									: ""}
-								Each link works once, and anyone who has it can claim it, so
-								send each one only to the person it is for.
-							</p>
+							{view.licenses.some((license) => !license.redeemed) ? (
+								<p className={classNames(NOTE, "mt-5")}>
+									{view.email
+										? `We also emailed every link to ${view.email}. `
+										: ""}
+									Each link works once, and anyone who has it can claim it, so
+									send each one only to the person it is for.
+								</p>
+							) : null}
 						</Panel>
 					);
 				}
