@@ -144,6 +144,10 @@ pub fn target_overlay_level() -> isize {
     1
 }
 
+pub fn recording_area_level() -> isize {
+    1
+}
+
 pub fn teleprompter_level() -> isize {
     1
 }
@@ -505,6 +509,8 @@ pub fn order_front_native(native: &NativeWindow) {
         );
     }
 }
+
+pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
 
 /// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
 /// after an overlay's own activation and loses to it.
