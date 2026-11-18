@@ -401,6 +401,10 @@ pub struct ProjectSummary {
     /// `editorInstance.recordings.segments.length`, which is what
     /// `SyncOffsetsConfig` iterates: offsets are per *recording* clip.
     pub recording_clips: usize,
+    /// Each recording clip's display and camera frame rate as the recorder
+    /// stored it in `recording-meta.json`: the rate it captured at, where the
+    /// probed rate in `recordings` is the track's average.
+    pub recorded_fps: Vec<(u32, Option<u32>)>,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -547,6 +551,22 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             .and_then(|segment| segment.mic.as_ref())
             .map(|mic| mic.channels),
         recording_clips: recordings.segments.len(),
+        recorded_fps: match studio.as_ref() {
+            StudioRecordingMeta::SingleSegment { segment } => vec![(
+                segment.display.fps,
+                segment.camera.as_ref().map(|camera| camera.fps),
+            )],
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|segment| {
+                    (
+                        segment.display.fps,
+                        segment.camera.as_ref().map(|camera| camera.fps),
+                    )
+                })
+                .collect(),
+        },
     })
 }
 
@@ -16109,6 +16129,7 @@ mod tests {
                             has_system_audio: false,
                             mic_channels: None,
                             recording_clips: 1,
+                            recorded_fps: Vec::new(),
                         },
                         window,
                         cx,
@@ -16256,6 +16277,7 @@ mod tests {
                             has_system_audio: false,
                             mic_channels: None,
                             recording_clips: 1,
+                            recorded_fps: Vec::new(),
                         },
                         window,
                         cx,
