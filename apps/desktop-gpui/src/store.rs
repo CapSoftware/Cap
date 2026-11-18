@@ -1017,7 +1017,7 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 /// fallbacks in `general.tsx` -- i.e. what the shipping page *shows* for a key
 /// that is not in the file. `enableNativeCameraPreview` disagrees with the
 /// Rust struct's own `#[serde(default)]`; the page is the authority here
-/// because this is a page. `autoZoomOnClicks` is on unless turned off.
+/// because this is a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
     pub theme: AppTheme,

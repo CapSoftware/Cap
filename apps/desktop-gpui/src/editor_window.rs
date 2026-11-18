@@ -6773,9 +6773,8 @@ impl EditorWindow {
         }
     }
 
-    /// A new recording gets its zooms once, the first time it opens, when
-    /// Auto zoom on clicks is on. They become the project's starting point
-    /// rather than an undo step, and never replace zooms already there.
+    /// Generated zooms become the first history entry rather than an undo
+    /// step, so undo cannot strip them from a recording that opened with them.
     pub(crate) fn apply_pending_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project.auto_zoom_pending {
             return;

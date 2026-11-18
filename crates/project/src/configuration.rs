@@ -3174,8 +3174,8 @@ pub struct ProjectConfiguration {
     /// [`crate::auto_zoom::AUTO_ZOOM_VERSION`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub auto_zoom_version: u32,
-    /// Set on a new project until the editor first opens it, which is when
-    /// its zooms are generated if the user wants them.
+    /// Only new projects carry it, and the editor's first open clears it, so
+    /// saved projects can never have zooms generated over them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_zoom_pending: bool,
     #[serde(

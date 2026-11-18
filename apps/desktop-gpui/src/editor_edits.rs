@@ -251,8 +251,8 @@ impl ProjectHistory {
         self.count > 0
     }
 
-    /// Nothing recorded since the project loaded and no gesture in progress,
-    /// including one that has changed the project but not yet committed.
+    /// A paused gesture changes the project before it records an entry, so
+    /// `can_undo` alone reads a drag in progress as untouched.
     pub fn is_untouched(&self) -> bool {
         self.entries.len() == 1 && self.paused == 0 && !self.dirty
     }
@@ -2508,10 +2508,6 @@ pub fn clip_trim_end(
 // Auto zoom
 // ---------------------------------------------------------------------------
 
-/// A new project's first open. Clears the pending flag for good and, when
-/// the project is still as recorded, auto zoom is on and the timeline has
-/// no zooms yet, fills the zoom track from the recorded clicks. Returns
-/// whether zooms were added.
 pub fn settle_pending_auto_zoom(
     project: &mut ProjectConfiguration,
     clicks_by_clip: &[Vec<CursorClickEvent>],
