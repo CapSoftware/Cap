@@ -68,7 +68,16 @@ impl<T> TrackReceiver<T> {
             tokio::select! {
                 biased;
                 Ok(rx) = self.next.recv_async() => self.rx = rx,
-                frame = self.rx.recv_async() => return frame,
+                frame = self.rx.recv_async() => match frame {
+                    Ok(frame) => return Ok(frame),
+                    // `attach` queues the replacement before it lets the old
+                    // queue close, so a switch that closed it between the two
+                    // polls has its replacement waiting here.
+                    Err(closed) => match self.next.try_recv() {
+                        Ok(rx) => self.rx = rx,
+                        Err(_) => return Err(closed),
+                    },
+                },
             }
         }
     }
