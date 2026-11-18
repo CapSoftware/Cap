@@ -939,9 +939,7 @@ impl RecordingSegmentDecoders {
 
         if needs_display {
             let screen_decoder = match (&self.source_video, fetch) {
-                (Some(video), FrameFetch::Still) => {
-                    video.decoder().await.unwrap_or(&self.screen)
-                }
+                (Some(video), FrameFetch::Still) => video.decoder().await.unwrap_or(&self.screen),
                 _ => &self.screen,
             };
             let (screen, camera) = tokio::join!(
