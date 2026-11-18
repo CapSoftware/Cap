@@ -310,6 +310,7 @@ fn wants_hover_analysis(project: &ProjectConfiguration) -> bool {
             timeline
                 .style_segments
                 .iter()
+                .filter(|style| style.is_active_at(style.start))
                 .filter_map(|style| style.overrides.cursor.as_ref())
                 .any(wants)
         })
@@ -2333,6 +2334,13 @@ mod tests {
         .unwrap();
         assert!(!styled.cursor.hover_anchors);
         assert!(wants_hover_analysis(&styled));
+
+        let mut disabled = styled.clone();
+        disabled.timeline.as_mut().unwrap().style_segments[0].enabled = false;
+        assert!(!wants_hover_analysis(&disabled));
+        let mut empty = styled;
+        empty.timeline.as_mut().unwrap().style_segments[0].end = 1.0;
+        assert!(!wants_hover_analysis(&empty));
     }
 
     #[test]
