@@ -474,6 +474,7 @@ pub struct SegmentedVideoMuxer {
     segment_duration: Duration,
     preset: H264Preset,
     output_size: Option<(u32, u32)>,
+    encoder_priority: Option<&'static [&'static str]>,
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     state: Option<SegmentedEncoderState>,
     pause: SharedPauseState,
@@ -487,6 +488,8 @@ pub struct SegmentedVideoMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
+    /// Encoders to try, in order, instead of the usual hardware-first choice.
+    pub encoder_priority: Option<&'static [&'static str]>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
@@ -498,6 +501,7 @@ impl Default for SegmentedVideoMuxerConfig {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
+            encoder_priority: None,
             shared_pause_state: None,
             segment_tx: None,
         }
@@ -535,6 +539,7 @@ impl Muxer for SegmentedVideoMuxer {
             segment_duration: config.segment_duration,
             preset: config.preset,
             output_size: config.output_size,
+            encoder_priority: config.encoder_priority,
             segment_tx: config.segment_tx,
             state: None,
             pause,
@@ -693,12 +698,21 @@ impl SegmentedVideoMuxer {
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
-        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
-            self.base_path.clone(),
-            self.video_config,
-            encoder_config,
-            self.timed_fragments,
-        )?;
+        let mut encoder = match self.encoder_priority {
+            Some(priority) => SegmentedVideoEncoder::init_with_encoder_priority(
+                self.base_path.clone(),
+                self.video_config,
+                encoder_config,
+                self.timed_fragments,
+                priority,
+            )?,
+            None => SegmentedVideoEncoder::init_with_timed_fragments(
+                self.base_path.clone(),
+                self.video_config,
+                encoder_config,
+                self.timed_fragments,
+            )?,
+        };
         if let Some(tx) = &self.segment_tx {
             encoder.set_segment_callback(tx.clone());
         }

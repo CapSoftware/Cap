@@ -478,6 +478,7 @@ mod tests {
                     cursors: cap_project::Cursors::Correct(Default::default()),
                     status: Some(StudioRecordingStatus::NeedsRemux),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
             upload: None,

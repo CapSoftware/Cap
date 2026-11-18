@@ -2902,6 +2902,10 @@ impl RecoveryManager {
                     .meta
                     .studio_meta()
                     .map_or(0, StudioRecordingMeta::cursor_shape_version),
+                audio_only: recording
+                    .meta
+                    .studio_meta()
+                    .is_some_and(StudioRecordingMeta::is_audio_only),
             },
         })
     }
@@ -5254,6 +5258,7 @@ mod clean_studio_snapshot_tests {
                     cursors: Cursors::default(),
                     status: Some(status),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         }
@@ -7306,6 +7311,7 @@ mod empty_orphan_segment_tests {
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -7720,6 +7726,7 @@ mod transactional_recovery_tests {
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -8422,6 +8429,7 @@ mod transactional_recovery_tests {
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
