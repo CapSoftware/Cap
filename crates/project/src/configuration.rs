@@ -3175,7 +3175,7 @@ pub struct ProjectConfiguration {
     )]
     pub markers: Vec<TimelineMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_visuals: Option<AudioVisualsConfiguration>,
+    pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
