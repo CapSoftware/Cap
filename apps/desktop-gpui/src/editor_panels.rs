@@ -4680,15 +4680,23 @@ impl EditorWindow {
                 .flex_1()
                 .flex()
                 .justify_center()
-                .py(px(10.))
-                .rounded(px(9.6))
+                .py(px(7.))
+                .rounded(px(8.))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(if selected {
-                    Hsla::from(theme.gray_12)
+                    Hsla::from(theme.editor.text_1)
                 } else {
-                    Hsla::from(theme.gray_11)
+                    Hsla::from(theme.editor.text_2)
                 })
                 .when(locked, |this| this.opacity(0.5))
-                .when(selected, |this| this.bg(Hsla::from(theme.gray_3)))
+                .when(selected, |this| {
+                    this.bg(theme.editor.pill_fill())
+                        .shadow(theme.editor.pill_shadow())
+                })
+                .when(!selected && !locked, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                })
                 .child(label)
                 .when(!locked, |this| {
                     this.on_click(cx.listener(move |this, _, window, cx| {
@@ -4706,10 +4714,10 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_12))
-                    .p(px(1.))
+                    .rounded(px(10.))
+                    .bg(Hsla::from(theme.editor.ctl))
+                    .shadow(theme.editor.trough_ring())
+                    .p(px(2.))
                     .child(tab(
                         tr::editor::panel::zoom::auto(),
                         "zoom-mode-auto",
@@ -5181,7 +5189,8 @@ impl EditorWindow {
                 .text_size(px(11.))
                 .font_weight(FontWeight::MEDIUM)
                 .when(selected, |this| {
-                    this.bg(Hsla::from(theme.editor.ctl_active))
+                    this.bg(theme.editor.pill_fill())
+                        .shadow(theme.editor.pill_shadow())
                         .text_color(Hsla::from(theme.editor.text_1))
                 })
                 .when(!selected, |this| {

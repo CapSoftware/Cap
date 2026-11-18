@@ -474,7 +474,7 @@ impl EditorWindow {
             .h_full()
             .min_h_0()
             .w(px(self.panel_width(viewport_width)))
-            .rounded(px(12.))
+            .rounded(px(crate::theme::EDITOR_CARD_RADIUS))
             .border_1()
             .border_color(if focused {
                 Hsla::from(theme.editor.line_strong)

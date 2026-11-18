@@ -409,8 +409,8 @@ impl EditorWindow {
             .overflow_y_scroll()
             .rounded(px(12.))
             .border_1()
-            .border_color(gpui::Hsla::from(theme.editor.line))
-            .bg(gpui::Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .shadow(theme.editor.pop_shadow())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(

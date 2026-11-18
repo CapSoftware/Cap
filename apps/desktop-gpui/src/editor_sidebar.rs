@@ -3098,7 +3098,8 @@ impl EditorWindow {
                                     .rounded(px(6.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .when(selected, |this| {
-                                        this.bg(Hsla::from(theme.editor.ctl_hover))
+                                        this.bg(theme.editor.pill_fill())
+                                            .shadow(theme.editor.pill_shadow())
                                             .text_color(Hsla::from(theme.editor.text_1))
                                     })
                                     .when(!selected, |this| {
@@ -4001,16 +4002,16 @@ impl EditorWindow {
                 )
                 .flex()
                 .row_height(px(28.))
-                .track(px(3.), Hsla::from(theme.editor.ctl_active))
+                .track(px(4.), Hsla::from(theme.editor.ctl_active))
                 .fill(Hsla::from(if disabled {
                     theme.editor.text_3
                 } else {
                     theme.editor.accent
                 }))
                 .thumb(
-                    px(14.),
+                    px(16.),
                     Hsla::from(theme.editor.thumb),
-                    Some(gpui::hsla(0., 0., 0., 0.12)),
+                    Some(gpui::hsla(0., 0., 0., 0.10)),
                 )
                 .thumb_shadow()
                 .when(!disabled, |this| {

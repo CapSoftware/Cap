@@ -9338,8 +9338,8 @@ impl EditorWindow {
             .gap(px(8.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .p(px(6.))
             .shadow(theme.editor.pop_shadow())
             .on_mouse_down(
@@ -9791,10 +9791,11 @@ impl EditorWindow {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .bg(if selected {
-                    Hsla::from(theme.editor.ctl_active)
+                    theme.editor.pill_fill()
                 } else {
                     gpui::transparent_black()
                 })
+                .when(selected, |this| this.shadow(theme.editor.pill_shadow()))
                 .text_color(Hsla::from(if selected {
                     theme.editor.text_1
                 } else {
@@ -9825,8 +9826,8 @@ impl EditorWindow {
             .gap(px(8.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .p(px(6.))
             .shadow(theme.editor.pop_shadow())
             .occlude()
@@ -10243,8 +10244,8 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
@@ -10512,8 +10513,8 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .overflow_hidden()
                         .child(
@@ -10710,8 +10711,8 @@ impl EditorWindow {
             .gap(px(2.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .shadow(theme.editor.pop_shadow())
             .child(
                 menu_row(
@@ -10924,8 +10925,8 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
@@ -11522,19 +11523,16 @@ impl EditorWindow {
                 .rev()
                 .copied()
                 .collect();
-        let selected_bg = if theme.is_dark() {
-            gpui::hsla(0., 0., 1., 0.12)
-        } else {
-            Hsla::from(editor.card)
-        };
+        let selected_bg = editor.pill_fill();
         div()
             .id("preview-quality")
             .flex()
             .flex_row()
             .flex_none()
             .p(px(2.))
-            .rounded(px(8.))
+            .rounded(px(9.))
             .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
             .children(qualities.iter().enumerate().map(|(index, quality)| {
                 let quality = *quality;
                 let selected = quality == self.preview_quality;
@@ -11549,12 +11547,14 @@ impl EditorWindow {
                     .h(px(24.))
                     .min_w(px(24.))
                     .px(px(10.))
-                    .rounded(px(6.))
+                    .rounded(px(7.))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .map(|this| {
                         if selected {
-                            this.bg(selected_bg).text_color(Hsla::from(editor.text_1))
+                            this.bg(selected_bg)
+                                .shadow(editor.pill_shadow())
+                                .text_color(Hsla::from(editor.text_1))
                         } else {
                             this.text_color(Hsla::from(editor.text_2))
                                 .cursor_pointer()
@@ -11609,7 +11609,7 @@ impl EditorWindow {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .bg(Hsla::from(theme.editor.card))
+            .bg(Hsla::from(theme.editor.window))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Left {
                     this.focus_root(window, cx);
@@ -12287,14 +12287,15 @@ impl EditorWindow {
                     .gap(px(5.))
                     .pl(px(6.))
                     .pr(px(8.))
-                    .rounded(px(6.))
+                    .rounded(px(7.))
                     .cursor_pointer()
-                    .bg(Hsla::from(theme.editor.text_1))
-                    .hover(|style| style.opacity(0.85))
-                    .active(|style| style.opacity(0.7))
+                    .bg(theme.editor.pill_fill())
+                    .shadow(theme.editor.pill_shadow())
+                    .hover(|style| style.bg(Hsla::from(theme.editor.ctl_active)))
+                    .active(|style| style.opacity(0.75))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.card))
+                    .text_color(Hsla::from(theme.editor.text_1))
                     .child(
                         svg()
                             .path(if self.add_track.is_some() {
@@ -12304,7 +12305,7 @@ impl EditorWindow {
                             })
                             .size(px(12.))
                             .flex_none()
-                            .text_color(Hsla::from(theme.editor.card)),
+                            .text_color(Hsla::from(theme.editor.accent)),
                     )
                     .child(
                         div()
@@ -13372,11 +13373,6 @@ impl Render for EditorWindow {
                                             .flex_1()
                                             .min_w_0()
                                             .min_h_0()
-                                            .rounded(px(12.))
-                                            .border_1()
-                                            .border_color(self.card_line())
-                                            .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
                                             .overflow_hidden()
                                             .child(self.render_player(cx)),
                                     )
@@ -13398,17 +13394,11 @@ impl Render for EditorWindow {
                                     .px(px(8.))
                                     .h(px(layout.timeline_height))
                                     .child(
-                                        div()
-                                            .size_full()
-                                            .rounded(px(12.))
-                                            .border_1()
-                                            .border_color(self.card_line())
-                                            .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
-                                            .overflow_hidden()
-                                            .child(self.timeline_view.clone().cached(
+                                        div().size_full().overflow_hidden().child(
+                                            self.timeline_view.clone().cached(
                                                 StyleRefinement::default().w_full().h_full(),
-                                            )),
+                                            ),
+                                        ),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the

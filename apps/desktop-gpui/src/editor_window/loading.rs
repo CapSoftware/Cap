@@ -40,7 +40,7 @@ pub(super) fn preview(theme: &Theme, animated: bool) -> AnyElement {
         .items_center()
         .justify_center()
         .p(px(24.))
-        .bg(Hsla::from(theme.editor.card))
+        .bg(Hsla::from(theme.editor.window))
         .child(pulse(
             "editor-preview-skeleton",
             div()
