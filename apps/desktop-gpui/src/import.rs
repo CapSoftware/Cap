@@ -1473,6 +1473,7 @@ struct KeepPlan {
     fps: u32,
     first_pts: i64,
     packets: u64,
+    untagged_matrix: Option<ImportMatrix>,
 }
 
 fn keep_stream_ineligibility(
@@ -1613,6 +1614,20 @@ fn plan_keep(
     let seconds = |ticks: i64| {
         ticks as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator())
     };
+    // An untagged source gets the matrix a re-encode would read it with and
+    // tag it as, so keeping it does not change its colours.
+    let untagged_matrix = {
+        let parameters = unsafe { &*stream.parameters().as_ptr() };
+        (parameters.color_space == ffmpeg::ffi::AVColorSpace::AVCOL_SPC_UNSPECIFIED).then(|| {
+            SourceColor::new(
+                avformat::Pixel::YUV444P,
+                ffmpeg::color::Space::Unspecified,
+                ffmpeg::color::Range::MPEG,
+                parameters.height.max(0) as u32,
+            )
+            .output()
+        })
+    };
     let max_interval_ticks = (KEEP_MAX_KEYFRAME_INTERVAL_SECS * f64::from(time_base.denominator())
         / f64::from(time_base.numerator().max(1))) as i64;
 
@@ -1680,6 +1695,7 @@ fn plan_keep(
         fps,
         first_pts,
         packets: presentation.len() as u64,
+        untagged_matrix,
     })
 }
 
@@ -1737,6 +1753,25 @@ fn keep_source_video(
         stream.set_parameters(source_stream.parameters());
         stream.set_time_base(source_time_base);
         stream.set_rate(source_stream.avg_frame_rate());
+        if let Some(matrix) = plan.untagged_matrix {
+            let (space, primaries) = match matrix {
+                ImportMatrix::Bt709 => (
+                    ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709,
+                    ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709,
+                ),
+                ImportMatrix::Bt601 => (
+                    ffmpeg::ffi::AVColorSpace::AVCOL_SPC_SMPTE170M,
+                    ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_SMPTE170M,
+                ),
+            };
+            unsafe {
+                let parameters = &mut *(*stream.as_mut_ptr()).codecpar;
+                parameters.color_space = space;
+                parameters.color_primaries = primaries;
+                parameters.color_trc = ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+                parameters.color_range = ffmpeg::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+            }
+        }
         stream.index()
     };
 
@@ -1843,7 +1878,11 @@ fn keep_source_video(
         .map_err(|e| format!("Failed to write trailer: {e}"))?;
     drop(output);
 
-    if !kept_color_reads_back(output_path)? {
+    let expected_space = plan.untagged_matrix.map(|matrix| match matrix {
+        ImportMatrix::Bt709 => ffmpeg::color::Space::BT709,
+        ImportMatrix::Bt601 => ffmpeg::color::Space::SMPTE170M,
+    });
+    if !kept_color_reads_back(output_path, expected_space)? {
         return Err(KeepError::Ineligible("colour tags"));
     }
 
@@ -1856,7 +1895,10 @@ fn keep_source_video(
 /// it: the stream tags the native decoders' paths probe, and the decoded
 /// frames the FFmpeg path converts. A bitstream that names a matrix of its
 /// own overrides the container's tag in the frames.
-fn kept_color_reads_back(path: &Path) -> Result<bool, String> {
+fn kept_color_reads_back(
+    path: &Path,
+    expected: Option<ffmpeg::color::Space>,
+) -> Result<bool, String> {
     let mut input =
         avformat::input(path).map_err(|e| format!("Failed to reopen kept video: {e}"))?;
     let stream = input
@@ -1870,6 +1912,9 @@ fn kept_color_reads_back(path: &Path) -> Result<bool, String> {
         .video()
         .map_err(|e| format!("Failed to create decoder: {e}"))?;
     let tagged = decoder.color_space();
+    if expected.is_some_and(|expected| expected != tagged) {
+        return Ok(false);
+    }
     let mut frame = ffmpeg::frame::Video::empty();
     let mut decoded = false;
     for (stream, packet) in input.packets() {
@@ -4288,8 +4333,50 @@ mod tests {
                 "{kept} vs {original}"
             );
         }
-        assert_eq!(stream_tags(&output), stream_tags(&source));
-        assert_eq!(stream_tags(&output).0, avformat::Pixel::YUV444P);
+        assert_eq!(
+            stream_tags(&output),
+            (
+                avformat::Pixel::YUV444P,
+                ffmpeg::color::Space::SMPTE170M,
+                ffmpeg::color::Range::MPEG
+            )
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn untagged_hd_is_kept_with_the_bt709_tag_a_reencode_writes() {
+        let Some((root, source, output)) = import_x264_source(
+            "keep-hd-untagged",
+            X264Source {
+                width: 1280,
+                height: 720,
+                frames: 4,
+                ..X264Source::new(avformat::Pixel::YUV444P)
+            },
+        ) else {
+            return;
+        };
+        assert_eq!(video_packets(&output), video_packets(&source));
+        assert_eq!(stream_tags(&output).1, ffmpeg::color::Space::BT709);
+        let mut input = avformat::input(&output).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                if decoder.receive_frame(&mut frame).is_ok() {
+                    break;
+                }
+            }
+        }
+        assert_eq!(frame.color_space(), ffmpeg::color::Space::BT709);
         std::fs::remove_dir_all(root).unwrap();
     }
 
