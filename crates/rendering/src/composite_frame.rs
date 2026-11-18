@@ -425,10 +425,13 @@ impl CompositeVideoFramePipeline {
         #[cfg(target_os = "macos")]
         let usage = wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST;
         #[cfg(not(target_os = "macos"))]
         let usage = wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST;
         device.create_texture(
             &(wgpu::TextureDescriptor {
