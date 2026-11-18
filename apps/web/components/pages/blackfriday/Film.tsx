@@ -1,10 +1,9 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
-import { CapPlayer } from "@/components/cap-player/CapPlayer";
-import { warmSource } from "@/components/cap-player/source";
 import { FILM } from "./content";
 import { GHOST } from "./theme";
 
@@ -12,7 +11,14 @@ export const FILM_EVENT = "cap:black-friday-film";
 
 const SOURCE = { hls: FILM.hls, mp4: FILM.mp4 };
 
-/** The film inline, served by Cap Infra: a poster until someone presses play. */
+const loadPlayer = () =>
+	import("@/components/cap-player/CapPlayer").then((m) => m.CapPlayer);
+
+const CapPlayer = dynamic(loadPlayer, {
+	ssr: false,
+	loading: () => <div className="absolute inset-0 bg-black" />,
+});
+
 export function Film() {
 	const frame = useRef<HTMLDivElement>(null);
 	const warmed = useRef(false);
@@ -21,18 +27,29 @@ export function Film() {
 	const warm = () => {
 		if (warmed.current) return;
 		warmed.current = true;
-		warmSource(SOURCE);
+		void loadPlayer();
+		void import("@/components/cap-player/source").then((m) =>
+			m.warmSource(SOURCE),
+		);
 	};
 
 	const play = (location: string) => {
 		warm();
-		setPlaying(true);
+		const video = frame.current?.querySelector("video");
+		if (playing && video) void video.play().catch(() => {});
+		else setPlaying(true);
 		trackEvent("black_friday_film_played", { cta_location: location });
 	};
 
 	useEffect(() => {
 		const onPlay = () => {
-			frame.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+			const reduce = window.matchMedia(
+				"(prefers-reduced-motion: reduce)",
+			).matches;
+			frame.current?.scrollIntoView({
+				behavior: reduce ? "auto" : "smooth",
+				block: "center",
+			});
 			play("hero");
 		};
 		window.addEventListener(FILM_EVENT, onPlay);
@@ -92,7 +109,6 @@ export function Film() {
 	);
 }
 
-/** The hero's "Watch the film": scrolls down to the film and starts it. */
 export function WatchFilm() {
 	return (
 		<button
