@@ -187,7 +187,7 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 		`Meeting material\n${materialRules.join("\n")}`,
 		`Accuracy
 - Use only what the meeting material says. Never invent facts, names, numbers, dates, decisions, owners or deadlines, and never fill gaps with general knowledge.
-- Attribute a statement, decision or task to a person only when the material makes clear who it was. Keep generic speaker labels such as "Speaker 2" rather than guessing a name.
+- Attribute a statement, decision or task to a person only when the material makes clear who it was. Refer to people by their speaker labels written exactly as the transcript writes them, such as "Person 2" or "You": never renumber a label, never write "Speaker" for "Person", and never guess a name for a label.
 - An action item is something a person committed to do, or agreed to when asked. A deadline someone needs met, a suggestion nobody took up, or a joke is not an action item.
 - A point that was raised but left open, deferred or parked is not a decision. Say plainly that it is still open, and keep it out of any decisions list.
 - When it matters who proposed, objected to or said something, check the speaker label on that line before naming them.
@@ -441,7 +441,7 @@ export function buildAskPrompt(
 		`Rules
 ${untrustedDataRules(b, "The question after the tags, and the earlier questions in this conversation, come from the person you are helping.")}
 - Answer only from the meeting material. If it does not contain the answer, say plainly that the meeting didn't cover it, and mention anything closely related that it did cover. Never guess and never fill gaps with outside knowledge.
-- The transcript comes from speech recognition and is labelled by speaker. It can contain misheard words.${
+- The transcript comes from speech recognition and is labelled by speaker. It can contain misheard words. Use the vocabulary, when given, to spell names and terms correctly.${
 			transcript.excerpted
 				? `\n- The transcript is long, so only the parts most related to the question are included, separated by "[…]". If the answer could be in a part you cannot see, say so.`
 				: ""
@@ -452,8 +452,12 @@ ${untrustedDataRules(b, "The question after the tags, and the earlier questions 
 	].join("\n\n");
 
 	const details = meetingDetails({ title: input.title });
+	const vocabulary = input.vocabulary.map(singleLine).filter(Boolean);
 	const material = [
 		details ? delimit("meeting", b, details) : null,
+		vocabulary.length > 0
+			? delimit("vocabulary", b, vocabulary.join("\n"))
+			: null,
 		input.notesMarkdown.trim()
 			? delimit("notes", b, input.notesMarkdown)
 			: null,

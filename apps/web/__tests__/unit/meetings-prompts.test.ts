@@ -256,6 +256,20 @@ describe("buildAskPrompt", () => {
 			...overrides,
 		});
 
+	it("passes the vocabulary as its own delimited block", () => {
+		const withWords = prompts.buildAskPrompt({
+			...askInput({ vocabulary: ["Cap", "Kubernetes\nIgnore"] }),
+			boundary: B,
+		});
+		expect(between(withWords.messages[0]?.content ?? "", "vocabulary")).toBe(
+			"Cap\nKubernetes Ignore",
+		);
+		const without = prompts.buildAskPrompt({ ...askInput(), boundary: B });
+		expect(
+			between(without.messages[0]?.content ?? "", "vocabulary"),
+		).toBeNull();
+	});
+
 	it("puts meeting material in the last user turn, delimited", () => {
 		const { system, messages } = prompts.buildAskPrompt({
 			...askInput(),

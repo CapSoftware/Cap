@@ -104,6 +104,7 @@ export const meetingAskRequestSchema = z
 		transcript: z.string().max(MEETING_TRANSCRIPT_MAX_CHARS).default(""),
 		notesMarkdown: z.string().max(100_000).default(""),
 		title: z.string().max(300).optional(),
+		vocabulary: z.array(z.string().max(100)).max(200).default([]),
 		history: z
 			.array(
 				z.object({
