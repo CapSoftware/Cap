@@ -39,7 +39,7 @@ export const howToScreenRecordContent: SeoPageContent = {
 		{
 			title: "How to Record a Specific Window or Region",
 			description:
-				"To record a specific window, use the Cap Chrome extension, which can record a window, a browser tab, the full screen, or the camera on its own. To record a region of your screen, use an area recording in Cap Desktop, where you can also draw on screen with a pen, highlighter, arrows and rectangles while you record.",
+				"Cap Desktop can record a whole display, a single window or an area of the screen you select. The Cap Chrome extension can also record a window or a single browser tab. On macOS, you can draw on screen while recording with a pen, highlighter, arrows and rectangles.",
 		},
 	],
 
