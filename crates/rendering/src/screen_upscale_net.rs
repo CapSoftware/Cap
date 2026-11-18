@@ -514,7 +514,6 @@ mod tests {
             .collect()
     }
 
-    /// The network evaluated directly from its tensors on the CPU.
     fn cpu_network(pixels: &[u8], size: [u32; 2], bytes: &[u8], layers: usize) -> Vec<f32> {
         let (w, h) = (size[0] as i32, size[1] as i32);
         let at = |x: i32, y: i32| (y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize;
