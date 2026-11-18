@@ -1,7 +1,3 @@
-//! Turns audio files that already exist, such as a meeting's microphone and
-//! system audio tracks, into an audio-only Studio project the editor opens
-//! like any recording.
-
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -18,7 +14,6 @@ use ffmpeg::util::rational::Rational as FFRational;
 
 const SEGMENT_DIR: &str = "content/segments/segment-0";
 
-/// The audio a project is made from. At least one is required.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioProjectSources {
     pub microphone: Option<PathBuf>,
@@ -242,7 +237,7 @@ mod tests {
                 Duration::ZERO,
                 Duration::from_secs(1),
                 Duration::from_secs(2),
-                Duration::from_millis(2_500) - Duration::from_secs(1) / 30,
+                Duration::from_millis(2_500).saturating_sub(Duration::from_secs(1) / 30),
             ]
         );
         assert_eq!(
