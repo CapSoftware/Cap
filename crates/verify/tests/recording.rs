@@ -4142,6 +4142,69 @@ fn contract_first_frame(
     frame
 }
 
+/// The first export frames a picture first presented at `pts` may show on,
+/// one per legal label (`picture_start_labels`). Only the picture's own
+/// labels, the grid slots its first sample rounds to, take the next-index
+/// check: a label it gets from a predecessor's shared slot is released by
+/// the next request, and the sample filed under that label is a later one.
+fn contract_frames(
+    labels: &[f64],
+    pts: f64,
+    previous: f64,
+    source_fps: f64,
+    first_frame: impl Fn(f64, f64, f64) -> f64,
+) -> Vec<f64> {
+    let slot = pts * source_fps;
+    let own = |label: f64| {
+        if (slot - slot.floor() - 0.5).abs() < 1e-6 {
+            label == slot.floor() || label == slot.ceil()
+        } else {
+            label == slot.round()
+        }
+    };
+    labels
+        .iter()
+        .map(|&label| first_frame(label, pts, if own(label) { previous } else { f64::MIN }))
+        .collect()
+}
+
+#[test]
+fn contract_promotes_only_a_pictures_own_label() {
+    // Display samples of a 64 Hz capture on a 60 fps grid, read 313.1 ms in.
+    // Picture 12's last sample (38.50 slots) and picture 13's first (39.44)
+    // both round to slot 39; the sample filed under 40 is picture 13's
+    // second (40.38), presented after export frame 21 (39.79 slots).
+    let samples = [
+        (12, 0.610422),
+        (12, 0.626044),
+        (12, 0.641667),
+        (13, 0.657289),
+        (13, 0.672922),
+        (13, 0.688544),
+        (14, 0.704167),
+    ];
+    let (fps, offset) = (60.0, 0.3864273 - 0.0732799);
+    let labels = picture_start_labels(&samples, fps);
+    let frames = |index: u32, previous: f64| {
+        let pts = samples.iter().find(|(i, _)| *i == index).unwrap().1;
+        contract_frames(
+            &labels[&index],
+            pts,
+            previous,
+            fps,
+            |label, pts, previous| contract_first_frame(label, pts, previous, fps, fps, offset),
+        )
+    };
+    // The grid answer for frame 21 is the cached picture 12 sample in slot
+    // 39, so picture 13 shows from frame 21 or, once the next request
+    // releases slot 39, frame 22.
+    assert_eq!(labels[&13], vec![39.0, 40.0]);
+    assert_eq!(frames(13, 39.0), vec![21.0, 22.0]);
+    // Picture 12's own slot takes the check: its first sample (36.63) is on
+    // screen at frame 18 (36.79 slots), one frame before the grid shows it.
+    assert_eq!(frames(12, 36.0), vec![18.0]);
+}
+
 #[test]
 fn contract_first_frame_follows_the_decoder_request_rule_for_long_recordings() {
     // Up to three hours in, with screen offsets on and between export
@@ -4453,11 +4516,12 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
             let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
             let pts = t - layout.display.start;
             let previous = previous_labels.get(i).copied().unwrap_or(f64::MIN);
-            let expected = first_frame(labels[0], pts, previous);
-            (!labels
-                .iter()
-                .any(|label| first_frame(*label, pts, previous) == frame))
-            .then(|| {
+            let frames =
+                contract_frames(labels, pts, previous, source_fps, |label, pts, previous| {
+                    first_frame(label, pts, previous)
+                });
+            let expected = frames[0];
+            (!frames.contains(&frame)).then(|| {
                 format!(
                     "{i} at frame {frame} instead of {expected} (display pts {:.3} s)",
                     t - layout.display.start
