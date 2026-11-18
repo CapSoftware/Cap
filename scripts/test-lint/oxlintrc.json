@@ -148,46 +148,6 @@
 			"rules": {
 				"landmines-testing/no-test-doubles": "error"
 			}
-		},
-		{
-			"files": [
-				"**/apps/discord-bot/test/interactions.spec.ts",
-				"**/apps/media-server/src/__tests__/lib/audio-levels.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/auth.test.ts",
-				"**/apps/media-server/src/__tests__/lib/drive-resumable-upload.test.ts",
-				"**/apps/media-server/src/__tests__/lib/hls-ladder-encode.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/infra-capacity.test.ts",
-				"**/apps/media-server/src/__tests__/lib/infra-poster.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/job-manager.test.ts",
-				"**/apps/media-server/src/__tests__/lib/lifecycle.test.ts",
-				"**/apps/media-server/src/__tests__/lib/loom-import-limit.test.ts",
-				"**/apps/media-server/src/__tests__/lib/media-routes-real-world.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/media-transfer.test.ts",
-				"**/apps/media-server/src/__tests__/lib/media-video.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/recording-verification.integration.test.ts",
-				"**/apps/media-server/src/__tests__/lib/storage-upload.test.ts",
-				"**/apps/media-server/src/__tests__/lib/video-input-validation.integration.test.ts",
-				"**/apps/media-server/src/__tests__/loom-importer/rejections.test.ts",
-				"**/apps/media-server/src/__tests__/routes/lifecycle.test.ts",
-				"**/apps/media-server/src/__tests__/routes/recording-verification.test.ts",
-				"**/apps/media-server/src/__tests__/routes/video.test.ts",
-				"**/apps/render-farm/src/s3-imds.test.ts",
-				"**/apps/render-farm/src/s3.test.ts",
-				"**/apps/status/tests/routes.test.ts",
-				"**/packages/infra-mcp/__tests__/video-import.test.ts",
-				"**/packages/recorder-core/__tests__/capture-streams.test.ts",
-				"**/packages/recorder-core/__tests__/instant-recording-uploader.test.ts",
-				"**/packages/recorder-core/__tests__/recorder-utils.test.ts",
-				"**/packages/recorder-core/__tests__/recording-spool-fallback.test.ts",
-				"**/packages/sdk-recorder/__tests__/capture-release.test.ts",
-				"**/packages/sdk-recorder/__tests__/multipart-cleanup.test.ts",
-				"**/packages/sdk-recorder/__tests__/multipart-pool.test.ts",
-				"**/packages/sdk-recorder/__tests__/recorder-options.test.ts",
-				"**/packages/sdk-recorder/__tests__/startup-cancellation.test.ts"
-			],
-			"rules": {
-				"landmines-testing/no-test-doubles": "off"
-			}
 		}
 	]
 }
