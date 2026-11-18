@@ -981,8 +981,10 @@ pub(crate) fn settle(project: &Path) -> Result<(), String> {
     let key = project
         .canonicalize()
         .unwrap_or_else(|_| project.to_path_buf());
-    let deadline = std::time::Instant::now() + SETTLE_WAIT;
+    let started = std::time::Instant::now();
+    let deadline = started + SETTLE_WAIT;
     let mut projects = active();
+    let waited = projects.contains(&key);
     while projects.contains(&key) {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
@@ -993,6 +995,9 @@ pub(crate) fn settle(project: &Path) -> Result<(), String> {
             .wait_timeout(projects, left)
             .unwrap_or_else(PoisonError::into_inner)
             .0;
+    }
+    if waited {
+        tracing::info!(path = %key.display(), waited_ms = started.elapsed().as_millis() as u64, "Waited for an unused clip media cleanup before reading the project");
     }
     if !exists_unfollowed(&key.join(JOURNAL)).map_err(|error| error.to_string())? {
         return Ok(());
