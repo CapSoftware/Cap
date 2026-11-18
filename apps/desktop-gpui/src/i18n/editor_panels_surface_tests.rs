@@ -485,6 +485,8 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::wallpaper_theme::cities(), "Cities"),
         (tr::editor::sidebar::wallpaper_theme::purple(), "Purple"),
         (tr::editor::sidebar::wallpaper_theme::orange(), "Orange"),
+        (tr::editor::sidebar::enhance::title(), "Enhance Quality"),
+        (tr::editor::sidebar::enhance::strength(), "Strength"),
         (tr::editor::sidebar::importing_image(), "Importing image…"),
         (
             tr::editor::sidebar::desktop_import_failed(),
