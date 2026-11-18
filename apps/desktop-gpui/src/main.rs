@@ -27,6 +27,7 @@ mod diagnostics;
 mod doodle;
 mod draw_bench;
 mod editor_audio;
+mod editor_audio_only;
 mod editor_bench;
 mod editor_canvas;
 mod editor_clips;

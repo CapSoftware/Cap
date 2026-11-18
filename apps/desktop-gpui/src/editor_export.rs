@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use cap_export::audio::AudioExportFormat;
 use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
 use cap_export::gif::{GifExportSettings, GifQuality};
 use cap_export::mov::MovExportSettings;
@@ -104,6 +105,9 @@ pub enum ExportFormatKind {
     Mp4,
     Gif,
     Tracks,
+    /// The edited sound as one MP3 or WAV file. Offered for audio-only
+    /// recordings.
+    Audio,
 }
 
 impl ExportFormatKind {
@@ -114,7 +118,23 @@ impl ExportFormatKind {
             Self::Mp4 => "MP4",
             Self::Gif => "GIF",
             Self::Tracks => tr::editor::export::tracks::format(),
+            Self::Audio => tr::editor::export::audio::format(),
         }
+    }
+
+    /// The formats an export of this project can pick between. An audio-only
+    /// recording exports its sound, and becomes a video only once it has
+    /// visuals.
+    fn options(audio_only: bool, visuals: bool) -> Vec<Self> {
+        match (audio_only, visuals) {
+            (false, _) => Self::ALL.to_vec(),
+            (true, false) => vec![Self::Audio],
+            (true, true) => vec![Self::Mp4, Self::Gif, Self::Audio],
+        }
+    }
+
+    fn writes_video(self) -> bool {
+        matches!(self, Self::Mp4 | Self::Gif)
     }
 
     fn slug(self) -> &'static str {
@@ -122,6 +142,7 @@ impl ExportFormatKind {
             Self::Mp4 => "Mp4",
             Self::Gif => "Gif",
             Self::Tracks => "Tracks",
+            Self::Audio => "Audio",
         }
     }
 
@@ -129,6 +150,7 @@ impl ExportFormatKind {
         match slug {
             "Gif" => Self::Gif,
             "Tracks" => Self::Tracks,
+            "Audio" => Self::Audio,
             _ => Self::Mp4,
         }
     }
@@ -405,6 +427,11 @@ pub struct ExportUi {
     resolution_from_source: bool,
     fps_from_source: bool,
     source: ExportSource,
+    pub audio_format: AudioExportFormat,
+    /// The video format saved before an audio export took over the pill, so
+    /// exporting sound once does not change what the next video export
+    /// opens with.
+    saved_format: ExportFormatKind,
 }
 
 /// What the project renders from: its output size before any export scaling
@@ -459,6 +486,7 @@ impl ExportUi {
             excluded_tracks: None,
             resolution_from_source: true,
             fps_from_source: true,
+            audio_format: None,
         });
         Self::from_preferences(prefs)
     }
@@ -518,6 +546,11 @@ impl ExportUi {
             resolution_from_source: prefs.resolution_from_source,
             fps_from_source: prefs.fps_from_source,
             source: ExportSource::default(),
+            audio_format: match prefs.audio_format.as_deref() {
+                Some("wav") => AudioExportFormat::Wav,
+                _ => AudioExportFormat::Mp3,
+            },
+            saved_format: ExportFormatKind::from_slug(&prefs.format),
         }
     }
 
@@ -588,7 +621,11 @@ impl ExportUi {
 
     fn preferences(&self) -> ExportPrefs {
         ExportPrefs {
-            format: self.format.slug().to_string(),
+            format: if self.format == ExportFormatKind::Audio {
+                self.saved_format.slug().to_string()
+            } else {
+                self.format.slug().to_string()
+            },
             fps: self.fps,
             export_to: self.destination.slug().to_string(),
             resolution: self.resolution.label().to_string(),
@@ -609,6 +646,8 @@ impl ExportUi {
             }),
             resolution_from_source: self.resolution_from_source,
             fps_from_source: self.fps_from_source,
+            audio_format: (self.audio_format == AudioExportFormat::Wav)
+                .then(|| self.audio_format.extension().to_string()),
         }
     }
 
@@ -860,7 +899,11 @@ impl EditorWindow {
                 .map(|summary| track_options(&summary.recordings, &self.project))
                 .unwrap_or_default(),
         );
-        if has_transparent_background(&self.project) && ui.format != ExportFormatKind::Tracks {
+        let formats = ExportFormatKind::options(self.is_audio_only(), self.audio_visuals_enabled());
+        if !formats.contains(&ui.format) {
+            ui.format = formats.first().copied().unwrap_or(ExportFormatKind::Mp4);
+        }
+        if has_transparent_background(&self.project) && ui.format.writes_video() {
             ui.format = ExportFormatKind::Gif;
             if ui.resolution == ExportResolution::P4k {
                 ui.resolution = ExportResolution::P1080;
@@ -869,7 +912,7 @@ impl EditorWindow {
                 ui.destination = ExportDestination::File;
             }
         }
-        if (ui.cursor_only || ui.format == ExportFormatKind::Tracks)
+        if (ui.cursor_only || !ui.format.writes_video())
             && ui.destination == ExportDestination::Link
         {
             ui.destination = ExportDestination::File;
@@ -998,7 +1041,7 @@ impl EditorWindow {
         ui.estimate_cancel = Arc::new(AtomicBool::new(false));
         ui.estimate = None;
         ui.preview_stats = None;
-        if ui.format == ExportFormatKind::Tracks {
+        if !ui.format.writes_video() {
             ui.estimate_loading = false;
             ui.preview_request = Arc::new(());
             ui.preview_task = None;
@@ -1149,6 +1192,10 @@ impl EditorWindow {
         }
         if ui.format == ExportFormatKind::Tracks {
             self.start_tracks_export(pretty_name, window, cx);
+            return;
+        }
+        if ui.format == ExportFormatKind::Audio {
+            self.start_audio_export(pretty_name, window, cx);
             return;
         }
         if ui.destination == ExportDestination::Link {
@@ -1580,6 +1627,308 @@ impl EditorWindow {
                 this.finish_requested_export_close(window, cx)
             });
         }));
+    }
+
+    /// Saves the edited sound as one MP3 or WAV file, chosen with a save
+    /// panel the same way a video export is.
+    fn start_audio_export(
+        &mut self,
+        pretty_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let duration = self.total_duration();
+        let project_path = self.project_path.clone();
+        let project = self.project.clone();
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        let format = ui.audio_format;
+        let estimate = format.estimated_bytes(duration);
+        let extension = format.extension();
+        let default = export_file_name(&pretty_name, extension);
+        ui.cancel = Arc::new(AtomicBool::new(false));
+        let cancel = ui.cancel.clone();
+        ui.phase = ExportPhase::ChoosingFile;
+        ui.error = None;
+        ui.rendered = 0;
+        ui.total_frames = 0;
+        ui.output_path = None;
+        cx.notify();
+
+        ui.export_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let chosen: Result<Option<PathBuf>, String> =
+                match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&default, &[extension])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel_async(&default, &[extension], cx).await)
+                        }
+                    }
+                };
+            let path = match chosen {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(ui) = this.export.as_mut()
+                            && Arc::ptr_eq(&ui.cancel, &cancel)
+                        {
+                            ui.phase = ExportPhase::Idle;
+                        }
+                        cx.notify();
+                        this.finish_requested_export_close(window, cx);
+                    });
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error,
+                        "Save dialog unavailable; keeping the audio in the project output folder"
+                    );
+                    project_path.join("output").join(&default)
+                }
+            };
+
+            let resources = ExportResources::new(vec![DiskBudget {
+                path: path.clone(),
+                description: "your export drive",
+                estimated_bytes: estimate,
+            }]);
+            if !confirm_export_resources(&this, cx, &resources, &cancel).await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
+                return;
+            }
+            let started = this.update(cx, |this, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return false;
+                };
+                if !Arc::ptr_eq(&ui.cancel, &cancel) || cancel.load(Ordering::Relaxed) {
+                    ui.phase = ExportPhase::Idle;
+                    cx.notify();
+                    return false;
+                }
+                ui.phase = ExportPhase::Starting;
+                cx.notify();
+                true
+            });
+            if !started.unwrap_or(false) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
+                return;
+            }
+
+            let (progress_tx, progress_rx) = flume::unbounded::<TrackProgress>();
+            let export_cancel = cancel.clone();
+            let export_path = path.clone();
+            let started_at = std::time::Instant::now();
+            let export = gpui_tokio::Tokio::spawn(cx, async move {
+                let stopped = export_cancel.clone();
+                resources
+                    .supervise(
+                        async move {
+                            cap_export::audio::export_audio(
+                                project_path,
+                                Some(project),
+                                format,
+                                export_path,
+                                export_cancel,
+                                move |progress| {
+                                    let _ = progress_tx.send(progress);
+                                },
+                            )
+                            .await
+                            .map_err(|error| error.to_string())
+                        },
+                        || stopped.store(true, Ordering::Release),
+                    )
+                    .await
+            });
+
+            loop {
+                let latest = progress_rx.try_iter().last();
+                if let Some(progress) = latest {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(ui) = this.export.as_mut() {
+                            ui.rendered = progress.done.min(u64::from(u32::MAX)) as u32;
+                            ui.total_frames = progress.total.min(u64::from(u32::MAX)) as u32;
+                            ui.phase = ExportPhase::Rendering;
+                        }
+                        cx.notify();
+                    });
+                }
+                if progress_rx.is_disconnected() {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+
+            let result = export.await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return;
+                };
+                match result {
+                    Ok(Ok(file)) => {
+                        tracing::info!(
+                            format = format.extension(),
+                            bytes = std::fs::metadata(&file).map(|meta| meta.len()).unwrap_or(0),
+                            elapsed_ms = started_at.elapsed().as_millis() as u64,
+                            "editor audio export completed"
+                        );
+                        crate::app_sounds::play_notification();
+                        ui.phase = ExportPhase::Done;
+                        ui.output_path = Some(file);
+                    }
+                    Ok(Err(error)) => {
+                        let cancelled = !is_resource_stop(&error)
+                            && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
+                        if cancelled {
+                            ui.phase = ExportPhase::Idle;
+                        } else {
+                            tracing::error!(error, "editor audio export failed");
+                            ui.phase = ExportPhase::Failed;
+                            ui.error = Some(error);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "editor audio export task ended without a result");
+                        ui.phase = ExportPhase::Failed;
+                        ui.error = Some(tr::editor::export::task_failed().into());
+                    }
+                }
+                cx.notify();
+            });
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
+        }));
+    }
+
+    fn export_audio_format_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let options = AudioExportFormat::ALL;
+        let selected = ui.audio_format;
+        let size = selected.estimated_bytes(self.total_duration()) as f64 / (1024.0 * 1024.0);
+        self.export_section(tr::editor::export::audio::file_type(), "icons/music.svg")
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-audio-format",
+                    options
+                        .iter()
+                        .map(|format| {
+                            ui::SegmentOption::new(
+                                format.extension().to_ascii_uppercase(),
+                                *format == selected,
+                            )
+                        })
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(move |this, index: &usize, _, cx| {
+                    let Some(format) = options.get(*index).copied() else {
+                        return;
+                    };
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.audio_format = format;
+                        ui.persist();
+                    }
+                    cx.notify();
+                })),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(match selected {
+                        AudioExportFormat::Mp3 => tr::editor::export::audio::mp3_description(),
+                        AudioExportFormat::Wav => tr::editor::export::audio::wav_description(),
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(editor.text_3))
+                    .child(tr::editor::export::stats::estimated_size())
+                    .child(format_estimate_range([size, size], false)),
+            )
+    }
+
+    /// The left pane for an audio export: what will be written, how long it
+    /// is and about how big.
+    fn render_audio_stage(&self, ui: &ExportUi) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let duration = self.total_duration();
+        let name = export_file_name(
+            self.summary()
+                .map(|summary| summary.pretty_name.as_str())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("Cap Recording"),
+            ui.audio_format.extension(),
+        );
+        let size = ui.audio_format.estimated_bytes(duration) as f64 / (1024.0 * 1024.0);
+        let minutes = (duration.max(0.0) / 60.0).floor() as u64;
+        let seconds = (duration.max(0.0) % 60.0).floor() as u64;
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(14.))
+            .p(px(24.))
+            .child(
+                div()
+                    .size(px(72.))
+                    .rounded(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(Hsla::from(editor.seg_fill(gpui::rgb(
+                        crate::editor_timeline::track_color::AUDIO,
+                    ))))
+                    .child(
+                        svg()
+                            .path("icons/music.svg")
+                            .size(px(30.))
+                            .text_color(Hsla::from(editor.text_1)),
+                    ),
+            )
+            .child(
+                div()
+                    .max_w(px(360.))
+                    .truncate()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(editor.text_1))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(format!(
+                        "{minutes}:{seconds:02} · {}",
+                        format_estimate_range([size, size], false)
+                    )),
+            )
     }
 
     fn retry_clipboard_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2039,6 +2388,8 @@ impl EditorWindow {
                     .min_h_0()
                     .child(if ui.format == ExportFormatKind::Tracks {
                         self.render_tracks_stage(ui).into_any_element()
+                    } else if ui.format == ExportFormatKind::Audio {
+                        self.render_audio_stage(ui).into_any_element()
                     } else {
                         self.render_export_preview_pane(ui, preview_box)
                             .into_any_element()
@@ -2474,6 +2825,7 @@ impl EditorWindow {
         let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
         let tracks_mode = ui.format == ExportFormatKind::Tracks;
+        let audio_mode = ui.format == ExportFormatKind::Audio;
         let link_disabled = transparent || ui.cursor_only || tracks_mode;
         let resolutions = self.export_resolutions(ui);
         let fps_options = self.export_fps_options(ui);
@@ -2497,15 +2849,22 @@ impl EditorWindow {
                     .overflow_y_scroll()
                     .p(px(16.))
                     .gap(px(20.))
-                    .child(self.export_destination_field(ui, link_disabled, cx))
+                    .when(!audio_mode, |this| {
+                        this.child(self.export_destination_field(ui, link_disabled, cx))
+                    })
                     .child(self.export_format_field(ui, transparent, cx))
+                    .when(audio_mode, |this| {
+                        this.child(self.export_audio_format_field(ui, cx))
+                    })
                     .when(tracks_mode, |this| {
                         this.child(self.export_tracks_field(ui, cx))
                     })
-                    .when(!tracks_mode, |this| {
+                    .when(!tracks_mode && !audio_mode, |this| {
                         this.child(self.export_resolution_field(ui, &resolutions, cx))
                     })
-                    .child(self.export_fps_field(ui, fps_options, cx))
+                    .when(!audio_mode, |this| {
+                        this.child(self.export_fps_field(ui, fps_options, cx))
+                    })
                     .when(
                         ui.format == ExportFormatKind::Mp4 && !ui.cursor_only,
                         |this| this.child(self.export_quality_field(ui, cx)),
@@ -2514,7 +2873,7 @@ impl EditorWindow {
                         ui.format == ExportFormatKind::Gif && !ui.cursor_only,
                         |this| this.child(self.export_gif_quality_field(ui, cx)),
                     )
-                    .when(!tracks_mode, |this| {
+                    .when(!tracks_mode && !audio_mode, |this| {
                         this.child(div().h(px(1.)).flex_none().bg(Hsla::from(editor.line)))
                             .child(self.export_advanced(ui, cx))
                     }),
@@ -2539,6 +2898,11 @@ impl EditorWindow {
             ExportDestination::File if ui.format == ExportFormatKind::Tracks => (
                 tr::editor::export::tracks::cta(),
                 Some("icons/folder.svg"),
+                true,
+            ),
+            ExportDestination::File if ui.format == ExportFormatKind::Audio => (
+                tr::editor::export::audio::cta(),
+                Some("icons/music.svg"),
                 true,
             ),
             ExportDestination::File => (
@@ -2830,13 +3194,14 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let options = ExportFormatKind::ALL;
+        let options = ExportFormatKind::options(self.is_audio_only(), self.audio_visuals_enabled());
         let cursor_only = ui.cursor_only;
         let no_tracks = ui.track_options.is_empty();
         let disabled = move |format: ExportFormatKind| match format {
             ExportFormatKind::Mp4 => transparent || cursor_only,
             ExportFormatKind::Gif => cursor_only,
             ExportFormatKind::Tracks => no_tracks,
+            ExportFormatKind::Audio => false,
         };
         self.export_section(tr::editor::export::section::format(), "icons/video.svg")
             .child(
@@ -2862,7 +3227,7 @@ impl EditorWindow {
                     }
                     if let Some(ui) = this.export.as_mut() {
                         ui.format = format;
-                        if format == ExportFormatKind::Tracks {
+                        if !format.writes_video() {
                             ui.destination = ExportDestination::File;
                             ui.cursor_only = false;
                         }
@@ -2883,14 +3248,17 @@ impl EditorWindow {
                     cx.notify();
                 })),
             )
-            .when(no_tracks, |field| {
-                field.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(Hsla::from(editor.text_3))
-                        .child(tr::editor::export::tracks::studio_only()),
-                )
-            })
+            .when(
+                no_tracks && options.contains(&ExportFormatKind::Tracks),
+                |field| {
+                    field.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(Hsla::from(editor.text_3))
+                            .child(tr::editor::export::tracks::studio_only()),
+                    )
+                },
+            )
     }
 
     fn export_tracks_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3514,6 +3882,9 @@ impl EditorWindow {
             ExportPhase::Rendering if ui.format == ExportFormatKind::Tracks => {
                 tr::editor::export::tracks::exporting()
             }
+            ExportPhase::Rendering if ui.format == ExportFormatKind::Audio => {
+                tr::editor::export::audio::exporting()
+            }
             ExportPhase::Rendering if ui.cursor_only => {
                 tr::editor::export::phase::rendering_cursor()
             }
@@ -3538,6 +3909,9 @@ impl EditorWindow {
             }
             ExportPhase::Done if ui.format == ExportFormatKind::Tracks => {
                 tr::editor::export::tracks::exported()
+            }
+            ExportPhase::Done if ui.format == ExportFormatKind::Audio => {
+                tr::editor::export::audio::exported()
             }
             ExportPhase::Done => tr::editor::export::phase::complete(),
             ExportPhase::Failed if ui.clipboard_retry_path().is_some() => {
@@ -3606,7 +3980,7 @@ impl EditorWindow {
             .when(
                 ui.phase == ExportPhase::Rendering
                     && ui.total_frames > 0
-                    && ui.format != ExportFormatKind::Tracks,
+                    && ui.format.writes_video(),
                 |this| {
                     this.child(
                         div()
@@ -3681,7 +4055,7 @@ impl EditorWindow {
                         .detach();
                     })),
                 )
-                .when(ui.format != ExportFormatKind::Tracks, |this| {
+                .when(ui.format.writes_video(), |this| {
                     this.child(
                         div()
                             .max_w(px(320.))
@@ -4039,6 +4413,10 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     if ui.format == ExportFormatKind::Tracks {
         ui.destination = ExportDestination::File;
     }
+    if ui.format == ExportFormatKind::Audio {
+        ui.destination = ExportDestination::File;
+        ui.cursor_only = false;
+    }
     let fps_options = export_fps_options(ui.format, ui.cursor_only);
     if ui.fps_from_source {
         ui.fps = source_fps(ui.source.fps, fps_options);
@@ -4326,6 +4704,7 @@ mod tests {
             excluded_tracks: None,
             resolution_from_source: false,
             fps_from_source: false,
+            audio_format: None,
         }
     }
 
