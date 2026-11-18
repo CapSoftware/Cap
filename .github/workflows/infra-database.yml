@@ -13,8 +13,16 @@ on:
       - "apps/web/app/api/cron/developer-storage/**"
       - "apps/web/lib/user-preferences-sql.ts"
       - "apps/web/lib/media-input-policy-strikes.ts"
+      - "apps/web/lib/organization-member-removal.ts"
+      - "packages/web-backend/src/Spaces/**"
+      - "packages/web-backend/src/Folders/FoldersPolicy.ts"
       - "apps/web/actions/notifications/**"
       - "apps/web/actions/analytics/**"
+      - "apps/web/actions/caps/**"
+      - "apps/web/actions/spaces/video-order.ts"
+      - "apps/web/actions/videos/archive.ts"
+      - "apps/web/actions/loom-import-overview.ts"
+      - "apps/web/lib/space-video-order*"
       - "packages/database/schema.ts"
       - "packages/database/migrations/**"
       - ".github/workflows/infra-database.yml"
@@ -30,8 +38,16 @@ on:
       - "apps/web/app/api/cron/developer-storage/**"
       - "apps/web/lib/user-preferences-sql.ts"
       - "apps/web/lib/media-input-policy-strikes.ts"
+      - "apps/web/lib/organization-member-removal.ts"
+      - "packages/web-backend/src/Spaces/**"
+      - "packages/web-backend/src/Folders/FoldersPolicy.ts"
       - "apps/web/actions/notifications/**"
       - "apps/web/actions/analytics/**"
+      - "apps/web/actions/caps/**"
+      - "apps/web/actions/spaces/video-order.ts"
+      - "apps/web/actions/videos/archive.ts"
+      - "apps/web/actions/loom-import-overview.ts"
+      - "apps/web/lib/space-video-order*"
       - "packages/database/schema.ts"
       - "packages/database/migrations/**"
       - ".github/workflows/infra-database.yml"
@@ -84,4 +100,4 @@ jobs:
         env:
           CAP_INFRA_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
           CAP_INFRA_ROUND_TRIPS_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
-        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts
+        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/dashboard-library-database.test.ts

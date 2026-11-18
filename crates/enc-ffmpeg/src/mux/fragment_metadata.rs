@@ -5,12 +5,12 @@ use std::{
     time::Duration,
 };
 
-pub(super) struct FragmentMetadata {
+pub struct FragmentMetadata {
     pub duration: Duration,
     pub file_size: u64,
 }
 
-pub(super) fn read_fragment_metadata(path: &Path) -> io::Result<FragmentMetadata> {
+pub fn read_fragment_metadata(path: &Path) -> io::Result<FragmentMetadata> {
     let mut file = File::open(path)?;
     let file_size = file.metadata()?.len();
     match read_metadata(&mut file, file_size) {

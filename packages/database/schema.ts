@@ -120,6 +120,9 @@ export const users = mysqlTable(
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
+				dashboard?: {
+					pageSize?: number;
+				};
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
@@ -545,6 +548,7 @@ export const videos = mysqlTable(
 		xStreamInfo: text("xStreamInfo"),
 		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
+		archivedAt: timestamp("archivedAt"),
 		// DEPRECATED
 		awsRegion: varchar("awsRegion", { length: 255 }),
 		awsBucket: varchar("awsBucket", { length: 255 }),
@@ -573,6 +577,13 @@ export const videos = mysqlTable(
 		),
 		index("org_effective_created_idx").on(
 			table.orgId,
+			table.effectiveCreatedAt,
+		),
+		index("org_owner_folder_archived_effective_idx").on(
+			table.orgId,
+			table.ownerId,
+			table.folderId,
+			table.archivedAt,
 			table.effectiveCreatedAt,
 		),
 		index("screenshot_transcription_created_idx").on(
@@ -1503,6 +1514,7 @@ export const spaces = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			publicPage?: PublicCollection.PublicPageSettings;
+			videoOrder?: "newest" | "oldest" | "custom";
 		}>(),
 		password: encryptedTextNullable("password"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1556,6 +1568,7 @@ export const spaceVideos = mysqlTable(
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		addedById: nanoId("addedById").notNull().$type<User.UserId>(),
 		addedAt: timestamp("addedAt").notNull().defaultNow(),
+		position: int("position"),
 	},
 	(table) => ({
 		folderIdIndex: index("folder_id_idx").on(table.folderId),
