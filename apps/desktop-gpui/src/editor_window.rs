@@ -1159,6 +1159,15 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                     tracing::debug!("engine stopped without a pause request");
                     applied_playing = false;
                     let _ = driver.engine_stopped.try_send(());
+                    let resolution = driver
+                        .desired
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .resolution;
+                    let instance = instance.clone();
+                    tokio::spawn(async move {
+                        rerender_paused_frame_enhanced(&instance, resolution).await;
+                    });
                 }
                 continue;
             }
