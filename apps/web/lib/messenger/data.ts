@@ -8,7 +8,7 @@ import {
 	messengerMessages,
 	users,
 } from "@cap/database/schema";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { MESSENGER_ADMIN_EMAIL, MESSENGER_ANON_COOKIE } from "./constants";
 
@@ -89,6 +89,24 @@ export const linkAnonymousConversationsToUser = async ({
 				),
 			),
 	]);
+};
+
+const viewerCanReadConversation = (
+	viewer: ViewerContext,
+	conversation: { userId: string | null; anonymousId: string | null },
+	allowAdmin: boolean,
+) => {
+	const matchesUser = Boolean(
+		viewer.user && conversation.userId === viewer.user.id,
+	);
+	const matchesAnonymous = Boolean(
+		viewer.anonymousId && conversation.anonymousId === viewer.anonymousId,
+	);
+	return (
+		(allowAdmin && viewer.isAdmin) ||
+		matchesUser ||
+		(matchesAnonymous && (!viewer.user || !conversation.userId))
+	);
 };
 
 type ConversationSummaryRow = typeof messengerConversations.$inferSelect & {
@@ -239,40 +257,78 @@ export const getMessengerConversationForViewer = async ({
 		.leftJoin(users, eq(messengerConversations.userId, users.id))
 		.where(eq(messengerConversations.id, conversationId));
 
-	if (!conversation) return null;
-
-	const adminAllowed = allowAdmin && viewer.isAdmin;
-	const matchesUser = Boolean(
-		viewer.user && conversation.userId === viewer.user.id,
-	);
-	const matchesAnonymous = Boolean(
-		viewer.anonymousId && conversation.anonymousId === viewer.anonymousId,
-	);
-	const matchesAnonymousAsSignedInUser = Boolean(
-		viewer.user && !conversation.userId && matchesAnonymous,
-	);
-	const matchesAnonymousAsVisitor = Boolean(!viewer.user && matchesAnonymous);
-
 	if (
-		!adminAllowed &&
-		!matchesUser &&
-		!matchesAnonymousAsSignedInUser &&
-		!matchesAnonymousAsVisitor
-	) {
+		!conversation ||
+		!viewerCanReadConversation(viewer, conversation, allowAdmin)
+	)
 		return null;
-	}
 
 	const messages = await db()
 		.select()
 		.from(messengerMessages)
 		.where(eq(messengerMessages.conversationId, conversation.id))
-		.orderBy(asc(messengerMessages.createdAt));
+		.orderBy(asc(messengerMessages.createdAt), asc(messengerMessages.id));
 
 	return {
 		viewer,
 		conversation,
 		messages,
 	};
+};
+
+export const getMessengerConversationUpdates = async ({
+	conversationId,
+	after,
+}: {
+	conversationId: string;
+	after: string | null;
+}) => {
+	const viewer = await getViewerContext();
+
+	const [conversation] = await db()
+		.select({
+			mode: messengerConversations.mode,
+			userId: messengerConversations.userId,
+			anonymousId: messengerConversations.anonymousId,
+			cursorId: messengerMessages.id,
+			cursorCreatedAt: messengerMessages.createdAt,
+		})
+		.from(messengerConversations)
+		.leftJoin(
+			messengerMessages,
+			and(
+				eq(messengerMessages.id, after ?? ""),
+				eq(messengerMessages.conversationId, messengerConversations.id),
+			),
+		)
+		.where(eq(messengerConversations.id, conversationId));
+	if (!conversation || !viewerCanReadConversation(viewer, conversation, false))
+		return null;
+	const { cursorId, cursorCreatedAt } = conversation;
+
+	const messages = await db()
+		.select({
+			id: messengerMessages.id,
+			role: messengerMessages.role,
+			content: messengerMessages.content,
+			createdAt: messengerMessages.createdAt,
+		})
+		.from(messengerMessages)
+		.where(
+			cursorId && cursorCreatedAt
+				? and(
+						eq(messengerMessages.conversationId, conversationId),
+						gte(messengerMessages.createdAt, cursorCreatedAt),
+						or(
+							gt(messengerMessages.createdAt, cursorCreatedAt),
+							gt(messengerMessages.id, cursorId),
+						),
+					)
+				: eq(messengerMessages.conversationId, conversationId),
+		)
+		.orderBy(asc(messengerMessages.createdAt), asc(messengerMessages.id));
+
+	return { mode: conversation.mode, messages };
 };
 
 export const requireAdminViewer = async (): Promise<AdminViewerContext> => {
