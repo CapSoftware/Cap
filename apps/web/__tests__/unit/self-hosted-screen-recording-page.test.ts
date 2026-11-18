@@ -49,15 +49,28 @@ describe("SelfHostedScreenRecordingPage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("self-host");
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("no longer includes the multi-product comparison table", () => {
+		expect(componentSource).not.toContain("comparisonTable");
 	});
 
-	it("describes the license split in the comparison table", () => {
+	it("describes the license split", () => {
 		expect(componentSource).toContain(
-			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
+			"most code under AGPLv3 and specified Rust crates under MIT",
 		);
 		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
+	});
+
+	it("only compares with Loom", () => {
+		const compared = [...componentSource.matchAll(/Cap vs (\w+)/g)].map(
+			(match) => match[1],
+		);
+		expect(compared.every((name) => name === "Loom")).toBe(true);
+	});
+
+	it("no longer compares with unnamed recorders", () => {
+		expect(componentSource).not.toContain("Most screen recorders");
+		expect(componentSource).not.toContain("closed-source SaaS tools");
+		expect(componentSource).not.toContain("Unlike local-only recorders");
 	});
 
 	it("includes recording modes section", () => {
@@ -138,19 +151,14 @@ describe("SelfHostedScreenRecordingPage FAQ schema", () => {
 			answer:
 				"Yes. The instant sharing experience works the same way with self-hosted storage.",
 		},
-		{
-			question: "What is the best self-hosted screen recorder?",
-			answer:
-				"Cap is the best self-hosted screen recorder for teams that need both data control and a modern async video experience.",
-		},
 	];
 
-	it("produces valid FAQPage schema with 8 questions", () => {
+	it("produces valid FAQPage schema with 7 questions", () => {
 		const schema = createFAQSchema(faqs);
 
 		expect(schema["@context"]).toBe("https://schema.org");
 		expect(schema["@type"]).toBe("FAQPage");
-		expect(schema.mainEntity).toHaveLength(8);
+		expect(schema.mainEntity).toHaveLength(7);
 	});
 
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
@@ -166,12 +174,18 @@ describe("SelfHostedScreenRecordingPage FAQ schema", () => {
 		});
 	});
 
+	it("no longer asks for the best self-hosted recorder", () => {
+		expect(componentSource).not.toContain(
+			"What is the best self-hosted screen recorder?",
+		);
+	});
+
 	it("produces JSON-serializable output", () => {
 		const schema = createFAQSchema(faqs);
 		expect(() => JSON.stringify(schema)).not.toThrow();
 		const parsed = JSON.parse(JSON.stringify(schema));
 		expect(parsed["@type"]).toBe("FAQPage");
-		expect(parsed.mainEntity).toHaveLength(8);
+		expect(parsed.mainEntity).toHaveLength(7);
 	});
 });
 
