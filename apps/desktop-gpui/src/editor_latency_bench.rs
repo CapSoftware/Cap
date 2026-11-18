@@ -454,6 +454,7 @@ async fn pause(handle: Handle, cx: &mut AsyncApp) {
         );
         if round + 1 == PAUSE_ROUNDS {
             screenshot(handle, cx);
+            save_frame(handle, cx);
         }
     }
     report("pause", "pause->canvas-size frame", &mut to_sharp);
@@ -496,6 +497,67 @@ fn screenshot(handle: Handle, cx: &mut AsyncApp) {
         "latency-bench: screenshot preview at {:.0},{:.0} {:.0}x{:.0} pt -> {path} ({status:?})",
         rect[0], rect[1], rect[2], rect[3]
     );
+}
+
+/// `CAP_GPUI_AUTO_LATENCY_FRAME=<png>`: write the settled preview frame at
+/// the size it was rendered, before the compositor scales it to the canvas.
+fn save_frame(handle: Handle, cx: &mut AsyncApp) {
+    let Some(path) = std::env::var("CAP_GPUI_AUTO_LATENCY_FRAME")
+        .ok()
+        .filter(|path| !path.is_empty())
+    else {
+        return;
+    };
+    let Some(frame) = update(handle, cx, |view, _, _| view.latest_frame.clone()) else {
+        return;
+    };
+    let Some((width, height, mut pixels)) = frame_bgra(&frame) else {
+        println!("latency-bench: frame could not be read");
+        return;
+    };
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let saved = image::RgbaImage::from_raw(width, height, pixels)
+        .map(|image| image.save(&path).is_ok())
+        .unwrap_or(false);
+    println!("latency-bench: frame {width}x{height} -> {path} (saved {saved})");
+}
+
+fn frame_bgra(frame: &crate::editor_window::EditorPreviewFrame) -> Option<(u32, u32, Vec<u8>)> {
+    match frame {
+        crate::editor_window::EditorPreviewFrame::Image(image) => {
+            let size = image.size(0);
+            Some((
+                size.width.0 as u32,
+                size.height.0 as u32,
+                image.as_bytes(0)?.to_vec(),
+            ))
+        }
+        #[cfg(target_os = "macos")]
+        crate::editor_window::EditorPreviewFrame::Surface(buffer) => {
+            use core_video::pixel_buffer::kCVPixelBufferLock_ReadOnly;
+            if buffer.lock_base_address(kCVPixelBufferLock_ReadOnly) != 0 {
+                return None;
+            }
+            let (width, height, stride) = (
+                buffer.get_width(),
+                buffer.get_height(),
+                buffer.get_bytes_per_row(),
+            );
+            let base = unsafe { buffer.get_base_address() }.cast::<u8>();
+            let mut pixels = Vec::with_capacity(width * height * 4);
+            if !base.is_null() {
+                for row in 0..height {
+                    let line =
+                        unsafe { std::slice::from_raw_parts(base.add(row * stride), width * 4) };
+                    pixels.extend_from_slice(line);
+                }
+            }
+            buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
+            (!base.is_null()).then_some((width as u32, height as u32, pixels))
+        }
+    }
 }
 
 fn memory_report(label: &str) {
