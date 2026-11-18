@@ -6199,6 +6199,14 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
     cx.background_executor()
         .timer(std::time::Duration::from_millis(300))
         .await;
+    if let Ok(style) = std::env::var("CAP_GPUI_AUTO_AUDIO_VISUALS") {
+        let _ = handle.update(cx, |view, window, cx| {
+            view.enable_audio_visuals_for_automation(&style, window, cx)
+        });
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(2))
+            .await;
+    }
     let _ = handle.update(cx, |view, window, cx| {
         view.open_export(window, cx);
         let tracks = std::env::var("CAP_GPUI_AUTO_EXPORT_TRACKS").ok();
@@ -6206,6 +6214,15 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
             && let Some(tracks) = tracks.as_deref()
         {
             export.use_tracks(Some(tracks));
+        } else if let Some(export) = view.export.as_mut()
+            && let Some(format) = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(cap_export::audio::AudioExportFormat::from_extension)
+        {
+            export.destination = crate::editor_export::ExportDestination::File;
+            export.format = crate::editor_export::ExportFormatKind::Audio;
+            export.audio_format = format;
         } else if let Some(export) = view.export.as_mut() {
             export.destination = crate::editor_export::ExportDestination::File;
             export.format = if path.extension().is_some_and(|extension| extension == "gif") {

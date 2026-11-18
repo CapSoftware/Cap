@@ -125,6 +125,9 @@ pub fn create_audio_only_project(
         })),
         upload: None,
     };
+    cap_project::ProjectConfiguration::for_new_project()
+        .write(project_path)
+        .map_err(|error| io(project_path, error))?;
     meta.save_for_project()
         .map_err(|error| AudioProjectError::Io(format!("Could not save the project: {error:?}")))?;
     cleanup.0 = None;

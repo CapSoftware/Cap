@@ -80,6 +80,26 @@ impl EditorWindow {
         });
     }
 
+    /// `CAP_GPUI_AUTO_AUDIO_VISUALS=bars|wave|circle`: turn visuals on the way
+    /// Add Visuals does, for the automated export checks.
+    pub(crate) fn enable_audio_visuals_for_automation(
+        &mut self,
+        style: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let style = match style {
+            "wave" => AudioVisualizerStyle::Wave,
+            "circle" => AudioVisualizerStyle::Circle,
+            _ => AudioVisualizerStyle::Bars,
+        };
+        tracing::info!(?style, "auto audio visuals");
+        self.edit_audio_visuals("audio-visuals-auto", window, cx, move |visuals| {
+            visuals.enabled = true;
+            visuals.style = style;
+        });
+    }
+
     /// The preview area of an audio-only recording without visuals.
     pub(crate) fn render_audio_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;

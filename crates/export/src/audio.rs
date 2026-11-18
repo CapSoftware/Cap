@@ -325,11 +325,13 @@ impl AudioSource {
 
 enum AudioSink {
     Wav(WavWriter),
-    Mp3 {
-        output: ffmpeg::format::context::Output,
-        encoder: Mp3Encoder,
-        written: i64,
-    },
+    Mp3(Box<Mp3Sink>),
+}
+
+struct Mp3Sink {
+    output: ffmpeg::format::context::Output,
+    encoder: Mp3Encoder,
+    written: i64,
 }
 
 impl AudioSink {
@@ -348,11 +350,11 @@ impl AudioSink {
                 output
                     .write_header()
                     .map_err(|error| format!("Could not write the MP3 header: {error}"))?;
-                Ok(Self::Mp3 {
+                Ok(Self::Mp3(Box::new(Mp3Sink {
                     output,
                     encoder,
                     written: 0,
-                })
+                })))
             }
         }
     }
@@ -363,11 +365,12 @@ impl AudioSink {
         }
         match self {
             Self::Wav(wav) => wav.write(interleaved),
-            Self::Mp3 {
-                output,
-                encoder,
-                written,
-            } => {
+            Self::Mp3(sink) => {
+                let Mp3Sink {
+                    output,
+                    encoder,
+                    written,
+                } = sink.as_mut();
                 let frames = interleaved.len() / 2;
                 let mut frame = ffmpeg::frame::Audio::new(
                     AudioRenderer::SAMPLE_FORMAT,
@@ -399,7 +402,7 @@ impl AudioSink {
         }
         match self {
             Self::Wav(wav) => wav.write_silence(frames),
-            Self::Mp3 { .. } => {
+            Self::Mp3(_) => {
                 let zeros = vec![0.0f32; frames.min(4_096) * 2];
                 let mut left = frames;
                 while left > 0 {
@@ -415,11 +418,12 @@ impl AudioSink {
     fn finish(self) -> Result<(), TrackExportError> {
         match self {
             Self::Wav(wav) => wav.finish(),
-            Self::Mp3 {
-                mut output,
-                mut encoder,
-                ..
-            } => {
+            Self::Mp3(sink) => {
+                let Mp3Sink {
+                    mut output,
+                    mut encoder,
+                    ..
+                } = *sink;
                 encoder
                     .flush(&mut output)
                     .map_err(|error| format!("MP3 encoding failed: {error}"))?;
