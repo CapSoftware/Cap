@@ -7,6 +7,7 @@ import {
 	type ComponentProps,
 	type ForwardedRef,
 	forwardRef,
+	memo,
 	type PropsWithChildren,
 } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
@@ -25,15 +26,15 @@ interface CapCardAnalyticsProps {
 }
 
 export const CapCardAnalytics = Object.assign(
-	({
+	memo(function CapCardAnalyticsContent({
 		capId,
 		displayCount,
 		totalComments,
 		totalReactions,
 		isLoadingAnalytics,
 		isOwner = true,
-	}: CapCardAnalyticsProps) =>
-		isLoadingAnalytics ? (
+	}: CapCardAnalyticsProps) {
+		return isLoadingAnalytics ? (
 			<CapCardAnalytics.Skeleton />
 		) : (
 			<Shell>
@@ -98,7 +99,8 @@ export const CapCardAnalytics = Object.assign(
 					</Link>
 				)}
 			</Shell>
-		),
+		);
+	}),
 	{
 		Skeleton: () => (
 			<Shell>

@@ -10,7 +10,7 @@ import { Effect, Exit } from "effect";
 import { AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
@@ -85,6 +85,8 @@ export type VideoData = {
 	archivedAt?: Date | null;
 }[];
 
+const moveLocation = { type: "personal" } as const;
+
 export const Caps = ({
 	data,
 	count,
@@ -111,7 +113,6 @@ export const Caps = ({
 	const isArchivedView = view === "archived";
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / pageSize);
-	const moveLocation = { type: "personal" } as const;
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const listedVideos = useMemo(
@@ -247,6 +248,27 @@ export const Caps = ({
 		},
 		onError: (_error: unknown) => toast.error("Failed to delete cap"),
 	});
+
+	const selectedCapsRef = useRef(selectedCaps);
+	selectedCapsRef.current = selectedCaps;
+	const handleDelete = useCallback(
+		(capId: Video.VideoId) => {
+			const selected = selectedCapsRef.current;
+			if (selected.length > 0) {
+				deleteCaps(selected);
+			} else {
+				deleteCap(capId);
+			}
+		},
+		[deleteCaps, deleteCap],
+	);
+
+	const archiveCap = archiveCaps.mutate;
+	const handleArchiveToggle = useCallback(
+		(capId: Video.VideoId) =>
+			void archiveCap({ ids: [capId], archived: !isArchivedView }),
+		[archiveCap, isArchivedView],
+	);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -388,6 +410,7 @@ export const Caps = ({
 							>
 								{visibleVideos.map((video) => {
 									const videoAnalytics = analytics[video.id];
+									const isSelected = selectedCaps.includes(video.id);
 									return (
 										<CapGridItem
 											key={video.id}
@@ -399,31 +422,18 @@ export const Caps = ({
 												key={video.id}
 												cap={video}
 												analytics={videoAnalytics ?? 0}
-												onDelete={() => {
-													if (selectedCaps.length > 0) {
-														deleteCaps(selectedCaps);
-													} else {
-														deleteCap(video.id);
-													}
-												}}
+												onDelete={handleDelete}
 												userId={user?.id}
 												isLoadingAnalytics={isLoadingAnalytics}
-												isSelected={selectedCaps.includes(video.id)}
+												isSelected={isSelected}
 												anyCapSelected={anyCapSelected}
-												onSelectToggle={(options) =>
-													selection.toggle(video.id, options)
-												}
-												selectedIds={selectedCaps}
+												onSelectToggle={selection.toggle}
+												selectedIds={isSelected ? selectedCaps : undefined}
 												canMove={!isArchivedView}
 												moveLocation={moveLocation}
 												moveRootLabel="My Caps"
 												isArchived={isArchivedView}
-												onArchiveToggle={() =>
-													void archiveCaps.mutate({
-														ids: [video.id],
-														archived: !isArchivedView,
-													})
-												}
+												onArchiveToggle={handleArchiveToggle}
 											/>
 										</CapGridItem>
 									);
