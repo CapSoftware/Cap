@@ -57,7 +57,21 @@ fn encode_track(
     width: u32,
     height: u32,
     fps: u32,
+    noise: u32,
+) -> Vec<PathBuf> {
+    encode_track_at_phase(root, track, width, height, fps, noise, 0.0)
+}
+
+/// Frames after the first are presented `phase` of a frame after their grid
+/// line, like capture timestamps that do not sit on the grid.
+fn encode_track_at_phase(
+    root: &Path,
+    track: &str,
+    width: u32,
+    height: u32,
+    fps: u32,
     mut noise: u32,
+    phase: f64,
 ) -> Vec<PathBuf> {
     let directory = root.join(track);
     let mut encoder = SegmentedVideoEncoder::init(
@@ -89,7 +103,11 @@ fn encode_track(
         encoder
             .queue_frame(
                 frame,
-                Duration::from_micros(index * 1_000_000 / u64::from(fps)),
+                Duration::from_secs_f64(if index == 0 {
+                    0.0
+                } else {
+                    (index as f64 + phase) / f64::from(fps)
+                }),
             )
             .unwrap();
     }
@@ -120,13 +138,18 @@ fn finalize_track(root: &Path, paths: &[PathBuf], output: &Path) {
 }
 
 fn fixture(svg: bool) -> Fixture {
+    fixture_with_display_phase(svg, 0.0)
+}
+
+fn fixture_with_display_phase(svg: bool, display_phase: f64) -> Fixture {
     ffmpeg::init().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let original = directory.path().join("original");
     let reference = directory.path().join("reference");
     std::fs::create_dir(&original).unwrap();
     std::fs::create_dir(&reference).unwrap();
-    let display = encode_track(&original, "display", 160, 120, 30, 123456789);
+    let display =
+        encode_track_at_phase(&original, "display", 160, 120, 30, 123456789, display_phase);
     let camera = encode_track(&original, "camera", 80, 80, 24, 987654321);
     finalize_track(&original, &display, &reference.join("display.mp4"));
     finalize_track(&original, &camera, &reference.join("camera.mp4"));
@@ -873,6 +896,31 @@ async fn native_preparing_png_cursor_zoom_camera_and_relocation_match_finalized_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_preparing_svg_cursor_zoom_camera_and_relocation_match_finalized_render() {
     composed_parity(fixture(true), &[0, 45, 12, 90]).await;
+}
+
+/// Display samples 0.75 of a frame after each grid line, read 0.98 of a
+/// frame into each cell (the 0.25 s screen offset of the mic start plus a
+/// 0.016 s trim): every request takes the sample filed under the next grid
+/// index, in the preparing preview as in the finished editor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_preparing_reads_samples_between_grid_lines_like_the_finalized_editor() {
+    let mut fixture = fixture_with_display_phase(false, 0.75);
+    fixture.project.timeline = Some(
+        serde_json::from_value(serde_json::json!({
+            "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.016, "end": 3.25}],
+            "zoomSegments": [{"start": 0.3, "end": 2.7, "amount": 1.6, "mode": "auto"}]
+        }))
+        .unwrap(),
+    );
+    let frames = [0, 45, 12, 90];
+    for frame in frames {
+        let display_time = (f64::from(frame) / 30.0 + 0.016 + 0.25) as f32;
+        assert!(
+            cap_rendering::decoder::request_next_frame(display_time, 30).is_some(),
+            "frame {frame} must read past the middle of its cell"
+        );
+    }
+    composed_parity(fixture, &frames).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
