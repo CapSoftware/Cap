@@ -21,6 +21,7 @@ import {
 } from "@cap/recorder-core";
 
 import {
+	authTokenFor,
 	createInstantRecording,
 	deleteInstantRecording,
 	updateUploadProgress,
@@ -976,7 +977,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const subpath = `raw-upload.${pipeline.fileExtension}`;
 		const api = {
 			baseUrl: request.settings.apiBaseUrl,
-			authToken: request.auth.authApiKey,
+			authToken: authTokenFor(request.settings, request.auth),
 			requestTimeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
 		};
 		const uploadSession = await initiateMultipartUpload({
@@ -1591,7 +1592,7 @@ const runFailedUploadRetry = async (
 		`raw-upload.${failed.mimeType.includes("webm") ? "webm" : "mp4"}`;
 	const api = {
 		baseUrl: settings.apiBaseUrl,
-		authToken: auth.authApiKey,
+		authToken: authTokenFor(settings, auth),
 		requestTimeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
 	};
 

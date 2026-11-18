@@ -19,6 +19,7 @@ import {
 	loadSettings,
 	loadSharedRecordingState,
 	removeFailedRecording,
+	saveApiBaseUrl,
 	saveSettings,
 } from "../shared/storage";
 import type { ExtensionAuth, ExtensionSettings } from "../shared/types";
@@ -358,12 +359,17 @@ function App() {
 		setSaved(false);
 		try {
 			new URL(settings.apiBaseUrl);
+			if (!apiBaseUrlManaged) {
+				await saveApiBaseUrl(settings.apiBaseUrl);
+			}
 			await saveSettings(settings);
 			await sendServiceWorkerMessage({
 				target: "service-worker",
 				type: "settings-updated",
 				settings,
 			}).catch(() => undefined);
+			// A new Cap URL signs the user out of the old server.
+			setAuth(await loadAuth());
 			setSaved(true);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));

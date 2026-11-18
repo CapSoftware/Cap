@@ -76,6 +76,7 @@ beforeEach(async () => {
 				},
 			},
 			onInstalled: { addListener: vi.fn() },
+			onStartup: { addListener: vi.fn() },
 		},
 		action: {
 			setPopup: vi.fn((_options, callback) => callback()),
@@ -287,6 +288,51 @@ describe("bootstrap account ownership", () => {
 			}),
 		);
 	});
+
+	it.each([
+		[
+			"can't be reached",
+			() => Promise.reject(new TypeError("Failed to fetch")),
+		],
+		[
+			"answers from an access gateway",
+			() => Promise.resolve(new Response("Forbidden", { status: 403 })),
+		],
+	])(
+		"queues a previous key whose server %s and revokes it later",
+		async (_label, failure) => {
+			const pendingKey = "cap-extension-pending-revocations";
+			const previousAuth = { ...oldAuth, apiOrigin: "https://old-cap.example" };
+			stored[AUTH_KEY] = previousAuth;
+			let oldServerReachable = false;
+			const oldServerCalls = () =>
+				requests.mock.calls.filter(([url]) =>
+					String(url).startsWith("https://old-cap.example"),
+				).length;
+			requests.mockImplementation(async (url) => {
+				if (
+					String(url).startsWith("https://old-cap.example") &&
+					!oldServerReachable
+				) {
+					return failure();
+				}
+				return Response.json({ success: true });
+			});
+
+			await signIn({ authApiKey: "new-fixture-key", userId: "new-account" });
+
+			expect(stored[pendingKey]).toEqual([previousAuth]);
+			// The retry right after sign-in fails too and keeps the key queued.
+			await vi.waitFor(() => expect(oldServerCalls()).toBe(2));
+			expect(stored[pendingKey]).toEqual([previousAuth]);
+
+			oldServerReachable = true;
+			expect(await send("auth-revoke")).toMatchObject({ ok: true });
+
+			await vi.waitFor(() => expect(stored[pendingKey]).toEqual([]));
+			expect(oldServerCalls()).toBe(3);
+		},
+	);
 
 	it("ignores another account's persisted cache after a worker restart", async () => {
 		stored[AUTH_KEY] = { ...oldAuth, userId: "new-account" };
