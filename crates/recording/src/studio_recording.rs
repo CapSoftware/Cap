@@ -4987,7 +4987,6 @@ mod tests {
         assert_eq!(replay.result.err().expect("cached unconfirmed stop"), error);
     }
 
-    #[cfg(any(target_os = "macos", windows))]
     /// A camera switch while paused hands the next segment another camera.
     /// The stopped segment's camera input must let go of the old camera's
     /// lock, or the app cannot open the new camera on the shared feed.
@@ -5027,6 +5026,7 @@ mod tests {
         assert!(camera.lock().await.is_ok());
     }
 
+    #[cfg(any(target_os = "macos", windows))]
     mod failed_resume_tests {
         use super::*;
 
