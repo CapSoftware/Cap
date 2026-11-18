@@ -12,7 +12,7 @@ use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::DisplayNotch;
+use crate::{AudioVisualsConfiguration, DisplayNotch};
 
 #[cfg(test)]
 mod clip_transition_tests;
@@ -3174,6 +3174,8 @@ pub struct ProjectConfiguration {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub markers: Vec<TimelineMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_visuals: Option<AudioVisualsConfiguration>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -3229,6 +3231,7 @@ impl Default for ProjectConfiguration {
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             markers: Vec::new(),
+            audio_visuals: None,
         }
     }
 }
