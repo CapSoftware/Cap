@@ -7611,7 +7611,18 @@ impl EditorWindow {
             && frame_size.0 <= interactive.x as f32
             && frame_size.1 <= interactive.y as f32
         {
-            self.schedule_sharp_preview(SHARP_PREVIEW_IDLE, cx);
+            // Frames the engine finished after a pause are still playback, not
+            // a scrub: nothing is moving, so redraw them without the idle wait.
+            let playback_tail = self
+                .paused_requests
+                .as_ref()
+                .is_some_and(|requests| !requests.has_changed().unwrap_or(true));
+            let delay = if playback_tail {
+                Duration::ZERO
+            } else {
+                SHARP_PREVIEW_IDLE
+            };
+            self.schedule_sharp_preview(delay, cx);
         }
         if frame_layout_requires_editor_invalidation(
             first_frame,
