@@ -320,6 +320,17 @@ pub async fn studio_rules_finished(project_dir: &Path) {
         .await;
 }
 
+/// Whether a finished Studio recording's rules may still export or upload
+/// `project_dir`, which is canonical.
+pub fn studio_rules_running(project_dir: &Path) -> bool {
+    running_events().lock().iter().any(|(trigger, key)| {
+        *trigger == Trigger::StudioRecordingFinished && {
+            let path = Path::new(key);
+            path == project_dir || path.canonicalize().is_ok_and(|path| path == project_dir)
+        }
+    })
+}
+
 fn studio_context(project_dir: PathBuf, store: &AutomationsStore) -> TriggerContext {
     let ctx = TriggerContext::new()
         .with_project_path(project_dir.clone())

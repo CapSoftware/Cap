@@ -876,6 +876,10 @@ impl Drop for ProjectBeingDeleted {
     }
 }
 
+pub fn is_being_deleted(path: &Path) -> bool {
+    DELETING_PROJECTS.holds_resolved(path)
+}
+
 /// Existing targets and roots are canonicalized before containment is checked.
 /// This keeps symlink escapes outside the allow-list while accepting Windows
 /// editor paths whose canonical form has a `\\?\` prefix. A missing strict child

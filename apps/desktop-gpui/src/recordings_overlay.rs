@@ -288,7 +288,8 @@ pub fn show_studio_recording(project_dir: PathBuf, cx: &mut App) {
 /// actions on the newest card in order, each after the previous one settles,
 /// so the real-app tests can drive the overlay without synthetic clicks
 /// (which unprivileged CI sessions drop). Export writes to
-/// `CAP_GPUI_AUTO_EXPORT`.
+/// `CAP_GPUI_AUTO_EXPORT`. `after:<path>` holds the next step until that file
+/// exists, so a test can start an action at a moment it chooses.
 #[cfg(debug_assertions)]
 fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
     let Ok(spec) = std::env::var("CAP_GPUI_AUTO_RECORDINGS_OVERLAY") else {
@@ -313,6 +314,12 @@ fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
                     Some(true) => cx.background_executor().timer(PROGRESS_POLL).await,
                     None => return,
                 }
+            }
+            if let Some(path) = step.strip_prefix("after:") {
+                while !Path::new(path).exists() {
+                    cx.background_executor().timer(PROGRESS_POLL).await;
+                }
+                continue;
             }
             tracing::info!(step = %step, "recordings overlay auto action");
             cx.update(|cx| {
@@ -398,6 +405,27 @@ pub fn show_after(capture: Capture, cx: &mut App) {
     }
 }
 
+pub fn project_changed(project: &Path, cx: &mut App) {
+    let Some(model) = existing_model(cx) else {
+        return;
+    };
+    model.update(cx, |overlay, cx| {
+        let reload: Vec<_> = overlay
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == MediaKind::Recording
+                    && (entry.path == project
+                        || entry.path.canonicalize().is_ok_and(|path| path == project))
+            })
+            .map(|entry| (entry.id, entry.path.clone()))
+            .collect();
+        for (id, path) in reload {
+            overlay.load_details(id, path, cx);
+        }
+    });
+}
+
 pub fn work_in_flight(cx: &App) -> bool {
     existing_model(cx).is_some_and(|model| {
         model
@@ -466,9 +494,9 @@ fn sync_window(model: &Entity<Overlay>, cx: &mut App) {
 
 fn overlay_level() -> isize {
     if cfg!(target_os = "macos") {
-        platform::target_overlay_level() - 1
+        platform::recording_area_level() - 1
     } else {
-        platform::target_overlay_level()
+        platform::recording_area_level()
     }
 }
 
@@ -686,22 +714,26 @@ impl Overlay {
         );
         self.enforce_limit(cx);
         if kind == MediaKind::Recording {
-            let task = cx
-                .background_executor()
-                .spawn(async move { load_details(&path) });
-            cx.spawn(async move |this, cx| {
-                let details = task.await;
-                this.update(cx, |overlay, cx| {
-                    if let Some(entry) = overlay.entry_mut(id) {
-                        entry.details = Some(details);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            self.load_details(id, path, cx);
         }
         cx.notify();
+    }
+
+    fn load_details(&self, id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let task = cx
+            .background_executor()
+            .spawn(async move { load_details(&path) });
+        cx.spawn(async move |this, cx| {
+            let details = task.await;
+            this.update(cx, |overlay, cx| {
+                if let Some(entry) = overlay.entry_mut(id) {
+                    entry.details = Some(details);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn entry(&self, id: u64) -> Option<&Entry> {
@@ -1119,6 +1151,10 @@ async fn render_for_project(
         cancel.store(true, Ordering::Release);
         return Err("Export cancelled".into());
     }
+    let settling = project_path.to_path_buf();
+    cx.background_executor()
+        .spawn(async move { crate::unused_media::settle(&settling) })
+        .await?;
     let project = cap_project::ProjectConfiguration::load(project_path).unwrap_or_default();
     let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
     let (width, height) = OVERLAY_EXPORT_SIZE;

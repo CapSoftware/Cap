@@ -1,5 +1,4 @@
 import { Clapperboard, Zap } from "lucide-react";
-import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -81,32 +80,6 @@ export const screenRecordingContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTitle: "Screen Recording Tools Compared",
-	comparisonDescription:
-		"How Cap stacks up against the most popular screen recording options",
-
-	comparison: [
-		{
-			title: "Cap vs Loom",
-			description: `Cap is significantly more affordable than Loom, starting at $${PRICING.pro.annualPerMonth}/month compared to Loom's $18/month. Cap is also open-source, supports custom S3 storage, and offers Studio Mode on the free plan. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
-		},
-		{
-			title: "Cap vs OBS Studio",
-			description:
-				"OBS is a powerful open-source recorder built for streamers, but it requires significant configuration. Cap is designed for simplicity — start recording in seconds with instant sharing, cloud storage, and a clean interface that anyone can use.",
-		},
-		{
-			title: "Cap vs macOS Built-in Recorder",
-			description:
-				"macOS Cmd+Shift+5 lacks system audio capture, webcam overlay, and instant sharing. Cap adds all of these natively with no extensions required. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
-		},
-		{
-			title: "Cap vs Windows Game Bar",
-			description:
-				"Xbox Game Bar only records the active window and cannot capture your full desktop. Cap records your entire screen, any window, or a custom region, with full audio support. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
-		},
-	],
-
 	useCasesTitle: "How Teams and Creators Use Screen Recording",
 	useCasesDescription:
 		"From quick async updates to polished training content — Cap fits every screen recording use case",
@@ -167,19 +140,14 @@ export const screenRecordingContent: SeoPageContent = {
 				"Yes. Cap records your screen and webcam simultaneously with a picture-in-picture overlay. In Studio Mode, screen and webcam are saved as separate tracks, giving you full editing control in post-production.",
 		},
 		{
-			question: "What is the best screen recording software?",
-			answer:
-				"The best screen recording software depends on your needs. For simplicity and instant sharing, Cap is the top choice — it is free, open-source, and produces professional results without any setup. For advanced streaming, OBS is powerful but complex. For team sharing, Cap's built-in link sharing and thread comments make it the best option for async collaboration. <a href='/screen-recording-software'>See a full comparison of screen recording software</a>.",
-		},
-		{
 			question: "How do I start screen recording on Mac?",
 			answer:
-				"To start screen recording on Mac with Cap, download the app, click the Cap icon in your menu bar, choose your recording region, and hit record. You can also use the macOS built-in recorder with Cmd+Shift+5, but it lacks system audio capture and instant sharing. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
+				"To start screen recording on Mac, download Cap Desktop, choose a whole display, a single window or an area of your screen, and start recording. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
 		},
 		{
 			question: "How do I start screen recording on Windows?",
 			answer:
-				"Download Cap for Windows and launch it from the system tray to start screen recording in seconds. Cap records your full screen, a specific window, or a custom region with audio. The built-in Windows Game Bar alternative only captures the active window. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
+				"To start screen recording on Windows, download Cap Desktop, choose a whole display, a single window or an area of your screen, and start recording. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
 		},
 		{
 			question: "Does Cap screen recording have a time limit?",
