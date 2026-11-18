@@ -29,6 +29,10 @@ pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// How long the playhead has to rest before a segment with a kept source
+/// video is shown again from that file. Playback and scrubbing stay on
+/// `display.mp4`, so they decode exactly what they always did.
+const PREVIEW_STILL_SETTLE: Duration = Duration::from_millis(150);
 
 type PreviewRequest = Option<PreviewFrameInstruction>;
 
@@ -51,6 +55,12 @@ async fn preview_superseded_while_fresh(
     last_presented: Option<Instant>,
 ) {
     if probe.changed().await.is_err() || preview_frame_overdue(last_presented) {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn preview_changed(mut probe: watch::Receiver<PreviewRequest>) {
+    if probe.changed().await.is_err() {
         std::future::pending::<()>().await;
     }
 }
@@ -1120,11 +1130,46 @@ impl EditorInstance {
             let mut project = Arc::new(project_rx.borrow_and_update().clone());
             let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
             let mut outgoing_zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
+            let has_source_video = self
+                .segment_medias
+                .iter()
+                .any(|media| media.decoders.has_source_video());
+            let mut playback_rx = self.playback_active_rx.clone();
+            let mut still_due: Option<(tokio::time::Instant, PreviewFrameInstruction)> = None;
+            let mut render_still = false;
 
             loop {
-                preview_rx.changed().await.unwrap();
+                let still_deadline = still_due.map(|(at, _)| at);
+                tokio::select! {
+                    changed = preview_rx.changed() => changed.unwrap(),
+                    _ = tokio::time::sleep_until(still_deadline.unwrap_or_else(tokio::time::Instant::now)),
+                        if still_deadline.is_some() =>
+                    {
+                        let Some((_, request)) = still_due.take() else {
+                            continue;
+                        };
+                        if *preview_rx.borrow() != Some(request) {
+                            continue;
+                        }
+                        render_still = true;
+                    }
+                    changed = playback_rx.changed(), if has_source_video => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let playing = *playback_rx.borrow_and_update();
+                        if !playing && let Some((_, fps, resolution_base)) = *preview_rx.borrow() {
+                            let frame = self.state.lock().await.playhead_position;
+                            self.preview_tx
+                                .send_replace(Some((frame, fps, resolution_base)));
+                        }
+                        continue;
+                    }
+                }
+                still_due = None;
 
                 loop {
+                    let still_now = std::mem::take(&mut render_still);
                     let Some((frame_number, fps, resolution_base)) =
                         *preview_rx.borrow_and_update()
                     else {
@@ -1211,17 +1256,37 @@ impl EditorInstance {
                     tokio::select! {
                         biased;
 
-                        _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
+                        _ = async {
+                            if still_now {
+                                preview_changed(preview_rx.clone()).await;
+                            } else {
+                                preview_superseded_while_fresh(preview_rx.clone(), last_presented)
+                                    .await;
+                            }
+                        } => {
                             continue;
                         }
 
-                        segment_frames_opt = segment_medias.decoders.get_frames_initial(
-                            segment_time as f32,
-                            project.requires_camera(),
-                            true,
-                            clip_offsets,
-                        ) => {
-                            if preview_superseded(&preview_rx, last_presented) {
+                        segment_frames_opt = async {
+                            if still_now {
+                                segment_medias.decoders.get_frames_still(
+                                    segment_time as f32,
+                                    project.requires_camera(),
+                                    true,
+                                    clip_offsets,
+                                ).await
+                            } else {
+                                segment_medias.decoders.get_frames_initial(
+                                    segment_time as f32,
+                                    project.requires_camera(),
+                                    true,
+                                    clip_offsets,
+                                ).await
+                            }
+                        } => {
+                            if preview_superseded(&preview_rx, last_presented)
+                                || (still_now && preview_rx.has_changed().unwrap_or(false))
+                            {
                                 continue;
                             }
 
@@ -1462,6 +1527,17 @@ impl EditorInstance {
                                         )
                                         .await;
                                 }
+                            }
+
+                            if rendered
+                                && !still_now
+                                && segment_medias.decoders.has_source_video()
+                                && !*self.playback_active_rx.borrow()
+                            {
+                                still_due = Some((
+                                    tokio::time::Instant::now() + PREVIEW_STILL_SETTLE,
+                                    (frame_number, fps, resolution_base),
+                                ));
                             }
 
                             if !rendered && !preview_rx.has_changed().unwrap_or(false) {

@@ -28,7 +28,10 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use tokio::sync::mpsc;
 
 pub mod camera3d;
@@ -536,6 +539,7 @@ pub struct PreparedMask {
 enum FrameFetch {
     Playback,
     PlaybackInitial,
+    Still,
     Export { initial: bool },
 }
 
@@ -547,7 +551,7 @@ impl FrameFetch {
     ) -> Result<Option<DecodedFrame>, decoder::DecodeStalled> {
         match self {
             Self::Playback => Ok(decoder.get_frame(time).await),
-            Self::PlaybackInitial => Ok(decoder.get_frame_initial(time).await),
+            Self::PlaybackInitial | Self::Still => Ok(decoder.get_frame_initial(time).await),
             Self::Export { initial } => decoder.get_frame_for_export(time, initial).await,
         }
     }
@@ -557,8 +561,66 @@ impl FrameFetch {
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
+    source_video: Option<Arc<SourceVideo>>,
     pub segment_offset: f64,
     transition_readers: Option<Arc<TransitionSideDecoders>>,
+}
+
+/// The file an import keeps next to `display.mp4` when the source has
+/// chroma a re-encode would subsample. `display.mp4` stays the re-encode, so
+/// playback and scrubbing read it as before; export and settled frames read
+/// this one.
+pub fn source_video_path(display: &Path) -> PathBuf {
+    display.with_file_name("display-source.mp4")
+}
+
+/// The screen reader for a segment's kept source video, opened on first use
+/// so a session that only plays and scrubs never pays for it.
+struct SourceVideo {
+    source: DecoderSource,
+    force_ffmpeg: bool,
+    decoder: tokio::sync::OnceCell<Option<AsyncVideoDecoderHandle>>,
+}
+
+impl SourceVideo {
+    fn find(display: &DecoderSource, force_ffmpeg: bool) -> Option<Arc<Self>> {
+        if display.path.file_name() != Some(std::ffi::OsStr::new("display.mp4")) {
+            return None;
+        }
+        let path = source_video_path(&display.path);
+        path.is_file().then(|| {
+            Arc::new(Self {
+                source: DecoderSource {
+                    path,
+                    ..display.clone()
+                },
+                force_ffmpeg,
+                decoder: tokio::sync::OnceCell::new(),
+            })
+        })
+    }
+
+    fn reopened(&self) -> Arc<Self> {
+        Arc::new(Self {
+            source: self.source.clone(),
+            force_ffmpeg: self.force_ffmpeg,
+            decoder: tokio::sync::OnceCell::new(),
+        })
+    }
+
+    async fn decoder(&self) -> Option<&AsyncVideoDecoderHandle> {
+        self.decoder
+            .get_or_init(|| async {
+                spawn_screen_decoder(self.source.clone(), self.force_ffmpeg)
+                    .await
+                    .inspect_err(|error| {
+                        tracing::warn!(%error, "Kept source video failed to open; using display");
+                    })
+                    .ok()
+            })
+            .await
+            .as_ref()
+    }
 }
 
 /// A second set of readers for this clip, opened on first use, for the
@@ -683,6 +745,7 @@ impl RecordingSegmentDecoders {
         Ok(Self {
             screen,
             camera,
+            source_video: SourceVideo::find(&screen_source, force_ffmpeg),
             segment_offset: latest_start_time.unwrap_or(0.0),
             transition_readers: Some(Arc::new(TransitionSideDecoders {
                 screen: screen_source,
@@ -702,7 +765,7 @@ impl RecordingSegmentDecoders {
         };
         let screen_shared = serves_two_positions(&self.screen);
         let camera_shared = self.camera.as_ref().is_none_or(serves_two_positions);
-        if screen_shared && camera_shared {
+        if screen_shared && camera_shared && self.source_video.is_none() {
             return self;
         }
         let decoders = side
@@ -729,6 +792,7 @@ impl RecordingSegmentDecoders {
                     Ok((screen, camera)) => Some(RecordingSegmentDecoders {
                         screen,
                         camera,
+                        source_video: self.source_video.as_ref().map(|video| video.reopened()),
                         segment_offset: self.segment_offset,
                         transition_readers: None,
                     }),
@@ -781,6 +845,32 @@ impl RecordingSegmentDecoders {
         .await
         .ok()
         .flatten()
+    }
+
+    /// A frame the editor shows once the playhead has settled: read from the
+    /// kept source video when the segment has one, otherwise the same as
+    /// [`Self::get_frames_initial`].
+    pub async fn get_frames_still(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        needs_display: bool,
+        offsets: ClipOffsets,
+    ) -> Option<DecodedSegmentFrames> {
+        self.fetch_frames(
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            FrameFetch::Still,
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+
+    pub fn has_source_video(&self) -> bool {
+        self.source_video.is_some()
     }
 
     /// Offline export variant: screen and camera requests wait past their
@@ -844,15 +934,22 @@ impl RecordingSegmentDecoders {
         let camera = needs_camera.then_some(self.camera.as_ref()).flatten();
 
         if needs_display {
+            let screen_decoder = match (&self.source_video, fetch) {
+                (Some(video), FrameFetch::Still | FrameFetch::Export { .. }) => {
+                    video.decoder().await.unwrap_or(&self.screen)
+                }
+                _ => &self.screen,
+            };
             let (screen, camera) = tokio::join!(
-                fetch.frame(&self.screen, segment_time),
+                fetch.frame(screen_decoder, segment_time),
                 OptionFuture::from(camera.map(|d| fetch.frame(d, camera_request_time)))
             );
 
             let camera_frame = camera.transpose()?.flatten();
             let screen = screen?;
 
-            if screen.is_none() && fetch != FrameFetch::PlaybackInitial {
+            if screen.is_none() && !matches!(fetch, FrameFetch::PlaybackInitial | FrameFetch::Still)
+            {
                 tracing::warn!(segment_time, "screen decoder returned no frame");
             }
 
@@ -7362,6 +7459,7 @@ mod export_order_tests {
             decoders: RecordingSegmentDecoders {
                 screen,
                 camera: None,
+                source_video: None,
                 segment_offset: 0.0,
                 transition_readers: None,
             },

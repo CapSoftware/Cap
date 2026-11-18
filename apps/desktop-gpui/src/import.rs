@@ -1406,34 +1406,35 @@ fn import_video(
     report_converting: &dyn Fn(f64),
     cancelled: Option<&AtomicBool>,
 ) -> Result<(u32, Option<u32>), String> {
-    match keep_source_video(
+    let result = transcode_video(
         source_path,
         output_path,
         audio_output_path,
         project_path,
         report_converting,
         cancelled,
-    ) {
-        Ok(result) => {
-            tracing::info!("import kept the source video");
-            return Ok(result);
-        }
-        Err(KeepError::Cancelled(error)) => return Err(error),
-        Err(KeepError::Ineligible(reason)) => {
-            tracing::info!(reason, "import re-encodes the source video");
-        }
-        Err(KeepError::Failed(error)) => {
-            tracing::warn!("import could not keep the source video, re-encoding: {error}");
+    )?;
+    let kept_path = cap_rendering::source_video_path(output_path);
+    match keep_source_video(source_path, &kept_path, project_path, cancelled) {
+        Ok(()) => tracing::info!("import kept the source video next to the re-encode"),
+        Err(error) => {
+            if let Err(remove_error) = std::fs::remove_file(&kept_path)
+                && remove_error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("could not remove a partial kept video: {remove_error}");
+            }
+            match error {
+                KeepError::Cancelled(error) => return Err(error),
+                KeepError::Ineligible(reason) => {
+                    tracing::info!(reason, "import keeps only the re-encode");
+                }
+                KeepError::Failed(error) => {
+                    tracing::warn!("import could not keep the source video: {error}");
+                }
+            }
         }
     }
-    transcode_video(
-        source_path,
-        output_path,
-        audio_output_path,
-        project_path,
-        report_converting,
-        cancelled,
-    )
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -1470,7 +1471,6 @@ const KEEP_MAX_PIXEL_RATE: f64 = 1920.0 * 1080.0 * 60.0;
 #[derive(Debug)]
 struct KeepPlan {
     stream_index: usize,
-    fps: u32,
     first_pts: i64,
     packets: u64,
     untagged_matrix: Option<ImportMatrix>,
@@ -1608,9 +1608,6 @@ fn plan_keep(
     }
     let stream_index = stream.index();
     let time_base = stream.time_base();
-    let rate = stream.avg_frame_rate();
-    let fps = ((f64::from(rate.numerator()) / f64::from(rate.denominator())).round() as u32)
-        .clamp(1, 120);
     let seconds = |ticks: i64| {
         ticks as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator())
     };
@@ -1692,7 +1689,6 @@ fn plan_keep(
 
     Ok(KeepPlan {
         stream_index,
-        fps,
         first_pts,
         packets: presentation.len() as u64,
         untagged_matrix,
@@ -1715,11 +1711,9 @@ fn open_import_input(
 fn keep_source_video(
     source_path: &Path,
     output_path: &Path,
-    audio_output_path: Option<&Path>,
     project_path: &Path,
-    report_converting: &dyn Fn(f64),
     cancelled: Option<&AtomicBool>,
-) -> Result<(u32, Option<u32>), KeepError> {
+) -> Result<(), KeepError> {
     check_editor_import_cancelled(project_path, cancelled)?;
     let plan = plan_keep(source_path, project_path, cancelled)?;
     let strict = cancelled.is_some();
@@ -1740,8 +1734,6 @@ fn keep_source_video(
         .video()
         .map_err(|e| format!("Failed to create decoder: {e}"))?;
     video_decoder.check(ffmpeg::codec::decoder::Check::EXPLODE);
-
-    let mut audio = ImportAudio::open_decoder(&input, strict)?;
 
     prepare_output_directory(output_path, project_path, cancelled)?;
     let mut output =
@@ -1775,8 +1767,6 @@ fn keep_source_video(
         stream.index()
     };
 
-    audio.open_output(audio_output_path)?;
-
     // The MP4 muxer leaves the colour tags out of the container unless asked,
     // and readers that open only the headers would then see none.
     let mut options = ffmpeg::Dictionary::new();
@@ -1792,7 +1782,6 @@ fn keep_source_video(
     let mut video_frame = ffmpeg::frame::Video::empty();
     let mut packets_copied = 0u64;
     let mut frames_decoded = 0u64;
-    let mut last_progress = 0.0;
     let mut decode =
         |decoder: &mut ffmpeg::decoder::Video, frames_decoded: &mut u64| -> Result<(), KeepError> {
             loop {
@@ -1819,13 +1808,7 @@ fn keep_source_video(
 
     while let Some(packet) = next_import_packet(&mut input, project_path, cancelled)? {
         check_editor_import_cancelled(project_path, cancelled)?;
-        let stream_index = packet.stream();
-        if strict && packet.is_corrupt() && audio.reads_stream(stream_index) {
-            return Err(KeepError::Failed(
-                "Imported media contains a corrupt packet".to_string(),
-            ));
-        }
-        if stream_index == plan.stream_index {
+        if packet.stream() == plan.stream_index {
             video_decoder
                 .send_packet(&packet)
                 .map_err(|e| KeepError::Failed(format!("Video decode: {e}")))?;
@@ -1841,17 +1824,10 @@ fn keep_source_video(
                 .map_err(|e| format!("Failed to write video: {e}"))?;
 
             packets_copied += 1;
-            let progress = (packets_copied as f64 / plan.packets as f64).min(0.99);
-            if progress - last_progress >= 0.01 {
-                last_progress = progress;
-                if !check_project_exists(project_path) {
-                    tracing::info!("import cancelled: project directory was deleted");
-                    return Err(KeepError::Cancelled(IMPORT_CANCELLED.to_string()));
-                }
-                report_converting(progress);
+            if packets_copied % 100 == 0 && !check_project_exists(project_path) {
+                tracing::info!("import cancelled: project directory was deleted");
+                return Err(KeepError::Cancelled(IMPORT_CANCELLED.to_string()));
             }
-        } else {
-            audio.push(&packet, project_path, cancelled)?;
         }
     }
 
@@ -1867,15 +1843,6 @@ fn keep_source_video(
         )));
     }
 
-    audio.flush_decoder(project_path, cancelled)?;
-    check_editor_import_cancelled(project_path, cancelled)?;
-    if strict && audio.decoded_nothing() {
-        return Err(KeepError::Failed(
-            "Imported media has an empty video or audio track".to_string(),
-        ));
-    }
-    let sample_rate = audio.finish()?;
-
     check_editor_import_cancelled(project_path, cancelled)?;
     output
         .write_trailer()
@@ -1890,9 +1857,9 @@ fn keep_source_video(
         return Err(KeepError::Ineligible("colour tags"));
     }
 
-    sync_imported_media(output_path, audio_output_path, sample_rate, strict)?;
+    sync_imported_media(output_path, None, None, strict)?;
     check_editor_import_cancelled(project_path, cancelled)?;
-    Ok((plan.fps, sample_rate))
+    Ok(())
 }
 
 /// Whether the written file reports one matrix everywhere the editor reads
@@ -4310,6 +4277,15 @@ mod tests {
         Some((root, source_path, output))
     }
 
+    fn assert_display_is_the_reencode(display: &Path) {
+        let (format, _, range) = stream_tags(display);
+        assert!(
+            matches!(format, avformat::Pixel::YUV420P | avformat::Pixel::NV12),
+            "{format:?}"
+        );
+        assert_eq!(range, ffmpeg::color::Range::MPEG);
+    }
+
     fn keep_reason(source: &Path) -> Option<&'static str> {
         let root = source.parent().unwrap();
         match plan_keep(source, root, None) {
@@ -4330,7 +4306,9 @@ mod tests {
         ) else {
             return;
         };
-        let (source_packets, kept_packets) = (video_packets(&source), video_packets(&output));
+        assert_display_is_the_reencode(&output);
+        let kept = cap_rendering::source_video_path(&output);
+        let (source_packets, kept_packets) = (video_packets(&source), video_packets(&kept));
         assert_eq!(kept_packets.len(), 45);
         assert_eq!(
             source_packets
@@ -4343,7 +4321,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let source_times = decoded_frame_seconds(&source);
-        let kept_times = decoded_frame_seconds(&output);
+        let kept_times = decoded_frame_seconds(&kept);
         assert_eq!(kept_times.len(), 45);
         assert!(
             kept_times[0].abs() < 1e-9,
@@ -4357,7 +4335,7 @@ mod tests {
             );
         }
         assert_eq!(
-            stream_tags(&output),
+            stream_tags(&kept),
             (
                 avformat::Pixel::YUV444P,
                 ffmpeg::color::Space::SMPTE170M,
@@ -4380,11 +4358,14 @@ mod tests {
         ) else {
             return;
         };
-        assert_eq!(video_packets(&output), video_packets(&source));
+        assert_display_is_the_reencode(&output);
         assert_eq!(stream_tags(&output).1, ffmpeg::color::Space::BT709);
-        let headers_only = header_color_space(&output);
+        let kept = cap_rendering::source_video_path(&output);
+        assert_eq!(video_packets(&kept), video_packets(&source));
+        assert_eq!(stream_tags(&kept).1, ffmpeg::color::Space::BT709);
+        let headers_only = header_color_space(&kept);
         assert_eq!(headers_only, ffmpeg::color::Space::BT709);
-        let mut input = avformat::input(&output).unwrap();
+        let mut input = avformat::input(&kept).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
         let index = stream.index();
         let mut decoder = avcodec::Context::from_parameters(stream.parameters())
@@ -4422,7 +4403,9 @@ mod tests {
         ) else {
             return;
         };
-        assert_eq!(video_packets(&output), video_packets(&source));
+        let kept = cap_rendering::source_video_path(&output);
+        assert_eq!(video_packets(&kept), video_packets(&source));
+        assert_eq!(stream_tags(&kept).1, ffmpeg::color::Space::SMPTE170M);
         assert_eq!(stream_tags(&output).1, ffmpeg::color::Space::SMPTE170M);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4475,6 +4458,7 @@ mod tests {
             );
             assert_eq!(range, ffmpeg::color::Range::MPEG, "{expected}");
             assert_eq!(decoded_video_frames(&output), source.frames as usize);
+            assert!(!cap_rendering::source_video_path(&output).exists());
             std::fs::remove_dir_all(root).unwrap();
         }
     }
@@ -4516,6 +4500,7 @@ mod tests {
             import_video(&source, &output, None, &root, &|_| {}, None).unwrap();
             let (width, height, _) = first_frame_luma(&output);
             assert_eq!((width, height), size, "{tag}");
+            assert!(!cap_rendering::source_video_path(&output).exists());
             std::fs::remove_dir_all(root).unwrap();
         }
     }
@@ -4540,8 +4525,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!((fps, sample_rate), (30, None));
-        assert_eq!(video_packets(&source), video_packets(&output));
-        assert_eq!(stream_tags(&output).0, avformat::Pixel::YUV444P);
+        assert_display_is_the_reencode(&output);
+        let kept = cap_rendering::source_video_path(&output);
+        assert_eq!(video_packets(&source), video_packets(&kept));
+        assert_eq!(stream_tags(&kept).0, avformat::Pixel::YUV444P);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -4608,7 +4595,11 @@ mod tests {
             import_video(&source, &output, Some(&audio), &root, &|_| {}, None).unwrap();
         assert_eq!(fps, 30);
         assert!(sample_rate.is_some());
-        assert_eq!(video_packets(&source), video_packets(&output));
+        assert_display_is_the_reencode(&output);
+        assert_eq!(
+            video_packets(&source),
+            video_packets(&cap_rendering::source_video_path(&output))
+        );
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();
@@ -4625,15 +4616,17 @@ mod tests {
         }
         std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
         let cancelled = AtomicBool::new(false);
+        let output = root.join("display.mp4");
         let result = import_video(
             &source,
-            &root.join("display.mp4"),
+            &output,
             None,
             &root,
             &|_| cancelled.store(true, Ordering::Release),
             Some(&cancelled),
         );
         assert_eq!(result.unwrap_err(), IMPORT_CANCELLED);
+        assert!(!cap_rendering::source_video_path(&output).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
