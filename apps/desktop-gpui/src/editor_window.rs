@@ -12292,7 +12292,7 @@ impl EditorWindow {
                     .absolute()
                     .bottom_0()
                     .left(px(4.))
-                    .h(px(28.))
+                    .h(px(TIMELINE_HEADER_HEIGHT))
                     .flex()
                     .flex_row()
                     .flex_none()

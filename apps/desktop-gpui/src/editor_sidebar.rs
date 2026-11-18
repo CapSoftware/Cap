@@ -333,12 +333,12 @@ impl SourceTab {
     /// `BACKGROUND_SOURCES_ROW_ONE` / `_TWO` (`:236-246`), now one segmented
     /// row. `None` is not in it: it is the section header's own action.
     pub const PICKER: [SourceTab; 6] = [
-        Self::Desktop,
         Self::Wallpaper,
-        Self::Image,
-        Self::Color,
-        Self::Gradient,
         Self::AnimatedGradient,
+        Self::Gradient,
+        Self::Color,
+        Self::Image,
+        Self::Desktop,
     ];
 
     pub fn label(self) -> &'static str {
@@ -813,6 +813,10 @@ pub struct SidebarState {
     /// The scroll body's offset, so a tab switch can put it back to the top
     /// (`:647-649`).
     pub scroll: gpui::ScrollHandle,
+    pub source_scroll: gpui::ScrollHandle,
+    /// The source whose pill the row last scrolled into view, so the
+    /// selection is revealed once and the user's own scroll is kept after.
+    pub source_revealed: std::rc::Rc<std::cell::Cell<Option<SourceTab>>>,
 
     /// `KCollapsible open={...}` for Border and MacBook notch (both driven by
     /// their own toggle) and `ShadowSettings`' own `isOpen` signal.
@@ -927,6 +931,8 @@ impl SidebarState {
             source_tab: initial_source_tab(config),
             wallpaper_theme: 0,
             scroll: gpui::ScrollHandle::new(),
+            source_scroll: gpui::ScrollHandle::new(),
+            source_revealed: Default::default(),
             border_open: CollapsibleState::new(
                 config.background.border.as_ref().is_some_and(|b| b.enabled),
             ),
@@ -2646,6 +2652,22 @@ impl EditorWindow {
 const SIDEBAR_INSET: f32 = 20.;
 const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
 /// Six 34px-tall tiles across the pane.
+const SOURCE_FADE_WIDTH: f32 = 28.;
+
+/// The row offset that shows a pill whole and clear of the edge fades,
+/// moving as little as possible. Item edges are unscrolled positions.
+fn source_reveal_offset(view: (f32, f32), item: (f32, f32), offset: f32, max: f32) -> f32 {
+    let mut next = offset;
+    let right = view.1 - SOURCE_FADE_WIDTH;
+    let left = view.0 + SOURCE_FADE_WIDTH;
+    if item.1 + next > right {
+        next -= item.1 + next - right;
+    }
+    if item.0 + next < left {
+        next += left - (item.0 + next);
+    }
+    next.clamp(-max.max(0.), 0.)
+}
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
 const WALLPAPER_TILE_HEIGHT: f32 = 50.;
@@ -2885,11 +2907,6 @@ impl EditorWindow {
         let theme = self.theme;
         let tab = self.sidebar.source_tab;
 
-        let options = SourceTab::PICKER
-            .into_iter()
-            .map(|item| ui::SegmentOption::new(item.label(), tab == item))
-            .collect();
-
         ui::Field::section(&theme, tr::editor::sidebar::background::title())
             .value(section_action(
                 &theme,
@@ -2901,18 +2918,7 @@ impl EditorWindow {
                     this.select_source_tab(SourceTab::None, window, cx);
                 }),
             ))
-            .child(
-                ui::SegmentedControl::editor(&theme, "background-source", options)
-                    .stretch()
-                    .item_height(px(26.))
-                    .item_padding(px(2.), px(0.))
-                    .text_size(px(11.5))
-                    .on_select(cx.listener(|this, index: &usize, window, cx| {
-                        if let Some(item) = ui::option_at(&SourceTab::PICKER, *index) {
-                            this.select_source_tab(item, window, cx);
-                        }
-                    })),
-            )
+            .child(self.render_source_tiles(tab, cx))
             .child(match tab {
                 SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
                 SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
@@ -2924,6 +2930,133 @@ impl EditorWindow {
                 }
                 SourceTab::None => div().into_any_element(),
             })
+    }
+
+    fn render_source_tiles(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let scroll = self.sidebar.source_scroll.clone();
+        let revealed = self.sidebar.source_revealed.clone();
+        let offset = f32::from(scroll.offset().x);
+        let max = f32::from(scroll.max_offset().x);
+        let fade_left = offset < -1.;
+        let fade_right = max > 1. && offset > -(max - 1.);
+        let panel = self.panel_bg();
+        let fade = |angle: f32| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(px(SOURCE_FADE_WIDTH))
+                .bg(gpui::linear_gradient(
+                    angle,
+                    gpui::linear_color_stop(panel, 0.),
+                    gpui::linear_color_stop(panel.opacity(0.), 1.),
+                ))
+        };
+
+        div()
+            .relative()
+            .child(
+                div()
+                    .when(revealed.get() != Some(tab), |this| {
+                        let scroll = scroll.clone();
+                        let revealed = revealed.clone();
+                        let index = SourceTab::PICKER.iter().position(|item| *item == tab);
+                        let editor = cx.entity().downgrade();
+                        this.on_children_prepainted(move |_, _, cx| {
+                            revealed.set(Some(tab));
+                            // A scrolling row keeps its children's bounds on the handle;
+                            // the listener's own list is empty.
+                            let Some(item) = index.and_then(|index| scroll.bounds_for_item(index))
+                            else {
+                                return;
+                            };
+                            let view = scroll.bounds();
+                            let offset = scroll.offset();
+                            let next = source_reveal_offset(
+                                (f32::from(view.left()), f32::from(view.right())),
+                                (f32::from(item.left()), f32::from(item.right())),
+                                f32::from(offset.x),
+                                f32::from(scroll.max_offset().x),
+                            );
+                            if (next - f32::from(offset.x)).abs() > 0.5 {
+                                scroll.set_offset(gpui::point(px(next), offset.y));
+                                // The sidebar view is cached, so it repaints
+                                // the new offset and edge fades only when told.
+                                editor
+                                    .update(cx, |this, cx| this.invalidate_sidebar(cx))
+                                    .ok();
+                            }
+                        })
+                    })
+                    .id("background-sources")
+                    .flex()
+                    .flex_row()
+                    .gap(px(6.))
+                    .overflow_x_scroll()
+                    .track_scroll(&scroll)
+                    .on_scroll_wheel(cx.listener(|this, _, _, cx| this.invalidate_sidebar(cx)))
+                    .children(SourceTab::PICKER.into_iter().map(|item| {
+                        let selected = tab == item;
+                        let ink = Hsla::from(if selected {
+                            editor.text_1
+                        } else {
+                            editor.text_2
+                        });
+                        let glyph = match item {
+                            SourceTab::Gradient => div()
+                                .size(px(13.))
+                                .rounded(px(3.))
+                                .bg(gpui::linear_gradient(
+                                    135.,
+                                    gpui::linear_color_stop(ink, 0.),
+                                    gpui::linear_color_stop(ink.opacity(0.15), 1.),
+                                ))
+                                .into_any_element(),
+                            _ => svg()
+                                .path(match item {
+                                    SourceTab::Desktop => "icons/monitor-outline.svg",
+                                    SourceTab::Wallpaper => "icons/image.svg",
+                                    SourceTab::Image => "icons/folder-open.svg",
+                                    SourceTab::Color => "icons/palette.svg",
+                                    _ => "icons/square-play.svg",
+                                })
+                                .size(px(14.))
+                                .text_color(ink)
+                                .into_any_element(),
+                        };
+                        div()
+                            .id(SharedString::from(format!("background-source-{item:?}")))
+                            .flex()
+                            .flex_none()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(7.))
+                            .h(px(32.))
+                            .px(px(13.))
+                            .rounded(px(10.))
+                            .text_size(px(13.))
+                            .text_color(ink)
+                            .map(|this| {
+                                if selected {
+                                    this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
+                                } else {
+                                    this.bg(Hsla::from(editor.ctl))
+                                        .shadow(editor.trough_ring())
+                                        .cursor_pointer()
+                                        .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
+                                }
+                            })
+                            .child(glyph)
+                            .child(item.label())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select_source_tab(item, window, cx);
+                            }))
+                    })),
+            )
+            .when(fade_left, |this| this.child(fade(90.).left_0()))
+            .when(fade_right, |this| this.child(fade(270.).right_0()))
     }
 
     /// The decoded preview for a path, if it is the one already decoded.
@@ -4366,6 +4499,21 @@ mod tests {
         assert!(SourceTab::PICKER.contains(&SourceTab::AnimatedGradient));
         assert!(!SourceTab::PICKER.contains(&SourceTab::None));
         assert!(!ColorTarget::AnimatedGradientStop(0).is_hex_string());
+    }
+
+    #[test]
+    fn revealing_a_source_pill_moves_the_row_only_as_far_as_needed() {
+        let view = (0., 300.);
+        // Already clear of both fades: the row stays put.
+        assert_eq!(source_reveal_offset(view, (40., 120.), 0., 200.), 0.);
+        // Past the right fade: just far enough to clear it.
+        assert_eq!(source_reveal_offset(view, (250., 330.), 0., 200.), -58.);
+        // Under the left fade while scrolled: back just far enough.
+        assert_eq!(source_reveal_offset(view, (100., 180.), -90., 200.), -72.);
+        // The last pill can only go as far as the row scrolls.
+        assert_eq!(source_reveal_offset(view, (420., 500.), 0., 200.), -200.);
+        // The first pill rests against the start.
+        assert_eq!(source_reveal_offset(view, (0., 80.), -40., 200.), 0.);
     }
 
     #[test]

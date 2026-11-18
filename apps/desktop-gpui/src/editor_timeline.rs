@@ -67,7 +67,7 @@ pub const TIMELINE_PADDING: f32 = 11.;
 pub const TIMELINE_TOP_PADDING: f32 = 9.;
 pub const TIMELINE_BOTTOM_PADDING: f32 = 11.;
 pub const TRACK_GUTTER_GAP: f32 = 8.;
-pub const TRACK_GUTTER: f32 = 104.;
+pub const TRACK_GUTTER: f32 = 136.;
 pub const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
 pub const TIMELINE_HEADER_HEIGHT: f32 = 26.;
 /// The playhead hangs from the ruler's baseline, which is the header's bottom
@@ -117,9 +117,13 @@ const RULER_MAJOR_TICK: f32 = 8.;
 const RULER_MINOR_TICK: f32 = 5.;
 /// The gutter cell: a 22px tile at 4px of left padding, then the label.
 const TRACK_TILE_SIZE: f32 = 26.;
-const TRACK_ROW_GROUP: &str = "timeline-track-row";
-const TRACK_DELETE_CLEARANCE: f32 = 22.;
+/// Room kept right of the label for the lane's delete button, which sits
+/// 24px in from the gutter's edge, so a label never runs under it.
+const TRACK_DELETE_CLEARANCE: f32 = 28.;
 const TRACK_TILE_INSET: f32 = 4.;
+/// How far a paused hold's well sits in from the clip's edges and its own.
+const HOLD_INSET_X: f32 = 3.;
+const HOLD_INSET_Y: f32 = 6.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
 const SEGMENT_RADIUS: f32 = 10.;
@@ -1316,7 +1320,6 @@ pub enum SegmentDetail {
     /// `TL/TextTrack.tsx:428-450`.
     Text {
         content: SharedString,
-        color: Hsla,
         italic: bool,
         bold: bool,
         fullscreen: bool,
@@ -1512,7 +1515,6 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.content.clone())
                     },
-                    color: parse_hex_color(&segment.color).unwrap_or_else(gpui::white),
                     italic: segment.italic,
                     // `font-weight: segment.fontWeight ?? 700` -- gpui has one
                     // weight per family here, so anything at or above 600
@@ -2020,7 +2022,7 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
         .items_center()
         .gap(px(8.))
         .pl(px(TRACK_TILE_INSET))
-        .pr(px(6.))
+        .pr(px(TRACK_DELETE_CLEARANCE))
         .child(
             div()
                 .flex_none()
@@ -2044,9 +2046,6 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
                 .truncate()
                 .text_size(px(13.))
                 .line_height(px(16.))
-                .group_hover(TRACK_ROW_GROUP, |style| {
-                    style.mr(px(TRACK_DELETE_CLEARANCE))
-                })
                 .child(kind.label()),
         )
 }
@@ -2334,7 +2333,6 @@ pub fn render_row(
         } else {
             Hsla::from(theme.editor.text_2).blend(Hsla::from(theme.editor.text_1).opacity(0.5))
         })
-        .group(TRACK_ROW_GROUP)
         .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
             div()
@@ -2923,7 +2921,7 @@ fn render_segment(
         for (hold_start, hold_end) in holds.iter() {
             let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
-            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
+            fill = fill.child(render_hold(hold_x, hold_width));
         }
     }
 
@@ -3391,70 +3389,56 @@ fn rounded_segment_overlay(
 }
 
 /// The paused window a fullscreen text segment inserts inside a clip
-/// (`TL/ClipTrack.tsx:959-1002`): the clip's tint washed back to the card,
-/// ruled off at both edges, with a pause glyph.
-fn render_hold(
-    theme: &Theme,
-    color: Hsla,
-    x: f32,
-    width: f32,
-    segment_width: f32,
-    height: f32,
-) -> impl IntoElement {
+/// (`TL/ClipTrack.tsx:959-1002`): a rounded well cut into the clip, shaded
+/// along its top and lit along its lower lip, with a pause glyph and, when it
+/// fits, its name.
+fn render_hold(x: f32, width: f32) -> impl IntoElement {
     let ink = gpui::hsla(0., 0., 1., 0.9);
+    let well = (width - HOLD_INSET_X * 2.).max(0.);
     div()
         .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(x))
-        .w(px(width))
+        .left(px(x + HOLD_INSET_X))
+        .top(px(HOLD_INSET_Y))
+        .bottom(px(HOLD_INSET_Y))
+        .w(px(well))
+        .rounded(px(SEGMENT_RADIUS - HOLD_INSET_X))
+        .bg(gpui::hsla(0., 0., 0., 0.26))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.3),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.14),
+                offset: gpui::point(px(0.), px(-1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ])
         .flex()
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(4.))
+        .gap(px(5.))
         .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(-x))
-                .w(px(segment_width))
-                .rounded(px(SEGMENT_RADIUS))
-                .bg(gpui::hsla(0., 0., 0., 0.32)),
-        )
-        .children([0., width - 1.].map(|edge| {
-            let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
-            let inset = rounded_corner_inset(
-                f64::from(x + edge),
-                f64::from(segment_width),
-                f64::from(radius),
+        .when(well >= 14., |this| {
+            this.child(
+                svg()
+                    .path("icons/pause.svg")
+                    .size(px(10.))
+                    .flex_none()
+                    .text_color(ink),
             )
-            .max(rounded_corner_inset(
-                f64::from(x + edge + 1.),
-                f64::from(segment_width),
-                f64::from(radius),
-            )) as f32;
-            div()
-                .absolute()
-                .left(px(edge))
-                .top(px(inset))
-                .bottom(px(inset))
-                .w(px(1.))
-                .bg(seg_border(theme, color, 0.))
-        }))
-        .child(
-            svg()
-                .path("icons/pause.svg")
-                .size(px(12.))
-                .flex_none()
-                .text_color(ink),
-        )
-        .when(width >= 64., |this| {
+        })
+        .when(well >= 64., |this| {
             this.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(px(11.))
+                    .line_height(px(15.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ink)
                     .child(tr::editor::timeline::paused()),
@@ -3950,7 +3934,6 @@ fn label_body(
         (
             SegmentDetail::Text {
                 content,
-                color: text_color,
                 italic,
                 bold,
                 fullscreen,
@@ -3959,28 +3942,23 @@ fn label_body(
             LabelTier::Full | LabelTier::Compact,
         ) => label_row()
             .gap(px(6.))
-            .child(
-                div()
-                    .size(px(8.))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(*text_color),
-            )
-            .child(
-                label_primary(theme, color)
-                    .when(*bold, |this| this.font_weight(FontWeight::BOLD))
-                    .when(*italic, |this| this.italic())
-                    .child(content.clone()),
-            )
+            // A fullscreen text pauses the video: it leads with the same
+            // glyph as the hold it cuts into the clip.
             .when(*fullscreen, |this| {
                 this.child(
                     svg()
                         .path("icons/pause.svg")
                         .size(px(10.))
                         .flex_none()
-                        .text_color(seg_muted(theme, color)),
+                        .text_color(seg_label(theme, color)),
                 )
             })
+            .child(
+                label_primary(theme, color)
+                    .when(*bold, |this| this.font_weight(FontWeight::BOLD))
+                    .when(*italic, |this| this.italic())
+                    .child(content.clone()),
+            )
             .into_any_element(),
         (SegmentDetail::Text { fullscreen, .. }, LabelTier::Glyph) => {
             if !*fullscreen {
@@ -4575,14 +4553,14 @@ mod tests {
     // -- Geometry -----------------------------------------------------------
 
     /// The editor's default width: 1275 minus 16 (slot), 24 (the card's
-    /// hairline and padding), 4 (`pr-1`) and 104 (gutter) = 1127px of track
-    /// content starting at x = 124, with the ruler's own strip four pixels
+    /// hairline and padding), 4 (`pr-1`) and 136 (gutter) = 1095px of track
+    /// content starting at x = 156, with the ruler's own strip four pixels
     /// wider.
     #[test]
     fn the_content_column_carries_the_scroll_bodys_padding() {
-        assert_eq!(content_width(1275.), 1127.);
-        assert_eq!(ruler_width(1275.), 1131.);
-        assert_eq!(content_left(), 124.);
+        assert_eq!(content_width(1275.), 1095.);
+        assert_eq!(ruler_width(1275.), 1099.);
+        assert_eq!(content_left(), 156.);
     }
 
     #[test]
@@ -4592,10 +4570,10 @@ mod tests {
         let transform = Transform::initial(total);
         let content = content_width(width);
 
-        assert!(time_from_x(124., width, transform, total).abs() < 1e-9);
-        let end = time_from_x(124. + content, width, transform, total);
+        assert!(time_from_x(content_left(), width, transform, total).abs() < 1e-9);
+        let end = time_from_x(content_left() + content, width, transform, total);
         assert!((end - total).abs() < 1e-6, "{end}");
-        let middle = time_from_x(124. + content / 2., width, transform, total);
+        let middle = time_from_x(content_left() + content / 2., width, transform, total);
         assert!((middle - total / 2.).abs() < 1e-6, "{middle}");
     }
 
@@ -4604,8 +4582,11 @@ mod tests {
         let width = 1275.;
         let total = 60.0;
         let transform = Transform::initial(total);
-        assert_eq!(time_from_x(124. + 9., width, transform, total), 0.0);
-        assert!(time_from_x(124. + 11., width, transform, total) > 0.0);
+        assert_eq!(
+            time_from_x(content_left() + 9., width, transform, total),
+            0.0
+        );
+        assert!(time_from_x(content_left() + 11., width, transform, total) > 0.0);
         assert_eq!(time_from_x(0., width, transform, total), 0.0);
         assert_eq!(time_from_x(9_000., width, transform, total), total);
     }
@@ -4619,7 +4600,12 @@ mod tests {
             zoom: 10.,
             position: 20.,
         };
-        let time = time_from_x(124. + content_width(width) / 2., width, transform, 600.);
+        let time = time_from_x(
+            content_left() + content_width(width) / 2.,
+            width,
+            transform,
+            600.,
+        );
         assert!((time - 25.0).abs() < 1e-6, "{time}");
     }
 
@@ -4629,13 +4615,20 @@ mod tests {
     fn the_hover_preview_clears_outside_the_content_column() {
         let width = 1275.;
         let transform = Transform::initial(60.);
-        assert_eq!(preview_time_from_x(123., width, transform), None);
         assert_eq!(
-            preview_time_from_x(124. + content_width(width) + 1., width, transform),
+            preview_time_from_x(content_left() - 1., width, transform),
             None
         );
-        assert_eq!(preview_time_from_x(124. + 5., width, transform), Some(0.));
-        let middle = preview_time_from_x(124. + content_width(width) / 2., width, transform);
+        assert_eq!(
+            preview_time_from_x(content_left() + content_width(width) + 1., width, transform),
+            None
+        );
+        assert_eq!(
+            preview_time_from_x(content_left() + 5., width, transform),
+            Some(0.)
+        );
+        let middle =
+            preview_time_from_x(content_left() + content_width(width) / 2., width, transform);
         assert!((middle.unwrap() - 30.).abs() < 1e-6);
     }
 
