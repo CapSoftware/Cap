@@ -2643,11 +2643,12 @@ impl EditorWindow {
 
 /// The sidebar card's inner content width: 416 minus its 1px borders minus the
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
-const CONTENT_WIDTH: f32 = 416. - 2. - 32.;
+const SIDEBAR_INSET: f32 = 20.;
+const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
 /// Six 34px-tall tiles across the pane.
-const WALLPAPER_COLUMNS: f32 = 6.;
-const WALLPAPER_GAP: f32 = 6.;
-const WALLPAPER_TILE_HEIGHT: f32 = 34.;
+const WALLPAPER_COLUMNS: f32 = 4.;
+const WALLPAPER_GAP: f32 = 8.;
+const WALLPAPER_TILE_HEIGHT: f32 = 50.;
 /// The gradient preview: `h-28` over the panel's full content width.
 const GRADIENT_PREVIEW_WIDTH: f32 = CONTENT_WIDTH;
 const GRADIENT_PREVIEW_HEIGHT: f32 = 112.;
@@ -2751,9 +2752,9 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(14.))
-                    .pt(px(14.))
-                    .px(px(16.))
-                    .pb(px(16.))
+                    .pt(px(18.))
+                    .px(px(SIDEBAR_INSET))
+                    .pb(px(20.))
                     .child(content),
             )
             .into_any_element()
@@ -2787,7 +2788,7 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(14.))
+            .gap(px(20.))
             .child(self.render_source_field(cx))
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(
@@ -2904,7 +2905,7 @@ impl EditorWindow {
                 ui::SegmentedControl::editor(&theme, "background-source", options)
                     .stretch()
                     .item_height(px(26.))
-                    .item_padding(px(4.), px(0.))
+                    .item_padding(px(2.), px(0.))
                     .text_size(px(11.5))
                     .on_select(cx.listener(|this, index: &usize, window, cx| {
                         if let Some(item) = ui::option_at(&SourceTab::PICKER, *index) {
@@ -3077,9 +3078,9 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(4.))
-                    .mb(px(10.))
-                    .text_size(px(12.))
+                    .gap(px(16.))
+                    .mb(px(12.))
+                    .text_size(px(12.5))
                     .overflow_x_scroll()
                     .children(
                         BACKGROUND_THEMES
@@ -3090,22 +3091,18 @@ impl EditorWindow {
                                 div()
                                     .id(SharedString::from(format!("wallpaper-theme-{index}")))
                                     .flex()
-                                    .flex_1()
-                                    .justify_center()
+                                    .flex_none()
                                     .items_center()
-                                    .h(px(24.))
-                                    .px(px(8.))
-                                    .rounded(px(6.))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .h(px(22.))
                                     .when(selected, |this| {
-                                        this.bg(theme.editor.pill_fill())
-                                            .shadow(theme.editor.pill_shadow())
-                                            .text_color(Hsla::from(theme.editor.text_1))
+                                        this.text_color(Hsla::from(theme.editor.text_1))
                                     })
                                     .when(!selected, |this| {
-                                        this.text_color(Hsla::from(theme.editor.text_2))
+                                        this.text_color(Hsla::from(theme.editor.text_3))
                                             .cursor_pointer()
-                                            .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
+                                            .hover(|this| {
+                                                this.text_color(Hsla::from(theme.editor.text_2))
+                                            })
                                     })
                                     .child(background_theme_label(id))
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -3129,13 +3126,19 @@ impl EditorWindow {
                             .id(SharedString::from(format!("wallpaper-{id}")))
                             .w(px(cell))
                             .h(px(WALLPAPER_TILE_HEIGHT + 2. * (RING_WIDTH + RING_GAP)))
-                            .rounded(px(8.))
+                            .rounded(px(12.))
                             .cursor_pointer()
                             .selection_ring(self.panel_bg(), theme.editor.accent, selected)
+                            .when(!selected, |this| {
+                                this.hover(|this| {
+                                    this.border_color(Hsla::from(theme.editor.line_strong))
+                                })
+                            })
                             .child(
                                 div()
+                                    .relative()
                                     .size_full()
-                                    .rounded(px(6.))
+                                    .rounded(px(8.))
                                     .overflow_hidden()
                                     .bg(Hsla::from(theme.editor.ctl_hover))
                                     .children(image.map(|image| {
@@ -3145,8 +3148,15 @@ impl EditorWindow {
                                         img(image)
                                             .size_full()
                                             .object_fit(gpui::ObjectFit::Cover)
-                                            .rounded(px(6.))
-                                    })),
+                                            .rounded(px(8.))
+                                    }))
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .rounded(px(8.))
+                                            .shadow(theme.editor.trough_ring()),
+                                    ),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let Some(path) = wallpaper_path(id) else {
@@ -3948,11 +3958,19 @@ impl EditorWindow {
         disabled: bool,
         cx: &mut Context<Self>,
     ) -> ui::Field {
+        let theme = self.theme;
         let value = format_slider_value(self.slider_value(slider), unit);
-        ui::Field::inline(&self.theme, name)
+        ui::Field::stacked(&theme, name)
             .disabled(disabled)
-            .value_text(value)
-            .child(self.slider_sized_state(slider, unit, true, disabled, cx))
+            .value(
+                div()
+                    .text_size(px(12.))
+                    .font_features(crate::editor_timeline::tabular_numerals())
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .child(value)
+                    .into_any_element(),
+            )
+            .child(self.slider_sized_state(slider, unit, false, disabled, cx))
     }
 
     fn slider_sized(
@@ -3987,8 +4005,9 @@ impl EditorWindow {
         div()
             .id(SharedString::from(format!("bg-slider-row-{slider:?}")))
             // The Kobalte root is `relative px-1 h-8 flex items-center`.
-            .px(px(4.))
-            .h(px(32.))
+            .px(px(8.))
+            .h(px(22.))
+            .when(!flex, |this| this.mb(px(10.)))
             .flex()
             .flex_row()
             .items_center()
@@ -4001,8 +4020,8 @@ impl EditorWindow {
                     track,
                 )
                 .flex()
-                .row_height(px(28.))
-                .editor(&theme, px(16.), disabled)
+                .row_height(px(22.))
+                .editor(&theme, px(18.), disabled)
                 .when(!disabled, |this| {
                     this.on_drag_start(cx.listener(
                         move |this, event: &MouseDownEvent, window, cx| {

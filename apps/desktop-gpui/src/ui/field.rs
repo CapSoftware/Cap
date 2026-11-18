@@ -183,7 +183,7 @@ impl RenderOnce for Field {
         } = self;
         let label_color = match (disabled, style) {
             (true, _) => disabled_text,
-            (false, FieldStyle::Section) => muted,
+            (false, FieldStyle::Section) => text,
             (false, _) => text,
         };
 
@@ -232,7 +232,7 @@ impl RenderOnce for Field {
         }
 
         let (label_size, label_weight) = match style {
-            FieldStyle::Section => (px(12.), FontWeight::MEDIUM),
+            FieldStyle::Section => (px(13.), FontWeight::MEDIUM),
             FieldStyle::Stacked => (px(13.), FontWeight::NORMAL),
             _ => (px(13.), FontWeight::SEMIBOLD),
         };

@@ -698,6 +698,15 @@ pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
     let _ = cx;
 }
 
+/// Text renders grayscale-antialiased with no stroke dilation, the way the
+/// web app's `-webkit-font-smoothing: antialiased` draws it. gpui only
+/// dilates glyphs when `AppleFontSmoothing` allows it, and reads that once,
+/// so this must run before the first frame.
+pub fn use_antialiased_text() {
+    #[cfg(target_os = "macos")]
+    mac::use_antialiased_text();
+}
+
 #[cfg(target_os = "macos")]
 mod macos_exception_guard;
 
@@ -706,6 +715,31 @@ mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    pub fn use_antialiased_text() {
+        use core_foundation::base::TCFType;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::{CFString, CFStringRef};
+
+        unsafe extern "C" {
+            static kCFPreferencesCurrentApplication: CFStringRef;
+            fn CFPreferencesSetAppValue(
+                key: CFStringRef,
+                value: core_foundation::base::CFTypeRef,
+                application: CFStringRef,
+            );
+        }
+
+        let key = CFString::new("AppleFontSmoothing");
+        let value = CFNumber::from(0i32);
+        unsafe {
+            CFPreferencesSetAppValue(
+                key.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+                kCFPreferencesCurrentApplication,
+            );
+        }
+    }
+
     pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
         use objc2_app_kit::{
             NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,

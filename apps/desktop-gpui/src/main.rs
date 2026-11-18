@@ -378,6 +378,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     runtime.block_on(linux_portal_id::register());
 
+    platform::use_antialiased_text();
     let app = gpui_platform::application().with_assets(Assets);
     // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
     // registered on the builder -- gpui exposes it nowhere else -- with the

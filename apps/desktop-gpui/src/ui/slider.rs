@@ -164,42 +164,32 @@ impl Slider {
 
     pub fn editor(self, theme: &crate::theme::Theme, knob: Pixels, disabled: bool) -> Self {
         let editor = theme.editor;
-        let accent = if disabled {
+        let fill = if disabled {
             editor.text_3
         } else {
             editor.accent
         };
-        let knob_fill = crate::theme::mix(accent, gpui::rgb(0xffffff), 0.14);
         let mut slider = self
             .track(px(4.), Hsla::from(editor.ctl_active))
-            .fill(Hsla::from(accent))
-            .thumb(knob, Hsla::from(knob_fill), None);
+            .fill(Hsla::from(fill))
+            .thumb(knob, gpui::white(), None);
         if let Some(thumb) = slider.thumb.as_mut() {
             thumb.shadow = vec![
                 gpui::BoxShadow {
-                    color: gpui::hsla(0., 0., 1., 0.35),
-                    offset: gpui::point(px(0.), px(1.)),
+                    color: gpui::hsla(0., 0., 0., 0.12),
+                    offset: gpui::point(px(0.), px(0.)),
                     blur_radius: px(0.),
-                    spread_radius: px(0.),
-                    inset: true,
+                    spread_radius: px(0.5),
+                    inset: false,
                 },
                 gpui::BoxShadow {
-                    color: gpui::hsla(0., 0., 0., 0.28),
+                    color: gpui::hsla(0., 0., 0., 0.22),
                     offset: gpui::point(px(0.), px(1.)),
-                    blur_radius: px(2.),
+                    blur_radius: px(3.),
                     spread_radius: px(0.),
                     inset: false,
                 },
             ];
-            if !disabled {
-                thumb.shadow.push(gpui::BoxShadow {
-                    color: Hsla::from(accent).opacity(0.18),
-                    offset: gpui::point(px(0.), px(1.)),
-                    blur_radius: px(4.),
-                    spread_radius: px(0.),
-                    inset: false,
-                });
-            }
         }
         slider
     }
