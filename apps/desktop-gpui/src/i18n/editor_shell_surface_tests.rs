@@ -639,6 +639,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::corner::squircle(), "Squircle"),
         (tr::editor::tabs::padding::even(), "Even"),
         (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (

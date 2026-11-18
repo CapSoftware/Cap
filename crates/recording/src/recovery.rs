@@ -2886,6 +2886,7 @@ impl RecoveryManager {
                         None
                     },
                     display_notch: original_segment.and_then(|s| s.display_notch),
+                    cursor_shape_version: original_segment.and_then(|s| s.cursor_shape_version),
                 }
             })
             .collect();
@@ -2897,6 +2898,10 @@ impl RecoveryManager {
                 segments,
                 cursors: existing_cursors,
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: recording
+                    .meta
+                    .studio_meta()
+                    .map_or(0, StudioRecordingMeta::cursor_shape_version),
             },
         })
     }
@@ -5244,9 +5249,11 @@ mod clean_studio_snapshot_tests {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
+                    cursor_shape_version: 0,
                 },
             })),
         }
@@ -7283,6 +7290,7 @@ mod empty_orphan_segment_tests {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             })
             .collect();
 
@@ -7297,6 +7305,7 @@ mod empty_orphan_segment_tests {
                     segments,
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -7710,6 +7719,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };
@@ -8411,6 +8421,7 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
                 },
             })),
         };

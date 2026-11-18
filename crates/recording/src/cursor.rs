@@ -1839,7 +1839,9 @@ fn get_cursor_data() -> Option<CursorData> {
 #[cfg(test)]
 mod stationary_shape_tests {
     use super::{records_cursor_move, should_sample_cursor_image, still_shape_confirmation};
-    use cap_project::{CursorEvents, CursorMoveEvent, SHORT_CURSOR_SHAPE_DEBOUNCE_MS};
+    use cap_project::{
+        CursorEvents, CursorMoveEvent, MIN_VISIBLE_CURSOR_SHAPE_MS, SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    };
 
     fn cursor_move(time_ms: f64, x: f64, cursor_id: &str) -> CursorMoveEvent {
         CursorMoveEvent {
@@ -1864,13 +1866,18 @@ mod stationary_shape_tests {
         assert_eq!((confirmation.x, confirmation.y), (0.4, 0.5));
         moves.push(confirmation);
 
-        let mut events = CursorEvents {
+        let events = CursorEvents {
             moves,
             clicks: vec![],
         };
-        events.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
-        assert_eq!(events.moves[2].cursor_id, "ibeam");
-        assert_eq!(events.moves[3].cursor_id, "ibeam");
+        let mut debounced = events.clone();
+        debounced.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        assert_eq!(debounced.moves[2].cursor_id, "ibeam");
+        assert_eq!(debounced.moves[3].cursor_id, "ibeam");
+        let mut held = events;
+        held.hold_brief_cursor_shapes(None, MIN_VISIBLE_CURSOR_SHAPE_MS);
+        assert_eq!(held.moves[2].cursor_id, "ibeam");
+        assert_eq!(held.moves[3].cursor_id, "ibeam");
     }
 
     #[test]

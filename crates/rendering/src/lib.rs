@@ -42,6 +42,7 @@ mod cursor_interpolation;
 #[cfg(target_os = "windows")]
 pub mod d3d_texture;
 pub mod decoder;
+mod export_activity;
 pub mod frame_chrome;
 mod frame_pipeline;
 mod frame_windows;
@@ -225,7 +226,10 @@ mod font_family_tests {
 }
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
-pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
+pub use cursor_interpolation::{
+    CursorAnchors, CursorEventOrder, HoverChanges, PrecomputedCursorTimeline,
+};
+pub use export_activity::ExportActivity;
 use mask::interpolate_masks;
 use scene::*;
 pub use shape::PreparedShape;
@@ -1080,6 +1084,7 @@ pub enum RenderingError {
 
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
+    pub hover_changes: Arc<HoverChanges>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
     pub render_display: bool,
@@ -1162,7 +1167,8 @@ pub async fn render_video_to_channel(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
-                project.cursor.interaction_anchors,
+                CursorAnchors::from_config(&project.cursor),
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -1736,7 +1742,8 @@ pub async fn render_video_to_channel_nv12(
                 &segment.cursor,
                 cursor_smoothing,
                 Some(click_spring),
-                project.cursor.interaction_anchors,
+                CursorAnchors::from_config(&project.cursor),
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -4642,7 +4649,8 @@ impl ProjectUniforms {
                 || current_click.tension != base_click.tension
                 || current_click.mass != base_click.mass
                 || current_click.friction != base_click.friction
-                || cursor.interaction_anchors != project.cursor.interaction_anchors)
+                || CursorAnchors::from_config(cursor)
+                    != CursorAnchors::from_config(&project.cursor))
         {
             Some(precomputed_cursor.cached_variant(
                 cursor_events,
@@ -4652,7 +4660,7 @@ impl ProjectUniforms {
                     friction: cursor.friction,
                 },
                 current_click,
-                cursor.interaction_anchors,
+                CursorAnchors::from_config(cursor),
             ))
         } else {
             None
@@ -7455,6 +7463,7 @@ mod export_order_tests {
                 clicks: vec![],
                 moves: vec![],
             }),
+            hover_changes: Arc::default(),
             keyboard: Arc::new(Default::default()),
             decoders: RecordingSegmentDecoders {
                 screen,
