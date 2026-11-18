@@ -788,6 +788,16 @@ fn main() {
             }
         }
 
+        // `CAP_GPUI_AUTO_OVERLAY_CARD=<path-to-.cap>`: show that recording's
+        // card in the recordings overlay, as the end of a Studio recording
+        // does, so a test can start an overlay action on a project that is
+        // also open in the editor.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("CAP_GPUI_AUTO_OVERLAY_CARD")
+        {
+            crate::recordings_overlay::show_studio_recording(path.into(), cx);
+        }
+
         // `CAP_GPUI_AUTO_HOTKEY=<store key>`: run a hotkey action's dispatch
         // arm (e.g. `screenshotDisplay`) as if the OS shortcut fired.
         if let Ok(action) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
