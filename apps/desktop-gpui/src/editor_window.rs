@@ -705,6 +705,18 @@ const SHARP_PREVIEW_ENGINE_POLL: Duration = Duration::from_millis(10);
 
 type PreviewRequests = tokio::sync::watch::Receiver<Option<(u32, u32, XY<u32>)>>;
 
+/// What [`EditorWindow::schedule_sharp_preview`] decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SharpPreview {
+    Scheduled,
+    Playing,
+    ChosenQuality,
+    Handoff,
+    NoEngine,
+    NoCanvas,
+    AlreadySharp,
+}
+
 /// The fitted preview's size in device pixels, written on every paint.
 pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
 
@@ -4786,24 +4798,32 @@ impl EditorWindow {
     /// the preview has been still for `delay` (a pause, the end of a scrub or
     /// an edit, a resize) the same frame is rendered again at the canvas size.
     /// Full and Quarter are explicit choices and are drawn as chosen.
-    pub(crate) fn schedule_sharp_preview(&mut self, delay: Duration, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_sharp_preview(
+        &mut self,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) -> SharpPreview {
         self.sharp_preview = None;
-        if self.playing
-            || self.preview_quality != crate::store::EditorPreviewQuality::Half
-            || self.preparing_presentation.is_some()
+        if self.playing {
+            return SharpPreview::Playing;
+        }
+        if self.preview_quality != crate::store::EditorPreviewQuality::Half {
+            return SharpPreview::ChosenQuality;
+        }
+        if self.preparing_presentation.is_some()
             || self.ordinary_handoff_frame.is_some()
             || self.preparing_transport_active()
         {
-            return;
+            return SharpPreview::Handoff;
         }
         let Some(instance) = self.instance.clone() else {
-            return;
+            return SharpPreview::NoEngine;
         };
         let Some(canvas) = self.preview_canvas_px.get() else {
-            return;
+            return SharpPreview::NoCanvas;
         };
         if !sharp_preview_needed(canvas, self.preview.read(cx).frame_size) {
-            return;
+            return SharpPreview::AlreadySharp;
         }
         // A newer paused request means the preview is moving again; its frame
         // schedules its own redraw when it lands.
@@ -4865,6 +4885,40 @@ impl EditorWindow {
                 });
             });
         }));
+        SharpPreview::Scheduled
+    }
+
+    /// A handoff from the preparing preview finished. While it was running the
+    /// guards above turned every redraw away, including the one the handoff's
+    /// own frame asked for, so a paused editor asks again here.
+    fn paused_handoff_done(&mut self, cx: &mut Context<Self>) -> Option<SharpPreview> {
+        (!self.playing).then(|| self.schedule_sharp_preview(Duration::ZERO, cx))
+    }
+
+    /// The ordinary handoff's frame has been painted: hand the transport back
+    /// and resume playback if the preparing preview was playing.
+    fn finish_ordinary_handoff(
+        &mut self,
+        target: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<SharpPreview> {
+        if self.ordinary_handoff_frame != Some(target) {
+            return None;
+        }
+        self.ordinary_handoff_frame = None;
+        let resume = self
+            .preparing_presentation
+            .take()
+            .is_some_and(|presentation| presentation.playback.playing);
+        self.preparing_seed = None;
+        if resume {
+            self.start_playback(self.playhead, cx);
+        }
+        let sharp = self.paused_handoff_done(cx);
+        cx.notify();
+        window.refresh();
+        sharp
     }
 
     pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
@@ -7673,6 +7727,7 @@ impl EditorWindow {
                     this.preparing_seed = None;
                     this.ordinary_handoff_frame = None;
                     drop(this.preparing_consumer.take());
+                    this.paused_handoff_done(cx);
                 } else {
                     this.retry_preparing_candidate(window, cx);
                 }
@@ -7682,20 +7737,7 @@ impl EditorWindow {
             window.refresh();
         } else if let Some(target) = handoff_target {
             cx.on_next_frame(window, move |this, window, cx| {
-                if this.ordinary_handoff_frame != Some(target) {
-                    return;
-                }
-                this.ordinary_handoff_frame = None;
-                let resume = this
-                    .preparing_presentation
-                    .take()
-                    .is_some_and(|presentation| presentation.playback.playing);
-                this.preparing_seed = None;
-                if resume {
-                    this.start_playback(this.playhead, cx);
-                }
-                cx.notify();
-                window.refresh();
+                this.finish_ordinary_handoff(target, window, cx);
             });
             window.refresh();
         }
@@ -14174,7 +14216,7 @@ mod tests {
             }
         }
 
-        fn fixture(
+        pub(super) fn fixture(
             cx: &mut gpui::TestAppContext,
         ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
             cx.update(|cx| {
@@ -14316,6 +14358,63 @@ mod tests {
                 assert_eq!(flags(&editor, cx).0, tab);
                 editor.update(cx, |editor, cx| editor.set_selection(None, cx));
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod paused_handoff {
+        use super::*;
+
+        fn hand_off(editor: &mut EditorWindow, target: u32) {
+            editor.preview_quality = crate::store::EditorPreviewQuality::Half;
+            editor.playing = false;
+            editor.preparing_presentation = Some(Default::default());
+            editor.ordinary_handoff_frame = Some(target);
+        }
+
+        #[gpui::test]
+        fn finishing_a_paused_handoff_asks_for_the_sharp_redraw(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                hand_off(editor, 12);
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::Handoff,
+                    "the handoff frame's own request is turned away"
+                );
+                assert_eq!(
+                    editor.finish_ordinary_handoff(12, window, cx),
+                    Some(SharpPreview::NoEngine),
+                    "once the handoff lands the redraw gets past every handoff guard"
+                );
+                assert!(editor.ordinary_handoff_frame.is_none());
+                assert!(editor.preparing_presentation.is_none());
+            });
+        }
+
+        #[gpui::test]
+        fn a_stale_handoff_target_changes_nothing(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                hand_off(editor, 12);
+                assert_eq!(editor.finish_ordinary_handoff(13, window, cx), None);
+                assert_eq!(editor.ordinary_handoff_frame, Some(12));
+                assert!(editor.preparing_presentation.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn a_committed_adoption_asks_for_the_sharp_redraw_when_paused(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.preview_quality = crate::store::EditorPreviewQuality::Half;
+                editor.playing = false;
+                assert_eq!(editor.paused_handoff_done(cx), Some(SharpPreview::NoEngine));
+                editor.playing = true;
+                assert_eq!(editor.paused_handoff_done(cx), None);
+            });
         }
     }
 
