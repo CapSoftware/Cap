@@ -57,9 +57,20 @@ impl Weights {
     }
 }
 
+/// Buffer rows for a stripe of a `width`-texel rect: as many as fit `budget`
+/// bytes of features, at least enough for a tile row plus the halo, at most
+/// the whole rect.
+fn buffer_rows(width: u32, height: u32, budget: u64) -> u32 {
+    let fitting = (budget / (u64::from(width) * 32)).min(u64::from(u32::MAX)) as u32;
+    (height + 2 * HALO).min(fitting.max(2 * HALO + TILE[1]))
+}
+
+/// Stripe buffers, sized in texels and tiles rather than by shape: the
+/// shaders index by the current stripe's own width, so any stripe whose
+/// texel and tile counts fit can reuse them.
 struct Stripes {
-    width: u32,
-    rows: u32,
+    texels: u64,
+    tiles: u64,
     image: wgpu::Buffer,
     features: [wgpu::Buffer; 2],
     residual: wgpu::Buffer,
@@ -223,17 +234,15 @@ impl ScreenUpscaleNet {
     }
 
     fn ensure_stripes(&mut self, device: &wgpu::Device, width: u32, rows: u32) {
+        let texels = u64::from(width) * u64::from(rows);
+        let tiles = u64::from(width.div_ceil(TILE[0])) * u64::from(rows.div_ceil(TILE[1]));
         if self
             .stripes
             .as_ref()
-            .is_some_and(|stripes| stripes.width >= width && stripes.rows >= rows)
+            .is_some_and(|stripes| stripes.texels >= texels && stripes.tiles >= tiles)
         {
             return;
         }
-        let (width, rows) = match &self.stripes {
-            Some(stripes) => (stripes.width.max(width), stripes.rows.max(rows)),
-            None => (width, rows),
-        };
         let buffer = |label: &str, bytes: u64| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -242,11 +251,9 @@ impl ScreenUpscaleNet {
                 mapped_at_creation: false,
             })
         };
-        let texels = u64::from(width) * u64::from(rows);
-        let tiles = u64::from(width.div_ceil(TILE[0])) * u64::from(rows.div_ceil(TILE[1]));
         self.stripes = Some(Stripes {
-            width,
-            rows,
+            texels,
+            tiles,
             image: buffer("Screen upscale image", texels * 16),
             features: [
                 buffer("Screen upscale features", texels * 32),
@@ -276,9 +283,7 @@ impl ScreenUpscaleNet {
         if width == 0 || height == 0 || source_size[0] == 0 || source_size[1] == 0 {
             return;
         }
-        let row_bytes = u64::from(width) * 32;
-        let fitting_rows = (self.max_stripe_bytes / row_bytes).min(u64::from(u32::MAX)) as u32;
-        let buffer_rows = (height + 2 * HALO).min(fitting_rows.max(2 * HALO + TILE[1]));
+        let buffer_rows = buffer_rows(width, height, self.max_stripe_bytes);
         let stripe_rows = buffer_rows - 2 * HALO;
         self.ensure_stripes(device, width, buffer_rows);
         let Some(stripes) = &self.stripes else {
@@ -622,6 +627,35 @@ mod tests {
             .flat_map(|(g, e)| (0..3).map(move |c| (g[c] as f32 / 255.0 - e[c]).abs()))
             .fold(0.0f32, f32::max);
         assert!(worst <= 1.0 / 255.0 + 1e-4, "worst difference {worst}");
+    }
+
+    #[test]
+    fn stripe_buffers_stay_within_budget_across_shapes() {
+        let instance = crate::create_wgpu_instance_sync();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                force_fallback_adapter: crate::force_software_wgpu_adapter(),
+                ..Default::default()
+            }))
+        else {
+            return;
+        };
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
+        let mut net = ScreenUpscaleNet::new(&device);
+        for (width, height) in [(512u32, 1800u32), (3000, 512), (512, 1800)] {
+            let rows = buffer_rows(width, height, MAX_STRIPE_BYTES);
+            net.ensure_stripes(&device, width, rows);
+            let stripes = net.stripes.as_ref().expect("stripes");
+            assert!(
+                stripes.features[0].size() <= MAX_STRIPE_BYTES,
+                "{width}x{height}"
+            );
+            assert!(stripes.texels >= u64::from(width) * u64::from(rows));
+        }
     }
 
     #[test]
