@@ -695,11 +695,10 @@ export const POST = async (req: Request) => {
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all lookup attempts. Acknowledging so Stripe does not retry.",
+						{ customerId: customer.id },
 					);
-					return new Response("User not found, webhook will be retried", {
-						status: 202,
-					});
+					return new Response("User not found", { status: 202 });
 				}
 
 				console.log("Successfully found user:", {
@@ -881,11 +880,10 @@ export const POST = async (req: Request) => {
 
 				if (!dbUser) {
 					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
+						"No user found after all lookup attempts. Acknowledging so Stripe does not retry.",
+						{ customerId: customer.id },
 					);
-					return new Response("User not found, webhook will be retried", {
-						status: 202,
-					});
+					return new Response("User not found", { status: 202 });
 				}
 
 				console.log("Successfully found user:", {

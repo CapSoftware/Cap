@@ -337,6 +337,40 @@ describe("Stripe webhook: Cap Pro checkout fulfilment", () => {
 			metadata: { userId: "user-2" },
 		});
 	});
+
+	it.each([
+		["checkout.session.completed", completed({})],
+		[
+			"customer.subscription.updated",
+			subscriptionEvent(
+				"customer.subscription.updated",
+				fakeSubscription("sub_1", "cus_1", 3),
+			),
+		],
+	])(
+		"acknowledges %s when no account matches the customer",
+		async (_, event) => {
+			vi.useFakeTimers();
+			stripeSubscriptions([fakeSubscription("sub_1", "cus_1", 3)]);
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_1",
+				email: "gone@example.com",
+				metadata: { userId: "user-gone" },
+			});
+			mockStripe.webhooks.constructEvent.mockReturnValue(event);
+
+			const pending = POST(request());
+			await vi.runAllTimersAsync();
+			const response = await pending;
+			vi.useRealTimers();
+
+			expect(response.status).toBe(202);
+			expect(state.updates).toEqual([]);
+			expect(state.inserts).toEqual([]);
+			expect(mockStripe.customers.update).not.toHaveBeenCalled();
+		},
+	);
+
 	describe("an account that already has a live subscription", () => {
 		const owner = () => ({
 			id: "user-own",
