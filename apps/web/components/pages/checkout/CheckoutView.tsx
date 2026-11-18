@@ -226,6 +226,7 @@ function HostedFallback({
 	plan,
 	seats,
 	onboarding,
+	promo,
 	priceIds,
 	onRetry,
 }: Omit<CheckoutViewProps, "session"> & { onRetry: () => void }) {
@@ -248,6 +249,7 @@ function HostedFallback({
 						quantity: seats,
 						isOnBoarding: onboarding,
 						hosted: true,
+						promo,
 					}),
 				},
 			);
