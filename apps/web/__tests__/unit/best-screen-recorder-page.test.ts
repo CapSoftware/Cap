@@ -47,24 +47,30 @@ describe("BestScreenRecorderPage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("best screen recorder");
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("no longer includes the multi-product comparison table", () => {
+		expect(componentSource).not.toContain("comparisonTable");
 	});
 
 	it("includes recording modes section", () => {
 		expect(componentSource).toContain("recordingModes");
 	});
 
-	it("includes OBS as a comparison target", () => {
-		expect(componentSource).toContain("OBS");
+	it("no longer names OBS", () => {
+		expect(componentSource).not.toContain("OBS");
 	});
 
 	it("includes Loom as a comparison target", () => {
 		expect(componentSource).toContain("Loom");
 	});
 
-	it("includes Camtasia as a comparison target", () => {
-		expect(componentSource).toContain("Camtasia");
+	it("no longer names Camtasia", () => {
+		expect(componentSource).not.toContain("Camtasia");
+	});
+
+	it("no longer names built-in OS recorders", () => {
+		expect(componentSource).not.toContain("Game Bar");
+		expect(componentSource).not.toContain("Cmd+Shift+5");
+		expect(componentSource).not.toContain("Built-in Tools");
 	});
 
 	it("references the free-screen-recorder internal link", () => {
