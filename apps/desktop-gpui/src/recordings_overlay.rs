@@ -494,9 +494,9 @@ fn sync_window(model: &Entity<Overlay>, cx: &mut App) {
 
 fn overlay_level() -> isize {
     if cfg!(target_os = "macos") {
-        platform::target_overlay_level() - 1
+        platform::recording_area_level() - 1
     } else {
-        platform::target_overlay_level()
+        platform::recording_area_level()
     }
 }
 

@@ -2806,6 +2806,7 @@ rounded = "Redondeadas"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Seguir resaltados al pasar"
 friction = "Fricción"
 hide_when_idle = "Ocultar en reposo"
 inactivity_delay = "Retraso de inactividad"

@@ -89,88 +89,13 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Cap vs Other Developer Documentation Video Tools",
-		headers: ["Feature", "Cap", "Loom", "Scribe", "Confluence Recorder"],
-		rows: [
-			[
-				"Screen + webcam recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Limited", status: "warning" },
-			],
-			[
-				"4K resolution",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "N/A", status: "neutral" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Instant shareable link",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Delayed", status: "warning" },
-			],
-			[
-				"AI transcripts",
-				{ text: "Yes", status: "positive" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Self-hosted storage",
-				{ text: "Yes — S3", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Confluence only", status: "warning" },
-			],
-			[
-				"Open source",
-				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"No time limits",
-				{ text: "Yes — Studio Mode", status: "positive" },
-				{ text: "Limited free", status: "warning" },
-				{ text: "N/A", status: "neutral" },
-				{ text: "Limited", status: "warning" },
-			],
-			[
-				"Timestamped comments",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
-
 	comparisonTitle: "Why Developers Choose Cap for Documentation Videos",
-	comparisonDescription:
-		"Developer documentation videos reduce support tickets and accelerate onboarding — here's how Cap compares to other tools",
 
 	comparison: [
-		{
-			title: "Cap vs Loom for Developer Documentation",
-			description:
-				"Loom is a capable async video tool but limits recording quality and length on its free plan, and has no self-hosting option for teams with data residency requirements. Cap records at 4K with no recording-length limits in Studio Mode and supports <a href='/self-hosted-screen-recording'>self-hosted S3 storage</a>. Cap is also open source, with most code under AGPLv3 and specified Rust crates under MIT — developers can audit the code, contribute features, and trust the tool they're using to document their own products.",
-		},
 		{
 			title: "Cap vs Written Documentation",
 			description:
 				"Written docs are valuable but struggle to convey dynamic processes — API authentication flows, SDK initialization sequences, CLI command outputs. A 3-minute Cap recording showing an end-to-end API integration replaces a multi-page written guide that developers have to parse and mentally simulate. Video documentation reduces support questions and accelerates integration time for your users.",
-		},
-		{
-			title: "Cap vs Scribe for Technical Walkthroughs",
-			description:
-				"Scribe generates step-by-step screenshot guides automatically, which works well for UI workflows but struggles with code, terminal output, and API responses. Cap records continuous video with audio narration, capturing the full context of a technical process — not just screenshots of discrete clicks. For developer documentation, video plus voice explains the why, not just the what.",
 		},
 		{
 			title: "Cap for Open Source Project Documentation",
@@ -261,11 +186,6 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 			question: "Can I record videos for private internal documentation?",
 			answer:
 				"Yes. Cap supports password protection on individual recordings and expiry dates on share links. For teams with stricter requirements, Cap supports self-hosted S3 storage — recordings upload directly to your own infrastructure (AWS S3, Cloudflare R2, MinIO) and never touch Cap's servers. This makes Cap suitable for internal runbooks, pre-release API docs, and proprietary SDK documentation.",
-		},
-		{
-			question: "What is the best screen recorder for developer documentation?",
-			answer:
-				"Cap is the best screen recorder for developer documentation because it combines 4K recording quality, instant shareable links, AI-generated transcripts, and self-hosted storage in a single free, open-source tool. Unlike general-purpose video tools, Cap is optimized for the async sharing workflows developers actually use — paste a link in a README, embed in a docs site, or share in a PR comment. It's free and open source, with most code under AGPLv3, and available for Mac and Windows.",
 		},
 		{
 			question: "Does Cap work for recording API demos and SDK walkthroughs?",

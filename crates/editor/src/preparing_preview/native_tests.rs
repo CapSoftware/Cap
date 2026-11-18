@@ -370,7 +370,12 @@ async fn ordinary_composed_frames(
             )
             .await
             .unwrap();
-        let timeline = cache.get(segment.recording_clip, &fixture.cursor, &fixture.project);
+        let timeline = cache.get(
+            segment.recording_clip,
+            &fixture.cursor,
+            &cap_rendering::HoverChanges::default(),
+            &fixture.project,
+        );
         let mut zoom = ZoomTransformTimeline::from_project_for_clip(
             &fixture.project,
             &fixture.cursor,
@@ -1705,4 +1710,82 @@ async fn native_studio_sound_releases_preparing_audio_and_preserves_transport() 
         .unwrap();
         candidate.dispose().await;
     }
+}
+
+/// A project without hover anchors never pays for hover analysis: no analysis
+/// thread, nothing decoded and no cache written, however long the editor is
+/// open and idle. Turning the setting on starts it on the next preview.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hover_analysis_never_starts_until_hover_anchors_are_turned_on() {
+    let fixture = fixture(false);
+    let root = fixture.directory.path().join("finished.cap");
+    std::fs::create_dir(&root).unwrap();
+    let display = root.join("display.mp4");
+    finalize_track(&fixture.metadata.project_path, &fixture.display, &display);
+    let mut metadata = fixture.metadata.clone();
+    metadata.project_path = root.clone();
+    let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+        panic!("Studio metadata expected");
+    };
+    let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("Indexed metadata expected");
+    };
+    inner.segments[0].display.path = "display.mp4".into();
+    inner.segments[0].camera = None;
+    inner.segments[0].mic = None;
+    inner.status = Some(cap_project::StudioRecordingStatus::Complete);
+    metadata.save_for_project().unwrap();
+    let cache = root.join("cursor-hover.json");
+    let opened = || {
+        crate::hover_analysis::OPENED_FOR_TEST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&display)
+    };
+    let mut project = fixture.project.clone();
+    project.cursor.interaction_anchors = true;
+    project.cursor.hover_anchors = false;
+    project.camera.hide = true;
+    project.write(&root).unwrap();
+
+    let editor = crate::EditorInstance::new_with_audio_output(
+        root.clone(),
+        |_| {},
+        Box::new(|_, _| {}),
+        None,
+        Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {}))),
+    )
+    .await
+    .unwrap();
+    for frame in [0, 15, 30, 45] {
+        editor
+            .preview_tx
+            .send(Some((frame, 30, XY::new(160, 120))))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Well past the idle second after which an opted-in project would start.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!editor.hover_analysis_started());
+    assert!(!opened());
+    assert!(!cache.exists());
+
+    editor
+        .project_config
+        .0
+        .send_modify(|project| project.cursor.hover_anchors = true);
+    editor
+        .preview_tx
+        .send(Some((0, 30, XY::new(160, 120))))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !cache.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("hover analysis never saved its result");
+    assert!(editor.hover_analysis_started());
+    assert!(opened());
+    editor.dispose().await;
 }
