@@ -4194,7 +4194,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_track_label_reads_at_aa_contrast_in_both_themes() {
+    fn every_track_label_and_value_reads_at_aa_contrast_in_both_themes() {
         use crate::theme::{EditorPalette, mix, relative_luminance};
         let contrast = |a: gpui::Rgba, b: gpui::Rgba| {
             let (a, b) = (relative_luminance(a), relative_luminance(b));
@@ -4221,13 +4221,14 @@ mod tests {
                     palette.seg_fill(color),
                     palette.sheen(palette.seg_fill(color)).0,
                 ] {
-                    let label = palette.seg_label(color);
-                    let ink = mix(fill, gpui::Rgba { a: 1., ..label }, label.a);
-                    assert!(
-                        contrast(ink, fill) >= 4.5,
-                        "{track:06x}: {:.2}",
-                        contrast(ink, fill)
-                    );
+                    for text in [palette.seg_label(color), palette.seg_muted(color)] {
+                        let ink = mix(fill, gpui::Rgba { a: 1., ..text }, text.a);
+                        assert!(
+                            contrast(ink, fill) >= 4.5,
+                            "{track:06x}: {:.2}",
+                            contrast(ink, fill)
+                        );
+                    }
                 }
             }
         }

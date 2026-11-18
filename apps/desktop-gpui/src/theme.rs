@@ -574,7 +574,7 @@ impl EditorPalette {
     }
 
     pub fn seg_muted(&self, color: Rgba) -> Rgba {
-        self.seg_ink(color, 0.72)
+        self.seg_ink(color, 1.)
     }
 
     /// White or a deep shade of the track colour, whichever contrasts more
