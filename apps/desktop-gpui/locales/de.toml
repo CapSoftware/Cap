@@ -2359,6 +2359,7 @@ background_blur = "Hintergrundunschärfe"
 custom_position = "Eigene Bildschirmposition (auf der Leinwand verschoben)"
 motion_blur = "Bewegungsunschärfe"
 padding = "Rand"
+padding_style = "Randstil"
 rounded_corners = "Abgerundete Ecken"
 title = "Layout"
 
@@ -2856,6 +2857,10 @@ timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
 timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
 title = "Tastatur anzeigen"
 uppercase = "Großbuchstaben"
+
+[editor.tabs.padding]
+even = "Gleichmäßig"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Unten mittig"
