@@ -1111,6 +1111,40 @@ fn a_cleanup_never_waits_on_its_own_project_trash() {
     assert_eq!(fixture.files(), before);
 }
 
+/// FFmpeg opens media without `FILE_SHARE_DELETE`, and the closing editor's
+/// decoders let go of it a few seconds after the window closes, which keeps
+/// Windows from moving the folder until then.
+#[cfg(windows)]
+#[test]
+fn media_still_open_when_the_editor_closes_is_cleaned_once_released() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    let fixture = Fixture::new();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(
+            fixture
+                .project()
+                .join("content/segments/segment-1/display.mp4"),
+        )
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        drop(held);
+    });
+    let outcome = run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    release.join().unwrap();
+    assert!(matches!(outcome, Outcome::Cleaned { .. }), "{outcome:?}");
+    assert!(
+        !fixture
+            .project()
+            .join("content/segments/segment-1")
+            .exists()
+    );
+    assert_opens(&fixture.project());
+}
+
 #[test]
 fn busy_projects_are_never_touched() {
     assert_eq!(Busy::default().reason(), None);
