@@ -294,7 +294,7 @@ impl<F: FnMut(TrackProgress)> ProgressReporter<'_, F> {
     }
 }
 
-struct StagedFiles(Vec<PathBuf>);
+pub(crate) struct StagedFiles(pub(crate) Vec<PathBuf>);
 
 impl Drop for StagedFiles {
     fn drop(&mut self) {
@@ -306,7 +306,7 @@ impl Drop for StagedFiles {
 
 /// Names this export's temporary files apart from any other export writing
 /// to the same folder at the same time.
-fn export_token() -> String {
+pub(crate) fn export_token() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
@@ -322,7 +322,7 @@ fn staging_path(dir: &Path, kind: TrackKind, token: &str) -> PathBuf {
 /// Moves every staged file onto its destination, all or nothing. Files
 /// already there are set aside first and put back if any move fails, so a
 /// failed export never leaves a mix of old and new tracks.
-fn publish(files: &[(PathBuf, PathBuf)], token: &str) -> Result<(), String> {
+pub(crate) fn publish(files: &[(PathBuf, PathBuf)], token: &str) -> Result<(), String> {
     if let Some((_, folder)) = files.iter().find(|(_, destination)| destination.is_dir()) {
         return Err(format!(
             "{} is a folder, so the track cannot be saved there",
@@ -383,12 +383,20 @@ struct Prepared {
     duration: f64,
 }
 
-async fn prepare(
+/// The edited timeline every separate-file export follows: the default
+/// timeline a fresh recording gets, clip offsets and late-audio trims filled
+/// in the way the main export does, and its duration.
+pub(crate) struct PreparedTimeline {
+    pub recording_meta: RecordingMeta,
+    pub project: ProjectConfiguration,
+    pub recordings: Arc<ProjectRecordingsMeta>,
+    pub duration: f64,
+}
+
+pub(crate) fn prepare_timeline(
     project_path: &Path,
     config: Option<ProjectConfiguration>,
-    tracks: &[TrackKind],
-    force_ffmpeg_decoder: bool,
-) -> Result<Prepared, TrackExportError> {
+) -> Result<PreparedTimeline, TrackExportError> {
     let recording_meta = RecordingMeta::load_for_project(project_path)
         .map_err(|error| format!("Could not read the recording: {error}"))?;
     let studio_meta = recording_meta
@@ -420,27 +428,67 @@ async fn prepare(
         &cap_project::late_audio_trim_limits(studio_meta, &recording_durations),
     );
 
-    let available = available_tracks(&recordings, &project);
+    Ok(PreparedTimeline {
+        recording_meta,
+        project,
+        recordings,
+        duration: 0.0,
+    })
+}
+
+impl PreparedTimeline {
+    /// Measures the timeline and rejects one that is empty or names a clip
+    /// the recording does not have.
+    pub(crate) fn measured(mut self) -> Result<Self, TrackExportError> {
+        let studio_meta = self
+            .recording_meta
+            .studio_meta()
+            .ok_or(TrackExportError::NotStudio)?;
+        self.duration = cap_rendering::get_duration(
+            &self.recordings,
+            &self.recording_meta,
+            studio_meta,
+            &self.project,
+        );
+        if !self.duration.is_finite() || self.duration <= 0.0 {
+            return Err(TrackExportError::Failed(
+                "There is nothing to export: the timeline is empty".into(),
+            ));
+        }
+        if let Some(timeline) = &self.project.timeline
+            && timeline
+                .segments
+                .iter()
+                .any(|segment| segment.recording_clip as usize >= self.recordings.segments.len())
+        {
+            return Err(TrackExportError::Failed(
+                "The timeline refers to a clip this recording does not have".into(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+async fn prepare(
+    project_path: &Path,
+    config: Option<ProjectConfiguration>,
+    tracks: &[TrackKind],
+    force_ffmpeg_decoder: bool,
+) -> Result<Prepared, TrackExportError> {
+    let timeline = prepare_timeline(project_path, config)?;
+    let available = available_tracks(&timeline.recordings, &timeline.project);
     if let Some(missing) = tracks.iter().find(|kind| !available.contains(kind)) {
         return Err(TrackExportError::Unavailable(*missing));
     }
-
-    let duration = cap_rendering::get_duration(&recordings, &recording_meta, studio_meta, &project);
-    if !duration.is_finite() || duration <= 0.0 {
-        return Err(TrackExportError::Failed(
-            "There is nothing to export: the timeline is empty".into(),
-        ));
-    }
-    if let Some(timeline) = &project.timeline
-        && timeline
-            .segments
-            .iter()
-            .any(|segment| segment.recording_clip as usize >= recordings.segments.len())
-    {
-        return Err(TrackExportError::Failed(
-            "The timeline refers to a clip this recording does not have".into(),
-        ));
-    }
+    let PreparedTimeline {
+        recording_meta,
+        project,
+        recordings,
+        duration,
+    } = timeline.measured()?;
+    let studio_meta = recording_meta
+        .studio_meta()
+        .ok_or(TrackExportError::NotStudio)?;
 
     // Media Foundation hands out GPU textures that the track encoder cannot
     // read back; the FFmpeg decoders give CPU frames on every platform.
@@ -1070,7 +1118,7 @@ async fn export_audio_track<F: FnMut(TrackProgress)>(
 
 /// Runs CPU-bound work without stalling the async workers that the video
 /// decoders and the app share, when the runtime has others to hand off to.
-fn run_blocking<T>(work: impl FnOnce() -> T) -> T {
+pub(crate) fn run_blocking<T>(work: impl FnOnce() -> T) -> T {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
             tokio::task::block_in_place(work)
