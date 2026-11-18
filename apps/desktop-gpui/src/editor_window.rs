@@ -573,9 +573,9 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
 }
 
 /// The amount drawn and generated zooms start at: the Default zoom amount
-/// setting, falling back to what its slider shows.
-fn new_zoom_amount() -> f64 {
-    f64::from(crate::store::GeneralSettings::load().new_zoom_amount())
+/// setting, falling back to the default for the project's auto zoom rules.
+fn new_zoom_amount(auto_zoom_version: u32) -> f64 {
+    f64::from(crate::store::GeneralSettings::load().zoom_amount_for(auto_zoom_version))
 }
 
 fn load_recording_clicks(
@@ -6794,7 +6794,8 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let amount = new_zoom_amount();
+        let version = self.project.auto_zoom_version;
+        let amount = new_zoom_amount(version);
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
@@ -6809,7 +6810,9 @@ impl EditorWindow {
                     .timeline
                     .as_ref()
                     .map_or_else(Vec::new, |timeline| {
-                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                        edits::generate_zoom_segments_for_timeline(
+                            &clicks, timeline, amount, version,
+                        )
                     });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
@@ -6843,6 +6846,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> usize {
         edits::ensure_timeline(&mut self.project, &self.clip_display_durations);
+        let auto_zoom_version = self.project.auto_zoom_version;
         let mut index = 0;
         self.edit(
             |timeline| {
@@ -6853,7 +6857,12 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => edits::insert_zoom_segment(timeline, start, end, new_zoom_amount()),
+                    _ => edits::insert_zoom_segment(
+                        timeline,
+                        start,
+                        end,
+                        new_zoom_amount(auto_zoom_version),
+                    ),
                 };
                 true
             },
@@ -15471,10 +15480,10 @@ mod tests {
         let settings = tempfile::tempdir().unwrap();
         let store = settings.path().join("store");
         for (contents, expected) in [
-            (r#"{ "general_settings": {} }"#, 1.5),
+            (r#"{ "general_settings": {} }"#, 2.0),
             (
                 r#"{ "general_settings": { "defaultZoomAmount": null } }"#,
-                1.5,
+                2.0,
             ),
             (
                 r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
@@ -15484,7 +15493,7 @@ mod tests {
             std::fs::write(&store, contents).unwrap();
             crate::store::set_test_tauri_store_path(Some(store.clone()));
             let shown = crate::store::GeneralSettings::load().new_zoom_amount();
-            let amount = new_zoom_amount();
+            let amount = new_zoom_amount(cap_project::auto_zoom::AUTO_ZOOM_VERSION);
             crate::store::set_test_tauri_store_path(None);
             assert_eq!(f64::from(shown), expected, "{contents}");
             assert_eq!(amount, expected, "{contents}");

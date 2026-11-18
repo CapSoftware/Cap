@@ -1,5 +1,6 @@
 mod animated_gradient;
 mod audio_visuals;
+pub mod auto_zoom;
 mod caption_timing;
 pub mod caption_words;
 #[cfg(test)]

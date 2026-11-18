@@ -3168,6 +3168,12 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    /// Which rules generate auto zoom segments, see
+    /// [`crate::auto_zoom::auto_zoom_segments`]. Absent (0) keeps the
+    /// original rules; new projects start on
+    /// [`crate::auto_zoom::AUTO_ZOOM_VERSION`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub auto_zoom_version: u32,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3176,6 +3182,10 @@ pub struct ProjectConfiguration {
     pub markers: Vec<TimelineMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -3230,6 +3240,7 @@ impl Default for ProjectConfiguration {
             clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            auto_zoom_version: 0,
             markers: Vec::new(),
             audio_visuals: None,
         }
@@ -3305,8 +3316,8 @@ pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
 impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
-    /// and motion: even padding, a lighter and softer card shadow, and the
-    /// new-project zoom spring. At zero padding both padding modes lay out
+    /// and motion: even padding, a lighter and softer card shadow, the
+    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3319,6 +3330,7 @@ impl ProjectConfiguration {
             blur: 46.7,
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
+        config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
         config
     }
 
@@ -3346,6 +3358,7 @@ impl ProjectConfiguration {
         preset.clip_alignment_version = self.clip_alignment_version;
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
+        preset.auto_zoom_version = self.auto_zoom_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3809,6 +3822,24 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {
+        assert_eq!(
+            ProjectConfiguration::for_new_project().auto_zoom_version,
+            crate::auto_zoom::AUTO_ZOOM_VERSION
+        );
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.auto_zoom_version, 0);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("autoZoomVersion").is_none());
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["autoZoomVersion"], 1);
+        let reloaded: ProjectConfiguration = serde_json::from_value(fresh).unwrap();
+        assert_eq!(reloaded.auto_zoom_version, 1);
+        let styled = saved.with_preset(ProjectConfiguration::for_new_project());
+        assert_eq!(styled.auto_zoom_version, 0);
+    }
+
+    #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
         assert!(ProjectConfiguration::default().cursor.hover_anchors);
@@ -3899,6 +3930,10 @@ mod tests {
             .unwrap()
             .remove("paddingMode");
         framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomVersion");
         assert_eq!(framing_reset, default);
     }
 
