@@ -763,6 +763,11 @@ impl EditorInstance {
         Ok(this)
     }
 
+    #[cfg(test)]
+    pub(crate) fn hover_analysis_started(&self) -> bool {
+        self.hover_analysis_started.load(Ordering::Acquire)
+    }
+
     fn ensure_hover_analysis(self: &Arc<Self>) {
         if !wants_hover_analysis(&self.project_config.1.borrow())
             || self.hover_analysis_started.swap(true, Ordering::AcqRel)

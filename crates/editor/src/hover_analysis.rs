@@ -62,6 +62,12 @@ fn write_cache(display: &Path, changes_ms: &[f64]) -> Result<(), String> {
     std::fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
+/// Every display video the analysis has opened, so tests can prove it never
+/// decodes anything for projects that have not asked for it.
+#[cfg(test)]
+pub(crate) static OPENED_FOR_TEST: std::sync::Mutex<Vec<PathBuf>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// `cursor_offset_ms` is added to video timestamps to reach cursor time.
 /// Waits while `should_pause` holds (playback, an export). Returns
 /// `Ok(None)` when cancelled, without saving anything.
@@ -73,6 +79,11 @@ pub fn analyze(
     should_pause: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<Option<Vec<f64>>, String> {
+    #[cfg(test)]
+    OPENED_FOR_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(display.to_path_buf());
     let mut input = ffmpeg::format::input(&display).map_err(|e| format!("open video: {e}"))?;
     let stream = input
         .streams()
