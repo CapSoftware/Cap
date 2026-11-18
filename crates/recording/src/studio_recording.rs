@@ -1327,7 +1327,18 @@ impl Message<SetCameraFeed> for Actor {
         }
         match self.state.as_ref() {
             Some(ActorState::Recording { .. }) => {
-                bail!("Pause the recording before changing camera input")
+                let (Some(camera_feed), Some(input)) = (
+                    msg.camera_feed,
+                    self.segment_factory
+                        .live_camera
+                        .clone()
+                        .filter(|input| input.is_released()),
+                ) else {
+                    bail!("Pause the recording before changing camera input")
+                };
+                input.attach(camera_feed.clone()).await?;
+                self.segment_factory.set_camera_feed(Some(camera_feed));
+                Ok(())
             }
             Some(ActorState::Paused { .. }) => {
                 self.segment_factory.set_camera_feed(msg.camera_feed);
@@ -1335,6 +1346,43 @@ impl Message<SetCameraFeed> for Actor {
             }
             None => Err(anyhow!("Recording no longer active")),
         }
+    }
+}
+
+struct ReleaseCameraForSwitch;
+
+impl Message<ReleaseCameraForSwitch> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(
+        &mut self,
+        _: ReleaseCameraForSwitch,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        #[cfg(target_os = "linux")]
+        if self.resume_attempt.is_some() || self.resume_cleanup_error.is_some() {
+            bail!("Recording resume or its cleanup is still pending");
+        }
+        // The Media Foundation camera encoder takes only the size and pixel
+        // format it was opened with, so Windows switches cameras at a
+        // segment boundary.
+        if cfg!(windows) {
+            bail!("Switching the camera within a segment is not supported here");
+        }
+        let Some(ActorState::Recording { pipeline, .. }) = self.state.as_ref() else {
+            bail!("The recording is not running");
+        };
+        if pipeline.camera.is_none() {
+            bail!("The running segment has no camera track");
+        }
+        let input = self
+            .segment_factory
+            .live_camera
+            .clone()
+            .ok_or_else(|| anyhow!("The running segment has no camera track"))?;
+        input.release().await?;
+        self.segment_factory.set_camera_feed(None);
+        Ok(())
     }
 }
 
@@ -1351,10 +1399,7 @@ impl Message<AddExcludedWindows> for Actor {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         match self.state.as_ref() {
-            Some(ActorState::Recording { .. }) => {
-                bail!("Pause the recording before changing excluded windows")
-            }
-            Some(ActorState::Paused { .. }) => {
+            Some(ActorState::Recording { .. } | ActorState::Paused { .. }) => {
                 self.segment_factory.add_excluded_windows(msg.0);
                 Ok(())
             }
@@ -2330,6 +2375,14 @@ impl ActorHandle {
         camera_feed: Option<Arc<CameraFeedLock>>,
     ) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
+    }
+
+    /// Gives the running segment's camera up for a switch while the segment
+    /// keeps recording: the camera track stays open without frames until
+    /// `set_camera_feed` hands it the next camera. Fails, changing nothing,
+    /// where the segment cannot switch in place; pause to switch there.
+    pub async fn release_camera_for_switch(&self) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(ReleaseCameraForSwitch).await?)
     }
 
     #[cfg(target_os = "macos")]
@@ -3320,7 +3373,15 @@ struct SegmentPipelineFactory {
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
     encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+    /// The camera input of the segment built last, which a camera switch
+    /// moves to another camera while that segment records.
+    live_camera: Option<StudioCameraInput>,
 }
+
+#[cfg(target_os = "linux")]
+type StudioCameraInput = sources::CameraTrackInput<crate::ffmpeg::FFmpegVideoFrame>;
+#[cfg(not(target_os = "linux"))]
+type StudioCameraInput = sources::CameraTrackInput<crate::output_pipeline::NativeCameraFrame>;
 
 impl SegmentPipelineFactory {
     #[allow(clippy::too_many_arguments)]
@@ -3352,6 +3413,7 @@ impl SegmentPipelineFactory {
             completion_tx,
             #[cfg(windows)]
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
+            live_camera: None,
         }
     }
 
@@ -3377,11 +3439,13 @@ impl SegmentPipelineFactory {
             return prepare(cursors, next_cursors_id).await;
         }
         let segment_start_time = Timestamps::now();
+        let camera_input = self.next_camera_input();
         create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
             self.segment_base_inputs(),
+            camera_input,
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -3410,6 +3474,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
+        let camera_input = self.next_camera_input();
         let startup = async {
             #[cfg(test)]
             if let Some(prepare) = &self.prepare_override {
@@ -3420,6 +3485,7 @@ impl SegmentPipelineFactory {
                 &self.cursors_dir,
                 self.index,
                 self.segment_base_inputs(),
+                camera_input,
                 cursors,
                 next_cursors_id,
                 self.custom_cursor_capture,
@@ -3474,6 +3540,15 @@ impl SegmentPipelineFactory {
 
     pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
         self.base_inputs.camera_feed = camera_feed;
+    }
+
+    fn next_camera_input(&mut self) -> Option<StudioCameraInput> {
+        self.live_camera = self
+            .base_inputs
+            .camera_feed
+            .clone()
+            .map(sources::CameraTrackInput::new);
+        self.live_camera.clone()
     }
 
     #[cfg(target_os = "macos")]
@@ -3548,6 +3623,7 @@ async fn create_segment_pipeline(
     cursors_dir: &Path,
     index: u32,
     base_inputs: RecordingBaseInputs,
+    camera_input: Option<StudioCameraInput>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
@@ -3612,7 +3688,7 @@ async fn create_segment_pipeline(
             } else {
                 OutputPipeline::builder(screen_output_path.clone())
             }
-            .with_video::<sources::Camera>(camera_feed)
+            .with_video::<sources::Camera>(sources::CameraTrackInput::new(camera_feed))
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone());
 
@@ -3652,7 +3728,9 @@ async fn create_segment_pipeline(
 
             #[cfg(target_os = "macos")]
             let screen = OutputPipeline::builder(screen_output_path.clone())
-                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_video::<sources::NativeCamera>(sources::CameraTrackInput::new(
+                    camera_feed.clone(),
+                ))
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
@@ -3662,7 +3740,9 @@ async fn create_segment_pipeline(
 
             #[cfg(windows)]
             let screen = OutputPipeline::builder(screen_output_path.clone())
-                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_video::<sources::NativeCamera>(sources::CameraTrackInput::new(
+                    camera_feed.clone(),
+                ))
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
@@ -3752,11 +3832,11 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "macos")]
     let camera = if camera_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<MacOSFragmentedM4SCameraMuxer>(MacOSFragmentedM4SCameraMuxerConfig {
@@ -3767,7 +3847,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig {
@@ -3785,11 +3865,11 @@ async fn create_segment_pipeline(
     #[cfg(windows)]
     let camera = if camera_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
@@ -3800,7 +3880,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
@@ -3818,10 +3898,10 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "linux")]
     let camera = if camera_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             OutputPipeline::builder(dir.join("camera"))
-                .with_video::<sources::Camera>(camera_feed)
+                .with_video::<sources::Camera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::SegmentedVideoMuxer>(
@@ -3836,7 +3916,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::Camera>(camera_feed)
+                .with_video::<sources::Camera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::Mp4Muxer>(())
