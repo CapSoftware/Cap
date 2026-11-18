@@ -39,6 +39,7 @@ mod cursor_interpolation;
 #[cfg(target_os = "windows")]
 pub mod d3d_texture;
 pub mod decoder;
+mod export_activity;
 pub mod frame_chrome;
 mod frame_pipeline;
 mod frame_windows;
@@ -223,6 +224,7 @@ mod font_family_tests {
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::{CursorEventOrder, HoverChanges, PrecomputedCursorTimeline};
+pub use export_activity::ExportActivity;
 use mask::interpolate_masks;
 use scene::*;
 pub use shape::PreparedShape;

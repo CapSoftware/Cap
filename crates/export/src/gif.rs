@@ -41,6 +41,7 @@ impl GifExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         use cap_utils::operation_diagnostics::{Field, observe};
         observe(
             "export_gif",

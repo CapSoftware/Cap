@@ -714,7 +714,7 @@ impl EditorInstance {
         Ok(this)
     }
 
-    fn spawn_hover_analysis(&self) {
+    fn spawn_hover_analysis(self: &Arc<Self>) {
         if !self.project_config.1.borrow().cursor.interaction_anchors {
             return;
         }
@@ -756,9 +756,18 @@ impl EditorInstance {
 
         let segments = Arc::clone(&self.segment_medias);
         let cancel = Arc::clone(&self.hover_analysis_cancel);
+        let editor = Arc::downgrade(self);
+        let should_pause = move || {
+            cap_rendering::ExportActivity::any_running()
+                || editor.upgrade().is_some_and(|editor| {
+                    *editor.playback_active_rx.borrow()
+                        || editor.export_preview_active.load(Ordering::Acquire)
+                })
+        };
         let spawned = std::thread::Builder::new()
             .name("cursor-hover-analysis".into())
             .spawn(move || {
+                crate::hover_analysis::lower_thread_priority();
                 for (index, display, offset_ms) in jobs {
                     let Some(segment) = segments.get(index) else {
                         continue;
@@ -777,6 +786,7 @@ impl EditorInstance {
                         &segment.cursor,
                         offset_ms,
                         &cancel,
+                        &should_pause,
                         &mut progress,
                     ) {
                         Ok(Some(changes)) => {

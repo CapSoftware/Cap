@@ -13,9 +13,10 @@ pub const DETECTOR_VERSION: u32 = 2;
 
 const CACHE_FILE: &str = "cursor-hover.json";
 
-/// Decoding is most of the cost. Two threads keep a full-screen recording
-/// well ahead of real time without taking the cores the editor is using.
-const ANALYSIS_DECODE_THREADS: usize = 2;
+/// Decoding stays on the analysis thread itself: decoder worker threads would
+/// not inherit its background priority on every platform.
+const ANALYSIS_DECODE_THREADS: usize = 1;
+const PAUSE_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,12 +63,14 @@ fn write_cache(display: &Path, changes_ms: &[f64]) -> Result<(), String> {
 }
 
 /// `cursor_offset_ms` is added to video timestamps to reach cursor time.
-/// Returns `Ok(None)` when cancelled, without saving anything.
+/// Waits while `should_pause` holds (playback, an export). Returns
+/// `Ok(None)` when cancelled, without saving anything.
 pub fn analyze(
     display: &Path,
     cursor: &CursorEvents,
     cursor_offset_ms: f64,
     cancel: &AtomicBool,
+    should_pause: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<Option<Vec<f64>>, String> {
     let mut input = ffmpeg::format::input(&display).map_err(|e| format!("open video: {e}"))?;
@@ -137,6 +140,9 @@ pub fn analyze(
     };
 
     for (packet_stream, packet) in input.packets() {
+        while should_pause() && !cancel.load(Ordering::Relaxed) {
+            std::thread::sleep(PAUSE_POLL);
+        }
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
@@ -154,6 +160,38 @@ pub fn analyze(
     let changes = detector.finish();
     write_cache(display, &changes)?;
     Ok(Some(changes))
+}
+
+/// Background priority for the calling thread, so the analysis only uses
+/// time the editor, playback and other apps leave idle.
+pub fn lower_thread_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        const QOS_CLASS_BACKGROUND: u32 = 0x09;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: only changes the scheduling class of the calling thread.
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0) };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        const PRIO_PROCESS: i32 = 0;
+        unsafe extern "C" {
+            fn setpriority(which: i32, who: u32, priority: i32) -> i32;
+        }
+        // SAFETY: on Linux `who == 0` with PRIO_PROCESS sets only the
+        // calling thread's nice value.
+        unsafe { setpriority(PRIO_PROCESS, 0, 19) };
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+        };
+        // SAFETY: only changes the priority of the calling thread.
+        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
+    }
 }
 
 struct PointerTrack {

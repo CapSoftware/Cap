@@ -220,6 +220,7 @@ impl Mp4ExportSettings {
         options: turbo::TurboOptions,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         let mut base = base.0;
         let on_progress = Arc::new(Mutex::new(on_progress));
         let user_cancellation = base
@@ -274,6 +275,7 @@ impl Mp4ExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         use cap_utils::operation_diagnostics::{Field, observe};
         observe(
             "export_mp4",

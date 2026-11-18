@@ -181,6 +181,7 @@ pub async fn export_tracks(
     cancel: Arc<AtomicBool>,
     mut on_progress: impl FnMut(TrackProgress) + Send,
 ) -> Result<Vec<PathBuf>, TrackExportError> {
+    let _export_activity = cap_rendering::ExportActivity::begin();
     let mut tracks = settings.tracks.clone();
     tracks.sort();
     tracks.dedup();
