@@ -117,6 +117,8 @@ const RULER_MAJOR_TICK: f32 = 8.;
 const RULER_MINOR_TICK: f32 = 5.;
 /// The gutter cell: a 22px tile at 4px of left padding, then the label.
 const TRACK_TILE_SIZE: f32 = 26.;
+const TRACK_ROW_GROUP: &str = "timeline-track-row";
+const TRACK_DELETE_CLEARANCE: f32 = 22.;
 const TRACK_TILE_INSET: f32 = 4.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
@@ -2042,6 +2044,9 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
                 .truncate()
                 .text_size(px(13.))
                 .line_height(px(16.))
+                .group_hover(TRACK_ROW_GROUP, |style| {
+                    style.mr(px(TRACK_DELETE_CLEARANCE))
+                })
                 .child(kind.label()),
         )
 }
@@ -2329,6 +2334,7 @@ pub fn render_row(
         } else {
             Hsla::from(theme.editor.text_2).blend(Hsla::from(theme.editor.text_1).opacity(0.5))
         })
+        .group(TRACK_ROW_GROUP)
         .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
             div()
