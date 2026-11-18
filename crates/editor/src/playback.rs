@@ -1208,10 +1208,11 @@ impl Playback {
                     self.segment_medias
                         .iter()
                         .map(|seg| {
-                            Arc::new(PrecomputedCursorTimeline::new(
+                            Arc::new(PrecomputedCursorTimeline::new_with_anchors(
                                 &seg.cursor,
                                 cursor_smoothing,
                                 Some(click_spring),
+                                project.cursor.interaction_anchors,
                             ))
                         })
                         .collect()
