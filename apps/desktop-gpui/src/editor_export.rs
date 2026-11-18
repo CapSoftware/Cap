@@ -358,7 +358,6 @@ pub struct PreviewStats {
     pub estimated_size_mb: f64,
 }
 
-/// What a render gets for the export page's "Enhance quality" option.
 fn screen_enhancement(enhance: bool) -> cap_project::ScreenEnhancement {
     if enhance {
         cap_project::ScreenEnhancement::on()

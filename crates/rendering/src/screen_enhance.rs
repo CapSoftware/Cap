@@ -194,7 +194,6 @@ impl ScreenEnhanceFrame {
     }
 }
 
-/// The screen's magnification: output pixels per source pixel of the crop.
 pub fn magnification(uniforms: &CompositeVideoFrameUniforms) -> f32 {
     let crop_w = (uniforms.crop_bounds[2] - uniforms.crop_bounds[0]).max(f32::EPSILON);
     let crop_h = (uniforms.crop_bounds[3] - uniforms.crop_bounds[1]).max(f32::EPSILON);

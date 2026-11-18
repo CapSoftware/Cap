@@ -1071,7 +1071,6 @@ pub struct ScreenEnhancement {
 impl ScreenEnhancement {
     pub const DEFAULT_STRENGTH: f32 = 0.5;
 
-    /// What the export page's option and the editor's preview toggle turn on.
     pub const fn on() -> Self {
         Self {
             enabled: true,
