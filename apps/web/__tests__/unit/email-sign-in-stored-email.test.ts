@@ -437,7 +437,7 @@ describe("normalizeSignInEmail", () => {
 		["a@gmaıl.com", "a@xn--gmal-nza.com"],
 		[" Person@Example.com ", "person@example.com"],
 		["me＠ｃap.example", "me@cap.example"],
-		["a@exa​mple.com", "a@example.com"],
+		["a@exa\u200Bmple.com", "a@example.com"],
 	])("maps %j to %j", (input, expected) => {
 		expect(normalizeSignInEmail(input)).toBe(expected);
 	});
@@ -445,7 +445,7 @@ describe("normalizeSignInEmail", () => {
 	it.each([
 		"pérson@example.com",
 		"straße@example.com",
-		"‬person@example.com",
+		"\u202Cperson@example.com",
 		"per\u0001son@example.com",
 		"a@exam\u0001ple.com",
 	])("refuses %j", (input) => {
