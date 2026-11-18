@@ -315,6 +315,13 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         );
     }
 
+    if !scenarios
+        .iter()
+        .any(|scenario| matches!(scenario, Scenario::TickFields))
+    {
+        std::process::exit(0);
+    }
+
     // The visible case models the production sidebar on the Captions tab with
     // caption 0 selected. `TickFields` seeds the fields without changing the
     // tab, so set that state explicitly before either sync loop.
