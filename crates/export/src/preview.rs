@@ -114,6 +114,7 @@ struct PreviewSource<'a> {
 struct PreviewSegment<'a> {
     decoders: &'a RecordingSegmentDecoders,
     cursor: &'a CursorEvents,
+    hover_changes: &'a cap_rendering::HoverChanges,
 }
 
 async fn render_preview_with_base(
@@ -136,6 +137,7 @@ async fn render_preview_with_base(
             .map(|segment| PreviewSegment {
                 decoders: &segment.decoders,
                 cursor: &segment.cursor,
+                hover_changes: &segment.hover_changes,
             })
             .collect(),
         total_duration,
@@ -191,6 +193,7 @@ pub async fn render_preview_with_editor(
             .map(|segment| PreviewSegment {
                 decoders: &segment.decoders,
                 cursor: &segment.cursor,
+                hover_changes: &segment.hover_changes,
             })
             .collect(),
         total_duration,
@@ -285,8 +288,11 @@ async fn render_preview_frame(
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
-    let cursor_timeline =
-        PrecomputedCursorTimeline::from_project(segment_media.cursor, project_config);
+    let cursor_timeline = PrecomputedCursorTimeline::from_project(
+        segment_media.cursor,
+        &segment_media.hover_changes.times_ms(),
+        project_config,
+    );
     let uniforms = ProjectUniforms::new_with_precomputed_cursor(
         render_constants,
         project_config,
@@ -358,6 +364,7 @@ async fn render_preview_frame(
         } else {
             Some(PrecomputedCursorTimeline::from_project(
                 outgoing_media.cursor,
+                &outgoing_media.hover_changes.times_ms(),
                 project_config,
             ))
         };
