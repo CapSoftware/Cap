@@ -320,12 +320,16 @@ fn shift_captions(
     // start on a clip boundary need not read back as that clip.
     let mut segments = Vec::with_capacity(captions.segments.len());
     for segment in std::mem::take(&mut captions.segments) {
+        let words = segment.words.len();
         let segment = split_words_at_clips(segment, &clip_start, |clip| late(clip).is_some());
+        // A word cut in two is cut with its caption, so no caption holds two
+        // pieces of one word (an edit to its text would merge them).
+        let word_cut = segment.words.len() > words;
         let cut_for = |clip: Option<usize>| {
             edited_late(clip) || (segment.words.is_empty() && clip.and_then(late).is_some())
         };
         let parts = split_at_clips(&segment, &clip_of, &clip_start);
-        if parts.len() < 2 || !parts.iter().any(|(clip, _)| cut_for(*clip)) {
+        if parts.len() < 2 || !(word_cut || parts.iter().any(|(clip, _)| cut_for(*clip))) {
             segments.push((None, segment));
             continue;
         }
@@ -1583,6 +1587,24 @@ mod tests {
             migrate_untouched(1, word()),
             [("w".to_string(), 9.5, 10.0), ("w".to_string(), 14.0, 14.5)]
         );
+        // Each side is its own caption, so editing one's text keeps the other.
+        let mut project = legacy_project();
+        project.captions = Some(CaptionsData {
+            segments: word(),
+            source_timed: true,
+            ..Default::default()
+        });
+        crate::synchronize_captions(&mut project, &durations());
+        migrate_late_audio_alignment(&mut project, &meta(4.05), durations);
+        let captions: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|c| (c.id.as_str(), c.words.len(), c.recording_clip))
+            .collect();
+        assert_eq!(captions, [("w", 1, Some(0)), ("w-1", 1, Some(1))]);
     }
 
     // Typed captions (no words) running across an untouched late clip's
@@ -2022,6 +2044,15 @@ mod tests {
         for caption in &after.captions.as_ref().unwrap().segments {
             if caption.start > caption.end {
                 return Err(format!("saved reversed {caption:?}"));
+            }
+            // Generated word texts are unique, so a repeat is one word's two
+            // pieces in one caption, which an edit to its text would merge.
+            let mut texts: Vec<&str> = caption.words.iter().map(|w| w.text.as_str()).collect();
+            texts.sort_unstable();
+            if texts.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(format!(
+                    "one caption holds two pieces of a word {caption:?}"
+                ));
             }
         }
 
