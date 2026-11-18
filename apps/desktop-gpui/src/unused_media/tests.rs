@@ -45,6 +45,7 @@ fn clip(recording: u32, start: f64, end: f64) -> Value {
 /// source clock: segment 0 is 0..10, segment 1 is 10..16, segment 2 16..24.
 fn config_json() -> Value {
     json!({
+        "clipAlignmentVersion": cap_project::CLIP_ALIGNMENT_VERSION,
         "timeline": {
             "segments": [clip(0, 1.0, 9.0), clip(2, 0.5, 7.5)],
             "zoomSegments": [],
@@ -365,6 +366,48 @@ fn cuts_merge_adjacent_segments() {
 }
 
 #[test]
+fn captions_tied_to_a_clip_move_with_it() {
+    let mut config = config_json();
+    config["captions"]["segments"] = json!([
+        { "id": "tail0", "start": 10.2, "end": 10.8, "text": "held tail", "words": [], "recordingSegment": 0 },
+        { "id": "gone", "start": 11.0, "end": 12.0, "text": "removed clip", "words": [], "recordingSegment": 1 },
+        { "id": "tied2", "start": 17.0, "end": 18.0, "text": "kept later", "recordingSegment": 2, "words": [
+            { "text": "kept", "start": 17.0, "end": 17.4 },
+            { "text": "later", "start": 17.5, "end": 18.0 },
+        ]},
+        { "id": "free", "start": 18.5, "end": 19.0, "text": "untied", "words": [] },
+    ]);
+    let fixture = Fixture::with(meta_json(3), config);
+    let plan = fixture.plan().unwrap();
+    let captions = &plan.config.captions.as_ref().unwrap().segments;
+    let shown: Vec<_> = captions
+        .iter()
+        .map(|caption| {
+            (
+                caption.id.as_str(),
+                caption.start,
+                caption.end,
+                caption.recording_clip,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("tail0", 10.2, 10.8, Some(0)),
+            ("tied2", 11.0, 12.0, Some(1)),
+            ("free", 12.5, 13.0, None),
+        ]
+    );
+    let words: Vec<_> = captions[1]
+        .words
+        .iter()
+        .map(|word| (word.start, word.end))
+        .collect();
+    assert_eq!(words, [(11.0, 11.4), (11.5, 12.0)]);
+}
+
+#[test]
 fn edit_time_captions_are_left_as_they_are() {
     let mut config = config_json();
     config["captions"]["sourceTimed"] = json!(false);
@@ -510,6 +553,10 @@ fn every_skip_condition_leaves_the_project_untouched() {
         plan(&fixture.snapshot(), &probes()).unwrap_err(),
         Skip::LegacyCaptions
     );
+
+    let mut config = config_json();
+    config["clipAlignmentVersion"] = json!(0);
+    assert_eq!(skip_for(meta_json(3), config), Skip::ClipAlignment);
 
     let fixture = Fixture::new();
     let mut short = probes();

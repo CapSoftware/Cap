@@ -100,6 +100,7 @@ pub(crate) enum Skip {
     EditChanged,
     Invalid,
     TrashInProgress,
+    ClipAlignment,
 }
 
 #[derive(Debug)]
@@ -225,16 +226,53 @@ fn inside_cut(start: f64, end: f64, cuts: &[Cut]) -> bool {
     cuts.iter().any(|cut| start >= cut.start && end <= cut.end)
 }
 
-fn remap_captions(segments: &[CaptionSegment], cuts: &[Cut]) -> Vec<CaptionSegment> {
-    let at = |time: f32| collapse(f64::from(time), cuts) as f32;
+/// Untied captions follow the shared source clock, so the removed spans are
+/// cut out of it. A caption tied to its clip (`recording_clip`) can sit past
+/// that clip's end on the shared clock, so it moves with its clip instead:
+/// back by the removed clips before it, or out with its clip.
+fn remap_captions(
+    segments: &[CaptionSegment],
+    durations: &[f64],
+    removed: &[usize],
+) -> Vec<CaptionSegment> {
+    let cuts = cuts(durations, removed);
     segments
         .iter()
-        .filter(|caption| !inside_cut(f64::from(caption.start), f64::from(caption.end), cuts))
         .filter_map(|caption| {
+            if let Some(clip) = caption.recording_clip {
+                let shift: f64 = durations
+                    .iter()
+                    .take(clip as usize)
+                    .enumerate()
+                    .filter(|(index, _)| removed.contains(index))
+                    .map(|(_, duration)| duration)
+                    .sum();
+                let at = |time: f32| (f64::from(time) - shift) as f32;
+                return Some(CaptionSegment {
+                    id: caption.id.clone(),
+                    start: at(caption.start),
+                    end: at(caption.end),
+                    text: caption.text.clone(),
+                    words: caption
+                        .words
+                        .iter()
+                        .map(|word| CaptionWord {
+                            text: word.text.clone(),
+                            start: at(word.start),
+                            end: at(word.end),
+                        })
+                        .collect(),
+                    recording_clip: Some(remap_index(clip, removed)?),
+                });
+            }
+            if inside_cut(f64::from(caption.start), f64::from(caption.end), &cuts) {
+                return None;
+            }
+            let at = |time: f32| collapse(f64::from(time), &cuts) as f32;
             let words: Vec<CaptionWord> = caption
                 .words
                 .iter()
-                .filter(|word| !inside_cut(f64::from(word.start), f64::from(word.end), cuts))
+                .filter(|word| !inside_cut(f64::from(word.start), f64::from(word.end), &cuts))
                 .map(|word| CaptionWord {
                     text: word.text.clone(),
                     start: at(word.start),
@@ -255,6 +293,7 @@ fn remap_captions(segments: &[CaptionSegment], cuts: &[Cut]) -> Vec<CaptionSegme
                 end: at(caption.end),
                 text,
                 words,
+                recording_clip: None,
             })
         })
         .collect()
@@ -421,6 +460,12 @@ pub(crate) fn plan(snapshot: &Snapshot, probes: &[SegmentProbe]) -> Result<Plan,
     if config.captions.is_none() && snapshot.captions_file {
         return Err(Skip::LegacyCaptions);
     }
+    // Late-audio alignment (`cap_project::late_audio`) is migrated by segment
+    // index when an older project opens; renumbering before that has run would
+    // move its fixes onto the wrong clips.
+    if config.clip_alignment_version != cap_project::CLIP_ALIGNMENT_VERSION {
+        return Err(Skip::ClipAlignment);
+    }
 
     let raw_config = String::from_utf8_lossy(&snapshot.config_bytes);
     let cursor_images: Vec<String> = match &inner.cursors {
@@ -545,7 +590,7 @@ pub(crate) fn plan(snapshot: &Snapshot, probes: &[SegmentProbe]) -> Result<Plan,
     if let Some(captions) = new_config.captions.as_mut()
         && captions.source_timed
     {
-        captions.segments = remap_captions(&captions.segments, &cuts(&old_durations, &removed));
+        captions.segments = remap_captions(&captions.segments, &old_durations, &removed);
     }
 
     if new_config.validate().is_err() {
