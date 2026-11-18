@@ -409,6 +409,43 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// rc064b: Microsoft removed the GitHub onnxruntime release archives. The same
+// builds come from the official NuGet package; lay them out as <extractDir>/lib
+// like the release archive so the rest of setup is unchanged.
+const RC064B_ONNX_NUGET_SHA256 = {
+	"1.23.2": "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a",
+	"1.24.2": "782564d3d68e87269ea1812cc94710ad06fe014faf093f01a6f89d0bd58719d3",
+	"1.24.3": "e4ab3b236c1b803e1e7167fe9a75caa1b82a2fd4ae82abbd130937c07517bcdb",
+};
+
+async function rc064bOnnxFromNuget(version, rid, extractDir) {
+	const id = `microsoft.ml.onnxruntime.${version}`;
+	const archivePath = await downloadVerifiedAsset({
+		name: `${id}.zip`,
+		url: `https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${version}/${id}.nupkg`,
+		sha256: RC064B_ONNX_NUGET_SHA256[version],
+	});
+	const tmp = path.join(targetDir, `${id}-${rid}`);
+	await fs.rm(tmp, { recursive: true, force: true });
+	if (process.platform === "win32") await expandArchive(archivePath, tmp);
+	else
+		await execFile("unzip", [
+			"-q",
+			"-o",
+			archivePath,
+			`runtimes/${rid}/native/*`,
+			"-d",
+			tmp,
+		]);
+	await fs.rm(extractDir, { recursive: true, force: true });
+	await fs.mkdir(extractDir, { recursive: true });
+	await fs.rename(
+		path.join(tmp, "runtimes", rid, "native"),
+		path.join(extractDir, "lib"),
+	);
+	await fs.rm(tmp, { recursive: true, force: true });
+}
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
@@ -431,16 +468,10 @@ async function setupMacOSOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await rc064bOnnxFromNuget(asset.version, arch === "aarch64" ? "osx-arm64" : "osx-x64", extractDir);
 		await fs.mkdir(outputDir, { recursive: true });
 		await fs.copyFile(
 			path.join(extractDir, "lib", "libonnxruntime.dylib"),
@@ -483,16 +514,10 @@ async function setupWindowsOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await expandArchive(archivePath, targetDir);
+		await rc064bOnnxFromNuget(asset.version, { x86_64: "win-x64", aarch64: "win-arm64" }[arch], extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -544,21 +569,10 @@ async function setupLinuxOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		const response = await fetch(
-			`https://github.com/microsoft/onnxruntime/releases/download/v${version}/${archiveName}`,
-		);
-		if (!response.ok)
-			throw new Error(
-				`Failed to download ${archiveName}: HTTP ${response.status}`,
-			);
-		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
-		console.log(`Downloaded ${archiveName}`);
-	} else console.log(`Using cached ${archiveName}`);
 
 	if (!(await fileExists(outputPath)) || marker !== archiveName) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await rc064bOnnxFromNuget(version, { x86_64: "linux-x64", aarch64: "linux-arm64" }[arch], extractDir);
 		await fs.mkdir(outputDir, { recursive: true });
 		await fs.copyFile(
 			path.join(extractDir, "lib", "libonnxruntime.so"),
