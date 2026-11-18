@@ -1325,6 +1325,28 @@ enum DragKind {
     },
 }
 
+/// `kind` with its bounds narrowed so the segment stays inside `window` (a
+/// tied caption's clip piece): a handle stops at the window's edge and a move
+/// slides up to it, snapping as at any other limit.
+fn keep_drag_in_window(kind: DragKind, window: (f64, f64)) -> DragKind {
+    match kind {
+        DragKind::TrimStart { start, bounds } => DragKind::TrimStart {
+            start,
+            bounds: edits::window_trim_start_bounds(window, bounds),
+        },
+        DragKind::TrimEnd { end, bounds } => DragKind::TrimEnd {
+            end,
+            bounds: edits::window_trim_end_bounds(window, bounds),
+        },
+        DragKind::Move { start, end, bounds } => DragKind::Move {
+            start,
+            end,
+            bounds: edits::window_move_bounds(window, (start, end), bounds),
+        },
+        other => other,
+    }
+}
+
 /// One live pointer drag on a segment.
 ///
 /// `createMouseDownDrag` (`TL/ZoomTrack.tsx:401-513` and its seven siblings) is
@@ -5116,6 +5138,19 @@ impl EditorWindow {
             (_, Hit::Empty) => None,
         };
 
+        // A caption tied to its clip stays on that clip's piece: its handles
+        // and body stop at the piece's edges.
+        let kind_of_drag = match kind {
+            TrackKind::Caption => kind_of_drag.map(|drag| {
+                crate::transcription::tied_caption_window(
+                    &self.project,
+                    index,
+                    &self.clip_display_durations,
+                )
+                .map_or(drag, |window| keep_drag_in_window(drag, window))
+            }),
+            _ => kind_of_drag,
+        };
         let clip_handle = matches!(
             kind_of_drag,
             Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
@@ -13732,6 +13767,107 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two 10 s recordings: the second at 0..10, then the first held to 14 s
+    // (4..14) at output 10..20. A caption tied to the first shows at 18..19.
+    // Its handles stop at its piece's edges (10 and 20) and its body slides
+    // only within them; an untied caption's drag keeps its bounds.
+    #[test]
+    fn a_tied_caption_drag_stops_at_its_clip_piece() {
+        let durations = [10.0, 10.0];
+        let caption = |recording_clip| cap_project::CaptionSegment {
+            id: "caption-tied".into(),
+            start: 12.0,
+            end: 13.0,
+            text: "typed".into(),
+            words: Vec::new(),
+            recording_clip,
+        };
+        let project = |recording_clip| {
+            let mut project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [
+                            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                            { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 }
+                        ],
+                        "zoomSegments": []
+                    }))
+                    .unwrap(),
+                ),
+                captions: Some(cap_project::CaptionsData {
+                    segments: vec![caption(recording_clip)],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            cap_project::synchronize_captions(&mut project, &durations);
+            project
+        };
+
+        let tied = project(Some(0));
+        let item = &tied.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((item.start, item.end), (18.0, 19.0));
+        let window = crate::transcription::tied_caption_window(&tied, 0, &durations);
+        assert_eq!(window, Some((10.0, 20.0)));
+        let window = window.unwrap();
+
+        let free = edits::DragBounds { min: 0., max: 20. };
+        let DragKind::TrimStart { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimStart {
+                start: 18.,
+                bounds: edits::DragBounds { min: 0., max: 18.5 },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(4.), bounds.clamp(12.)), (10., 12.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: 18.5,
+                    max: 30.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(25.), bounds.clamp(19.5)), (20., 19.5));
+        let DragKind::Move { bounds, .. } = keep_drag_in_window(
+            DragKind::Move {
+                start: 18.,
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: -18.,
+                    max: 11.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(-12.), bounds.clamp(5.)), (-8., 1.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: free,
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(bounds.max, 20.);
+
+        let untied = project(None);
+        assert_eq!(
+            crate::transcription::tied_caption_window(&untied, 0, &durations),
+            None
+        );
+    }
 
     #[cfg(target_os = "linux")]
     mod side_panel {

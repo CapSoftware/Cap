@@ -587,6 +587,40 @@ pub fn audio_trim_end_bounds(segment: &AudioTrackSegment, bounds: DragBounds) ->
     }
 }
 
+/// A start handle kept inside `window` (a tied caption's clip piece, see
+/// `transcription::tied_caption_window`): it stops at the window's start,
+/// as an audio segment's stops at its file's.
+pub fn window_trim_start_bounds((window_start, _): (f64, f64), bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.max(window_start);
+    DragBounds {
+        min,
+        max: bounds.max.max(min),
+    }
+}
+
+/// An end handle kept inside `window`: it stops at the window's end.
+pub fn window_trim_end_bounds((_, window_end): (f64, f64), bounds: DragBounds) -> DragBounds {
+    let max = bounds.max.min(window_end);
+    DragBounds {
+        min: bounds.min.min(max),
+        max,
+    }
+}
+
+/// A move (bounds on the delta) of the segment at `start..end` kept inside
+/// `window`: it slides up to either of the window's edges.
+pub fn window_move_bounds(
+    (window_start, window_end): (f64, f64),
+    (start, end): (f64, f64),
+    bounds: DragBounds,
+) -> DragBounds {
+    let min = bounds.min.max(window_start - start);
+    DragBounds {
+        min,
+        max: bounds.max.min(window_end - end).max(min),
+    }
+}
+
 /// `SegmentContent`'s setup (`TL/MaskTrack.tsx:449-458`): the whole segment
 /// slides, clamped so it cannot pass either neighbour. Expressed as bounds on
 /// the *delta* rather than on the start, which is how the source clamps it.
