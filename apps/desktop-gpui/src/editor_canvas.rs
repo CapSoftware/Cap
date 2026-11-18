@@ -46,7 +46,7 @@ use std::rc::Rc;
 use crate::i18n::tr;
 use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
 use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
-use cap_rendering::{CaptionFrameBox, FrameLayout};
+use cap_rendering::FrameLayout;
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, SharedString,
@@ -481,22 +481,47 @@ pub fn caption_nudge_center(
     camera_nudge_center(rect, canvas, direction, shift)
 }
 
+/// The caption font size a corner drag asks for: the box grows about its
+/// centre, so the pointer's travel counts twice, and the size scales with the
+/// average of the two sides' growth. `start_px` is the box in canvas pixels.
+pub fn caption_resize_size(
+    start_size: u32,
+    start_px: (f64, f64),
+    delta: (f64, f64),
+    dir: (i8, i8),
+) -> u32 {
+    let (w, h) = (start_px.0.max(1.), start_px.1.max(1.));
+    let grow_w = (w + 2. * f64::from(dir.0) * delta.0) / w;
+    let grow_h = (h + 2. * f64::from(dir.1) * delta.1) / h;
+    let factor = ((grow_w + grow_h) / 2.).max(0.05);
+    (f64::from(start_size) * factor)
+        .round()
+        .clamp(CAPTION_SIZE_RANGE.0, CAPTION_SIZE_RANGE.1) as u32
+}
+
+/// The caption size slider's range, which a canvas resize keeps to.
+pub const CAPTION_SIZE_RANGE: (f64, f64) = (12., 100.);
+
 /// Where Manual placement centres the captions when no position is stored:
 /// the bottom-centre spot the renderer falls back to.
 pub const CAPTION_DEFAULT_CENTER: (f64, f64) = (0.5, 0.85);
 
-/// The caption box to hit-test on the canvas. Only a caption the renderer
-/// placed manually gets one, so preset captions never take a click from the
-/// elements under them. The size is the renderer's; the position comes from
-/// the stored centre so a drag never waits on a frame.
+/// The caption box to hit-test on the canvas, in every placement, so the
+/// caption can be hovered, moved and resized like a text. The size is the
+/// renderer's. A manual caption's position comes from the stored centre so a
+/// drag never waits on a frame; a preset caption sits where it is drawn until
+/// a drag moves it to Manual.
 pub fn caption_canvas_rect(
     layout: &FrameLayout,
     manual_position: Option<XY<f32>>,
 ) -> Option<NormRect> {
-    let caption = layout.caption.filter(CaptionFrameBox::is_manual)?;
+    let caption = layout.caption?;
     let drawn = norm_rect(caption.bounds, layout);
     if drawn.w <= 0. || drawn.h <= 0. {
         return None;
+    }
+    if !caption.is_manual() {
+        return Some(drawn);
     }
     let center = manual_position.map_or(CAPTION_DEFAULT_CENTER, |position| {
         (f64::from(position.x), f64::from(position.y))
@@ -580,6 +605,8 @@ pub struct CanvasResize {
     /// Set when the display pads evenly, which the proportional
     /// `max_width` / `padding_scale` model cannot express.
     pub even: Option<EvenResize>,
+    /// The caption font size when a caption resize began.
+    pub caption_size: u32,
 }
 
 pub struct CanvasDrag {
@@ -841,8 +868,8 @@ impl EditorWindow {
             CanvasSelection::Mask(_)
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
-            | CanvasSelection::Shape(_) => true,
-            CanvasSelection::Captions => false,
+            | CanvasSelection::Shape(_)
+            | CanvasSelection::Captions => true,
         };
         if !resizable {
             return;
@@ -909,6 +936,11 @@ impl EditorWindow {
                 max_width,
                 padding_scale,
                 even,
+                caption_size: self
+                    .project
+                    .captions
+                    .as_ref()
+                    .map_or(0, |captions| captions.settings.size),
             }),
         });
         cx.notify();
@@ -966,6 +998,7 @@ impl EditorWindow {
                 resize.max_width,
                 resize.padding_scale,
                 resize.even,
+                resize.caption_size,
             )
         });
         let size = (
@@ -983,6 +1016,7 @@ impl EditorWindow {
             max_width,
             padding_scale,
             even,
+            caption_size,
         )) = resize
         {
             match element {
@@ -1073,7 +1107,15 @@ impl EditorWindow {
                     self.canvas_overlay_rect = Some(rect);
                     self.write_overlay_rect(element, rect, cx);
                 }
-                CanvasSelection::Captions => {}
+                CanvasSelection::Captions => {
+                    let next = caption_resize_size(
+                        caption_size,
+                        (start.w * size.0, start.h * size.1),
+                        delta,
+                        (dir_x, dir_y),
+                    );
+                    self.write_caption_size(next, cx);
+                }
             }
             let _ = (window, output_w, output_h);
             return;
@@ -1098,7 +1140,10 @@ impl EditorWindow {
                 };
                 overlay_drag_center(bounds, size, delta, &targets, shift)
             }
-            CanvasSelection::Captions => caption_drag_center(start, size, delta, &targets, shift),
+            CanvasSelection::Captions => {
+                self.make_captions_manual(start, cx);
+                caption_drag_center(start, size, delta, &targets, shift)
+            }
         };
         self.snap_guides = guides;
         let optimistic = NormRect {
@@ -1237,7 +1282,10 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Shape(_) => overlay_nudge_center(rect, direction, shift),
-            CanvasSelection::Captions => caption_nudge_center(rect, size, direction, shift),
+            CanvasSelection::Captions => {
+                self.make_captions_manual(rect, cx);
+                caption_nudge_center(rect, size, direction, shift)
+            }
         };
         let optimistic = NormRect {
             x: center.x - rect.w / 2.,
@@ -1294,9 +1342,35 @@ impl EditorWindow {
         );
     }
 
-    /// The manual caption centre. The placement setting itself is left alone:
-    /// the box only exists while the caption on screen is already manual,
-    /// whether through the setting or its segment's override.
+    /// Moving a caption that sits at a preset spot switches the placement to
+    /// Manual, centred where it is drawn, so the drag carries on from there.
+    fn make_captions_manual(&mut self, drawn: NormRect, cx: &mut Context<Self>) {
+        let Some(captions) = self.project.captions.as_mut() else {
+            return;
+        };
+        if captions.settings.position == "manual" {
+            return;
+        }
+        captions.settings.position = "manual".into();
+        captions.settings.manual_position = Some(XY::new(
+            (drawn.x + drawn.w / 2.) as f32,
+            (drawn.y + drawn.h / 2.) as f32,
+        ));
+        self.project_changed_live(cx);
+    }
+
+    fn write_caption_size(&mut self, size: u32, cx: &mut Context<Self>) {
+        let Some(captions) = self.project.captions.as_mut() else {
+            return;
+        };
+        if captions.settings.size == size {
+            return;
+        }
+        captions.settings.size = size;
+        self.project_changed_live(cx);
+    }
+
+    /// The manual caption centre.
     fn write_caption_center(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
         let Some(captions) = self.project.captions.as_mut() else {
             return;
@@ -1703,9 +1777,9 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Shape(_) => (true, true, None),
-            CanvasSelection::Captions => (true, false, None),
+            CanvasSelection::Captions => (true, true, None),
         };
-        let has_handles = element != CanvasSelection::Captions;
+        let has_handles = resizable;
 
         let left = rect.x as f32 * canvas.0;
         let top = rect.y as f32 * canvas.1;
@@ -2655,7 +2729,7 @@ mod tests {
 
     fn caption_layout(width: u32, height: u32, bounds: [f32; 4], position: &str) -> FrameLayout {
         FrameLayout {
-            caption: Some(CaptionFrameBox::new(bounds, position)),
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, position)),
             ..layout(width, height, [0., 0., width as f32, height as f32])
         }
     }
@@ -2664,10 +2738,10 @@ mod tests {
         (a - b).abs() < 1e-6
     }
 
-    /// A preset caption gets no hit box at all, so a click on it reaches the
-    /// text, mask or screen underneath exactly as before.
+    /// A caption at a preset spot takes clicks where it is drawn, whatever
+    /// manual centre is stored, so it can be picked up and moved.
     #[test]
-    fn only_a_manual_caption_takes_clicks() {
+    fn a_preset_caption_takes_clicks_where_it_is_drawn() {
         let bounds = [700., 870., 1220., 930.];
         for preset in [
             "top-left",
@@ -2678,7 +2752,9 @@ mod tests {
             "bottom-right",
         ] {
             let layout = caption_layout(1920, 1080, bounds, preset);
-            assert_eq!(caption_canvas_rect(&layout, Some(XY::new(0.5, 0.5))), None);
+            let rect = caption_canvas_rect(&layout, Some(XY::new(0.5, 0.5))).unwrap();
+            assert!(near(rect.x, 700. / 1920.));
+            assert!(near(rect.y, 870. / 1080.));
         }
         assert_eq!(caption_canvas_rect(&layout(1920, 1080, bounds), None), None);
         let manual = caption_layout(1920, 1080, bounds, "manual");
@@ -2711,6 +2787,31 @@ mod tests {
             rect,
             gpui::point(px(40. + 0.425 * 960.), px(20. + 0.5 * 540.))
         ));
+    }
+
+    /// A corner drag grows the caption about its centre and keeps to the
+    /// size slider's range.
+    #[test]
+    fn a_caption_corner_drag_scales_its_font_size() {
+        // Dragging the bottom-right corner out by a quarter of each side
+        // grows the box by half, as it grows about its centre: 40 becomes 60.
+        assert_eq!(
+            caption_resize_size(40, (400., 40.), (100., 10.), (1, 1)),
+            60
+        );
+        // The top-left corner pulled inward shrinks it.
+        assert_eq!(
+            caption_resize_size(40, (400., 40.), (100., 10.), (-1, -1)),
+            20
+        );
+        assert_eq!(
+            caption_resize_size(40, (400., 40.), (-400., -40.), (1, 1)),
+            12
+        );
+        assert_eq!(
+            caption_resize_size(90, (400., 40.), (400., 40.), (1, 1)),
+            100
+        );
     }
 
     /// No stored centre is the renderer's bottom-centre fallback, and a
