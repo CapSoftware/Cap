@@ -33,6 +33,7 @@ pub(crate) struct Mark {
 
 struct Probe {
     marks: Mutex<Vec<Mark>>,
+    sizes: Mutex<Vec<(u64, [u32; 2])>>,
 }
 
 fn probe() -> Option<&'static Probe> {
@@ -43,6 +44,7 @@ fn probe() -> Option<&'static Probe> {
                 .is_ok_and(|value| value == "1")
                 .then(|| Probe {
                     marks: Mutex::new(Vec::with_capacity(1 << 16)),
+                    sizes: Mutex::new(Vec::with_capacity(1 << 16)),
                 })
         })
         .as_ref()
@@ -50,6 +52,20 @@ fn probe() -> Option<&'static Probe> {
 
 pub(crate) fn enabled() -> bool {
     probe().is_some()
+}
+
+/// `CAP_GPUI_AUTO_LATENCY_BACKING_SCALE`: multiplies the window's scale
+/// factor wherever the preview sizes itself to the screen, so a 1x CI display
+/// can stand in for a Retina one. 1.0 unless the bench sets it.
+pub(crate) fn backing_scale() -> f32 {
+    static SCALE: OnceLock<f32> = OnceLock::new();
+    *SCALE.get_or_init(|| {
+        probe()
+            .and_then(|_| std::env::var("CAP_GPUI_AUTO_LATENCY_BACKING_SCALE").ok())
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(1.0)
+    })
 }
 
 pub(crate) fn mark(stage: Stage, frame: u32, sequence: u64) {
@@ -67,6 +83,30 @@ pub(crate) fn mark(stage: Stage, frame: u32, sequence: u64) {
             sequence,
             at,
         });
+}
+
+/// The output size of the frame adopted under `sequence`, so a scenario can
+/// tell which presentation was drawn at which resolution.
+pub(crate) fn sized(sequence: u64, size: [u32; 2]) {
+    let Some(probe) = probe() else {
+        return;
+    };
+    probe
+        .sizes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((sequence, size));
+}
+
+pub(crate) fn take_sizes() -> Vec<(u64, [u32; 2])> {
+    probe().map_or_else(Vec::new, |probe| {
+        std::mem::take(
+            &mut *probe
+                .sizes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    })
 }
 
 pub(crate) fn take() -> Vec<Mark> {
