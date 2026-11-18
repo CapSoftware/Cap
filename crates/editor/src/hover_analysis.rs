@@ -223,19 +223,25 @@ impl PointerTrack {
         moves.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut clicks: Vec<_> = cursor.clicks.iter().collect();
         clicks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        // A held stretch lasts from the first press until every button pressed
+        // during it is released, so letting go of one button while another is
+        // still down keeps the guard on.
         let mut held = Vec::new();
+        let mut pressed = [false; 2];
         let mut down_at = None;
         for click in &clicks {
-            if click.cursor_num > 1 {
+            let button = usize::from(click.cursor_num);
+            if button >= pressed.len() {
                 continue;
             }
-            match (click.down, down_at) {
-                (true, None) => down_at = Some(click.time_ms),
-                (false, Some(start)) => {
-                    held.push((start, click.time_ms));
-                    down_at = None;
-                }
-                _ => {}
+            if click.down {
+                pressed[button] = true;
+                down_at.get_or_insert(click.time_ms);
+            } else if std::mem::take(&mut pressed[button])
+                && !pressed.contains(&true)
+                && let Some(start) = down_at.take()
+            {
+                held.push((start, click.time_ms));
             }
         }
         if let Some(start) = down_at {
@@ -713,5 +719,56 @@ mod tests {
         };
         let frames = (0..12).map(|i| (page(if i < 6 { 0 } else { 6 }), Some((60, 40)), false));
         assert!(run(frames).is_empty());
+    }
+
+    fn clicks(events: &[(u8, bool, f64)]) -> CursorEvents {
+        CursorEvents {
+            clicks: events
+                .iter()
+                .map(|&(button, down, time_ms)| cap_project::CursorClickEvent {
+                    active_modifiers: Vec::new(),
+                    cursor_num: button,
+                    cursor_id: "arrow".into(),
+                    time_ms,
+                    down,
+                })
+                .collect(),
+            moves: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn releasing_one_button_keeps_the_guard_while_another_is_held() {
+        // Hold the first button, tap the second, then drag on until 3000 ms.
+        let track = PointerTrack::new(&clicks(&[
+            (0, true, 1000.0),
+            (1, true, 1500.0),
+            (1, false, 1600.0),
+            (0, false, 3000.0),
+        ]));
+        assert!(track.busy(2000.0));
+        assert!(track.busy(2900.0));
+        assert!(!track.busy(3400.0));
+
+        // The other order: the second button is the one held longest.
+        let track = PointerTrack::new(&clicks(&[
+            (0, true, 1000.0),
+            (1, true, 1500.0),
+            (0, false, 1600.0),
+            (1, false, 3000.0),
+        ]));
+        assert!(track.busy(2000.0));
+        assert!(!track.busy(3400.0));
+    }
+
+    #[test]
+    fn a_release_without_its_press_does_not_end_a_held_button() {
+        let track = PointerTrack::new(&clicks(&[
+            (0, true, 1000.0),
+            (1, false, 1500.0),
+            (0, false, 3000.0),
+        ]));
+        assert!(track.busy(2000.0));
+        assert!(!track.busy(3400.0));
     }
 }
