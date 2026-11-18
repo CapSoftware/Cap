@@ -35,6 +35,8 @@ function harness(env: Record<string, string> = {}) {
 	const timerDelays: number[] = [];
 	const clearedTimers: unknown[] = [];
 	const engineCalls: ReturnType<typeof Promise.withResolvers<unknown>>[] = [];
+	const engineCallWaiters: (() => void)[] = [];
+	const timerWaiters: (() => void)[] = [];
 	const engineKills: (NodeJS.Signals | undefined)[] = [];
 	const engineLabels: string[] = [];
 	const watchdogs: (() => void)[] = [];
@@ -196,6 +198,7 @@ function harness(env: Record<string, string> = {}) {
 			request() {
 				this.pending = Promise.withResolvers<unknown>();
 				engineCalls.push(this.pending);
+				for (const resolve of engineCallWaiters.splice(0)) resolve();
 				return this.pending.promise;
 			}
 			kill(signal?: NodeJS.Signals) {
@@ -224,6 +227,7 @@ function harness(env: Record<string, string> = {}) {
 		setTimeout: (callback: () => void, delay: number) => {
 			timers.push(callback);
 			timerDelays.push(delay);
+			for (const resolve of timerWaiters.splice(0)) resolve();
 			return { unref() {} };
 		},
 		clearTimeout: (timer: unknown) => clearedTimers.push(timer),
@@ -297,6 +301,9 @@ function harness(env: Record<string, string> = {}) {
 		engineCalls,
 		engineKills,
 		engineLabels,
+		nextEngineCall: () =>
+			new Promise<void>((resolve) => engineCallWaiters.push(resolve)),
+		nextTimer: () => new Promise<void>((resolve) => timerWaiters.push(resolve)),
 		watchdogs,
 		fetch: (request: Request) => fetchHandler(request),
 		gate: (gate?: Promise<void>) => {
@@ -569,7 +576,12 @@ describe("assembly", () => {
 		const gate = new Promise<void>((resolve) => {
 			open = resolve;
 		});
-		h.gateCopies(() => gate);
+		const eightCopying = Promise.withResolvers<void>();
+		let entered = 0;
+		h.gateCopies(() => {
+			if (++entered === 8) eightCopying.resolve();
+			return gate;
+		});
 		for (const j of jobs) {
 			for (const [index] of j.chunks.entries())
 				j.videoResults.set(
@@ -578,7 +590,8 @@ describe("assembly", () => {
 				);
 			h.stitchAhead(j);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await eightCopying.promise;
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(h.copyPeaks.total).toBe(8);
 		for (const j of jobs)
 			expect(h.copyPeaks.byJob.get(j.id) ?? 0).toBeLessThanOrEqual(4);
@@ -1437,19 +1450,24 @@ describe("local audio deadlines", () => {
 		j.tasks.set(state.task.taskId, state);
 		h.jobs.set(j.id, j);
 		h.queue.push(state);
+		const failed = new Promise<void>((resolve) => j.waiters.push(resolve));
+		let engineCalled = h.nextEngineCall();
 		h.pumpLocalAudio();
 		for (let attempt = 1; attempt <= 3; attempt++) {
-			await Bun.sleep(0);
+			await engineCalled;
 			expect(h.engineCalls).toHaveLength(attempt);
 			expect(h.timerDelays.at(-1)).toBe(110_000);
+			const retryScheduled = h.nextTimer();
 			h.timers.at(-1)?.();
-			await Bun.sleep(0);
 			if (attempt < 3) {
+				await retryScheduled;
 				expect(j.status).toBe("rendering");
 				expect(h.timerDelays.at(-1)).toBe(1000 * attempt);
+				engineCalled = h.nextEngineCall();
 				h.timers.at(-1)?.();
 			}
 		}
+		await failed;
 		expect(j.status).toBe("error");
 		expect(j.error).toBe("audio engine exited");
 		expect(state.attempts).toBe(3);

@@ -19,7 +19,6 @@
 					"apps/media-server/src/__tests__/lib/isolated-worker-pool.test.ts": 1,
 					"apps/media-server/src/__tests__/lib/memory-leak.test.ts": 2,
 					"apps/media-server/src/__tests__/lib/recording-verification.integration.test.ts": 3,
-					"apps/render-farm/src/coordinator.test.ts": 3,
 					"apps/web/__tests__/integration/developer-transcripts-database.test.ts": 1,
 					"apps/web/__tests__/integration/infra-auto-top-up-database.test.ts": 3,
 					"apps/web/__tests__/integration/infra-first-month-auto-top-up-database.test.ts": 1,
