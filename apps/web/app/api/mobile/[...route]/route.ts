@@ -4,7 +4,7 @@ import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
-	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
 import {
 	decrypt,
@@ -573,7 +573,8 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
+	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -625,10 +626,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
 	const code = rawCode.trim();
 
-	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
+	if (!email || !emailPattern.test(email) || !emailCodePattern.test(code)) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
