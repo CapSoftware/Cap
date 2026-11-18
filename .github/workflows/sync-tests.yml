@@ -235,6 +235,27 @@ jobs:
           CAP_REQUIRE_VIDEOTOOLBOX: "1"
         run: cargo test --locked -p cap-enc-ffmpeg -- --test-threads=1
 
+      - name: Temporary VideoToolbox repeat
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
+        shell: bash
+        env:
+          CAP_REQUIRE_VIDEOTOOLBOX: "1"
+        run: |
+          for mode in parallel serial; do
+            fails=0
+            for i in $(seq 20); do
+              args=""
+              [ "$mode" = serial ] && args="--test-threads=1"
+              start=$SECONDS
+              if ! cargo test --locked -p cap-enc-ffmpeg --lib -- $args > /tmp/repeat.log 2>&1; then
+                fails=$((fails+1))
+                grep -E "FAILED|panicked|12903|19092" /tmp/repeat.log | head -8
+              fi
+              echo "$mode run $i: $((SECONDS-start))s $(grep 'test result' /tmp/repeat.log)"
+            done
+            echo "REPEAT $mode: $fails/20 failed"
+          done
+
       - name: AVFoundation encoder tests (macOS)
         if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
         shell: bash
