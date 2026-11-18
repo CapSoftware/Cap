@@ -200,6 +200,7 @@ pub(crate) mod tests {
                             cursor: None,
                             keyboard: None,
                             display_notch: None,
+                            cursor_shape_version: None,
                         })
                         .collect(),
                     cursors: Default::default(),

@@ -717,7 +717,7 @@ fn adapt(
         } else {
             CursorEvents::default()
         };
-        studio.stabilize_cursor_shapes(&mut cursor);
+        studio.stabilize_cursor_shapes(Some(descriptor.metadata()), &mut cursor);
         segments.push(PreparingPreviewSegment {
             video: ManagedSegmentVideoInput::new(
                 descriptor.index() as usize,

@@ -3130,6 +3130,7 @@ async fn stop_recording(
                             .map(make_relative)
                     }),
                     display_notch,
+                    cursor_shape_version: None,
                 },
                 diagnostics,
                 duration: display_media_duration,
@@ -7579,6 +7580,7 @@ mod clean_stop_receipt_tests {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         };
         RecordingMeta {
             platform: Some(Platform::default()),

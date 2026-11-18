@@ -355,6 +355,7 @@ pub fn synthetic_meta(durations: &[f64]) -> (RecordingMeta, SourceTruth) {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         })
         .collect();
     let meta = RecordingMeta {

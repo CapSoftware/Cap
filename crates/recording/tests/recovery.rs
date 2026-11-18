@@ -137,6 +137,7 @@ impl TestRecording {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),

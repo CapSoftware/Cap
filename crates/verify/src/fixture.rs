@@ -436,6 +436,7 @@ pub fn write_fixture(spec: &FixtureSpec, dir: &Path) -> anyhow::Result<()> {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         });
     }
     write_project_files(dir, &spec.name, segments)?;

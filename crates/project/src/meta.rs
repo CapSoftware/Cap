@@ -17,7 +17,8 @@ use crate::{
 
 /// Recordings made from this version on keep every cursor shape shown for at
 /// least `MIN_VISIBLE_CURSOR_SHAPE_MS`. Recordings saved without the field keep
-/// the one-second debounce they were made and exported with.
+/// the one-second debounce they were made and exported with. A segment copied
+/// in from another recording carries that recording's version with it.
 pub const CURSOR_SHAPE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -634,8 +635,25 @@ impl StudioRecordingMeta {
         }
     }
 
-    pub fn stabilize_cursor_shapes(&self, events: &mut CursorEvents) {
-        let current = self.cursor_shape_version() >= CURSOR_SHAPE_VERSION;
+    pub fn segment_cursor_shape_version(&self, segment: &MultipleSegment) -> u32 {
+        match self {
+            StudioRecordingMeta::MultipleSegments { inner } => segment
+                .cursor_shape_version
+                .unwrap_or(inner.cursor_shape_version),
+            StudioRecordingMeta::SingleSegment { .. } => 0,
+        }
+    }
+
+    pub fn stabilize_cursor_shapes(
+        &self,
+        segment: Option<&MultipleSegment>,
+        events: &mut CursorEvents,
+    ) {
+        let version = segment.map_or_else(
+            || self.cursor_shape_version(),
+            |segment| self.segment_cursor_shape_version(segment),
+        );
+        let current = version >= CURSOR_SHAPE_VERSION;
         let pointer_ids = match self {
             StudioRecordingMeta::MultipleSegments { inner } => inner.arrow_cursor_ids(current),
             StudioRecordingMeta::SingleSegment { .. } => HashSet::new(),
@@ -814,6 +832,8 @@ pub struct MultipleSegment {
     pub keyboard: Option<RelativePathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_notch: Option<DisplayNotch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_shape_version: Option<u32>,
 }
 
 impl MultipleSegment {
@@ -843,7 +863,7 @@ impl MultipleSegment {
         };
 
         if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
-            studio_meta.stabilize_cursor_shapes(&mut data);
+            studio_meta.stabilize_cursor_shapes(Some(self), &mut data);
         } else {
             data.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
         }
@@ -1516,6 +1536,7 @@ mod test {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             }
         }
 
@@ -2062,6 +2083,29 @@ mod cursor_shape_version_tests {
     fn new_recordings_keep_a_hover_shorter_than_a_second() {
         let (_dir, meta) = project(Some(CURSOR_SHAPE_VERSION));
         assert_eq!(loaded_shapes(&meta), ["0", "2", "2", "0", "0"]);
+    }
+
+    #[test]
+    fn a_segment_copied_from_another_recording_keeps_its_own_rule() {
+        let (_dir, mut meta) = project(None);
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!("expected a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0].cursor_shape_version = Some(CURSOR_SHAPE_VERSION);
+        assert_eq!(loaded_shapes(&meta), ["0", "2", "2", "0", "0"]);
+
+        let (_dir, mut meta) = project(Some(CURSOR_SHAPE_VERSION));
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!("expected a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0].cursor_shape_version = Some(0);
+        assert_eq!(loaded_shapes(&meta), ["0", "0", "0", "0", "0"]);
     }
 
     #[test]
