@@ -34,7 +34,6 @@
 					"apps/web/__tests__/unit/trimming-tool-effect.test.ts": 1,
 					"packages/infra-mcp/__tests__/limits.test.ts": 2,
 					"packages/infra-mcp/__tests__/recovery.test.ts": 1,
-					"packages/infra-mcp/__tests__/stdio.test.ts": 1,
 					"packages/infra-mcp/__tests__/upload.test.ts": 1
 				}
 			}
