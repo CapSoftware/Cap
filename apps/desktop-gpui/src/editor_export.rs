@@ -952,10 +952,13 @@ impl EditorWindow {
             XY::new(width, height)
         });
         let fps = highest_recorded_fps(
-            segments.iter().map(|segment| {
+            segments.iter().enumerate().map(|(index, segment)| {
+                let recorded = summary.recorded_fps.get(index);
                 (
-                    segment.display.fps,
-                    segment.camera.as_ref().map(|camera| camera.fps),
+                    capture_fps(segment.display.fps, recorded.map(|(display, _)| *display)),
+                    segment.camera.as_ref().map(|camera| {
+                        capture_fps(camera.fps, recorded.and_then(|(_, camera)| *camera))
+                    }),
                 )
             }),
             !self.project.camera.hide,
@@ -4065,6 +4068,14 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     }
 }
 
+/// The rate a track was captured at. The probed rate is the track's average,
+/// which a mostly still screen keeps far below its capture rate (a 60 fps
+/// macOS capture of a still page averages a few fps), so the rate the recorder
+/// stored wins when it is higher.
+fn capture_fps(probed: u32, recorded: Option<u32>) -> u32 {
+    probed.max(recorded.unwrap_or(0))
+}
+
 fn highest_recorded_fps(
     segments: impl IntoIterator<Item = (u32, Option<u32>)>,
     camera_visible: bool,
@@ -4281,9 +4292,9 @@ mod tests {
 
     use super::{
         ExportDestination, ExportFormatKind, ExportPhase, ExportResolution, ExportSource, ExportUi,
-        GifQualityPreset, TrackKind, TrackOption, cancel_matching_export, estimated_tracks_bytes,
-        export_file_name, export_fps_options, export_name_stem, export_resolutions,
-        highest_recorded_fps, normalize_export_options, selected_tracks,
+        GifQualityPreset, TrackKind, TrackOption, cancel_matching_export, capture_fps,
+        estimated_tracks_bytes, export_file_name, export_fps_options, export_name_stem,
+        export_resolutions, highest_recorded_fps, normalize_export_options, selected_tracks,
     };
     use crate::store::ExportPrefs;
     use cap_project::XY;
@@ -4435,6 +4446,17 @@ mod tests {
         assert_eq!(highest_recorded_fps(segments, true), Some(60));
         assert_eq!(highest_recorded_fps(segments, false), Some(30));
         assert_eq!(highest_recorded_fps([(0, None)], true), None);
+    }
+
+    #[test]
+    fn a_still_screen_exports_at_the_rate_it_was_captured_at() {
+        // A 60 fps macOS capture of a mostly still screen averages 4.7 fps.
+        assert_eq!(capture_fps(5, Some(60)), 60);
+        assert_eq!(new_export(1920, 1200, capture_fps(5, Some(60))).fps, 60);
+        // A stored placeholder or a missing rate leaves the probed one.
+        assert_eq!(capture_fps(60, Some(30)), 60);
+        assert_eq!(capture_fps(24, Some(0)), 24);
+        assert_eq!(capture_fps(48, None), 48);
     }
 
     #[test]
