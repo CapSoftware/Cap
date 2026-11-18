@@ -72,17 +72,19 @@ function Hero() {
 			/>
 			<div className={`${WRAP} flex flex-col items-center text-center`}>
 				<CapFridayMark animate className="w-[min(80vw,500px)]" />
-				<h1 className="mt-5 text-balance text-[40px] font-medium leading-[1] tracking-[-0.035em] sm:text-[68px]">
+				<h1 className="mt-5 min-h-[2lh] text-balance text-[40px] font-medium leading-[1] tracking-[-0.035em] sm:min-h-0 sm:text-[68px]">
 					50% off Cap Pro Yearly
 				</h1>
 				<p
-					className={`mt-5 max-w-[520px] text-balance text-[17px] leading-[1.5] sm:text-[19px] ${DIM}`}
+					className={`mt-5 min-h-[2lh] max-w-[520px] text-balance text-[17px] leading-[1.5] sm:min-h-0 sm:text-[19px] ${DIM}`}
 				>
 					Record, share and get AI notes on every video, at half the yearly
 					price.
 				</p>
 				<Claim location="hero" className="mt-8" />
-				<p className={`mt-4 text-balance text-[14px] ${DIM}`}>
+				<p
+					className={`mt-4 min-h-[2lh] text-balance text-[14px] sm:min-h-0 ${DIM}`}
+				>
 					Code <CodeChip location="hero" /> is applied at checkout.{" "}
 					<Countdown />.
 				</p>
@@ -408,7 +410,11 @@ function Footer() {
 						["Terms", "/terms"],
 						["Privacy", "/privacy"],
 					].map(([label, href]) => (
-						<Link key={href} href={href} className="hover:text-[#F5F1EA]">
+						<Link
+							key={href}
+							href={href}
+							className={`${DIM} transition-colors hover:text-[#F5F1EA]`}
+						>
 							{label}
 						</Link>
 					))}

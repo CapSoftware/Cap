@@ -54,13 +54,13 @@ export function Film() {
 					}}
 					onPointerEnter={warm}
 					onFocus={warm}
-					aria-label="Play the Cap Friday film"
 					className="group absolute inset-0 grid size-full place-items-center focus-visible:outline-none"
 				>
 					<Image
 						src={POSTER}
 						alt="A plane tows a Cap banner reading 50% off Cap Pro Yearly, use code BLACKFRIDAY, over the beach"
 						fill
+						loading="eager"
 						fetchPriority="high"
 						sizes="(min-width: 1184px) 1120px, 100vw"
 						className="object-cover"
