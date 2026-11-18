@@ -4402,6 +4402,8 @@ mod tests {
             }
         }
         assert_eq!(frame.color_space(), ffmpeg::color::Space::BT709);
+        drop(decoder);
+        drop(input);
         std::fs::remove_dir_all(root).unwrap();
     }
 
