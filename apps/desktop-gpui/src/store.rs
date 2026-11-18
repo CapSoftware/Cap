@@ -501,6 +501,22 @@ pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
     })
 }
 
+/// The editor's quality control: the value and the mark that it was chosen,
+/// in one write.
+pub fn set_editor_preview_quality(quality: EditorPreviewQuality) -> bool {
+    update_store_section(GENERAL_SETTINGS, |general| {
+        general.insert(
+            "editorPreviewQuality".to_string(),
+            Value::from(quality.as_json()),
+        );
+        general.insert(
+            EDITOR_PREVIEW_QUALITY_CHOSEN_KEY.to_string(),
+            Value::Bool(true),
+        );
+        true
+    })
+}
+
 /// Replace or remove one top-level store section. `authStore.set(null)` in
 /// the Tauri app drops the whole `auth` object; writing keys one at a time
 /// would leave a half-signed-out session behind.
@@ -883,6 +899,71 @@ impl EditorPreviewQuality {
             Self::Quarter => 0.25,
         }
     }
+
+    /// Every earlier build wrote the whole settings object, so a stored `half`
+    /// without [`EDITOR_PREVIEW_QUALITY_CHOSEN_KEY`] is the old default, not a
+    /// choice. Full and Quarter were only ever picked by hand.
+    fn from_general(general: &Map<String, Value>) -> Self {
+        let stored = general
+            .get("editorPreviewQuality")
+            .and_then(Value::as_str)
+            .and_then(Self::from_json);
+        match stored {
+            Some(quality)
+                if quality != Self::Half
+                    || bool_at(general, EDITOR_PREVIEW_QUALITY_CHOSEN_KEY, false) =>
+            {
+                quality
+            }
+            _ => Self::for_this_machine(),
+        }
+    }
+
+    /// Full where the GPU draws it at no measurable cost, Half where Full
+    /// drops playback frames (software and integrated GPUs).
+    pub fn for_this_machine() -> Self {
+        static QUALITY: std::sync::OnceLock<EditorPreviewQuality> = std::sync::OnceLock::new();
+        *QUALITY.get_or_init(|| {
+            if full_preview_is_cheap() {
+                Self::Full
+            } else {
+                Self::Half
+            }
+        })
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn full_preview_is_cheap() -> bool {
+    true
+}
+
+/// A dedicated GPU (the editor renders on the high-performance adapter) and
+/// 16 GB of memory. Integrated GPUs report a few hundred MB of dedicated
+/// memory at most. A 16 GB machine reports slightly under 16 GiB.
+#[cfg(target_os = "windows")]
+fn full_preview_is_cheap() -> bool {
+    const MIN_DEDICATED_VIDEO_MEMORY: u64 = 2 << 30;
+    const MIN_MEMORY: u64 = 15 << 30;
+    let video_memory = cap_d3d_adapter::select_capture_adapter(None)
+        .map_or(0, |adapter| adapter.dedicated_vram_bytes);
+    let memory = crate::camera_blur_portable::total_memory_bytes().unwrap_or(0);
+    let cheap = video_memory >= MIN_DEDICATED_VIDEO_MEMORY && memory >= MIN_MEMORY;
+    tracing::info!(
+        video_memory_mb = video_memory >> 20,
+        memory_mb = memory >> 20,
+        cheap,
+        "editor preview quality default"
+    );
+    cheap
+}
+
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    target_os = "windows"
+)))]
+fn full_preview_is_cheap() -> bool {
+    false
 }
 
 /// One entry of `general_settings.excludedWindows` (`WindowExclusion`).
@@ -1095,6 +1176,8 @@ pub struct GeneralSettings {
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
 pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+/// Written when someone picks a preview quality in the editor.
+pub const EDITOR_PREVIEW_QUALITY_CHOSEN_KEY: &str = "editorPreviewQualityChosen";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
@@ -1532,7 +1615,7 @@ impl GeneralSettings {
             update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
-            editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            editor_preview_quality: EditorPreviewQuality::from_general(general),
             editor_preview_speed: general
                 .get(EDITOR_PREVIEW_SPEED_KEY)
                 .and_then(Value::as_f64)
@@ -3714,6 +3797,63 @@ mod tests {
             ..Default::default()
         };
         assert!(bundle_first.matches(Some("com.cap.desktop"), None, Some("Wrong")));
+    }
+
+    #[test]
+    fn editor_preview_quality_defaults_per_machine_until_chosen() {
+        let read = |quality: Option<&str>, chosen: Option<bool>| {
+            let mut general = Map::new();
+            if let Some(quality) = quality {
+                general.insert("editorPreviewQuality".to_string(), Value::from(quality));
+            }
+            if let Some(chosen) = chosen {
+                general.insert(
+                    EDITOR_PREVIEW_QUALITY_CHOSEN_KEY.to_string(),
+                    Value::from(chosen),
+                );
+            }
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .editor_preview_quality
+        };
+        let machine = EditorPreviewQuality::for_this_machine();
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert_eq!(machine, EditorPreviewQuality::Full);
+        }
+        if cfg!(target_os = "linux") {
+            assert_eq!(machine, EditorPreviewQuality::Half);
+        }
+        assert_eq!(read(None, None), machine);
+        assert_eq!(read(Some("half"), None), machine);
+        assert_eq!(read(Some("half"), Some(false)), machine);
+        assert_eq!(read(Some("bogus"), Some(true)), machine);
+        assert_eq!(read(Some("half"), Some(true)), EditorPreviewQuality::Half);
+        assert_eq!(read(Some("full"), None), EditorPreviewQuality::Full);
+        assert_eq!(read(Some("quarter"), None), EditorPreviewQuality::Quarter);
+        assert_eq!(read(Some("full"), Some(true)), EditorPreviewQuality::Full);
+    }
+
+    #[test]
+    fn choosing_half_keeps_it_over_the_machine_default() {
+        let store = TempStore::new(
+            "preview-quality",
+            Some(r#"{ "general_settings": { "editorPreviewQuality": "half", "theme": "dark" } }"#),
+        );
+        assert_eq!(
+            GeneralSettings::load().editor_preview_quality,
+            EditorPreviewQuality::for_this_machine()
+        );
+        assert!(set_editor_preview_quality(EditorPreviewQuality::Half));
+        let written = store.read();
+        assert_eq!(written["general_settings"]["editorPreviewQuality"], "half");
+        assert_eq!(
+            written["general_settings"][EDITOR_PREVIEW_QUALITY_CHOSEN_KEY],
+            true
+        );
+        assert_eq!(written["general_settings"]["theme"], "dark");
+        assert_eq!(
+            GeneralSettings::load().editor_preview_quality,
+            EditorPreviewQuality::Half
+        );
     }
 
     #[test]

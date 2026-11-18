@@ -8406,12 +8406,7 @@ impl EditorWindow {
         if let Some(transport) = &self.transport {
             transport.set_resolution(resolution);
         }
-        let value = serde_json::Value::String(quality.as_json().to_string());
-        if !crate::store::set_store_setting(
-            crate::store::GENERAL_SETTINGS,
-            "editorPreviewQuality",
-            value,
-        ) {
+        if !crate::store::set_editor_preview_quality(quality) {
             tracing::warn!("failed to persist preview quality");
         }
         if was_playing {
