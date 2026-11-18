@@ -18,7 +18,7 @@ export function OfferCard() {
 	const [seats, setSeats] = useState(1);
 
 	return (
-		<div className="relative rounded-[24px] bg-[linear-gradient(140deg,rgba(255,214,140,0.55),rgba(255,77,141,0.25)_40%,rgba(176,54,159,0)_70%)] p-px shadow-[0_40px_120px_-30px_rgba(0,0,0,0.8)]">
+		<div className="relative rounded-[24px] bg-[rgba(245,241,234,0.12)] p-px shadow-[0_40px_120px_-30px_rgba(0,0,0,0.8)]">
 			<div className="grid gap-10 rounded-[23px] bg-[#121113] p-6 sm:p-10 lg:grid-cols-[1.05fr_1fr] lg:gap-14">
 				<div className="flex flex-col">
 					<h2 className="text-[30px] font-medium leading-[1.05] tracking-[-0.025em] sm:text-[38px]">
@@ -30,7 +30,7 @@ export function OfferCard() {
 							{money(PRICE.now)}
 						</span>
 						<span className="pb-2 text-[15px] leading-tight text-[rgba(245,241,234,0.64)]">
-							<s className="decoration-[#FF6F8E] decoration-2">
+							<s className="decoration-[rgba(245,241,234,0.6)] decoration-2">
 								{symbol}
 								{PRICE.full}
 							</s>
@@ -125,7 +125,7 @@ export function OfferCard() {
 								<svg
 									viewBox="0 0 16 16"
 									aria-hidden="true"
-									className="mt-[3px] size-4 shrink-0 text-[#FF8078]"
+									className="mt-[3px] size-4 shrink-0 text-[rgba(245,241,234,0.5)]"
 								>
 									<path
 										d="m3.5 8.4 2.9 2.9 6.1-6.6"

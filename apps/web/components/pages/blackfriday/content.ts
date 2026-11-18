@@ -30,86 +30,58 @@ export const INCLUDED = [
 	"Everything in the Desktop license, plus priority support",
 ] as const;
 
-export type FeatureIcon =
-	| "apple"
-	| "windows"
-	| "linux"
-	| "phone"
-	| "chrome"
-	| "browser"
-	| "link"
-	| "spark"
-	| "cloud"
-	| "chat"
-	| "globe"
-	| "lock"
-	| "database"
-	| "film"
-	| "team";
-
 export const FEATURES: readonly {
-	icon: FeatureIcon;
 	title: string;
 	body: string;
 }[] = [
 	{
-		icon: "link",
 		title: "Share in seconds",
 		body: "Stop recording and a shareable link is ready straight away.",
 	},
 	{
-		icon: "spark",
 		title: "Cap AI on every video",
 		body: "Titles, summaries, clickable chapters and a searchable transcript, written for you.",
 	},
 	{
-		icon: "cloud",
 		title: "Unlimited cloud",
 		body: "Unlimited storage and bandwidth, so you never delete a recording to make room.",
 	},
 	{
-		icon: "chat",
 		title: "Comments and analytics",
 		body: "Threaded comments, reactions and viewer analytics turn a video into a conversation.",
 	},
 	{
-		icon: "globe",
 		title: "Your own domain",
 		body: "Serve every share from cap.yourdomain.com, with your brand on the page.",
 	},
 	{
-		icon: "lock",
 		title: "Private when it matters",
 		body: "Password-protect any share, or keep a recording to your workspace.",
 	},
 	{
-		icon: "database",
 		title: "Bring your own storage",
 		body: "Point Cap at your own S3 bucket or Google Drive and keep the files yourself.",
 	},
 	{
-		icon: "film",
 		title: "Studio quality",
 		body: "Record up to 4K at 60 fps, then polish with zooms, backgrounds and captions.",
 	},
 	{
-		icon: "team",
 		title: "Built for teams",
 		body: "Shared workspaces and spaces keep every team's videos in one place.",
 	},
 ];
 
 export const PLATFORMS: readonly {
-	icon: FeatureIcon;
 	name: string;
 	note: string;
 }[] = [
-	{ icon: "apple", name: "macOS", note: "Native app" },
-	{ icon: "windows", name: "Windows", note: "Native app" },
-	{ icon: "linux", name: "Linux", note: "Native app" },
-	{ icon: "phone", name: "iOS", note: "Record on your iPhone" },
-	{ icon: "chrome", name: "Chrome", note: "Browser extension" },
-	{ icon: "browser", name: "Web", note: "Record in any browser" },
+	{ name: "macOS", note: "Native app" },
+	{ name: "Windows", note: "Native app" },
+	{ name: "Linux", note: "Native app" },
+	{ name: "iOS", note: "Record on your iPhone" },
+	{ name: "Chrome", note: "Browser extension" },
+	{ name: "Web", note: "Record in any browser" },
 ];
 
 export const TEAM_POINTS = [

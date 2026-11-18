@@ -33,7 +33,7 @@ export function Film() {
 	};
 
 	return (
-		<div className="relative aspect-[1920/1010] w-full overflow-hidden rounded-[14px] bg-black shadow-[0_0_0_1px_rgba(245,241,234,0.1),0_40px_120px_-40px_rgba(255,77,141,0.45),0_30px_80px_-30px_rgba(0,0,0,0.9)] sm:rounded-[20px]">
+		<div className="relative aspect-[1920/1010] w-full overflow-hidden rounded-[14px] bg-black shadow-[0_0_0_1px_rgba(245,241,234,0.1),0_30px_80px_-30px_rgba(0,0,0,0.9)] sm:rounded-[20px]">
 			{playing ? (
 				<CapPlayer
 					source={SOURCE}
@@ -65,7 +65,7 @@ export function Film() {
 						sizes="(min-width: 1184px) 1120px, 100vw"
 						className="object-cover"
 					/>
-					<span className="relative inline-flex h-11 items-center gap-2.5 rounded-full bg-[rgba(10,10,11,0.72)] px-5 text-[15px] text-[#F5F1EA] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.25),0_10px_40px_-6px_rgba(255,77,141,0.5)] transition-transform duration-200 group-hover:scale-[1.04] group-focus-visible:ring-2 group-focus-visible:ring-[#F5F1EA] motion-reduce:transition-none sm:h-14 sm:px-6 sm:text-[17px]">
+					<span className="relative inline-flex h-11 items-center gap-2.5 rounded-full bg-[rgba(10,10,11,0.72)] px-5 text-[15px] text-[#F5F1EA] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.25)] transition-transform duration-200 group-hover:scale-[1.04] group-focus-visible:ring-2 group-focus-visible:ring-[#F5F1EA] motion-reduce:transition-none sm:h-14 sm:px-6 sm:text-[17px]">
 						<svg
 							viewBox="0 0 16 16"
 							aria-hidden="true"

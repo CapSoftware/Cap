@@ -18,10 +18,9 @@ import {
 	TEAM_POINTS,
 	TESTIMONIAL_NAMES,
 } from "./content";
-import { FeatureIcon } from "./FeatureIcon";
 import { Film } from "./Film";
 import { OfferCard } from "./OfferCard";
-import { CARD, DIM, GHOST, SUN_TEXT } from "./theme";
+import { CARD, DIM, GHOST } from "./theme";
 
 const WRAP = "mx-auto w-full max-w-[1184px] px-5 sm:px-8";
 const H2 =
@@ -156,9 +155,7 @@ function Features() {
 		<section className="relative isolate py-16 sm:py-24">
 			<div className={WRAP}>
 				<div className="mx-auto max-w-[680px] text-center">
-					<h2 className={H2}>
-						Everything in Cap Pro, <span className={SUN_TEXT}>half price</span>
-					</h2>
+					<h2 className={H2}>Everything in Cap Pro, half price</h2>
 					<p className={`mt-4 text-[17px] leading-[1.55] ${DIM}`}>
 						A fast, native screen recorder for Mac and Windows, with the cloud,
 						AI and team tools to share what you record.
@@ -184,10 +181,7 @@ function Features() {
 							key={feature.title}
 							className="bg-[#0A0A0B] px-4 py-6 last:col-span-2 sm:px-8 sm:py-10 lg:last:col-span-1"
 						>
-							<span className="text-[#FF9C8A]">
-								<FeatureIcon name={feature.icon} />
-							</span>
-							<h3 className="mt-3 text-[16px] font-medium leading-[1.25] tracking-[-0.015em] sm:mt-4 sm:text-[19px]">
+							<h3 className="text-[16px] font-medium leading-[1.25] tracking-[-0.015em] sm:text-[19px]">
 								{feature.title}
 							</h3>
 							<p
@@ -219,12 +213,9 @@ function Platforms() {
 					{PLATFORMS.map((platform) => (
 						<div
 							key={platform.name}
-							className="flex flex-col items-center gap-3 bg-[#0A0A0B] px-3 py-10 text-center"
+							className="flex flex-col items-center gap-1.5 bg-[#0A0A0B] px-3 py-9 text-center"
 						>
-							<span className="text-[#FF9C8A] [&_svg]:size-7">
-								<FeatureIcon name={platform.icon} />
-							</span>
-							<span className="mt-1 text-[20px] font-medium tracking-[-0.015em]">
+							<span className="text-[22px] font-medium tracking-[-0.02em] sm:text-[24px]">
 								{platform.name}
 							</span>
 							<span className={`text-[14px] leading-tight ${DIM}`}>
@@ -250,9 +241,7 @@ function Team() {
 				className={`${WRAP} grid items-center gap-10 lg:grid-cols-[1fr_1.15fr] lg:gap-16`}
 			>
 				<div>
-					<h2 className={H2}>
-						Bring your <span className={SUN_TEXT}>entire team</span>
-					</h2>
+					<h2 className={H2}>Bring your entire team</h2>
 					<p className={`mt-4 max-w-[520px] text-[17px] leading-[1.55] ${DIM}`}>
 						Every seat on the yearly plan is half price, so the whole team can
 						record, share and review together for less.
@@ -263,7 +252,7 @@ function Team() {
 								<svg
 									viewBox="0 0 16 16"
 									aria-hidden="true"
-									className="mt-[3px] size-4 shrink-0 text-[#FF8078]"
+									className="mt-[3px] size-4 shrink-0 text-[rgba(245,241,234,0.5)]"
 								>
 									<path
 										d="m3.5 8.4 2.9 2.9 6.1-6.6"
