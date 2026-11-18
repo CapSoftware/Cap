@@ -153,7 +153,26 @@ fn owner_id() -> Option<String> {
 }
 
 fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    let now = chrono::Utc::now();
+    #[cfg(test)]
+    let now = now + virtual_clock_lead();
+    now.timestamp()
+}
+
+/// How far a paused test runtime's clock is from real time, so retry and
+/// recheck times follow the virtual clock the queue tests advance. It is
+/// negative while real work outpaces the paused clock.
+#[cfg(test)]
+fn virtual_clock_lead() -> chrono::Duration {
+    let virtual_now = tokio::time::Instant::now().into_std();
+    let real_now = std::time::Instant::now();
+    let signed = |ahead: Duration, sign: i32| {
+        chrono::Duration::from_std(ahead).unwrap_or(chrono::Duration::zero()) * sign
+    };
+    match virtual_now.checked_duration_since(real_now) {
+        Some(ahead) => signed(ahead, 1),
+        None => signed(real_now.saturating_duration_since(virtual_now), -1),
+    }
 }
 
 fn regular_file(path: &Path) -> Result<std::fs::Metadata, String> {

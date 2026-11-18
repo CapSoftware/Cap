@@ -211,6 +211,7 @@ struct MockState {
     created: Vec<String>,
     created_orgs: Vec<Option<String>>,
     deleted: Vec<String>,
+    deleted_on_web: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -452,6 +453,12 @@ impl MockCap {
 
     pub(super) fn deleted(&self) -> Vec<String> {
         self.lock().deleted.clone()
+    }
+
+    /// Deletes the cap on the web, as its owner can at any time: the server
+    /// then answers its completion calls with 404 "Video not found".
+    pub(super) fn delete_on_web(&self, video_id: &str) {
+        self.lock().deleted_on_web.push(video_id.to_string());
     }
 
     pub(super) fn deletes(&self) -> u32 {
@@ -937,8 +944,11 @@ impl Server {
             }
             ("POST", "/api/recording/prepare") => reply(404, json!({ "error": "not found" })),
             ("POST", "/api/upload/recording-complete") => {
-                state.confirmations.push(request.clone());
                 let video_id = text(&request, "videoId");
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
+                state.confirmations.push(request.clone());
                 let Some(verification) = request.get("verification") else {
                     return reply(200, json!({ "success": true }));
                 };
