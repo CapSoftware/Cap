@@ -229,14 +229,26 @@ fn shrunk_one_pixel_stripes_average_instead_of_beating() {
         [v, v, v, 255]
     });
     let output = [128, 64];
-    let pixels = render(&gpu, &source, &full_frame_draw(&source, output));
-    let (mean, spread) = luma_spread(&pixels, output[0], 3);
-    // A 1.5x shrink of 1 px stripes is above the output's Nyquist limit, so
-    // the ideal result is flat mid grey. One tap plus an unsharp mask left a
-    // full-contrast beat pattern (spread about 92 levels); four box taps
-    // bring it to about 32.
-    assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
-    assert!(spread < 45.0, "spread {spread:.1}");
+    for preserve_alpha in [false, true] {
+        let draw = Draw {
+            preserve_alpha,
+            ..full_frame_draw(&source, output)
+        };
+        let pixels = render(&gpu, &source, &draw);
+        let (mean, spread) = luma_spread(&pixels, output[0], 3);
+        // A 1.5x shrink of 1 px stripes is above the output's Nyquist limit, so
+        // the ideal result is flat mid grey. One tap plus an unsharp mask left a
+        // full-contrast beat pattern (spread about 92 levels); four box taps
+        // bring it to about 32.
+        assert!(
+            (mean - 127.5).abs() < 4.0,
+            "preserve_alpha {preserve_alpha}: mean {mean:.1}"
+        );
+        assert!(
+            spread < 45.0,
+            "preserve_alpha {preserve_alpha}: spread {spread:.1}"
+        );
+    }
 }
 
 #[test]
