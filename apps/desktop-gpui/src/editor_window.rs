@@ -4781,20 +4781,19 @@ impl EditorWindow {
             if requests.has_changed().unwrap_or(true) {
                 return;
             }
-            let _ = this.update(cx, |view, _| {
+            let _ = this.update(cx, |view, cx| {
                 if view.playing || !view.is_instance(&instance) {
                     return;
                 }
                 let Some(canvas) = view.preview_canvas_px.get() else {
                     return;
                 };
-                let time = view.view.preview_time.unwrap_or(view.playhead).max(0.0);
+                // The frame on screen, not one rebuilt from the playhead: a
+                // stale hover time or a seconds round trip would redraw a
+                // different moment.
+                let frame = view.preview.read(cx).frame_number;
                 instance.preview_tx.send_modify(|value| {
-                    *value = Some((
-                        (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
-                        EDITOR_PREVIEW_FPS,
-                        XY::new(canvas[0], canvas[1]),
-                    ))
+                    *value = Some((frame, EDITOR_PREVIEW_FPS, XY::new(canvas[0], canvas[1])))
                 });
             });
         }));
