@@ -1247,29 +1247,9 @@ fn shortcut_effect(
         },
         "startStudioRecording" => studio_start_effect(settings),
         "startInstantRecording" => instant_start_effect(settings),
-        "startRecording" => match mode {
-            Mode::Studio => studio_start_effect(settings),
-            Mode::Instant => instant_start_effect(settings),
-            Mode::Screenshot => match shot {
-                Shot::OpenEditor => ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::selected_screenshot_open_editor,
-                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_open_editor,
-                },
-                Shot::Copy => ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::selected_screenshot_copy,
-                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_copy,
-                },
-                Shot::CopyAndOpenEditor => ShortcutEffect {
-                    phrase:
-                        tr::settings::shortcuts::effect::selected_screenshot_copy_and_open_editor,
-                    sentence:
-                        tr::settings::shortcuts::sentence::selected_screenshot_copy_and_open_editor,
-                },
-                Shot::Save => ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::selected_screenshot_save,
-                    sentence: tr::settings::shortcuts::sentence::selected_screenshot_save,
-                },
-            },
+        "startRecording" => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::start_selected,
+            sentence: tr::settings::shortcuts::sentence::start_selected,
         },
         // `Mode::for_recording`: a "Record …" shortcut records in Studio when
         // the saved mode is Screenshot.
@@ -1367,10 +1347,7 @@ fn instant_start_effect(settings: &store::GeneralSettings) -> ShortcutEffect {
 
 fn description_follows_outcome(action: &str) -> bool {
     SCREENSHOT_SHORTCUTS.contains(&action)
-        || matches!(
-            action,
-            "startRecording" | "startStudioRecording" | "startInstantRecording"
-        )
+        || matches!(action, "startStudioRecording" | "startInstantRecording")
 }
 
 /// gpui on macOS reports ⌘⇧4 as `cmd-$` with Shift cleared, so this restores
@@ -8873,17 +8850,9 @@ mod tests {
             "startInstantRecording" => {
                 format!("record your selected screen or window in Instant mode{instant_stop}")
             }
-            "startRecording" => match mode {
-                crate::main_window::Mode::Studio => {
-                    assembled_effect("startStudioRecording", settings, mode)
-                }
-                crate::main_window::Mode::Instant => {
-                    assembled_effect("startInstantRecording", settings, mode)
-                }
-                crate::main_window::Mode::Screenshot => {
-                    format!("capture your selected screen or window and {screenshot}")
-                }
-            },
+            "startRecording" => {
+                "start a recording or screenshot in the mode selected in Cap".into()
+            }
             "openRecordingPickerArea" => format!("select an area, then {picker}"),
             "openRecordingPickerWindow" => format!("choose a window, then {picker}"),
             "openRecordingPickerDisplay" => format!("choose a display, then {picker}"),
@@ -8975,24 +8944,22 @@ mod tests {
         assert_eq!(bindings.len(), 1);
     }
 
-    /// "Start in selected mode" reads like the shortcut the selected mode
-    /// would run.
+    /// "Start in selected mode" sits right above Start Studio recording, so
+    /// it says what sets it apart instead of repeating that row.
     #[test]
-    fn the_selected_mode_start_describes_the_selected_mode() {
+    fn the_selected_mode_start_names_the_selected_mode() {
         use crate::main_window::Mode;
         let settings = store::GeneralSettings::default();
-        assert_eq!(
-            sentence("startRecording", &settings, Mode::Studio),
-            sentence("startStudioRecording", &settings, Mode::Studio)
-        );
-        assert_eq!(
-            sentence("startRecording", &settings, Mode::Instant),
-            sentence("startInstantRecording", &settings, Mode::Instant)
-        );
-        assert!(
-            sentence("startRecording", &settings, Mode::Screenshot)
-                .starts_with("Capture your selected screen or window")
-        );
+        for mode in [Mode::Studio, Mode::Instant, Mode::Screenshot] {
+            assert_eq!(
+                sentence("startRecording", &settings, mode),
+                "Start a recording or screenshot in the mode selected in Cap."
+            );
+            assert_ne!(
+                sentence("startRecording", &settings, mode),
+                sentence("startStudioRecording", &settings, mode)
+            );
+        }
     }
 
     #[test]
@@ -9037,7 +9004,7 @@ mod tests {
         }
         assert_eq!(
             checked.len(),
-            32 + usize::from(crate::live_draw::SUPPORTED),
+            29 + usize::from(crate::live_draw::SUPPORTED),
             "every effect message is reachable"
         );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
