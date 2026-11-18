@@ -116,6 +116,7 @@ mod transcript;
 mod transcription;
 mod tray;
 mod ui;
+mod unused_media;
 mod updates;
 mod upload;
 mod foreign_window;
@@ -785,6 +786,16 @@ fn main() {
                 Some(path) => app_windows::open_editor(path, cx),
                 None => tracing::error!(target, "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"),
             }
+        }
+
+        // `CAP_GPUI_AUTO_OVERLAY_CARD=<path-to-.cap>`: show that recording's
+        // card in the recordings overlay, as the end of a Studio recording
+        // does, so a test can start an overlay action on a project that is
+        // also open in the editor.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("CAP_GPUI_AUTO_OVERLAY_CARD")
+        {
+            crate::recordings_overlay::show_studio_recording(path.into(), cx);
         }
 
         // `CAP_GPUI_AUTO_HOTKEY=<store key>[,<store key>...]`: run hotkey
