@@ -8,7 +8,7 @@ import {
 	messengerMessages,
 	users,
 } from "@cap/database/schema";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { MESSENGER_ADMIN_EMAIL, MESSENGER_ANON_COOKIE } from "./constants";
 
@@ -319,10 +319,7 @@ export const getMessengerConversationUpdates = async ({
 				? and(
 						eq(messengerMessages.conversationId, conversationId),
 						gte(messengerMessages.createdAt, cursorCreatedAt),
-						or(
-							gt(messengerMessages.createdAt, cursorCreatedAt),
-							gt(messengerMessages.id, cursorId),
-						),
+						ne(messengerMessages.id, cursorId),
 					)
 				: eq(messengerMessages.conversationId, conversationId),
 		)

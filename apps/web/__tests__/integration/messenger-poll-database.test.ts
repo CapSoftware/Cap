@@ -328,7 +328,41 @@ describe.runIf(Boolean(databaseUrl))("messenger poll against MySQL", () => {
 				after: middle ?? "",
 				mode: "agent",
 			});
-			expect(afterMiddle.json?.messages.map((m) => m.id)).toEqual([last]);
+			expect(afterMiddle.json?.messages.map((m) => m.id)).toEqual([
+				first,
+				last,
+			]);
+		});
+
+		it("returns a message saved later in the cursor's second with a lower id", async () => {
+			const anonymousId = `anon-${id()}`;
+			fixture.anonymousId = anonymousId;
+			const { conversationId } = await seedConversation({ anonymousId });
+			const prefix = id().slice(0, 14);
+			const row = (suffix: string) => ({
+				id: `${prefix}${suffix}`,
+				conversationId,
+				role: "admin" as const,
+				content: suffix,
+				userId: null,
+				anonymousId,
+				createdAt: second(5),
+			});
+			await database().insert(Db.messengerMessages).values(row("m"));
+
+			const before = await pollRoute(conversationId, {
+				after: `${prefix}m`,
+				mode: "agent",
+			});
+			expect(before.status).toBe(204);
+
+			await database().insert(Db.messengerMessages).values(row("a"));
+			const after = await pollRoute(conversationId, {
+				after: `${prefix}m`,
+				mode: "agent",
+			});
+			expect(after.status).toBe(200);
+			expect(after.json?.messages.map((m) => m.id)).toEqual([`${prefix}a`]);
 		});
 
 		it("reports a handoff to a human even with no new messages", async () => {
