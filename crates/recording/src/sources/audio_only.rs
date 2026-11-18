@@ -13,17 +13,10 @@ use futures::{FutureExt, SinkExt, channel::mpsc, future::BoxFuture};
 
 use crate::output_pipeline::{FFmpegVideoFrame, SetupCtx, VideoSource};
 
-/// Size of the black frame an audio-only recording keeps as its display track.
-/// It is the canvas a visualiser export is drawn on, so it matches the 1080p
-/// default export.
-pub const AUDIO_ONLY_CANVAS_WIDTH: u32 = 1920;
-pub const AUDIO_ONLY_CANVAS_HEIGHT: u32 = 1080;
-pub const AUDIO_ONLY_CANVAS_FPS: u32 = 30;
-
-/// Software H.264 only: a static black frame costs libx264 almost nothing, and
-/// keeping it off the hardware encoders means an audio recording never
-/// competes with, or depends on, a GPU encoder session.
-pub const AUDIO_ONLY_CANVAS_ENCODERS: &[&str] = &["libx264"];
+pub use cap_project::{
+    AUDIO_ONLY_CANVAS_ENCODERS, AUDIO_ONLY_CANVAS_FPS, AUDIO_ONLY_CANVAS_HEIGHT,
+    AUDIO_ONLY_CANVAS_WIDTH,
+};
 
 pub struct AudioOnlyCanvasConfig;
 
