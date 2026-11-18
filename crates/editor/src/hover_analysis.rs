@@ -257,6 +257,9 @@ const MAX_BURST_MS: f64 = 250.0;
 const QUIET_MS: f64 = 100.0;
 const GLOBAL_LIMIT: f32 = 0.2;
 const SCROLL_RATIO: f32 = 0.5;
+/// A plain patch matches any shifted plain patch, so a highlight switching
+/// off would read as a scroll; only textured content can be seen to move.
+const MIN_SCROLL_TEXTURE: f32 = 6.0;
 const MERGE_MS: f64 = 120.0;
 const RING_FRAMES: usize = 48;
 
@@ -486,6 +489,23 @@ impl HoverDetector {
         }
     }
 
+    fn spread(&self, luma: &[u8], cx: usize, cy: usize) -> f32 {
+        let (x0, x1, y0, y1) = self.probe_bounds(cx, cy);
+        let mut sum = 0f32;
+        let mut sum_sq = 0f32;
+        let mut count = 0f32;
+        for y in y0..=y1 {
+            for &value in &luma[y * self.width + x0..=y * self.width + x1] {
+                let value = f32::from(value);
+                sum += value;
+                sum_sq += value * value;
+                count += 1.0;
+            }
+        }
+        let mean = sum / count.max(1.0);
+        (sum_sq / count.max(1.0) - mean * mean).max(0.0).sqrt()
+    }
+
     /// Scrolling slides content past a pointer that stays put; a hover
     /// change can look like a shift too (the highlight hopping to the next
     /// button) but the pointer moves with it.
@@ -499,7 +519,7 @@ impl HoverDetector {
             }
             _ => 0.0,
         };
-        if travel >= self.still_pointer {
+        if travel >= self.still_pointer || self.spread(&b.luma, cx, cy) < MIN_SCROLL_TEXTURE {
             return false;
         }
         let base = self.mean_difference(&a.luma, &b.luma, cx, cy, 0, 0);
