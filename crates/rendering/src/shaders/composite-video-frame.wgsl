@@ -474,38 +474,30 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         }
 
         if is_downscaling {
-            let texel_size = 1.0 / uniforms.frame_size;
-
-            let offset_x = vec2<f32>(texel_size.x, 0.0);
-            let offset_y = vec2<f32>(0.0, texel_size.y);
-
-            let left = textureSample(
+            // Four bilinear taps a quarter of the footprint off centre cover
+            // the source texels under the output pixel, which one tap plus an
+            // unsharp mask skipped: text stops aliasing and 1 px lines stop
+            // turning into moire, for one tap fewer than that mask.
+            let reach = scale_ratio / uniforms.frame_size * 0.25;
+            let box_sum = textureSample(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_x, safe_min, safe_max)
-            ).rgb;
-            let right = textureSample(
+                clamp(cropped_uv - reach, safe_min, safe_max)
+            ).rgb + textureSample(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_x, safe_min, safe_max)
-            ).rgb;
-            let top = textureSample(
+                clamp(cropped_uv + reach, safe_min, safe_max)
+            ).rgb + textureSample(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_y, safe_min, safe_max)
-            ).rgb;
-            let bottom = textureSample(
+                clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max)
+            ).rgb + textureSample(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_y, safe_min, safe_max)
+                clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max)
             ).rgb;
 
-            let blurred = (left + right + top + bottom) * 0.25;
-
-            let sharpness = min(scale_ratio.x * 0.3, 0.7);
-            let sharpened = center_color + (center_color - blurred) * sharpness;
-
-            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
+            return vec4(box_sum * 0.25, out_alpha);
         }
 
         if is_upscaling {
