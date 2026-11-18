@@ -191,12 +191,37 @@ module.exports = (__app, _options) => {
 						from: { clipPath: "inset(-30% 100% -30% -10%)" },
 						to: { clipPath: "inset(-30% -10% -30% -10%)" },
 					},
+					bfFlicker: {
+						"0%": { opacity: "0" },
+						"10%": { opacity: "0.9" },
+						"13%": { opacity: "0.15" },
+						"18%": { opacity: "1" },
+						"23%": { opacity: "0.35" },
+						"28%": { opacity: "1" },
+						"62%": { opacity: "0.8" },
+						"66%, 100%": { opacity: "1" },
+					},
+					bfBloom: {
+						"0%, 100%": { filter: "blur(28px) brightness(1)" },
+						"45%": { filter: "blur(30px) brightness(2.4)" },
+					},
+					bfSparkle: {
+						"0%": { opacity: "0", transform: "scale(0) rotate(0deg)" },
+						"30%": { opacity: "1", transform: "scale(1) rotate(45deg)" },
+						"55%": { opacity: "0.5", transform: "scale(0.6) rotate(70deg)" },
+						"75%": { opacity: "1", transform: "scale(0.95) rotate(90deg)" },
+						"100%": { opacity: "0", transform: "scale(0) rotate(135deg)" },
+					},
 				},
 				animation: {
 					flyEmoji: "flyEmoji 1.5s forwards",
 					fadeIn: "capFadeIn 200ms ease-out",
 					fadeOut: "capFadeOut 150ms ease-in",
-					"bf-write": "bfWrite 1.4s cubic-bezier(0.6,0,0.2,1) 0.15s both",
+					"bf-title":
+						"bfWrite 1.3s cubic-bezier(0.6,0,0.2,1) 0.1s both, bfFlicker 1.7s linear 0.1s both",
+					"bf-glow":
+						"bfWrite 1.3s cubic-bezier(0.6,0,0.2,1) 0.1s both, bfFlicker 1.7s linear 0.1s both, bfBloom 1.1s ease-in-out 1.3s both",
+					"bf-sparkle": "bfSparkle 1.2s ease-out both",
 				},
 			},
 		},
