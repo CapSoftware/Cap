@@ -609,9 +609,18 @@ impl ExportUi {
         true
     }
 
-    fn persist(&self) {
+    fn persist(&mut self) {
+        self.remember_video_format();
         let prefs = self.preferences();
         store::update(|state| state.export = Some(prefs));
+    }
+
+    /// Every change to a video format becomes the one an audio export hands
+    /// back, so leaving Audio restores the latest choice, not the opening one.
+    fn remember_video_format(&mut self) {
+        if self.format != ExportFormatKind::Audio {
+            self.saved_format = self.format;
+        }
     }
 
     fn preferences(&self) -> ExportPrefs {
@@ -4865,6 +4874,18 @@ mod tests {
         };
         normalize_export_options(&mut reopened, false);
         assert_eq!(chosen(&reopened), (ExportResolution::P4k, 60));
+    }
+
+    #[test]
+    fn audio_exports_keep_the_latest_video_format() {
+        let mut ui = new_export(1920, 1080, 30);
+        ui.format = ExportFormatKind::Mp4;
+        ui.remember_video_format();
+        ui.format = ExportFormatKind::Gif;
+        ui.remember_video_format();
+        ui.format = ExportFormatKind::Audio;
+        ui.remember_video_format();
+        assert_eq!(ui.preferences().format, ExportFormatKind::Gif.slug());
     }
 
     #[test]
