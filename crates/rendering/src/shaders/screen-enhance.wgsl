@@ -130,8 +130,21 @@ fn fs_upscale(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     let hi_px = max(ceil(uniforms.crop_max) - vec2<f32>(1.0), lo_px);
     let texels_per_pixel = (uniforms.crop_max - uniforms.crop_min) / uniforms.target_size;
     if uniforms.deband.w != 0.0 && min(texels_per_pixel.x, texels_per_pixel.y) >= 1.0 {
-        let uv = clamp(source_px, lo_px + vec2<f32>(0.5), hi_px + vec2<f32>(0.5)) / uniforms.frame_size;
-        return textureSampleLevel(source_texture, source_sampler, uv, 0.0);
+        // Bilinear in the shader: filtering hardware rounds the weights to a
+        // few bits on some GPUs, which moves high-contrast edges by a level.
+        let p = clamp(source_px, lo_px + vec2<f32>(0.5), hi_px + vec2<f32>(0.5)) - vec2<f32>(0.5);
+        let p0 = floor(p);
+        let f = p - p0;
+        let t0 = vec2<i32>(p0);
+        let lo_i = vec2<i32>(lo_px);
+        let hi_i = vec2<i32>(hi_px);
+        let top = mix(load_source(t0, lo_i, hi_i), load_source(t0 + vec2<i32>(1, 0), lo_i, hi_i), f.x);
+        let bottom = mix(
+            load_source(t0 + vec2<i32>(0, 1), lo_i, hi_i),
+            load_source(t0 + vec2<i32>(1, 1), lo_i, hi_i),
+            f.x,
+        );
+        return mix(top, bottom, f.y);
     }
     let position = source_px - vec2<f32>(0.5);
     let base = floor(position);
