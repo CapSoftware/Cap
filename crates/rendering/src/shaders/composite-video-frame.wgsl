@@ -479,25 +479,37 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             // unsharp mask skipped: text stops aliasing and 1 px lines stop
             // turning into moire, for one tap fewer than that mask.
             let reach = scale_ratio / uniforms.frame_size * 0.25;
-            let box_sum = textureSample(
+            let a = textureSample(
                 frame_texture,
                 frame_sampler,
                 clamp(cropped_uv - reach, safe_min, safe_max)
-            ).rgb + textureSample(
+            );
+            let b = textureSample(
                 frame_texture,
                 frame_sampler,
                 clamp(cropped_uv + reach, safe_min, safe_max)
-            ).rgb + textureSample(
+            );
+            let c = textureSample(
                 frame_texture,
                 frame_sampler,
                 clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max)
-            ).rgb + textureSample(
+            );
+            let d = textureSample(
                 frame_texture,
                 frame_sampler,
                 clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max)
-            ).rgb;
+            );
 
-            return vec4(box_sum * 0.25, out_alpha);
+            if uniforms.preserve_source_alpha > 0.5 {
+                // Straight-alpha sources (background removal, transparent
+                // images) keep their old colour under transparent texels, so
+                // weight each tap by its alpha and soften the edge alpha too.
+                let alpha_sum = a.a + b.a + c.a + d.a;
+                let color_sum = a.rgb * a.a + b.rgb * b.a + c.rgb * c.a + d.rgb * d.a;
+                return vec4(color_sum / max(alpha_sum, 0.0001), alpha_sum * 0.25);
+            }
+
+            return vec4((a.rgb + b.rgb + c.rgb + d.rgb) * 0.25, out_alpha);
         }
 
         if is_upscaling {
