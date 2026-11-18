@@ -3600,6 +3600,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The render device exists by now, so a software fallback has been
+        // noted and an unchosen default can step down to Half.
+        self.preview_quality = crate::store::GeneralSettings::load().editor_preview_quality;
         transport.set_resolution(self.preview_resolution());
         self.transport = Some(transport);
         self.stats = Some(stats);

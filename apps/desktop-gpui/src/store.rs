@@ -920,18 +920,29 @@ impl EditorPreviewQuality {
     }
 
     /// Full where the GPU draws it at no measurable cost, Half where Full
-    /// drops playback frames (software and integrated GPUs).
+    /// drops playback frames (software and integrated GPUs). A renderer that
+    /// fell back to (or was forced onto) a software adapter reads back every
+    /// frame on the CPU, whatever GPU is installed.
     pub fn for_this_machine() -> Self {
-        static QUALITY: std::sync::OnceLock<EditorPreviewQuality> = std::sync::OnceLock::new();
-        *QUALITY.get_or_init(|| {
-            if full_preview_is_cheap() {
-                Self::Full
-            } else {
-                Self::Half
-            }
-        })
+        static FULL_IS_CHEAP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let software = SOFTWARE_RENDERING.load(std::sync::atomic::Ordering::Acquire)
+            || cap_rendering::force_software_wgpu_adapter();
+        if !software && *FULL_IS_CHEAP.get_or_init(full_preview_is_cheap) {
+            Self::Full
+        } else {
+            Self::Half
+        }
+    }
+
+    /// Called with the shared render device's adapter, or `true` when no
+    /// hardware device could be made.
+    pub fn note_rendering_adapter(software: bool) {
+        SOFTWARE_RENDERING.store(software, std::sync::atomic::Ordering::Release);
     }
 }
+
+static SOFTWARE_RENDERING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn full_preview_is_cheap() -> bool {
