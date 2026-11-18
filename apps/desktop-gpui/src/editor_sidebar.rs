@@ -4002,18 +4002,7 @@ impl EditorWindow {
                 )
                 .flex()
                 .row_height(px(28.))
-                .track(px(4.), Hsla::from(theme.editor.ctl_active))
-                .fill(Hsla::from(if disabled {
-                    theme.editor.text_3
-                } else {
-                    theme.editor.accent
-                }))
-                .thumb(
-                    px(16.),
-                    Hsla::from(theme.editor.thumb),
-                    Some(gpui::hsla(0., 0., 0., 0.10)),
-                )
-                .thumb_shadow()
+                .editor(&theme, px(16.), disabled)
                 .when(!disabled, |this| {
                     this.on_drag_start(cx.listener(
                         move |this, event: &MouseDownEvent, window, cx| {

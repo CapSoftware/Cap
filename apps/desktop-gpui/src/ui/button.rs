@@ -530,10 +530,6 @@ impl RenderOnce for Button {
     }
 }
 
-/// How a filled button is lit: a soft vertical sheen over its fill, a 1px
-/// highlight along the top edge, and a contact shadow under opaque fills
-/// (with a tinted glow under saturated ones, so accent buttons glow rather
-/// than sit flat).
 struct ButtonFinish {
     fill: gpui::Background,
     shadow: Vec<gpui::BoxShadow>,

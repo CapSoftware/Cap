@@ -162,6 +162,48 @@ impl Slider {
         self
     }
 
+    pub fn editor(self, theme: &crate::theme::Theme, knob: Pixels, disabled: bool) -> Self {
+        let editor = theme.editor;
+        let accent = if disabled {
+            editor.text_3
+        } else {
+            editor.accent
+        };
+        let knob_fill = crate::theme::mix(accent, gpui::rgb(0xffffff), 0.14);
+        let mut slider = self
+            .track(px(4.), Hsla::from(editor.ctl_active))
+            .fill(Hsla::from(accent))
+            .thumb(knob, Hsla::from(knob_fill), None);
+        if let Some(thumb) = slider.thumb.as_mut() {
+            thumb.shadow = vec![
+                gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 1., 0.35),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+                gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 0., 0.28),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(2.),
+                    spread_radius: px(0.),
+                    inset: false,
+                },
+            ];
+            if !disabled {
+                thumb.shadow.push(gpui::BoxShadow {
+                    color: Hsla::from(accent).opacity(0.18),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(4.),
+                    spread_radius: px(0.),
+                    inset: false,
+                });
+            }
+        }
+        slider
+    }
+
     /// A knob that has to read on a light track needs the lift the CSS one
     /// gets from `0 1px 3px rgba(0,0,0,.25)`.
     pub fn thumb_shadow(mut self) -> Self {

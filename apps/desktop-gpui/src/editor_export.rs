@@ -3394,14 +3394,7 @@ impl EditorWindow {
                                         )
                                         .flex()
                                         .row_height(px(28.))
-                                        .track(px(3.), Hsla::from(editor.ctl_active))
-                                        .fill(Hsla::from(editor.accent))
-                                        .thumb(
-                                            px(14.),
-                                            Hsla::from(editor.thumb),
-                                            Some(gpui::hsla(0., 0., 0., 0.12)),
-                                        )
-                                        .thumb_shadow()
+                                        .editor(&self.theme, px(14.), false)
                                         .on_drag_start(
                                             cx.listener(
                                                 |this, event: &MouseDownEvent, _window, cx| {

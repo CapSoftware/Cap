@@ -11951,14 +11951,7 @@ impl EditorWindow {
                         )
                         .row_width(px(72.))
                         .row_height(px(20.))
-                        .track(px(3.), Hsla::from(editor.ctl_active))
-                        .fill(Hsla::from(editor.accent))
-                        .thumb(
-                            px(12.),
-                            Hsla::from(editor.thumb),
-                            Some(gpui::hsla(0., 0., 0., 0.12)),
-                        )
-                        .thumb_shadow()
+                        .editor(&theme, px(12.), false)
                         .on_drag_start(cx.listener(
                             |this, event: &MouseDownEvent, window, cx| {
                                 this.zoom_slider_drag = true;
@@ -13394,11 +13387,17 @@ impl Render for EditorWindow {
                                     .px(px(8.))
                                     .h(px(layout.timeline_height))
                                     .child(
-                                        div().size_full().overflow_hidden().child(
-                                            self.timeline_view.clone().cached(
+                                        div()
+                                            .size_full()
+                                            // Invisible, but kept: the timeline's
+                                            // hit-testing still offsets by
+                                            // `TIMELINE_CARD_BORDER`.
+                                            .border_1()
+                                            .border_color(gpui::transparent_black())
+                                            .overflow_hidden()
+                                            .child(self.timeline_view.clone().cached(
                                                 StyleRefinement::default().w_full().h_full(),
-                                            ),
-                                        ),
+                                            )),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the

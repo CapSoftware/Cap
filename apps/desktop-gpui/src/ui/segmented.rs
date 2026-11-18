@@ -14,11 +14,10 @@
 //! ([`crate::ui::TabRail`]) because its items are `flex-1` icon boxes with a
 //! separate indicator layer, not padded pills.
 //!
-//! The selected pill glides between items. Equal-width (stretched) controls
-//! place it by fraction, so it tracks a resizing container exactly; content
-//! sized ones place it from the item rects measured on the previous frame.
-//! Until those exist (the very first frame) the selected item paints its own
-//! fill, which looks identical at rest.
+//! The selected pill glides between items. Stretched controls without gaps
+//! place it by fraction so it tracks a resizing row exactly; the rest place
+//! it from item rects measured on the previous frame, so until those exist
+//! the selected item paints its own fill.
 
 use std::time::Duration;
 
@@ -182,8 +181,6 @@ impl SegmentedControl {
         }
     }
 
-    /// The editor's segmented control: an `ed-ctl` trough ringed by a
-    /// hairline, with a raised, lit pill on the selected item.
     pub fn editor(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
         let editor = theme.editor;
         Self {
@@ -305,11 +302,12 @@ impl RenderOnce for SegmentedControl {
             state.update(cx, |glide, _| glide.select(selected_index, count));
             state
         });
+        let fractional = stretch && f32::from(container_gap) == 0.;
         let indicator = glide_state.as_ref().and_then(|state| {
             let glide = state.read(cx);
             let to = glide.current?;
             let from = glide.from.unwrap_or(to);
-            let place = if stretch {
+            let place = if fractional {
                 let width = 1. / count as f32;
                 Placement::Fraction {
                     from: from as f32 * width,
@@ -350,18 +348,21 @@ impl RenderOnce for SegmentedControl {
             .when(!container_shadow.is_empty(), |this| {
                 this.shadow(container_shadow)
             })
-            .when_some(glide_state.clone().filter(|_| !stretch), |this, state| {
-                this.child(
-                    canvas(
-                        move |bounds, _, cx| {
-                            state.update(cx, |glide, _| glide.origin = Some(bounds.origin));
-                        },
-                        |_, _, _, _| {},
+            .when_some(
+                glide_state.clone().filter(|_| !fractional),
+                |this, state| {
+                    this.child(
+                        canvas(
+                            move |bounds, _, cx| {
+                                state.update(cx, |glide, _| glide.origin = Some(bounds.origin));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
                     )
-                    .absolute()
-                    .inset_0(),
-                )
-            })
+                },
+            )
             .when_some(indicator, |this, (place, generation)| {
                 let pill = div()
                     .absolute()
@@ -405,7 +406,7 @@ impl RenderOnce for SegmentedControl {
                 let handler = handler.clone();
                 let selected = option.selected;
                 let disabled = option.disabled;
-                let measure = glide_state.clone().filter(|_| !stretch);
+                let measure = glide_state.clone().filter(|_| !fractional);
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
@@ -486,20 +487,14 @@ impl RenderOnce for SegmentedControl {
     }
 }
 
-/// How long the selected pill takes to reach a newly picked item.
 const GLIDE_MS: u64 = 200;
 
-/// Where the gliding pill starts and ends: fractions of the item row for a
-/// stretched control, container-relative pixels (left, width) otherwise.
 #[derive(Clone, Copy)]
 enum Placement {
     Fraction { from: f32, to: f32, width: f32 },
     Measured { from: (f32, f32), to: (f32, f32) },
 }
 
-/// The pill's memory across frames: which item it sits on, which it came
-/// from, a generation that restarts the animation on every change, and the
-/// last measured layout.
 struct Glide {
     current: Option<usize>,
     from: Option<usize>,

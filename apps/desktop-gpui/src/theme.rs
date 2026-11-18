@@ -467,8 +467,6 @@ pub struct Theme {
     pub editor: EditorPalette,
 }
 
-/// The corner every editor card (player, side panel, timeline, export
-/// panes) shares.
 pub const EDITOR_CARD_RADIUS: f32 = 14.;
 
 /// Editor surfaces, transcribed from the `--ed-*` custom properties in
@@ -492,14 +490,7 @@ pub struct EditorPalette {
     pub accent_2: Rgba,
     pub playhead: Rgba,
     pub thumb: Rgba,
-    /// `--ed-seg-tint`: how much of a track colour a segment fill carries.
-    pub seg_tint: f32,
-    /// `--ed-seg-line`: the segment border's alpha.
-    pub seg_line: f32,
-    /// `--ed-seg-label-base` / `--ed-seg-label-mix`: segment text is the
-    /// track colour pulled this far toward black (light) or white (dark).
     pub seg_label_base: Rgba,
-    pub seg_label_mix: f32,
     /// `--ed-card-shadow` / `--ed-pop-shadow`: how black each surface's drop
     /// shadow is. A card lifts barely at all on white and much more on the dark
     /// window, where the hairline alone is invisible.
@@ -512,26 +503,23 @@ pub struct EditorPalette {
 impl EditorPalette {
     pub fn light() -> Self {
         Self {
-            window: rgb(0xedeef1),
+            window: rgb(0xf7f7f9),
             card: rgb(0xffffff),
-            card_2: rgb(0xf6f6f8),
-            stage: rgb(0xe7e8ec),
-            line: rgba(0x0000001a),
-            line_strong: rgba(0x00000024),
-            text_1: rgb(0x18181b),
-            text_2: rgb(0x68686f),
-            text_3: rgb(0x9d9da5),
-            ctl: rgba(0x0000000a),
-            ctl_hover: rgba(0x00000012),
-            ctl_active: rgba(0x0000001c),
+            card_2: rgb(0xffffff),
+            stage: rgb(0xf7f7f9),
+            line: rgba(0x00000014),
+            line_strong: rgba(0x00000021),
+            text_1: rgb(0x17171a),
+            text_2: rgb(0x66666e),
+            text_3: rgb(0x9a9aa2),
+            ctl: rgba(0x00000008),
+            ctl_hover: rgba(0x0000000f),
+            ctl_active: rgba(0x00000018),
             accent: rgb(0x0a7cff),
             accent_2: rgb(0x2b8cff),
             playhead: rgb(0xff3b30),
             thumb: rgb(0xffffff),
-            seg_tint: 0.22,
-            seg_line: 0.5,
             seg_label_base: rgb(0x000000),
-            seg_label_mix: 0.62,
             card_shadow_alpha: 0.05,
             pop_shadow_alpha: 0.22,
             pop_shadow_offset: 14.,
@@ -557,10 +545,7 @@ impl EditorPalette {
             accent_2: rgb(0x3d9bff),
             playhead: rgb(0xff453a),
             thumb: rgb(0xf4f4f6),
-            seg_tint: 0.42,
-            seg_line: 0.6,
             seg_label_base: rgb(0xffffff),
-            seg_label_mix: 0.3,
             card_shadow_alpha: 0.42,
             pop_shadow_alpha: 0.62,
             pop_shadow_offset: 16.,
@@ -572,30 +557,28 @@ impl EditorPalette {
         self.card.r < 0.5
     }
 
-    /// `color-mix(in srgb, color <tint>, card)`: the segment fill.
     pub fn seg_fill(&self, color: Rgba) -> Rgba {
-        mix(self.card, color, self.seg_tint)
+        if self.is_dark() {
+            mix(color, rgb(0x000000), 0.10)
+        } else {
+            color
+        }
     }
 
-    /// A selected segment: the tint plus ten points.
     pub fn seg_fill_selected(&self, color: Rgba) -> Rgba {
-        mix(self.card, color, self.seg_tint + 0.10)
+        mix(self.seg_fill(color), rgb(0xffffff), 0.12)
     }
 
-    /// The segment's 1px inset border.
     pub fn seg_border(&self, color: Rgba) -> Rgba {
-        rgba_alpha(color, self.seg_line)
+        rgba_alpha(mix(color, rgb(0x000000), 0.32), 0.9)
     }
 
-    /// Segment label text.
-    pub fn seg_label(&self, color: Rgba) -> Rgba {
-        mix(self.seg_label_base, color, self.seg_label_mix)
+    pub fn seg_label(&self, _color: Rgba) -> Rgba {
+        rgba(0xfffffff5)
     }
 
-    /// Segment secondary text (durations, amounts): the label colour at 45%
-    /// toward `text_3`.
-    pub fn seg_muted(&self, color: Rgba) -> Rgba {
-        mix(self.text_3, color, 0.45)
+    pub fn seg_muted(&self, _color: Rgba) -> Rgba {
+        rgba(0xffffffb3)
     }
 
     /// The track gutter's icon tile: `color 16%` over transparent.
@@ -608,14 +591,10 @@ impl EditorPalette {
         mix(self.seg_label_base, color, 0.62)
     }
 
-    /// Trim handles: the colour at 70% toward the label base.
-    pub fn seg_handle(&self, color: Rgba) -> Rgba {
-        mix(self.seg_label_base, color, 0.70)
+    pub fn seg_handle(&self, _color: Rgba) -> Rgba {
+        rgba(0xffffffe6)
     }
 
-    /// The lift under every editor card: a 1px contact shadow, a wide soft
-    /// ambient one, and a 1px inner sheen along the top edge so the card
-    /// reads as a lit pane rather than a flat cut-out.
     pub fn card_shadow(&self) -> Vec<BoxShadow> {
         let dark = self.is_dark();
         vec![
@@ -643,8 +622,6 @@ impl EditorPalette {
         ]
     }
 
-    /// The lift under a menu, popover or dialog, with the same top sheen as
-    /// a card.
     pub fn pop_shadow(&self) -> Vec<BoxShadow> {
         vec![
             BoxShadow {
@@ -664,7 +641,6 @@ impl EditorPalette {
         ]
     }
 
-    /// A menu, popover or dialog body: a step above the card it opens over.
     pub fn pop_bg(&self) -> Hsla {
         if self.is_dark() {
             self.card_2.into()
@@ -673,14 +649,11 @@ impl EditorPalette {
         }
     }
 
-    /// A popover's hairline, firmer than a card's so the edge holds over
-    /// busy content.
     pub fn pop_line(&self) -> Hsla {
         self.line_strong.into()
     }
 
-    /// The 1px inner hairline around a trough (segmented controls, mode
-    /// switches). Drawn as an inset shadow so it adds no layout size.
+    /// An inset shadow, so the ring adds no layout size.
     pub fn trough_ring(&self) -> Vec<BoxShadow> {
         vec![BoxShadow {
             color: self.line.into(),
@@ -691,49 +664,52 @@ impl EditorPalette {
         }]
     }
 
-    /// A selected pill inside a trough (segmented controls, tab switchers):
-    /// raised and lit in both appearances.
     pub fn pill_shadow(&self) -> Vec<BoxShadow> {
-        if self.is_dark() {
-            vec![
-                BoxShadow {
-                    color: gpui::hsla(0., 0., 1., 0.07),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
-                    inset: true,
+        let dark = self.is_dark();
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if dark { 0.05 } else { 0.8 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: if dark {
+                    gpui::hsla(0., 0., 1., 0.07)
+                } else {
+                    gpui::hsla(0., 0., 0., 0.09)
                 },
-                BoxShadow {
-                    color: gpui::hsla(0., 0., 1., 0.06),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.5),
-                    inset: false,
-                },
-                BoxShadow {
-                    color: gpui::hsla(0., 0., 0., 0.4),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(3.),
-                    spread_radius: px(0.),
-                    inset: false,
-                },
-            ]
-        } else {
-            raised_pill_shadow()
-        }
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+        ]
     }
 
-    /// The selected pill's fill: the card in light, a white wash in dark.
+    /// Shadows only, so selecting a tile never shifts the layout.
+    pub fn choice_selected_shadow(&self) -> Vec<BoxShadow> {
+        let mut shadow = self.pill_shadow();
+        shadow.push(BoxShadow {
+            color: self.accent.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.5),
+            inset: true,
+        });
+        shadow
+    }
+
+    /// Opaque, so the pill's own drop shadow never shows through it.
     pub fn pill_fill(&self) -> Hsla {
         if self.is_dark() {
-            gpui::hsla(0., 0., 1., 0.11)
+            mix(self.card_2, rgb(0xffffff), 0.08).into()
         } else {
             self.card.into()
         }
     }
 
-    /// The vertical sheen a coloured fill (a timeline segment, a primary
-    /// button) carries: the colour lifted a little at the top.
     pub fn sheen(&self, color: Rgba) -> (Rgba, Rgba) {
         let lift = if self.is_dark() { 0.10 } else { 0.07 };
         (mix(color, rgb(0xffffff), lift), color)
@@ -907,8 +883,6 @@ impl Theme {
             material: None,
             editor: EditorPalette::dark(),
 
-            // A cool-leaning neutral ramp shared with the editor palette, so
-            // every window sits on the same family of greys.
             gray_1: rgb(0x101114),
             gray_2: rgb(0x1a1b1f),
             gray_3: rgb(0x26272c),

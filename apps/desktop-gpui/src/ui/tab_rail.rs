@@ -73,9 +73,6 @@ pub struct TabRail {
 }
 
 impl TabRail {
-    /// The editor's config sidebar rail: a 46px bar on the card surface under
-    /// an `ed-line` hairline, with 40x30 tab boxes, 16px icons and the same
-    /// raised pill as the segmented controls on the selected tab.
     pub fn editor(
         theme: &Theme,
         id: impl Into<ElementId>,
