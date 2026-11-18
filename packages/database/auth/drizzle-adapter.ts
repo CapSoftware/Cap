@@ -32,6 +32,10 @@ type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
 type UnlinkAccountData = Parameters<NonNullable<Adapter["unlinkAccount"]>>[0];
 type UpdateSessionData = Parameters<NonNullable<Adapter["updateSession"]>>[0];
 
+function isSameStoredEmail(storedEmail: string, requestedEmail: string) {
+	return storedEmail.toLowerCase() === requestedEmail;
+}
+
 function getProvisionedUserName(email: string) {
 	return (
 		email
@@ -108,6 +112,11 @@ export function DrizzleAdapter(
 					.limit(1);
 
 				if (existingUser) {
+					if (!isSameStoredEmail(existingUser.email, normalizedEmail)) {
+						throw new Error(
+							"The stored email does not match the requested email.",
+						);
+					}
 					userId = existingUser.id;
 					const userUpdate: Partial<typeof users.$inferInsert> = {};
 
@@ -158,11 +167,16 @@ export function DrizzleAdapter(
 						set: { email: normalizedEmail },
 					});
 					const [createdUser] = await tx
-						.select({ id: users.id })
+						.select({ id: users.id, email: users.email })
 						.from(users)
 						.where(eq(users.email, normalizedEmail))
 						.limit(1);
 					if (!createdUser) throw new Error("User was not created.");
+					if (!isSameStoredEmail(createdUser.email, normalizedEmail)) {
+						throw new Error(
+							"The stored email does not match the requested email.",
+						);
+					}
 					userId = createdUser.id;
 				} else {
 					await insertUser;
@@ -232,6 +246,7 @@ export function DrizzleAdapter(
 				});
 			const row = rows[0];
 			if (!row) return null;
+			if (!isSameStoredEmail(row.email, normalizedEmail)) return null;
 
 			if (
 				!(await hasLinkedAccount(db, row.id)) &&
