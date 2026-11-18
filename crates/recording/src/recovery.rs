@@ -2962,7 +2962,7 @@ impl RecoveryManager {
             Ok(config) => config,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
                 markers: Self::recovered_markers(recording, inner, &timeline_segments),
-                ..Default::default()
+                ..ProjectConfiguration::for_new_project()
             },
             Err(error) => return Err(error.into()),
         };

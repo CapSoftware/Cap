@@ -181,6 +181,8 @@ export const RATE_LIMIT_IDS = {
 	TRANSLATE_TRANSCRIPT: "rl_translate_transcript",
 	/** Anonymous support-chat messages (Groq + Supermemory cost). Suggested: 20 / 1m per IP. */
 	MESSENGER_MESSAGE: "rl_messenger_message",
+	/** Support-chat update polls. An open chat polls at most every 3 s, slower when idle. Suggested: 120 / 1m per IP. */
+	MESSENGER_POLL: "rl_messenger_poll",
 	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 120 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
 	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
@@ -252,6 +254,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MESSENGER_POLL]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },

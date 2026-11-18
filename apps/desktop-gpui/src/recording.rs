@@ -2090,6 +2090,22 @@ fn apply_initial_animated_gradient(
             "padding".into(),
             serde_json::json!(crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING),
         );
+        // New projects pad evenly; they also get the corner that goes with
+        // their framing when the gradient reveals the background.
+        let even = background
+            .get("paddingMode")
+            .and_then(serde_json::Value::as_str)
+            == Some("even");
+        let square = background
+            .get("rounding")
+            .and_then(serde_json::Value::as_f64)
+            .is_none_or(|rounding| rounding == 0.);
+        if even && square {
+            let _ = background.insert(
+                "rounding".into(),
+                serde_json::json!(cap_project::NEW_PROJECT_ROUNDING),
+            );
+        }
     }
     true
 }
