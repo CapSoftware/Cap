@@ -366,6 +366,37 @@ fn cuts_merge_adjacent_segments() {
 }
 
 #[test]
+fn an_older_project_with_late_audio_still_to_migrate_is_left_alone() {
+    let mut meta = meta_json(3);
+    meta["segments"][2]["mic"]["start_time"] = json!(3.0);
+    let mut config = config_json();
+    config["clipAlignmentVersion"] = json!(0);
+    assert_eq!(skip_for(meta, config), Skip::ClipAlignment);
+}
+
+#[test]
+fn an_older_project_with_nothing_to_migrate_is_cleaned_at_the_current_version() {
+    let mut config = config_json();
+    config["clipAlignmentVersion"] = json!(0);
+    let fixture = Fixture::with(meta_json(3), config);
+    assert_eq!(fixture.snapshot().config.clip_alignment_version, 0);
+    let plan = fixture.plan().unwrap();
+    assert_eq!(plan.removed, vec![1]);
+    assert_eq!(
+        plan.config.clip_alignment_version,
+        cap_project::CLIP_ALIGNMENT_VERSION
+    );
+    run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    assert_eq!(
+        ProjectConfiguration::load(fixture.project())
+            .unwrap()
+            .clip_alignment_version,
+        cap_project::CLIP_ALIGNMENT_VERSION
+    );
+    assert_opens(&fixture.project());
+}
+
+#[test]
 fn captions_tied_to_a_clip_move_with_it() {
     let mut config = config_json();
     config["captions"]["segments"] = json!([
@@ -555,7 +586,7 @@ fn every_skip_condition_leaves_the_project_untouched() {
     );
 
     let mut config = config_json();
-    config["clipAlignmentVersion"] = json!(0);
+    config["clipAlignmentVersion"] = json!(cap_project::CLIP_ALIGNMENT_VERSION + 1);
     assert_eq!(skip_for(meta_json(3), config), Skip::ClipAlignment);
 
     let fixture = Fixture::new();

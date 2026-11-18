@@ -406,13 +406,30 @@ impl Snapshot {
 
 pub(crate) fn plan(snapshot: &Snapshot, probes: &[SegmentProbe]) -> Result<Plan, Skip> {
     let meta = &snapshot.meta;
-    let config = &snapshot.config;
+    let mut config = std::borrow::Cow::Borrowed(&snapshot.config);
     let RecordingMetaInner::Studio(studio) = &meta.inner else {
         return Err(Skip::NotStudio);
     };
     let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
         return Err(Skip::SingleSegment);
     };
+    // Late-audio alignment (`cap_project::late_audio`) is migrated by segment
+    // index when an older project opens, and saved only when it changed
+    // something. One that still has fixes to save is left alone, since
+    // renumbering would move them onto the wrong clips; one with nothing to
+    // fix is cleaned and saved at the current version.
+    if config.clip_alignment_version > cap_project::CLIP_ALIGNMENT_VERSION {
+        return Err(Skip::ClipAlignment);
+    }
+    if config.clip_alignment_version < cap_project::CLIP_ALIGNMENT_VERSION {
+        let mut migrated = snapshot.config.clone();
+        let durations = || probes.iter().map(|probe| probe.duration).collect();
+        if cap_project::migrate_late_audio_alignment(&mut migrated, studio, durations) {
+            return Err(Skip::ClipAlignment);
+        }
+        config = std::borrow::Cow::Owned(migrated);
+    }
+    let config = config.as_ref();
     if !matches!(inner.status, None | Some(StudioRecordingStatus::Complete)) {
         return Err(Skip::Unfinished);
     }
@@ -459,12 +476,6 @@ pub(crate) fn plan(snapshot: &Snapshot, probes: &[SegmentProbe]) -> Result<Plan,
     }
     if config.captions.is_none() && snapshot.captions_file {
         return Err(Skip::LegacyCaptions);
-    }
-    // Late-audio alignment (`cap_project::late_audio`) is migrated by segment
-    // index when an older project opens; renumbering before that has run would
-    // move its fixes onto the wrong clips.
-    if config.clip_alignment_version != cap_project::CLIP_ALIGNMENT_VERSION {
-        return Err(Skip::ClipAlignment);
     }
 
     let raw_config = String::from_utf8_lossy(&snapshot.config_bytes);
@@ -868,11 +879,14 @@ pub(crate) fn commit(
             .as_bytes(),
     )?;
     sync_dir(&backup)?;
+    sync_dir(&project.join(BACKUPS))?;
     if last == Step::Backup {
         return Ok(PathBuf::new());
     }
 
     let (staging, staging_name) = unique_dir(&project.join(STAGING), stamp)?;
+    sync_dir(&project.join(STAGING))?;
+    sync_dir(&project.join("content"))?;
     let journal = Journal {
         backup: format!("{BACKUPS}/{backup_name}"),
         staging: format!("{STAGING}/{staging_name}"),
@@ -909,6 +923,8 @@ pub(crate) fn commit(
             let name = folder_name(folder).ok_or_else(|| io::Error::other("invalid folder"))?;
             std::fs::rename(project.join(folder), target.join(name))?;
         }
+        sync_dir(&target)?;
+        sync_dir(&staging)?;
         sync_dir(&project.join("content/segments"))?;
         if last == Step::Stage {
             return Ok(());
