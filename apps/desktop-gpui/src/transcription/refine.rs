@@ -544,6 +544,7 @@ mod tests {
             end: words[words.len() - 1].end,
             text: String::new(),
             words,
+            recording_clip: None,
         };
         let input = vec![
             caption("segment-0", vec![word("so", 0.0, 0.2)]),
@@ -578,6 +579,7 @@ mod tests {
             end: words[words.len() - 1].end,
             text: String::new(),
             words,
+            recording_clip: None,
         };
         let input = vec![
             caption("segment-0", vec![word("so", 0.0, 0.2)]),
@@ -633,6 +635,7 @@ mod tests {
             end: words.last().map_or(0.0, |word| word.end),
             text: String::new(),
             words,
+            recording_clip: None,
         };
         let input = vec![segment(vec![word("the", 1.0, 1.4), word("the", 1.4, 1.9)])];
         let refined = vec![segment(vec![

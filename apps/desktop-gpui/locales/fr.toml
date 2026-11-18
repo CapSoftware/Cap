@@ -2359,6 +2359,7 @@ background_blur = "Flou de l'arrière-plan"
 custom_position = "Position d'écran personnalisée (déplacée sur le canevas)"
 motion_blur = "Flou de mouvement"
 padding = "Marge"
+padding_style = "Style de marge"
 rounded_corners = "Coins arrondis"
 title = "Disposition"
 
@@ -2857,6 +2858,10 @@ timeline_unavailable = "La timeline du projet n'est pas disponible."
 timeline_unreadable = "Impossible de lire la timeline du projet."
 title = "Afficher le clavier"
 uppercase = "Majuscules"
+
+[editor.tabs.padding]
+even = "Uniforme"
+proportional = "Proportionnelle"
 
 [editor.tabs.position]
 bottom_center = "En bas au centre"
