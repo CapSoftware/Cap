@@ -691,8 +691,19 @@ fn a_missing_segment_folder_stops_the_cleanup_before_any_write() {
     assert!(!fixture.project().join(JOURNAL).exists());
 }
 
+fn segment_count(project: &Path) -> usize {
+    match RecordingMeta::load_for_project(project)
+        .unwrap()
+        .studio_meta()
+        .unwrap()
+    {
+        StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+        StudioRecordingMeta::SingleSegment { .. } => 1,
+    }
+}
+
 #[test]
-fn rollback_keeps_the_journal_until_every_folder_is_back() {
+fn lost_staged_media_rolls_forward_instead_of_stranding_the_project() {
     let fixture = Fixture::new();
     let snapshot = fixture.snapshot();
     let plan = fixture.plan().unwrap();
@@ -707,17 +718,64 @@ fn rollback_keeps_the_journal_until_every_folder_is_back() {
     .unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     std::fs::rename(staged.join("label"), elsewhere.path().join("label")).unwrap();
-    let written = fixture.files();
 
-    assert!(settle(&fixture.project()).is_err());
-    assert!(fixture.project().join(JOURNAL).exists());
-    assert_eq!(fixture.files(), written);
-    assert!(!trash_staged(&fixture.project(), &no_trash));
-    assert!(staged.is_dir());
-
-    std::fs::rename(elsewhere.path().join("label"), staged.join("label")).unwrap();
     settle(&fixture.project()).unwrap();
     assert!(!fixture.project().join(JOURNAL).exists());
+    assert_eq!(segment_count(&fixture.project()), 2);
+    assert_opens(&fixture.project());
+}
+
+#[test]
+fn a_crash_between_the_two_files_with_the_media_gone_rolls_forward() {
+    let fixture = Fixture::new();
+    let snapshot = fixture.snapshot();
+    let plan = fixture.plan().unwrap();
+    commit(
+        &fixture.project(),
+        &snapshot,
+        &plan,
+        "stamp",
+        "label",
+        Step::Config,
+    )
+    .unwrap();
+    std::fs::remove_dir_all(fixture.project().join("content/segments/segment-1")).unwrap();
+
+    settle(&fixture.project()).unwrap();
+    assert!(!fixture.project().join(JOURNAL).exists());
+    assert_eq!(segment_count(&fixture.project()), 2);
+    assert_opens(&fixture.project());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_cleanup_keeps_its_journal_until_it_can_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let original = fixture.files();
+    let snapshot = fixture.snapshot();
+    let plan = fixture.plan().unwrap();
+    let staged = commit(
+        &fixture.project(),
+        &snapshot,
+        &plan,
+        "stamp",
+        "label",
+        Step::Stage,
+    )
+    .unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let blocked = std::fs::read_dir(&staged).is_err();
+    let result = settle(&fixture.project());
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if blocked {
+        assert!(result.is_err());
+        assert!(fixture.project().join(JOURNAL).exists());
+        assert!(staged.join("label/segment-1/display.mp4").is_file());
+        settle(&fixture.project()).unwrap();
+    }
+    assert!(!fixture.project().join(JOURNAL).exists());
+    assert_eq!(fixture.files(), original);
     assert_opens(&fixture.project());
 }
 
@@ -901,6 +959,19 @@ fn trashing_one_project_never_waits_on_another() {
     assert_eq!(done_rx.recv_timeout(Duration::from_secs(10)), Ok(true));
     drop(held);
     worker.join().unwrap();
+}
+
+#[test]
+fn a_cleanup_never_waits_on_its_own_project_trash() {
+    let fixture = Fixture::new();
+    let before = fixture.files();
+    let held = staging_lock(&fixture.project());
+    assert_eq!(
+        run(&fixture.project(), &Request::from_probes(probes())).unwrap(),
+        Outcome::Skipped(Skip::TrashInProgress)
+    );
+    drop(held);
+    assert_eq!(fixture.files(), before);
 }
 
 #[test]

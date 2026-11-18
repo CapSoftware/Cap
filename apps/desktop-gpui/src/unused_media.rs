@@ -20,6 +20,8 @@ const STAGING: &str = "content/removed-media";
 const SEGMENTS: &str = "content/segments/";
 const META: &str = "recording-meta.json";
 const CONFIG: &str = "project-config.json";
+const NEXT_META: &str = "next-recording-meta.json";
+const NEXT_CONFIG: &str = "next-project-config.json";
 const DIAGNOSTICS: &str = "recording-diagnostics.json";
 const CAPTION_TOLERANCE: f64 = 1e-3;
 const MARKER_TOLERANCE: f64 = 1e-9;
@@ -97,6 +99,7 @@ pub(crate) enum Skip {
     NothingRemovable,
     EditChanged,
     Invalid,
+    TrashInProgress,
 }
 
 #[derive(Debug)]
@@ -645,6 +648,24 @@ fn staging_lock(project: &Path) -> StagingGuard {
     StagingGuard(key)
 }
 
+/// [`staging_lock`] without the wait: a cleanup holds its [`Claim`] while it
+/// takes this, and on Linux a trash across devices copies, so waiting here
+/// could keep the project from opening.
+fn try_staging_lock(project: &Path) -> Option<StagingGuard> {
+    let key = project
+        .canonicalize()
+        .unwrap_or_else(|_| project.to_path_buf());
+    let mut projects = STAGING_HOLDS
+        .projects
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if projects.contains(&key) {
+        return None;
+    }
+    projects.push(key.clone());
+    Some(StagingGuard(key))
+}
+
 impl Drop for StagingGuard {
     fn drop(&mut self) {
         STAGING_HOLDS
@@ -756,6 +777,18 @@ pub(crate) fn commit(
     let (backup, backup_name) = unique_dir(&project.join(BACKUPS), stamp)?;
     write_new(&backup.join(META), &snapshot.meta_bytes)?;
     write_new(&backup.join(CONFIG), &snapshot.config_bytes)?;
+    write_new(
+        &backup.join(NEXT_META),
+        serde_json::to_string_pretty(&plan.meta)
+            .map_err(io::Error::other)?
+            .as_bytes(),
+    )?;
+    write_new(
+        &backup.join(NEXT_CONFIG),
+        serde_json::to_string_pretty(&plan.config)
+            .map_err(io::Error::other)?
+            .as_bytes(),
+    )?;
     sync_dir(&backup)?;
     if last == Step::Backup {
         return Ok(PathBuf::new());
@@ -818,8 +851,12 @@ pub(crate) fn commit(
     Ok(staging)
 }
 
-/// Undoes an interrupted [`commit`]: moves the media back and restores both
-/// files from the backup. Safe to repeat.
+/// Settles an interrupted [`commit`]. When every removed folder can still be
+/// put back, the media moves back and both files are restored from the
+/// backup. When one has gone (emptied by hand, say), the cleanup is finished
+/// instead with the files it was writing, which never refer to removed
+/// media, so the project can always open again. Read errors keep the
+/// journal: nothing is decided on what could not be seen. Safe to repeat.
 pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
     let raw = match std::fs::read(project.join(JOURNAL)) {
         Ok(raw) => raw,
@@ -831,21 +868,46 @@ pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
         return Err(io::Error::other("unexpected paths in the cleanup journal"));
     }
     let staging = project.join(&journal.staging);
-    let entries = match std::fs::read_dir(&staging) {
-        Ok(entries) => Some(entries),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    if entries.is_some() && !is_plain_dir(&staging)? {
-        return Err(io::Error::other("cleanup staging is not a plain folder"));
-    }
-    for label in entries.into_iter().flatten() {
-        let label = label?.path();
-        if !is_plain_dir(&label)? {
-            return Err(io::Error::other(
-                "cleanup staging holds an unexpected entry",
-            ));
+    let mut labels = Vec::new();
+    match std::fs::read_dir(&staging) {
+        Ok(entries) => {
+            if !is_plain_dir(&staging)? {
+                return Err(io::Error::other("cleanup staging is not a plain folder"));
+            }
+            for label in entries {
+                let label = label?.path();
+                if !is_plain_dir(&label)? {
+                    return Err(io::Error::other(
+                        "cleanup staging holds an unexpected entry",
+                    ));
+                }
+                labels.push(label);
+            }
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut restorable = true;
+    for folder in &journal.folders {
+        let name = folder_name(folder).ok_or_else(|| io::Error::other("invalid folder"))?;
+        let mut found = is_plain_dir(&project.join(folder))?;
+        for label in &labels {
+            found |= is_plain_dir(&label.join(name))?;
+        }
+        restorable &= found;
+    }
+    let backup = project.join(&journal.backup);
+    if !restorable {
+        let config = std::fs::read(backup.join(NEXT_CONFIG))?;
+        let meta = std::fs::read(backup.join(NEXT_META))?;
+        replace_file(&project.join(CONFIG), &config)?;
+        replace_file(&project.join(META), &meta)?;
+        std::fs::remove_file(project.join(JOURNAL))?;
+        sync_dir(project)?;
+        tracing::warn!(path = %project.display(), "Finished an interrupted unused media cleanup whose media had gone");
+        return Ok(true);
+    }
+    for label in &labels {
         for folder in &journal.folders {
             let Some(name) = folder_name(folder) else {
                 continue;
@@ -856,16 +918,15 @@ pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
                 std::fs::rename(&moved, &original)?;
             }
         }
-        std::fs::remove_dir(&label).ok();
+        std::fs::remove_dir(label).ok();
     }
     for folder in &journal.folders {
         if !is_plain_dir(&project.join(folder))? {
             return Err(io::Error::other(format!(
-                "{folder} is missing; the cleanup journal is kept"
+                "{folder} could not be put back; the cleanup journal is kept"
             )));
         }
     }
-    let backup = project.join(&journal.backup);
     replace_file(&project.join(CONFIG), &std::fs::read(backup.join(CONFIG))?)?;
     replace_file(&project.join(META), &std::fs::read(backup.join(META))?)?;
     std::fs::remove_dir(&staging).ok();
@@ -1081,11 +1142,40 @@ pub(crate) enum Outcome {
     Cleaned { removed: Vec<usize>, bytes: u64 },
 }
 
+/// `CAP_GPUI_UNUSED_MEDIA_HOLD_MS=<ms>` keeps the cleanup's claim that long
+/// before it writes, and `CAP_GPUI_UNUSED_MEDIA_CRASH_AFTER=<step>` aborts the
+/// whole app right after that commit step (`backup`, `journal`, `config`,
+/// `meta`, `stage`), so the real-app proof can stand in for a slow disk and a
+/// crash part way through the rewrite.
+#[cfg(debug_assertions)]
+fn debug_hooks(project: &Path, snapshot: &Snapshot, plan: &Plan, stamp: &str, label: &str) {
+    if let Some(ms) = std::env::var("CAP_GPUI_UNUSED_MEDIA_HOLD_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        eprintln!("unused media cleanup: holding {ms} ms");
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+    let step = match std::env::var("CAP_GPUI_UNUSED_MEDIA_CRASH_AFTER").as_deref() {
+        Ok("backup") => Step::Backup,
+        Ok("journal") => Step::Journal,
+        Ok("config") => Step::Config,
+        Ok("meta") => Step::Meta,
+        Ok("stage") => Step::Stage,
+        _ => return,
+    };
+    let result = commit(project, snapshot, plan, stamp, label, step);
+    eprintln!("unused media cleanup: aborting after {step:?}: {result:?}");
+    std::process::abort();
+}
+
 /// Removes the unused segments of a closed project and stages their media.
 /// The caller then sends it to the trash with [`trash_staged`], after
 /// releasing its [`Claim`] so opening the project does not wait on the trash.
 pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
-    let _staging = staging_lock(project);
+    let Some(_staging) = try_staging_lock(project) else {
+        return Ok(Outcome::Skipped(Skip::TrashInProgress));
+    };
     roll_back(project).map_err(|error| error.to_string())?;
     let snapshot = Snapshot::read(project)?;
     let plan = match plan(&snapshot, &request.probes) {
@@ -1094,6 +1184,8 @@ pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> 
     };
     let stamp = now_stamp();
     let label = trash_label(&snapshot.meta.pretty_name);
+    #[cfg(debug_assertions)]
+    debug_hooks(project, &snapshot, &plan, &stamp, &label);
     let staged = commit(project, &snapshot, &plan, &stamp, &label, Step::Done)
         .map_err(|error| error.to_string())?;
     Ok(Outcome::Cleaned {
