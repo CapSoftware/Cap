@@ -2261,6 +2261,7 @@ manual_help = "Le zoom manuel reste sur le point fixe que vous choisissez ci-des
 mixed = "Mixte"
 mode = "Mode de zoom"
 positions_mixed = "Les segments zooment sur des points différents. Faites glisser pour tous les placer au même endroit."
+start_early = "Lancer les zooms plus tôt"
 title = "Zoom {number}"
 
 [editor.side_panel]
@@ -2365,6 +2366,7 @@ background_blur = "Flou de l'arrière-plan"
 custom_position = "Position d'écran personnalisée (déplacée sur le canevas)"
 motion_blur = "Flou de mouvement"
 padding = "Marge"
+padding_style = "Style de marge"
 rounded_corners = "Coins arrondis"
 title = "Disposition"
 
@@ -2862,6 +2864,10 @@ timeline_unavailable = "La timeline du projet n'est pas disponible."
 timeline_unreadable = "Impossible de lire la timeline du projet."
 title = "Afficher le clavier"
 uppercase = "Majuscules"
+
+[editor.tabs.padding]
+even = "Uniforme"
+proportional = "Proportionnelle"
 
 [editor.tabs.position]
 bottom_center = "En bas au centre"
@@ -3393,6 +3399,7 @@ changed_after = "L'enregistrement local a changé après l'envoi ; il a été co
 already_queued = "Cet enregistrement est déjà en attente d'envoi"
 paused = "Envoi en pause ; l'enregistrement local est conservé"
 worker_failed = "Le processus d'envoi a échoué ; l'enregistrement local est conservé"
+deleted_on_web = "Cet enregistrement a été supprimé sur le web ; l'enregistrement local est conservé"
 empty = "L'enregistrement sauvegardé est vide"
 no_resumable_state = "Cet enregistrement n'a pas d'envoi pouvant reprendre"
 verification_failed = "La vérification de l'enregistrement a échoué : {status}"

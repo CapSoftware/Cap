@@ -2261,6 +2261,7 @@ manual_help = "Der manuelle Zoom bleibt auf der Stelle, die Sie unten wählen."
 mixed = "Gemischt"
 mode = "Zoom-Modus"
 positions_mixed = "Die Segmente zoomen auf unterschiedliche Stellen. Ziehen Sie, um alle auf dieselbe Stelle zu setzen."
+start_early = "Zooms früher starten"
 title = "Zoom {number}"
 
 [editor.side_panel]
@@ -2365,6 +2366,7 @@ background_blur = "Hintergrundunschärfe"
 custom_position = "Eigene Bildschirmposition (auf der Leinwand verschoben)"
 motion_blur = "Bewegungsunschärfe"
 padding = "Rand"
+padding_style = "Randstil"
 rounded_corners = "Abgerundete Ecken"
 title = "Layout"
 
@@ -2862,6 +2864,10 @@ timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
 timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
 title = "Tastatur anzeigen"
 uppercase = "Großbuchstaben"
+
+[editor.tabs.padding]
+even = "Gleichmäßig"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Unten mittig"
@@ -3393,6 +3399,7 @@ changed_after = "Die lokale Aufnahme hat sich nach dem Upload geändert; sie ble
 already_queued = "Diese Aufnahme ist bereits zum Hochladen eingereiht"
 paused = "Upload pausiert; die lokale Aufnahme bleibt erhalten"
 worker_failed = "Der Upload-Vorgang ist fehlgeschlagen; die lokale Aufnahme bleibt erhalten"
+deleted_on_web = "Diese Aufnahme wurde im Web gelöscht; die lokale Aufnahme bleibt erhalten"
 empty = "Die gespeicherte Aufnahme ist leer"
 no_resumable_state = "Für diese Aufnahme gibt es keinen fortsetzbaren Upload"
 verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"

@@ -2263,6 +2263,7 @@ manual_help = "Manual zoom stays on a fixed spot you pick below."
 mixed = "Mixed"
 mode = "Zoom Mode"
 positions_mixed = "Segments zoom into different spots. Drag to move them all to the same one."
+start_early = "Start zooms early"
 title = { text = "Zoom {number}", context = "{number} is the segment's position on the track, starting at 1." }
 
 [editor.side_panel]
@@ -2367,6 +2368,7 @@ background_blur = "Background Blur"
 custom_position = "Custom screen position (dragged on canvas)"
 motion_blur = "Motion Blur"
 padding = "Padding"
+padding_style = "Padding Style"
 rounded_corners = "Rounded Corners"
 title = "Layout"
 
@@ -2864,6 +2866,10 @@ timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
 uppercase = "Uppercase"
+
+[editor.tabs.padding]
+even = "Even"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Bottom Center"
@@ -3395,6 +3401,7 @@ changed_after = "The local recording changed after upload; it has been preserved
 already_queued = "This recording is already queued for upload"
 paused = "Upload paused; the local recording is preserved"
 worker_failed = "The upload worker failed; the local recording is preserved"
+deleted_on_web = "This recording was deleted on the web; the local recording is preserved"
 empty = "The saved recording is empty"
 no_resumable_state = "This recording has no resumable upload state"
 verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }

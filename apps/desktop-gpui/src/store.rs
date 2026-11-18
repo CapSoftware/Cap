@@ -156,6 +156,10 @@ pub struct ExportPrefs {
     pub gif_quality: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excluded_tracks: Option<Vec<String>>,
+    #[serde(default)]
+    pub resolution_from_source: bool,
+    #[serde(default)]
+    pub fps_from_source: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.

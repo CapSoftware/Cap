@@ -41,6 +41,7 @@ Then run `bun run cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
 On MacOS, cmake must be installed.
+On Linux, `unzip` must be installed.
 `bun run cap-setup` does not yet install these dependencies for you.
 
 To run both `@cap/desktop` and `@cap/web` together, use `bun run dev`.
