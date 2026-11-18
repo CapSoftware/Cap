@@ -1195,39 +1195,46 @@ async fn render(
         builder = builder.with_output_path(output);
     }
     let reservation = ReservedOutput(reserved);
-    let base = builder.build().await.map_err(|error| format!("{error}"))?;
-    let output = match profile.format {
-        ExportFormat::Mp4 => {
-            cap_export::mp4::Mp4ExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                compression: export_compression(profile.compression),
-                custom_bpp: None,
-                force_ffmpeg_decoder: false,
-                optimize_filesize: false,
+    // Boxed so the exporter's large futures live on the heap, not on the
+    // stack of whichever thread polls the automation run.
+    let base = Box::pin(builder.build())
+        .await
+        .map_err(|error| format!("{error}"))?;
+    let output = Box::pin(async {
+        match profile.format {
+            ExportFormat::Mp4 => {
+                cap_export::mp4::Mp4ExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    compression: export_compression(profile.compression),
+                    custom_bpp: None,
+                    force_ffmpeg_decoder: false,
+                    optimize_filesize: false,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
-        }
-        ExportFormat::Gif => {
-            cap_export::gif::GifExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                quality: None,
+            ExportFormat::Gif => {
+                cap_export::gif::GifExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    quality: None,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
-        }
-        ExportFormat::Mov => {
-            cap_export::mov::MovExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                cursor_only: false,
+            ExportFormat::Mov => {
+                cap_export::mov::MovExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    cursor_only: false,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
         }
-    }
+    })
+    .await
     .map_err(|error| format!("Export failed: {error}"))?;
     reservation.keep();
     tracing::info!(output = %output.display(), "automation: export complete");
