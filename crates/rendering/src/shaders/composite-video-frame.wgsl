@@ -474,38 +474,31 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         }
 
         if is_downscaling {
-            let texel_size = 1.0 / uniforms.frame_size;
+            // Four bilinear taps a quarter of the footprint off centre cover
+            // the source texels under the output pixel, which one tap plus an
+            // unsharp mask skipped: text stops aliasing and 1 px lines stop
+            // turning into moire, for one tap fewer than that mask.
+            let reach = scale_ratio / uniforms.frame_size * 0.25;
+            let p0 = clamp(cropped_uv - reach, safe_min, safe_max);
+            let p1 = clamp(cropped_uv + reach, safe_min, safe_max);
+            let p2 = clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max);
+            let p3 = clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max);
 
-            let offset_x = vec2<f32>(texel_size.x, 0.0);
-            let offset_y = vec2<f32>(0.0, texel_size.y);
+            if uniforms.preserve_source_alpha > 0.5 {
+                // Straight-alpha sources (background removal, transparent
+                // images) keep their old colour under transparent texels. A
+                // hardware bilinear tap mixes that colour in, so these taps
+                // interpolate premultiplied texels instead.
+                let sum = sample_premultiplied(p0) + sample_premultiplied(p1)
+                    + sample_premultiplied(p2) + sample_premultiplied(p3);
+                return vec4(sum.rgb / max(sum.a, 0.0001), sum.a * 0.25);
+            }
 
-            let left = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv - offset_x, safe_min, safe_max)
-            ).rgb;
-            let right = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + offset_x, safe_min, safe_max)
-            ).rgb;
-            let top = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv - offset_y, safe_min, safe_max)
-            ).rgb;
-            let bottom = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + offset_y, safe_min, safe_max)
-            ).rgb;
-
-            let blurred = (left + right + top + bottom) * 0.25;
-
-            let sharpness = min(scale_ratio.x * 0.3, 0.7);
-            let sharpened = center_color + (center_color - blurred) * sharpness;
-
-            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
+            let box_sum = textureSample(frame_texture, frame_sampler, p0).rgb
+                + textureSample(frame_texture, frame_sampler, p1).rgb
+                + textureSample(frame_texture, frame_sampler, p2).rgb
+                + textureSample(frame_texture, frame_sampler, p3).rgb;
+            return vec4(box_sum * 0.25, out_alpha);
         }
 
         if is_upscaling {
@@ -546,6 +539,31 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     }
 
     return vec4(0.0);
+}
+
+// Bilinear sample of the frame as premultiplied colour.
+fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(frame_texture));
+    let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = floor(position);
+    let fraction = position - base;
+    let origin = vec2<i32>(base);
+    let last = size - 1;
+    let t00 = textureLoad(frame_texture, clamp(origin, vec2<i32>(0), last), 0);
+    let t10 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 0), vec2<i32>(0), last), 0);
+    let t01 = textureLoad(frame_texture, clamp(origin + vec2<i32>(0, 1), vec2<i32>(0), last), 0);
+    let t11 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 1), vec2<i32>(0), last), 0);
+    let top = mix(
+        vec4(t00.rgb * t00.a, t00.a),
+        vec4(t10.rgb * t10.a, t10.a),
+        fraction.x
+    );
+    let bottom = mix(
+        vec4(t01.rgb * t01.a, t01.a),
+        vec4(t11.rgb * t11.a, t11.a),
+        fraction.x
+    );
+    return mix(top, bottom, fraction.y);
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
