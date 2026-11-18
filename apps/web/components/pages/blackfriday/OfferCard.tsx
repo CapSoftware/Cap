@@ -19,7 +19,7 @@ export function OfferCard() {
 
 	return (
 		<div className="relative rounded-[24px] bg-[linear-gradient(140deg,rgba(255,214,140,0.55),rgba(255,77,141,0.25)_40%,rgba(176,54,159,0)_70%)] p-px shadow-[0_40px_120px_-30px_rgba(0,0,0,0.8)]">
-			<div className="grid gap-10 rounded-[23px] bg-[rgba(18,17,19,0.86)] p-6 backdrop-blur-xl sm:p-10 lg:grid-cols-[1.05fr_1fr] lg:gap-14">
+			<div className="grid gap-10 rounded-[23px] bg-[#121113] p-6 sm:p-10 lg:grid-cols-[1.05fr_1fr] lg:gap-14">
 				<div className="flex flex-col">
 					<h2 className="text-[30px] font-medium leading-[1.05] tracking-[-0.025em] sm:text-[38px]">
 						Cap Pro Yearly, half price
