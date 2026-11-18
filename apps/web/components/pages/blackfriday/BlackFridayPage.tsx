@@ -21,7 +21,6 @@ import {
 import { FeatureIcon } from "./FeatureIcon";
 import { Film } from "./Film";
 import { OfferCard } from "./OfferCard";
-import { TeamPicks } from "./TeamPicks";
 import { CARD, DIM, GHOST, SUN_TEXT } from "./theme";
 
 const WRAP = "mx-auto w-full max-w-[1184px] px-5 sm:px-8";
@@ -107,16 +106,16 @@ async function Loved() {
 						Open source, with {stars} stars on GitHub.
 					</p>
 				</div>
-				<div className="mt-12 columns-1 gap-4 sm:columns-2 lg:columns-3">
+				<div className="mt-12 grid gap-px overflow-hidden rounded-[20px] bg-[rgba(245,241,234,0.1)] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.1)] sm:grid-cols-2 lg:grid-cols-3">
 					{QUOTES.map((quote, index) => (
 						<figure
 							key={quote.name}
-							className={`${CARD} mb-4 break-inside-avoid p-6 ${index >= 3 ? "hidden sm:block" : ""}`}
+							className={`flex flex-col justify-between gap-6 bg-[#0A0A0B] p-7 sm:p-8 ${index >= 3 ? "hidden sm:flex" : ""}`}
 						>
 							<blockquote className="text-[16px] leading-[1.6] text-[rgba(245,241,234,0.88)]">
 								{quote.content}
 							</blockquote>
-							<figcaption className="mt-5 flex items-center gap-3">
+							<figcaption className="flex items-center gap-3">
 								<Image
 									src={quote.image}
 									alt=""
@@ -164,25 +163,23 @@ function Features() {
 						className="h-auto w-full rounded-[14px] shadow-[0_0_0_1px_rgba(245,241,234,0.1),0_30px_80px_-30px_rgba(0,0,0,0.9)] sm:rounded-[20px]"
 					/>
 				</div>
-				<div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				<div className="mt-14 grid gap-px overflow-hidden rounded-[20px] bg-[rgba(245,241,234,0.1)] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.1)] grid-cols-2 lg:grid-cols-3">
 					{FEATURES.map((feature) => (
 						<div
 							key={feature.title}
-							className={`${CARD} flex items-start gap-4 p-5 sm:block sm:p-6`}
+							className="bg-[#0A0A0B] px-4 py-6 last:col-span-2 sm:px-8 sm:py-10 lg:last:col-span-1"
 						>
-							<span className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-[linear-gradient(135deg,rgba(255,179,107,0.18),rgba(194,75,179,0.18))] text-[#FFB59A] shadow-[inset_0_0_0_1px_rgba(255,179,107,0.2)]">
+							<span className="text-[#FF9C8A]">
 								<FeatureIcon name={feature.icon} />
 							</span>
-							<div>
-								<h3 className="text-[17px] font-medium tracking-[-0.01em] sm:mt-5 sm:text-[18px]">
-									{feature.title}
-								</h3>
-								<p
-									className={`mt-1.5 text-[15px] leading-[1.55] sm:mt-2 ${DIM}`}
-								>
-									{feature.body}
-								</p>
-							</div>
+							<h3 className="mt-3 text-[16px] font-medium leading-[1.25] tracking-[-0.015em] sm:mt-4 sm:text-[19px]">
+								{feature.title}
+							</h3>
+							<p
+								className={`mt-1.5 max-w-[340px] text-[14px] leading-[1.5] sm:mt-2 sm:text-[15px] sm:leading-[1.6] ${DIM}`}
+							>
+								{feature.body}
+							</p>
 						</div>
 					))}
 				</div>
@@ -203,23 +200,25 @@ function Platforms() {
 						everything in sync.
 					</p>
 				</div>
-				<div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+				<div className="mt-14 grid gap-px overflow-hidden rounded-[20px] bg-[rgba(245,241,234,0.1)] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.1)] grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
 					{PLATFORMS.map((platform) => (
 						<div
 							key={platform.name}
-							className={`${CARD} flex flex-col items-center gap-3 px-4 py-6 text-center`}
+							className="flex flex-col items-center gap-3 bg-[#0A0A0B] px-3 py-10 text-center"
 						>
-							<span className="text-[#FFB59A]">
+							<span className="text-[#FF9C8A] [&_svg]:size-7">
 								<FeatureIcon name={platform.icon} />
 							</span>
-							<span className="text-[16px] font-medium">{platform.name}</span>
-							<span className={`text-[13px] leading-tight ${DIM}`}>
+							<span className="mt-1 text-[20px] font-medium tracking-[-0.015em]">
+								{platform.name}
+							</span>
+							<span className={`text-[14px] leading-tight ${DIM}`}>
 								{platform.note}
 							</span>
 						</div>
 					))}
 				</div>
-				<div className="mt-8 text-center">
+				<div className="mt-10 text-center">
 					<Link href="/download" className={GHOST}>
 						Download Cap
 					</Link>
@@ -264,8 +263,24 @@ function Team() {
 							</li>
 						))}
 					</ul>
+					<a href={`#${ANCHORS.offer}`} className={`${GHOST} mt-9`}>
+						Choose your seats
+					</a>
 				</div>
-				<TeamPicks />
+				<div className="relative">
+					<div
+						aria-hidden="true"
+						className="absolute inset-x-[6%] -bottom-8 top-[15%] -z-10 bg-[radial-gradient(50%_50%_at_50%_50%,rgba(255,111,142,0.24),rgba(10,10,11,0))]"
+					/>
+					<Image
+						src="/app/capdashboard.webp"
+						alt="The Cap dashboard with a team's shared recordings, folders and spaces"
+						width={2573}
+						height={1620}
+						sizes="(min-width: 1024px) 620px, 100vw"
+						className="h-auto w-full rounded-[14px] shadow-[0_0_0_1px_rgba(245,241,234,0.1),0_30px_80px_-30px_rgba(0,0,0,0.9)] sm:rounded-[18px]"
+					/>
+				</div>
 			</div>
 		</section>
 	);

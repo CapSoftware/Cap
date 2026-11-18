@@ -112,8 +112,6 @@ export const PLATFORMS: readonly {
 	{ icon: "browser", name: "Web", note: "Record in any browser" },
 ];
 
-export const TEAM_SIZES = [5, 10, 25] as const;
-
 export const TEAM_POINTS = [
 	"Shared workspaces and spaces for every team",
 	"Comments, reactions and viewer analytics on every video",
