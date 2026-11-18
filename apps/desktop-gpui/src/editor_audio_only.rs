@@ -45,15 +45,9 @@ impl EditorWindow {
         if !self.is_audio_only() {
             return;
         }
-        let slices = |waveforms: &[Arc<Vec<f32>>]| {
-            waveforms
-                .iter()
-                .map(|peaks| peaks.as_slice())
-                .collect::<Vec<_>>()
-        };
         let levels = Arc::new(AudioLevels::from_waveform_peaks(
-            &slices(&self.timeline.mic_waveforms),
-            &slices(&self.timeline.system_waveforms),
+            &peak_slices(&self.timeline.mic_waveforms),
+            &peak_slices(&self.timeline.system_waveforms),
         ));
         if let Some(instance) = &self.instance {
             instance
@@ -372,6 +366,10 @@ impl EditorWindow {
                 .into_any_element(),
         )
     }
+}
+
+fn peak_slices(waveforms: &[Arc<Vec<f32>>]) -> Vec<&[f32]> {
+    waveforms.iter().map(|peaks| peaks.as_slice()).collect()
 }
 
 fn style_label(style: AudioVisualizerStyle) -> &'static str {
