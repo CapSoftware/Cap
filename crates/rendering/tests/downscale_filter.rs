@@ -8,7 +8,7 @@ use cap_rendering::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DownscaleFilter {
     Bilinear,
-    Lanczos,
+    Prefiltered,
 }
 
 struct Gpu {
@@ -143,7 +143,7 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
     });
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut prefilter = DownscalePrefilter::default();
-    if draw.filter == DownscaleFilter::Lanczos {
+    if draw.filter == DownscaleFilter::Prefiltered {
         prefilter.encode(
             device,
             queue,
@@ -245,12 +245,15 @@ fn one_to_one_and_magnified_draws_ignore_the_downscale_filter() {
             &source,
             &full_frame_draw(&source, output, DownscaleFilter::Bilinear),
         );
-        let lanczos = render(
+        let prefiltered = render(
             &gpu,
             &source,
-            &full_frame_draw(&source, output, DownscaleFilter::Lanczos),
+            &full_frame_draw(&source, output, DownscaleFilter::Prefiltered),
         );
-        assert!(bilinear == lanczos, "{output:?} changed with the filter on");
+        assert!(
+            bilinear == prefiltered,
+            "{output:?} changed with the filter on"
+        );
     }
 }
 
@@ -262,26 +265,32 @@ fn downscale_filter_resolves_one_pixel_stripes_without_moire() {
         [v, v, v, 255]
     });
     let output = [128, 64];
-    let lanczos = render(
+    let prefiltered = render(
         &gpu,
         &source,
-        &full_frame_draw(&source, output, DownscaleFilter::Lanczos),
+        &full_frame_draw(&source, output, DownscaleFilter::Prefiltered),
     );
     let bilinear = render(
         &gpu,
         &source,
         &full_frame_draw(&source, output, DownscaleFilter::Bilinear),
     );
-    let (lanczos_mean, lanczos_spread) = luma_spread(&lanczos, output[0], 3);
+    let (prefiltered_mean, prefiltered_spread) = luma_spread(&prefiltered, output[0], 3);
     let (_, bilinear_spread) = luma_spread(&bilinear, output[0], 3);
     // A 1.5x shrink of 1 px stripes is above the output's Nyquist limit, so
     // the ideal result is flat mid grey. One bilinear tap beats against the
     // stripes and leaves a strong pattern.
-    assert!((lanczos_mean - 127.5).abs() < 4.0, "mean {lanczos_mean:.1}");
-    assert!(lanczos_spread < 12.0, "lanczos spread {lanczos_spread:.1}");
     assert!(
-        bilinear_spread > lanczos_spread * 3.0,
-        "bilinear spread {bilinear_spread:.1} vs lanczos {lanczos_spread:.1}"
+        (prefiltered_mean - 127.5).abs() < 4.0,
+        "mean {prefiltered_mean:.1}"
+    );
+    assert!(
+        prefiltered_spread < 12.0,
+        "prefiltered spread {prefiltered_spread:.1}"
+    );
+    assert!(
+        bilinear_spread > prefiltered_spread * 3.0,
+        "bilinear spread {bilinear_spread:.1} vs prefiltered {prefiltered_spread:.1}"
     );
 }
 
@@ -301,7 +310,7 @@ fn downscale_filter_keeps_flat_colour_and_stays_inside_the_crop() {
         output: [80, 50],
         crop: [20.0, 10.0, 140.0, 110.0],
         target: [0.0, 0.0, 80.0, 50.0],
-        filter: DownscaleFilter::Lanczos,
+        filter: DownscaleFilter::Prefiltered,
     };
     let pixels = render(&gpu, &source, &draw);
     let [width, height] = draw.output;

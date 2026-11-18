@@ -5,7 +5,7 @@
 //! The composite shader takes one bilinear tap per output pixel, which skips
 //! most source texels once the layer shrinks, so text and 1 px lines alias
 //! and shimmer. For a shrinking layer this prefilters the frame with a
-//! separable Lanczos-2 kernel, stretched to the shrink factor, into a scratch
+//! separable Catmull-Rom cubic, stretched to the shrink factor, into a scratch
 //! texture with one texel per output pixel; the composite then reads that
 //! texture 1:1 and runs exactly as before. 1:1 and magnified layers never
 //! come here.
@@ -19,19 +19,18 @@ pub enum DownscaleFilter {
     /// One bilinear tap per output pixel, plus a light unsharp mask above a
     /// 1.1x shrink.
     Bilinear,
-    /// Separable Lanczos-2 with its footprint widened to the shrink factor.
-    Lanczos,
+    /// Separable Catmull-Rom cubic with its footprint widened to the shrink
+    /// factor.
+    Cubic,
 }
 
-pub const DOWNSCALE_FILTER: DownscaleFilter = DownscaleFilter::Lanczos;
+pub const DOWNSCALE_FILTER: DownscaleFilter = DownscaleFilter::Cubic;
 
 /// Shrink factors at or below this keep the composite's own sampling, so
 /// 1:1 output is untouched; the margin absorbs float noise in the ratio.
 const MIN_SHRINK: f32 = 1.001;
 
-const KERNEL_RADIUS: f32 = 2.0;
-
-const SCRATCH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const SCRATCH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Scratch textures grow in steps of this many texels so a zoom or resize
 /// animation does not reallocate them every frame.
 const SCRATCH_GRANULARITY: u32 = 64;
@@ -45,8 +44,7 @@ struct PassParams {
     row_offset: f32,
     edge_min: i32,
     edge_max: i32,
-    radius: f32,
-    _padding: f32,
+    _padding: [f32; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +63,7 @@ fn plan(
     texture_size: [u32; 2],
     max_texture_size: u32,
 ) -> Option<Plan> {
-    if DOWNSCALE_FILTER != DownscaleFilter::Lanczos || uniforms.preserve_source_alpha > 0.5 {
+    if DOWNSCALE_FILTER != DownscaleFilter::Cubic || uniforms.preserve_source_alpha > 0.5 {
         return None;
     }
     let [tex_w, tex_h] = texture_size;
@@ -117,8 +115,7 @@ fn plan(
         row_offset: edge_y.0 as f32,
         edge_min: edge_x.0,
         edge_max: edge_x.1,
-        radius: KERNEL_RADIUS,
-        _padding: 0.0,
+        _padding: [0.0; 2],
     };
     let vertical = PassParams {
         origin: crop[1] + (y0 - ty0) * step[1] - edge_y.0 as f32,
@@ -127,8 +124,7 @@ fn plan(
         row_offset: 0.0,
         edge_min: 0,
         edge_max: rows as i32 - 1,
-        radius: KERNEL_RADIUS,
-        _padding: 0.0,
+        _padding: [0.0; 2],
     };
     let composite = CompositeVideoFrameUniforms {
         crop_bounds: [tx0 - x0, ty0 - y0, tx1 - x0, ty1 - y0],
@@ -445,7 +441,7 @@ fn draw_pass(
             view: target,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 store: wgpu::StoreOp::Store,
             },
         })],
