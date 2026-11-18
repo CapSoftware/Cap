@@ -2,7 +2,7 @@ import { PRICING } from "@/data/pricing";
 
 export const CODE = "BLACKFRIDAY";
 
-/** The offer closes at the end of Cyber Monday, Pacific time. */
+// 11:59:59 pm Pacific on Cyber Monday.
 export const ENDS_AT = Date.parse("2026-12-01T07:59:59Z");
 export const ENDS_LABEL = "Cyber Monday, December 1";
 
@@ -12,7 +12,6 @@ export const PRICE = {
 	perMonth: Math.floor((PRICING.pro.yearlyTotal / 2 / 12) * 100) / 100,
 } as const;
 
-/** The film, served by Cap Infra. */
 export const FILM = {
 	title: "Cap Friday, the film",
 	ratio: "1920 / 1010",

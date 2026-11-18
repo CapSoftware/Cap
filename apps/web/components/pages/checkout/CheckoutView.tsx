@@ -176,9 +176,6 @@ function CheckoutSession(
 	);
 }
 
-// Applies a campaign's promotion code once, as soon as the session is open, so
-// buyers arriving from a link with ?promo= see the discounted total straight
-// away. A code Stripe rejects is ignored: the field stays available to type in.
 function ApplyPromotion({ code }: { code: string }) {
 	const state = useCheckoutElements();
 	const tried = useRef(false);

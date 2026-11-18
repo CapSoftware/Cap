@@ -10,7 +10,6 @@ import { Film, WatchFilm } from "./Film";
 import { OfferCard } from "./OfferCard";
 import { DIM, GHOST, GRAIN, NEON, SUN_TEXT } from "./theme";
 
-// A retro Miami script for the title (Yellowtail, Apache 2.0).
 const script = localFont({
 	src: "../../../public/fonts/Yellowtail-Regular.ttf",
 	display: "swap",
@@ -51,9 +50,6 @@ function Header() {
 function Hero() {
 	return (
 		<section className="relative isolate flex min-h-[100svh] flex-col justify-end overflow-hidden">
-			{/* On phones the wide frame sits as a band at the top (plane and banner
-			    both in shot) with the copy below it on dark; wider screens get
-			    the full-bleed picture with a soft wash behind the copy. */}
 			<div
 				aria-hidden="true"
 				className="absolute inset-x-0 top-0 -z-10 h-[62svh] overflow-hidden sm:inset-0 sm:h-auto"

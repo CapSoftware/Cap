@@ -4,7 +4,6 @@ import { useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { CODE } from "./content";
 
-/** The code as plain text: press it to copy. Checkout applies it anyway. */
 export function CodeChip({ location }: { location: string }) {
 	const [copied, setCopied] = useState(false);
 

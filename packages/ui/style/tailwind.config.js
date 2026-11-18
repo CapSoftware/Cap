@@ -187,9 +187,6 @@ module.exports = (__app, _options) => {
 						from: { opacity: 1 },
 						to: { opacity: 0 },
 					},
-					// Black Friday page: the neon title writes on left to right,
-					// then its glow breathes; copy rises into focus; the hero
-					// still drifts slowly.
 					bfWrite: {
 						from: { clipPath: "inset(-30% 100% -30% -10%)" },
 						to: { clipPath: "inset(-30% -10% -30% -10%)" },

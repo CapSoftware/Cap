@@ -31,8 +31,6 @@ export const parseCheckoutSeats = (value: unknown): number => {
 		: 1;
 };
 
-// Promotion codes arrive in the checkout URL from campaign pages, so only a
-// plain code shape is passed on to Stripe; anything else is dropped.
 const PROMOTION_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{1,39}$/;
 
 export const parsePromotionCode = (value: unknown): string | null =>

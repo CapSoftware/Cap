@@ -13,8 +13,7 @@ const remaining = (ms: number) => {
 	return plural(Math.floor(hours / 24), "day");
 };
 
-// Calm on purpose: days, then hours, then minutes, refreshed each minute. Only
-// rendered after mount, so the server and the first client render agree.
+// Rendered only after mount so the server and first client render match.
 export function Countdown() {
 	const [now, setNow] = useState<number | null>(null);
 

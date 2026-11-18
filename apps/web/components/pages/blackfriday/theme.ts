@@ -1,6 +1,3 @@
-// Cap Friday: the film's palette. Sun-washed beach, a neon sunset script, and
-// the dark, grainy black and white of its ending.
-
 export const INK = "#0A0A0B";
 
 const FOCUS =
@@ -12,8 +9,6 @@ export const CLAIM_SMALL = "!h-9 !px-[15px] !text-[14px]";
 
 export const GHOST = `inline-flex h-12 items-center justify-center gap-[9px] whitespace-nowrap rounded-full bg-[rgba(10,10,11,0.42)] px-5 text-[16px] text-[#F5F1EA] shadow-[inset_0_0_0_1px_rgba(245,241,234,0.28)] backdrop-blur-[14px] transition-[background-color,box-shadow] duration-200 hover:bg-[rgba(10,10,11,0.62)] hover:shadow-[inset_0_0_0_1px_rgba(245,241,234,0.5)] ${FOCUS}`;
 
-// The neon script: a sunset gradient through the letters, a faint hot edge and
-// a pink bloom; it writes on, then breathes (animate-bf-title).
 export const NEON =
 	"relative inline-block bg-[linear-gradient(180deg,#FFD68C_0%,#FF8078_38%,#FF4D8D_62%,#B0369F_100%)] bg-clip-text px-[0.16em] pb-[0.16em] pt-[0.06em] font-normal leading-[0.95] tracking-normal text-transparent [-webkit-text-stroke:0.6px_rgba(255,238,230,0.35)] [filter:drop-shadow(0_0_0.06em_rgba(255,77,141,0.85))_drop-shadow(0_0_0.28em_rgba(255,77,141,0.42))] animate-bf-title motion-reduce:animate-none";
 

@@ -9,7 +9,6 @@ import { checkoutPath } from "@/lib/checkout/plans";
 import { CODE, ENDS_AT } from "./content";
 import { CLAIM, CLAIM_SMALL } from "./theme";
 
-/** False on the server and the first render, then whether the offer is over. */
 export function useEnded() {
 	const [ended, setEnded] = useState(false);
 	useEffect(() => {
@@ -21,11 +20,6 @@ export function useEnded() {
 	return ended;
 }
 
-/**
- * The one action on the page: a yearly checkout with BLACKFRIDAY applied.
- * Opens the in-app checkout (Stripe warmed on hover), or the pricing page
- * where that checkout is not available, and after the offer has ended.
- */
 export function Claim({
 	location,
 	seats = 1,
