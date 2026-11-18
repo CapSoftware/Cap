@@ -587,6 +587,40 @@ pub fn audio_trim_end_bounds(segment: &AudioTrackSegment, bounds: DragBounds) ->
     }
 }
 
+/// A start handle kept inside `window` (a tied caption's clip piece, see
+/// `transcription::tied_caption_window`): it stops at the window's start,
+/// as an audio segment's stops at its file's.
+pub fn window_trim_start_bounds((window_start, _): (f64, f64), bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.max(window_start);
+    DragBounds {
+        min,
+        max: bounds.max.max(min),
+    }
+}
+
+/// An end handle kept inside `window`: it stops at the window's end.
+pub fn window_trim_end_bounds((_, window_end): (f64, f64), bounds: DragBounds) -> DragBounds {
+    let max = bounds.max.min(window_end);
+    DragBounds {
+        min: bounds.min.min(max),
+        max,
+    }
+}
+
+/// A move (bounds on the delta) of the segment at `start..end` kept inside
+/// `window`: it slides up to either of the window's edges.
+pub fn window_move_bounds(
+    (window_start, window_end): (f64, f64),
+    (start, end): (f64, f64),
+    bounds: DragBounds,
+) -> DragBounds {
+    let min = bounds.min.max(window_start - start);
+    DragBounds {
+        min,
+        max: bounds.max.min(window_end - end).max(min),
+    }
+}
+
 /// `SegmentContent`'s setup (`TL/MaskTrack.tsx:449-458`): the whole segment
 /// slides, clamped so it cannot pass either neighbour. Expressed as bounds on
 /// the *delta* rather than on the start, which is how the source clamps it.
@@ -2198,6 +2232,11 @@ pub fn add_caption_segment(
         (mapping.source_start + (time - mapping.effective_start) * mapping.timescale) as f32
     };
     let (source_start, source_end) = (source(start), source(end));
+    let recording_clip = cap_project::held_tail_clip(
+        mapping.recording_clip,
+        f64::from(source_end),
+        recording_durations,
+    );
     if project
         .captions
         .as_ref()
@@ -2226,6 +2265,7 @@ pub fn add_caption_segment(
             end: source_end,
             text: text.to_string(),
             words: Vec::new(),
+            recording_clip,
         },
     );
     Some(index)
@@ -2384,6 +2424,11 @@ pub fn clip_trim_start(
         .unwrap_or(f64::INFINITY);
     let available = clip_available_timeline_duration(timeline, index, recording_duration);
     let max_duration = max_segment.min(available);
+    // A clip whose end already runs past its media (a late-audio clip moved
+    // by `cap_project::migrate_late_audio_alignment`) holds its last frame
+    // there; that tail is not recorded material, so the start may still open
+    // back to the clip's beginning.
+    let recorded_end = segment.end.min(max_segment);
 
     // `prevSegmentIsSameClip ? prevSegment.end : 0` -- a clip split in two may
     // not be trimmed back over its own left-hand half. That floor only means
@@ -2407,7 +2452,7 @@ pub fn clip_trim_start(
     Some(
         new_start
             .max(previous_floor)
-            .max(segment.end - max_duration)
+            .max(recorded_end - max_duration)
             .min(ceiling),
     )
 }
@@ -2437,7 +2482,9 @@ pub fn clip_trim_end(
         .get(index + 1)
         .filter(|next| next.recording_clip == segment.recording_clip)
         .filter(|next| next.start >= segment.end)
-        .map_or(max_segment, |next| next.start);
+        // A saved end past the media (see `clip_trim_start`) stays reachable,
+        // so a small drag does not snap the held tail away.
+        .map_or(max_segment.max(segment.end), |next| next.start);
 
     // Mirror of the start handle's growth guard for sub-minimum clips.
     let floor = (segment.start + min_recorded).min(segment.end);
@@ -3484,6 +3531,7 @@ mod tests {
                             end: start + word as f32 * 0.35 + 0.3,
                         })
                         .collect(),
+                    recording_clip: None,
                 }
             })
             .collect();
@@ -3873,6 +3921,38 @@ mod tests {
         }];
         let timeline = fast.timeline.as_ref().unwrap();
         assert_eq!(clip_min_recorded_duration(timeline, 1, 0.001), 2.4);
+    }
+
+    // A late-audio clip moved onto the new segment clock by
+    // `migrate_late_audio_alignment` keeps its edited footage by running 4 s
+    // past its 10 s media, holding the last frame. Its handles keep that tail
+    // and can still open the clip back to the footage before its start.
+    #[test]
+    fn clip_trim_keeps_a_migrated_held_tail() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "start": 4.0, "end": 14.0, "timescale": 1.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        let (displays, recording, spp) = ([10.0], 10.0, 0.001);
+        assert_eq!(
+            clip_trim_end(&timeline, 0, 13.9, spp, &displays, recording),
+            Some(13.9)
+        );
+        assert_eq!(
+            clip_trim_end(&timeline, 0, 20.0, spp, &displays, recording),
+            Some(14.0)
+        );
+        assert_eq!(
+            clip_trim_start(&timeline, 0, 0.0, spp, &displays, recording),
+            Some(0.0)
+        );
+        assert_eq!(
+            clip_trim_start(&timeline, 0, 2.5, spp, &displays, recording),
+            Some(2.5)
+        );
     }
 
     #[test]
@@ -6003,6 +6083,52 @@ mod add_caption_tests {
             .iter()
             .map(|segment| (segment.text.clone(), segment.start, segment.end))
             .collect()
+    }
+
+    // A migrated late-audio clip trimmed to 4..14 of its 10 s media (a held
+    // tail from 10 s), then another 10 s clip. A caption typed over the held
+    // tail is tied to its clip, so it shows there and not on the next clip,
+    // whose own stretch of the source clock it shares.
+    #[test]
+    fn a_caption_over_a_held_tail_stays_on_its_clip() {
+        let mut project = project(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "start": 4.0, "end": 14.0, "timescale": 1.0 },
+                { "recordingSegment": 1, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+            ],
+            "zoomSegments": []
+        }));
+        let durations = [10.0, 10.0];
+        let add = |project: &mut ProjectConfiguration, output, id: &str| {
+            add_caption_segment(project, output, id.into(), "Hello", &durations)
+        };
+        add(&mut project, 8.0..9.0, "caption-tail").unwrap();
+        add(&mut project, 1.0..2.0, "caption-media").unwrap();
+        let ties: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| (segment.id.as_str(), segment.start, segment.recording_clip))
+            .collect();
+        assert_eq!(
+            ties,
+            [
+                ("caption-media", 5.0, None),
+                ("caption-tail", 12.0, Some(0))
+            ]
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track: Vec<_> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect();
+        assert_eq!(track, [(1.0, 2.0), (8.0, 9.0)]);
     }
 
     #[test]

@@ -216,6 +216,26 @@ pub enum CornerStyle {
     Rounded,
 }
 
+/// How `BackgroundConfiguration::padding` turns into margins in auto aspect.
+///
+/// `Proportional` grows each side by the same fraction of its own length, so a
+/// 16:9 screen gets wider side margins than top and bottom ones. `Even` puts
+/// the same margin on every side, a fraction of the shorter side. Projects
+/// saved without the field keep `Proportional`.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PaddingMode {
+    #[default]
+    Proportional,
+    Even,
+}
+
+impl PaddingMode {
+    pub fn is_proportional(&self) -> bool {
+        *self == Self::Proportional
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -359,6 +379,11 @@ pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: f64,
     pub padding: f64,
+    /// Absent in every project saved before the setting existed, which keeps
+    /// their framing. Skipped when proportional so those files round-trip
+    /// unchanged.
+    #[serde(skip_serializing_if = "PaddingMode::is_proportional")]
+    pub padding_mode: PaddingMode,
     pub rounding: f64,
     pub rounding_type: CornerStyle,
     pub inset: u32,
@@ -396,6 +421,7 @@ impl Default for BackgroundConfiguration {
             source: BackgroundSource::default(),
             blur: 0.0,
             padding: 0.0,
+            padding_mode: PaddingMode::default(),
             rounding: 0.0,
             rounding_type: CornerStyle::default(),
             inset: 0,
@@ -2683,6 +2709,19 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    /// The recording clip this caption belongs to, set only when its times
+    /// cannot say: a caption in a clip's held tail (an edited late-audio clip
+    /// trimmed past its media end, see `migrate_late_audio_alignment`) sits
+    /// where the shared source clock starts the next clip, and a part of a
+    /// caption that migration cut where two clips meet may round across the
+    /// boundary. Such a caption is shown only through this clip's timeline
+    /// segments.
+    #[serde(
+        rename = "recordingSegment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recording_clip: Option<u32>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -3086,6 +3125,15 @@ pub struct ProjectConfiguration {
     /// grade.
     #[serde(default)]
     pub color_correction: ColorCorrectionConfiguration,
+    /// How clip audio offsets, markers and caption words of a segment with a
+    /// late audio track are timed. 0 (legacy): against the late audio start,
+    /// which also set where the segment's video began. 1: against the screen
+    /// and camera start (`MultipleSegment::latest_start_time`); legacy configs
+    /// are migrated by `migrate_late_audio_alignment` when the recording is
+    /// opened. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub clip_alignment_version: u32,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -3110,6 +3158,7 @@ pub struct ProjectConfiguration {
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
+pub const CLIP_ALIGNMENT_VERSION: u32 = 1;
 
 /// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
 /// that skips every value instead of building a JSON tree of a file that can
@@ -3156,6 +3205,7 @@ impl Default for ProjectConfiguration {
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
             color_correction: Default::default(),
+            clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             markers: Vec::new(),
@@ -3225,7 +3275,28 @@ impl ProjectStyleCache {
     }
 }
 
+/// Rounding a new project gets when its background first gains padding: a
+/// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
+pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
+
 impl ProjectConfiguration {
+    /// Where a new recording or import starts. Differs from `Default` (which
+    /// is what an older project missing a field reads as) only in framing:
+    /// even padding and a lighter, softer card shadow. At zero padding both
+    /// padding modes lay out identically and the card fills the frame, so
+    /// neither shows until the card has room around it.
+    pub fn for_new_project() -> Self {
+        let mut config = Self::default();
+        config.background.padding_mode = PaddingMode::Even;
+        config.background.shadow = 50.0;
+        config.background.advanced_shadow = Some(ShadowConfiguration {
+            size: 0.0,
+            opacity: 62.4,
+            blur: 46.7,
+        });
+        config
+    }
+
     pub fn with_preset(&self, mut preset: Self) -> Self {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
@@ -3247,6 +3318,7 @@ impl ProjectConfiguration {
             (None, None) => None,
         };
         preset.timeline = self.timeline.clone();
+        preset.clip_alignment_version = self.clip_alignment_version;
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.overlay_order = self.overlay_order.clone();
@@ -3756,6 +3828,45 @@ mod tests {
         assert!(restored.show_filler_words);
         assert_eq!(restored.filler_language.as_deref(), Some("en"));
         assert!(restored.uppercase);
+    }
+
+    #[test]
+    fn padding_mode_is_proportional_for_saved_projects_and_only_written_when_even() {
+        let saved: BackgroundConfiguration =
+            serde_json::from_str(r#"{"padding":10.0,"rounding":7.5}"#).unwrap();
+        assert_eq!(saved.padding_mode, PaddingMode::Proportional);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("paddingMode").is_none());
+
+        let project = ProjectConfiguration::default();
+        let bytes = serde_json::to_vec(&project).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("paddingMode"));
+
+        let mut even = saved.clone();
+        even.padding_mode = PaddingMode::Even;
+        let written = serde_json::to_value(&even).unwrap();
+        assert_eq!(written["paddingMode"], "even");
+        let restored: BackgroundConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(restored.padding_mode, PaddingMode::Even);
+    }
+
+    #[test]
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+        let fresh = ProjectConfiguration::for_new_project();
+        assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
+        assert_eq!(fresh.background.padding, 0.0);
+        assert_eq!(fresh.background.rounding, 0.0);
+
+        let mut framing_reset = serde_json::to_value(&fresh).unwrap();
+        let default = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        for key in ["paddingMode", "shadow", "advancedShadow"] {
+            framing_reset["background"][key] = default["background"][key].clone();
+        }
+        framing_reset["background"]
+            .as_object_mut()
+            .unwrap()
+            .remove("paddingMode");
+        assert_eq!(framing_reset, default);
     }
 
     #[test]

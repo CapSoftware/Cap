@@ -658,6 +658,7 @@ struct PreviewFrameView {
     frame_rect: crate::editor_canvas::CanvasRect,
     stats: Option<Arc<PumpStats>>,
     frame_sequence: u64,
+    frame_number: u32,
     /// The stage's lift under the preview. A canvas paints raw quads, so the
     /// shadow cannot come from a style and is carried here instead.
     shadow: Vec<gpui::BoxShadow>,
@@ -671,6 +672,7 @@ impl PreviewFrameView {
             frame_rect,
             stats: None,
             frame_sequence: 0,
+            frame_number: 0,
             shadow: crate::theme::preview_shadow(),
         }
     }
@@ -678,6 +680,7 @@ impl PreviewFrameView {
     fn set_frame(
         &mut self,
         frame: EditorPreviewFrame,
+        frame_number: u32,
         frame_size: (f32, f32),
         stats: Option<Arc<PumpStats>>,
         cx: &mut Context<Self>,
@@ -685,6 +688,12 @@ impl PreviewFrameView {
         self.frame_size = frame_size;
         self.stats = stats;
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        self.frame_number = frame_number;
+        crate::editor_latency::mark(
+            crate::editor_latency::Stage::Arrived,
+            frame_number,
+            self.frame_sequence,
+        );
         let previous = self.frame.replace(frame);
         cx.notify();
         previous
@@ -700,6 +709,7 @@ impl Render for PreviewFrameView {
         let frame_rect = self.frame_rect.clone();
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
+        let frame_number = self.frame_number;
         let shadow = self.shadow.clone();
 
         gpui::canvas(
@@ -740,6 +750,11 @@ impl Render for PreviewFrameView {
                 if let Some(stats) = &painted {
                     stats.record_paint(frame_sequence);
                 }
+                crate::editor_latency::mark(
+                    crate::editor_latency::Stage::Painted,
+                    frame_number,
+                    frame_sequence,
+                );
             },
         )
         .size_full()
@@ -1323,6 +1338,28 @@ enum DragKind {
         min_duration: f64,
         created: Option<usize>,
     },
+}
+
+/// `kind` with its bounds narrowed so the segment stays inside `window` (a
+/// tied caption's clip piece): a handle stops at the window's edge and a move
+/// slides up to it, snapping as at any other limit.
+fn keep_drag_in_window(kind: DragKind, window: (f64, f64)) -> DragKind {
+    match kind {
+        DragKind::TrimStart { start, bounds } => DragKind::TrimStart {
+            start,
+            bounds: edits::window_trim_start_bounds(window, bounds),
+        },
+        DragKind::TrimEnd { end, bounds } => DragKind::TrimEnd {
+            end,
+            bounds: edits::window_trim_end_bounds(window, bounds),
+        },
+        DragKind::Move { start, end, bounds } => DragKind::Move {
+            start,
+            end,
+            bounds: edits::window_move_bounds(window, (start, end), bounds),
+        },
+        other => other,
+    }
 }
 
 /// One live pointer drag on a segment.
@@ -3971,6 +4008,36 @@ impl EditorWindow {
         self.timeline.waveform_paths.stats()
     }
 
+    pub(crate) fn bench_pump_snapshot(&self) -> Option<StatsSnapshot> {
+        self.stats.as_ref().map(|stats| stats.snapshot())
+    }
+
+    pub(crate) fn bench_zoom_end_handle(
+        &self,
+        index: usize,
+        viewport_width: f32,
+    ) -> Option<(u32, f32)> {
+        let segment = self.timeline.segments(TrackKind::Zoom).get(index)?;
+        let content = timeline::content_width(viewport_width);
+        let x = ((segment.end - self.view.transform.position) / self.secs_per_pixel(viewport_width))
+            as f32
+            - 2.;
+        (2.0..content)
+            .contains(&x)
+            .then(|| (segment.lane, timeline::content_left() + x))
+    }
+
+    pub(crate) fn bench_zoom_segment(&self, index: usize) -> Option<(f64, f64)> {
+        self.timeline
+            .segments(TrackKind::Zoom)
+            .get(index)
+            .map(|segment| (segment.start, segment.end))
+    }
+
+    pub(crate) fn bench_zoom_count(&self) -> usize {
+        self.timeline.segments(TrackKind::Zoom).len()
+    }
+
     pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
         let total = self.total_duration();
         self.view
@@ -4904,7 +4971,7 @@ impl EditorWindow {
     /// a handle trims, a body moves (or splits, in split mode), and bare track
     /// falls through to the timeline container's own press-to-seek -- except on
     /// the zoom track, which creates a segment there.
-    fn track_mouse_down(
+    pub(crate) fn track_mouse_down(
         &mut self,
         kind: TrackKind,
         lane: u32,
@@ -5116,6 +5183,19 @@ impl EditorWindow {
             (_, Hit::Empty) => None,
         };
 
+        // A caption tied to its clip stays on that clip's piece: its handles
+        // and body stop at the piece's edges.
+        let kind_of_drag = match kind {
+            TrackKind::Caption => kind_of_drag.map(|drag| {
+                crate::transcription::tied_caption_window(
+                    &self.project,
+                    index,
+                    &self.clip_display_durations,
+                )
+                .map_or(drag, |window| keep_drag_in_window(drag, window))
+            }),
+            _ => kind_of_drag,
+        };
         let clip_handle = matches!(
             kind_of_drag,
             Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
@@ -5575,7 +5655,7 @@ impl EditorWindow {
     /// A pointer move with a segment drag live. Runs off the root's handler, so
     /// a drag that leaves its own row keeps tracking -- which is what
     /// `createEventListenerMap(window, ...)` gives the source.
-    fn drag_mouse_move(
+    pub(crate) fn drag_mouse_move(
         &mut self,
         x: f32,
         snap_disabled: bool,
@@ -6101,11 +6181,12 @@ fn split_caption_segment(
     };
     let split_output = track.start + at;
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    let Some(split_source) = crate::transcription::map_edited_time_to_source(
+    let Some((split_source, _)) = crate::transcription::map_edited_time_to_source(
         split_output,
         timeline,
         recording_durations,
         source_range,
+        source.recording_clip,
     ) else {
         return false;
     };
@@ -6700,7 +6781,7 @@ impl EditorWindow {
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
-    fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drag_snap_targets = snap::SnapTargets::default();
         self.drag_snap_time = None;
         let Some(drag) = self.drag.take() else {
@@ -7327,7 +7408,13 @@ impl EditorWindow {
         );
         self.latest_frame = Some(frame.frame.clone());
         let previous = self.preview.update(cx, |preview, cx| {
-            preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
+            preview.set_frame(
+                frame.frame,
+                frame.number,
+                frame_size,
+                self.stats.clone(),
+                cx,
+            )
         });
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
             let _ = window.drop_image(previous);
@@ -8239,7 +8326,7 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
-    fn apply_project_preset(
+    pub(crate) fn apply_project_preset(
         &mut self,
         next: ProjectConfiguration,
         window: &mut Window,
@@ -12953,6 +13040,7 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::TextWeight(_)
         | SidebarMenu::Camera3DEasing(_) => true,
         SidebarMenu::BackgroundCornerStyle
+        | SidebarMenu::BackgroundPaddingMode
         | SidebarMenu::CameraBlur
         | SidebarMenu::CameraShape
         | SidebarMenu::CameraCornerStyle
@@ -13674,6 +13762,7 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
 /// `set_playhead_position` would move the playhead and render nothing --
 /// the classic "the editor opened but the canvas is black" bug.
 pub fn request_frame(instance: &EditorInstance, frame_number: u32, resolution: XY<u32>) {
+    crate::editor_latency::mark(crate::editor_latency::Stage::Demand, frame_number, 0);
     instance
         .preview_tx
         .send_modify(|value| *value = Some((frame_number, EDITOR_PREVIEW_FPS, resolution)));
@@ -13690,6 +13779,15 @@ pub fn make_frame_callback(
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
         stats.rendered.fetch_add(1, Ordering::Relaxed);
+        if crate::editor_latency::enabled() {
+            let frame_number = match &output {
+                EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                #[cfg(target_os = "macos")]
+                EditorFrameOutput::Surface(frame) => frame.frame_number,
+            };
+            crate::editor_latency::mark(crate::editor_latency::Stage::Rendered, frame_number, 0);
+        }
         #[cfg(target_os = "windows")]
         let sent = tx
             .send_timeout((output, layout), Duration::from_millis(100))
@@ -13731,6 +13829,107 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two 10 s recordings: the second at 0..10, then the first held to 14 s
+    // (4..14) at output 10..20. A caption tied to the first shows at 18..19.
+    // Its handles stop at its piece's edges (10 and 20) and its body slides
+    // only within them; an untied caption's drag keeps its bounds.
+    #[test]
+    fn a_tied_caption_drag_stops_at_its_clip_piece() {
+        let durations = [10.0, 10.0];
+        let caption = |recording_clip| cap_project::CaptionSegment {
+            id: "caption-tied".into(),
+            start: 12.0,
+            end: 13.0,
+            text: "typed".into(),
+            words: Vec::new(),
+            recording_clip,
+        };
+        let project = |recording_clip| {
+            let mut project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [
+                            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                            { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 }
+                        ],
+                        "zoomSegments": []
+                    }))
+                    .unwrap(),
+                ),
+                captions: Some(cap_project::CaptionsData {
+                    segments: vec![caption(recording_clip)],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            cap_project::synchronize_captions(&mut project, &durations);
+            project
+        };
+
+        let tied = project(Some(0));
+        let item = &tied.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((item.start, item.end), (18.0, 19.0));
+        let window = crate::transcription::tied_caption_window(&tied, 0, &durations);
+        assert_eq!(window, Some((10.0, 20.0)));
+        let window = window.unwrap();
+
+        let free = edits::DragBounds { min: 0., max: 20. };
+        let DragKind::TrimStart { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimStart {
+                start: 18.,
+                bounds: edits::DragBounds { min: 0., max: 18.5 },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(4.), bounds.clamp(12.)), (10., 12.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: 18.5,
+                    max: 30.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(25.), bounds.clamp(19.5)), (20., 19.5));
+        let DragKind::Move { bounds, .. } = keep_drag_in_window(
+            DragKind::Move {
+                start: 18.,
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: -18.,
+                    max: 11.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(-12.), bounds.clamp(5.)), (-8., 1.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: free,
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(bounds.max, 20.);
+
+        let untied = project(None);
+        assert_eq!(
+            crate::transcription::tied_caption_window(&untied, 0, &durations),
+            None
+        );
+    }
 
     #[cfg(target_os = "linux")]
     mod side_panel {
@@ -13963,6 +14162,7 @@ mod tests {
                     camera_y: editor.project.camera.position.y.clone(),
                     max_width: 1000.,
                     padding_scale: 1.,
+                    even: None,
                 }),
             });
             editor.canvas_drag_rect = Some(rect);
@@ -15193,6 +15393,7 @@ mod tests {
                     end: 4.0,
                     text: "hello world".into(),
                     words,
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -15212,6 +15413,60 @@ mod tests {
         cap_project::synchronize_captions(&mut project, &[10.0]);
         assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
+    }
+
+    // A migrated 10 s recording cut into 4..12 and 12..14 (a held tail from
+    // 10 s) with a 1 s crossfade, so both pieces of the same recording
+    // overlap at 7..8. A caption tied to it at 12.2..13.8 shows at 7.2..8.8
+    // through the second piece, and splitting it at 7.9, inside the overlap,
+    // cuts it at 12.9 rather than at the first piece's 11.9.
+    #[test]
+    fn a_tied_caption_inside_a_crossfade_of_its_own_clip_splits() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 4.0, "end": 12.0, "timescale": 1.0 },
+                    { "recordingSegment": 0, "start": 12.0, "end": 14.0, "timescale": 1.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "caption-tail", "start": 12.2, "end": 13.8,
+                    "text": "Held tail", "recordingSegment": 0
+                }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let track = project.timeline.as_ref().unwrap().caption_segments[0].clone();
+        assert!((track.start - 7.2).abs() < 1e-4 && (track.end - 8.8).abs() < 1e-4);
+
+        assert!(split_caption_segment(
+            &mut project,
+            0,
+            7.9 - track.start,
+            &[10.0]
+        ));
+        let halves: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| {
+                let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+                (
+                    near(segment.start),
+                    near(segment.end),
+                    segment.recording_clip,
+                )
+            })
+            .collect();
+        assert_eq!(halves, [(12.2, 12.9, Some(0)), (12.9, 13.8, Some(0))]);
     }
 
     #[test]
@@ -15305,6 +15560,7 @@ mod tests {
                             end: 4.0,
                         },
                     ],
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -15480,6 +15736,7 @@ mod tests {
 
         for kind in [
             SidebarMenu::BackgroundCornerStyle,
+            SidebarMenu::BackgroundPaddingMode,
             SidebarMenu::CameraBlur,
             SidebarMenu::CameraShape,
             SidebarMenu::CameraCornerStyle,
@@ -15921,6 +16178,7 @@ mod tests {
                                 end: 7.0,
                             },
                         ],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,
@@ -15989,6 +16247,7 @@ mod tests {
                             start: 6.0,
                             end: 7.0,
                         }],
+                        recording_clip: None,
                     }],
                     settings: Default::default(),
                     source_timed: true,

@@ -163,11 +163,6 @@ const nextConfig = {
 				permanent: true,
 			},
 			{
-				source: "/docs/s3-config",
-				destination: "/docs",
-				permanent: true,
-			},
-			{
 				source: "/docs/api",
 				destination: "/docs/api/get-started",
 				permanent: false,

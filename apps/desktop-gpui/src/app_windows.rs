@@ -6103,6 +6103,7 @@ fn load_editor_project_candidate(
         crate::transcript::automation::run(handle, cx).await;
         drive_auto_export(handle, cx).await;
         crate::editor_hover_bench::run(handle, cx).await;
+        crate::editor_latency_bench::run(handle, cx).await;
     })
     .detach();
 }
