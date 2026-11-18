@@ -350,3 +350,40 @@ export function EmptyFolderDoodle({ size = 88 }: { size?: number }) {
 		</Frame>
 	);
 }
+
+export function ArchiveDoodle({ size = 88 }: { size?: number }) {
+	return (
+		<Frame size={size} viewBox="0 0 96 80">
+			<g className={styles.float}>
+				<path
+					className={cx(styles.accent, styles.draw)}
+					style={timing(0.9, 0.45)}
+					strokeWidth={3.4}
+					pathLength={1}
+					d="M 62 4 Q 54 8 52 20"
+				/>
+			</g>
+			<path
+				className={cx(styles.ink, styles.draw)}
+				style={timing(0.05, 0.6)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 16 26 Q 16 22 20 22 L 76 22 Q 80 22 80 26 L 80 32 Q 80 35 77 35 L 19 35 Q 16 35 16 32 Z"
+			/>
+			<path
+				className={cx(styles.ink, styles.draw)}
+				style={timing(0.4, 0.7)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 21 35 L 21 70 Q 21 75 26 75 L 70 75 Q 75 75 75 70 L 75 35"
+			/>
+			<path
+				className={cx(styles.soft, styles.draw)}
+				style={timing(1, 0.3)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 40 46 L 56 46"
+			/>
+		</Frame>
+	);
+}
