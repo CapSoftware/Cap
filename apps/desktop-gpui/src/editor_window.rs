@@ -705,7 +705,6 @@ const SHARP_PREVIEW_ENGINE_POLL: Duration = Duration::from_millis(10);
 
 type PreviewRequests = tokio::sync::watch::Receiver<Option<(u32, u32, XY<u32>)>>;
 
-/// What [`EditorWindow::schedule_sharp_preview`] decided.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SharpPreview {
     Scheduled,
@@ -717,7 +716,6 @@ pub(crate) enum SharpPreview {
     AlreadySharp,
 }
 
-/// The fitted preview's size in device pixels, written on every paint.
 pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
 
 struct PreviewFrameView {
@@ -1537,8 +1535,6 @@ pub struct EditorWindow {
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
     preview: Entity<PreviewFrameView>,
     preview_canvas_px: PreviewCanvasPx,
-    /// The pending device-pixel redraw of the paused frame, see
-    /// [`EditorWindow::schedule_sharp_preview`].
     sharp_preview: Option<gpui::Task<()>>,
     /// Subscribed when playback stops: changed once a paused request has been
     /// sent since, which is when the latest request names the frame the
@@ -4126,8 +4122,6 @@ impl EditorWindow {
         self.timeline.waveform_paths.stats()
     }
 
-    /// The fitted preview's size in device pixels: what a frame must be to
-    /// be drawn 1:1.
     pub(crate) fn bench_preview_canvas(&self, window: &Window) -> Option<[u32; 2]> {
         let frame = self.player_frame_rect.get()?.frame;
         let scale = window.scale_factor() * crate::editor_latency::backing_scale();
@@ -4895,8 +4889,6 @@ impl EditorWindow {
         (!self.playing).then(|| self.schedule_sharp_preview(Duration::ZERO, cx))
     }
 
-    /// The ordinary handoff's frame has been painted: hand the transport back
-    /// and resume playback if the preparing preview was playing.
     fn finish_ordinary_handoff(
         &mut self,
         target: u32,
