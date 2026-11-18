@@ -4095,17 +4095,17 @@ fn clip_badge(
         .gap(px(3.))
         .px(px(5.))
         .rounded(px(4.))
-        .bg(seg_border(theme, color, 0.))
+        .bg(Hsla::from(theme.editor.badge_fill(gpui::Rgba::from(color))))
         .text_size(px(10.))
         .line_height(px(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(seg_label(theme, color))
+        .text_color(Hsla::from(theme.editor.badge_ink(gpui::Rgba::from(color))))
         .child(
             svg()
                 .path(icon)
                 .size(px(10.))
                 .flex_none()
-                .text_color(seg_label(theme, color)),
+                .text_color(Hsla::from(theme.editor.badge_ink(gpui::Rgba::from(color)))),
         )
         .child(label)
 }
@@ -4215,8 +4215,14 @@ mod tests {
             track_color::THREE_D,
         ];
         for palette in [EditorPalette::light(), EditorPalette::dark()] {
-            for track in tracks {
-                let color = gpui::rgb(track);
+            let colors = tracks.into_iter().map(gpui::rgb).chain([palette.text_3]);
+            for color in colors {
+                let badge = palette.badge_fill(color);
+                assert!(
+                    contrast(palette.badge_ink(color), badge) >= 4.5,
+                    "badge {color:?}: {:.2}",
+                    contrast(palette.badge_ink(color), badge)
+                );
                 for fill in [
                     palette.seg_fill(color),
                     palette.sheen(palette.seg_fill(color)).0,
@@ -4225,7 +4231,7 @@ mod tests {
                         let ink = mix(fill, gpui::Rgba { a: 1., ..text }, text.a);
                         assert!(
                             contrast(ink, fill) >= 4.5,
-                            "{track:06x}: {:.2}",
+                            "{color:?}: {:.2}",
                             contrast(ink, fill)
                         );
                     }

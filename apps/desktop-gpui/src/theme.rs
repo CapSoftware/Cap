@@ -580,6 +580,21 @@ impl EditorPalette {
     /// White or a deep shade of the track colour, whichever contrasts more
     /// with the brightest part of the fill (its lit top), so labels stay
     /// readable on the bright hues without dulling every track.
+    pub fn badge_fill(&self, color: Rgba) -> Rgba {
+        mix(self.seg_fill(color), rgb(0x000000), 0.32)
+    }
+
+    pub fn badge_ink(&self, color: Rgba) -> Rgba {
+        let fill = self.badge_fill(color);
+        let shade = mix(color, rgb(0x000000), 0.86);
+        let lum = relative_luminance(fill);
+        if 1.05 / (lum + 0.05) >= (lum + 0.05) / (relative_luminance(shade) + 0.05) {
+            rgb(0xffffff)
+        } else {
+            shade
+        }
+    }
+
     fn seg_ink(&self, color: Rgba, alpha: f32) -> Rgba {
         let fill = self.seg_fill(color);
         let lit = relative_luminance(self.sheen(fill).0).max(relative_luminance(fill));
