@@ -1146,6 +1146,71 @@ fn media_still_open_when_the_editor_closes_is_cleaned_once_released() {
 }
 
 #[test]
+fn removed_media_still_in_use_is_waited_for() {
+    let fixture = Fixture::new();
+    let checks = std::sync::atomic::AtomicUsize::new(0);
+    let in_use = |_: &Path| -> io::Result<bool> {
+        Ok(checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3)
+    };
+    let outcome = run_waiting(
+        &fixture.project(),
+        &Request::from_probes(probes()),
+        Duration::from_secs(5),
+        &in_use,
+    )
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Cleaned { .. }), "{outcome:?}");
+    assert!(checks.load(std::sync::atomic::Ordering::SeqCst) >= 4);
+    assert_opens(&fixture.project());
+}
+
+#[test]
+fn removed_media_that_stays_in_use_leaves_the_project_untouched() {
+    let fixture = Fixture::new();
+    let before = fixture.files();
+    let tree = fixture.tree();
+    let outcome = run_waiting(
+        &fixture.project(),
+        &Request::from_probes(probes()),
+        Duration::from_millis(300),
+        &|_: &Path| Ok(true),
+    )
+    .unwrap();
+    assert_eq!(outcome, Outcome::Skipped(Skip::MediaInUse));
+    assert_eq!(fixture.files(), before);
+    assert_eq!(fixture.tree(), tree);
+}
+
+#[cfg(windows)]
+#[test]
+fn media_held_open_for_good_leaves_the_project_untouched() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    let fixture = Fixture::new();
+    let before = fixture.files();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(
+            fixture
+                .project()
+                .join("content/segments/segment-1/display.mp4"),
+        )
+        .unwrap();
+    let outcome = run_waiting(
+        &fixture.project(),
+        &Request::from_probes(probes()),
+        Duration::from_millis(500),
+        &folder_in_use,
+    )
+    .unwrap();
+    drop(held);
+    assert_eq!(outcome, Outcome::Skipped(Skip::MediaInUse));
+    assert_eq!(fixture.files(), before);
+    assert!(!fixture.project().join(BACKUPS).exists());
+}
+
+#[test]
 fn busy_projects_are_never_touched() {
     assert_eq!(Busy::default().reason(), None);
     for busy in [

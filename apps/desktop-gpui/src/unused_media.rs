@@ -26,6 +26,7 @@ const DIAGNOSTICS: &str = "recording-diagnostics.json";
 const CAPTION_TOLERANCE: f64 = 1e-3;
 const MARKER_TOLERANCE: f64 = 1e-9;
 const SETTLE_WAIT: Duration = Duration::from_secs(30);
+const MEDIA_RELEASE_WAIT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SegmentProbe {
@@ -101,6 +102,7 @@ pub(crate) enum Skip {
     Invalid,
     TrashInProgress,
     ClipAlignment,
+    MediaInUse,
 }
 
 #[derive(Debug)]
@@ -1277,7 +1279,82 @@ fn debug_hooks(project: &Path, snapshot: &Snapshot, plan: &Plan, stamp: &str, la
 /// Removes the unused segments of a closed project and stages their media.
 /// The caller then sends it to the trash with [`trash_staged`], after
 /// releasing its [`Claim`] so opening the project does not wait on the trash.
+/// Windows refuses to move a folder while a file inside it is open without
+/// `FILE_SHARE_DELETE`, which is how FFmpeg opens media, and the closing
+/// editor's decoders let go of theirs a few seconds after the window closes.
+/// Opening each entry for `DELETE` with every share flag fails exactly while
+/// such a handle is open.
+#[cfg(windows)]
+fn folder_in_use(folder: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const SHARE_ALL: u32 = 0x7;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let mut pending = vec![folder.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if std::fs::symlink_metadata(&path)?.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+        }
+        let opened = std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(SHARE_ALL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&path);
+        match opened {
+            Ok(_) => {}
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => return Ok(true),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(windows))]
+fn folder_in_use(_folder: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+fn wait_for_media(
+    project: &Path,
+    folders: &[String],
+    max_wait: Duration,
+    in_use: &dyn Fn(&Path) -> io::Result<bool>,
+) -> io::Result<bool> {
+    let deadline = std::time::Instant::now() + max_wait;
+    loop {
+        let mut busy = false;
+        for folder in folders {
+            if in_use(&project.join(folder))? {
+                busy = true;
+                break;
+            }
+        }
+        if !busy {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
+    run_waiting(project, request, MEDIA_RELEASE_WAIT, &folder_in_use)
+}
+
+/// [`run`] with the wait for the removed media to be released spelled out.
+/// Nothing is written until every removed folder can be moved; if one is
+/// still held when the wait ends, this close leaves the project as it is and
+/// the next one tries again.
+pub(crate) fn run_waiting(
+    project: &Path,
+    request: &Request,
+    max_wait: Duration,
+    in_use: &dyn Fn(&Path) -> io::Result<bool>,
+) -> Result<Outcome, String> {
     let Some(_staging) = try_staging_lock(project) else {
         return Ok(Outcome::Skipped(Skip::TrashInProgress));
     };
@@ -1289,6 +1366,11 @@ pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> 
     };
     let stamp = now_stamp();
     let label = trash_label(&snapshot.meta.pretty_name);
+    if !wait_for_media(project, &plan.folders, max_wait, in_use)
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(Outcome::Skipped(Skip::MediaInUse));
+    }
     #[cfg(debug_assertions)]
     debug_hooks(project, &snapshot, &plan, &stamp, &label);
     let staged = commit(project, &snapshot, &plan, &stamp, &label, Step::Done)
