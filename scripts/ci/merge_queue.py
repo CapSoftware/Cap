@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -138,17 +139,18 @@ def triggers(workflow):
     raise SystemExit(f"{workflow}: no on: block")
 
 
-def run_git(*args):
-    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+def run_git(*args, cwd=ROOT):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def changed_files(base, head):
-    partial = subprocess.run(["git", "config", "remote.origin.promisor"], cwd=ROOT, capture_output=True, text=True)
+def changed_files(base, head, cwd=ROOT):
+    partial = subprocess.run(["git", "config", "remote.origin.promisor"], cwd=cwd, capture_output=True, text=True)
     fetch = ["fetch", "--no-tags", "--depth=1"] + (["--filter=blob:none"] if partial.stdout.strip() == "true" else [])
     for sha in (base, head):
-        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=ROOT, capture_output=True).returncode:
-            run_git(*fetch, "origin", sha)
-    return [line for line in run_git("diff", "--no-renames", "--name-only", base, head).splitlines() if line]
+        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=cwd, capture_output=True).returncode:
+            run_git(*fetch, "origin", sha, cwd=cwd)
+    # -z: without it git quotes non-ASCII paths, which then match no filter.
+    return [path for path in run_git("diff", "--no-renames", "--name-only", "-z", base, head, cwd=cwd).split("\0") if path]
 
 
 def cmd_files(args):
@@ -339,6 +341,22 @@ def cmd_test(_args):
                 if theirs is not None:
                     assert mine[event].get(key) == theirs, f"{workflow.name} {event}.{key}: {mine[event].get(key)} != {theirs}"
         checked += 1
+
+    with tempfile.TemporaryDirectory() as repo:
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, env={**os.environ, **env})
+        git("init", "-q")
+        Path(repo, "a.txt").write_text("a")
+        git("add", "-A"); git("commit", "-q", "-m", "base")
+        base = run_git("rev-parse", "HEAD", cwd=repo).strip()
+        Path(repo, "apps/status/public").mkdir(parents=True)
+        Path(repo, "apps/status/public/caf\u00e9 x.svg").write_text("b")
+        Path(repo, "a.txt").rename(Path(repo, "b.txt"))
+        git("add", "-A"); git("commit", "-q", "-m", "head")
+        head = run_git("rev-parse", "HEAD", cwd=repo).strip()
+        got = sorted(changed_files(base, head, cwd=repo))
+        assert got == ["a.txt", "apps/status/public/caf\u00e9 x.svg", "b.txt"], got
+        assert matches(got[1], ["apps/status/**"])
 
     runs = [
         {"id": 1, "path": ".github/workflows/a.yml", "status": "completed", "conclusion": "failure", "html_url": "u1"},
