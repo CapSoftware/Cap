@@ -612,6 +612,33 @@ fn is_plain_dir(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Whether no existing component of `relative` below `project` is a link, so
+/// a path built from it cannot lead out of the project.
+fn no_links_below(project: &Path, relative: &str) -> io::Result<bool> {
+    let mut path = project.to_path_buf();
+    for component in Path::new(relative).components() {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Ok(false),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(true)
+}
+
+fn ensure_no_links<'a>(project: &Path, paths: impl IntoIterator<Item = &'a str>) -> io::Result<()> {
+    for relative in paths {
+        if !no_links_below(project, relative)? {
+            return Err(io::Error::other(format!(
+                "{relative} goes through a link; the cleanup leaves it alone"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn exists_unfollowed(path: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -768,6 +795,12 @@ pub(crate) fn commit(
     {
         return Err(io::Error::other("project changed before cleanup"));
     }
+    ensure_no_links(
+        project,
+        [STAGING, BACKUPS]
+            .into_iter()
+            .chain(plan.folders.iter().map(String::as_str)),
+    )?;
     for folder in &plan.folders {
         if !is_plain_dir(&project.join(folder))? {
             return Err(io::Error::other("segment folder missing before cleanup"));
@@ -867,6 +900,12 @@ pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
     if !journal.is_safe() {
         return Err(io::Error::other("unexpected paths in the cleanup journal"));
     }
+    ensure_no_links(
+        project,
+        [journal.staging.as_str(), journal.backup.as_str()]
+            .into_iter()
+            .chain(journal.folders.iter().map(String::as_str)),
+    )?;
     let staging = project.join(&journal.staging);
     let mut labels = Vec::new();
     match std::fs::read_dir(&staging) {

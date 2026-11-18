@@ -781,6 +781,65 @@ fn an_unreadable_cleanup_keeps_its_journal_until_it_can_be_read() {
 
 #[cfg(unix)]
 #[test]
+fn recovery_never_moves_media_out_through_a_linked_parent() {
+    let fixture = Fixture::new();
+    let snapshot = fixture.snapshot();
+    let plan = fixture.plan().unwrap();
+    commit(
+        &fixture.project(),
+        &snapshot,
+        &plan,
+        "stamp",
+        "label",
+        Step::Stage,
+    )
+    .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let segments = fixture.project().join("content/segments");
+    std::fs::rename(&segments, outside.path().join("real-segments")).unwrap();
+    std::fs::create_dir(outside.path().join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("elsewhere"), &segments).unwrap();
+
+    assert!(settle(&fixture.project()).is_err());
+    assert!(!outside.path().join("elsewhere/segment-1").exists());
+    assert!(
+        fixture
+            .project()
+            .join("content/removed-media/stamp/label/segment-1/display.mp4")
+            .is_file()
+    );
+    assert!(fixture.project().join(JOURNAL).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_never_pulls_outside_folders_in_through_a_linked_parent() {
+    let fixture = Fixture::new();
+    let outside = tempfile::tempdir().unwrap();
+    let foreign = outside.path().join("stamp/label/segment-1");
+    std::fs::create_dir_all(&foreign).unwrap();
+    std::fs::write(foreign.join("keep.txt"), b"not the project's").unwrap();
+    std::os::unix::fs::symlink(outside.path(), fixture.project().join(STAGING)).unwrap();
+    std::fs::remove_dir_all(fixture.project().join("content/segments/segment-1")).unwrap();
+    std::fs::create_dir_all(fixture.project().join("backups/b")).unwrap();
+    std::fs::write(
+        fixture.project().join(JOURNAL),
+        br#"{"backup":"backups/b","staging":"content/removed-media/stamp","folders":["content/segments/segment-1"]}"#,
+    )
+    .unwrap();
+
+    assert!(settle(&fixture.project()).is_err());
+    assert!(foreign.join("keep.txt").is_file());
+    assert!(
+        !fixture
+            .project()
+            .join("content/segments/segment-1")
+            .exists()
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn the_trash_never_follows_links_out_of_the_project() {
     let fixture = Fixture::new();
     let outside = tempfile::tempdir().unwrap();
