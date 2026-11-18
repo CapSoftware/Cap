@@ -164,7 +164,7 @@ impl VideoMuxer for AudioOnlyStandinMuxer {
 }
 
 pub fn standin_for_span(path: &std::path::Path, duration: Duration) -> anyhow::Result<()> {
-    cap_enc_ffmpeg::video::standin::write_black_standin(
+    cap_enc_ffmpeg::standin::write_black_standin(
         path,
         AUDIO_ONLY_CANVAS_WIDTH,
         AUDIO_ONLY_CANVAS_HEIGHT,

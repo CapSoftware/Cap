@@ -171,7 +171,7 @@ fn link_or_copy(source: &Path, destination: &Path) -> Result<(), AudioProjectErr
 }
 
 fn write_placeholder(path: &Path, duration: Duration) -> Result<(), AudioProjectError> {
-    cap_enc_ffmpeg::video::standin::write_black_standin(
+    cap_enc_ffmpeg::standin::write_black_standin(
         path,
         AUDIO_ONLY_CANVAS_WIDTH,
         AUDIO_ONLY_CANVAS_HEIGHT,

@@ -6646,6 +6646,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         let pipeline = Pipeline {
             microphone: Some(microphone),
@@ -7137,6 +7138,7 @@ mod tests {
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
             },
             index: 0,
             segment_start_time: 0.0,
@@ -7226,6 +7228,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         match role {
             RecordingTrackKind::Microphone => pipeline.microphone = Some(microphone),
@@ -7419,6 +7422,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_watcher(completion_tx);
 
@@ -7538,6 +7542,7 @@ mod tests {
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
             };
             pipeline.spawn_watcher(completion_tx);
             microphone_tx
