@@ -398,6 +398,28 @@ pub fn show_after(capture: Capture, cx: &mut App) {
     }
 }
 
+/// A recording's files changed under its card: read its size again.
+pub fn project_changed(project: &Path, cx: &mut App) {
+    let Some(model) = existing_model(cx) else {
+        return;
+    };
+    model.update(cx, |overlay, cx| {
+        let reload: Vec<_> = overlay
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == MediaKind::Recording
+                    && (entry.path == project
+                        || entry.path.canonicalize().is_ok_and(|path| path == project))
+            })
+            .map(|entry| (entry.id, entry.path.clone()))
+            .collect();
+        for (id, path) in reload {
+            overlay.load_details(id, path, cx);
+        }
+    });
+}
+
 pub fn work_in_flight(cx: &App) -> bool {
     existing_model(cx).is_some_and(|model| {
         model
@@ -686,22 +708,26 @@ impl Overlay {
         );
         self.enforce_limit(cx);
         if kind == MediaKind::Recording {
-            let task = cx
-                .background_executor()
-                .spawn(async move { load_details(&path) });
-            cx.spawn(async move |this, cx| {
-                let details = task.await;
-                this.update(cx, |overlay, cx| {
-                    if let Some(entry) = overlay.entry_mut(id) {
-                        entry.details = Some(details);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            self.load_details(id, path, cx);
         }
         cx.notify();
+    }
+
+    fn load_details(&self, id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let task = cx
+            .background_executor()
+            .spawn(async move { load_details(&path) });
+        cx.spawn(async move |this, cx| {
+            let details = task.await;
+            this.update(cx, |overlay, cx| {
+                if let Some(entry) = overlay.entry_mut(id) {
+                    entry.details = Some(details);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn entry(&self, id: u64) -> Option<&Entry> {

@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -1624,6 +1625,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::prepare_controls_failed(&error),
         format!("Could not prepare the recording controls: {error}")
+    );
+    assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
     );
     assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),
