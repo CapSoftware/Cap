@@ -24,6 +24,7 @@ import {
 	MEDIA_INPUT_POLICY_STRIKE_WINDOW_MS,
 	mediaProcessingSuspendedError,
 	readMediaInputPolicyState,
+	toStoredUploadContentType,
 	unsupportedMediaInputError,
 } from "@/lib/media-processing-policy";
 
@@ -211,6 +212,36 @@ describe("getMediaProcessingRejection", () => {
 		).resolves.toBe(mediaProcessingSuspendedError);
 		await expect(getMediaProcessingRejection({ ownerId })).resolves.toBe(
 			mediaProcessingSuspendedError,
+		);
+	});
+});
+
+describe("toStoredUploadContentType", () => {
+	it.each([
+		"video/mp4",
+		"video/webm;codecs=vp9,opus",
+		"Video/QuickTime",
+		"audio/mp4",
+		"image/png",
+		"image/jpeg",
+	])("keeps %s", (contentType) => {
+		expect(toStoredUploadContentType(contentType)).toBe(contentType);
+	});
+
+	it.each([
+		"text/html",
+		" TEXT/HTML ; charset=utf-8",
+		"application/xhtml+xml",
+		"image/svg+xml",
+		"text/xml",
+		"application/xml",
+		"text/javascript",
+		"application/pdf",
+		"multipart/x-mixed-replace",
+		"",
+	])("stores %s as plain bytes", (contentType) => {
+		expect(toStoredUploadContentType(contentType)).toBe(
+			"application/octet-stream",
 		);
 	});
 });

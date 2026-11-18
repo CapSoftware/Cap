@@ -610,6 +610,51 @@ describe("desktop reupload completion", () => {
 		expect(objects.get(oldKey)?.ETag).toBe("original");
 		expect(mocks.complete).toHaveBeenCalledTimes(1);
 	});
+	it.each([
+		["raw-upload.html", "text/html", "application/octet-stream"],
+		["raw-upload.mp4", "text/html; charset=utf-8", "application/octet-stream"],
+		["raw-upload.svg", "image/svg+xml", "application/octet-stream"],
+		["raw-upload.xhtml", "application/xhtml+xml", "application/octet-stream"],
+		[
+			"raw-upload.webm",
+			"video/webm;codecs=vp9,opus",
+			"video/webm;codecs=vp9,opus",
+		],
+		["raw-upload.m4a", "audio/mp4", "audio/mp4"],
+		["screenshot/screen-capture.png", "image/png", "image/png"],
+	])(
+		"stores a %s upload sent as %s with content type %s",
+		async (subpath, contentType, stored) => {
+			const response = await app.request("/initiate", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ videoId: "video", subpath, contentType }),
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.create).toHaveBeenCalledWith(
+				`owner/video/${subpath}`,
+				expect.objectContaining({ ContentType: stored }),
+			);
+		},
+	);
+
+	it("stores a replacement upload sent as a web page as plain bytes", async () => {
+		const response = await app.request("/initiate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				contentType: "text/html",
+				replaceExisting: true,
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.create).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({ ContentType: "application/octet-stream" }),
+		);
+	});
+
 	it("signs only the authenticated replacement key and backend session", async () => {
 		const response = await app.request("/presign-part", {
 			method: "POST",

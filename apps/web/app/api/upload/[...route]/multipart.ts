@@ -31,6 +31,7 @@ import {
 	getMediaProcessingRejection,
 	isNonMediaRawUploadKey,
 	nonMediaUploadMessage,
+	toStoredUploadContentType,
 } from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
@@ -136,7 +137,7 @@ app.post(
 				});
 				const outputKey = createDesktopReuploadKey(video);
 				const result = yield* bucket.multipart.create(outputKey, {
-					ContentType: contentType || "video/mp4",
+					ContentType: toStoredUploadContentType(contentType || "video/mp4"),
 					CacheControl: "public, max-age=31536000, immutable",
 					Metadata: { userId: user.id, source: "cap-desktop-reupload" },
 				});
@@ -239,7 +240,9 @@ app.post(
 					const [video] = maybeVideo.value;
 					const [bucket] = yield* Storage.getAccessForVideo(video);
 
-					const finalContentType = contentType || "video/mp4";
+					const finalContentType = toStoredUploadContentType(
+						contentType || "video/mp4",
+					);
 					console.log(
 						`Creating multipart upload in bucket: ${bucket.bucketName}, content-type: ${finalContentType}, key: ${fileKey}`,
 					);
