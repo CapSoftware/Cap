@@ -566,10 +566,31 @@ fn cap_deleted_on_the_web_during_verification_stops_confirming() {
     });
 }
 
-/// The same when the cap is deleted on the web before the upload finishes:
-/// the first completion call learns it and the queue stops there.
+/// The same when the cap is deleted on the web after its upload URLs were
+/// issued and the media uploaded: the first completion call learns it and the
+/// queue stops there.
 #[test]
-fn cap_deleted_on_the_web_before_upload_finishes_stops_confirming() {
+fn cap_deleted_on_the_web_after_upload_stops_confirming() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleted_on_web_after_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        mock.delete_on_web_before_completion(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert!(mock.count("POST", "/api/upload/signed") > 0);
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
+/// A cap deleted on the web before its upload starts gets 404 from the upload
+/// URL routes, so the queue never reaches cloud verification and retries the
+/// transfer with the usual bounded backoff.
+#[test]
+fn cap_deleted_on_the_web_before_upload_never_confirms() {
     let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
     let scratch = Scratch::new("queue_deleted_on_web_before_upload");
     virtual_time(async {
@@ -578,9 +599,17 @@ fn cap_deleted_on_the_web_before_upload_finishes_stops_confirming() {
         let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
         mock.delete_on_web(VIDEO_ID);
         let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
-        let window = Duration::from_secs(30 * 60);
-        run_queue(&manager, &project, window).await;
-        assert_deleted_on_web(&mock, &project, window);
+        run_queue(&manager, &project, Duration::from_secs(60 * 60)).await;
+        let state = read_state(&project).unwrap().unwrap();
+        eprintln!("{state:?}\n{}", mock.timeline());
+        assert_eq!(mock.count("POST", "recording-complete"), 0);
+        assert_eq!(state.phase, UploadPhase::Failed, "{state:?}");
+        assert_eq!(state.attempt_count(), MAX_AUTOMATIC_ATTEMPTS, "{state:?}");
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+        assert_eq!(mock.deletes(), 0);
     });
 }
 
