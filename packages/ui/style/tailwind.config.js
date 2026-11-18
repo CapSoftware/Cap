@@ -187,11 +187,39 @@ module.exports = (__app, _options) => {
 						from: { opacity: 1 },
 						to: { opacity: 0 },
 					},
+					// Black Friday page: the neon title writes on left to right,
+					// then its glow breathes; copy rises into focus; the hero
+					// still drifts slowly.
+					bfWrite: {
+						from: { clipPath: "inset(-30% 100% -30% -10%)" },
+						to: { clipPath: "inset(-30% -10% -30% -10%)" },
+					},
+					bfBreathe: {
+						"50%": {
+							filter:
+								"drop-shadow(0 0 0.07em rgba(255,90,150,0.95)) drop-shadow(0 0 0.36em rgba(255,77,141,0.55))",
+						},
+					},
+					bfRise: {
+						from: {
+							opacity: "0",
+							transform: "translateY(10px)",
+							filter: "blur(6px)",
+						},
+					},
+					bfDrift: {
+						from: { transform: "scale(1.04) translate3d(0,0,0)" },
+						to: { transform: "scale(1.09) translate3d(-1.2%,0.6%,0)" },
+					},
 				},
 				animation: {
 					flyEmoji: "flyEmoji 1.5s forwards",
 					fadeIn: "capFadeIn 200ms ease-out",
 					fadeOut: "capFadeOut 150ms ease-in",
+					"bf-title":
+						"bfWrite 1.5s cubic-bezier(0.6,0,0.2,1) 0.25s both, bfBreathe 4.4s ease-in-out 1.9s infinite",
+					"bf-rise": "bfRise 0.9s cubic-bezier(0.2,0.7,0.2,1) both",
+					"bf-drift": "bfDrift 24s ease-in-out infinite alternate",
 				},
 			},
 		},
