@@ -230,6 +230,10 @@ async function render(data: VideoData) {
 		),
 	);
 }
+const selectButton = (name: string) => `button[aria-label="Select ${name}"]`;
+const cardSelector = (name: string) => `fieldset[aria-label="${name}"]`;
+const deleteDescription = (name: string) =>
+	`Are you sure you want to delete the cap "${name}"? This action cannot be undone.`;
 async function click(selector: string) {
 	const button = container.querySelector<HTMLButtonElement>(selector);
 	if (!button) throw new Error(`Missing ${selector}`);
@@ -271,14 +275,14 @@ it("keeps unchanged cards out of parent analytics updates", async () => {
 it("rerenders only the selected cards when the selection grows", async () => {
 	const data = makeVideos(50);
 	await render(data);
-	await click('button[aria-label="Select Recording 0"]');
+	await click(selectButton("Recording 0"));
 	mocks.cardRender.mockClear();
-	await click('button[aria-label="Select Recording 1"]');
+	await click(selectButton("Recording 1"));
 	expect(mocks.cardRender.mock.calls.map(([id]) => id).sort()).toEqual([
 		"video-0",
 		"video-1",
 	]);
-	const card = container.querySelector('fieldset[aria-label="Recording 0"]');
+	const card = container.querySelector(cardSelector("Recording 0"));
 	if (!card) throw new Error("Missing card");
 	const dragData = new Map<string, string>();
 	const dragStart = Object.assign(new Event("dragstart", { bubbles: true }), {
@@ -297,11 +301,11 @@ it("rerenders only the selected cards when the selection grows", async () => {
 it("preserves selection and the current bulk-delete selection", async () => {
 	const data = makeVideos(3);
 	await render(data);
-	await click('button[aria-label="Select Recording 0"]');
-	await click('button[aria-label="Select Recording 1"]');
-	expect(
-		container.querySelectorAll('button[aria-pressed="true"]'),
-	).toHaveLength(2);
+	await click(selectButton("Recording 0"));
+	await click(selectButton("Recording 1"));
+	expect(container.querySelectorAll("button[aria-pressed=true]")).toHaveLength(
+		2,
+	);
 	await act(async () =>
 		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" })),
 	);
@@ -309,26 +313,26 @@ it("preserves selection and the current bulk-delete selection", async () => {
 	await act(async () =>
 		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
 	);
-	expect(
-		container.querySelectorAll('button[aria-pressed="true"]'),
-	).toHaveLength(0);
+	expect(container.querySelectorAll("button[aria-pressed=true]")).toHaveLength(
+		0,
+	);
 });
 
 it("skips static content work on selection and preserves unchanged card markup", async () => {
 	const data = makeVideos(3);
 	await render(data);
 	const markup = container.querySelector(
-		'fieldset[aria-label="Recording 2"]',
+		cardSelector("Recording 2"),
 	)?.innerHTML;
 	contentRender.mockClear();
-	await click('button[aria-label="Select Recording 0"]');
+	await click(selectButton("Recording 0"));
 	expect(contentRender).not.toHaveBeenCalled();
 	await act(async () =>
 		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
 	);
-	expect(
-		container.querySelector('fieldset[aria-label="Recording 2"]')?.innerHTML,
-	).toBe(markup);
+	expect(container.querySelector(cardSelector("Recording 2"))?.innerHTML).toBe(
+		markup,
+	);
 	mocks.loading = true;
 	await render(data);
 	expect(container.querySelectorAll(".animate-pulse")).toHaveLength(9);
@@ -336,11 +340,11 @@ it("skips static content work on selection and preserves unchanged card markup",
 	mocks.analytics = { "video-0": 42 };
 	await render(data);
 	expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
+	expect(container.querySelector(cardSelector("Recording 2"))?.innerHTML).toBe(
+		markup,
+	);
 	expect(
-		container.querySelector('fieldset[aria-label="Recording 2"]')?.innerHTML,
-	).toBe(markup);
-	expect(
-		container.querySelector('fieldset[aria-label="Recording 0"]')?.textContent,
+		container.querySelector(cardSelector("Recording 0"))?.textContent,
 	).toContain("42");
 	await render(
 		data.map((cap) => ({ ...cap, public: false, totalComments: 19 })),
@@ -374,7 +378,7 @@ it("keeps title editing and date validation responsive after parent updates", as
 	expect(mocks.editTitle).toHaveBeenCalledWith("video-0", "Renamed recording");
 	expect(container.textContent).toContain("Renamed recording");
 	const date = container.querySelector<HTMLParagraphElement>(
-		'p[class*="truncate transition-colors cursor-pointer"]',
+		"p.truncate.cursor-pointer",
 	);
 	if (!date) throw new Error("Missing date");
 	await act(async () => date.click());
@@ -404,9 +408,7 @@ it("keeps title editing and date validation responsive after parent updates", as
 it("deletes the clicked card and uses the latest selection for bulk deletion", async () => {
 	await render(makeVideos(3));
 	async function confirm() {
-		const onConfirm = mocks.confirmations.get(
-			'Are you sure you want to delete the cap "Recording 1"? This action cannot be undone.',
-		);
+		const onConfirm = mocks.confirmations.get(deleteDescription("Recording 1"));
 		if (!onConfirm) throw new Error("Missing delete confirmation");
 		await act(async () => onConfirm());
 	}
@@ -415,8 +417,8 @@ it("deletes the clicked card and uses the latest selection for bulk deletion", a
 		expect(mocks.deleteVideo.mock.calls).toEqual([["video-1"]]),
 	);
 	mocks.deleteVideo.mockClear();
-	await click('button[aria-label="Select Recording 0"]');
-	await click('button[aria-label="Select Recording 1"]');
+	await click(selectButton("Recording 0"));
+	await click(selectButton("Recording 1"));
 	await confirm();
 	await vi.waitFor(() =>
 		expect(mocks.deleteVideo.mock.calls).toEqual([["video-0"], ["video-1"]]),
@@ -510,7 +512,7 @@ it("updates only the uploading card and keeps its metadata out of progress rende
 	expect(mocks.cardRender.mock.calls.map(([id]) => id)).toEqual(["video-0"]);
 	expect(contentRender).not.toHaveBeenCalled();
 	expect(
-		container.querySelector('fieldset[aria-label="Recording 0"]')?.textContent,
+		container.querySelector(cardSelector("Recording 0"))?.textContent,
 	).toContain("25%");
 });
 
@@ -547,7 +549,7 @@ it.skipIf(!process.env.CAP_GRID_BENCH)(
 					} else if (kind === "upload") {
 						await updateUpload(sample + 11);
 					} else {
-						await click('button[aria-label="Select Recording 1"]');
+						await click(selectButton("Recording 1"));
 					}
 					if (sample > 1) {
 						times.push(performance.now() - start);
