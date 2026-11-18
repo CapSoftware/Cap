@@ -16,6 +16,7 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_loading;
+mod caption_export;
 mod camera_window;
 mod controls_window;
 mod crash_capture;
@@ -34,6 +35,8 @@ mod editor_crop;
 mod editor_edits;
 mod editor_export;
 mod editor_hover_bench;
+mod editor_latency;
+mod editor_latency_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
@@ -54,6 +57,7 @@ mod import;
 mod installer;
 mod jpeg_thumbnail;
 mod library;
+mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]

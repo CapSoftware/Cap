@@ -50,6 +50,7 @@ fn captions(words: &[(&str, f64, f64)]) -> CaptionsData {
                     end: *end as f32,
                 })
                 .collect(),
+            recording_clip: None,
         })
         .collect();
     CaptionsData {

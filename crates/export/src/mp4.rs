@@ -1074,7 +1074,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
 /// the stream stays gapless and strictly monotonic. The caller advances the
 /// cursor to `pts + samples`. Shared with the tests so they exercise this exact
 /// arithmetic rather than a re-implementation.
-fn audio_frame_budget(
+pub(crate) fn audio_frame_budget(
     frame_number: u64,
     sample_rate: u64,
     fps: u64,

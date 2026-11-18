@@ -34,7 +34,7 @@ def lane_of(artifact):
     m = re.match(r"verify-report-(.+?)-(fast|full)(-\d+)?$", artifact)
     if m:
         return m.group(1)
-    m = re.match(r"verify-recording-(?:report-)?(.+)$", artifact)
+    m = re.match(r"verify-recording-(?:report-)?(.+?)(?:-(?:fast|full)-\d+)?$", artifact)
     if m:
         return "recording-" + m.group(1)
     return artifact

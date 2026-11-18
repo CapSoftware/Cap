@@ -20,6 +20,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.transcript.captions_save_failed",
     "editor.transcript.fillers.remove_all",
     "editor.transcript.pauses.summary",
     "editor.transcript.restore_hint",
@@ -60,6 +61,8 @@ const FORMATTED: &[&str] = &[
     "editor.export.fps",
     "editor.export.frames",
     "editor.export.stats.output_value",
+    "editor.export.tracks.file_count",
+    "editor.export.tracks.video_detail",
     "editor.tabs.captions.download",
     "editor.tabs.captions.downloading",
     "editor.tabs.captions.generate_failed",
@@ -634,6 +637,8 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::corner::rounded(), "Rounded"),
         (tr::editor::tabs::corner::squircle(), "Squircle"),
+        (tr::editor::tabs::padding::even(), "Even"),
+        (tr::editor::tabs::padding::proportional(), "Proportional"),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -1073,12 +1078,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::transcript::add_caption(),
             "Add caption at playhead",
         ),
+        (tr::editor::transcript::captions_saved(), "Captions saved"),
         (tr::editor::transcript::cleanup(), "Clean up"),
         (
             tr::editor::transcript::cleanup_tooltip(),
             "Remove filler words and shorten pauses",
         ),
         (tr::editor::transcript::delete_matches(), "Delete all"),
+        (
+            tr::editor::transcript::download_captions(),
+            "Download captions",
+        ),
+        (tr::editor::transcript::download_srt(), "SubRip (.srt)"),
+        (tr::editor::transcript::download_vtt(), "WebVTT (.vtt)"),
         (
             tr::editor::transcript::delete_matches_tooltip(),
             "Cut every match from the video",
@@ -1444,6 +1456,34 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
         (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
         (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
+        (tr::editor::export::section::tracks(), "Tracks"),
+        (
+            tr::editor::export::tracks::aligned(),
+            "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects.",
+        ),
+        (tr::editor::export::tracks::audio_detail(), "WAV · 48 kHz"),
+        (tr::editor::export::tracks::camera(), "Camera"),
+        (
+            tr::editor::export::tracks::choose_one(),
+            "Choose at least one track to export.",
+        ),
+        (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::tracks::exported(), "Tracks exported"),
+        (tr::editor::export::tracks::exporting(), "Exporting tracks"),
+        (
+            tr::editor::export::tracks::file_only(),
+            "Tracks are saved as separate files in a folder.",
+        ),
+        (tr::editor::export::tracks::files(), "Files"),
+        (tr::editor::export::tracks::format(), "Tracks"),
+        (tr::editor::export::tracks::microphone(), "Microphone"),
+        (tr::editor::export::tracks::open_folder(), "Open Folder"),
+        (tr::editor::export::tracks::screen(), "Screen"),
+        (
+            tr::editor::export::tracks::studio_only(),
+            "Separate tracks are only recorded in Studio Mode.",
+        ),
+        (tr::editor::export::tracks::system_audio(), "System audio"),
         (tr::editor::canvas::shape(), "Shape"),
         (tr::editor::timeline::track::shape(), "Shape"),
         (
@@ -1631,6 +1671,20 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
             format!("{}×{} · {} fps", 1920, 1080, fps)
         );
     }
+    assert_eq!(
+        tr::editor::export::tracks::video_detail(2560_u32, 1440_u32),
+        "MP4 · 2560×1440"
+    );
+    for count in [1_usize, 4] {
+        assert_eq!(
+            tr::editor::export::tracks::file_count(count),
+            if count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{count} files")
+            }
+        );
+    }
     for total in [0_u32, 1, 2, 5] {
         let rendered = total / 2;
         let expected = if total == 1 {
@@ -1714,6 +1768,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::window::presets::delete_confirm(&name),
         format!("Are you sure you want to delete \"{}\"?", name)
+    );
+    assert_eq!(
+        tr::editor::transcript::captions_save_failed(&error),
+        format!("Could not save the captions: {error}")
     );
     assert_eq!(
         tr::editor::window::save_failed(path.display(), &error),

@@ -154,6 +154,12 @@ pub struct ExportPrefs {
     pub turbo: bool,
     #[serde(default)]
     pub gif_quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_tracks: Option<Vec<String>>,
+    #[serde(default)]
+    pub resolution_from_source: bool,
+    #[serde(default)]
+    pub fps_from_source: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -450,6 +456,18 @@ pub fn notification_sounds_enabled() -> bool {
                 .get(GENERAL_SETTINGS)
                 .and_then(Value::as_object)
                 .map(|settings| bool_at(settings, "enableNotifications", true))
+        })
+        .unwrap_or(false)
+}
+
+/// Read once per stroke, so it goes through the cached store too.
+pub fn keep_drawings() -> bool {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| bool_at(settings, KEEP_DRAWINGS_KEY, false))
         })
         .unwrap_or(false)
 }
@@ -1040,6 +1058,9 @@ pub struct GeneralSettings {
     /// during a Studio recording. Off by default, because a microphone or
     /// system audio capture can record the cue.
     pub recording_marker_sound: bool,
+    /// GPUI-only `keepDrawingsOnScreen`: strokes drawn on screen while
+    /// recording stay until cleared instead of fading out.
+    pub keep_drawings: bool,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -1076,6 +1097,7 @@ pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstant
 pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
 
 /// Read on every marker press, so it goes through the cached store rather
 /// than a full [`GeneralSettings::load`].
@@ -1488,6 +1510,7 @@ impl GeneralSettings {
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
             recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
+            keep_drawings: bool_at(general, KEEP_DRAWINGS_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
@@ -1677,29 +1700,55 @@ pub fn default_recording_marker_hotkey() -> Hotkey {
 /// unless the user already bound it, or bound something else to the default
 /// combo. Later launches leave the map alone.
 pub fn seed_recording_marker_hotkey() {
-    if store_section(HOTKEYS)
-        .get(RECORDING_MARKER_HOTKEY_SEEDED)
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
+    seed_default_hotkey(
+        RECORDING_MARKER_HOTKEY,
+        RECORDING_MARKER_HOTKEY_SEEDED,
+        default_recording_marker_hotkey(),
+    );
+}
+
+pub const DRAW_HOTKEY: &str = "toggleDrawing";
+
+const DRAW_HOTKEY_SEEDED: &str = "toggleDrawingSeeded";
+
+/// ⌃⌘D is the system's look-up shortcut, so drawing takes ⌃⌘P (pen).
+pub fn default_draw_hotkey() -> Hotkey {
+    Hotkey {
+        code: "KeyP".into(),
+        meta: true,
+        ctrl: true,
+        alt: false,
+        shift: false,
+    }
+}
+
+/// The drawing shortcut's default, offered once the same way as the
+/// marker's. Only where drawing on screen is offered.
+pub fn seed_draw_hotkey() {
+    if crate::live_draw::SUPPORTED {
+        seed_default_hotkey(DRAW_HOTKEY, DRAW_HOTKEY_SEEDED, default_draw_hotkey());
+    }
+}
+
+fn seed_default_hotkey(key: &str, seeded: &str, default: Hotkey) {
+    if store_section(HOTKEYS).get(seeded).and_then(Value::as_bool) == Some(true) {
         return;
     }
     let mut map = hotkeys_raw();
-    let default = default_recording_marker_hotkey();
     let taken = map
         .values()
         .filter_map(hotkey_from_value)
         .any(|hotkey| hotkey == default);
-    if !map.contains_key(RECORDING_MARKER_HOTKEY) && !taken {
+    if !map.contains_key(key) && !taken {
         let Ok(value) = serde_json::to_value(&default) else {
             return;
         };
-        map.insert(RECORDING_MARKER_HOTKEY.into(), value);
+        map.insert(key.into(), value);
         if !set_hotkeys_raw(&map) {
             return;
         }
     }
-    set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
+    set_store_setting(HOTKEYS, seeded, Value::Bool(true));
 }
 
 // -- Transcription hints --------------------------------------------------------
@@ -3460,6 +3509,51 @@ mod tests {
             store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
             true
         );
+    }
+
+    #[test]
+    fn the_draw_shortcut_default_is_offered_once_and_never_over_a_combo_in_use() {
+        let store = TempStore::new("draw-seed", Some(r#"{ "hotkeys": { "hotkeys": {} } }"#));
+        seed_draw_hotkey();
+        if !crate::live_draw::SUPPORTED {
+            assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+            return;
+        }
+        assert_eq!(
+            hotkey_from_value(&hotkeys_raw()[DRAW_HOTKEY]),
+            Some(default_draw_hotkey())
+        );
+        assert_eq!(store.read()["hotkeys"][DRAW_HOTKEY_SEEDED], true);
+        let mut cleared = hotkeys_raw();
+        cleared.remove(DRAW_HOTKEY);
+        assert!(set_hotkeys_raw(&cleared));
+        seed_draw_hotkey();
+        assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+        drop(store);
+
+        let default = serde_json::to_string(&default_draw_hotkey()).unwrap();
+        let _taken = TempStore::new(
+            "draw-seed-taken",
+            Some(&format!(
+                r#"{{ "hotkeys": {{ "hotkeys": {{ "stopRecording": {default} }} }} }}"#
+            )),
+        );
+        seed_draw_hotkey();
+        assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+    }
+
+    #[test]
+    fn drawings_fade_unless_kept() {
+        let _store = TempStore::new("keep-drawings", Some(r#"{ "general_settings": {} }"#));
+        assert!(!keep_drawings());
+        assert!(!GeneralSettings::load().keep_drawings);
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            KEEP_DRAWINGS_KEY,
+            Value::Bool(true)
+        ));
+        assert!(keep_drawings());
+        assert!(GeneralSettings::load().keep_drawings);
     }
 
     #[test]

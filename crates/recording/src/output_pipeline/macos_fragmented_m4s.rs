@@ -102,6 +102,52 @@ impl FrameDropTracker {
     }
 }
 
+/// Logs the first encode failures, then every 300th, and reports a switch to
+/// the software encoder. Once the hardware encoder has stopped and nothing
+/// could replace it every later frame fails, so this ends the encoder thread
+/// and the recording fails instead of running on without video.
+fn handle_encode_result(
+    encoder: &mut SegmentedVideoEncoder,
+    result: anyhow::Result<()>,
+    failures: &mut u64,
+    health_tx: &SharedHealthSender,
+    track: &'static str,
+) -> anyhow::Result<()> {
+    if let Err(error) = result {
+        *failures += 1;
+        if *failures <= 3 || failures.is_multiple_of(300) {
+            warn!(
+                track,
+                failures = *failures,
+                "Failed to encode frame: {error:#}"
+            );
+        }
+    }
+    if let Some(fallback) = encoder.take_encoder_fallback() {
+        warn!(
+            track,
+            failed_encoder = %fallback.failed_encoder,
+            error = %fallback.error,
+            replacement = %fallback.replacement,
+            "Video encoder replaced mid-recording"
+        );
+        health_tx.emit(PipelineHealthEvent::EncoderRebuilt {
+            backend: fallback.replacement,
+            attempt: 1,
+        });
+    }
+    if let Some((failed_encoder, error)) = encoder.unrecovered_encoder_failure() {
+        error!(
+            track,
+            failed_encoder, %error, "Video encoder stopped working and could not be replaced"
+        );
+        return Err(anyhow!(
+            "The {failed_encoder} video encoder stopped working ({error}) and no software encoder could replace it"
+        ));
+    }
+    Ok(())
+}
+
 fn finish_encoder_thread(
     handle: JoinHandle<anyhow::Result<()>>,
     label: &str,
@@ -114,6 +160,7 @@ fn finish_segmented_encoder(
     timestamp: Duration,
     thread_label: &str,
     finish_label: &str,
+    health_tx: &SharedHealthSender,
 ) -> anyhow::Result<()> {
     if let Err(error) = state.video_tx.send(None) {
         trace!("{thread_label} channel already closed during finish: {error}");
@@ -132,9 +179,8 @@ fn finish_segmented_encoder(
     };
 
     let finalize_error = match state.encoder.lock() {
-        Ok(mut encoder) => encoder
-            .finish_with_timestamp(timestamp)
-            .map_err(|error| {
+        Ok(mut encoder) => {
+            let result = encoder.finish_with_timestamp(timestamp).map_err(|error| {
                 let message = format!("{finish_label}: {error:#}");
                 // A stalled writer may still write the segments, so Stop must see it.
                 match std::error::Error::source(&error) {
@@ -143,8 +189,19 @@ fn finish_segmented_encoder(
                     }
                     _ => anyhow!(message),
                 }
-            })
-            .err(),
+            });
+            if let Some(failure) = encoder.take_flush_failure() {
+                warn!(
+                    encoder = %failure.encoder,
+                    error = %failure.error,
+                    "{finish_label}: frames the encoder held at stop were lost"
+                );
+                health_tx.emit(PipelineHealthEvent::EncoderTailLost {
+                    encoder: failure.encoder,
+                });
+            }
+            result.err()
+        }
         Err(_) => Some(anyhow!(
             "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
         )),
@@ -278,6 +335,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 timestamp,
                 "M4S encoder",
                 "Failed to finish segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));
@@ -354,6 +412,7 @@ impl MacOSFragmentedM4SMuxer {
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
+                let mut encode_failures = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
@@ -395,9 +454,16 @@ impl MacOSFragmentedM4SMuxer {
 
                                 match encoder_clone.lock() {
                                     Ok(mut encoder) => {
-                                        if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                            warn!("Failed to encode frame: {e}");
-                                        }
+                                        let result = encoder
+                                            .queue_frame(owned_frame, timestamp)
+                                            .map_err(anyhow::Error::from);
+                                        handle_encode_result(
+                                            &mut encoder,
+                                            result,
+                                            &mut encode_failures,
+                                            &health_tx,
+                                            "screen",
+                                        )?;
                                     }
                                     Err(_) => {
                                         error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
@@ -428,27 +494,30 @@ impl MacOSFragmentedM4SMuxer {
                     } else {
                         let encode_start = std::time::Instant::now();
 
-                        let queued = match sample_buf.image_buf() {
-                            Some(image_buf) => {
-                                let ptr = (std::ptr::from_ref(image_buf)
-                                    as *const std::ffi::c_void)
-                                    .cast_mut();
-                                match encoder_clone.lock() {
-                                    Ok(mut encoder) => {
+                        match encoder_clone.lock() {
+                            Ok(mut encoder) => {
+                                let result = match sample_buf.image_buf() {
+                                    Some(image_buf) => {
+                                        let ptr = (std::ptr::from_ref(image_buf)
+                                            as *const std::ffi::c_void)
+                                            .cast_mut();
                                         unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }
-                                            .map_err(|e| anyhow!("{e}"))
+                                            .map_err(anyhow::Error::from)
                                     }
-                                    Err(_) => {
-                                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                        return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
-                                    }
-                                }
+                                    None => Err(anyhow!("sample buffer has no image buffer")),
+                                };
+                                handle_encode_result(
+                                    &mut encoder,
+                                    result,
+                                    &mut encode_failures,
+                                    &health_tx,
+                                    "screen",
+                                )?;
                             }
-                            None => Err(anyhow!("sample buffer has no image buffer")),
-                        };
-
-                        if let Err(e) = queued {
-                            warn!("Failed to encode frame: {e}");
+                            Err(_) => {
+                                error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                            }
                         }
 
                         let encode_elapsed_ms = encode_start.elapsed().as_millis();
@@ -669,6 +738,7 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 timestamp,
                 "M4S camera encoder",
                 "Failed to finish camera segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));
@@ -743,6 +813,7 @@ impl MacOSFragmentedM4SCameraMuxer {
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
+                let mut encode_failures = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
@@ -783,9 +854,16 @@ impl MacOSFragmentedM4SCameraMuxer {
 
                             match encoder_clone.lock() {
                                 Ok(mut encoder) => {
-                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                        warn!("Failed to encode camera frame: {e}");
-                                    }
+                                    let result = encoder
+                                        .queue_frame(owned_frame, timestamp)
+                                        .map_err(anyhow::Error::from);
+                                    handle_encode_result(
+                                        &mut encoder,
+                                        result,
+                                        &mut encode_failures,
+                                        &health_tx,
+                                        "camera",
+                                    )?;
                                 }
                                 Err(_) => {
                                     error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
