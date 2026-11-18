@@ -288,12 +288,11 @@ async fn render_preview_frame(
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
-    let cursor_timeline =
-        PrecomputedCursorTimeline::from_project(
-            segment_media.cursor,
-            &segment_media.hover_changes.times_ms(),
-            project_config,
-        );
+    let cursor_timeline = PrecomputedCursorTimeline::from_project(
+        segment_media.cursor,
+        &segment_media.hover_changes.times_ms(),
+        project_config,
+    );
     let uniforms = ProjectUniforms::new_with_precomputed_cursor(
         render_constants,
         project_config,
