@@ -12,12 +12,16 @@ import {
 	ENDS_LABEL,
 	FAQ,
 	FEATURES,
+	LOOM_MAIL,
+	PLATFORMS,
 	RENEWAL_MAIL,
+	TEAM_POINTS,
 	TESTIMONIAL_NAMES,
 } from "./content";
 import { FeatureIcon } from "./FeatureIcon";
 import { Film } from "./Film";
 import { OfferCard } from "./OfferCard";
+import { TeamPicks } from "./TeamPicks";
 import { CARD, DIM, GHOST, SUN_TEXT } from "./theme";
 
 const WRAP = "mx-auto w-full max-w-[1184px] px-5 sm:px-8";
@@ -67,7 +71,7 @@ function Hero() {
 				className="absolute inset-x-0 top-0 -z-10 h-[720px] bg-[radial-gradient(60%_55%_at_50%_0%,rgba(255,111,142,0.22),rgba(255,179,107,0.08)_45%,rgba(10,10,11,0)_75%)]"
 			/>
 			<div className={`${WRAP} flex flex-col items-center text-center`}>
-				<CapFridayMark className="w-[min(82vw,560px)] animate-bf-write [filter:drop-shadow(0_0_18px_rgba(255,77,141,0.4))] motion-reduce:animate-none" />
+				<CapFridayMark animate className="w-[min(80vw,500px)]" />
 				<h1 className="mt-5 text-balance text-[40px] font-medium leading-[1] tracking-[-0.035em] sm:text-[68px]">
 					50% off Cap Pro Yearly
 				</h1>
@@ -185,6 +189,118 @@ function Features() {
 	);
 }
 
+function Platforms() {
+	return (
+		<section className="py-16 sm:py-24">
+			<div className={WRAP}>
+				<div className="mx-auto max-w-[640px] text-center">
+					<h2 className={H2}>Record from anywhere</h2>
+					<p className={`mt-4 text-[17px] leading-[1.55] ${DIM}`}>
+						Native apps for macOS, Windows and Linux, an iOS app, a Chrome
+						extension and a recorder that runs in any browser. One account,
+						everything in sync.
+					</p>
+				</div>
+				<div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+					{PLATFORMS.map((platform) => (
+						<div
+							key={platform.name}
+							className={`${CARD} flex flex-col items-center gap-3 px-4 py-6 text-center`}
+						>
+							<span className="text-[#FFB59A]">
+								<FeatureIcon name={platform.icon} />
+							</span>
+							<span className="text-[16px] font-medium">{platform.name}</span>
+							<span className={`text-[13px] leading-tight ${DIM}`}>
+								{platform.note}
+							</span>
+						</div>
+					))}
+				</div>
+				<div className="mt-8 text-center">
+					<Link href="/download" className={GHOST}>
+						Download Cap
+					</Link>
+				</div>
+			</div>
+		</section>
+	);
+}
+
+function Team() {
+	return (
+		<section className="py-16 sm:py-24">
+			<div
+				className={`${WRAP} grid items-center gap-10 lg:grid-cols-[1fr_1.15fr] lg:gap-16`}
+			>
+				<div>
+					<h2 className={H2}>
+						Bring your <span className={SUN_TEXT}>entire team</span>
+					</h2>
+					<p className={`mt-4 max-w-[520px] text-[17px] leading-[1.55] ${DIM}`}>
+						Every seat on the yearly plan is half price, so the whole team can
+						record, share and review together for less.
+					</p>
+					<ul className="mt-7 flex flex-col gap-3">
+						{TEAM_POINTS.map((point) => (
+							<li key={point} className="flex gap-3 text-[16px] leading-[1.45]">
+								<svg
+									viewBox="0 0 16 16"
+									aria-hidden="true"
+									className="mt-[3px] size-4 shrink-0 text-[#FF8078]"
+								>
+									<path
+										d="m3.5 8.4 2.9 2.9 6.1-6.6"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="1.7"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+									/>
+								</svg>
+								{point}
+							</li>
+						))}
+					</ul>
+				</div>
+				<TeamPicks />
+			</div>
+		</section>
+	);
+}
+
+function Loom() {
+	return (
+		<section className="py-16 sm:py-24">
+			<div className={WRAP}>
+				<div
+					className={`${CARD} relative isolate overflow-hidden px-6 py-12 text-center sm:px-12 sm:py-16`}
+				>
+					<div
+						aria-hidden="true"
+						className="absolute inset-0 -z-10 bg-[radial-gradient(60%_80%_at_50%_0%,rgba(255,179,107,0.14),rgba(10,10,11,0))]"
+					/>
+					<h2 className={H2}>Moving from Loom?</h2>
+					<p
+						className={`mx-auto mt-4 max-w-[600px] text-balance text-[17px] leading-[1.55] ${DIM}`}
+					>
+						Import your entire Loom library into Cap. Or let us handle the whole
+						migration for you, at no extra cost.
+					</p>
+					<div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+						<Link href="/migrate-from-loom" className={GHOST}>
+							How migration works
+						</Link>
+						<a href={LOOM_MAIL} className={GHOST}>
+							Have us migrate you
+						</a>
+					</div>
+				</div>
+			</div>
+		</section>
+	);
+}
+
 function Offer() {
 	return (
 		<section id={ANCHORS.offer} className="scroll-mt-8 py-16 sm:py-24">
@@ -258,7 +374,7 @@ function Closing() {
 				className="absolute inset-x-0 bottom-0 -z-10 h-[80%] bg-[radial-gradient(55%_60%_at_50%_100%,rgba(255,111,142,0.2),rgba(10,10,11,0))]"
 			/>
 			<div className={`${WRAP} flex flex-col items-center text-center`}>
-				<CapFridayMark className="w-[min(70vw,380px)] [filter:drop-shadow(0_0_14px_rgba(255,77,141,0.4))]" />
+				<CapFridayMark className="w-[min(68vw,340px)]" />
 				<p className="mt-4 text-[28px] font-medium tracking-[-0.025em] sm:text-[36px]">
 					50% off Cap Pro Yearly
 				</p>
@@ -311,6 +427,9 @@ export function BlackFridayPage() {
 				<Hero />
 				<Loved />
 				<Features />
+				<Platforms />
+				<Team />
+				<Loom />
 				<Offer />
 				<Renewal />
 				<Faq />

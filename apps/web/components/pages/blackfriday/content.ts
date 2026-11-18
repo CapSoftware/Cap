@@ -31,6 +31,12 @@ export const INCLUDED = [
 ] as const;
 
 export type FeatureIcon =
+	| "apple"
+	| "windows"
+	| "linux"
+	| "phone"
+	| "chrome"
+	| "browser"
 	| "link"
 	| "spark"
 	| "cloud"
@@ -89,9 +95,31 @@ export const FEATURES: readonly {
 	{
 		icon: "team",
 		title: "Built for teams",
-		body: "Shared workspaces and spaces, plus a one-click importer for your Loom library.",
+		body: "Shared workspaces and spaces keep every team's videos in one place.",
 	},
 ];
+
+export const PLATFORMS: readonly {
+	icon: FeatureIcon;
+	name: string;
+	note: string;
+}[] = [
+	{ icon: "apple", name: "macOS", note: "Native app" },
+	{ icon: "windows", name: "Windows", note: "Native app" },
+	{ icon: "linux", name: "Linux", note: "Native app" },
+	{ icon: "phone", name: "iOS", note: "Record on your iPhone" },
+	{ icon: "chrome", name: "Chrome", note: "Browser extension" },
+	{ icon: "browser", name: "Web", note: "Record in any browser" },
+];
+
+export const TEAM_SIZES = [5, 10, 25] as const;
+
+export const TEAM_POINTS = [
+	"Shared workspaces and spaces for every team",
+	"Comments, reactions and viewer analytics on every video",
+	"One bill, with seats you can add any time",
+	"Your domain, your storage, your branding",
+] as const;
 
 export const TESTIMONIAL_NAMES = [
 	"Steven Tey",
@@ -126,5 +154,8 @@ export const FAQ = [
 
 export const RENEWAL_MAIL =
 	"mailto:hello@cap.so?subject=Black%20Friday%3A%20lock%20in%20another%20year";
+
+export const LOOM_MAIL =
+	"mailto:hello@cap.so?subject=Black%20Friday%3A%20migrate%20us%20from%20Loom";
 
 export const ANCHORS = { film: "film", offer: "offer", faq: "faq" } as const;
