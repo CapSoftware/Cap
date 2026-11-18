@@ -757,12 +757,6 @@ fn primary_drags(clicks: &[CursorClickEvent]) -> Vec<(f64, f64)> {
     drags
 }
 
-/// A gap in the samples normally means the pointer stood still, so the path
-/// holds there and then moves on. While the button is held that reading is
-/// wrong when the recorder missed samples mid-drag: the pointer kept moving.
-/// Inside a drag the gap is filled in a straight line instead. A real pause
-/// costs nothing either way, because the first sample after it is still
-/// next to where the pointer stopped.
 fn drag_at(drags: &[(f64, f64)], time_ms: f64) -> Option<usize> {
     let next = drags.partition_point(|&(start, _)| start < time_ms);
     next.checked_sub(1)
@@ -804,38 +798,63 @@ fn keep_drag_samples(
     Some(kept)
 }
 
+/// A gap in the samples normally means the pointer stood still, so the path
+/// holds there and then moves on. Inside a drag that reading is wrong when
+/// the recorder missed samples: the pointer kept moving, and the jump after
+/// the gap covers about as much ground per millisecond as the pointer did
+/// going into it. Only those gaps are filled in a straight line. A pause
+/// moves far less per millisecond across the gap and keeps the hold.
 fn fill_drag_gaps<'a>(
     moves: &'a [CursorMoveEvent],
     clicks: &[CursorClickEvent],
 ) -> Cow<'a, [CursorMoveEvent]> {
+    const MIN_SPEED_RATIO: f64 = 0.5;
     let drags = primary_drags(clicks);
-    let needs_fill = |pair: &[CursorMoveEvent]| {
-        pair[1].time_ms - pair[0].time_ms > IDLE_GAP_THRESHOLD_MS
-            && drag_at(&drags, pair[0].time_ms)
-                .is_some_and(|drag| drag_at(&drags, pair[1].time_ms) == Some(drag))
+    let speed = |from: &CursorMoveEvent, to: &CursorMoveEvent| {
+        let dt = to.time_ms - from.time_ms;
+        ((to.x - from.x).hypot(to.y - from.y) / dt).max(0.0)
     };
-    if !moves.windows(2).any(needs_fill) {
+    let missed_samples = |index: usize| {
+        let (Some(previous), Some(from), Some(to)) = (
+            index.checked_sub(1).and_then(|i| moves.get(i)),
+            moves.get(index),
+            moves.get(index + 1),
+        ) else {
+            return false;
+        };
+        let drag = drag_at(&drags, from.time_ms);
+        let lead_in = from.time_ms - previous.time_ms;
+        drag.is_some()
+            && drag_at(&drags, previous.time_ms) == drag
+            && drag_at(&drags, to.time_ms) == drag
+            && to.time_ms - from.time_ms > IDLE_GAP_THRESHOLD_MS
+            && lead_in > 0.0
+            && lead_in <= IDLE_GAP_THRESHOLD_MS
+            && speed(from, to) >= MIN_SPEED_RATIO * speed(previous, from)
+            && speed(previous, from) > 0.0
+    };
+    if !(0..moves.len()).any(missed_samples) {
         return Cow::Borrowed(moves);
     }
 
     let mut filled = Vec::with_capacity(moves.len());
-    for pair in moves.windows(2) {
-        filled.push(pair[0].clone());
-        if needs_fill(pair) {
-            let gap = pair[1].time_ms - pair[0].time_ms;
+    for (index, from) in moves.iter().enumerate() {
+        filled.push(from.clone());
+        if missed_samples(index) {
+            let to = &moves[index + 1];
+            let gap = to.time_ms - from.time_ms;
             let steps = (gap / SIMULATION_STEP_MS).ceil() as usize;
             for step in 1..steps {
                 let u = step as f64 / steps as f64;
                 filled.push(CursorMoveEvent {
-                    time_ms: pair[0].time_ms + gap * u,
-                    x: pair[0].x + (pair[1].x - pair[0].x) * u,
-                    y: pair[0].y + (pair[1].y - pair[0].y) * u,
-                    ..pair[0].clone()
+                    time_ms: from.time_ms + gap * u,
+                    x: from.x + (to.x - from.x) * u,
+                    y: from.y + (to.y - from.y) * u,
+                    ..from.clone()
                 });
             }
         }
     }
-    filled.extend(moves.last().cloned());
     Cow::Owned(filled)
 }
 
@@ -3177,6 +3196,32 @@ mod tests {
                 cursor.moves.len(),
                 "no samples are invented across the release and the next press"
             );
+        }
+
+        #[test]
+        fn a_pause_inside_a_drag_keeps_the_cursor_still() {
+            let mut moves: Vec<_> = (0..=30)
+                .map(|i| {
+                    let t = f64::from(i) * 16.0;
+                    cursor_move(t, (300.0 + t) / W, 500.0 / H)
+                })
+                .collect();
+            moves.extend((0..=20).map(|i| {
+                let t = 2480.0 + f64::from(i) * 16.0;
+                cursor_move(t, (800.0 + (t - 2480.0)) / W, 500.0 / H)
+            }));
+            let cursor = CursorEvents {
+                moves,
+                clicks: clicks(&[(0.0, true), (2900.0, false)]),
+            };
+            assert_eq!(
+                fill_drag_gaps(&cursor.moves, &cursor.clicks).len(),
+                cursor.moves.len(),
+                "a two second pause is not treated as missed samples"
+            );
+            let anchored = timeline(&cursor, true);
+            let (x, _) = rendered(&anchored, 1500.0);
+            assert!((x - 780.0).abs() < 1.0, "cursor at x={x:.2} mid-pause");
         }
 
         #[test]
