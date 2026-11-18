@@ -2238,20 +2238,22 @@ impl EditorWindow {
         let smooth = !cursor.raw;
         let mut body = body
             .child(
-                ui::Field::section(&theme, tr::editor::tabs::cursor::movement_style()).child(
-                    ui::RadioCards::plain(
-                        &theme,
-                        "cursor-style",
-                        CURSOR_STYLES
-                            .iter()
-                            .map(|(_, label, description)| {
-                                ui::RadioCard::new(label(), Some(description()))
-                            })
-                            .collect(),
-                        style_index,
-                    )
-                    .on_select(cx.listener(
-                        |this, index: &usize, window, cx| {
+                ui::Field::section(&theme, tr::editor::tabs::cursor::movement_style())
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "cursor-style",
+                            CURSOR_STYLES
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (_, label, _))| {
+                                    ui::SegmentOption::new(label(), style_index == Some(index))
+                                })
+                                .collect(),
+                        )
+                        .stretch()
+                        .item_height(px(28.))
+                        .on_select(cx.listener(|this, index: &usize, window, cx| {
                             let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
                                 return;
                             };
@@ -2267,9 +2269,19 @@ impl EditorWindow {
                                 }
                                 true
                             });
+                        }))
+                        .into_any_element(),
+                    )
+                    .children(style_index.and_then(|index| CURSOR_STYLES.get(index)).map(
+                        |(_, _, description)| {
+                            div()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .child(description())
+                                .into_any_element()
                         },
                     )),
-                ),
             )
             .child(
                 div()
