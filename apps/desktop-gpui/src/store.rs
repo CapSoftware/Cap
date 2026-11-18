@@ -1017,9 +1017,8 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 ///
 /// The defaults are `createDefaultGeneralSettings()` plus the per-row `??`
 /// fallbacks in `general.tsx` -- i.e. what the shipping page *shows* for a key
-/// that is not in the file. Two of them disagree with the Rust struct's own
-/// `#[serde(default)]`: `autoZoomOnClicks` (Rust `default_true`, the page
-/// false) and `enableNativeCameraPreview`. The page is the authority here
+/// that is not in the file. `enableNativeCameraPreview` disagrees with the
+/// Rust struct's own `#[serde(default)]`; the page is the authority here
 /// because this is a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
@@ -1455,10 +1454,23 @@ impl GeneralSettings {
         }
     }
 
-    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
-    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    /// What the settings slider shows: the chosen amount, else the amount
+    /// new projects start their zooms at.
     pub fn new_zoom_amount(&self) -> f32 {
-        self.default_zoom_amount.unwrap_or(1.5)
+        self.zoom_amount_for(cap_project::auto_zoom::AUTO_ZOOM_VERSION)
+    }
+
+    /// What a drawn or generated zoom starts at in a project on the given
+    /// auto zoom rules. Projects from before the rules changed keep 1.5x
+    /// when no amount was chosen.
+    pub fn zoom_amount_for(&self, auto_zoom_version: u32) -> f32 {
+        self.default_zoom_amount.unwrap_or(
+            if auto_zoom_version >= cap_project::auto_zoom::AUTO_ZOOM_VERSION {
+                cap_project::auto_zoom::DEFAULT_AUTO_ZOOM_AMOUNT as f32
+            } else {
+                1.5
+            },
+        )
     }
 
     pub fn load() -> Self {
@@ -1511,7 +1523,7 @@ impl GeneralSettings {
             // is how the setting was re-defaulted without inheriting the old
             // key's values.
             custom_cursor_capture: bool_at(general, "custom_cursor_capture2", true),
-            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", false),
+            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", true),
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
@@ -3307,7 +3319,10 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
-        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 2.0);
+        assert_eq!(GeneralSettings::default().zoom_amount_for(0), 1.5);
+        assert!(GeneralSettings::default().auto_zoom_on_clicks);
+        assert_eq!(settings.zoom_amount_for(0), 2.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key
