@@ -61,7 +61,11 @@ impl EditorWindow {
     ) {
         self.edit_project_without_timeline(reason, window, cx, move |project| {
             let before = project.audio_visuals.clone();
-            change(&mut **project.audio_visuals.get_or_insert_with(Default::default));
+            let background = &project.background.source;
+            let visuals = project.audio_visuals.get_or_insert_with(|| {
+                Box::new(AudioVisualsConfiguration::for_background(background))
+            });
+            change(&mut **visuals);
             project.audio_visuals != before
         });
     }
