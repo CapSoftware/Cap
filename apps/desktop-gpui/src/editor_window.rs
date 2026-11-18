@@ -3605,7 +3605,6 @@ impl EditorWindow {
         self.instance = Some(instance);
     }
 
-    /// What the renderer gets for the preview's Enhance toggle and Compare.
     fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
         if self.preview_enhance && !self.preview_comparing {
             cap_project::ScreenEnhancement::on()
@@ -3801,6 +3800,8 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        // Compare only applies to a paused frame, so playing ends it.
+        self.set_preview_comparing(false, cx);
         let Some(transport) = &self.transport else {
             return;
         };
@@ -12350,19 +12351,21 @@ impl EditorWindow {
                                 this.set_preview_comparing(true, cx);
                             }),
                         )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                                this.set_preview_comparing(false, cx);
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                                this.set_preview_comparing(false, cx);
-                            }),
-                        )
                     })
+                    // Release always ends Compare, even once playback has
+                    // disabled the button under the held mouse.
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
                     .child(
                         ui::Button::plain(
                             &theme,
@@ -17017,6 +17020,31 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn playback_ends_a_held_compare(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update(cx, |editor, cx| {
+            editor.preview_enhance = true;
+            editor.set_preview_comparing(true, cx);
+            assert!(editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::default()
+            );
+            editor.start_playback(0.0, cx);
+            assert!(!editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::on()
+            );
+        });
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
