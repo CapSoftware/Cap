@@ -320,14 +320,19 @@ fn shift_captions(
     // start on a clip boundary need not read back as that clip.
     let mut segments = Vec::with_capacity(captions.segments.len());
     for segment in std::mem::take(&mut captions.segments) {
-        let parts = split_at_clips(&segment, &clip_of, &clip_start);
+        let segment = split_words_at_clips(segment, &clip_start, |clip| late(clip).is_some());
         let cut_for = |clip: Option<usize>| {
             edited_late(clip) || (segment.words.is_empty() && clip.and_then(late).is_some())
         };
+        let parts = split_at_clips(&segment, &clip_of, &clip_start);
         if parts.len() < 2 || !parts.iter().any(|(clip, _)| cut_for(*clip)) {
             segments.push((None, segment));
             continue;
         }
+        // Each part is tied to its clip, so a word running out of it into a
+        // clip that is not late is cut at that clip's start too.
+        let segment = split_words_at_clips(segment, &clip_start, |_| true);
+        let parts = split_at_clips(&segment, &clip_of, &clip_start);
         for (index, (clip, mut part)) in parts.into_iter().enumerate() {
             if index > 0 {
                 let mut suffix = index;
@@ -402,6 +407,66 @@ fn shift_captions(
             }
         }
     }
+}
+
+/// `segment` with each word drawn across the start of a clip, where `cut`
+/// holds for either clip, cut there into one word per clip with the same
+/// text. The word showed through both clips before; cut, each piece moves
+/// with, and is tied to, its own clip and keeps showing there. Cut ends round
+/// toward the boundary so each piece's start reads back as its own clip.
+fn split_words_at_clips(
+    mut segment: crate::CaptionSegment,
+    clip_start: &[f64],
+    cut: impl Fn(usize) -> bool,
+) -> crate::CaptionSegment {
+    let drawn_end = |word: &crate::CaptionWord| {
+        word.end
+            .min(word.start + crate::caption_words::MAX_CAPTION_WORD_DURATION)
+    };
+    let cuts = |word: &crate::CaptionWord| {
+        (1..clip_start.len())
+            .filter(|&clip| cut(clip - 1) || cut(clip))
+            .map(|clip| clip_start[clip])
+            .filter(|&cut| f64::from(word.start) < cut && cut < f64::from(drawn_end(word)))
+            .collect::<Vec<_>>()
+    };
+    if segment.words.iter().all(|word| cuts(word).is_empty()) {
+        return segment;
+    }
+    let first_start = segment.words.first().map(|word| word.start);
+    let mut words = Vec::with_capacity(segment.words.len() + 1);
+    for word in std::mem::take(&mut segment.words) {
+        let cuts = cuts(&word);
+        if cuts.is_empty() {
+            words.push(word);
+            continue;
+        }
+        let mut start = word.start;
+        for cut in cuts {
+            words.push(crate::CaptionWord {
+                text: word.text.clone(),
+                start,
+                end: f32_at_or_before(cut),
+            });
+            start = f32_at_or_after(cut);
+        }
+        words.push(crate::CaptionWord {
+            end: drawn_end(&word),
+            start,
+            text: word.text,
+        });
+    }
+    words.retain(|word| word.end > word.start);
+    // A caption starting with a word at a clip start that f32 rounds just
+    // short of it starts in that clip too, with its word.
+    if let (Some(old), Some(new)) = (first_start, words.first())
+        && segment.start == old
+        && new.start > old
+    {
+        segment.start = new.start;
+    }
+    segment.words = words;
+    segment
 }
 
 /// `segment` cut where its content changes recording clip, each part with
@@ -1097,7 +1162,6 @@ mod tests {
             );
         }
 
-        // Every other edited-time track counts the same way.
         for track in [
             "sceneSegments",
             "maskSegments",
@@ -1324,7 +1388,6 @@ mod tests {
         Ok(())
     }
 
-    // The caption text and the highlighted words on screen at `time`.
     fn on_screen(track: &[Rendered], time: f64) -> Vec<(String, Vec<String>)> {
         track
             .iter()
@@ -1468,6 +1531,58 @@ mod tests {
         crate::synchronize_captions(&mut before, &[10.0, 10.0]);
         assert_eq!(rendered_track(&before).len(), 1);
         assert_captions_render_the_same(&before, &meta(4.05), &[10.0, 10.0]);
+    }
+
+    // Greptile's case: a transcribed word can run across the start of a clip
+    // (adjacent clips share one transcription), and it showed through both
+    // clips. With the late clip edited (a zoom over it), a word running into
+    // it, one running out of it, and one ending a caption that otherwise stays
+    // in the late clip all keep showing on both sides, exactly as before.
+    #[test]
+    fn words_across_an_edited_late_clips_edges_render_where_they_did() {
+        let durations = [10.0, 10.0, 10.0];
+        let mut before: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 0.0, "end": 10.0, "timescale": 1.0 },
+                    { "recordingSegment": 1, "start": 0.0, "end": 10.0, "timescale": 1.0 },
+                    { "recordingSegment": 2, "start": 0.0, "end": 10.0, "timescale": 1.0 }
+                ],
+                "zoomSegments": [
+                    { "start": 15.0, "end": 16.0, "amount": 2.0, "mode": "auto" }
+                ]
+            }
+        }))
+        .unwrap();
+        before.captions = Some(CaptionsData {
+            segments: vec![
+                words_caption("into", &[("into", 9.5, 10.5)]),
+                words_caption("tail", &[("a", 15.0, 15.4), ("b", 19.7, 20.3)]),
+                words_caption("out", &[("over", 19.9, 20.4), ("out", 20.6, 20.9)]),
+            ],
+            source_timed: true,
+            ..Default::default()
+        });
+        crate::synchronize_captions(&mut before, &durations);
+        assert_eq!(rendered_track(&before).len(), 6);
+        let after = assert_captions_render_the_same(&before, &meta_late_middle(), &durations);
+        assert_eq!(late_clip_start(&after), 4.0, "edited, so its trims moved");
+    }
+
+    // The same words with the late clip untouched: the late side of a word
+    // follows the late audio like every other late word, and the side over
+    // the other clip stays where it was.
+    #[test]
+    fn words_across_an_untouched_late_clips_edges_keep_their_other_side() {
+        let word = || vec![words_caption("w", &[("w", 9.5, 10.5)])];
+        assert_eq!(
+            migrate_untouched(0, word()),
+            [("w".to_string(), 10.0, 10.5)]
+        );
+        assert_eq!(
+            migrate_untouched(1, word()),
+            [("w".to_string(), 9.5, 10.0), ("w".to_string(), 14.0, 14.5)]
+        );
     }
 
     // Typed captions (no words) running across an untouched late clip's
@@ -1746,5 +1861,287 @@ mod tests {
             .map(|c| (c.start, c.end))
             .collect();
         assert_eq!(track, vec![(11.0, 11.5)]);
+    }
+
+    /// splitmix64, as `cap_verify::fixture::Rng`.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn between(&mut self, low: f64, high: f64) -> f64 {
+            low + (high - low) * ((self.next_u64() >> 11) as f64 / (1u64 << 53) as f64)
+        }
+
+        fn below(&mut self, count: usize) -> usize {
+            (self.next_u64() % count as u64) as usize
+        }
+
+        fn chance(&mut self, probability: f64) -> bool {
+            self.between(0.0, 1.0) < probability
+        }
+    }
+
+    struct MigrationCase {
+        project: ProjectConfiguration,
+        meta: StudioRecordingMeta,
+        durations: Vec<f64>,
+    }
+
+    /// Two to four clips, some with late audio (edited by a zoom or trims,
+    /// or untouched), and transcribed captions whose words often run across
+    /// the start of a clip. Times on a 1/8 s grid, a 0.1 s grid or anywhere.
+    fn random_migration_case(rng: &mut Rng) -> MigrationCase {
+        let grid = rng.below(3);
+        let snap = |time: f64| match grid {
+            0 => (time * 8.0).round() / 8.0,
+            1 => (time * 10.0).round() / 10.0,
+            _ => time,
+        };
+        let count = 2 + rng.below(3);
+        let durations: Vec<f64> = (0..count).map(|_| snap(rng.between(3.0, 12.0))).collect();
+        let mut late = vec![false; count];
+        let mut segments = Vec::new();
+        let mut timeline = Vec::new();
+        let mut zooms = Vec::new();
+        let mut output = 0.0;
+        for (index, &duration) in durations.iter().enumerate() {
+            late[index] = rng.chance(0.5);
+            let mic_start = if late[index] {
+                0.05 + snap(rng.between(1.2, 4.0))
+            } else {
+                0.03
+            };
+            segments.push(serde_json::json!({
+                "display": { "path": format!("{index}/display.mp4"), "fps": 30, "start_time": 0.05 },
+                "mic": { "path": format!("{index}/mic.ogg"), "start_time": mic_start }
+            }));
+            let (start, end) = match rng.below(4) {
+                0 => (
+                    snap(rng.between(0.0, 1.0)),
+                    snap(rng.between(duration - 1.0, duration)),
+                ),
+                1 => {
+                    zooms.push(serde_json::json!({
+                        "start": output + duration * 0.4,
+                        "end": output + duration * 0.6,
+                        "amount": 2.0,
+                        "mode": "auto"
+                    }));
+                    (0.0, duration)
+                }
+                _ => (0.0, duration),
+            };
+            output += end - start;
+            timeline.push(serde_json::json!({
+                "recordingSegment": index, "start": start, "end": end, "timescale": 1.0
+            }));
+        }
+        if !late.contains(&true) {
+            late[0] = true;
+            segments[0]["mic"]["start_time"] = serde_json::json!(2.55);
+        }
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "segments": timeline, "zoomSegments": zooms }
+        }))
+        .unwrap();
+        let meta: StudioRecordingMeta =
+            serde_json::from_value(serde_json::json!({ "segments": segments })).unwrap();
+
+        let starts: Vec<f64> = durations
+            .iter()
+            .scan(0.0, |sum, duration| {
+                let start = *sum;
+                *sum += duration;
+                Some(start)
+            })
+            .collect();
+        let total: f64 = durations.iter().sum();
+        let mut captions = Vec::new();
+        for caption in 0..1 + rng.below(4) {
+            let mut words = Vec::new();
+            let mut at = snap(rng.between(0.0, total - 3.0));
+            for word in 0..1 + rng.below(4) {
+                let (start, end) = if rng.chance(0.4) {
+                    let boundary = starts[1 + rng.below(count - 1)];
+                    (
+                        snap(boundary - rng.between(0.1, 0.8)),
+                        snap(boundary + rng.between(0.1, 0.8)),
+                    )
+                } else {
+                    let start = snap(at + rng.between(0.05, 0.6));
+                    (start, snap(start + rng.between(0.2, 0.9)))
+                };
+                if start < at || end <= start || end > total {
+                    continue;
+                }
+                at = end;
+                words.push((format!("w{caption}-{word}"), start as f32, end as f32));
+            }
+            if words.is_empty() {
+                continue;
+            }
+            let words: Vec<_> = words
+                .iter()
+                .map(|(text, start, end)| (text.as_str(), *start, *end))
+                .collect();
+            captions.push(words_caption(&format!("c{caption}"), &words));
+        }
+        project.captions = Some(CaptionsData {
+            segments: captions,
+            source_timed: true,
+            ..Default::default()
+        });
+        crate::synchronize_captions(&mut project, &durations);
+        MigrationCase {
+            project,
+            meta,
+            durations,
+        }
+    }
+
+    /// Migrates the case and checks the highlighted words on screen against
+    /// the timeline alone: unchanged everywhere except over an untouched late
+    /// clip, where they follow the late audio by its shift (and none show in
+    /// its first `shift` seconds), before and after a reload.
+    fn check_migration(case: &MigrationCase) -> Result<(), String> {
+        let durations = &case.durations[..];
+        let before = &case.project;
+        let old = rendered_track(before);
+        let mut after = before.clone();
+        migrate_late_audio_alignment(&mut after, &case.meta, || durations.to_vec());
+        let mut reloaded: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap();
+        crate::synchronize_captions(&mut reloaded, durations);
+        for caption in &after.captions.as_ref().unwrap().segments {
+            if caption.start > caption.end {
+                return Err(format!("saved reversed {caption:?}"));
+            }
+        }
+
+        let timeline = before.timeline.as_ref().unwrap();
+        let shifts = late_audio_shifts(&case.meta);
+        let mut output = 0.0;
+        let untouched: Vec<(f64, f64, f64)> = timeline
+            .segments
+            .iter()
+            .map(|segment| {
+                let start = output;
+                output += segment.duration();
+                (segment.recording_clip as usize, start, output)
+            })
+            .filter_map(|(clip, start, end)| {
+                let shift = shifts.iter().find(|(index, _)| *index == clip)?.1;
+                is_untouched_clip(before, timeline, clip, durations.get(clip).copied())
+                    .then_some((start, end, shift))
+            })
+            .collect();
+        let words_at = |track: &[Rendered], time: f64| {
+            let mut words: Vec<String> = on_screen(track, time)
+                .into_iter()
+                .flat_map(|(_, words)| words)
+                .collect();
+            words.sort();
+            words
+        };
+        let mut edges: Vec<f64> = timeline
+            .segments
+            .iter()
+            .scan(0.0, |sum, segment| {
+                *sum += segment.duration();
+                Some(*sum)
+            })
+            .collect();
+        for (label, project) in [("migrated", &after), ("reloaded", &reloaded)] {
+            let new = rendered_track(project);
+            edges.extend(
+                old.iter()
+                    .chain(&new)
+                    .flat_map(|item| item.3.iter().flat_map(|w| [f64::from(w.1), f64::from(w.2)])),
+            );
+            let near_edge = |time: f64| edges.iter().any(|edge| (edge - time).abs() < 0.02);
+            let duration = timeline.duration();
+            for step in 0..=(duration * 100.0) as usize {
+                let time = step as f64 / 100.0;
+                let in_late = untouched
+                    .iter()
+                    .find(|(start, end, _)| *start <= time && time < *end);
+                let (expected, at) = match in_late {
+                    None => (words_at(&old, time), time),
+                    Some(&(start, _, shift)) if time - shift >= start => {
+                        (words_at(&old, time - shift), time - shift)
+                    }
+                    Some(_) => (Vec::new(), time),
+                };
+                if near_edge(time) || near_edge(at) {
+                    continue;
+                }
+                let shown = words_at(&new, time);
+                if shown != expected {
+                    return Err(format!(
+                        "{label} at {time:.2}: {shown:?}, expected {expected:?} (from {at:.2})"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Seeded random projects, every migration checked against the oracle
+    // above. CAP_LATE_CAPTION_CASES and CAP_LATE_CAPTION_BASE (hex) run more;
+    // CAP_LATE_CAPTION_SEED dumps one case.
+    #[test]
+    fn migrated_caption_words_stay_on_screen() {
+        let hex = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| u64::from_str_radix(value.trim_start_matches("0x"), 16).unwrap())
+        };
+        let cases = hex("CAP_LATE_CAPTION_CASES").map_or(3_000, |cases| cases as usize);
+        let mut rng = Rng(hex("CAP_LATE_CAPTION_BASE").unwrap_or(0x4308));
+        let mut failures = Vec::new();
+        for _ in 0..cases {
+            let seed = rng.next_u64();
+            if let Err(failure) = check_migration(&random_migration_case(&mut Rng(seed))) {
+                failures.push(format!("seed {seed:#x}: {failure}"));
+            }
+        }
+        println!(
+            "late caption property: {cases} cases, {} failures",
+            failures.len()
+        );
+        if let Some(seed) = hex("CAP_LATE_CAPTION_SEED") {
+            let case = random_migration_case(&mut Rng(seed));
+            let mut after = case.project.clone();
+            migrate_late_audio_alignment(&mut after, &case.meta, || case.durations.clone());
+            println!(
+                "durations {:?}\nmeta {}\ntimeline {}\ncaptions {}\nafter {}\ntrack before {:?}\ntrack after {:?}\n{:?}",
+                case.durations,
+                serde_json::to_string(&case.meta).unwrap(),
+                serde_json::to_string(&case.project.timeline.as_ref().unwrap().segments).unwrap(),
+                serde_json::to_string(&case.project.captions.as_ref().unwrap().segments).unwrap(),
+                serde_json::to_string(&after.captions.as_ref().unwrap().segments).unwrap(),
+                rendered_track(&case.project),
+                rendered_track(&after),
+                check_migration(&case)
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {cases} cases fail:\n{}",
+            failures.len(),
+            failures
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 }
